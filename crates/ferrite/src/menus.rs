@@ -11,9 +11,9 @@ use ferrite_ui::keymap::{Hide, HideOthers, Minimize, Quit, ShowAll, Zoom};
 
 pub fn app_menus() -> Vec<Menu> {
     use cockpit::{
-        CloseThread, NewGroup, NewThread, NewWorktreeThread, NextPane, OpenPrInBrowser,
-        OpenSettings, PreviousPane, RefreshPrStatus, ReopenThread, TextLarger, TextReset,
-        TextSmaller, ToggleFullscreen, ToggleNav, ToggleNotifications, TogglePanel,
+        CloseThread, GoBack, GoForward, NewGroup, NewThread, NewWorktreeThread, NextPane,
+        OpenPrInBrowser, OpenSettings, PreviousPane, RefreshPrStatus, ReopenThread, TextLarger,
+        TextReset, TextSmaller, ToggleFullscreen, ToggleNav, ToggleNotifications, TogglePanel,
     };
     use ferrite_pane::pane::NextDecision;
     vec![
@@ -87,6 +87,8 @@ pub fn app_menus() -> Vec<Menu> {
                 MenuItem::action("Smaller Text", TextSmaller),
                 MenuItem::action("Actual Size", TextReset),
                 MenuItem::separator(),
+                MenuItem::action("Back", GoBack),
+                MenuItem::action("Forward", GoForward),
                 MenuItem::action("Next Pane", NextPane),
                 MenuItem::action("Previous Pane", PreviousPane),
                 MenuItem::action("Next Decision", NextDecision),

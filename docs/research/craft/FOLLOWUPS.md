@@ -92,3 +92,52 @@
 - [x] `file_links::wire_inline`: the path chip's hover underline is `INLINE_CODE_INK`, not `LINK_INK`.
 - [x] theme: `PROMPT_BUBBLE` #262626 and `INLINE_CODE_CHIP` #2a2a2a split from `RAISED` #242424 (typecolour.md).
 - [x] gpui-base lib tests compile again (pre-existing breakage at HEAD): `indoc!` → `concat!` (a patched non-member's dev-dependencies never resolve), missing test imports in inline.rs, `Styled::font_weight` in style.rs. `cargo test -p gpui-base` is refused (non-member with dev-dependencies); run them with `cargo build -p gpui-base --lib --tests` and the printed binary.
+
+## Open tool row (no box in box) follow-ups
+- [ ] Diffs inside an open group still use the filled `block_box` — give them the same hairline-well treatment as Claude's diff.
+- [ ] Decide: standalone call card shows Claude's "Bash" label? (left out for consistency); command syntax colour (left in INK).
+
+## Wave 2 lane T follow-ups
+- [ ] Menu row height 30 → Claude's 28 (`FLOAT_ROW_H`, ~30 uses) — polish pass.
+- [x] Panel Connectors row icon: `BLOCKS` (Claude) instead of `PLUG` (lane P).
+- [ ] thinking_tokens estimate: new non-persisted Live event (session_event, protocol, engine, store skip, claude wire, codex match, transcript) → working.rs shows max(reported, estimate). After lane R lands.
+- [ ] Plugins: per-plugin submenus need nested submenus.
+- Checkpoint tests: composer_chips, stab, stale_chrome, provider_picker, composer_controls, boards, image_viewer, core_transcript_parity, ferrite-ui menu/icons.
+
+## Wave 2 lane N follow-ups
+- [x] Delete the strip's split button (now in the title bar): `split_beside_button`, `PaneWiring.split`, `tab_strip` `split` param, cockpit `split:` line (~11077). (Integrator: already gone with A2's strip removal.)
+- [x] Panel file-preview tabs must stop short of the title tools (`panel_toggle_inset() + ICON_BUTTON + TITLE_TOOLS_GAP + tools width`). (`title_tools_room`, shared with the view head.)
+- [ ] Verify gpui matches `ctrl-{` / `ctrl-}` on Windows for Next/Previous pane.
+- Checkpoint tests: cockpit::history::*, view_head, cockpit/tests/navigation.rs, keymap, icons, panel toggle_sits_in_one_place. Never compiled.
+
+## Wave 2 lane P follow-ups
+- [x] Remove `ContextDetails.usable_window` / `auto_compact_threshold` (unused now) after lane R. (Old records still load; the compat fixture keeps the keys.)
+- [ ] Plan name in the usage card ("· Ultra") from initialize `account.subscriptionType` (claude.rs).
+- [x] `context_meter_segments` doc mentions a panel foot that no longer exists.
+- [x] Apply lane T's 4-arg `composer_footer` at cockpit.rs:8530. (Already applied: lane T's signature is 3-arg, `lead` moved to `env_strip`.)
+- Checkpoint tests: clock day_label, panel::changes create_pr prompt, review::create_pr, panel::connectors_fold, contract_native_controls context refresh, provider_controls context card, composer_chips context/ring, pane rate_limit_resets.
+
+## Wave 2 lane S follow-ups
+- [x] Owner (2026-11-03): keep Inbox as is for now (opens via ⌘I/palette); don’t fold into the bell.
+- [ ] Pins not removed when a Thread is deleted (harmless).
+- Checkpoint tests: nav_list new 4 + changed, floats_parity notifications, thread_groups:341, nav.rs head test, settings round-trip; watch ui_c.rs and floats_parity for Show more.
+
+## Wave 2 lane A2 (subagents) follow-ups
+- [ ] Codex: agent rows don't open (agents keyed by thread id); "spawnAgent" not in the tool policy as Agent.
+- [ ] Agent row keyboard stop (details toggle gone).
+- [ ] Faces only where the agent ran live (replay has no agent state).
+- [ ] Drill-in header design is a guess — confirm against a Claude capture.
+- Checkpoint: `cargo test -p ferrite-core -p ferrite-pane -p ferrite-cockpit --lib -- background_origin every_tool_has_one_policy agents transcript::rows a_call_line_reads a_group_summary working subagents stab:: ui_c transcript_rows core_transcript_parity`
+
+## Wave 2 lane R (edit/rewind) follow-ups
+- [ ] Codex path: `thread/revert` / `thread/fork beforeTurnId` (not started; Codex threads show no buttons).
+- [ ] Palette commands for Edit / Rewind / Fork.
+- [ ] Live capture to confirm `claude-rewind-2.1.317.jsonl` reply shapes.
+- [x] Re-run v12-torn compat fingerprint (repinned unverified). (Integrator: holds; v11-activity repinned for the dropped `ContextDetails` fields.)
+- Checkpoint: full core/pane/cockpit; known cockpit failures from run 7: composer_chips::the_context_section_reads_the_window_and_the_ring_the_plan, composer_controls::the_model_gives_way_before_the_permission_mode, panel_preview::focus_moving_to_another_pane_takes_the_keyboard_from_an_image.
+
+## Wave 2 checkpoint (integrator)
+- [x] Builds clean (`--workspace --tests`, `visual-reference`); one stray `ScrollableElement` import in pane.rs.
+- [x] Usage popover: the kit `Popover` framed the card in its own surface (`p_3`) and kept its 4px foot, so the card sat 10px short of the ring's right edge and over its top. Now `.appearance(false)` and `.bottom(USAGE_POP_OFFSET)`.
+- [x] `focus_moving_to_another_pane…` pressed `cmd-]`, which is Forward now (lane N); Next Pane is `cmd-}`.
+- [x] `the_model_gives_way…`: with the env words over the box (lane T) the model starts to cut only near 680px, so the test breaks at any cut, not 40px.

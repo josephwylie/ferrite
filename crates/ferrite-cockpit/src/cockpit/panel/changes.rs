@@ -4,9 +4,10 @@
 //! exists.
 //!
 //! Under the section head, the summary line (`N files changed`, its
-//! diffstat at the right), which folds and unfolds every file at once; one
-//! block per file, whose hunks fold under its head (`hunks`); `Review
-//! changes`; and the pull request's row. With no edits, `No changes yet`.
+//! diffstat, and `Create PR` at the right until a pull request exists),
+//! which folds and unfolds every file at once; one block per file, whose
+//! hunks fold under its head (`hunks`); `Review changes`; and the pull
+//! request's row once there is one. With no edits, `No changes yet`.
 
 use super::sections::quiet_line;
 use super::*;
@@ -21,7 +22,7 @@ impl CockpitView {
             .flex()
             .flex_col()
             .gap(px(SPACE_0_5))
-            .child(panel_section_head("panel-changes-head", "Changes", None));
+            .child(panel_section_head("panel-changes-head", "Changes"));
         let files = self
             .facts
             .get(thread)
@@ -30,7 +31,8 @@ impl CockpitView {
         if files.is_empty() {
             section = section.child(quiet_line("panel-no-changes").child("No changes yet"));
         } else {
-            section = section.child(self.changes_summary(thread, files, cx));
+            let create_pr = self.facts.pr(thread).is_none();
+            section = section.child(self.changes_summary(thread, files, create_pr, cx));
             let cwd = self.thread_path(thread);
             for (index, file) in files.iter().enumerate() {
                 section =
@@ -45,11 +47,12 @@ impl CockpitView {
     /// unfolding every file at once, its chevron on the content edge and
     /// its words on the text column. Under the pointer its words blend up
     /// to `INK`, as the nav's fold headings do; a press lands at
-    /// `INK_STRONG`.
+    /// `INK_STRONG`. With `create_pr`, Claude's `Create PR` ends it.
     fn changes_summary(
         &self,
         thread: ThreadId,
         files: &[FileChange],
+        create_pr: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<Div> {
         use ferrite_ui::theme::*;
@@ -106,6 +109,26 @@ impl CockpitView {
                     .child(SharedString::from(format!("{count} {noun} changed"))),
             )
             .child(diffstat(added, removed))
+            .when(create_pr, |line| {
+                line.child(create_pr_button(cx).ml(px(SPACE_3)))
+            })
+    }
+
+    /// `Create PR`: ask the Thread's agent to commit what is left, push its
+    /// branch and open the pull request (`create_pr_prompt`), queued behind
+    /// a running turn, as Claude's button does. The PR's row takes the
+    /// button's place once the forge reports it.
+    fn create_pr(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let Some(index) = self.panel_pane() else {
+            return;
+        };
+        let branch = self.thread_branch(thread);
+        let base = self
+            .facts
+            .get(thread)
+            .and_then(|facts| facts.default_branch.clone());
+        let prompt = create_pr_prompt(branch.as_deref(), base.as_deref());
+        self.send_again(index, thread, prompt, cx);
     }
 
     /// One changed file's block (r8): its head (48, `RAISED`) — the name,
@@ -229,6 +252,69 @@ impl CockpitView {
             .child(head)
             .child(self.panel_hunks_element(thread, index, &file.path, unfolded))
     }
+}
+
+/// The `Create PR` button at the end of the summary line
+/// (`PANEL_LINE_BUTTON_H`): a press stops at it, so the line does not fold.
+fn create_pr_button(cx: &mut Context<CockpitView>) -> gpui::Stateful<Div> {
+    use ferrite_ui::theme::*;
+    let id = gpui::ElementId::from("panel-create-pr");
+    let key = ferrite_ui::pointer::hover_key(&id);
+    div()
+        .id(id)
+        .debug_selector(|| "panel-create-pr".into())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(PANEL_LINE_BUTTON_H))
+        .px(px(PANEL_LINE_BUTTON_PAD_X))
+        .rounded(px(R_CONTROL))
+        .bg(paint::RAISED)
+        .text_size(px(FS_LABEL))
+        .font_weight(W_LABEL)
+        .text_color(rgb(INK_STRONG))
+        .hover_control(key)
+        .press_control()
+        .child("Create PR")
+        .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+            cx.stop_propagation();
+            if let Some(thread) = view
+                .panel_pane()
+                .and_then(|index| view.panes[index].thread())
+            {
+                view.create_pr(thread, cx);
+            }
+        }))
+}
+
+/// What `Create PR` asks the agent, after Claude's own: commit, push, open
+/// the pull request with `gh pr create` (on `base` when origin has it) and
+/// report its URL — or, when one already exists, push to it and report
+/// that one.
+fn create_pr_prompt(branch: Option<&str>, base: Option<&str>) -> String {
+    let mut prompt = String::from(
+        "Create a pull request for the changes in this session.\n\n\
+         1. Check for uncommitted changes. If any exist, stage and commit them with a \
+         message that describes what changed and why.\n\
+         2. Push the branch to the remote.\n\
+         3. Open the PR with `gh pr create`. When a base branch is named below and it \
+         exists on origin (`git ls-remote --heads origin <base>`), pass it with `--base`; \
+         otherwise leave `--base` off and let gh infer it. Write a title that summarizes \
+         the change and a body that covers what changed, why, and anything a reviewer \
+         should know. If the repo has a PR template, follow it.\n\
+         4. Report the PR URL when done.\n\n\
+         If a PR already exists for this branch, push any new commits and report its URL \
+         instead of creating a duplicate.",
+    );
+    let target: Vec<String> = [("Branch", branch), ("Base branch", base)]
+        .into_iter()
+        .filter_map(|(key, value)| Some(format!("{key}: {}", value?)))
+        .collect();
+    if !target.is_empty() {
+        prompt.push_str("\n\n");
+        prompt.push_str(&target.join("\n"));
+    }
+    prompt
 }
 
 /// `Review changes`: the Review beside the Pane on the uncommitted work.
@@ -417,4 +503,21 @@ fn diffstat(added: usize, removed: usize) -> Div {
         .font_family(FONT_CODE)
         .text_size(px(FS_CHROME_CODE))
         .child(pane::trail_diff_stat(added, removed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::create_pr_prompt;
+
+    /// `Create PR` names the branch and its base when it knows them, and
+    /// says nothing of either when it does not.
+    #[test]
+    fn the_create_pr_prompt_names_its_target() {
+        let prompt = create_pr_prompt(Some("fix-nav"), Some("main"));
+        assert!(prompt.starts_with("Create a pull request for the changes in this session."));
+        assert!(prompt.contains("`gh pr create`"));
+        assert!(prompt.ends_with("\n\nBranch: fix-nav\nBase branch: main"));
+        let bare = create_pr_prompt(None, None);
+        assert!(bare.ends_with("instead of creating a duplicate."));
+    }
 }

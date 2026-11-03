@@ -235,9 +235,15 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("1".into(), "cockpit::PickOption1", Some("Wall")),
         ("2".into(), "cockpit::PickOption2", Some("Wall")),
         ("3".into(), "cockpit::PickOption3", Some("Wall")),
-        // The cockpit: walk the grid, and jump to whoever needs answering.
-        (with_primary("]"), "cockpit::NextPane", None),
-        (with_primary("["), "cockpit::PreviousPane", None),
+        // Back and forward through where the operator has been, Claude's
+        // and the browser's ⌘[ / ⌘].
+        (with_primary("["), "cockpit::GoBack", None),
+        (with_primary("]"), "cockpit::GoForward", None),
+        // The cockpit: walk the grid (the browser's next and previous tab,
+        // ⌘⇧] / ⌘⇧[, typed as their shifted faces), and jump to whoever
+        // needs answering.
+        (with_primary("}"), "cockpit::NextPane", None),
+        (with_primary("{"), "cockpit::PreviousPane", None),
         (with_primary("d"), "cockpit::NextDecision", None),
         // The Composer's `+` menu's first verb: attach files or photos.
         (with_primary("u"), "cockpit::AttachFiles", None),
@@ -746,8 +752,10 @@ mod tests {
             ("composer::Undo", "z"),
             ("composer::Redo", "shift-z"),
             ("cockpit::CopySelection", "c"),
-            ("cockpit::NextPane", "]"),
-            ("cockpit::PreviousPane", "["),
+            ("cockpit::GoBack", "["),
+            ("cockpit::GoForward", "]"),
+            ("cockpit::NextPane", "}"),
+            ("cockpit::PreviousPane", "{"),
             ("cockpit::NextDecision", "d"),
             ("cockpit::NewThread", "n"),
             // #20: cmd-t is the browser-tab spelling of the same new Thread.
@@ -1262,8 +1270,8 @@ mod tests {
             [
                 "`cmd-a` for cockpit::ToggleNav is composer::SelectAll's in Composer; \
                  pick another key, or unbind composer::SelectAll",
-                "`cmd-]` for palette::SelectNext is cockpit::NextPane's everywhere; \
-                 pick another key, or unbind cockpit::NextPane",
+                "`cmd-]` for palette::SelectNext is cockpit::GoForward's everywhere; \
+                 pick another key, or unbind cockpit::GoForward",
             ]
         );
         assert!(table.contains(&("cmd-b".into(), "cockpit::ToggleNav", None)));
@@ -1338,8 +1346,8 @@ mod tests {
         assert!(says(
             "`shift-space` for cockpit::ToggleFullscreen would take"
         ));
-        assert!(table.contains(&("ctrl-]".into(), "cockpit::NextPane", None)));
-        assert!(table.contains(&("ctrl-[".into(), "cockpit::PreviousPane", None)));
+        assert!(table.contains(&("ctrl-}".into(), "cockpit::NextPane", None)));
+        assert!(table.contains(&("ctrl-{".into(), "cockpit::PreviousPane", None)));
         assert!(table.contains(&("ctrl-j".into(), "cockpit::TextLarger", None)));
         assert!(table.contains(&("ctrl--".into(), "cockpit::TextSmaller", None)));
     }

@@ -171,6 +171,27 @@ pub enum Op {
     TakeRecovered {
         thread: ThreadId,
     },
+    /// Go back to before the prompt `prompt` names (its `Block::prompt_id`):
+    /// it and everything after it leave the conversation. `files` restores
+    /// the files its provider checkpointed to how they were then; `edit`
+    /// hands the prompt back to the Composer (`TakeRecovered`). The reply
+    /// says only whether the rewind was asked for: the provider's answer
+    /// arrives as the cut, or as a Notice saying why not.
+    Rewind {
+        thread: ThreadId,
+        prompt: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        files: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        edit: bool,
+    },
+    /// A new Thread holding this one's conversation up to the prompt
+    /// `prompt` names, without it. The reply says only whether the fork was
+    /// asked for: the new Thread opens once the agent answers.
+    Fork {
+        thread: ThreadId,
+        prompt: String,
+    },
     /// Up or Down through the Thread's sent prompts.
     Recall {
         thread: ThreadId,
@@ -399,6 +420,8 @@ impl Op {
             | Op::Unqueue { thread, .. }
             | Op::CancelQueued { thread, .. }
             | Op::TakeRecovered { thread, .. }
+            | Op::Rewind { thread, .. }
+            | Op::Fork { thread, .. }
             | Op::Recall { thread, .. }
             | Op::Interrupt { thread, .. }
             | Op::StopSubagent { thread, .. }
@@ -1300,6 +1323,7 @@ pub enum WireControlKind {
     StopTask,
     BackgroundTasks,
     SetPermissionMode,
+    Rewind,
     #[serde(other)]
     Unknown,
 }
@@ -1948,6 +1972,7 @@ fn main_outgoing(input: &Input, duration: Option<Duration>) -> Outgoing {
         )
         | Input::Prompt(_)
         | Input::PromptObservation { .. }
+        | Input::Rewind { .. }
         | Input::CompletionObservation { .. } => unreachable!("the log keeps {input:?}"),
     };
     Outgoing::Input(WireInput::Live(live))
@@ -2566,6 +2591,7 @@ impl From<&crate::ControlKind> for WireControlKind {
             Kind::StopTask => Self::StopTask,
             Kind::BackgroundTasks => Self::BackgroundTasks,
             Kind::SetPermissionMode => Self::SetPermissionMode,
+            Kind::Rewind => Self::Rewind,
         }
     }
 }
@@ -2583,6 +2609,7 @@ impl TryFrom<&WireControlKind> for crate::ControlKind {
             Kind::StopTask => Self::StopTask,
             Kind::BackgroundTasks => Self::BackgroundTasks,
             Kind::SetPermissionMode => Self::SetPermissionMode,
+            Kind::Rewind => Self::Rewind,
             Kind::Unknown => return Err(Unknown),
         })
     }

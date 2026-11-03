@@ -784,6 +784,8 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         name: Some("CI flake".into()),
         permission_mode: Some("default".into()),
         resume: None,
+        resume_at: None,
+        fork: false,
         visuals: None,
         env: Vec::new(),
         launcher: Vec::new(),

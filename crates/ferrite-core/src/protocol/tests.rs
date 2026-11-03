@@ -473,6 +473,28 @@ fn samples() -> Vec<(&'static str, Sample)> {
             command(30, Op::TakeRecovered { thread }),
         ),
         (
+            "command_rewind",
+            command(
+                52,
+                Op::Rewind {
+                    thread,
+                    prompt: "0000beef-0003-4000-8001-000000000001".into(),
+                    files: true,
+                    edit: true,
+                },
+            ),
+        ),
+        (
+            "command_fork",
+            command(
+                53,
+                Op::Fork {
+                    thread,
+                    prompt: "0000beef-0003-4000-8001-000000000001".into(),
+                },
+            ),
+        ),
+        (
             "command_recall",
             command(
                 31,
@@ -1636,6 +1658,26 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     ids: vec!["toolu_01".into(), "toolu_02".into()],
                     summary: "Read the parser and its tests".into(),
                 }))),
+            ),
+        ),
+        (
+            "input_record_prompt_observation",
+            input(
+                42,
+                WireInput::Record(record(Input::PromptObservation {
+                    sent_at: "7:31 pm".into(),
+                    prompt_id: Some("0000beef-0003-4000-8001-000000000001".into()),
+                })),
+            ),
+        ),
+        (
+            "input_record_rewind",
+            input(
+                43,
+                WireInput::Record(record(Input::Rewind {
+                    prompt: "0000beef-0003-4000-8001-000000000001".into(),
+                    dropped: 2,
+                })),
             ),
         ),
         (

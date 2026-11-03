@@ -97,7 +97,8 @@
 //!    Steel blue is retired: focus, selection, `❯` and the caret use
 //!    `INK_STRONG`, and selection is a lighter fill, never a coloured
 //!    outline. A link is the one ink that is not state: the Claude app's
-//!    link blue (`LINK_INK`), underlined in prose — the owner's spec. Hue
+//!    link blue (`LINK_INK`), underlined in prose — the owner's spec; and a
+//!    menu's standing `✓` wears Claude's check blue (`MENU_CHECK_INK`). Hue
 //!    is for state only: `RUNNING` green (working, `ok`, diff `+`),
 //!    `ATTENTION` yellow (needs you), `MODE_ATTENTION_INK` amber (the
 //!    permission mode that asks before every change, `mode_is_manual`),
@@ -239,15 +240,23 @@ pub const CARD: u32 = 0x1a1a1a;
 /// The frame — the nav, the heads, the right panel, a Group's gutter, the
 /// bottom bar: the plane itself (rule 2).
 pub const FRAME: u32 = CARD;
-/// `#222222` — the sidebar (the nav column): a step over the plane, as
-/// Claude's sidebar sits a little lighter than its transcript (sampled
-/// from claude/*.png: the transcript `#191919`, the sidebar ~12 levels
-/// over it under the window's vibrancy), so the column reads as its own
-/// region and not by its hairline alone. Its rows step up from it:
-/// `SIDEBAR_HOVER` under the pointer, `SIDEBAR_SELECTED` selected.
-pub const SIDEBAR: u32 = 0x222222;
-pub const SIDEBAR_HOVER: u32 = 0x2a2a2a;
-pub const SIDEBAR_SELECTED: u32 = 0x303030;
+/// `#272727` — the sidebar (the nav column): lighter than the plane, as
+/// Claude's sidebar sits over its transcript (sampled from claude/*.png:
+/// the transcript `#191919`, the sidebar `#292428` under the window's
+/// vibrancy, ~14 levels over it; this is that grey without the wallpaper's
+/// tint), so the column reads as its own region and not by its hairline
+/// alone. Its rows step up from it: `SIDEBAR_HOVER` under the pointer,
+/// `SIDEBAR_SELECTED` selected.
+pub const SIDEBAR: u32 = 0x272727;
+pub const SIDEBAR_HOVER: u32 = 0x2f2f2f;
+pub const SIDEBAR_SELECTED: u32 = 0x363636;
+/// A chip whose menu is open: pressed, Claude's #363636 under its model and
+/// permission chips (claude/model-menu.png x1172, y1018–1041).
+pub const CHIP_OPEN: u32 = 0x363636;
+/// The standing choice's `✓` in a menu: Claude's check blue
+/// (claude/model-menu.png x1266–1280, y744–755) — the owner's call, the one
+/// hue in a menu that is not state (rule 6).
+pub const MENU_CHECK_INK: u32 = 0x237ddb;
 /// `#171717` — sunk below the plane: a Decision's command well, the
 /// palette scrim's base.
 pub const SUNKEN: u32 = 0x171717;
@@ -352,6 +361,8 @@ pub mod paint {
     pub const SIDEBAR: Paint = Paint::solid(super::SIDEBAR);
     pub const SIDEBAR_HOVER: Paint = Paint::solid(super::SIDEBAR_HOVER);
     pub const SIDEBAR_SELECTED: Paint = Paint::solid(super::SIDEBAR_SELECTED);
+    pub const CHIP_OPEN: Paint = Paint::solid(super::CHIP_OPEN);
+    pub const ENV_STRIP: Paint = Paint::solid(super::ENV_STRIP);
     /// A diff's or a code fence's box, on a reading surface (the card, the
     /// panel).
     pub const BLOCK: Paint = Paint::solid(super::BLOCK);
@@ -895,6 +906,16 @@ pub const TITLEBAR_H: f32 = 44.0;
 /// (13). Off the scale: the mockups' head.
 pub const VIEW_HEAD_PAD_X: f32 = 20.0;
 pub const VIEW_HEAD_GAP: f32 = 10.0;
+/// The head's history arrows (Claude's `‹ ›`, claude/answer-done.png x 126
+/// and 153): `ICON_BUTTON` doors edge to edge, a 28pt pitch, the glyph
+/// `NAV_TOGGLE_GLYPH`. At an end the arrow is disabled in `TEXT_FAINT`:
+/// Claude's disabled arrow is 0.6 of its live one (#7a777a by #ccc9cb), as
+/// `TEXT_FAINT` is of the doors' resting `INK_SUBTLE`.
+pub const HISTORY_ARROW_DISABLED_INK: u32 = TEXT_FAINT;
+/// The title-bar tools at the row's right end (Claude's panel, terminal,
+/// diff, preview, files, `⋯`): `ICON_BUTTON` doors 4 apart, Claude's 32pt
+/// pitch (claude/answer-done.png x 1738–1898), the panel toggle the last.
+pub const TITLE_TOOLS_GAP: f32 = SPACE_1;
 pub const CONTROL_CHIP_PAD_X: f32 = 10.0;
 pub const CONTROL_CHIP_GAP: f32 = SPACE_1_5;
 pub const CONTROL_CHIP_ICON: f32 = 13.0;
@@ -963,6 +984,11 @@ pub const PANEL_SECTION_H: f32 = 32.0;
 pub const PANEL_SECTION_GAP: f32 = SPACE_4;
 /// 32px — the panel's full-width secondary buttons (`Review changes`).
 pub const PANEL_BUTTON_H: f32 = 32.0;
+/// 24px — a button at the end of a panel line (`Create PR`, Claude's: 77×24
+/// at the right of the Changes line), its words `PANEL_LINE_BUTTON_PAD_X`
+/// in from its sides.
+pub const PANEL_LINE_BUTTON_H: f32 = 24.0;
+pub const PANEL_LINE_BUTTON_PAD_X: f32 = 10.0;
 /// A changed file's actions (copy its path, open it in its app), laid
 /// over its diffstat while the pointer is on its head: 22px doors (the
 /// nav heading's `+`) holding a 13px glyph, 2px apart, on the head's own
@@ -1053,9 +1079,12 @@ pub const CONTROL_H: f32 = 28.0;
 pub const CONTROL_PAD_X: f32 = SPACE_3;
 /// **The float's shell** (SPEC §5.8 "Other floats": the palette's at a
 /// smaller scale): radius `R_FLOAT`, rows `FLOAT_ROW_H` (`LH_UI` and 5px
-/// above and below), each inset `FLOAT_PAD` from the float's edge with its
-/// text `MENU_ROW_PAD_X` inside its fill, so a line without a fill (a
-/// head, a note, a footer) sets its text `FLOAT_PAD_X` in.
+/// above and below), each inset `MENU_ROW_INSET_X` from the float's sides
+/// (`FLOAT_PAD` above and below the rows) with its text `MENU_ROW_PAD_X`
+/// inside its fill, so a line without a fill (a head, a note, a footer, a
+/// divider's ends) sets its text `FLOAT_PAD_X` in: 16, Claude's model and
+/// permission menus (claude/model-menu.png: text x1053 in a menu at
+/// x1037; hover fill 6 in from the menu's side, claude/effort-menu.png).
 pub const FLOAT_ROW_H: f32 = 30.0;
 /// A row with a one-line note under its label (a mode's description): the
 /// label's line and the note's meta line in 6px of air above and below.
@@ -1063,17 +1092,18 @@ pub const FLOAT_ROW_NOTE_H: f32 = LH_UI + LH_META + 2.0 * SPACE_1_5;
 /// A row's tag (`Recommended`): white at 8%, a word set apart.
 pub const BADGE_FILL: u32 = 0xffffff14;
 pub const FLOAT_PAD: f32 = SPACE_1;
-pub const FLOAT_PAD_X: f32 = FLOAT_PAD + MENU_ROW_PAD_X;
+pub const FLOAT_PAD_X: f32 = MENU_ROW_INSET_X + MENU_ROW_PAD_X;
 /// The gap a float keeps from the control that opened it.
 pub const FLOAT_OFFSET: f32 = 6.0;
 /// The context menu's width, and any floating list's height cap before it
 /// scrolls.
 pub const MENU_W: f32 = 256.0;
 pub const MENU_MAX_H: f32 = 420.0;
-/// A menu row's inline padding and the gap between its label and trailing
-/// parts; its fill's radius is `R_CONTROL`, inside the float's 12 at a 4px
-/// inset.
-pub const MENU_ROW_PAD_X: f32 = SPACE_2;
+/// A menu row's side inset, its inline padding and the gap between its
+/// label and trailing parts; its fill's radius is `R_CONTROL`, inside the
+/// float's 12 at a 6px inset.
+pub const MENU_ROW_INSET_X: f32 = SPACE_1_5;
+pub const MENU_ROW_PAD_X: f32 = 10.0;
 pub const MENU_ROW_GAP: f32 = SPACE_3;
 /// A section heading: 28px, its 12/500 word sat on the heading's foot
 /// (4px under it) so it hugs the rows it heads, as the palette's does.
@@ -1312,9 +1342,9 @@ pub fn init_components(cx: &mut gpui::App) {
 // - **Activity.** A call or a run of calls is one muted line in the app's
 //   words (`Edited 3 files ›`, `Ran cargo test · 954 passed ›`), a literal
 //   a step brighter on no chip; no icon, no time, its `›` when it opens.
-//   Opened, what it produced sits in one output box under it. The agent's
-//   narration between calls reads in the same muted ink; only a turn's last
-//   prose reads bright.
+//   Opened, its input sits in a quiet well, its output plain under it.
+//   The agent's narration between calls reads in the same muted ink; only
+//   a turn's last prose reads bright.
 // - **Rhythm in rows.** A turn's work reads as one list, its rows half a
 //   line apart; every other block (a prompt, an answer, the stamp) stands
 //   a line and a half off; a row that answers the one above it sits flush.
@@ -1470,11 +1500,14 @@ pub const PROMPT_BUBBLE_PAD_X: f32 = SPACE_4;
 pub const PROMPT_BUBBLE_PAD_Y: f32 = 10.0;
 pub const PROMPT_BUBBLE_GAP: f32 = SPACE_1_5;
 
-/// **A sent image's thumbnail** (the prototype's `.thumb`): the picture at
-/// its own proportions, no larger than `THUMB_MAX_W` × `THUMB_MAX_H` (nor
-/// its own size), at `R_CARD` in a 1px `FIELD_RING`.
-pub const THUMB_MAX_W: f32 = 320.0;
-pub const THUMB_MAX_H: f32 = 200.0;
+/// **A sent image's thumbnail** (Claude's, over its bubble): the picture
+/// at its own proportions, no larger than `THUMB_MAX_W` × `THUMB_MAX_H`
+/// (nor its own size), at `R_CARD` in a 1px `LINE` ring,
+/// `PROMPT_IMAGE_GAP` above the bubble. claude/plus-menu.png: a 16:10
+/// screenshot at 480 × 269, 10 above its bubble, right edges level.
+pub const THUMB_MAX_W: f32 = 480.0;
+pub const THUMB_MAX_H: f32 = 320.0;
+pub const PROMPT_IMAGE_GAP: f32 = 10.0;
 
 /// **The block box** — a diff's or a code fence's (SPEC §5.4): `paint::BLOCK`
 /// ground, `R_CONTROL` corners, an inset 1px `BLOCK_RING`, `BLOCK_PAD_Y`
@@ -1927,21 +1960,26 @@ pub const EMPTY_RECENT_MAX: usize = 4;
 /// The provider mark on the empty board's provider rows.
 pub const BAR_MARK: f32 = 11.0;
 
-/// An empty draft's mark, flat, in a quiet ink a step over the plane.
-pub const EMBOSS_ON_PANE: u32 = LINE;
-/// 44px — an empty draft's mark over its start card, the Composer at the
-/// foot as its Thread will keep it.
-pub const DRAFT_MARK: f32 = 44.0;
-/// An empty draft's start card, Claude's new session (`components.md`):
-/// 320 wide at the body's centre, its groups `R_CARD` cards ringed in
-/// `CARD_RING`, `DRAFT_CARD_GAP` apart and under the mark; the setup
-/// rows (project, workspace) 40 high and split by a hairline, the
-/// suggestion rows 34; a row's 14px icon `SPACE_3` in, its words 8 after.
-pub const DRAFT_CARD_W: f32 = 320.0;
-pub const DRAFT_CARD_GAP: f32 = SPACE_3;
-pub const DRAFT_SETUP_ROW_H: f32 = 40.0;
-pub const DRAFT_SUGGESTION_ROW_H: f32 = 34.0;
-pub const DRAFT_SUGGESTIONS_MAX: usize = 2;
+/// **The start hero**, an empty Thread's or a draft's, Codex's home
+/// (codex/home.png): the mark `HERO_MARK` square in `HERO_MARK_INK` (its
+/// #5d5d5d, x1148–1195, y399–446), `HERO_MARK_GAP` over `What should we
+/// build in <project>?` at `FS_HOME_TITLE`, centred over the body.
+pub const HERO_MARK: f32 = 48.0;
+pub const HERO_MARK_INK: u32 = TEXT_FAINT;
+pub const HERO_MARK_GAP: f32 = 28.0;
+/// **The env strip** over an empty Thread's or a draft's box, Codex's
+/// (codex/home.png): #282828 between the plane #181818 and the box #363636
+/// there — here the step between `CARD` and `FIELD` — `ENV_STRIP_H` tall
+/// (y894–932), `ENV_STRIP_INSET` in from the box's sides (x818 in a box at
+/// x805), a chip's mark `ENV_STRIP_PAD_X` + `FOOTER_CHIP_PAD_X` in (x832),
+/// `ENV_MARK` with `ENV_MARK_GAP` to its words, chips `ENV_CHIP_GAP` apart.
+pub const ENV_STRIP: u32 = 0x262626;
+pub const ENV_STRIP_H: f32 = 38.0;
+pub const ENV_STRIP_INSET: f32 = SPACE_3;
+pub const ENV_STRIP_PAD_X: f32 = SPACE_2;
+pub const ENV_MARK: f32 = 14.0;
+pub const ENV_MARK_GAP: f32 = SPACE_1_5;
+pub const ENV_CHIP_GAP: f32 = SPACE_3;
 // (end WP-C) — append above this line only
 
 // ======================================== WP-D · composer, pickers, usage, draft
@@ -2020,11 +2058,9 @@ pub const COMPOSER_SELECTION: u32 = TEXT_SELECTION_WASH;
 /// An `@`-mention the operator picked: a path, so `LINK_INK` on no
 /// ground — the terminal's own colour for a path.
 pub const MENTION_INK: u32 = LINK_INK;
-/// The Context tab's blocks (`pane::context_usage`): between one window's
-/// block and the next, and inside one block; the blocks stand twice as far
-/// apart as their own lines.
+/// The panel's Context section (`pane::context_usage`): its stacked bar
+/// (4, Claude's), and the gap above the turn's usage under the legend.
 pub const USAGE_CARD_GAP: f32 = SPACE_3;
-pub const USAGE_CARD_ROW_GAP: f32 = SPACE_1_5;
 pub const USAGE_CARD_BAR_H: f32 = 4.0;
 /// Where a usage reading turns from neutral to ATTENTION (80%, rule
 /// 2.6.6) — a fraction of the window, not a count — on the status line's
@@ -2035,11 +2071,16 @@ pub const USAGE_TIGHT: f32 = 0.80;
 /// its state and two quiet actions (`needs sign-in`, `Sign in`,
 /// `Reconnect`).
 pub const SESSION_CARD_W: f32 = 416.0;
-/// One row of the usage card's legend, its colour square, and the share
-/// column the percentages right-align in.
-pub const USAGE_LEGEND_ROW_H: f32 = 20.0;
-pub const USAGE_SWATCH: f32 = 8.0;
+/// One row of the panel's context legend (Claude's, 24 apart), its colour
+/// square, the column its names start on (24 in from the content edge, the
+/// square or a list's chevron before it), and the share column the
+/// percentages right-align in. Its groups — the window's categories, the
+/// deferred ones, the lists — stand `USAGE_LEGEND_GROUP_GAP` apart.
+pub const USAGE_LEGEND_ROW_H: f32 = 24.0;
+pub const USAGE_SWATCH: f32 = 10.0;
+pub const USAGE_LEGEND_TEXT_X: f32 = SPACE_6;
 pub const USAGE_SHARE_W: f32 = 44.0;
+pub const USAGE_LEGEND_GROUP_GAP: f32 = SPACE_1_5;
 /// What fills the context window, one ink per category in the stacked bar
 /// and its legend: the terminal palette, the operator's own words first
 /// (blue, as the retired accent had them: a category, not a state).
@@ -2094,8 +2135,10 @@ pub const ATTACH_REMOVE_ICON: f32 = 10.0;
 /// `COMPOSER_INPUT_PAD_X` in and `COMPOSER_INPUT_PAD_T` under its top (or
 /// the queued row), `ATTACH_ROW_GAP` over the text.
 pub const ATTACH_ROW_GAP: f32 = SPACE_2;
-/// A Composer chip's menu hangs off its chip, its foot 5px over it.
-pub const MODEL_PICKER_GAP: f32 = 5.0;
+/// A Composer chip's menu hangs off its chip, its foot 7px over it, its
+/// right edge on the chip's (claude/model-menu.png: menu foot y1011, chip
+/// top y1018; both right edges x1295).
+pub const MODEL_PICKER_GAP: f32 = 7.0;
 /// The Solo Composer's box stands `COMPOSER_OUTSET` past the reading
 /// column's text at each side (Claude's: the box frames the column), so at
 /// most `COMPOSER_MAX_W` wide and `COMPOSER_INSET` in from the card's sides
@@ -2164,9 +2207,21 @@ pub const FOOTER_CHIP_H: f32 = 24.0;
 pub const FOOTER_CHIP_PAD_X: f32 = SPACE_1_5;
 pub const FOOTER_CHIP_GAP: f32 = SPACE_1_5;
 pub const FOOTER_WORD_GAP: f32 = 10.0;
-/// The plan-usage card the ring opens on hover (Claude's): `USAGE_TIP_W`
-/// wide, each window's bar `USAGE_CARD_BAR_H`.
-pub const USAGE_TIP_W: f32 = 344.0;
+/// The plan-usage popover a click on the ring opens (Claude's, measured on
+/// claude/usage-popover.png): `USAGE_POP_W` wide, its lines
+/// `USAGE_POP_PAD_Y` in from top and foot and `USAGE_POP_PAD_X` from the
+/// sides, its head and each window `USAGE_POP_GAP` apart, each window's
+/// bar `USAGE_POP_BAR_H` on `USAGE_POP_TRACK`, `USAGE_POP_BAR_GAP` under its
+/// line. Its foot rests `USAGE_POP_OFFSET` above the ring's box, its right
+/// edge on the box's.
+pub const USAGE_POP_W: f32 = 360.0;
+pub const USAGE_POP_PAD_X: f32 = SPACE_4;
+pub const USAGE_POP_PAD_Y: f32 = 14.0;
+pub const USAGE_POP_GAP: f32 = SPACE_3;
+pub const USAGE_POP_BAR_GAP: f32 = 3.0;
+pub const USAGE_POP_BAR_H: f32 = 3.0;
+pub const USAGE_POP_TRACK: u32 = 0x454545;
+pub const USAGE_POP_OFFSET: f32 = SPACE_2;
 pub const CONTEXT_RING: f32 = 14.0;
 pub const CONTEXT_RING_STROKE: f32 = 1.75;
 // (end WP-D) — append above this line only
@@ -2490,39 +2545,22 @@ pub const QUESTION_OTHER_H: f32 = LH_UI;
 /// on the primary fill.
 pub const SEND_KEY_INK: u32 = 0x111214b3;
 
-/// The Solo card's tab strip (SPEC §5.3): one `SUBJECT_STRIP_H` (38) row
-/// at the card's top — under the Group head in a board cell — padded
-/// `SUBJECT_STRIP_PAD_X` (6) at both ends, its tabs `SUBJECT_TAB_GAP` (2)
-/// apart, closed by a `LINE` the body clips at. A tab is
-/// `SUBJECT_TAB_H` (28) high at `R_CONTROL`, `FS_LABEL` SF Pro: the selected one
-/// on `RAISED` in `INK_STRONG`, the others bare in `INK`.
-/// `Main` leads with the `terminal` icon (`SUBJECT_TAB_ICON`, 13) and pads
-/// `SUBJECT_TAB_PAD_L` / `SUBJECT_MAIN_PAD_R` (10 / 8); a live Subagent's
-/// tab pads 10 both sides and leads with its mark in a fixed
-/// `SUBJECT_MARK_W` slot (a nav mark's icon box, the running spinner's), so
-/// a state change never resizes it. Labels ellipsise at
-/// `SUBJECT_LABEL_MAX_W` (200). Icon or mark to label: `SUBJECT_TAB_INNER_GAP`
-/// (8). The `N done ▾` menu button pads 10 / 8, its parts
-/// `SUBJECT_MENU_GAP` (6) apart, after a 1×16 `LINE` separator with
-/// `SUBJECT_SEPARATOR_MX` (6) either side. Off the scale: the mockups' tabs.
-pub const SUBJECT_STRIP_H: f32 = 38.0;
-pub const SUBJECT_STRIP_PAD_X: f32 = SPACE_1_5;
-pub const SUBJECT_TAB_GAP: f32 = SPACE_0_5;
-pub const SUBJECT_TAB_H: f32 = 28.0;
-pub const SUBJECT_TAB_PAD_L: f32 = 10.0;
-pub const SUBJECT_MAIN_PAD_R: f32 = SPACE_2;
-pub const SUBJECT_TAB_ICON: f32 = 13.0;
-pub const SUBJECT_MARK_W: f32 = NAV_MARK_ICON;
-pub const SUBJECT_TAB_INNER_GAP: f32 = SPACE_2;
-pub const SUBJECT_LABEL_MAX_W: f32 = 200.0;
-pub const SUBJECT_MENU_GAP: f32 = SPACE_1_5;
-pub const SUBJECT_MENU_CHEVRON: f32 = 11.0;
-pub const SUBJECT_SEPARATOR_H: f32 = SPACE_4;
-pub const SUBJECT_SEPARATOR_MX: f32 = SPACE_1_5;
-/// A Subagent tab's `Back to Main` row in the Composer's place (SPEC
-/// §5.3): `SUBJECT_STRIP_H` high, the coverage words in `INK_SUBTLE` on the
-/// Composer's inset.
-pub const CHILD_FOOTER_H: f32 = SUBJECT_STRIP_H;
+/// A subagent's head, over its transcript while the Pane shows one (no
+/// capture of Claude's drill-in exists: sized as the strip it replaced): one
+/// `SUBAGENT_HEAD_H` (38) row at the card's top — under the Group head in a
+/// board cell — padded `SUBAGENT_HEAD_PAD_X` (6), closed by a `LINE` the body
+/// clips at. `FS_LABEL` SF Pro: the back button (`ICON_BUTTON`), the `Main`
+/// crumb `SUBAGENT_CRUMB_H` (28) high at `R_CONTROL` in `INK_SUBTLE`, a
+/// `SUBAGENT_CRUMB_ICON` (13) `›` in `TEXT_FAINT`, then the agent's mark in a
+/// fixed `SUBAGENT_MARK_W` slot (a nav mark's icon box, the running
+/// spinner's), its name in `INK_STRONG` and its state word in `INK_SUBTLE`,
+/// `SUBAGENT_NAME_GAP` (8) apart.
+pub const SUBAGENT_HEAD_H: f32 = 38.0;
+pub const SUBAGENT_HEAD_PAD_X: f32 = SPACE_1_5;
+pub const SUBAGENT_CRUMB_H: f32 = 28.0;
+pub const SUBAGENT_CRUMB_ICON: f32 = 13.0;
+pub const SUBAGENT_MARK_W: f32 = NAV_MARK_ICON;
+pub const SUBAGENT_NAME_GAP: f32 = SPACE_2;
 // (end WP-F) — append above this line only
 
 // ======================================== WP-G · nav
@@ -2654,10 +2692,6 @@ pub const NAV_MARK_ICON_SMALL: f32 = 13.0;
 pub const NAV_PARKED_OPACITY: f32 = 0.5;
 /// `#a6a6a6` — line 2 of the selected row, a step over `INK_SUBTLE`.
 pub const NAV_LINE2_SELECTED: u32 = 0xa6a6a6;
-/// 18px — the needs-you pill (radius 9, padding 0 5, `ATTENTION` at 16%).
-pub const NAV_PILL: f32 = 18.0;
-pub const NAV_PILL_PAD_X: f32 = 5.0;
-pub const NAV_PILL_FILL: u32 = 0xe6c47c29;
 /// The blocked dot's halo: `ATTENTION` at 15%.
 pub const NAV_HALO_FILL: u32 = 0xe6c47c26;
 /// 12px — a Group row's chevron, at x 11 (`NAV_CHEVRON_X`).

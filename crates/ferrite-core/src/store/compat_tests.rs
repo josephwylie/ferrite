@@ -296,8 +296,11 @@ const V12_TORN: &str = concat!(
 pub(crate) const FIXTURES: &[(&str, &str, usize, u64)] = &[
     ("v1", V1, 5, 3446535063353353541),
     ("v8-handover", V8_HANDOVER, 13, 10633635308718456287),
-    ("v11-activity", V11_ACTIVITY, 31, 12504063494823536178),
-    ("v12-torn", V12_TORN, 10, 5782667316263972688),
+    // Repinned when `ContextDetails` dropped `usable_window` and
+    // `auto_compact_threshold`: the record still loads, without them.
+    ("v11-activity", V11_ACTIVITY, 31, 945556790741783628),
+    // Repinned at schema 15: its observation now reads `prompt_id: None`.
+    ("v12-torn", V12_TORN, 10, 2170776138345052278),
 ];
 
 /// Old logs load to exactly what they always showed — and still do after a
@@ -341,7 +344,7 @@ fn invariant_every_logged_event_is_still_logged_in_order() {
     let child = AgentKey::new(Provider::Claude, "sess-1", "agent-1");
     let events = |writer: &mut ThreadWriter, round: usize| {
         writer.record_prompt(&format!("prompt {round}")).unwrap();
-        writer.record_prompt_observation("7:31 pm").unwrap();
+        writer.record_prompt_observation("7:31 pm", None).unwrap();
         for event in [
             SessionEvent::Init {
                 session_id: format!("sess-{round}"),

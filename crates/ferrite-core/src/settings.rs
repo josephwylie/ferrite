@@ -54,6 +54,13 @@ pub struct Settings {
     /// where the window has room for it; ⌥⌘B and its own hide button
     /// flip it. Default: true.
     pub panel_shown: bool,
+    /// The Threads the nav's `Pinned` section holds, in the order they
+    /// were pinned (the row menu's `Pin`). An id whose Thread is gone is
+    /// passed over. Default: none.
+    pub pinned_threads: Vec<crate::ThreadId>,
+    /// The Projects whose nav section is folded to its heading (its `▾`).
+    /// Default: none.
+    pub folded_projects: Vec<crate::workspace::registry::ProjectId>,
     /// How the navigation orders the rows inside each Project: creation
     /// order, or most recently used first. Changed from the ⌘K palette.
     pub thread_list_order: ThreadListOrder,
@@ -239,6 +246,8 @@ impl Default for Settings {
             codex_sandbox: None,
             nav_collapsed: false,
             panel_shown: true,
+            pinned_threads: Vec::new(),
+            folded_projects: Vec::new(),
             thread_list_order: ThreadListOrder::Created,
             confirm_delete: true,
             auto_title: true,
@@ -418,6 +427,8 @@ mod tests {
             codex_sandbox: Some("workspace-write".to_string()),
             nav_collapsed: true,
             panel_shown: false,
+            pinned_threads: vec![crate::ThreadId::new(7)],
+            folded_projects: vec![serde_json::from_str("3").unwrap()],
             thread_list_order: ThreadListOrder::Recent,
             confirm_delete: false,
             auto_title: false,

@@ -17,13 +17,22 @@ fn contract_context_card_refreshes_and_shows_native_details(cx: &mut TestAppCont
         },
         SessionEvent::ContextDetails {
             details: ferrite_core::ContextDetails {
-                usable_window: Some(150000),
-                auto_compact_threshold: Some(140000),
                 is_auto_compact_enabled: Some(true),
-                categories: vec![ferrite_core::ContextCategory {
-                    name: "Messages".into(),
-                    tokens: 12000,
+                categories: vec![
+                    ferrite_core::ContextCategory {
+                        name: "Messages".into(),
+                        tokens: 12000,
+                    },
+                    ferrite_core::ContextCategory {
+                        name: "MCP tools (deferred)".into(),
+                        tokens: 9000,
+                    },
+                ],
+                mcp_tools: vec![ferrite_core::ContextItem {
+                    name: "mcp__docs__search".into(),
+                    tokens: 202,
                 }],
+                ..Default::default()
             },
         },
     ] {
@@ -38,16 +47,25 @@ fn contract_context_card_refreshes_and_shows_native_details(cx: &mut TestAppCont
         fake.controls.borrow().as_slice(),
         [ferrite_core::SessionControl::RefreshContext]
     );
+    // The legend is open, as Claude's: the window's categories, then the
+    // deferred ones apart, then the lists, folded.
+    let held = cx
+        .debug_bounds("context-category-0-12000")
+        .expect("the legend is always open");
+    let deferred = cx.debug_bounds("context-category-1-9000").unwrap();
+    let list = cx.debug_bounds("context-list-mcp-tools").unwrap();
     assert!(
-        cx.debug_bounds("context-category-0-12000").is_none(),
-        "the legend starts folded"
+        deferred.top() - held.bottom() >= px(ferrite_ui::theme::USAGE_LEGEND_GROUP_GAP),
+        "deferred tools stand apart"
     );
-    let toggle = cx.debug_bounds("context-window-toggle").unwrap();
-    cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+    assert!(list.top() > deferred.bottom(), "the lists come last");
+    assert!(cx.debug_bounds("context-list-mcp-tools-0").is_none());
+    cx.simulate_click(list.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    assert!(cx.debug_bounds("context-usable-150000").is_some());
-    assert!(cx.debug_bounds("context-compaction-140000").is_some());
-    assert!(cx.debug_bounds("context-category-0-12000").is_some());
+    assert!(
+        cx.debug_bounds("context-list-mcp-tools-0").is_some(),
+        "a list folds open to its items"
+    );
     cx.run_until_parked();
     assert_eq!(
         fake.controls.borrow().len(),

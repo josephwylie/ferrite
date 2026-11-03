@@ -15,6 +15,7 @@
 //! Composer. Two altitudes (R12): the transcript, or the wall tile — the
 //! state word in colour, the last lines dim, the quick answers.
 
+mod agents;
 mod compact_composer;
 mod composer;
 mod menus;
@@ -22,23 +23,23 @@ mod output;
 mod text;
 mod usage;
 mod working;
+pub(crate) use agents::{is_agent, render_agent};
+pub use agents::{AgentFace, AgentFaces, AgentRun};
 #[cfg(any(test, feature = "test-support"))]
 pub use composer::model_label;
 pub use composer::{
-    attach_button, composer_footer, composer_row_limit, flat_facts_text, footer_word, mode_chip,
-    model_effort_chip, offers_import, permission_mode_label, queued_close, queued_count,
+    attach_button, composer_footer, composer_row_limit, env_strip, env_word, flat_facts_text,
+    mode_chip, model_effort_chip, offers_import, permission_mode_label, queued_close, queued_count,
     queued_edit, queued_send_now, queued_takes_back, send_button, send_is_stop, toolbar_chip,
     ComposerControls,
 };
 use composer::{
-    chip_face, composer_region, composer_stack, ghost_row, in_column, placeholder, queue_card,
-    ComposerStack, Ghost,
+    composer_region, composer_stack, env_face, ghost_row, placeholder, queue_card, ComposerStack,
+    Ghost,
 };
 pub use menus::{menu_item, menu_popover, menu_row, picker_row, picker_section, MenuRow};
+use output::{call_body, diff_rows, hunk_rows, render_diff, running_tests, DiffRow};
 pub use output::{diff_number_cells, test_elbow, DiffKind, DiffPaint, TestElbow};
-use output::{
-    diff_rows, hunk_rows, output_box, render_diff, running_tests, shell_card, tool_details, DiffRow,
-};
 pub(crate) use text::{collect_block_text, collect_group_text, group_live, turn_stamp};
 pub use usage::{
     compact_count, context_meter_segments, context_segments, context_usage, ctx_meter_ink,
@@ -81,7 +82,6 @@ use ferrite_ui::components;
 use ferrite_ui::components::Tip as _;
 use ferrite_ui::icons::{self, icon};
 use ferrite_ui::pointer::{Pointer, PointerPressed};
-use gpui::component::scroll::ScrollableElement;
 // Every color and metric here is a Soft token (ferrite_ui::theme) — no literal
 // survives in render code, which is #22's grep-able law.
 use ferrite_ui::theme;
@@ -112,8 +112,6 @@ pub struct PaneView {
     pub selected: Subject,
     pub generation: u64,
     pub rich: crate::rich::TextCache,
-    pub agent_menu_open: bool,
-    pub subject_strip_width: f32,
     pub history_error: Option<String>,
     pub request_error: Option<(ferrite_core::activity::DecisionHandle, String)>,
     /// Retained, virtualized transcript entities keyed by Subject. The pane
@@ -242,8 +240,6 @@ impl PaneView {
             selected: Subject::Main,
             generation: 0,
             rich,
-            agent_menu_open: false,
-            subject_strip_width: 0.,
             history_error: None,
             request_error: None,
             transcripts: HashMap::from([(Subject::Main, transcript)]),
@@ -292,8 +288,6 @@ impl PaneView {
             selected: Subject::Main,
             generation: 0,
             rich,
-            agent_menu_open: false,
-            subject_strip_width: 0.,
             history_error: None,
             request_error: None,
             transcripts: HashMap::from([(Subject::Main, transcript)]),
@@ -418,7 +412,6 @@ impl PaneView {
         self.subject_views
             .insert(std::mem::replace(&mut self.selected, subject), next);
         self.ensure_transcript(cx);
-        self.agent_menu_open = false;
         self.history_error = None;
     }
 
@@ -634,17 +627,14 @@ pub struct PaneWiring {
     /// opens the rename editor, or the editor itself while renaming. None
     /// draws the plain name (L2, L3, drafts).
     pub title: Option<AnyElement>,
-    /// The tab strip's tabs and its `N done` menu (`subject_strip`); None
-    /// draws no strip.
-    pub agents: Option<AnyElement>,
-    /// The strip's split-right button (Solo).
-    pub split: Option<AnyElement>,
+    /// A subagent's head (`subagent_head`) while the Pane shows one; None
+    /// on Main, which has none.
+    pub subagent_head: Option<AnyElement>,
     pub activity_decisions: Option<AnyElement>,
     /// A question too big for this Pane's body: it answers in fullscreen
     /// (the expand key), and the body keeps its transcript meanwhile.
     pub expand_question: bool,
     pub question_measurement: Option<AnyElement>,
-    pub child_footer: Option<AnyElement>,
     /// Wires the whole L1 head as the Pane's drag handle (the cockpit
     /// supplies it while the board has somewhere to move the Pane to).
     pub head_drag: Option<HeadDrag>,
@@ -658,9 +648,9 @@ pub struct PaneWiring {
     /// The Group head's fill button (`fill_button`), wired to fill the
     /// board with this Pane; None in Solo.
     pub fill: Option<AnyElement>,
-    /// An empty Thread's start card groups (`start_card`), centred over
-    /// its body until the first prompt; empty draws none.
-    pub start: Vec<AnyElement>,
+    /// An empty Thread's hero project word (`hero_project`): the hero
+    /// (`start_hero`) stands centred over its body until the first prompt.
+    pub start: Option<AnyElement>,
 }
 
 /// Turns the Pane head's band into its drag handle: the cockpit gives it an
@@ -855,8 +845,6 @@ pub(crate) struct PaneCtx<'a> {
     pub attachments: Option<AnyElement>,
     pub background: Option<AnyElement>,
     pub menu: Option<AnyElement>,
-    /// A Subagent's footer, drawn where the Composer would be.
-    pub child_footer: Option<AnyElement>,
     /// `l1_dock`: activity requests that were not docked in the body.
     pub activity_decisions: Option<AnyElement>,
     /// The docked Decision merges into this Pane's Composer (one block).
@@ -901,12 +889,10 @@ pub fn render_pane(
         background,
         menu,
         title,
-        agents,
-        split,
+        subagent_head,
         activity_decisions,
         expand_question,
         question_measurement,
-        child_footer,
         head_drag,
         quick_answers,
         toolbar,
@@ -1035,7 +1021,6 @@ pub fn render_pane(
         attachments,
         background,
         menu,
-        child_footer,
         activity_decisions: None,
         decision_joined,
         toolbar,
@@ -1043,12 +1028,11 @@ pub fn render_pane(
 
     // Solo (fullscreen included) has no head: the nav's row names the
     // Thread (C2, ADR 0014), and the body starts at the Pane's own top edge. A
-    // Group's Pane wears the one head. Subagent tabs keep a strip of their
-    // own either way.
-    let subagents = thread.map_or(0, |thread| thread.activity().children().len());
+    // Group's Pane wears the one head. A subagent's transcript has its own
+    // head over it either way.
     let mut pane = shell
         .children(head(title))
-        .children(agents.and_then(|agents| tab_strip(key, agents, split, subagents)));
+        .children(subagent_head.map(|head| subagent_strip(key, head)));
     match transcript {
         Some(_) => {
             view.rich
@@ -1080,9 +1064,9 @@ pub fn render_pane(
                     .child(
                         retained_transcript.expect("L1 transcript entity is wired by CockpitView"),
                     )
-                    .children((!start.is_empty()).then(|| {
-                        // An empty Thread, as a draft: the start card at
-                        // the body's centre.
+                    .children(start.map(|project| {
+                        // An empty Thread, as a draft: the hero at the
+                        // body's centre.
                         div()
                             .absolute()
                             .inset_0()
@@ -1091,7 +1075,7 @@ pub fn render_pane(
                             .items_center()
                             .justify_center()
                             .px(px(theme::SPACE_4))
-                            .child(start_card(start))
+                            .child(start_hero(project))
                     }))
                     .children(question_measurement),
             );
@@ -1131,20 +1115,11 @@ fn l1_dock(cx: &mut PaneCtx) -> Vec<AnyElement> {
     cx.activity_decisions.take().into_iter().collect()
 }
 
-/// WP-D · the L1 Composer, or a Subagent's footer in its place.
+/// WP-D · the L1 Composer: Main's alone. A subagent takes no prompts, so
+/// its transcript runs to the Pane's foot.
 fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
-    if let Some(footer) = cx.child_footer.take() {
-        // The footer stands where the box would: in the box's column.
-        let inset = if cx.grid {
-            theme::COMPACT_COMPOSER_INSET
-        } else {
-            theme::COMPOSER_INSET
-        };
-        return Some(
-            composer_stack(None, None, !cx.grid)
-                .child(in_column(inset, !cx.grid, footer))
-                .into_any_element(),
-        );
+    if !cx.view.is_main() {
+        return None;
     }
     let transcript = cx.transcript?;
     Some(
@@ -1308,10 +1283,9 @@ pub struct DraftState<'a> {
     pub show_focus: bool,
     /// The Solo box's controls (`PaneWiring::toolbar`).
     pub toolbar: Option<ComposerControls>,
-    /// The start card's groups (`draft_card_group`), wired in the cockpit:
-    /// the project and workspace pickers, then the suggestions. Empty on a
-    /// board, where the cell has no room for them.
-    pub start: Vec<AnyElement>,
+    /// The hero's project word (`hero_project`), wired in the cockpit to
+    /// the Project picker. None on a board, where the cell has no room.
+    pub start: Option<AnyElement>,
 }
 
 /// What a draft is called until its first send names the Thread — in its
@@ -1380,10 +1354,10 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
             toolbar,
         },
     );
-    // The Claude app's new session: at the body's centre the start card,
-    // and the Composer at the foot, where the Thread it becomes keeps it,
-    // so the first send moves nothing.
-    let card = (level == Level::Transcript).then(|| start_card(start));
+    // Codex's home: at the body's centre the hero, and the Composer at the
+    // foot, where the Thread it becomes keeps it, so the first send moves
+    // nothing.
+    let card = start.filter(|_| level == Level::Transcript).map(start_hero);
     let body = div()
         .debug_selector(|| "draft-empty".into())
         .flex_1()
@@ -1407,92 +1381,55 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
     )
 }
 
-/// The start card, the Claude app's new session: the mark over its groups
-/// (where the work runs, then a suggestion or two) — a draft's, and an
-/// empty Thread's.
-fn start_card(groups: Vec<AnyElement>) -> Div {
+/// An empty Thread's or a draft's hero, Codex's home: Ferrite's mark in
+/// `HERO_MARK_INK`, then `What should we build in <project>?` at the home's
+/// display size, `project` the word the cockpit wires (`hero_project`).
+pub fn start_hero(project: AnyElement) -> Div {
     div()
-        .debug_selector(|| "draft-start".into())
+        .debug_selector(|| "start-hero".into())
         .flex()
         .flex_col()
-        .w_full()
-        .max_w(px(theme::DRAFT_CARD_W))
-        .gap(px(theme::DRAFT_CARD_GAP))
-        .child(div().flex().justify_end().child(components::embossed_mark(
-            theme::DRAFT_MARK,
-            theme::EMBOSS_ON_PANE,
-        )))
-        .children(groups)
-}
-
-/// One group of the draft's start card: an `R_CARD` card ringed in
-/// `CARD_RING`, its rows split by hairlines when `ruled` (the setup rows),
-/// or not (the suggestions).
-pub fn draft_card_group(
-    selector: &'static str,
-    rows: impl IntoIterator<Item = AnyElement>,
-    ruled: bool,
-) -> Div {
-    div()
-        .debug_selector(move || selector.into())
-        .flex()
-        .flex_col()
-        .rounded(px(theme::R_CARD))
-        .border_1()
-        .border_color(theme::paint::CARD_RING)
-        .overflow_hidden()
-        .children(rows.into_iter().enumerate().map(|(at, row)| {
-            div()
-                .when(ruled && at > 0, |row| {
-                    row.border_t_1().border_color(theme::paint::CARD_RING)
-                })
-                .child(row)
-        }))
-}
-
-/// One row of the draft's start card: its icon, its words, and a chevron
-/// after them when it opens a picker. A setup row is
-/// `DRAFT_SETUP_ROW_H`, a suggestion `DRAFT_SUGGESTION_ROW_H`; the caller
-/// wires the press.
-pub fn draft_card_row(
-    id: impl Into<gpui::ElementId>,
-    glyph: &'static str,
-    label: impl Into<SharedString>,
-    picker: bool,
-) -> Stateful<Div> {
-    let id = id.into();
-    let key = ferrite_ui::pointer::hover_key(&id);
-    let selector = format!("{id}");
-    div()
-        .id(id)
-        .debug_selector(move || selector.clone())
-        .flex()
         .items_center()
-        .gap(px(theme::SPACE_2))
-        .h(px(if picker {
-            theme::DRAFT_SETUP_ROW_H
-        } else {
-            theme::DRAFT_SUGGESTION_ROW_H
-        }))
-        .px(px(theme::SPACE_3))
-        .min_w_0()
-        .cursor_pointer()
-        .hover_row(key)
-        .press_row()
-        .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_UI))
-        .text_color(rgb(INK))
-        .child(icon(glyph, theme::PANEL_ROW_ICON, INK))
+        .gap(px(theme::HERO_MARK_GAP))
+        .max_w_full()
+        .child(components::embossed_mark(
+            theme::HERO_MARK,
+            theme::HERO_MARK_INK,
+        ))
         .child(
             div()
-                .flex_shrink(1.)
-                .min_w_0()
-                .truncate()
-                .child(label.into()),
+                .flex()
+                .flex_wrap()
+                .justify_center()
+                .items_baseline()
+                .max_w_full()
+                .font_family(theme::FONT_UI)
+                .font_weight(theme::W_BODY)
+                .text_size(px(theme::FS_HOME_TITLE))
+                .line_height(px(theme::LH_HOME_TITLE))
+                .text_color(rgb(INK_STRONG))
+                .child("What should we build in\u{a0}")
+                .child(project)
+                .child("?"),
         )
-        .when(picker, |row| {
-            row.child(icon(icons::CHEVRON_DOWN, theme::ICON_CHEVRON, INK_SUBTLE))
+}
+
+/// The hero's project word: the Project's name, and while it can still
+/// change (a draft's) a switcher under a dashed `INK_SUBTLE` rule, Codex's.
+/// The cockpit wires its press.
+pub fn hero_project(label: SharedString, switcher: bool) -> Stateful<Div> {
+    div()
+        .id("start-hero-project")
+        .debug_selector(|| "start-hero-project".into())
+        .min_w_0()
+        .truncate()
+        .when(switcher, |word| {
+            word.cursor_pointer()
+                .border_b_1()
+                .border_dashed()
+                .border_color(rgb(INK_SUBTLE))
         })
+        .child(label)
 }
 
 /// A Draft is disposable state, so its Pane advertises the same close action
@@ -1521,12 +1458,17 @@ pub fn draft_discard(draft: DraftId, button: AnyElement, keys: Option<String>) -
         .child(button)
 }
 
-/// A draft's Project or Workspace chip (SPEC §5.5), a footer word like the
-/// model's: the choice, plain, ringed by the one focus recipe
-/// (`components::focused`) while tab rests on it, because the popover
-/// opens on ↵ and the chip must say where ↵ will land. In a narrow Pane its
-/// label cuts first.
-pub fn band_chip(slot: usize, label: SharedString, focused: bool) -> Stateful<Div> {
+/// A draft's Project or Workspace chip on the strip over the box
+/// (`env_strip`, Codex's): its mark and the choice, ringed by the one focus
+/// recipe (`components::focused`) while tab rests on it, because the
+/// popover opens on ↵ and the chip must say where ↵ will land. In a narrow
+/// Pane its label cuts first.
+pub fn band_chip(
+    slot: usize,
+    mark: &'static str,
+    label: SharedString,
+    focused: bool,
+) -> Stateful<Div> {
     // The label truncates in a narrow Pane; the tooltip keeps the whole
     // choice reachable and names the keys that change it.
     let tooltip = SharedString::from(format!("{label} \u{b7} Tab, then \u{21b5} to change"));
@@ -1546,7 +1488,7 @@ pub fn band_chip(slot: usize, label: SharedString, focused: bool) -> Stateful<Di
         .map(|chip| components::focused(chip, focused))
         .hover_raised(format!("band-chip-{slot}"))
         .press_raised()
-        .child(chip_face(label, INK_SUBTLE))
+        .child(env_face(mark, label))
 }
 
 /// A band chip's text: the choice itself (the chip draws its own chevron).
@@ -2376,38 +2318,23 @@ pub(crate) fn needs_you_door(id: SharedString, selector: SharedString, face: Div
     .into_any_element()
 }
 
-/// The card's tab strip (SPEC §5.3), under the head on a board and at the
-/// card's top edge in Solo: one `SUBJECT_STRIP_H` row padded
-/// `SUBJECT_STRIP_PAD_X`, closed by a `LINE` — the tabs and their menu
-/// taking the width, then the split button at the right. Only a Thread with
-/// Subagents has one: a lone `Main` tab is no choice, so it costs no row.
-/// The plan's progress is the task list's (`working::task_list`), not here.
-fn tab_strip(
-    key: u64,
-    agents: AnyElement,
-    split: Option<AnyElement>,
-    subagents: usize,
-) -> Option<Div> {
-    if subagents == 0 {
-        return None;
-    }
-    let strip = div()
-        .debug_selector(move || format!("pane-tabs-{key}"))
+/// The row a subagent's head (`subagent_head`) stands in, over its
+/// transcript: under the head on a board, at the card's top edge in Solo —
+/// one `SUBAGENT_HEAD_H` row padded `SUBAGENT_HEAD_PAD_X`, closed by a
+/// `LINE`.
+fn subagent_strip(key: u64, head: AnyElement) -> Div {
+    div()
+        .debug_selector(move || format!("pane-subagent-{key}"))
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(theme::SUBJECT_TAB_GAP))
         // The rule lies under the row's 38, as the mockup's border does.
-        .h(px(theme::SUBJECT_STRIP_H + 1.))
-        .px(px(theme::SUBJECT_STRIP_PAD_X))
+        .h(px(theme::SUBAGENT_HEAD_H + 1.))
+        .px(px(theme::SUBAGENT_HEAD_PAD_X))
         .border_b_1()
         .border_color(theme::paint::LINE)
-        .text_size(px(theme::FS_LABEL))
-        .line_height(px(theme::LH_UI))
         .text_color(rgb(INK_SUBTLE))
-        .child(agents)
-        .children(split);
-    Some(strip)
+        .child(head)
 }
 
 /// The floor a head title keeps however narrow its head: `HEAD_TITLE_MIN_W`,
@@ -3029,7 +2956,7 @@ pub(crate) fn mark_gutter(grid: Grid, mark: impl IntoElement) -> Div {
 }
 
 /// Something literal laid out on the grid's cells (a call's failure, its
-/// output box, a diff): Geist Mono whatever face the transcript reads in.
+/// open body, a diff): Geist Mono whatever face the transcript reads in.
 pub(crate) fn on_cells(row: Div) -> Div {
     row.font_family(theme::FONT_CODE)
 }
@@ -3063,9 +2990,11 @@ impl RowCx<'_> {
 }
 
 /// A tool row's disclosure state: whether its details (its output fold,
-/// its diffs) are open, and the keyboard's target and toggle.
+/// its diffs) are open, whether it stands in a group's card, and the
+/// keyboard's target and toggle.
 pub(crate) struct ToolCx {
     pub expanded: bool,
+    pub grouped: bool,
     pub disclosure: Option<Disclosure>,
 }
 
@@ -3268,6 +3197,7 @@ pub(crate) fn render_block(
             row_cx,
             ToolCx {
                 expanded,
+                grouped: false,
                 disclosure,
             },
         ),
@@ -3419,14 +3349,14 @@ pub(crate) fn prompt_row(
         .enumerate()
         .map(|(index, path)| inline_image(block.id, index, path, &gallery, row_cx.preview))
         .collect();
+    // The images stand over the bubble, right edges level (Claude's).
     let message = div()
         .flex()
         .flex_col()
         .items_end()
-        .gap(px(theme::PROMPT_BUBBLE_GAP))
+        .gap(px(theme::PROMPT_IMAGE_GAP))
         .w_full()
         .min_w_0()
-        .children(bubble)
         .when(!images.is_empty(), |row| {
             row.child(
                 div()
@@ -3437,7 +3367,8 @@ pub(crate) fn prompt_row(
                     .max_w_full()
                     .children(images),
             )
-        });
+        })
+        .children(bubble);
     div()
         .id(SharedString::from(format!("prompt-{:?}", block.id)))
         .relative()
@@ -3575,7 +3506,7 @@ pub(crate) fn prompt_chip(
     (gpui::size(px(width), line), element.into_any_element())
 }
 
-/// A sent image under its prompt (the prototype's `.thumb`): the picture
+/// A sent image over its prompt's bubble (Claude's): the picture
 /// at its own proportions, no larger than `THUMB_MAX_W` × `THUMB_MAX_H`
 /// nor its own size (covering that box when its header cannot be read), at
 /// `R_CARD` in a 1px `LINE`; its caption (`name · W×H · 41 KB`) is
@@ -4046,10 +3977,13 @@ pub(crate) fn activity_note(grid: Grid) -> Div {
 /// preview of what it printed: a shut row says only what it did and whether
 /// it failed. Under it while it runs: a suite's bar.
 ///
-/// Open, a command shows its shell card (`shell_card`: `$ cmd`, its output,
-/// how it ended); any other call shows its input where the call line could
-/// not show it whole, its output and any structured result in one output
-/// box (`output_box`), then its diffs. Opening and shutting snap. The whole
+/// Open, a call shows its body (`call_body`, Claude's): its input in a quiet
+/// well (a command's `$ cmd`), a failed command's `Exit code N`, what it
+/// printed as plain mono — `SPACE_3` under its line and `SPACE_1` over the
+/// card's next seam in a group's card; alone, in a card of its own, the
+/// group card's (`CARD_RING` at `R_CARD`, `TOOL_CARD_OUTSET` past the
+/// column, its body `TOOL_CARD_INSET` in, `SPACE_3` top and bottom) — then
+/// its diffs. Opening and shutting snap. The whole
 /// line is the pointer's toggle; the keyboard's disclosure target wears
 /// `paint::RAISED`.
 pub(crate) fn render_tool(
@@ -4063,6 +3997,7 @@ pub(crate) fn render_tool(
     let selection = row_cx.selection;
     let ToolCx {
         expanded,
+        grouped,
         disclosure,
     } = state;
     let (overlay, chevron, targeted) = disclosure_parts(disclosure);
@@ -4125,13 +4060,21 @@ pub(crate) fn render_tool(
         card = card.child(running_tests(&tool.call, progress, grid));
     }
     if expanded {
-        if ferrite_core::transcript::tools::is_command_run(&tool.name) {
-            card = card.child(shell_card(block, tool, grid, selection));
-        } else {
-            let details = tool_details(block, tool, selection);
-            if !details.is_empty() {
-                card = card.child(output_box(grid, details));
-            }
+        if let Some(body) = call_body(block, tool, grid, selection) {
+            card = card.child(if grouped {
+                body.mt(px(theme::SPACE_3)).pb(px(theme::SPACE_1))
+            } else {
+                div()
+                    .debug_selector(|| "tool-card".into())
+                    .mt(px(theme::SPACE_1))
+                    .ml(px(-theme::TOOL_CARD_OUTSET))
+                    .px(px(theme::TOOL_CARD_INSET))
+                    .py(px(theme::SPACE_3))
+                    .rounded(px(theme::R_CARD))
+                    .border_1()
+                    .border_color(theme::paint::CARD_RING)
+                    .child(body)
+            });
         }
         for each in &tool.diffs {
             card = card.child(render_diff(Some((selection, block)), each, grid));
@@ -4856,6 +4799,8 @@ mod tests {
                 solo: false,
                 thinking: true,
                 settled_at: Default::default(),
+                agents: Default::default(),
+                rewind: None,
             };
             let selection = self.selection.clone();
             self.transcript.update(cx, |transcript, cx| {
@@ -4893,6 +4838,8 @@ mod tests {
                     solo: false,
                     thinking: true,
                     settled_at: Default::default(),
+                    agents: Default::default(),
+                    rewind: None,
                 },
                 crate::rich::TextCache::default(),
                 selection.clone(),
@@ -5361,6 +5308,70 @@ mod tests {
             "rows {} apart: {member:?} {second:?}",
             theme::TOOL_CARD_ROW_H
         );
+
+        // A call opened in the card draws Claude's body, no box of its own:
+        // its `$ cmd` in a well `SPACE_3` under its line, what it printed
+        // under that. A success says nothing.
+        view.update(cx, |view, cx| {
+            view.expanded.insert("g1".into());
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(copied(&view, cx).contains("12 matched"));
+        let line = cx.debug_bounds("tool-row-g1").unwrap();
+        let well = cx.debug_bounds("tool-input").unwrap();
+        let output = cx.debug_bounds("tool-output").unwrap();
+        assert!(
+            ((well.top() - line.bottom()) - px(theme::SPACE_3)).abs() <= px(1.0),
+            "{line:?} {well:?}"
+        );
+        assert!(output.top() > well.bottom(), "{well:?} {output:?}");
+        assert!(cx.debug_bounds("tool-card").is_none(), "no card in a card");
+        assert!(cx.debug_bounds("tool-exit").is_none(), "a success is quiet");
+    }
+
+    /// A call opened alone stands in the group's card, its body the same;
+    /// a failed command says its exit code over what it printed.
+    #[gpui::test]
+    fn a_call_opened_alone_stands_in_its_own_card(cx: &mut TestAppContext) {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Prompt("list it".into()));
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: "s1".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "ls /missing" }),
+        }));
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "s1".into(),
+            output: "Exit code 1\nls: /missing: No such file or directory".into(),
+            is_error: true,
+            result: ferrite_core::ToolResult::Opaque,
+        }));
+        let blocks: Vec<Block> = transcript.blocks().to_vec();
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            gpui::component::init(cx);
+            shows_blocks(blocks, cx)
+        });
+        cx.simulate_resize(size(px(900.), px(600.)));
+        view.update(cx, |view, cx| {
+            view.expanded.insert("s1".into());
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let line = cx.debug_bounds("tool-row-s1").unwrap();
+        let card = cx.debug_bounds("tool-card").unwrap();
+        let well = cx.debug_bounds("tool-input").unwrap();
+        let exit = cx.debug_bounds("tool-exit").unwrap();
+        let output = cx.debug_bounds("tool-output").unwrap();
+        assert!(
+            ((line.left() - card.left()) - px(theme::TOOL_CARD_OUTSET)).abs() <= px(1.0),
+            "{line:?} {card:?}"
+        );
+        assert!(card.top() >= line.bottom(), "{line:?} {card:?}");
+        assert!(
+            well.bottom() <= exit.top() && exit.bottom() <= output.top(),
+            "{well:?} {exit:?} {output:?}"
+        );
     }
 
     #[test]
@@ -5423,10 +5434,10 @@ mod tests {
             "Searched for 1 pattern, read 2 files (1 failed)"
         );
         assert_eq!(
-            text::group_live(blocks).map(|block| block.id),
+            text::group_live(blocks).first().map(|block| block.id),
             Some(blocks[5].id)
         );
-        assert_eq!(text::group_live(&blocks[..5]), None);
+        assert!(text::group_live(&blocks[..5]).is_empty());
     }
 
     #[gpui::test]
@@ -5920,7 +5931,7 @@ mod tests {
             ("Edit", "Edited "),
             ("Write", "Wrote "),
             ("Grep", "Searched for "),
-            ("Task", "Agent "),
+            ("Task", "Ran agent "),
         ] {
             let call = tool(name, "cargo-test", ToolState::Ok);
             assert_eq!(text::call_line(&call).verb, verb, "{name}");
@@ -6011,7 +6022,7 @@ mod tests {
     }
 
     #[test]
-    fn a_commands_shell_card_says_how_it_ended() {
+    fn an_open_command_says_how_it_failed_and_nothing_on_success() {
         let tool = |state: ToolState, output: Option<&str>| ToolBlock {
             caption: None,
             call: "c".into(),
@@ -6029,7 +6040,7 @@ mod tests {
             progress: None,
         };
         // Claude's `Exit code N` line becomes the status; the rest is the
-        // output, the command out of its wrapper.
+        // output in the output's ink, the command out of its wrapper.
         let failed = tool(
             ToolState::Failed("Exit code 1\nls: /missing: No such file or directory".into()),
             None,
@@ -6037,25 +6048,31 @@ mod tests {
         let shell = output::shell(&failed);
         assert_eq!(shell.command, "ls /missing");
         assert_eq!(
-            shell.output,
-            Some("ls: /missing: No such file or directory")
+            (shell.output, shell.exit, shell.failure),
+            (
+                Some("ls: /missing: No such file or directory"),
+                Some(1),
+                false
+            )
         );
-        assert_eq!(shell.status, Some(output::ShellStatus::Exit(1)));
-        assert_eq!(output::ShellStatus::Exit(1).words(), "Exit code 1");
-        // No code said: the status says it failed.
+        // No code said: no status; the failure's own message reads in the
+        // failure ink (claude/tools-expanded.png's `Blocked: …`).
         let bare = tool(ToolState::Failed("boom".into()), None);
+        let bare = output::shell(&bare);
         assert_eq!(
-            output::shell(&bare).status,
-            Some(output::ShellStatus::Failed)
+            (bare.output, bare.exit, bare.failure),
+            (Some("boom"), None, true)
         );
+        // A success says nothing (Claude's), its output plain.
         let ok = tool(ToolState::Ok, Some("a\nb"));
-        let shell = output::shell(&ok);
+        let ok = output::shell(&ok);
         assert_eq!(
-            (shell.output, shell.status),
-            (Some("a\nb"), Some(output::ShellStatus::Success))
+            (ok.output, ok.exit, ok.failure),
+            (Some("a\nb"), None, false)
         );
         let running = tool(ToolState::Running, None);
-        assert_eq!(output::shell(&running).status, None);
+        let running = output::shell(&running);
+        assert_eq!((running.output, running.exit), (None, None));
     }
 
     #[test]
@@ -6221,7 +6238,7 @@ mod tests {
     }
 
     #[test]
-    fn rate_limit_resets_read_as_compact_countdowns() {
+    fn rate_limit_resets_read_as_wall_times_inside_their_window() {
         let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
         let after = |seconds: u64| Some(1_000_000 + seconds);
         let week = Duration::from_secs(7 * 86_400);
@@ -6229,15 +6246,13 @@ mod tests {
         let label = |at| reset_label(at, week, now).map(|label| label.to_string());
         assert_eq!(label(None), None, "an unreported reset reads nothing");
         assert_eq!(label(after(0)), None, "a reset due now is already past");
-        assert_eq!(label(after(45)).as_deref(), Some("resets in <1m"));
-        assert_eq!(label(after(42 * 60)).as_deref(), Some("resets in 42m"));
+        let at = UNIX_EPOCH + Duration::from_secs(1_000_000 + 4 * 86_400);
         assert_eq!(
-            label(after(3 * 3_600 + 14 * 60)).as_deref(),
-            Some("resets in 3h 14m")
-        );
-        assert_eq!(
-            label(after(4 * 86_400 + 2 * 3_600)).as_deref(),
-            Some("resets in 4d 2h")
+            label(after(4 * 86_400)),
+            Some(format!(
+                "Resets {}",
+                ferrite_core::clock::day_label(at, now)
+            ))
         );
         assert_eq!(
             label(Some(999_999)),
@@ -6645,9 +6660,7 @@ mod tests {
                     tokens: 100_000,
                 },
             ],
-            usable_window: None,
-            auto_compact_threshold: None,
-            is_auto_compact_enabled: None,
+            ..Default::default()
         };
         let foot = context_meter_segments(130_000, 200_000, Some(&details));
         assert!(foot.iter().all(|(ink, _)| *ink == ctx_meter_ink(0.65)));

@@ -229,7 +229,7 @@ fn each_thread_keeps_its_own_preview(cx: &mut TestAppContext) {
 }
 
 /// An image holds the keyboard in its viewer — yet focus moving to the
-/// other Pane (⌘]) takes it there: typing reaches that Pane's Composer.
+/// other Pane (⌘}) takes it there: typing reaches that Pane's Composer.
 #[gpui::test]
 fn focus_moving_to_another_pane_takes_the_keyboard_from_an_image(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window("preview-image-focus", 2, cx);
@@ -247,7 +247,7 @@ fn focus_moving_to_another_pane_takes_the_keyboard_from_an_image(cx: &mut TestAp
             .is_some()),
         "the premise: the viewer holds the keyboard"
     );
-    cx.simulate_keystrokes("cmd-]");
+    cx.simulate_keystrokes("cmd-}");
     tick(cx);
     cx.simulate_input("x");
     let typed = |index: usize, cx: &mut gpui::VisualTestContext| {

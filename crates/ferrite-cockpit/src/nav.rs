@@ -1,13 +1,16 @@
 //! The left navigation column (SPEC §5.1, `mockups/solo.png`): the head
-//! (the traffic lights' spacer, the Activity bell and the sidebar toggle),
-//! the views (`New thread`, `Search`, `Inbox`, `Parked`), the tree — one
-//! section per Project, its loose Threads and its Groups, each Group's
-//! members hanging under it — and the foot (the view switcher, the account
-//! row and the gear). A view other than the tree shows its list in the
-//! tree's place; Esc or a click on the active view returns to it. The
-//! Activity view (the bell, Codex's) is one: what runs or needs the
-//! operator under `Priority`, the rest touched today under `Today`, each
-//! row its title, Project and the last message's opening lines.
+//! (the traffic lights' spacer, the Activity bell, search and the sidebar
+//! toggle, as Codex's header), the views (`New thread`, `Parked`), the
+//! tree — `Pinned`, then one section per Project, its loose Threads (the
+//! first `SHOWN_ROWS`, then `Show more`) and its Groups, each Group's
+//! members hanging under it, then `Recents`, the Threads in no Project —
+//! and the foot (the view switcher, the account row and the gear). A view
+//! other than the tree shows its list in the tree's place; Esc or a click
+//! on the active view returns to it. The Activity view (the bell, Codex's)
+//! is one: what runs or needs the operator under `Priority`, the rest
+//! touched today under `Today`, each row its title, Project and the last
+//! message's opening lines. The Inbox (⌘I) is another, reached from the
+//! keyboard and the palette.
 //! It is a view, never the only door: everything a row does (focus,
 //! revive, regroup) stays reachable from the keyboard and the ⌘K palette.
 //!
@@ -143,17 +146,23 @@ const COLLAPSE_KEY: &str = "nav-collapse";
 pub(crate) const CONTENT_FADE: MotionSpec = MotionSpec::new(MOTION_NAV_FADE_MS, motion::EASE);
 
 /// What a fold in the nav holds shut (N-4): a Project section shut to its
-/// heading, the Groups section, or a Group shut to its row (its count
-/// kept). Held in memory by the cockpit (`CockpitView::set_nav_fold`), so
-/// a fold survives every re-render and view switch; opening a folded Group
-/// never unfolds it.
+/// heading, the Pinned or Groups section, or a Group shut to its row (its
+/// count kept). A Project's fold is saved with the settings
+/// (`Settings::folded_projects`); the rest are held in memory by the
+/// cockpit (`CockpitView::set_nav_fold`), so a fold survives every
+/// re-render and view switch; opening a folded Group never unfolds it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum NavFold {
     Project(ProjectId),
+    /// The Pinned section.
+    Pinned,
     /// The Groups section: the Groups that span Projects.
     Groups,
     Group(GroupId),
 }
+
+/// How many loose rows a section draws before `Show more` (Codex's five).
+pub const SHOWN_ROWS: usize = 5;
 
 /// What the nav shows under its views (§5.1.2): the tree, or one view's
 /// list in its place.
@@ -174,6 +183,12 @@ pub enum NavView {
 /// lists. Nothing here is a store read — the cockpit assembles it from
 /// O(1) reads plus its project/branch caches.
 pub struct NavState {
+    /// The `Pinned` section's rows (`Settings::pinned_threads`), in pin
+    /// order: open Threads no Group claims. A pinned row is listed here
+    /// and nowhere else in the tree.
+    pub pinned: Vec<ThreadRow>,
+    /// The `Pinned` heading folded its rows away.
+    pub pinned_folded: bool,
     /// One section per Project with a row to show, in creation order, then
     /// `Other` for Threads whose Project cannot be read.
     pub sections: Vec<ProjectSection>,
@@ -190,15 +205,19 @@ pub struct NavState {
 }
 
 impl NavState {
-    /// Every row the tree draws, in the order it draws them: each section's
-    /// loose rows, then the members of each of its unfolded Groups. A
-    /// folded section or Group draws none. The views' lists are not the
-    /// tree; tests read the tree's order from here.
+    /// Every row the tree draws, in the order it draws them: the pinned
+    /// rows, then each section's loose rows `Show more` leaves out, then
+    /// the members of each of its unfolded Groups. A folded section or
+    /// Group draws none. The views' lists are not the tree; tests read the
+    /// tree's order from here.
     #[cfg(test)]
     pub fn ordered_rows(&self) -> Vec<&ThreadRow> {
         let mut rows = Vec::new();
+        if !self.pinned_folded {
+            rows.extend(self.pinned.iter());
+        }
         for section in self.sections.iter().filter(|section| !section.folded) {
-            rows.extend(section.solos.iter().map(|index| &self.solos[*index]));
+            rows.extend(section.drawn.iter().map(|index| &self.solos[*index]));
             for group in section.groups.iter().map(|index| &self.groups[*index]) {
                 if !group.folded {
                     rows.extend(group.members.iter());
@@ -244,11 +263,40 @@ pub struct ProjectSection {
     pub count: usize,
     /// Indices into `NavState::solos`.
     pub solos: Vec<usize>,
+    /// The loose rows it draws (indices into `NavState::solos`): all of
+    /// them, or while `Show more` holds the rest back, the first
+    /// `SHOWN_ROWS` and the selected row wherever it is.
+    pub drawn: Vec<usize>,
+    /// The line under its loose rows, when it has more than `SHOWN_ROWS`.
+    pub more: Option<ShowMore>,
     /// Indices into `NavState::groups`.
     pub groups: Vec<usize>,
 }
 
+/// The line under a long section's loose rows (Codex's): `Show more`
+/// while the rows past `SHOWN_ROWS` are held back, `Show less` once shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShowMore {
+    More,
+    Less,
+}
+
+impl ShowMore {
+    pub fn label(self) -> &'static str {
+        match self {
+            ShowMore::More => "Show more",
+            ShowMore::Less => "Show less",
+        }
+    }
+}
+
 impl ProjectSection {
+    /// `Recents` (Codex's): the section of the Threads in no Project,
+    /// headed by its word rather than a folder, newest first.
+    pub fn recents(&self) -> bool {
+        self.project.is_none() && !self.mixed
+    }
+
     /// What a folded heading says at its right, the first that has
     /// something to say: its rows' roll-up word, its drift, its branch when
     /// that is not the default, its row count.
@@ -763,9 +811,15 @@ pub fn content() -> Div {
 }
 
 /// The head (§5.1.1), in the head row: `drag` (the window-drag stretch the
-/// traffic lights sit over), then the Activity bell (`activity_button`)
-/// and the sidebar toggle, as Codex's header holds its bell.
-pub fn head(drag: impl IntoElement, bell: impl IntoElement, toggle: impl IntoElement) -> Div {
+/// traffic lights sit over), then the Activity bell (`activity_button`),
+/// search (`search_button`) and the sidebar toggle, as Codex's header
+/// holds its bell and search.
+pub fn head(
+    drag: impl IntoElement,
+    bell: impl IntoElement,
+    search: impl IntoElement,
+    toggle: impl IntoElement,
+) -> Div {
     div()
         .debug_selector(|| "nav-head".into())
         .flex()
@@ -784,6 +838,7 @@ pub fn head(drag: impl IntoElement, bell: impl IntoElement, toggle: impl IntoEle
                 .child(drag),
         )
         .child(bell)
+        .child(search)
         .child(toggle)
 }
 
@@ -859,6 +914,22 @@ pub fn activity_button(on: bool) -> Stateful<Div> {
     .tooltip(ferrite_ui::menu::tooltip("Activity"))
 }
 
+/// Search's door in the head (Codex's): the magnifier, its tooltip `Search`
+/// and the palette's chord. The cockpit wires the press to the palette.
+pub fn search_button() -> Stateful<Div> {
+    icon_button(
+        "nav-search",
+        icons::SEARCH,
+        NAV_TOGGLE_GLYPH,
+        ICON_BUTTON,
+        R_CONTROL,
+    )
+    .tooltip(ferrite_ui::menu::action_tooltip(
+        "Search",
+        "palette::Toggle",
+    ))
+}
+
 // ------------------------------------------------------------- the views
 
 /// What a view row says at its right (§5.1.2).
@@ -866,8 +937,6 @@ pub enum Trailing {
     None,
     /// A chord, as the keymap binds it (`⌘K`).
     Chord(String),
-    /// The needs-you pill, hidden at 0.
-    Pill(usize),
     /// A dim count, hidden at 0.
     Count(usize),
 }
@@ -884,8 +953,7 @@ pub fn views(rows: Vec<AnyElement>) -> Div {
 
 /// One view row: its 15px icon in `ICON_INK`, its label in primary ink
 /// (`INK_STRONG`, as the reference app's rows) and its trailing item;
-/// under the pointer `paint::RAISED`, the active view `SELECTED`. What a
-/// view holds for the operator its trailing item says (the pill).
+/// under the pointer `paint::RAISED`, the active view `SELECTED`.
 pub fn view_row(
     key: &'static str,
     glyph: AnyElement,
@@ -901,8 +969,7 @@ pub fn view_row(
                 .debug_selector(move || format!("{key}-chord"))
                 .into_any_element(),
         ),
-        Trailing::Pill(0) | Trailing::Count(0) => None,
-        Trailing::Pill(count) => Some(pill(count).into_any_element()),
+        Trailing::Count(0) => None,
         Trailing::Count(count) => Some(
             components::tabular(trailing(count.to_string(), FS_META, INK_SUBTLE))
                 .debug_selector(move || format!("{key}-count"))
@@ -928,28 +995,6 @@ pub fn view_row(
 /// A view row's icon, in `ICON_INK` beside its primary label.
 pub fn view_icon(path: &'static str) -> AnyElement {
     icon(path, NAV_ICON, ICON_INK).into_any_element()
-}
-
-/// The needs-you pill: the count in `ATTENTION` 11/600 on `ATTENTION` at
-/// 16%, 18 high and at least 18 wide, round.
-fn pill(count: usize) -> Div {
-    components::tabular(
-        div()
-            .debug_selector(|| "nav-needs-you-pill".into())
-            .flex()
-            .flex_shrink_0()
-            .justify_center()
-            .min_w(px(NAV_PILL))
-            .h(px(NAV_PILL))
-            .px(px(NAV_PILL_PAD_X))
-            .rounded(px(NAV_PILL / 2.0))
-            .bg(rgba(NAV_PILL_FILL))
-            .text_size(px(FS_BADGE))
-            .line_height(px(NAV_PILL))
-            .font_weight(W_LABEL)
-            .text_color(rgb(ATTENTION))
-            .child(count.to_string()),
-    )
 }
 
 /// A chord as it is drawn, its key a capital: `cmd-k` → `⌘K`.
@@ -1037,7 +1082,8 @@ fn hovered(key: &SharedString) -> bool {
 }
 
 /// A Project heading (§5.1.4): its `folder` icon in `INK_SUBTLE`, the label
-/// in 13/500 `INK`, and at its right the shared branch's drift. Folded, it
+/// in 13/500 `INK` with its fold's caret right after it (Claude's `▾`,
+/// `▸` folded), and at its right the shared branch's drift. Folded, it
 /// is one quiet row: the label in `INK` at 400, and at its right
 /// what `ProjectSection::folded_summary` says. Under the pointer its
 /// `action` (a new Thread in the Project, `row_action`) stands at its right
@@ -1059,7 +1105,7 @@ pub fn project_section(
         section.label.clone(),
         right,
         action,
-        section.folded,
+        Some(section.folded),
         measure,
     )
 }
@@ -1067,20 +1113,22 @@ pub fn project_section(
 /// A Project's heading in a view's list (§5.1.2): the tree's heading,
 /// open, with nothing at its right and no fold.
 pub fn view_project(index: usize, label: SharedString, measure: &Measure) -> Stateful<Div> {
-    project_row("nav-view-project", index, label, None, None, false, measure)
+    project_row("nav-view-project", index, label, None, None, None, measure)
 }
 
 /// A Project heading's row, whichever list it heads (`key`, with `index`
-/// its id and selector).
+/// its id and selector). `fold` is `Some(folded)` where the heading folds
+/// its section, which its caret says.
 fn project_row(
     key: &'static str,
     index: usize,
     label: SharedString,
     right: Option<(SharedString, u32)>,
     action: Option<AnyElement>,
-    folded: bool,
+    fold: Option<bool>,
     measure: &Measure,
 ) -> Stateful<Div> {
+    let folded = fold == Some(true);
     let (ink, weight) = if folded {
         (INK, W_BODY)
     } else {
@@ -1096,11 +1144,41 @@ fn project_row(
         (None, None) => 0.0,
     };
     let title_w = INNER_W - 2.0 * NAV_ROW_PAD_X - NAV_ICON - NAV_ICON_GAP - right_w;
+    // The caret follows the label itself, so the label's box is its own
+    // width, out to what the caret leaves of the title's.
+    let (label_w, caret) = match fold {
+        Some(folded) => (
+            measure
+                .ui(&label, FS_UI, weight)
+                .min(title_w - SPACE_1 - NAV_HEADING_CARET),
+            Some(
+                div()
+                    .debug_selector(move || format!("{key}-{index}-chevron"))
+                    .flex()
+                    .flex_shrink_0()
+                    .child(components::fold_chevron(
+                        format!("{key}-{index}-chevron"),
+                        !folded,
+                        NAV_HEADING_CARET,
+                        INK_SUBTLE,
+                    )),
+            ),
+        ),
+        None => (title_w, None),
+    };
     line_frame((key, index), blend, false)
         .debug_selector(move || format!("{key}-{index}"))
         .gap(px(NAV_ICON_GAP))
         .child(icon(icons::FOLDER, NAV_ICON, ICON_INK))
-        .child(fitted(title_w, FS_UI, ink, weight, label))
+        .child(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(px(SPACE_1))
+                .child(fitted(label_w, FS_UI, ink, weight, label))
+                .children(caret),
+        )
         .children(right.map(|(right, right_ink)| {
             div()
                 .flex()
@@ -1692,6 +1770,31 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
         )))
 }
 
+/// A long section's `Show more` / `Show less` (Codex's): one line on the
+/// title column in `INK_SUBTLE`, washed under the pointer as a row is. It
+/// hangs at `place` with the section's guides (`ends` of them ending at
+/// it). The cockpit wires its press.
+pub fn show_more(index: usize, more: ShowMore, place: RowPlace, ends: usize) -> Stateful<Div> {
+    let key = SharedString::from(format!("nav-show-more-{index}"));
+    let cover = motion::hover_t(&key);
+    let guides = guides(
+        &format!("nav-guide-more-{index}"),
+        place.levels(),
+        ends,
+        cover,
+    );
+    pitched(row_frame(("nav-show-more", index), key, false))
+        .debug_selector(move || format!("nav-show-more-{index}"))
+        .flex_row()
+        .items_center()
+        .h(px(NAV_ROW_H))
+        .pl(px(place.title_x()))
+        .pr(px(NAV_ROW_PAD_X))
+        .text_color(rgb(INK_SUBTLE))
+        .children(guides)
+        .child(more.label())
+}
+
 /// One quiet line in a view's list or the tree, on the title column:
 /// what an empty list says (`Nothing needs you`).
 pub fn note(key: &'static str, text: impl Into<SharedString>) -> Div {
@@ -2240,6 +2343,8 @@ mod tests {
             roll_up: None,
             count: 2,
             solos: Vec::new(),
+            drawn: Vec::new(),
+            more: None,
             groups: Vec::new(),
         }
     }
@@ -2728,7 +2833,7 @@ mod tests {
         assert_eq!(style.padding.bottom, Some(px(NAV_COL_PAD).into()));
         assert_eq!(style.padding.top, None, "the head is in the head row");
         assert_eq!(
-            head(div(), div(), div()).style().size.height,
+            head(div(), div(), div(), div()).style().size.height,
             Some(px(WIN_CHROME_H).into())
         );
     }

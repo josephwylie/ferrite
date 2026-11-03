@@ -554,3 +554,37 @@ fn unfolding_a_panel_file_reads_its_hunks_off_the_ui_thread(cx: &mut TestAppCont
     tick(cx);
     assert!(cx.debug_bounds("panel-hunks-0").is_none(), "folded again");
 }
+
+/// `Create PR` ends the Changes line until a pull request exists (Claude's
+/// panel): a press asks the Thread's agent to open one, naming its branch,
+/// and does not fold the files open under it.
+#[gpui::test]
+fn create_pr_asks_the_agent_for_a_pull_request(cx: &mut TestAppContext) {
+    let (mut core, fake, repo) = edited("panel-create-pr");
+    tidied(&mut core, &fake, &repo);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    tick(cx);
+    let button = cx
+        .debug_bounds("panel-create-pr")
+        .expect("no pull request yet: the button");
+    let summary = cx.debug_bounds("panel-changes-section").unwrap();
+    assert!(
+        button.right() <= summary.right() && button.top() >= summary.top(),
+        "at the end of the summary line"
+    );
+    let before = fake.sent.borrow().len();
+    cx.simulate_click(button.center(), gpui::Modifiers::none());
+    tick(cx);
+    let sent = fake.sent.borrow().clone();
+    assert_eq!(sent.len(), before + 1, "{sent:?}");
+    let prompt = sent.last().unwrap();
+    assert!(prompt.starts_with("Create a pull request for the changes in this session."));
+    assert!(prompt.contains("`gh pr create`"));
+    assert!(
+        cx.debug_bounds("panel-hunks-0").is_none(),
+        "the press stops at the button"
+    );
+}

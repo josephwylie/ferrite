@@ -338,7 +338,7 @@ fn the_titlebar_band_says_nothing_and_no_bar_is_left(cx: &mut TestAppContext) {
     ] {
         assert!(cx.debug_bounds(gone).is_none(), "{gone} is gone");
     }
-    for door in ["nav-collapse", "nav-activity"] {
+    for door in ["nav-collapse", "nav-activity", "nav-search"] {
         let at = cx.debug_bounds(door).unwrap_or_else(|| panic!("{door}"));
         assert!(
             at.bottom() <= px(ferrite_ui::theme::WIN_CHROME_H),

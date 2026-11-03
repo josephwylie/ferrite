@@ -24,6 +24,13 @@ impl AgentKey {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+    /// The provider's own id this key was made from (`new`'s `native`):
+    /// for a Claude agent, the tool call that started it.
+    fn native(&self) -> Option<String> {
+        serde_json::from_str::<(serde_json::Value, String, String)>(&self.0)
+            .ok()
+            .map(|(_, _, native)| native)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -774,6 +781,32 @@ impl SubjectState {
         self.transcript.evict_through(reach)
     }
 
+    /// Go back to before the prompt `prompt` names: its records and every
+    /// one after them go, so no rebuild brings the dropped turns back, and
+    /// the transcript cuts the same place (`Transcript::truncate_from`). A
+    /// prompt no longer retained came before everything that is.
+    fn rewind(&mut self, prompt: String, dropped: u64) -> transcript::Update {
+        let observed = self.records.iter().rposition(|record| {
+            matches!(&record.input, Input::PromptObservation { prompt_id: Some(id), .. } if *id == prompt)
+        });
+        let cut = observed
+            .and_then(|at| {
+                self.records
+                    .range(..at)
+                    .rposition(|record| matches!(record.input, Input::Prompt(_)))
+            })
+            .unwrap_or(0);
+        self.records.truncate(cut);
+        self.bytes = self.records.iter().map(|record| record.bytes).sum();
+        let update = self.transcript.apply(Input::Rewind { prompt, dropped });
+        if let Some(first) = update.evicted.first() {
+            self.authors.retain(|block, _| block < first);
+        }
+        self.busy = false;
+        self.revision = self.revision.wrapping_add(1);
+        update
+    }
+
     fn rebuild(&mut self, limits: ActivityLimits) -> transcript::Update {
         let runtime = self.transcript.runtime();
         let evicted = self
@@ -981,6 +1014,10 @@ pub struct Activity {
     connected: bool,
     limited: bool,
     main_operator_turn: bool,
+    /// Subagents that settled since Main's turn last ended: the turn the
+    /// provider starts on its own to hand them back opens with a line
+    /// saying so (`background_origin`).
+    settled_while_idle: usize,
 }
 
 impl Default for Activity {
@@ -1005,6 +1042,7 @@ impl Activity {
             connected: false,
             limited: false,
             main_operator_turn: false,
+            settled_while_idle: 0,
         }
     }
 
@@ -1242,6 +1280,14 @@ impl Activity {
         if let Input::Event(SessionEvent::ConversationReset { session_id }) = input {
             return self.conversation_reset(session_id, at, live);
         }
+        if let Input::Rewind { prompt, dropped } = input {
+            let blocks = self.main.rewind(prompt, dropped);
+            return ActivityUpdate {
+                changed: vec![Subject::Main],
+                blocks: vec![(Subject::Main, blocks)],
+                ..ActivityUpdate::default()
+            };
+        }
         if let Input::Event(SessionEvent::DecisionRequested { decision }) = input {
             return self.event(
                 ActivityEvent::Decision {
@@ -1259,7 +1305,21 @@ impl Activity {
         let previous_busy = self.main.busy;
         if prompt && live {
             self.main_operator_turn = true;
+            self.settled_while_idle = 0;
         }
+        let opens = matches!(
+            &input,
+            Input::Event(
+                SessionEvent::TextDelta { .. }
+                    | SessionEvent::ThinkingDelta { .. }
+                    | SessionEvent::ReasoningSummaryDelta { .. }
+                    | SessionEvent::ToolStarted { .. }
+                    | SessionEvent::Progress {
+                        event: crate::progress::ProgressEvent::Phase { .. }
+                    }
+            )
+        );
+        let announced = self.background_origin(opens, at, live);
         let ended = matches!(input, Input::Event(SessionEvent::TurnEnded { .. }));
         let closed = matches!(input, Input::Event(SessionEvent::Closed { .. }));
         let mut update = ActivityUpdate {
@@ -1273,8 +1333,12 @@ impl Activity {
         };
         if live && ended {
             self.main_operator_turn = false;
+            self.settled_while_idle = 0;
             self.remove_subject_decisions(&Subject::Main, &mut update);
         }
+        update
+            .blocks
+            .extend(announced.map(|blocks| (Subject::Main, blocks)));
         let blocks = self
             .main
             .append(input, None, None, self.sequence, at, live, self.limits);
@@ -1411,6 +1475,7 @@ impl Activity {
                         _ => None,
                     };
                     if let Some(outcome) = outcome {
+                        self.settled_while_idle += usize::from(live);
                         let blocks = agent.state.append(
                             Input::Event(SessionEvent::TurnEnded {
                                 outcome,
@@ -1713,6 +1778,22 @@ impl Activity {
         let sequence = self.sequence;
         let limits = self.limits;
         let ended = matches!(event, ExecutionEvent::TurnEnded { .. });
+        let opens = subject == Subject::Main
+            && matches!(
+                &event,
+                ExecutionEvent::TextDelta { .. }
+                    | ExecutionEvent::Text { .. }
+                    | ExecutionEvent::TextSnapshot { .. }
+                    | ExecutionEvent::ThinkingDelta { .. }
+                    | ExecutionEvent::Thinking { .. }
+                    | ExecutionEvent::ThinkingSnapshot { .. }
+                    | ExecutionEvent::ReasoningSummaryDelta { .. }
+                    | ExecutionEvent::ToolStarted { .. }
+                    | ExecutionEvent::Progress {
+                        event: crate::progress::ProgressEvent::Phase { .. }
+                    }
+            );
+        let announced = self.background_origin(opens, at, live);
         let Some(state) = self.state_mut(&subject) else {
             return ActivityUpdate {
                 rejected: true,
@@ -1770,7 +1851,11 @@ impl Activity {
         };
         let mut update = ActivityUpdate {
             changed: vec![subject.clone()],
-            blocks: vec![(subject.clone(), blocks)],
+            blocks: announced
+                .map(|announced| (Subject::Main, announced))
+                .into_iter()
+                .chain([(subject.clone(), blocks)])
+                .collect(),
             completed_tool_duration,
             main_turn_ended: live && root_signal && ended && subject == Subject::Main,
             main_settled: live && ended && subject == Subject::Main,
@@ -1780,10 +1865,48 @@ impl Activity {
             if root_signal && subject == Subject::Main {
                 self.main_operator_turn = false;
             }
+            if subject == Subject::Main {
+                self.settled_while_idle = 0;
+            }
             self.remove_subject_decisions(&subject, &mut update);
         }
         self.refresh_waiting(&subject);
         update
+    }
+
+    /// A turn the provider started on its own, opening while subagents
+    /// settled under an idle Main: Claude hands their results back this way,
+    /// and its first line says so, quietly (`2 background agents
+    /// completed`). Live only: an operator's turn is told apart by
+    /// `main_operator_turn`, which replay does not keep.
+    fn background_origin(
+        &mut self,
+        opens: bool,
+        at: Instant,
+        live: bool,
+    ) -> Option<transcript::Update> {
+        if !live
+            || !opens
+            || self.main_operator_turn
+            || self.settled_while_idle == 0
+            || self.main.transcript.status() == transcript::Status::Streaming
+        {
+            return None;
+        }
+        let count = std::mem::take(&mut self.settled_while_idle);
+        let line = format!(
+            "{count} background {} completed",
+            if count == 1 { "agent" } else { "agents" }
+        );
+        Some(self.main.append(
+            Input::Notice(line),
+            None,
+            None,
+            self.sequence,
+            at,
+            live,
+            self.limits,
+        ))
     }
 
     fn ensure_agent(&mut self, key: AgentKey) -> bool {
@@ -2138,6 +2261,21 @@ impl<'a> ActivityView<'a> {
                 agent: &self.activity.agents[key],
             })
             .collect()
+    }
+    /// Each subagent by the provider id its key was made from, aliases
+    /// included: a Claude agent is keyed by the `Agent` call that started it
+    /// (aliased to it once resumed), so this is how a call finds its agent.
+    /// A Codex agent is keyed by its own thread, which no call names.
+    pub fn invocations(self) -> impl Iterator<Item = (String, AgentView<'a>)> {
+        let activity = self.activity;
+        activity
+            .agents
+            .keys()
+            .chain(activity.aliases.keys())
+            .filter_map(move |key| {
+                let agent = activity.agents.get(&activity.resolve(key))?;
+                Some((key.native()?, AgentView { agent }))
+            })
     }
     pub fn pending_decisions(self) -> &'a [PendingDecision] {
         &self.activity.pending
@@ -2725,3 +2863,101 @@ fn merge_updates(mut first: transcript::Update, second: transcript::Update) -> t
 
 #[cfg(test)]
 mod retention_tests;
+
+#[cfg(test)]
+mod background_origin_tests {
+    use super::*;
+    use crate::transcript::Body;
+
+    fn activity_with_children(names: &[&str]) -> Activity {
+        let mut activity = Activity::default();
+        activity.apply(ActivityInput::Connect { generation: 1 });
+        for name in names {
+            let mut info = AgentInfo::new(AgentKey::new(Provider::Claude, "root", name));
+            info.parent = Some(Subject::Main);
+            activity.apply(ActivityInput::Observe {
+                generation: 1,
+                event: ActivityEvent::Discovered(info),
+                at: crate::clock::instant(),
+            });
+        }
+        activity
+    }
+
+    fn settle(activity: &mut Activity, name: &str, state: AgentStatus) {
+        for state in [AgentStatus::Working, state] {
+            activity.apply(ActivityInput::Observe {
+                generation: 1,
+                event: ActivityEvent::Status {
+                    key: AgentKey::new(Provider::Claude, "root", name),
+                    state,
+                },
+                at: crate::clock::instant(),
+            });
+        }
+    }
+
+    fn main(activity: &mut Activity, event: SessionEvent) {
+        activity.apply(ActivityInput::Main {
+            input: Input::Event(event),
+            at: crate::clock::instant(),
+        });
+    }
+
+    fn notices(activity: &Activity) -> Vec<String> {
+        activity
+            .main
+            .transcript
+            .blocks()
+            .iter()
+            .filter_map(|block| match &block.body {
+                Body::Notice(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn ended() -> SessionEvent {
+        SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: None,
+        }
+    }
+
+    /// Agents that settle while Main rests are handed back in a turn the
+    /// provider starts itself; that turn opens with one quiet line. An
+    /// operator's own turn never does, nor does the next background one.
+    #[test]
+    fn a_background_turn_opens_by_counting_the_agents_it_hands_back() {
+        let mut activity = activity_with_children(&["a", "b", "c"]);
+        activity.apply(ActivityInput::Main {
+            input: Input::Prompt("count files".into()),
+            at: crate::clock::instant(),
+        });
+        // Settled inside the operator's turn: that turn's own work.
+        settle(&mut activity, "c", AgentStatus::Idle);
+        main(&mut activity, ended());
+        settle(&mut activity, "a", AgentStatus::Idle);
+        settle(&mut activity, "b", AgentStatus::Failed);
+        main(
+            &mut activity,
+            SessionEvent::TextDelta {
+                text: "Both finished.".into(),
+            },
+        );
+        main(
+            &mut activity,
+            SessionEvent::TextDelta {
+                text: " More.".into(),
+            },
+        );
+        main(&mut activity, ended());
+        main(
+            &mut activity,
+            SessionEvent::TextDelta {
+                text: "Again.".into(),
+            },
+        );
+        assert_eq!(notices(&activity), ["2 background agents completed"]);
+    }
+}

@@ -21,9 +21,9 @@ use ferrite_core::providers::{applied, Session, SettingAck};
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{
-    ContextCategory, ContextDetails, ControlKind, Decision, DecisionAnswer, McpServer, McpStatus,
-    PermissionModeChoice, SessionControl, SessionEvent, ThreadId, TurnOutcome, UsageDetails,
-    UsageScope,
+    ContextCategory, ContextDetails, ContextItem, ControlKind, Decision, DecisionAnswer, McpServer,
+    McpStatus, PermissionModeChoice, SessionControl, SessionEvent, ThreadId, TurnOutcome,
+    UsageDetails, UsageScope,
 };
 
 use crate::cockpit::here;
@@ -444,8 +444,6 @@ fn boot(session_id: &str) -> Vec<Step> {
             10,
             SessionEvent::ContextDetails {
                 details: ContextDetails {
-                    usable_window: Some(167_000),
-                    auto_compact_threshold: Some(155_000),
                     is_auto_compact_enabled: Some(true),
                     categories: [
                         ("Messages", 38_400),
@@ -464,6 +462,17 @@ fn boot(session_id: &str) -> Vec<Step> {
                         tokens,
                     })
                     .collect(),
+                    mcp_tools: context_items(&[
+                        ("mcp__github__create_pull_request", 1_900),
+                        ("mcp__github__get_issue", 1_100),
+                        ("mcp__github__search_code", 1_400),
+                        ("mcp__linear__list_issues", 1_800),
+                    ]),
+                    skills: context_items(&[("release-notes", 1_300), ("triage", 800)]),
+                    memory_files: context_items(&[
+                        ("~/.claude/CLAUDE.md", 400),
+                        ("~/work/ferrite/CLAUDE.md", 800),
+                    ]),
                 },
             },
         ),
@@ -502,6 +511,17 @@ fn boot(session_id: &str) -> Vec<Step> {
             },
         ),
     ]
+}
+
+/// The items behind a context category, by name and tokens.
+fn context_items(items: &[(&str, u64)]) -> Vec<ContextItem> {
+    items
+        .iter()
+        .map(|(name, tokens)| ContextItem {
+            name: (*name).into(),
+            tokens: *tokens,
+        })
+        .collect()
 }
 
 fn usage(steps: &mut Vec<Step>, total_tokens: u64) {
@@ -1448,6 +1468,7 @@ mod tests {
                 model: None,
                 effort: None,
                 resume: Some("4f2a"),
+                resume_at: None,
                 permission_mode: None,
                 cwd: None,
                 name: None,

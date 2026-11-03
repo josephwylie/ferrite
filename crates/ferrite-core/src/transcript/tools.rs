@@ -33,8 +33,10 @@ pub enum ToolKind<'a> {
 pub enum Grouping {
     /// Folds into a group with the routine calls beside it.
     RollsUp,
-    /// Keeps a row of its own between groups.
-    OwnRow,
+    /// Folds only with the agent calls beside it, into Claude's `Ran 2
+    /// agents` card; a lone agent keeps a row of its own. Either way the
+    /// routine group before it ends.
+    Agents,
     /// Stands alone: the group before it ends, another starts after it.
     StandsAlone,
     /// Only state: something else draws what it did (the checklist), so it
@@ -72,7 +74,7 @@ pub fn policy(name: &str) -> ToolPolicy<'_> {
         "LS" => (List, RollsUp),
         "WebFetch" => (Fetch, RollsUp),
         "WebSearch" | "webSearch" => (WebSearch, RollsUp),
-        "Task" | "Agent" | "collabAgentToolCall" => (Agent, OwnRow),
+        "Task" | "Agent" | "collabAgentToolCall" => (Agent, Agents),
         // `TaskStop` and `TaskOutput` are background-task tools, not the
         // checklist's: they stay ordinary rows.
         "TodoWrite" | "TaskCreate" | "TaskUpdate" | "TaskGet" | "TaskList" => (Todo, StateOnly),
@@ -266,8 +268,9 @@ mod tests {
             ("LS", List, RollsUp),
             ("WebFetch", Fetch, RollsUp),
             ("webSearch", WebSearch, RollsUp),
-            ("Task", Agent, OwnRow),
-            ("collabAgentToolCall", Agent, OwnRow),
+            ("Task", Agent, Agents),
+            ("Agent", Agent, Agents),
+            ("collabAgentToolCall", Agent, Agents),
             ("mcp__ferrite__show_visual", Visual, StandsAlone),
             ("ferrite.show_visual", Visual, StandsAlone),
             ("AskUserQuestion", Question, StandsAlone),

@@ -96,6 +96,11 @@ icons![
     // ---- WP-G icons (append names above the end line)
     "bell-fill",
     // (end WP-G)
+    // ---- Title-bar icons (Wave 2 lane N)
+    "back",
+    "forward",
+    "diff",
+    // (end title bar)
     "update",
     // ---- UI refresh icons (SPEC §3.7): Lucide's shapes on a 24 grid,
     // stroked 2.25 — the family's 1.5px at 16px.
@@ -125,6 +130,10 @@ icons![
     "spinner-arc",
     // A row's more menu (the nav's `⋯`).
     "ellipsis",
+    // The Composer's `+` menu (Claude's marks).
+    "paperclip",
+    "square-slash",
+    "blocks",
     // (end UI refresh)
 ];
 
@@ -203,6 +212,15 @@ pub const PLUG: &str = "icons/plug.svg";
 pub const BELL_FILL: &str = "icons/bell-fill.svg";
 // (end WP-G)
 
+// ---- Title-bar icon names (Wave 2 lane N)
+/// The head's history arrows: Claude's chevrons, taller than
+/// `CHEVRON_RIGHT` (16 of the 24 grid, 11pt at the doors' 16).
+pub const BACK: &str = "icons/back.svg";
+pub const FORWARD: &str = "icons/forward.svg";
+/// Review the branch's changes: Claude's `±` in a rounded square.
+pub const DIFF: &str = "icons/diff.svg";
+// (end title bar)
+
 // ---- UI refresh icon names (SPEC §3.7; the phases after 0 draw them)
 /// The right panel's toggle.
 pub const PANEL_RIGHT: &str = "icons/panel-right.svg";
@@ -254,6 +272,12 @@ pub const REFRESH: &str = "icons/refresh.svg";
 pub const EXTERNAL: &str = "icons/external.svg";
 /// Fill the board with a Pane.
 pub const MAXIMIZE: &str = "icons/maximize.svg";
+/// The `+` menu's `Add files or photos`: Lucide's paperclip.
+pub const PAPERCLIP: &str = "icons/paperclip.svg";
+/// The `+` menu's `Slash commands`: a slash in a square.
+pub const SQUARE_SLASH: &str = "icons/square-slash.svg";
+/// The `+` menu's `Connectors ›`: Lucide's blocks.
+pub const BLOCKS: &str = "icons/blocks.svg";
 // (end UI refresh)
 
 pub struct Assets;
@@ -473,6 +497,7 @@ mod tests {
         ]
         .into_iter()
         .chain(REFRESH_ICONS)
+        .chain(TITLE_BAR_ICONS)
         {
             let bytes = Assets
                 .load(key)
@@ -484,7 +509,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            30 + REFRESH_ICONS.len(),
+            30 + REFRESH_ICONS.len() + TITLE_BAR_ICONS.len(),
             "the prototype and app controls, including close, the four \
              Windows caption glyphs, the image mark, the CLI update mark and the board door; every glyph \
              Geist Mono lacks is typed in the face the platform falls back to (theme rule 10)"
@@ -524,6 +549,7 @@ mod tests {
         ]
         .into_iter()
         .chain(REFRESH_ICONS)
+        .chain(TITLE_BAR_ICONS)
         {
             let bytes = Assets.load(key).unwrap().unwrap();
             let svg = std::str::from_utf8(&bytes).unwrap();
@@ -552,8 +578,11 @@ mod tests {
         }
     }
 
+    /// The title bar's line icons (Wave 2), in the family.
+    const TITLE_BAR_ICONS: [&str; 3] = [BACK, FORWARD, DIFF];
+
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
-    const REFRESH_ICONS: [&str; 25] = [
+    const REFRESH_ICONS: [&str; 28] = [
         PANEL_RIGHT,
         SEARCH,
         INBOX,
@@ -579,6 +608,9 @@ mod tests {
         ELLIPSIS,
         LAPTOP,
         PLUG,
+        PAPERCLIP,
+        SQUARE_SLASH,
+        BLOCKS,
     ];
 
     /// `stroke-width × 16 / viewBox` — the stroke an icon draws at 16px.

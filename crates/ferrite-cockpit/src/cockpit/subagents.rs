@@ -176,20 +176,6 @@ fn measure_question(
     }
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct TabInteraction(Rc<RefCell<TabInteractionState>>);
-#[derive(Default)]
-struct TabInteractionState {
-    focus: HashMap<Subject, FocusHandle>,
-    keyboard: Option<Subject>,
-}
-
-impl TabInteraction {
-    pub(super) fn main_focus(&self) -> Option<FocusHandle> {
-        self.0.borrow().focus.get(&Subject::Main).cloned()
-    }
-}
-
 /// Pending handles can share a destination. Visit each destination once,
 /// retaining request discovery order and wrapping after the current one.
 pub(super) fn next_request<T: Clone + Eq>(
@@ -308,7 +294,7 @@ fn pick_option(picks: &mut Vec<usize>, option: usize, multi: bool) {
 }
 
 /// An agent's state in the shared lexicon (`theme::words`); an idle or
-/// unclassified agent has none, and nothing is drawn for it.
+/// unclassified agent has none.
 fn status_label(status: AgentStatus, fresh: bool) -> Option<&'static str> {
     use theme::words;
     if !fresh {
@@ -326,12 +312,23 @@ fn status_label(status: AgentStatus, fresh: bool) -> Option<&'static str> {
     }
 }
 
-/// `name · word`, or the bare name when the agent has no state word.
-fn name_and_status(name: &str, status: AgentStatus, fresh: bool) -> String {
-    match status_label(status, fresh) {
-        Some(word) => format!("{name} \u{b7} {word}"),
-        None => name.to_string(),
-    }
+/// The word a subagent's head says of it: its state word, or `done`.
+fn state_word(status: AgentStatus, fresh: bool) -> &'static str {
+    status_label(status, fresh).unwrap_or(theme::words::DONE)
+}
+
+/// A subagent's mark (the nav's, `nav::mark`): the running spinner while
+/// it works, the `ATTENTION` dot while it waits on the operator, the
+/// `BLOCKED` dot once it failed; none otherwise, the slot kept.
+fn agent_mark(status: AgentStatus, fresh: bool, waiting: bool) -> Option<AnyElement> {
+    use crate::nav::RowStatus;
+    let face = match status {
+        _ if waiting || fresh && status == AgentStatus::Waiting => RowStatus::NeedsYou,
+        AgentStatus::Working if fresh => RowStatus::Working,
+        AgentStatus::Failed | AgentStatus::NotFound => RowStatus::Failed,
+        _ => return None,
+    };
+    Some(crate::nav::mark(face, false))
 }
 
 pub(crate) fn agent_name(info: &AgentInfo) -> String {
@@ -349,267 +346,32 @@ pub(crate) fn agent_name(info: &AgentInfo) -> String {
         .unwrap_or_else(|| "Subagent".into())
 }
 
-/// Where a Subagent stands on the strip (SPEC §5.3), in the live tabs'
-/// order: waiting, then working; anything else is done (finished, failed,
-/// stopped, idle or unavailable) and lives in the `N done` menu. SPEC's
-/// third live state, failing (still running with failures), has no signal
-/// on a Subagent: its checks are its parent Thread's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Standing {
-    Waiting,
-    Working,
-    Done,
-}
-
-impl Standing {
-    /// `agent`'s standing; `waiting` when a request of its own pends.
-    fn of(agent: ferrite_core::activity::AgentView<'_>, waiting: bool) -> Self {
-        if waiting || agent.fresh() && agent.status() == AgentStatus::Waiting {
-            Self::Waiting
-        } else if agent.fresh()
-            && matches!(agent.status(), AgentStatus::Working | AgentStatus::Pending)
-        {
-            Self::Working
-        } else {
-            Self::Done
-        }
+/// What a subagent's transcript covers, as a lead and an optional tail
+/// that shows only where it fits; a complete transcript says nothing.
+fn coverage_words(
+    retained: bool,
+    coverage: TranscriptCoverage,
+) -> Option<(&'static str, Option<&'static str>)> {
+    if !retained {
+        return Some(("Loading saved transcript\u{2026}", None));
     }
-
-    fn live(self) -> bool {
-        self != Self::Done
+    match coverage {
+        TranscriptCoverage::Unavailable => Some(("Transcript unavailable", None)),
+        TranscriptCoverage::ToolActivity => Some(("Tool activity only", None)),
+        TranscriptCoverage::Live => Some((
+            "Live transcript",
+            Some(" \u{b7} earlier messages may be unavailable"),
+        )),
+        TranscriptCoverage::Partial => Some(("Partial transcript", None)),
+        TranscriptCoverage::Complete => None,
     }
-
-    /// The tab's mark (the nav's, `nav::mark`): a waiting agent's
-    /// `ATTENTION` dot, the running spinner while working, and a failed
-    /// one's `BLOCKED` dot on its sticky tab. Starting and other done
-    /// agents carry none; the slot stays.
-    fn mark(self, status: AgentStatus) -> Option<AnyElement> {
-        use crate::nav::RowStatus;
-        let face = match self {
-            Self::Waiting => RowStatus::NeedsYou,
-            Self::Working if status == AgentStatus::Working => RowStatus::Working,
-            Self::Done if matches!(status, AgentStatus::Failed | AgentStatus::NotFound) => {
-                RowStatus::Failed
-            }
-            Self::Working | Self::Done => return None,
-        };
-        Some(crate::nav::mark(face, false))
-    }
-}
-
-/// One Subagent as the strip plans it: where it stands, when it started
-/// (`AgentView::discovered`), its tab's fixed width, and whether the Pane
-/// shows it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct StripAgent {
-    pub standing: Standing,
-    pub started: u64,
-    pub width: f32,
-    pub selected: bool,
-}
-
-/// What the strip shows, as indices into its agents: the Subagent tabs
-/// after Main, in order; the live tabs that did not fit (the menu's `Live`
-/// section); and the done ones, newest first.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct StripPlan {
-    pub tabs: Vec<usize>,
-    pub folded: Vec<usize>,
-    pub done: Vec<usize>,
-}
-
-impl StripPlan {
-    /// How many rows the menu holds; its button hides at 0.
-    pub fn menu_len(&self) -> usize {
-        self.folded.len() + self.done.len()
-    }
-
-    /// The menu button's words: `N done`, or `N more` once live tabs fold
-    /// into it.
-    pub fn menu_label(&self) -> String {
-        if self.folded.is_empty() {
-            format!("{} done", self.done.len())
-        } else {
-            format!("{} more", self.menu_len())
-        }
-    }
-}
-
-/// Lay out the strip (SPEC §5.3): one tab per live Subagent — waiting,
-/// then working, each by start — plus the selected one even once it is
-/// done (it sticks until the operator leaves it); every other done
-/// Subagent goes to the menu, newest first. `room` is what the tabs after
-/// Main may take, gaps included; `menu` is the menu button's cost (its
-/// separator included) for a menu of that many rows. When the live tabs
-/// overflow, their tail folds into the menu; the selected tab is always
-/// kept.
-fn plan_strip(agents: &[StripAgent], room: f32, menu: impl Fn(usize) -> f32) -> StripPlan {
-    let mut live: Vec<usize> = (0..agents.len())
-        .filter(|at| agents[*at].standing.live() || agents[*at].selected)
-        .collect();
-    // The sticky done tab rides after the live ones.
-    live.sort_by_key(|at| (agents[*at].standing, agents[*at].started));
-    let mut done: Vec<usize> = (0..agents.len()).filter(|at| !live.contains(at)).collect();
-    done.sort_by_key(|at| std::cmp::Reverse(agents[*at].started));
-    let cost = |at: usize| theme::SUBJECT_TAB_GAP + agents[at].width;
-    let mut used: f32 = live
-        .iter()
-        .filter(|at| agents[**at].selected)
-        .map(|at| cost(*at))
-        .sum();
-    let mut tabs = Vec::new();
-    let mut folded = Vec::new();
-    for (place, at) in live.iter().enumerate() {
-        if agents[*at].selected {
-            tabs.push(*at);
-            continue;
-        }
-        // What would still fold if this tab is the last to show: every
-        // later unselected live tab, and the done ones.
-        let later = live[place + 1..]
-            .iter()
-            .filter(|at| !agents[**at].selected)
-            .count();
-        let after = later + done.len();
-        let menu_cost = if after == 0 { 0. } else { menu(after) };
-        if folded.is_empty() && used + cost(*at) + menu_cost <= room {
-            used += cost(*at);
-            tabs.push(*at);
-        } else {
-            folded.push(*at);
-        }
-    }
-    StripPlan { tabs, folded, done }
-}
-
-#[cfg(test)]
-thread_local! {
-    /// Each Thread's strip plan as last drawn, for the tests.
-    static DRAWN_PLANS: RefCell<HashMap<ThreadId, StripPlan>> = RefCell::new(HashMap::new());
-}
-
-/// `thread`'s strip plan as its last frame drew it.
-#[cfg(test)]
-pub(crate) fn drawn_plan(thread: ThreadId) -> Option<StripPlan> {
-    DRAWN_PLANS.with(|plans| plans.borrow().get(&thread).cloned())
-}
-
-/// The mark's slot: always in layout, `SUBJECT_MARK_W` wide, holding the
-/// mark when there is one — so a tab never changes width with its state.
-fn mark_slot(mark: Option<AnyElement>) -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .w(px(theme::SUBJECT_MARK_W))
-        .children(mark)
-}
-
-/// One Subject tab's face on the headless tab (its role and selection are
-/// the platform's): `width` wide (`tab_width`), `SUBJECT_TAB_H` high at
-/// `R_CONTROL`. Selected, `paint::RAISED` in `INK_STRONG`; otherwise no
-/// ground, `INK` blending to `INK` through the one hover blend.
-fn subject_tab_face(
-    at: usize,
-    selected: bool,
-    width: f32,
-    pad_right: f32,
-    key: SharedString,
-) -> gpui_base::Tab {
-    gpui_base::Tab::new(at)
-        .selected(selected)
-        .justify_start()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .w(px(width))
-        .h(px(theme::SUBJECT_TAB_H))
-        .pl(px(theme::SUBJECT_TAB_PAD_L))
-        .pr(px(pad_right))
-        .overflow_hidden()
-        .rounded(px(theme::R_CONTROL))
-        .cursor_pointer()
-        .text_size(px(theme::FS_LABEL))
-        .line_height(px(theme::LH_UI))
-        .when(selected, |tab| {
-            // The tab's own debug name is its Subject's; the selected face
-            // is named by a box laid exactly over it.
-            tab.relative()
-                .bg(theme::paint::RAISED)
-                .text_color(rgb(theme::INK_STRONG))
-                .child(
-                    div()
-                        .debug_selector(|| "subject-tab-selected".into())
-                        .absolute()
-                        .inset_0(),
-                )
-        })
-        .when(!selected, |tab| {
-            tab.text_color(ferrite_ui::motion::hover_blend(
-                &key,
-                rgb(theme::INK).into(),
-                rgb(theme::INK).into(),
-            ))
-            .on_hover(ferrite_ui::motion::hover_listener(key.clone()))
-        })
-}
-
-/// A Subagent tab's laid-out width: its inline padding, the mark slot and
-/// its gap, and the label up to its cap — whatever the agent's state. The
-/// plan and the tab's own `w` both come from here.
-fn tab_width(label: f32) -> f32 {
-    2. * theme::SUBJECT_TAB_PAD_L
-        + theme::SUBJECT_MARK_W
-        + theme::SUBJECT_TAB_INNER_GAP
-        + label.min(theme::SUBJECT_LABEL_MAX_W)
-}
-
-/// Main's tab: the `terminal` icon, then its label.
-fn main_tab_width(label: f32) -> f32 {
-    theme::SUBJECT_TAB_PAD_L
-        + theme::SUBJECT_TAB_ICON
-        + theme::SUBJECT_TAB_INNER_GAP
-        + label
-        + theme::SUBJECT_MAIN_PAD_R
-}
-
-/// The menu button's width for a `label` (`23 done`), its separator
-/// included: the 1px rule, its margins and the strip's gaps, the padding, the
-/// `check-circle`, the label and the chevron.
-fn menu_button_width(label: f32) -> f32 {
-    2. * (theme::SUBJECT_TAB_GAP + theme::SUBJECT_SEPARATOR_MX)
-        + 1.
-        + theme::SUBJECT_TAB_PAD_L
-        + theme::SUBJECT_TAB_ICON
-        + 2. * theme::SUBJECT_MENU_GAP
-        + label
-        + theme::SUBJECT_MENU_CHEVRON
-        + theme::SUBJECT_MAIN_PAD_R
-}
-
-/// A done Subagent's result word in the menu: its state word, or `done`.
-fn result_word(agent: ferrite_core::activity::AgentView<'_>) -> &'static str {
-    status_label(agent.status(), agent.fresh()).unwrap_or(theme::words::DONE)
 }
 
 impl CockpitView {
-    fn activate_subject(
-        &mut self,
-        thread: ThreadId,
-        subject: Subject,
-        event: &ClickEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let focus = matches!(event, ClickEvent::Keyboard(_))
-            .then(|| window.focused(cx))
-            .flatten();
-        self.select_subject(thread, subject, window, cx);
-        if let Some(focus) = focus {
-            window.focus(&focus, cx);
-        }
-    }
+    /// Show `subject`'s transcript in `thread`'s Pane: Main, or a subagent
+    /// opened from its row (`open_agent_from`) and left by its head's back
+    /// button or escape. Every Subject switch the operator makes comes
+    /// through here.
     pub(super) fn select_subject(
         &mut self,
         thread: ThreadId,
@@ -624,14 +386,13 @@ impl CockpitView {
             return;
         };
         let subject = open.activity().canonical_subject(&subject);
-        if open.activity().subject(&subject).is_none() {
-            return;
-        }
-        let generation = open
+        let Some(generation) = open
             .activity()
             .subject(&subject)
             .map(|subject| subject.revision())
-            .unwrap_or(0);
+        else {
+            return;
+        };
         self.panes[index].select_subject(subject, generation, cx);
         self.retry_subject_history(index, cx);
         self.cockpit
@@ -640,7 +401,8 @@ impl CockpitView {
         self.focus_pane(index);
         self.popover = None;
         // Keep native text selections in their retained Subject entities.
-        // A tab selection must not edit or focus Main's hidden Composer.
+        // A subagent's transcript must not edit or focus Main's hidden
+        // Composer.
         if self.panes[index].is_main() {
             window.focus(&self.panes[index].composer.read(cx).focus_handle(cx), cx);
         } else {
@@ -675,592 +437,177 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The card's tab strip (SPEC §5.3), less its right side: `Main`, a tab
-    /// per live Subagent (and the selected one), and the `N done ▾` menu
-    /// for the rest. Solo always shows it; a board Pane only while its
-    /// Thread has Subagents.
-    pub(super) fn subject_strip(
-        &self,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        use gpui::base::ElementExt as _;
-        let pane = &self.panes[index];
-        let thread = pane.thread()?;
-        let activity = self.cockpit.thread(thread)?.activity();
-        let children = activity.children();
-        // On a board the strip shows only on the focused Pane, and only
-        // when it has Subagents, live or done (SPEC §5.9); otherwise the
-        // head stands alone.
-        if self.grid_board() && (children.is_empty() || index != self.focused()) {
-            return None;
-        }
-        let measure = |text: &str| {
-            let run = gpui::TextRun {
-                len: text.len(),
-                font: gpui::font(theme::FONT_UI),
-                color: rgb(theme::INK).into(),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            f32::from(
-                window
-                    .text_system()
-                    .shape_line(text.to_string().into(), px(theme::FS_LABEL), &[run], None)
-                    .width,
-            )
-            .ceil()
-        };
-        let waiting = |agent: &ferrite_core::activity::AgentView<'_>| {
-            activity
-                .pending_decisions()
-                .iter()
-                .any(|request| request.subject.as_ref() == Some(&agent.subject()))
-        };
-        let agents: Vec<StripAgent> = children
-            .iter()
-            .map(|agent| StripAgent {
-                standing: Standing::of(*agent, waiting(agent)),
-                started: agent.discovered(),
-                width: tab_width(measure(&agent_name(agent.info()))),
-                selected: agent.subject() == pane.selected,
-            })
-            .collect();
-        let main_width = main_tab_width(measure("Main"));
-        let plan = plan_strip(&agents, pane.subject_strip_width - main_width, |rows| {
-            menu_button_width(
-                measure(&format!("{rows} done")).max(measure(&format!("{rows} more"))),
-            )
-        });
-        #[cfg(test)]
-        DRAWN_PLANS.with(|plans| plans.borrow_mut().insert(thread, plan.clone()));
-        let mut order = vec![Subject::Main];
-        order.extend(plan.tabs.iter().map(|at| children[*at].subject()));
-        let nav = Rc::new(order);
-        let interaction = pane.tab_interaction.clone();
-        let identity = format!("subject-tabs-{}-{:?}", thread.get(), nav);
-        // Our own row, not the kit's TabBar: the kit edges its active tab
-        // and rules the bar in the global border colour. The id carries the
-        // ordered Subjects so a reorder discards positional press state
-        // before any release.
-        let selected_at = nav.iter().position(|subject| subject == &pane.selected);
-        let mut tabs = gpui_base::Tabs::new(SharedString::from(identity))
-            .flex()
-            .items_center()
-            .gap(px(theme::SUBJECT_TAB_GAP))
-            .h(px(theme::SUBJECT_TAB_H));
-        let main_selected = selected_at == Some(0);
-        let main = subject_tab_face(
-            0,
-            main_selected,
-            main_width,
-            theme::SUBJECT_MAIN_PAD_R,
-            format!("subject-tab-{}-main", thread.get()).into(),
-        )
-        .accessibility_label("Main transcript")
-        .tooltip(ferrite_ui::menu::tooltip("Main transcript"))
-        .debug_selector(move || format!("subject-main-{}", thread.get()))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(theme::SUBJECT_TAB_INNER_GAP))
-                .child(ferrite_ui::icons::icon(
-                    ferrite_ui::icons::TERMINAL,
-                    theme::SUBJECT_TAB_ICON,
-                    if main_selected {
-                        theme::INK_STRONG
-                    } else {
-                        theme::INK
-                    },
-                ))
-                .child(
-                    div()
-                        .debug_selector(move || format!("subject-main-label-{}", thread.get()))
-                        .child("Main"),
-                ),
-        );
-        tabs = tabs.child(self.subject_tab(
-            main,
-            thread,
-            Subject::Main,
-            0,
-            nav.clone(),
-            interaction.clone(),
-            cx,
-        ));
-        for (place, at) in plan.tabs.iter().enumerate() {
-            let agent = children[*at];
-            let subject = agent.subject();
-            let name = agent_name(agent.info());
-            let content = div()
-                .flex()
-                .items_center()
-                .gap(px(theme::SUBJECT_TAB_INNER_GAP))
-                .min_w_0()
-                .child(mark_slot(agents[*at].standing.mark(agent.status())))
-                .child(
-                    div()
-                        .max_w(px(theme::SUBJECT_LABEL_MAX_W))
-                        .truncate()
-                        .child(name.clone()),
-                );
-            let selector = format!(
-                "subject-agent-{}-{}",
-                thread.get(),
-                match &subject {
-                    Subject::Subagent(key) => key.as_str(),
-                    _ => "main",
-                }
-            );
-            let tooltip = name_and_status(&name, agent.status(), agent.fresh());
-            let tab = subject_tab_face(
-                place + 1,
-                selected_at == Some(place + 1),
-                agents[*at].width,
-                theme::SUBJECT_TAB_PAD_L,
-                format!("{selector}-hover").into(),
-            )
-            .accessibility_label(tooltip.clone())
-            .debug_selector(move || selector.clone())
-            .child(content)
-            .tooltip(ferrite_ui::menu::tooltip(tooltip));
-            tabs = tabs.child(self.subject_tab(
-                tab,
-                thread,
-                subject,
-                place + 1,
-                nav.clone(),
-                interaction.clone(),
-                cx,
-            ));
-        }
-        let mut strip = div()
-            .id(("subject-strip", thread.get()))
-            .debug_selector(move || format!("subject-strip-{}", thread.get()))
-            .font_family(theme::FONT_UI)
-            .font_weight(theme::W_BODY)
-            .flex()
-            .items_center()
-            .flex_1()
-            .min_w_0()
-            .gap(px(theme::SUBJECT_TAB_GAP))
-            .h(px(theme::SUBJECT_TAB_H))
-            .child(tabs);
-        if plan.menu_len() > 0 {
-            strip = strip
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .w(px(1.))
-                        .h(px(theme::SUBJECT_SEPARATOR_H))
-                        .mx(px(theme::SUBJECT_SEPARATOR_MX))
-                        .bg(theme::paint::LINE),
-                )
-                .child(self.subject_menu(index, thread, &children, &plan, cx));
-        }
-        let weak = cx.entity().downgrade();
-        let measured_width = pane.subject_strip_width;
-        Some(
-            native_keys(strip)
-                .on_prepaint(move |bounds, window, cx| {
-                    let width = f32::from(bounds.size.width);
-                    if (measured_width - width).abs() > 0.5 {
-                        let weak = weak.clone();
-                        // Publish after paint so GPUI schedules the follow-up layout;
-                        // notifying while this same entity paints can be coalesced.
-                        window.defer(cx, move |_, cx| {
-                            let _ = weak.update(cx, |view, cx| {
-                                if let Some(index) = view.pane_for(thread) {
-                                    view.panes[index].subject_strip_width = width;
-                                    cx.notify();
-                                }
-                            });
-                        });
-                    }
-                })
-                .into_any_element(),
-        )
-    }
-
-    /// The `N done ▾` menu (SPEC §5.3): the done Subagents newest first,
-    /// each with its result word and its last turn's time where the
-    /// transcript holds one; under a `Live` heading first, the live tabs
-    /// that did not fit, and then the button reads `N more ▾`. Picking a
-    /// row selects that Subagent's tab.
-    fn subject_menu(
-        &self,
-        index: usize,
-        thread: ThreadId,
-        children: &[ferrite_core::activity::AgentView<'_>],
-        plan: &StripPlan,
-        cx: &mut Context<Self>,
-    ) -> ferrite_ui::menu::ChoiceMenu {
-        let pane = &self.panes[index];
-        let mut choices = Vec::new();
-        let mut subjects = Vec::new();
-        let section = |title: &'static str,
-                       choices: &mut Vec<components::Choice>,
-                       subjects: &mut Vec<Option<Subject>>| {
-            choices.push(components::Choice {
-                label: title.into(),
-                section: true,
-                ..Default::default()
-            });
-            subjects.push(None);
-        };
-        let row = |agent: ferrite_core::activity::AgentView<'_>, word: &str| {
-            let time = agent.transcript().last_working_ms().map(|ms| {
-                ferrite_core::progress::duration_label(std::time::Duration::from_millis(ms))
-            });
-            components::Choice {
-                label: agent_name(agent.info()).into(),
-                detail: Some(match time {
-                    Some(time) => format!("{word} \u{b7} {time}").into(),
-                    None => SharedString::from(word.to_string()),
-                }),
-                ..Default::default()
-            }
-        };
-        if !plan.folded.is_empty() {
-            section("Live", &mut choices, &mut subjects);
-            for at in &plan.folded {
-                let agent = children[*at];
-                let word =
-                    status_label(agent.status(), agent.fresh()).unwrap_or(theme::words::WORKING);
-                choices.push(row(agent, word));
-                subjects.push(Some(agent.subject()));
-            }
-            if !plan.done.is_empty() {
-                section("Done", &mut choices, &mut subjects);
-            }
-        }
-        for at in &plan.done {
-            let agent = children[*at];
-            choices.push(row(agent, result_word(agent)));
-            subjects.push(Some(agent.subject()));
-        }
-        let label = plan.menu_label();
-        let weak = cx.entity().downgrade();
-        let picking = weak.clone();
-        ferrite_ui::menu::ChoiceMenu {
-            id: format!("subject-overflow-{}", thread.get()).into(),
-            // The strip runs across the card's top: with no place, the list
-            // drops below it.
-            place: None,
-            submenus: Vec::new(),
-            width: None,
-            trigger: components::button(("subject-overflow", thread.get()))
-                .tab_stop(true)
-                .h(px(theme::SUBJECT_TAB_H))
-                .pl(px(theme::SUBJECT_TAB_PAD_L))
-                .pr(px(theme::SUBJECT_MAIN_PAD_R))
-                .rounded(px(theme::R_CONTROL))
-                .accessibility_label("More subagents")
-                .tooltip("More subagents")
-                .debug_selector(move || format!("subject-overflow-{}", thread.get()))
-                .child(
-                    div()
-                        .debug_selector(move || format!("subject-overflow-label-{}", thread.get()))
-                        .flex()
-                        .items_center()
-                        .gap(px(theme::SUBJECT_MENU_GAP))
-                        .text_size(px(theme::FS_LABEL))
-                        .line_height(px(theme::LH_UI))
-                        .text_color(rgb(theme::INK_SUBTLE))
-                        .child(ferrite_ui::icons::icon(
-                            ferrite_ui::icons::CHECK_CIRCLE,
-                            theme::SUBJECT_TAB_ICON,
-                            theme::INK_SUBTLE,
-                        ))
-                        .child(components::tabular(div().child(label)))
-                        .child(ferrite_ui::icons::icon(
-                            ferrite_ui::icons::CHEVRON_DOWN,
-                            theme::SUBJECT_MENU_CHEVRON,
-                            theme::INK_SUBTLE,
-                        )),
-                ),
-            choices,
-            open: pane.agent_menu_open,
-            return_focus: pane.transcript_focus.clone(),
-            on_open: Rc::new(move |open, _, cx| {
-                let _ = weak.update(cx, |view, cx| {
-                    if let Some(index) = view.pane_for(thread) {
-                        view.panes[index].agent_menu_open = open;
-                        cx.notify();
-                    }
-                });
-            }),
-            on_pick: Rc::new(move |at, window, cx| {
-                if let Some(Some(subject)) = subjects.get(at) {
-                    let _ = picking.update(cx, |view, cx| {
-                        view.select_subject(thread, subject.clone(), window, cx)
-                    });
-                }
-            }),
-        }
-    }
-
-    /// The strip's split-right button (SPEC §5.3): opens a Thread beside
-    /// this one (`open_beside`, `Beside::Thread`) through the palette,
-    /// whose ⏎ then opens the picked Thread beside rather than in place.
-    /// Solo only; there is no split down while the Beside slot has one
-    /// axis.
-    pub(super) fn split_beside_button(
-        &self,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let thread = self.panes.get(index)?.thread()?;
-        if self.grid_board() {
-            return None;
-        }
-        Some(
-            components::button(("split-beside", thread.get()))
-                .debug_selector(move || format!("split-beside-{}", thread.get()))
-                .flex_shrink_0()
-                .w(px(theme::ICON_BUTTON))
-                .h(px(theme::ICON_BUTTON))
-                .p_0()
-                .rounded(px(theme::R_CONTROL))
-                .accessibility_label("Open a thread beside")
-                .tooltip("Open a thread beside")
-                .child(ferrite_ui::icons::icon(
-                    ferrite_ui::icons::SPLIT_RIGHT,
-                    theme::ICON_BUTTON_GLYPH,
-                    theme::INK_SUBTLE,
-                ))
-                .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-                    cx.stop_propagation();
-                    view.open_palette_beside(window, cx);
-                }))
-                .into_any_element(),
-        )
-    }
-
-    fn subject_tab(
-        &self,
-        tab: gpui_base::Tab,
-        thread: ThreadId,
-        subject: Subject,
-        at: usize,
-        order: Rc<Vec<Subject>>,
-        interaction: TabInteraction,
-        cx: &mut Context<Self>,
-    ) -> gpui_base::Tab {
-        let focus = interaction
-            .0
-            .borrow_mut()
-            .focus
-            .entry(subject.clone())
-            .or_insert_with(|| cx.focus_handle())
-            .clone();
-        let clicked_subject = subject.clone();
-        let keyboard = interaction.clone();
-        let keyboard_subject = subject.clone();
-        let release = interaction;
-        let release_subject = subject.clone();
-        let release_focus = focus.clone();
-        tab.track_focus(&focus.clone().tab_index(0).tab_stop(true))
-            .tab_stop(true)
-            .focus_visible(components::control_focus)
-            .on_click(cx.listener(move |view, event, window, cx| {
-                // The row's identity includes the ordered Subjects. A reorder
-                // discards native positional press state before any release.
-                view.activate_subject(thread, clicked_subject.clone(), event, window, cx);
-            }))
-            .on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
-                if matches!(event.keystroke.key.as_str(), "space" | "enter") {
-                    if !event.is_held {
-                        keyboard.0.borrow_mut().keyboard = Some(keyboard_subject.clone());
-                    }
-                    cx.stop_propagation();
-                    window.prevent_default();
-                    return;
-                }
-                let target = match event.keystroke.key.as_str() {
-                    "left" => Some(at.saturating_sub(1)),
-                    "right" => Some((at + 1).min(order.len() - 1)),
-                    "home" => Some(0),
-                    "end" => Some(order.len() - 1),
-                    _ => None,
-                };
-                if let Some(target) = target {
-                    cx.stop_propagation();
-                    window.prevent_default();
-                    let subject = order[target].clone();
-                    let focus = keyboard.0.borrow().focus.get(&subject).cloned();
-                    view.select_subject(thread, subject, window, cx);
-                    if let Some(focus) = focus {
-                        window.focus(&focus, cx);
-                    }
-                }
-            }))
-            .on_key_up(
-                cx.listener(move |view, event: &gpui::KeyUpEvent, window, cx| {
-                    if matches!(event.keystroke.key.as_str(), "space" | "enter") {
-                        let pressed = release.0.borrow_mut().keyboard.take();
-                        if pressed.as_ref() == Some(&release_subject) {
-                            view.select_subject(thread, release_subject.clone(), window, cx);
-                            window.focus(&release_focus, cx);
-                        }
-                        cx.stop_propagation();
-                        window.prevent_default();
-                    }
-                }),
-            )
-    }
-
-    /// The head's title: the Thread's, whichever Subject is selected — the
-    /// strip's selected tab already says which transcript this is.
-    pub(super) fn activity_title(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let thread = self.panes[index].thread().expect("Thread Pane");
-        self.pane_title(index, thread, cx)
-    }
-
-    pub(super) fn child_footer(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// A subagent's head, over its transcript while the Pane shows one
+    /// (Claude's drill-in): the back button and `Main`, either of which
+    /// goes back; `›`; the agent's mark, its name and its state word; and at
+    /// the far end what its transcript covers (`coverage_words`), or why it
+    /// could not load with `Retry`. Main has no head: its agents are its
+    /// transcript's `Ran agent` rows.
+    pub(super) fn subagent_head(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let pane = &self.panes[index];
         if pane.is_main() {
             return None;
         }
         let thread = pane.thread()?;
-        let subject = self
-            .cockpit
-            .thread(thread)?
-            .activity()
-            .subject(&pane.selected)?;
-        // What this transcript covers, as a lead and an optional tail that
-        // shows only where it fits; a complete transcript says nothing.
-        let coverage: Option<(&str, Option<&str>)> = if !subject.retained() {
-            Some(("loading saved transcript\u{2026}", None))
-        } else {
-            match subject.coverage() {
-                TranscriptCoverage::Unavailable => Some(("transcript unavailable", None)),
-                TranscriptCoverage::ToolActivity => Some(("tool activity only", None)),
-                TranscriptCoverage::Live => Some((
-                    "live transcript",
-                    Some(" \u{b7} earlier messages may be unavailable"),
-                )),
-                TranscriptCoverage::Partial => Some(("partial transcript", None)),
-                TranscriptCoverage::Complete => None,
-            }
+        let activity = self.cockpit.thread(thread)?.activity();
+        let subject = activity.subject(&pane.selected)?;
+        let agent = activity
+            .children()
+            .into_iter()
+            .find(|agent| agent.subject() == pane.selected)?;
+        let waiting = activity
+            .pending_decisions()
+            .iter()
+            .any(|request| request.subject.as_ref() == Some(&pane.selected));
+        let back = move |view: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
+            view.select_subject(thread, Subject::Main, window, cx)
         };
-        let error = pane.history_error.clone();
-        let seam = || {
-            div()
-                .flex_shrink_0()
-                .px(px(theme::SPACE_1_5))
-                .text_color(rgb(theme::TEXT_FAINT))
-                .child("\u{b7}")
-        };
-        let text = div()
-            .debug_selector(move || format!("child-footer-text-{}", thread.get()))
+        let back_button = components::button(("subagent-back", thread.get()))
+            .debug_selector(move || format!("subagent-back-{}", thread.get()))
+            .tab_stop(true)
+            .flex_shrink_0()
+            .w(px(theme::ICON_BUTTON))
+            .h(px(theme::ICON_BUTTON))
+            .p_0()
+            .rounded(px(theme::R_CONTROL))
+            .accessibility_label("Back to Main")
+            .tooltip("Back to Main")
+            .child(ferrite_ui::icons::icon(
+                ferrite_ui::icons::BACK,
+                theme::ICON_BUTTON_GLYPH,
+                theme::INK_SUBTLE,
+            ))
+            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| back(view, window, cx)));
+        let main_crumb = components::button(("subagent-main", thread.get()))
+            .debug_selector(move || format!("subagent-main-{}", thread.get()))
+            .flex_shrink_0()
+            .h(px(theme::SUBAGENT_CRUMB_H))
+            .px(px(theme::SPACE_1_5))
+            .rounded(px(theme::R_CONTROL))
+            .text_color(rgb(theme::INK_SUBTLE))
+            .child("Main")
+            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| back(view, window, cx)));
+        let name = agent_name(agent.info());
+        let word = state_word(agent.status(), agent.fresh());
+        let crumb = div()
+            .debug_selector(move || format!("subagent-name-{}", thread.get()))
             .flex()
-            .flex_1()
             .items_center()
+            .gap(px(theme::SUBAGENT_NAME_GAP))
             .min_w_0()
-            .overflow_hidden()
-            .text_color(rgb(theme::INK_SUBTLE));
-        let text = match (&error, coverage) {
-            // `failed · could not load transcript · <error>`: only the
-            // state word carries the hue, and the error is machine text.
-            (Some(error), _) => text
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_color(rgb(theme::BLOCKED))
-                        .child(theme::words::FAILED),
-                )
-                .child(seam())
-                .child(div().flex_shrink_0().child("could not load transcript"))
-                .child(seam())
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .font_family(theme::FONT_CODE)
-                        .child(SharedString::from(error.clone())),
-                ),
-            (None, Some((lead, tail))) => text
-                .flex_wrap()
-                .h(px(theme::LH_UI))
-                .child(div().flex_shrink_0().child(lead))
-                .children(tail.map(|tail| div().flex_shrink_0().child(tail))),
-            (None, None) => text,
-        };
-        // A read-only line in the Composer's slot (SPEC §5.3): one fixed
-        // `CHILD_FOOTER_H` row on the card's own ground — no box, no edge,
-        // nothing to type here — inset as the Composer's box is, its words
-        // where the input's stand in `INK_SUBTLE` and `Back to Main`, a
-        // secondary button, where send stands.
-        let (inset, pad_l, pad_r) = if self.grid_board() {
-            (
-                theme::COMPACT_COMPOSER_INSET,
-                theme::COMPACT_COMPOSER_PAD_L,
-                theme::COMPACT_COMPOSER_PAD_R,
-            )
-        } else {
-            (
-                theme::COMPOSER_INSET,
-                theme::COMPOSER_INPUT_PAD_X,
-                theme::COMPOSER_TOOLBAR_PAD_X,
-            )
-        };
-        let footer = div()
-            .debug_selector(move || format!("child-footer-{}", thread.get()))
-            .flex()
-            .items_center()
-            .h(px(theme::CHILD_FOOTER_H))
-            .pl(px(pad_l))
-            .pr(px(pad_r))
-            .font_family(theme::FONT_UI)
-            .text_size(px(theme::FS_UI))
-            .line_height(px(theme::LH_UI))
-            .child(text)
             .child(
                 div()
                     .flex()
                     .flex_shrink_0()
                     .items_center()
+                    .justify_center()
+                    .w(px(theme::SUBAGENT_MARK_W))
+                    .children(agent_mark(agent.status(), agent.fresh(), waiting)),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(theme::INK_STRONG))
+                    .child(name),
+            )
+            .child(
+                div()
+                    .debug_selector(move || format!("subagent-state-{}", thread.get()))
+                    .flex_shrink_0()
+                    .text_color(rgb(theme::INK_SUBTLE))
+                    .child(word),
+            );
+        let error = pane.history_error.clone();
+        let end = match (
+            &error,
+            coverage_words(subject.retained(), subject.coverage()),
+        ) {
+            // `Couldn't load transcript · <error>  Retry`: the words in
+            // `BLOCKED`, the error machine text.
+            (Some(error), _) => Some(
+                div()
+                    .flex()
+                    .items_center()
                     .gap(px(theme::SPACE_2))
-                    .ml(px(theme::SPACE_2))
-                    .when(error.is_some(), |actions| {
-                        actions.child(
-                            components::ghost_button(
-                                ("retry-child-history", thread.get()),
-                                "Retry",
-                                cx,
-                            )
-                            .tab_stop(true)
-                            .on_click(cx.listener(
-                                move |view, _, _, cx| view.reload_subject_history(thread, cx),
-                            )),
-                        )
-                    })
+                    .min_w_0()
                     .child(
-                        components::secondary_button(
-                            ("return-main", thread.get()),
-                            None,
-                            "Back to Main",
+                        div()
+                            .flex_shrink_0()
+                            .text_color(rgb(theme::BLOCKED))
+                            .child("Couldn\u{2019}t load transcript"),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_family(theme::FONT_CODE)
+                            .child(SharedString::from(error.clone())),
+                    )
+                    .child(
+                        components::ghost_button(
+                            ("retry-child-history", thread.get()),
+                            "Retry",
                             cx,
                         )
                         .tab_stop(true)
-                        .debug_selector(move || format!("return-main-{}", thread.get()))
-                        .on_click(cx.listener(
-                            move |view, _, window, cx| {
-                                view.select_subject(thread, Subject::Main, window, cx)
-                            },
-                        )),
-                    ),
-            );
-        // The Composer's slot: its box's inset from the card's foot (the
-        // Pane sets it in the Composer's column, sides and all).
-        Some(
-            native_keys(div().flex_shrink_0().min_w_0().pb(px(inset)).child(footer))
-                .into_any_element(),
-        )
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.reload_subject_history(thread, cx)
+                        })),
+                    )
+                    .into_any_element(),
+            ),
+            (None, Some((lead, tail))) => Some(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .justify_end()
+                    .h(px(theme::LH_UI))
+                    .overflow_hidden()
+                    .min_w_0()
+                    .child(div().flex_shrink_0().child(lead))
+                    .children(tail.map(|tail| div().flex_shrink_0().child(tail)))
+                    .into_any_element(),
+            ),
+            (None, None) => None,
+        };
+        let head = div()
+            .debug_selector(move || format!("subagent-head-{}", thread.get()))
+            .font_family(theme::FONT_UI)
+            .font_weight(theme::W_BODY)
+            .text_size(px(theme::FS_LABEL))
+            .line_height(px(theme::LH_UI))
+            .flex()
+            .flex_1()
+            .items_center()
+            .min_w_0()
+            .gap(px(theme::SPACE_0_5))
+            .child(back_button)
+            .child(main_crumb)
+            .child(ferrite_ui::icons::icon(
+                ferrite_ui::icons::CHEVRON_RIGHT,
+                theme::SUBAGENT_CRUMB_ICON,
+                theme::TEXT_FAINT,
+            ))
+            .child(div().flex_1().min_w_0().pl(px(theme::SPACE_1)).child(crumb))
+            .children(end.map(|end| {
+                div()
+                    .debug_selector(move || format!("subagent-coverage-{}", thread.get()))
+                    .flex()
+                    .flex_shrink(1.)
+                    .min_w_0()
+                    .ml(px(theme::SPACE_2))
+                    .text_color(rgb(theme::INK_SUBTLE))
+                    .child(end)
+            }));
+        Some(native_keys(head).into_any_element())
+    }
+
+    /// The head's title: the Thread's, whichever Subject is selected — the
+    /// subagent's own head says which transcript this is.
+    pub(super) fn activity_title(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let thread = self.panes[index].thread().expect("Thread Pane");
+        self.pane_title(index, thread, cx)
     }
 
     pub(super) fn respond_exact(
@@ -2984,85 +2331,8 @@ fn form_defaults(fields: &[ferrite_core::FormField]) -> serde_json::Map<String, 
 mod status_word_tests {
     use super::*;
 
-    /// A tab's width is its label's and a reserved mark slot's: an agent
-    /// starting, finishing or waiting never moves the tabs beside it.
-    #[test]
-    fn a_tab_keeps_its_width_whatever_its_state() {
-        let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
-        for label in [0., 24., 80., 400.] {
-            assert!(near(
-                tab_width(label),
-                2. * theme::SUBJECT_TAB_PAD_L
-                    + theme::SUBJECT_MARK_W
-                    + theme::SUBJECT_TAB_INNER_GAP
-                    + f32::min(label, theme::SUBJECT_LABEL_MAX_W)
-            ));
-        }
-        // Main: the mockup's 67px tab around a 27px `Main`.
-        assert!(near(main_tab_width(27.), 66.));
-    }
-
-    fn agent(standing: Standing, started: u64) -> StripAgent {
-        StripAgent {
-            standing,
-            started,
-            width: 100.,
-            selected: false,
-        }
-    }
-
-    /// Live tabs run waiting, then working, each by start; the rest are
-    /// the menu's, newest first.
-    #[test]
-    fn the_strip_orders_live_tabs_and_lists_done_newest_first() {
-        let agents = [
-            agent(Standing::Working, 1),
-            agent(Standing::Done, 2),
-            agent(Standing::Waiting, 3),
-            agent(Standing::Done, 4),
-            agent(Standing::Working, 5),
-        ];
-        let plan = plan_strip(&agents, 10_000., |_| 80.);
-        assert_eq!(plan.tabs, [2, 0, 4]);
-        assert!(plan.folded.is_empty());
-        assert_eq!(plan.done, [3, 1]);
-        assert_eq!(plan.menu_label(), "2 done");
-    }
-
-    /// A done tab the operator is reading stays, after the live ones.
-    #[test]
-    fn the_selected_done_tab_sticks() {
-        let mut agents = [agent(Standing::Done, 1), agent(Standing::Working, 2)];
-        agents[0].selected = true;
-        let plan = plan_strip(&agents, 10_000., |_| 80.);
-        assert_eq!(plan.tabs, [1, 0]);
-        assert!(plan.done.is_empty());
-        assert_eq!(plan.menu_len(), 0, "no menu button");
-    }
-
-    /// Live tabs that overflow fold, tail first, into the menu, which then
-    /// reads `N more`; the selected tab always shows.
-    #[test]
-    fn overflowing_live_tabs_fold_into_the_menu_keeping_the_selected() {
-        let mut agents: Vec<_> = (0..5).map(|at| agent(Standing::Working, at)).collect();
-        agents.push(agent(Standing::Done, 9));
-        agents[4].selected = true;
-        let gap = theme::SUBJECT_TAB_GAP;
-        // Room for the selected tab, one more and the menu.
-        let room = 2. * (100. + gap) + 80.;
-        let plan = plan_strip(&agents, room, |_| 80.);
-        assert_eq!(plan.tabs, [0, 4]);
-        assert_eq!(plan.folded, [1, 2, 3]);
-        assert_eq!(plan.done, [5]);
-        assert_eq!(plan.menu_label(), "4 more");
-        // No room at all: the selected tab alone.
-        let plan = plan_strip(&agents, 0., |_| 80.);
-        assert_eq!(plan.tabs, [4]);
-        assert_eq!(plan.folded, [0, 1, 2, 3]);
-    }
-
-    /// Nothing here schedules a loop of its own: a working tab's spinner is
-    /// the shared one (`nav::mark`).
+    /// Nothing here schedules a loop of its own: a working agent's spinner
+    /// is the shared one (`nav::mark`).
     #[test]
     fn subagents_schedule_no_loops() {
         let source = include_str!("subagents.rs");
@@ -3094,11 +2364,22 @@ mod status_word_tests {
                 "{status:?} unobserved"
             );
         }
+        assert_eq!(state_word(AgentStatus::Idle, true), words::DONE);
+        assert_eq!(state_word(AgentStatus::Waiting, true), words::NEEDS_YOU);
+    }
+
+    /// A subagent's head says what its transcript covers; a complete one
+    /// says nothing.
+    #[test]
+    fn the_head_says_what_a_transcript_covers() {
         assert_eq!(
-            name_and_status("scout", AgentStatus::Waiting, true),
-            "scout \u{b7} needs you"
+            coverage_words(false, TranscriptCoverage::Complete),
+            Some(("Loading saved transcript\u{2026}", None))
         );
-        assert_eq!(name_and_status("scout", AgentStatus::Idle, true), "scout");
-        assert!(!name_and_status("scout", AgentStatus::Failed, true).contains('\u{2014}'));
+        assert_eq!(coverage_words(true, TranscriptCoverage::Complete), None);
+        assert_eq!(
+            coverage_words(true, TranscriptCoverage::ToolActivity),
+            Some(("Tool activity only", None))
+        );
     }
 }

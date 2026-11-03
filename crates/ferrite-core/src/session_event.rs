@@ -236,6 +236,8 @@ pub enum ControlKind {
     StopTask,
     BackgroundTasks,
     SetPermissionMode,
+    /// Rewind and fork from a prompt (`Session::rewind`, `Session::fork`).
+    Rewind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,12 +252,28 @@ pub enum SessionControl {
     SetPermissionMode { mode: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ContextDetails {
-    pub usable_window: Option<u64>,
-    pub auto_compact_threshold: Option<u64>,
     pub is_auto_compact_enabled: Option<bool>,
     pub categories: Vec<ContextCategory>,
+    /// What stands behind three of the categories, item by item: every MCP
+    /// tool the Session has (loaded or deferred), its skills, its memory
+    /// files. Empty when the provider does not say.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_tools: Vec<ContextItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<ContextItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub memory_files: Vec<ContextItem>,
+}
+
+/// One item behind a context category: an MCP tool's full name
+/// (`mcp__server__tool`), a skill's name, a memory file's path, and the
+/// tokens it takes.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ContextItem {
+    pub name: String,
+    pub tokens: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

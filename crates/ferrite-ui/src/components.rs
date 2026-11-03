@@ -1484,6 +1484,17 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
         })
 }
 
+/// A path as the operator reads it: their home spelled `~`.
+pub fn home_relative(path: &std::path::Path) -> String {
+    let shown = path.display().to_string();
+    match std::env::var("HOME") {
+        Ok(home) if !home.is_empty() && shown.starts_with(&home) => {
+            format!("~{}", &shown[home.len()..])
+        }
+        _ => shown,
+    }
+}
+
 /// A fold's chevron, every surface's (the nav's sections and Groups, the
 /// panel's file blocks): `chevron-right` while folded, a
 /// quarter turn down while open. The turn eases over `motion::CHEVRON`

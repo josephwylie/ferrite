@@ -313,6 +313,24 @@ impl Session for SessionWithDefaults {
         self.inner.send(text)
     }
 
+    fn send_as(&mut self, id: &str, text: &str) -> io::Result<()> {
+        self.inner.send_as(id, text)
+    }
+
+    fn rewind(
+        &mut self,
+        request: crate::providers::RewindRequest,
+    ) -> io::Result<crate::providers::RewindAck> {
+        self.inner.rewind(request)
+    }
+
+    fn fork(
+        &mut self,
+        request: crate::providers::RewindRequest,
+    ) -> io::Result<crate::providers::ForkAck> {
+        self.inner.fork(request)
+    }
+
     fn set_effort(&mut self, effort: Option<&str>) -> io::Result<SettingAck> {
         let effort = match effort {
             Some(effort) => Some(effort.to_string()),
@@ -398,6 +416,8 @@ impl Spawn {
                     .or(defaults.claude_permission_mode),
                 prompt_suggestions: defaults.placeholder_suggestions,
                 resume,
+                resume_at: request.resume_at.and_then(|point| point.at.clone()),
+                fork: request.resume_at.is_some_and(|point| point.fork),
                 additional_directories,
                 visuals: self.visuals(defaults.visuals),
                 env,
@@ -535,6 +555,7 @@ mod tests {
             model: None,
             effort: None,
             resume: None,
+            resume_at: None,
             permission_mode: None,
             name: None,
             cwd: None,
@@ -578,6 +599,7 @@ mod tests {
             model: None,
             effort: None,
             resume: None,
+            resume_at: None,
             permission_mode: None,
             name: None,
             cwd: None,
@@ -620,6 +642,7 @@ mod tests {
             model: None,
             effort: None,
             resume: None,
+            resume_at: None,
             permission_mode: None,
             name: None,
             cwd: None,

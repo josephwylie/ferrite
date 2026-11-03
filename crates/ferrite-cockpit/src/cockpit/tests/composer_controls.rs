@@ -700,14 +700,16 @@ fn the_model_gives_way_before_the_permission_mode(cx: &mut TestAppContext) {
     tick(cx);
     let roomy = debug_bounds(cx, format!("mode-picker-{}", thread.get())).expect("mode");
     let roomy_model = debug_bounds(cx, format!("model-picker-{}", thread.get())).expect("model");
-    // Narrow until the model has had to give some of its label.
+    // Narrow until the model has had to give some of its label. Its env
+    // words now stand over the box (`env_strip`), so the footer is roomy
+    // and the model starts to cut only in a narrow window.
     let mut width = 1600.;
     loop {
         width -= 20.;
         cx.simulate_resize(gpui::size(px(width), px(800.)));
         tick(cx);
-        let model = debug_bounds(cx, format!("model-picker-{}", thread.get())).unwrap();
-        if model.size.width < roomy_model.size.width - px(40.) || width < 500. {
+        let model = debug_bounds(cx, format!("model-picker-{}", thread.get())).expect("model");
+        if model.size.width < roomy_model.size.width - px(1.) || width < 500. {
             break;
         }
     }

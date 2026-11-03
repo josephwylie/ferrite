@@ -107,7 +107,7 @@ case "$frame" in
 esac;;
 *'"subtype":"get_context_usage"'*)
 request=$(printf '%s' "$frame" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
-printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"totalTokens":12000,"rawMaxTokens":180000,"maxTokens":150000,"model":"fixture","autoCompactThreshold":140000,"isAutoCompactEnabled":true,"categories":[{"name":"Messages","tokens":12000,"color":"blue"}]}}}\n' "$request";;
+printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"totalTokens":12000,"rawMaxTokens":180000,"maxTokens":150000,"model":"fixture","autoCompactThreshold":140000,"isAutoCompactEnabled":true,"categories":[{"name":"Messages","tokens":12000,"color":"blue"}],"mcpTools":[{"name":"mcp__docs__search","serverName":"docs","tokens":202,"isLoaded":true}],"skills":{"totalSkills":1,"includedSkills":1,"tokens":159,"skillFrontmatter":[{"name":"brandkit","source":"userSettings","tokens":159}]},"memoryFiles":[{"path":"/home/me/.claude/CLAUDE.md","type":"User","tokens":14}]}}}\n' "$request";;
 *'"subtype":"mcp_status"'*)
 request=$(printf '%s' "$frame" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
 printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"mcpServers":[{"name":"search","status":"needs-auth","error":"Sign in to search"}]}}}\n' "$request";;

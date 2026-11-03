@@ -88,8 +88,8 @@ impl<'a> Work<'a> {
     }
 
     /// One call's verb, in the present tense while it runs: `Ran`, `Read`,
-    /// `Edited`; a tool with no verb of its own is named (`Agent`, `github`,
-    /// `TodoWrite`).
+    /// `Edited`, `Ran agent`; a tool with no verb of its own is named
+    /// (`github`, `TodoWrite`).
     fn verb(&self, running: bool) -> &'a str {
         let tense = |active, done| if running { active } else { done };
         match self.kind {
@@ -101,7 +101,7 @@ impl<'a> Work<'a> {
             ToolKind::List => tense("Listing", "Listed"),
             ToolKind::Fetch => tense("Fetching", "Fetched"),
             ToolKind::WebSearch => tense("Searching the web for", "Searched the web for"),
-            ToolKind::Agent => "Agent",
+            ToolKind::Agent => tense("Running agent", "Ran agent"),
             ToolKind::Mcp(_)
             | ToolKind::Todo
             | ToolKind::Question
@@ -243,9 +243,9 @@ fn code_span(text: &str) -> String {
 
 /// A call's line. A command whose provider wrote what it is for (Claude's
 /// Bash `description`, carried as `ToolBlock::title`) leads with those
-/// words, the command behind its disclosure (`$ cmd` in its shell card);
+/// words, the command behind its disclosure (`$ cmd` in its open well);
 /// otherwise the verb and the argument, a command less a leading `cd <dir>
-/// &&` (the shell card keeps it).
+/// &&` (the open well keeps it).
 pub(crate) fn call_line(tool: &ToolBlock) -> CallLine {
     let work = Work::of(tool);
     let result = call_result(tool).map(|result| format!("{RESULT_SEAM}{result}"));
@@ -307,6 +307,33 @@ fn call_result(tool: &ToolBlock) -> Option<String> {
                 .filter(|rest| rest.contains("passed"))
         }
     }
+}
+
+/// An agent call's line, as it reads and copies (`agents::render_agent`):
+/// `Ran agent Count .rs files`, and the range of its task, the words the
+/// row brightens; while the agent runs, `Running agent …` and what it is
+/// doing after the seam (its summary, carried as the call's result line
+/// while it runs: `AgentFaces::apply`).
+pub(crate) fn agent_line(tool: &ToolBlock) -> (String, std::ops::Range<usize>) {
+    let running = tool.state == ToolState::Running;
+    let mut line = Work::of(tool).verb(running).to_owned();
+    let task = tool.argument();
+    if !task.is_empty() {
+        line.push(' ');
+    }
+    let start = line.len();
+    line.push_str(&task);
+    let range = start..line.len();
+    if let Some(summary) = tool
+        .result_line
+        .as_deref()
+        .map(str::trim)
+        .filter(|summary| running && !summary.is_empty())
+    {
+        line.push_str(RESULT_SEAM);
+        line.push_str(summary);
+    }
+    (line, range)
 }
 
 /// A group's summary line, as it reads and copies: the provider's own
@@ -509,20 +536,28 @@ pub(crate) fn call_failed(tool: &ToolBlock) -> bool {
             && test_elbow(tool).is_some_and(|elbow| elbow.lead == theme::words::FAILED))
 }
 
-/// The call a shut group shows under its summary while it works: its
-/// newest running call, drawn whole (a suite's bar, a command's live
-/// line). Settled, a shut group shows nothing under it.
-pub(crate) fn group_live(members: &[Block]) -> Option<&Block> {
-    members
-        .iter()
-        .rev()
-        .find(|block| matches!(&block.body, Body::Tool(tool) if tool.state == ToolState::Running))
+/// The calls a shut group shows under its summary while it works, drawn
+/// whole (a suite's bar, a command's live line): its newest running call —
+/// or, in an agents' card, every agent still running, since they run side
+/// by side. Settled, a shut group shows nothing under it.
+pub(crate) fn group_live(members: &[Block]) -> Vec<&Block> {
+    let running = members.iter().filter(
+        |block| matches!(&block.body, Body::Tool(tool) if tool.state == ToolState::Running),
+    );
+    let agents = group_tools(members)
+        .next()
+        .is_some_and(super::agents::is_agent);
+    if agents {
+        running.collect()
+    } else {
+        running.last().into_iter().collect()
+    }
 }
 
 /// Whether an opened call that is not a command echoes its input: only
 /// where the call line could not already show it whole (`INPUT_ECHO_CHARS`,
 /// or a description stood in for it), or where the input is all there is to
-/// disclose (a call still running). A command's shell card always shows its
+/// disclose (a call still running). An open command always shows its
 /// `$ cmd`.
 pub(crate) fn shows_input(tool: &ToolBlock) -> bool {
     !tool.summary.is_empty()
@@ -664,7 +699,7 @@ pub(crate) fn collect_group_text(
     let drawn: Vec<&Block> = if expanded {
         members.iter().collect()
     } else {
-        group_live(members).into_iter().collect()
+        group_live(members)
     };
     for block in drawn {
         if let Body::Tool(tool) = &block.body {
@@ -674,9 +709,16 @@ pub(crate) fn collect_group_text(
 }
 
 /// A call's copy fragments, in the order `render_tool` registers them: its
-/// call line; a failure's tag; once open, a command's shell card (`$ cmd`,
-/// its output) or another call's details, then its diffs.
+/// call line; a failure's tag; once open, a command's `$ cmd` and its
+/// output or another call's details, then its diffs.
 fn collect_tool_text(block: BlockId, tool: &ToolBlock, expanded: bool, selection: &TextRuns) {
+    if super::agents::is_agent(tool) {
+        let _ = selection.line(block, agent_line(tool).0, Vec::new());
+        if let Some(verdict) = call_verdict(tool) {
+            let _ = selection.line(block, verdict, Vec::new());
+        }
+        return;
+    }
     let _ = selection.markdown(block, call_markdown(tool));
     if let Some(verdict) = call_verdict(tool) {
         let _ = selection.line(block, verdict, Vec::new());

@@ -90,10 +90,10 @@ fn two_decisions_mark_their_rows_and_their_group_and_no_toast(cx: &mut TestAppCo
     });
 }
 
-/// §5.1.2: the Inbox stands in the tree's place —
-/// the blocked Threads oldest-first as their two-line rows, then
-/// `Recent` — counted by the view row's pill. Esc and a click on the
-/// active view return to the tree, and ⌘D still walks the queue.
+/// §5.1.2: the Inbox (⌘I; the bell's Activity view took its row) stands
+/// in the tree's place — the blocked Threads oldest-first as their
+/// two-line rows, then `Recent`. Esc and ⌘I again return to the tree, and
+/// ⌘D still walks the queue.
 #[gpui::test]
 fn the_needs_you_view_lists_the_queue_in_the_trees_place(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("needs-you-view", 3);
@@ -102,19 +102,17 @@ fn the_needs_you_view_lists_the_queue_in_the_trees_place(cx: &mut TestAppContext
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    assert!(
-        cx.debug_bounds("nav-needs-you-pill").is_none(),
-        "nothing waits: no pill"
-    );
     fake.streams.borrow()[2].send(decision("perm_3")).unwrap();
     tick(cx);
     fake.streams.borrow()[0].send(decision("perm_1")).unwrap();
     tick(cx);
-    assert!(cx.debug_bounds("nav-needs-you-pill").is_some(), "2 wait");
     assert!(cx.debug_bounds("nav-view-needs-you-list").is_none());
+    assert!(
+        cx.debug_bounds("nav-view-needs-you").is_none(),
+        "no Inbox row: the bell is the door"
+    );
 
-    let door = cx.debug_bounds("nav-view-needs-you").expect("the view row");
-    cx.simulate_click(door.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("cmd-i");
     tick(cx);
     assert!(view.read_with(cx, |view, _| view.needs_you_shown()));
     assert!(cx.debug_bounds("nav-view-needs-you-list").is_some());
@@ -159,14 +157,14 @@ fn the_needs_you_view_lists_the_queue_in_the_trees_place(cx: &mut TestAppContext
         cx.debug_bounds("nav-needs-you").is_none(),
         "the tree has no strip"
     );
-    cx.simulate_click(door.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("cmd-i");
     tick(cx);
     assert!(view.read_with(cx, |view, _| view.needs_you_shown()));
-    cx.simulate_click(door.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("cmd-i");
     tick(cx);
     assert!(
         !view.read_with(cx, |view, _| view.needs_you_shown()),
-        "a click on the active view returns to the tree"
+        "⌘I again returns to the tree"
     );
 }
 
@@ -1346,9 +1344,7 @@ fn left_on_a_loose_row_folds_its_project(cx: &mut TestAppContext) {
         view.read_with(cx, |view, _| view.nav_cursor.clone().map(|c| c.item)),
         Some(nav::NavItem::Heading(NavFold::Project(project)))
     );
-    assert!(view.read_with(cx, |view, _| view
-        .nav_folds
-        .contains(&NavFold::Project(project))));
+    assert!(view.read_with(cx, |view, _| view.nav_folded(NavFold::Project(project))));
 }
 
 /// The tree fades at whichever edge has rows past it, never slicing a row
@@ -1359,6 +1355,11 @@ fn the_tree_fades_at_the_edges_rows_pass(cx: &mut TestAppContext) {
     let (core, _) = cockpit("nav-edge-fades", 24);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
+    // Every row drawn: past `Show more`.
+    view.update(cx, |view, _| {
+        let project = view.nav_state().sections[0].project;
+        view.nav_more.insert(project);
+    });
     cx.simulate_resize(gpui::size(px(1000.), px(320.)));
     cx.run_until_parked();
     let shows = |cx: &mut gpui::VisualTestContext, id: &'static str| cx.debug_bounds(id).is_some();
@@ -1378,4 +1379,149 @@ fn the_tree_fades_at_the_edges_rows_pass(cx: &mut TestAppContext) {
     wheel(cx, -40_000.);
     assert!(shows(cx, "nav-fade-top"));
     assert!(!shows(cx, "nav-fade-foot"), "at the end: nothing below");
+}
+
+/// Claude's `Pinned`: the row menu's `Pin` lists a loose Thread under the
+/// `Pinned` heading, above the Projects, and nowhere else; the pin is
+/// saved with the settings; `Unpin` puts the row back in its Project. The
+/// heading folds its rows away.
+#[gpui::test]
+fn a_pinned_thread_heads_the_tree_until_unpinned(cx: &mut TestAppContext) {
+    let (core, _) = cockpit("nav-pinned", 3);
+    let threads = core.threads();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    let menu = |view: &CockpitView| -> Vec<String> {
+        view.context_rows(MenuTarget::Thread(threads[2]))
+            .into_iter()
+            .flatten()
+            .map(|(item, _)| item.label.to_string())
+            .collect()
+    };
+    assert_eq!(view.read_with(cx, |view, _| menu(view))[0], "Pin");
+    assert!(
+        cx.debug_bounds("nav-pinned-heading").is_none(),
+        "nothing pinned"
+    );
+
+    view.update_in(cx, |view, window, cx| {
+        view.run_menu_verb(MenuTarget::Thread(threads[2]), MenuVerb::Pin, window, cx)
+    });
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.prefs.settings.pinned_threads, vec![threads[2]]);
+        let state = view.nav_state();
+        assert_eq!(
+            state
+                .pinned
+                .iter()
+                .map(|row| row.thread)
+                .collect::<Vec<_>>(),
+            vec![threads[2]]
+        );
+        assert!(
+            state.solos.iter().all(|row| row.thread != threads[2]),
+            "listed once"
+        );
+        assert_eq!(menu(view)[0], "Unpin");
+    });
+    let heading = cx.debug_bounds("nav-pinned-heading").expect("Pinned");
+    let row = cx
+        .debug_bounds(format!("nav-thread-{}", threads[2].get()).leak())
+        .expect("its row");
+    let projects = cx.debug_bounds("nav-projects-heading").expect("Projects");
+    assert!(heading.bottom() <= row.top() && row.bottom() <= projects.top());
+
+    cx.simulate_click(heading.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx
+        .debug_bounds(format!("nav-thread-{}", threads[2].get()).leak())
+        .is_none());
+
+    view.update_in(cx, |view, window, cx| {
+        view.run_menu_verb(MenuTarget::Thread(threads[2]), MenuVerb::Unpin, window, cx)
+    });
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.prefs.settings.pinned_threads.is_empty());
+        assert!(view.nav_state().pinned.is_empty());
+    });
+    assert!(cx.debug_bounds("nav-pinned-heading").is_none());
+}
+
+/// Codex's `Show more`: past five loose rows a Project draws the first
+/// five (and the selected row) over `Show more`, which draws them all and
+/// becomes `Show less`.
+#[gpui::test]
+fn a_long_project_shows_five_rows_then_show_more(cx: &mut TestAppContext) {
+    let (mut core, _) = cockpit("nav-show-more", 7);
+    let threads = core.threads();
+    core.focus_thread(threads[0]);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(900.)));
+    tick(cx);
+    let drawn = |cx: &mut gpui::VisualTestContext| -> usize {
+        threads
+            .iter()
+            .filter(|thread| {
+                cx.debug_bounds(format!("nav-thread-{}", thread.get()).leak())
+                    .is_some()
+            })
+            .count()
+    };
+    assert_eq!(drawn(cx), nav::SHOWN_ROWS);
+    let more = cx.debug_bounds("nav-show-more-0").expect("Show more");
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(drawn(cx), threads.len());
+    assert_eq!(
+        view.read_with(cx, |view, _| view.nav_state().sections[0].more),
+        Some(nav::ShowMore::Less)
+    );
+    let less = cx.debug_bounds("nav-show-more-0").expect("Show less");
+    cx.simulate_click(less.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(drawn(cx), nav::SHOWN_ROWS);
+}
+
+/// A Project's fold is saved with the settings, and its heading's caret
+/// says which way it is.
+#[gpui::test]
+fn a_project_fold_is_saved(cx: &mut TestAppContext) {
+    let (core, _) = cockpit("nav-fold-saved", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    tick(cx);
+    assert!(cx.debug_bounds("nav-project-section-0-chevron").is_some());
+    let project = view
+        .read_with(cx, |view, _| view.nav_state().sections[0].project)
+        .expect("the fixture's Project");
+    let heading = cx.debug_bounds("nav-project-section-0").unwrap();
+    cx.simulate_click(heading.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.prefs.settings.folded_projects, vec![project]);
+        assert!(view.nav_state().sections[0].folded);
+    });
+}
+
+/// Codex's header: search beside the bell, opening the palette; the
+/// views no longer list `Search` or `Inbox`.
+#[gpui::test]
+fn search_sits_in_the_nav_head(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, _) = cockpit("nav-search-head", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let search = cx.debug_bounds("nav-search").expect("the search button");
+    let bell = cx.debug_bounds("nav-activity").expect("the bell");
+    assert!(search.bottom() <= px(ferrite_ui::theme::WIN_CHROME_H));
+    assert!(bell.right() <= search.left(), "after the bell");
+    assert!(cx.debug_bounds("nav-view-search").is_none());
+    cx.simulate_click(search.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.floats.palette.is_some()));
 }

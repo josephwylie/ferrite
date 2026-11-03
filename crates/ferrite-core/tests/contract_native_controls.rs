@@ -32,9 +32,14 @@ fn context_refresh_uses_native_summary_control_and_updates_shared_usage() {
                 context_window: Some(180000),
             } => usage = true,
             SessionEvent::ContextDetails { details: d } => {
-                assert_eq!(d.usable_window, Some(150000));
-                assert_eq!(d.auto_compact_threshold, Some(140000));
                 assert_eq!(d.categories[0].name, "Messages");
+                let item = |name: &str, tokens| ferrite_core::ContextItem {
+                    name: name.into(),
+                    tokens,
+                };
+                assert_eq!(d.mcp_tools, [item("mcp__docs__search", 202)]);
+                assert_eq!(d.skills, [item("brandkit", 159)]);
+                assert_eq!(d.memory_files, [item("/home/me/.claude/CLAUDE.md", 14)]);
                 details = true;
             }
             _ => {}

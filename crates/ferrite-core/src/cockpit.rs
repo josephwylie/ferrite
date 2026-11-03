@@ -1492,6 +1492,50 @@ impl Cockpit {
         );
     }
 
+    /// Go back to before the prompt `prompt` names (`Engine::rewind`):
+    /// `Err` says why not, in words.
+    pub fn rewind(
+        &mut self,
+        thread: ThreadId,
+        prompt: &str,
+        files: bool,
+        edit: bool,
+    ) -> Result<(), String> {
+        self.act(
+            |engine| engine.rewind(thread, prompt, files, edit),
+            |server| {
+                run(
+                    server,
+                    Op::Rewind {
+                        thread,
+                        prompt: prompt.to_string(),
+                        files,
+                        edit,
+                    },
+                )
+                .map_err(|error| error.to_string())
+            },
+        )
+    }
+
+    /// A new Thread from `thread`'s conversation before the prompt `prompt`
+    /// names (`Engine::fork`).
+    pub fn fork(&mut self, thread: ThreadId, prompt: &str) -> Result<(), String> {
+        self.act(
+            |engine| engine.fork(thread, prompt),
+            |server| {
+                run(
+                    server,
+                    Op::Fork {
+                        thread,
+                        prompt: prompt.to_string(),
+                    },
+                )
+                .map_err(|error| error.to_string())
+            },
+        )
+    }
+
     pub fn interrupt(&mut self, thread: ThreadId) {
         self.act(
             |engine| engine.interrupt(thread),

@@ -7,12 +7,11 @@
 //!   branched from and the checkout's drift and dirt when git has said.
 //! - **Changes**: what it edited, and its pull request once one exists
 //!   (`changes`).
-//! - **Context**: what fills its context window, by category, with its
-//!   account windows (`pane::context_usage`, whose heading reads as a
-//!   section head and opens the category table). The one place context is
-//!   read: the Composer's ring reads plan usage.
-//! - **Connectors**: its MCP servers and how each stands; left out with
-//!   none.
+//! - **Context**: what fills its context window, by category, and the
+//!   lists behind the categories (`pane::context_usage`). The one place
+//!   context is read: the Composer's ring reads plan usage.
+//! - **Connectors**: `N connected` at its head, which folds its MCP servers
+//!   open, each with how it stands; left out with none.
 //!
 //! The work it left running (a dev server, a watch) is not listed here: the
 //! chips over the Composer hold that fact (theme rule 7).
@@ -44,10 +43,9 @@ impl CockpitView {
             .child(section_rule());
 
         // Context.
+        body = body.child(panel_section_head("panel-context-head", "Context"));
         body = match transcript.usage() {
             Some(usage) => {
-                // The sections scroll inside the body, under the head.
-                let room = f32::from(window.viewport_size().height) - WIN_CHROME_H;
                 let error = self
                     .session_control_error
                     .as_ref()
@@ -58,43 +56,25 @@ impl CockpitView {
                 body.child(div().debug_selector(|| "panel-context".into()).child(
                     pane::context_usage(
                         usage,
-                        self.cockpit.account_limits(open.provider()),
                         transcript.context_details(),
                         transcript.usage_details(),
                         transcript.last_cost(),
-                        self.context_usage_expanded,
-                        room,
-                        cx.listener(|view, _: &ClickEvent, _, cx| {
-                            view.context_usage_expanded = !view.context_usage_expanded;
-                            cx.notify();
-                        }),
                     ),
                 ))
                 .children(error.map(|error| pane::card_error(error).id("session-control-error")))
             }
-            None => body
-                .child(panel_section_head("panel-context-head", "Context", None))
-                .child(
-                    quiet_line("panel-no-context")
-                        .child("Shows once the provider reports what fills the window"),
-                ),
+            None => body.child(
+                quiet_line("panel-no-context")
+                    .child("Shows once the provider reports what fills the window"),
+            ),
         };
 
         // Connectors.
         let servers = transcript.mcp_servers();
         if !servers.is_empty() {
-            let connected = servers
-                .iter()
-                .filter(|server| server.status == McpStatus::Connected)
-                .count();
-            body = body.child(section_rule()).child(panel_section_head(
-                "panel-connectors-head",
-                "Connectors",
-                Some(format!("{connected} connected")),
-            ));
-            for (index, server) in servers.iter().enumerate() {
-                body = body.child(connector_row(index, server));
-            }
+            body = body
+                .child(section_rule())
+                .child(connectors(servers, window, cx));
         }
 
         body.into_any_element()
@@ -109,11 +89,7 @@ impl CockpitView {
         let mut section = div()
             .flex()
             .flex_col()
-            .child(panel_section_head(
-                "panel-environment-head",
-                "Environment",
-                None,
-            ))
+            .child(panel_section_head("panel-environment-head", "Environment"))
             .child(detail_row(
                 "panel-environment-machine",
                 icons::LAPTOP,
@@ -131,19 +107,23 @@ impl CockpitView {
                     }),
             );
         }
-        if let Some(facts) = self.facts.get(thread) {
-            let branch = facts
-                .status
-                .as_ref()
-                .and_then(|status| status.branch.clone())
-                .map(SharedString::from)
-                .or_else(|| facts.branch.clone());
-            if let Some(branch) = branch {
-                let meta = branch_meta(&branch, facts);
-                section = section.child(detail_row("panel-branch", icons::BRANCH, branch, meta));
-            }
+        if let (Some(facts), Some(branch)) = (self.facts.get(thread), self.thread_branch(thread)) {
+            let meta = branch_meta(&branch, facts);
+            section = section.child(detail_row("panel-branch", icons::BRANCH, branch, meta));
         }
         section
+    }
+
+    /// The branch `thread`'s checkout is on: as git last said, else as the
+    /// Thread was bound.
+    pub(super) fn thread_branch(&self, thread: ThreadId) -> Option<SharedString> {
+        let facts = self.facts.get(thread)?;
+        facts
+            .status
+            .as_ref()
+            .and_then(|status| status.branch.clone())
+            .map(SharedString::from)
+            .or_else(|| facts.branch.clone())
     }
 }
 
@@ -246,6 +226,70 @@ pub(super) fn detail_row(
         }))
 }
 
+/// Connectors (Claude's): its head, `Connectors ▸` with `N connected` at
+/// the right, folds its servers' lines open and shut — folded at first,
+/// the count saying what matters. The fold is the panel's own, kept while
+/// it shows.
+fn connectors(servers: &[McpServer], window: &mut Window, cx: &mut gpui::App) -> Div {
+    use ferrite_ui::theme::*;
+    let open = window.use_keyed_state("panel-connectors-open", cx, |_, _| false);
+    let unfolded = *open.read(cx);
+    let connected = servers
+        .iter()
+        .filter(|server| server.status == McpStatus::Connected)
+        .count();
+    let head = div()
+        .id("panel-connectors-head")
+        .debug_selector(|| "panel-connectors-head".into())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(SPACE_3))
+        .h(px(PANEL_SECTION_H))
+        .px(px(PANEL_ROW_ICON_X))
+        .cursor_pointer()
+        .text_size(px(FS_META))
+        .child(
+            div()
+                .flex()
+                .flex_1()
+                .items_center()
+                .gap(px(SPACE_1))
+                .font_weight(W_LABEL)
+                .text_color(rgb(INK_STRONG))
+                .child("Connectors")
+                .child(ferrite_ui::components::fold_chevron(
+                    "panel-connectors-turn",
+                    unfolded,
+                    NAV_HEADING_CARET,
+                    INK_SUBTLE,
+                )),
+        )
+        .child(
+            div()
+                .text_color(rgb(INK_SUBTLE))
+                .child(format!("{connected} connected")),
+        )
+        .on_click(move |_, _, cx| {
+            open.update(cx, |open, cx| {
+                *open = !*open;
+                cx.notify();
+            })
+        });
+    div()
+        .flex()
+        .flex_col()
+        .child(head)
+        .when(unfolded, |section| {
+            section.children(
+                servers
+                    .iter()
+                    .enumerate()
+                    .map(|(index, server)| connector_row(index, server)),
+            )
+        })
+}
+
 /// An MCP server's line: its name, and how it stands in the lexicon's
 /// lowercase words — coloured only when it needs the operator (`needs
 /// auth`) or failed.
@@ -274,7 +318,7 @@ fn connector_row(index: usize, server: &McpServer) -> Div {
                 .absolute()
                 .left(px(PANEL_ROW_ICON_X))
                 .top(px((PANEL_SECTION_H - PANEL_ROW_ICON) / 2.))
-                .child(icon(icons::PLUG, PANEL_ROW_ICON, INK)),
+                .child(icon(icons::BLOCKS, PANEL_ROW_ICON, INK)),
         )
         .child(
             div()

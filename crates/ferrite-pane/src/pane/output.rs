@@ -1,5 +1,5 @@
-//! What a call printed: its folds and output box, a failed call's
-//! excerpt, a test run's elbow and bar, and its diffs.
+//! What a call printed: its open body (input well, exit status, output),
+//! a test run's elbow and bar, and its diffs.
 
 use super::*;
 
@@ -125,41 +125,24 @@ pub fn test_elbow(tool: &ToolBlock) -> Option<TestElbow> {
     })
 }
 
-/// What a command's shell card holds (Codex's card): the command as it ran
-/// (`$ cmd`, out of its `bash -lc` wrapper, its `cd` kept), what it printed —
-/// its retained output, else a failure's message, less a leading `Exit code
-/// N` line, which the status says — and how it ended.
+/// What an open command holds (Claude's): the command as it ran (`$ cmd`,
+/// out of its `bash -lc` wrapper, its `cd` kept), the code a failed run
+/// exited with, and what it printed — its retained output, else a failure's
+/// message, less a leading `Exit code N` line, which the status says.
 pub(crate) struct Shell<'a> {
     pub command: std::borrow::Cow<'a, str>,
     pub output: Option<&'a str>,
     /// What the retained output left out.
     pub omitted: usize,
-    pub status: Option<ShellStatus>,
+    /// The code a failed run said it exited with (Claude's `Exit code 1`
+    /// line): its status. A success says nothing, as Claude's does.
+    pub exit: Option<i64>,
+    /// What it printed is the failure's own message, no code said (a hook's
+    /// `Blocked: …`): it reads in the failure ink.
+    pub failure: bool,
 }
 
-/// How a command ended, at its shell card's foot. A call still running, or
-/// one whose result never came (its row says `no result`), has none.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ShellStatus {
-    Success,
-    /// The provider said the exit code (Claude's `Exit code 1` line).
-    Exit(i64),
-    /// Failed with no code said.
-    Failed,
-}
-
-impl ShellStatus {
-    /// `Success`, `Exit code 1`, `Failed`.
-    pub(crate) fn words(self) -> String {
-        match self {
-            Self::Success => "Success".to_owned(),
-            Self::Exit(code) => format!("Exit code {code}"),
-            Self::Failed => text::FAILED_TAG.to_owned(),
-        }
-    }
-}
-
-/// A command's shell card contents. See [`Shell`].
+/// An open command's contents. See [`Shell`].
 pub(crate) fn shell(tool: &ToolBlock) -> Shell<'_> {
     let retained = text::disclosed_output(tool);
     let printed = retained
@@ -170,16 +153,12 @@ pub(crate) fn shell(tool: &ToolBlock) -> Shell<'_> {
         Some((code, rest)) => (code, Some(rest).filter(|rest| !rest.trim().is_empty())),
         None => (None, None),
     };
-    let status = match &tool.state {
-        ToolState::Running | ToolState::Unavailable => None,
-        _ if text::call_failed(tool) => Some(code.map_or(ShellStatus::Failed, ShellStatus::Exit)),
-        _ => Some(ShellStatus::Success),
-    };
     Shell {
         command: ferrite_core::providers::shell::unwrap_shell(&tool.summary),
         output,
         omitted: retained.map_or(0, |output| output.omitted_bytes),
-        status,
+        exit: code.filter(|_| text::call_failed(tool)),
+        failure: retained.is_none() && code.is_none() && output.is_some(),
     }
 }
 
@@ -198,85 +177,127 @@ fn exit_line(printed: &str) -> (Option<i64>, &str) {
     }
 }
 
-/// An open command's card (the reference's shell card): a `Shell` label,
-/// the `$ cmd` line, what it printed (`output_block`: inline, or past
-/// `OUTPUT_INLINE_BYTES` a bounded native viewer), and its status at the
-/// foot's right — `✓ Success` in `INK_SUBTLE`, `Exit code 1` in `BLOCKED`.
-/// One `block_box` on the content column.
-pub(super) fn shell_card(
+/// An open call's body (Claude's, measured on claude/failed-open.png and
+/// tools-expanded.png), the same in a group's card or a call's own: no
+/// box of its own, no label. Its input in a quiet well — a command's `$ cmd`
+/// (the `$` in `INK_SUBTLE`), another call's input where its line could not
+/// show it whole — in `INK`; then a failed command's `Exit code 1` in
+/// `BLOCKED`, in the row's words; then what it printed, plain `INK_SUBTLE`
+/// mono (a failure's own message in `BLOCKED`), its structured result, what
+/// was not kept. Each part `SPACE_3` under the last, the printed text
+/// `SPACE_0_5` more. Mono on the block grid. `None` when a call has nothing
+/// to show.
+pub(super) fn call_body(
     block: BlockId,
     tool: &ToolBlock,
     grid: Grid,
     selection: &TextRuns,
-) -> Div {
-    let Shell {
-        command,
-        output,
-        omitted,
-        status,
-    } = shell(tool);
+) -> Option<Div> {
     let cells = grid.block();
-    let label = div()
-        .font_family(theme::FONT_UI)
-        .text_size(px(grid.activity().size))
-        .text_color(rgb(INK_SUBTLE))
-        .child(SHELL_LABEL);
-    let command = div()
-        .flex()
-        .items_start()
-        .w_full()
-        .min_w_0()
-        .child(
-            div()
-                .flex_shrink_0()
-                .w(px(2. * cells.cell()))
-                .text_color(rgb(TEXT_FAINT))
-                .child("$"),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_color(rgb(INK))
-                .child(output_block(block, "command", &command, selection)),
+    let mut input = None;
+    let mut exit = None;
+    let mut printed: Vec<AnyElement> = Vec::new();
+    let mut part = |name: &str, text: &str, omitted: usize, ink: u32| {
+        printed.push(
+            output_block(block, name, text, selection)
+                .text_color(rgb(ink))
+                .into_any_element(),
         );
-    let status = status.map(|status| {
-        let ink = if status == ShellStatus::Success {
-            INK_SUBTLE
-        } else {
-            BLOCKED
-        };
+        if omitted > 0 {
+            printed.push(omitted_line(omitted).into_any_element());
+        }
+    };
+    if ferrite_core::transcript::tools::is_command_run(&tool.name) {
+        let shell = shell(tool);
+        input = Some(
+            div()
+                .flex()
+                .items_start()
+                .w_full()
+                .min_w_0()
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .w(px(2. * cells.cell()))
+                        .text_color(rgb(INK_SUBTLE))
+                        .child("$"),
+                )
+                .child(
+                    output_block(block, "command", &shell.command, selection)
+                        .flex_1()
+                        .text_color(rgb(INK)),
+                ),
+        );
+        exit = shell.exit;
+        if let Some(output) = shell.output {
+            let ink = if shell.failure { BLOCKED } else { INK_SUBTLE };
+            part("result", output, shell.omitted, ink);
+        }
+    } else {
+        if text::shows_input(tool) {
+            input =
+                Some(output_block(block, "command", &tool.summary, selection).text_color(rgb(INK)));
+        }
+        if let Some(output) = text::disclosed_output(tool) {
+            part("result", &output.text, output.omitted_bytes, INK_SUBTLE);
+        } else if let Some(message) = text::failure_message(tool) {
+            part("result", message, 0, BLOCKED);
+        }
+        if let Some(structured) = tool.structured_preview.as_ref() {
+            part(
+                "details",
+                &structured.text,
+                structured.omitted_bytes,
+                INK_SUBTLE,
+            );
+        }
+    }
+    if input.is_none() && exit.is_none() && printed.is_empty() {
+        return None;
+    }
+    let well = input.map(|input| {
         div()
-            .debug_selector(|| "tool-shell-status".into())
-            .flex()
-            .items_center()
-            .justify_end()
-            .gap(px(theme::SPACE_1))
+            .debug_selector(|| "tool-input".into())
+            .mx(px(-theme::SPACE_0_5))
+            .px(px(theme::SPACE_3))
+            .py(px(theme::BLOCK_PAD_Y))
+            .rounded(px(theme::R_CONTROL))
+            .border_1()
+            .border_color(theme::paint::CARD_RING)
+            .child(input)
+    });
+    let status = exit.map(|code| {
+        div()
+            .debug_selector(|| "tool-exit".into())
             .font_family(theme::FONT_UI)
             .text_size(px(grid.activity().size))
-            .text_color(rgb(ink))
-            .when(status == ShellStatus::Success, |line| {
-                line.child(icon(icons::CHECK, theme::ICON_CHEVRON, INK_SUBTLE))
-            })
-            .child(SharedString::from(status.words()))
+            .line_height(px(grid.line))
+            .text_color(rgb(BLOCKED))
+            .child(SharedString::from(format!("Exit code {code}")))
     });
-    content_row(grid).pt(px(theme::BLOCK_MARGIN_T)).child(
-        on_cells(block_box(cells))
-            .debug_selector(|| "tool-shell".into())
+    let printed = (!printed.is_empty()).then(|| {
+        div()
+            .debug_selector(|| "tool-output".into())
             .flex()
             .flex_col()
-            .gap(px(theme::SPACE_1))
-            .px(px(theme::CODE_PAD_CELLS * cells.cell()))
-            .child(label)
-            .child(command)
-            .children(output.map(|output| output_block(block, "result", output, selection)))
-            .when(omitted > 0, |card| card.child(omitted_line(omitted)))
-            .children(status),
+            .min_w_0()
+            .mt(px(theme::SPACE_0_5))
+            .children(printed)
+    });
+    Some(
+        on_cells(div())
+            .flex()
+            .flex_col()
+            .gap(px(theme::SPACE_3))
+            .w_full()
+            .min_w_0()
+            .text_size(px(cells.size))
+            .line_height(px(cells.line))
+            .children(well)
+            .children(status)
+            .children(printed),
     )
 }
-
-/// The label atop a shell card: the same word whichever provider ran it.
-const SHELL_LABEL: &str = "Shell";
 
 /// A running suite's line under its call (CT-25): `running 357 tests`, its
 /// bar, and `212/357` in tabular `INK_SUBTLE`.
@@ -404,50 +425,6 @@ impl gpui::RenderOnce for TestBar {
     }
 }
 
-/// Literal output under a call (the mockup's `.out`): one block box
-/// (`block_box`) on the content column, in Geist Mono a step under the
-/// prose, its lines `CODE_PAD_CELLS` in.
-pub(super) fn output_box(grid: Grid, lines: Vec<AnyElement>) -> Div {
-    let block = grid.block();
-    content_row(grid).pt(px(theme::BLOCK_MARGIN_T)).child(
-        on_cells(block_box(block))
-            .debug_selector(|| "tool-output".into())
-            .flex()
-            .flex_col()
-            .px(px(theme::CODE_PAD_CELLS * block.cell()))
-            .children(lines),
-    )
-}
-
-/// A call's disclosed details (opened, not a command), for its output box:
-/// its input where the call line could not show it whole, its output (a
-/// failure's message where it kept none), its structured result.
-pub(super) fn tool_details(
-    block: BlockId,
-    tool: &ToolBlock,
-    selection: &TextRuns,
-) -> Vec<AnyElement> {
-    let mut details = Vec::new();
-    let mut part = |name: &str, text: &str, omitted: usize| {
-        details.push(output_block(block, name, text, selection).into_any_element());
-        if omitted > 0 {
-            details.push(omitted_line(omitted).into_any_element());
-        }
-    };
-    if text::shows_input(tool) {
-        part("command", &tool.summary, 0);
-    }
-    if let Some(output) = text::disclosed_output(tool) {
-        part("result", &output.text, output.omitted_bytes);
-    } else if let Some(message) = text::failure_message(tool) {
-        part("result", message, 0);
-    }
-    if let Some(structured) = tool.structured_preview.as_ref() {
-        part("details", &structured.text, structured.omitted_bytes);
-    }
-    details
-}
-
 /// A result's verdict words in their state ink, the rest in the line's
 /// `INK_SUBTLE` (CT-15): a line's lead `ok` (`RUNNING`) or `failed`
 /// (`BLOCKED`); a test line's trailing `... ok` / `... FAILED`; and the
@@ -514,7 +491,7 @@ pub(super) fn result_highlights(text: &str) -> Vec<(std::ops::Range<usize>, High
     highlights
 }
 
-/// A disclosed block of text in a call's output box — its input, output, a
+/// A disclosed block of text in a call's open body — its input, output, a
 /// structured result. Text draws inline, keeping its whitespace; text past
 /// `OUTPUT_INLINE_BYTES` scrolls in one bounded, selectable native control
 /// `OUTPUT_MAX_LINES` high, and `… +N lines` under it says how much is out

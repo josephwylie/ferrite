@@ -11,8 +11,6 @@
 //! `empty_board::Next` / `Previous` move the selection, `Run` does what the
 //! row says (the floats package binds ↑ ↓ ⏎). A press does the same.
 //! `show_empty_board` shows it while Threads stay open.
-//!
-//! An empty draft's start card (`draft_start`) borrows its ways to start.
 
 use super::*;
 
@@ -158,110 +156,42 @@ impl CockpitView {
         rows
     }
 
-    /// An empty draft's start card (`pane::render_draft`), Claude's new
-    /// session: where the work runs — the draft's Project and Workspace,
-    /// each a press from the picker its footer chip opens — then the
-    /// suggestions (`start_suggestions`).
-    pub(super) fn draft_start(&self, index: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        use ferrite_ui::icons;
-        let Some(draft) = self.panes[index].draft() else {
-            return Vec::new();
-        };
+    /// An empty draft's hero project word (`pane::start_hero`, Codex's
+    /// home): the draft's Project, a switcher that drops the Project menu
+    /// under it (`band_from_hero`).
+    pub(super) fn draft_hero(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let draft = self.panes[index].draft()?;
         let project = self
             .cockpit
             .registry()
             .project(draft.binding.project())
             .map(|project| SharedString::from(project.title.clone()))
             .unwrap_or_else(|| "Project".into());
-        let workspace = match draft.binding.target() {
-            DraftTarget::Main => self.checked_out_branch(draft.binding.project(), cx),
-            DraftTarget::Branch { name } => SharedString::from(name.clone()),
-            DraftTarget::NewBranch => SharedString::from("New branch"),
-            DraftTarget::Existing { branch, .. } => SharedString::from(branch.clone()),
-            DraftTarget::New => SharedString::from("New worktree"),
-        };
         let composer = self.panes[index].composer.clone();
-        let picker = |chip: pane::BandChip, glyph, label: SharedString| {
-            let composer = composer.clone();
-            pane::draft_card_row(format!("draft-start-{chip:?}"), glyph, label, true)
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    if let Some(at) = view.panes.iter().position(|pane| pane.composer == composer) {
-                        view.focus_pane(at);
-                    }
-                    view.open_band_popover(chip, cx);
-                }))
-                .into_any_element()
-        };
-        let setup = pane::draft_card_group(
-            "draft-start-setup",
-            [
-                picker(pane::BandChip::Project, icons::FOLDER, project),
-                picker(pane::BandChip::Workspace, icons::BRANCH, workspace),
-            ],
-            true,
+        let word = pane::hero_project(project, true).on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                // Stop the press so the root's dismissal cannot close what
+                // this opens.
+                cx.stop_propagation();
+                if let Some(at) = view.panes.iter().position(|pane| pane.composer == composer) {
+                    view.focus_pane(at);
+                }
+                view.open_band_popover(pane::BandChip::Project, cx);
+                view.band_from_hero = true;
+            }),
         );
-        std::iter::once(setup)
-            .chain(self.start_suggestions())
-            .map(IntoElement::into_any_element)
-            .collect()
+        Some(
+            ferrite_ui::components::on_bounds(word, self.record_trigger(HERO_TRIGGER.into()))
+                .into_any_element(),
+        )
     }
 
-    /// An empty Thread's start card (`PaneWiring::start`), the draft's
-    /// once the Thread exists: where the work runs — its folder, a press
-    /// that shows it in the system's file browser — then the suggestions.
-    pub(super) fn thread_start(&self, thread: ThreadId) -> Vec<AnyElement> {
-        use ferrite_ui::icons;
-        let folder = self.thread_path(thread).map(|cwd| {
-            let name = cwd
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| cwd.display().to_string());
-            pane::draft_card_group(
-                "thread-start-setup",
-                [
-                    pane::draft_card_row("thread-start-folder", icons::FOLDER, name, false)
-                        .tooltip(ferrite_ui::menu::tooltip("Show in its folder"))
-                        .on_click(move |_, window, cx| {
-                            ferrite_pane::preview::open_original(&cwd, window, cx);
-                        })
-                        .into_any_element(),
-                ],
-                true,
-            )
-        });
-        folder
-            .into_iter()
-            .chain(self.start_suggestions())
-            .map(IntoElement::into_any_element)
-            .collect()
-    }
-
-    /// The start card's suggestions: up to `DRAFT_SUGGESTIONS_MAX` of the
-    /// home's ways to start that are not a new Thread (the card's Pane is
-    /// one already); `None` with none.
-    fn start_suggestions(&self) -> Option<Div> {
-        let suggestions: Vec<AnyElement> = self
-            .start_rows()
-            .into_iter()
-            .filter(|row| {
-                !matches!(
-                    row.action,
-                    "cockpit::NewThread" | "cockpit::NewWorktreeThread"
-                )
-            })
-            .take(ferrite_ui::theme::DRAFT_SUGGESTIONS_MAX)
-            .enumerate()
-            .map(|(at, row)| {
-                let StartRow {
-                    icon, verb, run, ..
-                } = row;
-                pane::draft_card_row(("draft-start-suggestion", at), icon, verb, false)
-                    .on_click(move |_, window, cx| window.dispatch_action(run.boxed_clone(), cx))
-                    .into_any_element()
-            })
-            .collect();
-        (!suggestions.is_empty())
-            .then(|| pane::draft_card_group("draft-start-suggestions", suggestions, false))
+    /// An empty Thread's hero project word: its Project, settled, so a word
+    /// and not a switcher. None while the Thread's facts are unknown.
+    pub(super) fn thread_hero(&self, thread: ThreadId) -> Option<AnyElement> {
+        let project = self.facts.get(thread)?.project_label.clone()?;
+        Some(pane::hero_project(project, false).into_any_element())
     }
 
     fn step_empty(&mut self, delta: isize, cx: &mut Context<Self>) {

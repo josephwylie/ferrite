@@ -303,8 +303,8 @@ impl CockpitView {
         )
     }
 
-    /// The head (in the head row): bare but for the toggle's room
-    /// (`panel_toggle_element` lays the toggle over it) — unless the Pane
+    /// The head (in the head row): bare but for the title tools' and the
+    /// toggle's rooms (the frame lays both over it) — unless the Pane
     /// has a preview open, when it holds the preview's tab, after the
     /// Thread's `Overview` tab that goes back to the sections. On Windows
     /// it stops short of the caption buttons, which keep the row's right
@@ -338,6 +338,7 @@ impl CockpitView {
             .h(px(WIN_CHROME_H))
             .pr(px(panel_toggle_inset() - PANEL_PAD_R))
             .child(tabs.unwrap_or_else(|| div().flex_1()))
+            .children(self.title_tools_room(SPACE_1))
             .child(toggle_room())
     }
 
@@ -394,14 +395,10 @@ pub(super) fn panel_toggle_inset() -> f32 {
 }
 
 /// A section's head, the Panel's one (`PANEL_SECTION_H`): its name in
-/// 12/500 `INK_SUBTLE` on the content edge, its reading (`3 connected`) at
-/// the right — Environment's, Changes', Connectors', and the Context
-/// section's own heading (`pane::context_usage`) alike.
-pub(super) fn panel_section_head(
-    selector: &'static str,
-    name: &'static str,
-    reading: Option<String>,
-) -> Div {
+/// 13/500 `INK_STRONG` on the content edge — Claude's panel heads read as
+/// strong as its rows — Environment's, Changes' and Context's alike;
+/// Connectors' folds (`sections::connectors`).
+pub(super) fn panel_section_head(selector: &'static str, name: &'static str) -> Div {
     use ferrite_ui::theme::*;
     div()
         .debug_selector(move || selector.into())
@@ -411,9 +408,9 @@ pub(super) fn panel_section_head(
         .h(px(PANEL_SECTION_H))
         .px(px(PANEL_ROW_ICON_X))
         .text_size(px(FS_META))
-        .text_color(rgb(INK_SUBTLE))
-        .child(div().flex_1().font_weight(W_LABEL).child(name))
-        .children(reading.map(SharedString::from))
+        .font_weight(W_LABEL)
+        .text_color(rgb(INK_STRONG))
+        .child(name)
 }
 
 /// The toggle's room at the end of whichever head the toggle lies over

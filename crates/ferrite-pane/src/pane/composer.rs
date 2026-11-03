@@ -190,27 +190,87 @@ fn send_glyph(stop: bool, extent: f32, ink: u32) -> impl IntoElement {
 }
 
 /// The Composer's controls, wired in the cockpit: Solo's `+` and send
-/// circle on the box's row and its footer under the box; a board Pane's
-/// send circle alone. Either's queue strip carries `queue`, its action
-/// buttons (`queued_send_now`, `queued_edit`, `queued_close`).
+/// circle on the box's row, its footer under the box and, on an empty
+/// Thread or a draft, where the work runs on a strip over it (`env`,
+/// `env_strip`); a board Pane's send circle alone. Either's queue strip
+/// carries `queue`, its action buttons (`queued_send_now`, `queued_edit`,
+/// `queued_close`).
 pub struct ComposerControls {
     pub attach: Option<AnyElement>,
     pub send: AnyElement,
     pub footer: Option<AnyElement>,
+    pub env: Option<AnyElement>,
     pub queue: Vec<AnyElement>,
 }
 
+/// Where an empty Thread's or a draft's work runs, Codex's strip over the
+/// box: `ENV_STRIP_H` of `paint::ENV_STRIP`, `ENV_STRIP_INSET` in from the
+/// box's sides, its top corners `R_FLOAT`, standing on the box's top edge;
+/// its chips (a draft's pickers, `band_chip`; an empty Thread's words,
+/// `env_word`) from its left.
+pub fn env_strip(chips: Vec<AnyElement>) -> Div {
+    div()
+        .debug_selector(|| "composer-env".into())
+        .flex()
+        .items_center()
+        .gap(px(theme::ENV_CHIP_GAP))
+        .min_w_0()
+        .h(px(theme::ENV_STRIP_H))
+        .mx(px(theme::ENV_STRIP_INSET))
+        .px(px(theme::ENV_STRIP_PAD_X))
+        .rounded_t(px(theme::R_FLOAT))
+        .bg(theme::paint::ENV_STRIP)
+        .overflow_hidden()
+        .children(chips.into_iter().map(|chip| {
+            div()
+                .flex_shrink(1.)
+                .min_w_0()
+                .max_w(px(theme::TOOLBAR_LEAD_MAX_W))
+                .overflow_hidden()
+                .child(chip)
+        }))
+}
+
+/// An env strip chip's face: its mark in `INK_SUBTLE`, then its words in
+/// `INK`, cut at their end.
+pub(crate) fn env_face(mark: &'static str, label: SharedString) -> Div {
+    div()
+        .flex()
+        .flex_shrink(1.)
+        .min_w_0()
+        .items_center()
+        .gap(px(theme::ENV_MARK_GAP))
+        .child(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .child(icon(mark, theme::ENV_MARK, INK_SUBTLE)),
+        )
+        .child(chip_face(label, INK))
+}
+
+/// An env strip word that is not a control (an empty Thread's Project and
+/// branch): a chip's face at a chip's inset, so it lines up with a draft's
+/// pickers.
+pub fn env_word(mark: &'static str, label: SharedString) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .min_w_0()
+        .h(px(theme::FOOTER_CHIP_H))
+        .px(px(theme::FOOTER_CHIP_PAD_X))
+        .child(env_face(mark, label))
+}
+
 /// The Solo box's footer (`COMPOSER_FOOTER_H`, under the box, Claude's):
-/// `lead` at the left — where the work runs, a draft's Project and
-/// Workspace pickers or an empty Thread's words — and at the right the
-/// model and effort, then the permission mode as plain words, then the
-/// plan-usage ring. In a narrow box what matters least gives way: the
+/// at the right the model and effort, then the permission mode as plain
+/// words, then the plan-usage ring (where the work runs stands over the
+/// box, `env_strip`). In a narrow box what matters least gives way: the
 /// model's word cuts first (the picker says it whole). The rest never give
 /// way to it, the mode — the permission in force, which matters for
 /// safety — least of all; a long one cuts at its own `TOOLBAR_LEAD_MAX_W`.
 /// Narrower still, the words clip at the row's start.
 pub fn composer_footer(
-    lead: Vec<AnyElement>,
     model: Option<AnyElement>,
     hold: Vec<AnyElement>,
     ring: Option<AnyElement>,
@@ -236,31 +296,10 @@ pub fn composer_footer(
         .overflow_hidden()
         .items_center()
         .gap(px(theme::FOOTER_CHIP_GAP))
-        .children(lead.into_iter().map(held))
         .child(div().flex_1().min_w_0())
         .children(model.map(give))
         .children(hold.into_iter().map(held))
-        .children(ring.map(|ring| {
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .pl(px(theme::SPACE_1_5))
-                .child(ring)
-        }))
-}
-
-/// A footer word that is not a control (an empty Thread's Project and
-/// branch): a chip's face at a chip's inset, so it lines up with the
-/// pickers beside it.
-pub fn footer_word(label: SharedString) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .min_w_0()
-        .h(px(theme::FOOTER_CHIP_H))
-        .px(px(theme::FOOTER_CHIP_PAD_X))
-        .child(chip_face(label, INK_SUBTLE))
+        .children(ring.map(|ring| div().flex().flex_shrink_0().items_center().child(ring)))
 }
 
 // --------------------------------------------------------------- Composer
@@ -454,14 +493,15 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
     }
     // One row, as Claude's: the `+`, the line that grows, the send circle,
     // the buttons standing at the row's foot as the line grows over them.
-    let (attach, send, footer, actions) = match toolbar {
+    let (attach, send, footer, env, actions) = match toolbar {
         Some(controls) => (
             controls.attach,
             Some(controls.send),
             controls.footer,
+            controls.env,
             controls.queue,
         ),
-        None => (None, None, None, Vec::new()),
+        None => (None, None, None, None, Vec::new()),
     };
     let queue = queue_card(queued, &namespace, actions);
     let slot = |control: AnyElement| {
@@ -514,6 +554,8 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         .children(queue.map(|queue| {
             in_column(theme::COMPOSER_INSET, true, queue).pb(px(theme::QUEUE_CARD_GAP))
         }))
+        // Where the work runs, on the box's top edge (Codex's).
+        .children(env.map(|env| in_column(theme::COMPOSER_INSET, true, env)))
         .child(in_column(theme::COMPOSER_INSET, true, field))
         // The model, effort and mode under the box, as plain words, the
         // last one's ink ending where the column's text does.

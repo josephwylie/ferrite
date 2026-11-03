@@ -311,13 +311,16 @@ pub fn gated(call: &str, pending: &str) -> bool {
     call == pending || call.ends_with(&format!("\"{pending}\"]"))
 }
 
-/// Whether a call folds into a group with the calls beside it: a command,
-/// a read, a search, an edit (`Edited 3 files`), an MCP call. A subagent, a
-/// question or a visual keeps a row of its own and ends the group before
-/// it, as does a checklist call that failed. Decided by the tool's policy,
-/// never by a result still to come.
-pub(crate) fn groups(tool: &ToolBlock) -> bool {
-    tools::policy(&tool.name).grouping == tools::Grouping::RollsUp
+/// The run a call folds into with the calls beside it, by its policy: the
+/// routine run (`RollsUp`: a command, a read, a search, an edit — `Edited 3
+/// files` —, an MCP call) or the agents' (`Agents`: Claude's `Ran 2 agents`
+/// card). Calls of different runs never share a group. A question, a visual
+/// or a checklist call that failed has none: it keeps a row of its own and
+/// ends the group before it. Decided by the tool's policy, never by a result
+/// still to come.
+pub(crate) fn run_of(tool: &ToolBlock) -> Option<tools::Grouping> {
+    let grouping = tools::policy(&tool.name).grouping;
+    matches!(grouping, tools::Grouping::RollsUp | tools::Grouping::Agents).then_some(grouping)
 }
 
 /// A block that projects to no row: blank or hidden thinking, an answered
@@ -349,18 +352,24 @@ fn is_gated(tool: &ToolBlock, shape: &RowShape) -> bool {
             .is_some_and(|pending| gated(&tool.call, pending))
 }
 
-/// The routine calls that fold with the one at `blocks[start]`: it and
-/// every routine call after it up to the first row that is not one,
+/// The calls that fold with the one at `blocks[start]`: it and every call
+/// of its run (`run_of`) after it up to the first row that is not one,
 /// reading across blocks that draw nothing. Returns the members' indices
 /// and the index after the run.
 fn group_at(blocks: &[Block], start: usize, shape: &RowShape) -> (Vec<usize>, usize) {
+    let run = match &blocks[start].body {
+        Body::Tool(tool) => run_of(tool),
+        _ => None,
+    };
     let mut members = vec![start];
     let mut end = start + 1;
     let mut index = end;
     while let Some(block) = blocks.get(index) {
         match &block.body {
             _ if draws_nothing(block, shape) => index += 1,
-            Body::Tool(tool) if block.markdown.is_none() && groups(tool) => {
+            Body::Tool(tool)
+                if block.markdown.is_none() && run.is_some() && run_of(tool) == run =>
+            {
                 members.push(index);
                 index += 1;
                 end = index;
@@ -422,7 +431,7 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                 if draws_nothing(block, shape) {
                     continue;
                 }
-                if groups(tool) {
+                if run_of(tool).is_some() {
                     let (members, end) = group_at(blocks, index - 1, shape);
                     if members.len() > 1 {
                         let run: Vec<Block> =
@@ -947,13 +956,20 @@ mod tests {
         assert!(matches!(rows.get(0).unwrap().id(), RowId::Block(_)));
     }
 
-    /// Edits fold as other calls do (`Edited 2 files`); subagents keep their
-    /// own rows, even running: a call never leaves a group when its result
-    /// lands.
+    /// Edits fold as other calls do (`Edited 2 files`); subagents fold
+    /// apart, into their own `Ran 2 agents` group, even running: a call never
+    /// leaves a group when its result lands. A lone agent keeps a row.
     #[test]
-    fn edits_fold_and_subagents_keep_their_own_rows() {
+    fn edits_fold_and_subagents_fold_apart() {
         let mut transcript = Transcript::default();
-        for (id, name) in [("w", "Write"), ("e", "Edit"), ("t", "Task"), ("a", "Agent")] {
+        for (id, name) in [
+            ("w", "Write"),
+            ("e", "Edit"),
+            ("t", "Task"),
+            ("a", "Agent"),
+            ("r", "Read"),
+            ("lone", "Agent"),
+        ] {
             transcript.apply(Input::Event(SessionEvent::ToolStarted {
                 id: id.into(),
                 name: name.into(),
@@ -961,10 +977,14 @@ mod tests {
             }));
         }
         let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
-        let kinds: Vec<_> = rows.rows().iter().map(|row| row.kind()).collect();
         assert_eq!(
-            kinds,
-            [RowKind::Group, RowKind::Activity, RowKind::Activity]
+            calls(&rows),
+            [
+                (RowKind::Group, vec!["w".to_string(), "e".into()]),
+                (RowKind::Group, vec!["t".into(), "a".into()]),
+                (RowKind::Activity, vec!["r".into()]),
+                (RowKind::Activity, vec!["lone".into()]),
+            ]
         );
     }
 

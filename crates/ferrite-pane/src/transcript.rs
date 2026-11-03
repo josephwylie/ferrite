@@ -139,6 +139,14 @@ pub struct TranscriptInput {
     pub thinking: bool,
     /// When each edit settled, seen live: the hover card's age.
     pub settled_at: BTreeMap<String, SystemTime>,
+    /// The subagents this transcript's calls started, by call: the blocks
+    /// already carry their standing (`AgentFaces::apply`); a call with a
+    /// face opens its agent (`TranscriptEvent::OpenAgent`).
+    pub agents: pane::AgentFaces,
+    /// Whether a sent prompt's Edit, Rewind and Fork can be asked now:
+    /// `None` while its agent offers none (they are not drawn), `Err` with
+    /// why not while they stand disabled.
+    pub rewind: Option<Result<(), SharedString>>,
 }
 
 /// Everything a transcript's render depends on besides its blocks and its
@@ -157,6 +165,8 @@ pub struct TranscriptKey {
     pub workspace: Option<PathBuf>,
     pub solo: bool,
     pub thinking: bool,
+    pub agents: pane::AgentFaces,
+    pub rewind: Option<Result<(), SharedString>>,
 }
 
 impl TranscriptInput {
@@ -174,6 +184,8 @@ impl TranscriptInput {
             workspace: self.workspace.clone(),
             solo: self.solo,
             thinking: self.thinking,
+            agents: self.agents.clone(),
+            rewind: self.rewind.clone(),
         }
     }
 
@@ -205,6 +217,50 @@ pub enum TranscriptEvent {
     /// The live reasoning caption's own row came into or left view, against
     /// what the working line was chosen for (`working_reasoning`).
     ReasoningShown,
+    /// A press on an agent call's row: open the subagent it started.
+    OpenAgent(String),
+    /// A press on a sent prompt's Edit, Rewind or Fork, at `at`.
+    Prompt {
+        block: BlockId,
+        action: PromptAction,
+        at: gpui::Point<gpui::Pixels>,
+    },
+}
+
+/// What a sent prompt's actions ask of its Thread
+/// (docs/research/edit-rewind.md).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptAction {
+    /// Back to before it, its words back in the Composer.
+    Edit,
+    /// Back to before it.
+    Rewind,
+    /// A new Thread from the conversation before it.
+    Fork,
+}
+
+/// The press target over an agent call's whole row: it asks the cockpit to
+/// open the agent (`TranscriptEvent::OpenAgent`), whose transcript then
+/// takes the Pane's body.
+fn agent_opener(call: &str, view: Entity<TranscriptView>) -> AnyElement {
+    let opened = call.to_owned();
+    div()
+        .id(SharedString::from(format!("agent-open-{call}")))
+        .debug_selector({
+            let call = call.to_owned();
+            move || format!("agent-open-{call}")
+        })
+        .absolute()
+        .inset_0()
+        .cursor_pointer()
+        .tooltip(ferrite_ui::menu::tooltip("Open agent"))
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            cx.stop_propagation();
+            gpui::base::TextSelection::clear(window, cx);
+            let opened = opened.clone();
+            view.update(cx, |_, cx| cx.emit(TranscriptEvent::OpenAgent(opened)));
+        })
+        .into_any_element()
 }
 
 /// A minimap jump in flight: from one scroll position to another, eased.
@@ -319,6 +375,8 @@ impl TranscriptView {
                 solo: false,
                 thinking: false,
                 settled_at: BTreeMap::new(),
+                agents: Default::default(),
+                rewind: None,
             },
             rich,
             TranscriptText::default(),
@@ -447,8 +505,10 @@ impl TranscriptView {
         let before = self.input.key();
         let after = input.key();
         let namespace_changed = before.namespace != after.namespace;
-        let content_changed =
-            namespace_changed || before.content_revision != after.content_revision;
+        // An agent's standing is its call's: it changes the blocks.
+        let content_changed = namespace_changed
+            || before.content_revision != after.content_revision
+            || before.agents != after.agents;
         let disclosure_changed =
             self.input.expanded != input.expanded || self.input.target != input.target;
         let reading_changed = before.reading_size != after.reading_size;
@@ -1009,10 +1069,14 @@ impl TranscriptView {
             return self.render_group(row, &row_cx, view);
         }
         if let Body::Prompt(line) = &block.body {
-            // Its send time and `Copy`, under the bubble's right edge. Edit
-            // and rewind join them here once core can truncate a turn
-            // (`docs/research/edit-rewind.md`); fork, once it can fork a
-            // session.
+            // Its send time, Edit, Rewind, Fork and `Copy`, under the
+            // bubble's right edge (docs/research/edit-rewind.md). The three
+            // that cut need the id it was sent as and an agent that can.
+            let cuts = block
+                .prompt_id
+                .as_ref()
+                .zip(self.input.rewind.as_ref())
+                .zip(view.as_ref());
             let actions = message_actions(false)
                 .children(
                     block
@@ -1020,6 +1084,11 @@ impl TranscriptView {
                         .clone()
                         .map(|at| message_time("prompt-sent-at", at)),
                 )
+                .children(cuts.into_iter().flat_map(|((_, allowed), view)| {
+                    [PromptAction::Edit, PromptAction::Rewind, PromptAction::Fork].map(|action| {
+                        self.prompt_action(row.id(), block.id, action, allowed, view.clone())
+                    })
+                }))
                 // Its words, as the bubble shows them: the attachments'
                 // trailer is chips, never copied text.
                 .child(
@@ -1038,7 +1107,7 @@ impl TranscriptView {
                 .into_any_element();
         }
         match &block.body {
-            Body::Tool(tool) => self.render_call(block.id, tool, &row_cx, view.as_ref()),
+            Body::Tool(tool) => self.render_call(block.id, tool, &row_cx, view.as_ref(), false),
             _ => {
                 let call = match &block.body {
                     Body::Thinking(text) if pane::reasoning_has_details(text) => {
@@ -1089,14 +1158,22 @@ impl TranscriptView {
 
     /// One call as its row draws it, alone or in a group: its disclosure
     /// (the whole line the pointer's toggle, its `›`, the keyboard's
-    /// target, its folds) when it has details to open.
+    /// target, its folds) when it has details to open. `grouped`: it stands
+    /// in a group's card, so its open body takes no card of its own.
     fn render_call(
         &self,
         block: BlockId,
         tool: &ferrite_core::transcript::ToolBlock,
         row_cx: &pane::RowCx,
         view: Option<&Entity<Self>>,
+        grouped: bool,
     ) -> AnyElement {
+        if pane::is_agent(tool) {
+            let open = view
+                .filter(|_| self.input.agents.get(&tool.call).is_some())
+                .map(|view| agent_opener(&tool.call, view.clone()));
+            return pane::render_agent(block, tool, row_cx, open);
+        }
         let call = DisclosureId::Tool(tool.call.clone());
         let expanded = self.tool_state(&call) == DisclosureState::Expanded;
         let disclosure = view
@@ -1108,6 +1185,7 @@ impl TranscriptView {
             row_cx,
             pane::ToolCx {
                 expanded,
+                grouped,
                 disclosure,
             },
         )
@@ -1145,13 +1223,13 @@ impl TranscriptView {
             let drawn: Vec<&ferrite_core::transcript::Block> = if expanded {
                 row.blocks().iter().collect()
             } else {
-                pane::group_live(row.blocks()).into_iter().collect()
+                pane::group_live(row.blocks())
             };
             drawn
                 .into_iter()
                 .filter_map(|block| match &block.body {
                     Body::Tool(tool) => {
-                        Some(self.render_call(block.id, tool, row_cx, view.as_ref()))
+                        Some(self.render_call(block.id, tool, row_cx, view.as_ref(), true))
                     }
                     _ => None,
                 })
@@ -1183,7 +1261,8 @@ impl TranscriptView {
         let mut stops = Vec::new();
         let call = |stops: &mut Vec<DisclosureId>, block: &ferrite_core::transcript::Block| {
             if let Body::Tool(tool) = &block.body {
-                if pane::tool_has_details(tool) {
+                // An agent's row opens its agent: it has no details.
+                if pane::tool_has_details(tool) && !pane::is_agent(tool) {
                     stops.push(DisclosureId::Tool(tool.call.clone()));
                 }
             }
@@ -1199,8 +1278,10 @@ impl TranscriptView {
                         for block in row.blocks() {
                             call(&mut stops, block);
                         }
-                    } else if let Some(block) = pane::group_live(row.blocks()) {
-                        call(&mut stops, block);
+                    } else {
+                        for block in pane::group_live(row.blocks()) {
+                            call(&mut stops, block);
+                        }
                     }
                 }
                 RowKind::Activity { .. } => {
@@ -1348,6 +1429,70 @@ impl TranscriptView {
             .flex_shrink_0()
             .child(ferrite_ui::components::copy_button(id, text))
             .into_any_element()
+    }
+
+    /// One of a sent prompt's Edit, Rewind and Fork: a message action's
+    /// door asking the cockpit for it (`TranscriptEvent::Prompt`), or,
+    /// while it cannot be asked (`allowed`), its glyph faded and its
+    /// tooltip saying why.
+    fn prompt_action(
+        &self,
+        row: &RowId,
+        block: BlockId,
+        action: PromptAction,
+        allowed: &Result<(), SharedString>,
+        view: Entity<Self>,
+    ) -> AnyElement {
+        let (glyph, label, selector) = match action {
+            PromptAction::Edit => (ferrite_ui::icons::PENCIL, "Edit", "message-edit"),
+            PromptAction::Rewind => (ferrite_ui::icons::BACK, "Rewind to here", "message-rewind"),
+            PromptAction::Fork => (ferrite_ui::icons::BRANCH, "Fork from here", "message-fork"),
+        };
+        let id = gpui::ElementId::from(SharedString::from(format!(
+            "{selector}-{}-{row:?}",
+            self.input.namespace
+        )));
+        let door = div()
+            .id(id.clone())
+            .debug_selector(move || selector.into())
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .size(px(theme::MESSAGE_ACTION))
+            .rounded(px(theme::R_CONTROL));
+        let face = |opacity| {
+            ferrite_ui::icons::icon(glyph, theme::MESSAGE_ACTION_GLYPH, theme::INK_SUBTLE)
+                .opacity(opacity)
+        };
+        let door = match allowed {
+            Err(why) => door
+                .tooltip(ferrite_ui::menu::tooltip(format!("{label} \u{b7} {why}")))
+                .child(face(0.4)),
+            Ok(()) => {
+                let key = ferrite_ui::pointer::hover_key(&id);
+                // The hover blend draws through this cached view: ask for
+                // its next frame.
+                let t = ferrite_ui::motion::hover_t(&key);
+                if t > 0. && t < 1. {
+                    crate::file_links::mark_fading();
+                }
+                use ferrite_ui::pointer::PointerPressed;
+                door.hover_raised(key)
+                    .press_raised()
+                    .tooltip(ferrite_ui::menu::tooltip(label))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(move |event, _, cx| {
+                        cx.stop_propagation();
+                        let at = event.position();
+                        view.update(cx, |_, cx| {
+                            cx.emit(TranscriptEvent::Prompt { block, action, at })
+                        });
+                    })
+                    .child(face(1.))
+            }
+        };
+        door.into_any_element()
     }
 
     /// The pinned prompt: its turn's bubble stuck to the top on a plane in

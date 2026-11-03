@@ -158,11 +158,11 @@ pub fn key_label(keys: &str, ink: u32) -> AnyElement {
 }
 
 /// A row's face with no id and no pointer role, for kit hosts that own the
-/// row's interaction: `FLOAT_ROW_H`, inset `FLOAT_PAD` from the float's
-/// edge, radius `R_CONTROL`; a leading mark, the label (strong on its
-/// fuzzy matches), the description after it, the key hard right, and a
-/// `✓` on the standing choice. The cursor (or an armed) row is `FLOAT_SEL`
-/// with its label `INK_STRONG`.
+/// row's interaction: `FLOAT_ROW_H`, inset `MENU_ROW_INSET_X` from the
+/// float's sides, radius `R_CONTROL`; a leading mark, the label (strong on
+/// its fuzzy matches), the description after it, a `✓` on the standing
+/// choice in `MENU_CHECK_INK`, and the key hard right (Claude's `✓ 5`). The cursor (or an
+/// armed) row is `FLOAT_SEL` with its label `INK_STRONG`.
 pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
     let ink = label_ink(item, cursor, armed);
     let dim = detail_ink(item, cursor, armed);
@@ -228,7 +228,7 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
         } else {
             FLOAT_ROW_H
         }))
-        .mx(px(FLOAT_PAD))
+        .mx(px(MENU_ROW_INSET_X))
         .px(px(MENU_ROW_PAD_X))
         .rounded(px(R_CONTROL))
         .whitespace_nowrap()
@@ -259,17 +259,17 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
             }
             None => row.child(div().flex_1()),
         })
-        .when_some(item.shortcut.clone(), |row, keys| {
-            row.child(div().flex().flex_shrink_0().child(key_label(&keys, dim)))
-        })
         .when(item.checked, |row| {
             row.child(
                 div()
                     .flex()
                     .flex_shrink_0()
                     .debug_selector(|| "float-check".into())
-                    .child(components::glyph("\u{2713}", INK_STRONG)),
+                    .child(components::glyph("\u{2713}", MENU_CHECK_INK)),
             )
+        })
+        .when_some(item.shortcut.clone(), |row, keys| {
+            row.child(div().flex().flex_shrink_0().child(key_label(&keys, dim)))
         })
 }
 
@@ -518,9 +518,12 @@ pub type Picked = Rc<dyn Fn(usize, &mut gpui::Window, &mut gpui::App)>;
 /// `Effort  Medium ›`, `More models ›`, each list in a float of its own):
 /// its label, the choice in force at its right, the list it opens, that
 /// list's width, and what a pick there does. Submenu rows sit under the
-/// menu's rows, each past a hairline.
+/// menu's rows, each past an inset hairline — or, marked, as rows of it.
 #[derive(Clone)]
 pub struct Submenu {
+    /// A row's own mark: the row then stands among the menu's rows, no
+    /// divider over it (the `+` menu's `Connectors ›`).
+    pub icon: Option<(&'static str, u32)>,
     pub label: SharedString,
     pub value: SharedString,
     pub choices: Vec<components::Choice>,
@@ -562,9 +565,9 @@ pub struct ChoiceMenu {
     pub width: Option<f32>,
 }
 
-/// A picker's trigger that never wears the selected face while its menu is
-/// open (FL-13): the status segment stays a quiet segment under its float,
-/// no raised box. A placed menu's trigger reports its bounds, where the
+/// A picker's trigger that never wears the kit's selected face while its
+/// menu is open (FL-13): it wears `CHIP_OPEN` instead, pressed, as Claude's
+/// chip does under its menu. A placed menu's trigger reports its bounds, where the
 /// menu hangs from.
 #[derive(IntoElement)]
 struct QuietTrigger {
@@ -604,6 +607,10 @@ struct ChoiceState {
     /// The open submenu's cursor (an index into its choices); `None` while
     /// it is shut. The open submenu is the one whose row the cursor is on.
     sub: Option<usize>,
+    /// The keyboard has moved a cursor since the menu opened: only then is
+    /// the cursor row filled. At rest no row is (Claude's menus): the ✓
+    /// says what stands, and the pointer's hover fill says where it is.
+    moved: bool,
     initialized: bool,
     /// The trigger as the last frame laid it out: a placed menu hangs from
     /// it, so it lands in place on its first frame.
@@ -737,6 +744,7 @@ impl ChoiceContent {
                 }
                 _ => state.cursor = step_in(&menu.lives(), state.cursor, delta),
             }
+            state.moved = true;
         });
     }
 
@@ -747,7 +755,10 @@ impl ChoiceContent {
         };
         match (sub, cursor, self.submenu_at(cursor)) {
             (Some(sub), _, _) => self.pick_sub(sub, window, cx),
-            (None, _, Some((k, _))) => self.open_sub(k, cx),
+            (None, _, Some((k, _))) => {
+                self.update(cx, |_, state| state.moved = true);
+                self.open_sub(k, cx);
+            }
             (None, Some(at), None) => self.pick(at, window, cx),
             (None, None, None) => {}
         }
@@ -755,12 +766,14 @@ impl ChoiceContent {
 
     fn build(self: &Rc<Self>, cx: &gpui::App) -> AnyElement {
         use gpui::base::actions::{Cancel, Confirm, SelectDown, SelectLeft, SelectRight, SelectUp};
-        let (cursor, sub, trigger) = {
+        let (cursor, sub, trigger, moved) = {
             let state = self.state.read(cx);
-            (state.cursor, state.sub, state.trigger)
+            (state.cursor, state.sub, state.trigger, state.moved)
         };
+        // The rows the keyboard's cursors fill: none at rest.
+        let lit = cursor.filter(|_| moved);
         #[cfg(any(test, feature = "test-support"))]
-        testing::DRAWN.with(|drawn| drawn.set(testing::Drawn { cursor, sub }));
+        testing::DRAWN.with(|drawn| drawn.set(testing::Drawn { cursor, sub, lit }));
         let mut surface = float()
             .debug_selector(|| "choice-menu".into())
             .key_context("PopupMenu")
@@ -782,6 +795,7 @@ impl ChoiceContent {
                 move |_: &SelectRight, _, cx| {
                     let state = menu.state.read(cx);
                     if let (None, Some((k, _))) = (state.sub, menu.submenu_at(state.cursor)) {
+                        menu.update(cx, |_, state| state.moved = true);
                         menu.open_sub(k, cx);
                     }
                 }
@@ -848,7 +862,7 @@ impl ChoiceContent {
             let pick = self.clone();
             let shut = self.clone();
             rows = rows.child(
-                item_row(("choice-row", index), &item, cursor == Some(index), false)
+                item_row(("choice-row", index), &item, lit == Some(index), false)
                     .debug_selector(move || format!("choice-row-{index}"))
                     .when_some(choice.why.clone(), |row, why| row.tooltip(tooltip(why)))
                     .on_mouse_move(move |_, _, cx| shut.close_sub(cx))
@@ -858,15 +872,23 @@ impl ChoiceContent {
                     }),
             );
         }
-        surface = surface.child(rows);
+        // A marked submenu row is one of the rows; a bare one stands under
+        // them past its divider.
         let mut side = None;
+        let mut under = Vec::new();
         for (k, submenu) in self.submenus.iter().enumerate() {
             let open = sub.is_some() && cursor == Some(self.sub_row(k));
-            surface = surface.child(self.sub_row_face(k, submenu, cursor, open));
+            let face = self.sub_row_face(k, submenu, lit, open);
+            if submenu.icon.is_some() {
+                rows = rows.child(face);
+            } else {
+                under.push(face);
+            }
             if open {
-                side = sub.map(|sub| self.sub_surface(submenu, sub));
+                side = Some(self.sub_surface(submenu, sub.filter(|_| moved)));
             }
         }
+        surface = surface.child(rows).children(under);
         let menu = self.clone();
         let surface = components::on_bounds(surface, move |_, window, cx| {
             let first = menu.state.update(cx, |state, _| {
@@ -921,46 +943,60 @@ impl ChoiceContent {
         open: bool,
     ) -> Div {
         let lit = cursor == Some(self.sub_row(k)) || open;
-        let item = MenuItem::new(submenu.label.clone());
+        let mut item = MenuItem::new(submenu.label.clone());
+        if let Some((path, ink)) = submenu.icon {
+            item = item.leading(path, ink);
+        }
         let hover = self.clone();
         let toggle = self.clone();
-        div()
-            .flex_shrink_0()
-            .py(px(FLOAT_PAD))
-            .border_t_1()
-            .border_color(paint::FLOAT_EDGE)
-            .child(
-                item_row(("choice-submenu-row", k), &item, lit, false)
-                    .debug_selector(move || format!("choice-submenu-row-{k}"))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_shrink_0()
-                            .items_center()
-                            .gap(px(SPACE_1))
-                            .text_color(rgb(if lit { INK } else { INK_SUBTLE }))
-                            .child(submenu.value.clone())
-                            .child(icons::icon(icons::CHEVRON_RIGHT, ROW_ICON, INK_SUBTLE)),
-                    )
-                    .on_mouse_move(move |_, _, cx| {
-                        if !open {
-                            hover.open_sub(k, cx);
-                        }
-                    })
-                    .on_click(move |_, _, cx| {
-                        cx.stop_propagation();
-                        if open {
-                            toggle.close_sub(cx);
-                        } else {
-                            toggle.open_sub(k, cx);
-                        }
-                    }),
+        // A marked submenu row is one more of the menu's rows; a bare one
+        // stands past a divider inset to the text's edges (Claude's).
+        let row = div().flex_shrink_0();
+        let row = if submenu.icon.is_some() {
+            row
+        } else {
+            row.py(px(FLOAT_PAD)).child(
+                div()
+                    .h(px(HAIRLINE_W))
+                    .mx(px(FLOAT_PAD_X))
+                    .mb(px(FLOAT_PAD))
+                    .bg(paint::FLOAT_EDGE),
             )
+        };
+        row.child(
+            item_row(("choice-submenu-row", k), &item, lit, false)
+                .debug_selector(move || format!("choice-submenu-row-{k}"))
+                .child(
+                    div()
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(px(SPACE_1))
+                        .text_color(rgb(if lit { INK } else { INK_SUBTLE }))
+                        .when(!submenu.value.is_empty(), |cell| {
+                            cell.child(submenu.value.clone())
+                        })
+                        .child(icons::icon(icons::CHEVRON_RIGHT, ROW_ICON, INK_SUBTLE)),
+                )
+                .on_mouse_move(move |_, _, cx| {
+                    if !open {
+                        hover.open_sub(k, cx);
+                    }
+                })
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    if open {
+                        toggle.close_sub(cx);
+                    } else {
+                        toggle.open_sub(k, cx);
+                    }
+                }),
+        )
     }
 
     /// The open submenu: its own float, `submenu.width` wide, a `✓` on the
-    /// choice in force, `sub` the cursor row.
-    fn sub_surface(self: &Rc<Self>, submenu: &Submenu, sub: usize) -> Div {
+    /// choice in force, `sub` the cursor row the keyboard fills.
+    fn sub_surface(self: &Rc<Self>, submenu: &Submenu, sub: Option<usize>) -> Div {
         let mut rows = div()
             .flex()
             .flex_col()
@@ -972,7 +1008,7 @@ impl ChoiceContent {
                 item_row(
                     ("choice-sub", index),
                     &choice.item(false),
-                    sub == index,
+                    sub == Some(index),
                     false,
                 )
                 .debug_selector(move || format!("choice-sub-{index}"))
@@ -1001,6 +1037,7 @@ impl RenderOnce for ChoiceMenu {
             state.update(cx, |state, _| {
                 state.cursor = None;
                 state.sub = None;
+                state.moved = false;
                 state.initialized = false;
             });
         } else if state.read(cx).cursor.is_none() {
@@ -1018,7 +1055,12 @@ impl RenderOnce for ChoiceMenu {
             .appearance(false)
             .overlay_closable(false)
             .trigger(QuietTrigger {
-                button: self.trigger,
+                // Pressed while its menu is open (Claude's chips).
+                button: if self.open {
+                    self.trigger.bg(paint::CHIP_OPEN)
+                } else {
+                    self.trigger
+                },
                 measure: self.place.map(|_| state.clone()),
             })
             .open(self.open)
@@ -1055,6 +1097,8 @@ pub mod testing {
         pub cursor: Option<usize>,
         /// The open submenu's cursor; `None` while it is shut.
         pub sub: Option<usize>,
+        /// The row the cursor fills: none until the keyboard moves it.
+        pub lit: Option<usize>,
     }
 
     thread_local! {

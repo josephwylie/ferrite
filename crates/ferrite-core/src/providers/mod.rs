@@ -140,6 +140,28 @@ pub trait Session {
     /// The bounded event stream. The pump drains this per frame.
     fn events(&self) -> &Receiver<SessionEvent>;
     fn send(&mut self, text: &str) -> io::Result<()>;
+    /// Send a prompt under Ferrite's id `id`, what a rewind or a fork names
+    /// it by (`rewind`, `fork`). A provider that names prompts itself just
+    /// sends, and maps `id` to its own name for them.
+    fn send_as(&mut self, _id: &str, text: &str) -> io::Result<()> {
+        self.send(text)
+    }
+    /// Cut the conversation back to before the prompt `request` names,
+    /// answered on the ack once the provider has (`Rewound`).
+    fn rewind(&mut self, _request: RewindRequest) -> io::Result<RewindAck> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this agent cannot rewind its conversation",
+        ))
+    }
+    /// Where a new conversation holding this one up to the prompt
+    /// `request.prompt` names, without it, comes from (`Forked`).
+    fn fork(&mut self, _request: RewindRequest) -> io::Result<ForkAck> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this agent cannot fork its conversation",
+        ))
+    }
     fn enqueue(&mut self, _client_id: &str, _text: &str) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -207,6 +229,66 @@ pub trait Session {
     }
 }
 
+/// What a rewind asks of a Session (`Session::rewind`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RewindRequest {
+    /// The prompt to go back to before, by the id it was sent under.
+    pub prompt: String,
+    /// The latest prompt the operator saw, when it has an id: a provider
+    /// that heard a later one refuses rather than cut what was not seen.
+    pub latest: Option<String>,
+    /// Restore the files the provider checkpointed to how they were when
+    /// the prompt was sent, before the conversation is cut.
+    pub files: bool,
+    /// The provider's id of the conversation, as its Init named it.
+    pub session: Option<String>,
+}
+
+/// What the provider made of a rewind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rewound {
+    pub cut: Cut,
+    /// What restoring the files changed, when they were asked for and the
+    /// restore ran.
+    pub files: Option<FilesRestored>,
+}
+
+/// How the conversation was cut.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Cut {
+    /// In place, in the live Session.
+    InPlace,
+    /// Not in place: the next Session resumes `session` at its entry `at`
+    /// instead (`ResumePoint`), and this one should end.
+    ResumeAt { session: String, at: String },
+    /// Refused, in the provider's words; nothing was cut.
+    Refused(String),
+}
+
+/// What a file restore changed.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FilesRestored {
+    pub files: usize,
+    pub insertions: u64,
+    pub deletions: u64,
+}
+
+pub type RewindAck = Receiver<io::Result<Rewound>>;
+
+/// Where a fork's conversation comes from (`Session::fork`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Forked {
+    /// A new provider conversation already made, by its id.
+    Thread(String),
+    /// Made by the next Session: `session` resumed at its entry `at`,
+    /// forked (`ResumePoint`).
+    ResumeAt { session: String, at: String },
+    /// Nothing before the prompt: the fork starts a conversation afresh.
+    Fresh,
+}
+
+pub type ForkAck = Receiver<io::Result<Forked>>;
+
 /// A native match, in provider ranking order. Highlight offsets are character
 /// indices in `path`, not byte offsets. Paths are relative to the Session cwd or absolute.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,6 +343,15 @@ impl Session for ClaudeSession {
 
     fn send(&mut self, text: &str) -> io::Result<()> {
         ClaudeSession::send(self, text)
+    }
+    fn send_as(&mut self, id: &str, text: &str) -> io::Result<()> {
+        ClaudeSession::send_as(self, id, text)
+    }
+    fn rewind(&mut self, request: RewindRequest) -> io::Result<RewindAck> {
+        ClaudeSession::rewind(self, request)
+    }
+    fn fork(&mut self, request: RewindRequest) -> io::Result<ForkAck> {
+        ClaudeSession::fork(self, request)
     }
 
     fn interrupt(&mut self) -> io::Result<()> {

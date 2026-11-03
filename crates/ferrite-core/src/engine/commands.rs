@@ -83,6 +83,21 @@ impl Engine {
                 }
                 Ok(None)
             }
+            Op::Rewind {
+                thread,
+                prompt,
+                files,
+                edit,
+            } => {
+                self.open_thread(thread)?;
+                self.rewind(*thread, prompt, *files, *edit)
+                    .map(|()| None)
+                    .map_err(failed)
+            }
+            Op::Fork { thread, prompt } => {
+                self.open_thread(thread)?;
+                self.fork(*thread, prompt).map(|()| None).map_err(failed)
+            }
             Op::TakeRecovered { thread } => Ok(self
                 .take_retrieved_prompt(*thread)
                 .map(|(text, prepend)| Done::Recovered { text, prepend })),

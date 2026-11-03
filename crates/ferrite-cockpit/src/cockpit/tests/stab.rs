@@ -215,15 +215,15 @@ fn keycaps_and_menu_shortcuts_draw_the_command_glyph(cx: &mut TestAppContext) {
     );
 }
 
-/// The Subject strip is Ferrite's own tab row: exactly one active tab,
-/// which follows the pick, as high as a tab (no kit rule hanging under it).
+/// A subagent opened from its row wears its own head over its transcript:
+/// one row at the card's top, closed by its rule; Main has none.
 #[gpui::test]
-fn the_subject_strip_marks_one_active_pill_that_follows_the_pick(cx: &mut TestAppContext) {
+fn an_opened_subagent_wears_one_head_row(cx: &mut TestAppContext) {
     use ferrite_core::activity::{
         ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject, TranscriptCoverage,
     };
-    let (core, fake) = cockpit("subject-pill", 1);
-    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (core, fake) = cockpit("subject-head", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     let key = AgentKey::new(Provider::Claude, "ui-fixture", "Atlas");
     let mut info = AgentInfo::new(key.clone());
@@ -242,23 +242,28 @@ fn the_subject_strip_marks_one_active_pill_that_follows_the_pick(cx: &mut TestAp
             .unwrap();
     }
     tick(cx);
-    let strip = cx.debug_bounds("subject-strip-1").expect("the strip");
-    let pill = cx.debug_bounds("subject-tab-selected").expect("one pill");
-    let main = cx.debug_bounds("subject-main-1").unwrap();
-    assert_eq!(pill, main, "Main is active first");
-    assert_eq!(pill.size.height, px(ferrite_ui::theme::SUBJECT_TAB_H));
-    assert!(strip.size.height <= px(ferrite_ui::theme::SUBJECT_STRIP_H));
-
-    let atlas: &'static str =
-        Box::leak(format!("subject-agent-1-{}", key.as_str()).into_boxed_str());
-    let tab = cx.debug_bounds(atlas).expect("Atlas's tab");
-    cx.simulate_click(tab.center(), gpui::Modifiers::none());
+    assert!(
+        cx.debug_bounds("pane-subagent-1").is_none(),
+        "Main has no head"
+    );
+    view.update(cx, |view, cx| view.open_agent_from(0, "Atlas".into(), cx));
     cx.run_until_parked();
     tick(cx);
+    let strip = cx.debug_bounds("pane-subagent-1").expect("the head's row");
+    let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
     assert_eq!(
-        cx.debug_bounds("subject-tab-selected").unwrap(),
-        cx.debug_bounds(atlas).unwrap(),
-        "the pill follows the pick"
+        strip.size.height,
+        px(ferrite_ui::theme::SUBAGENT_HEAD_H + 1.)
+    );
+    assert!(
+        (strip.top() - px(pane.y)).abs() <= px(0.5),
+        "at the card's top"
+    );
+    assert!(cx.debug_bounds("subagent-name-1").is_some());
+    assert!(cx.debug_bounds("subagent-state-1").is_some());
+    assert!(
+        cx.debug_bounds("subagent-coverage-1").is_some(),
+        "a live transcript says so"
     );
 }
 
@@ -466,22 +471,15 @@ fn the_solo_agent_strip_fits_its_tabs_with_room(cx: &mut TestAppContext) {
                 .unwrap();
         }
     }
-    // Solo has no Pane head (the view head names it): the tabs keep a
-    // strip of their own.
+    // Solo has no Pane head (the view head names it), and Main has no
+    // strip for its agents: they are its transcript's rows.
     for width in [900., 1800., 2400.] {
         cx.simulate_resize(gpui::size(px(width), px(800.)));
         tick(cx);
         tick(cx);
         assert!(cx.debug_bounds("pane-head-1").is_none(), "Solo has no head");
-        assert!(
-            cx.debug_bounds("pane-tabs-1").is_some(),
-            "the tabs keep a strip"
-        );
+        assert!(cx.debug_bounds("pane-subagent-1").is_none(), "no strip");
     }
-    assert!(
-        cx.debug_bounds("subject-overflow-1").is_none(),
-        "the wide strip fits every tab"
-    );
 }
 
 /// A Group head names the Thread and nothing else (theme WP-C, rule 7):
@@ -585,9 +583,10 @@ fn a_wall_tile_truncates_a_long_call_inside_the_tile(cx: &mut TestAppContext) {
     );
 }
 
-/// A draft in a narrow Pane keeps its whole controls row inside the
-/// Composer: the Project and branch chips truncate first, and the model
-/// chip (its effort beside the model) stays in the block.
+/// A draft in a narrow Pane keeps its controls inside the Composer: the
+/// Project and branch chips on the strip over the box (Codex's) truncate
+/// without leaving it, and the model chip (its effort beside the model)
+/// stays in the block.
 #[gpui::test]
 fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("narrow-draft-controls", 1);
@@ -608,12 +607,18 @@ fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext
         model.right() <= block.right() + px(0.5),
         "the model chip {model:?} stays inside the box {block:?}"
     );
-    let toolbar = cx.debug_bounds("composer-footer").expect("the toolbar");
+    let strip = cx.debug_bounds("composer-env").expect("the env strip");
+    assert!(
+        (strip.bottom() - block.top()).abs() <= px(1.5)
+            && strip.left() >= block.left()
+            && strip.right() <= block.right(),
+        "the strip stands on the box, inside its sides: {strip:?} / {block:?}"
+    );
     for chip in ["band-chip-0", "band-chip-1"] {
         let chip = cx.debug_bounds(chip).expect("a setup chip");
         assert!(
-            toolbar.contains(&chip.center()) && chip.right() <= model.left(),
-            "the setup chips ride the footer's left: {chip:?} / {toolbar:?}"
+            strip.contains(&chip.center()) && chip.right() <= strip.right(),
+            "the setup chips ride the strip: {chip:?} / {strip:?}"
         );
     }
     for chip in ["band-chip-0", "band-chip-1"] {
@@ -624,63 +629,6 @@ fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext
         );
     }
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// A Subagent's read-only footer stands in the Composer's slot (SPEC
-/// §5.3): as wide as Main's box and as far inside the card's foot, its
-/// words where the input's stand.
-#[gpui::test]
-fn the_subagent_footer_sits_in_the_composer_block(cx: &mut TestAppContext) {
-    use ferrite_core::activity::{
-        ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject, TranscriptCoverage,
-    };
-    let (core, fake) = cockpit("child-footer-block", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
-    let key = AgentKey::new(Provider::Claude, "ui-fixture", "Atlas");
-    let mut info = AgentInfo::new(key.clone());
-    info.name = Some("Atlas".into());
-    info.parent = Some(Subject::Main);
-    info.coverage = TranscriptCoverage::Live;
-    for event in [
-        ActivityEvent::Discovered(info),
-        ActivityEvent::Status {
-            key: key.clone(),
-            state: AgentStatus::Working,
-        },
-    ] {
-        fake.streams.borrow()[0]
-            .send(SessionEvent::Activity(event))
-            .unwrap();
-    }
-    tick(cx);
-    let main_block = cx.debug_bounds("composer-block").expect("Main's Composer");
-    let tab: &'static str = Box::leak(format!("subject-agent-1-{}", key.as_str()).into_boxed_str());
-    let at = cx.debug_bounds(tab).expect("Atlas's tab").center();
-    cx.simulate_click(at, gpui::Modifiers::none());
-    cx.run_until_parked();
-    tick(cx);
-    let footer = cx
-        .debug_bounds("child-footer-1")
-        .expect("the read-only footer");
-    let text = cx.debug_bounds("child-footer-text-1").unwrap();
-    let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-    assert_eq!(
-        (footer.left(), footer.size.width),
-        (main_block.left(), main_block.size.width),
-        "the footer spans the Composer's box"
-    );
-    assert_eq!(footer.size.height, px(ferrite_ui::theme::CHILD_FOOTER_H));
-    assert!(
-        (px(pane.y + pane.h) - footer.bottom() - px(ferrite_ui::theme::COMPOSER_INSET)).abs()
-            <= px(1.5),
-        "inset from the card's foot as the box is: {footer:?} / {pane:?}"
-    );
-    assert_eq!(
-        text.left() - footer.left(),
-        px(ferrite_ui::theme::COMPOSER_INPUT_PAD_X),
-        "the words start where the input's do"
-    );
 }
 
 /// A question's own answer is not a second field (rule 2.8.6): one bare
@@ -719,8 +667,9 @@ fn the_own_answer_is_one_bare_line_on_the_label_column(cx: &mut TestAppContext) 
     );
 }
 
-/// A draft's body holds only the embossed mark, and neither it nor an
-/// empty Thread centres a second copy of the guidance: the Composer's
+/// A draft's body holds the start hero (Codex's `What should we build in
+/// <project>?`, its project word the Project switcher), and neither it nor
+/// an empty Thread centres a second copy of the guidance: the Composer's
 /// placeholder says how to start, once (rule 2.11.4).
 #[gpui::test]
 fn a_draft_body_says_how_to_start(cx: &mut TestAppContext) {
@@ -739,6 +688,34 @@ fn a_draft_body_says_how_to_start(cx: &mut TestAppContext) {
         .expect("the draft's body spacer");
     let block = cx.debug_bounds("composer-block").unwrap();
     assert!(empty.bottom() <= block.top(), "{empty:?} / {block:?}");
+    let hero = cx.debug_bounds("start-hero").expect("the start hero");
+    assert!(empty.contains(&hero.center()), "{hero:?} in {empty:?}");
+    let word = cx
+        .debug_bounds("start-hero-project")
+        .expect("the hero's project word");
+    cx.simulate_mouse_down(word.center(), MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_up(word.center(), MouseButton::Left, gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(
+            view.popover
+                .as_ref()
+                .is_some_and(|open| matches!(open.kind, Kind::Band(pane::BandChip::Project))),
+            "the project word switches the Project"
+        );
+    });
+    let rows = cx
+        .debug_bounds("composer-menu-rows")
+        .expect("the Project menu is drawn");
+    assert!(
+        rows.top() >= word.bottom(),
+        "it drops under the word: {rows:?} / {word:?}"
+    );
+    view.update(cx, |view, cx| {
+        view.popover = None;
+        cx.notify();
+    });
+    tick(cx);
     assert!(
         cx.debug_bounds("transcript-empty").is_none(),
         "no centred empty state anywhere"

@@ -1,5 +1,9 @@
 //! The view head (SPEC §5.2): the head row's slot over the board.
 //!
+//! It opens with the history arrows (Claude's `‹ ›`, `history`), on every
+//! board, the empty one and a draft's too: back is most wanted where there
+//! is nothing else to do.
+//!
 //! Solo names the focused Thread — its title (a double-click renames it),
 //! its ▾ (the Thread's menu, as Claude's title carries one) and its
 //! Project in quiet grey. A Group names itself — its title, `<project> · N
@@ -8,6 +12,12 @@
 //! head ends in the panel toggle's room (the frame lays the one toggle over
 //! it, `panel_toggle_element`), where the panel head's room is while it
 //! shows; the branch and its diffstat are the panel's.
+//!
+//! The title-bar tools (`title_tools_element`) sit at the row's right end
+//! before the panel toggle, as Claude's do: Review branch (its diff), the
+//! checkout in Finder (its files), Open a thread beside. Claude's terminal,
+//! preview and `⋯` have nothing behind them here (the title's ▾ is the
+//! Thread's menu), so they are not drawn.
 //!
 //! The head is an overlay laid after the titlebar's drag strip
 //! (the frame's titlebar), over the frame the board column already paints
@@ -20,47 +30,179 @@ use super::*;
 use ferrite_ui::{components, icons, theme};
 
 impl CockpitView {
-    /// The head over the board, when the board shows a view to name: a
-    /// Thread in Solo, or a Group.
-    pub(super) fn view_head(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.empty_board_shown() {
-            return None;
+    /// The head over the board: the history arrows, then the view's name
+    /// when the board shows one — a Thread in Solo, or a Group.
+    pub(super) fn view_head(&self, cx: &mut Context<Self>) -> AnyElement {
+        let mut parts = vec![self.history_arrows(cx)];
+        if !self.empty_board_shown() {
+            let named = match self.cockpit.roster().view() {
+                View::Solo => self.solo_head(cx),
+                View::Group(group) => self.group_view_head(group, cx),
+            };
+            parts.extend(named.into_iter().flatten());
         }
-        let mut parts = match self.cockpit.roster().view() {
-            View::Solo => self.solo_head(cx)?,
-            View::Group(group) => self.group_view_head(group, cx)?,
-        };
         // The head stops where the board does while the panel shows (its
         // head holds the row's right end, toggle, caption buttons and all);
-        // hidden, it runs to the panel toggle and ends in its room, which
-        // the frame lays the toggle over (`view_head_end`).
+        // hidden, it runs to the panel toggle and ends in its room and the
+        // tools', which the frame lays them over (`view_head_end`).
         let (right, toggle_room) = self.view_head_end();
         if toggle_room {
+            parts.extend(
+                self.title_tools_room(theme::VIEW_HEAD_GAP)
+                    .map(IntoElement::into_any_element),
+            );
             parts.push(super::panel::toggle_room().into_any_element());
         }
+        div()
+            .debug_selector(|| "view-head".into())
+            .absolute()
+            .top_0()
+            .left(px(self.board_left()))
+            .right(px(right))
+            .h(px(theme::WIN_CHROME_H))
+            .flex()
+            .items_center()
+            .gap(px(theme::VIEW_HEAD_GAP))
+            .pl(px(theme::VIEW_HEAD_PAD_X))
+            // Against the panel, the head's end stands in as its start
+            // does, so `New thread` never abuts the panel's tabs; the
+            // toggle's room is laid flush, under the frame's toggle.
+            .when(!toggle_room, |head| head.pr(px(theme::VIEW_HEAD_PAD_X)))
+            .font_family(theme::FONT_UI)
+            .text_size(px(theme::FS_UI))
+            .line_height(px(theme::LH_UI))
+            .whitespace_nowrap()
+            .children(parts)
+            .into_any_element()
+    }
+
+    /// Back and forward (`history`), each disabled at its end. Its tooltip
+    /// names the chord, as Claude's `Back ⌘[` does.
+    fn history_arrows(&self, cx: &mut Context<Self>) -> AnyElement {
+        let back = history_arrow(
+            "history-back",
+            icons::BACK,
+            "Back",
+            "cockpit::GoBack",
+            self.history.can_go_back(),
+        )
+        .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            view.step_history(-1, window, cx);
+        }));
+        let forward = history_arrow(
+            "history-forward",
+            icons::FORWARD,
+            "Forward",
+            "cockpit::GoForward",
+            self.history.can_go_forward(),
+        )
+        .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            view.step_history(1, window, cx);
+        }));
+        div()
+            .debug_selector(|| "history-arrows".into())
+            .flex()
+            .flex_shrink_0()
+            .occlude()
+            .child(back)
+            .child(forward)
+            .into_any_element()
+    }
+
+    /// The tools the focused Thread has something behind, left to right.
+    /// A draft and the empty board have none.
+    fn title_tools(&self) -> Vec<TitleTool> {
+        if self.empty_board_shown() {
+            return Vec::new();
+        }
+        let Some(thread) = self.focused_thread() else {
+            return Vec::new();
+        };
+        let checkout = self.thread_path(thread).is_some();
+        title_tools(checkout, self.on_machine(), self.grid_board())
+    }
+
+    /// The room the title tools take in a head that runs under them, for a
+    /// head whose parts sit `gap` apart: what it leaves before the panel
+    /// toggle's room. None while there are no tools.
+    pub(super) fn title_tools_room(&self, gap: f32) -> Option<Div> {
+        let tools = self.title_tools().len();
+        (tools > 0).then(|| {
+            div()
+                .flex_shrink_0()
+                .w(px(tools_width(tools) + theme::TITLE_TOOLS_GAP - gap))
+        })
+    }
+
+    /// The title-bar tools, laid by the frame at the row's right end just
+    /// before the panel toggle, so they stay put as the panel comes and
+    /// goes; the view head leaves their room while the panel is hidden.
+    pub(super) fn title_tools_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let tools = self.title_tools();
+        if tools.is_empty() || self.panel_candidate().is_none() {
+            return None;
+        }
+        let right =
+            super::panel::panel_toggle_inset() + theme::ICON_BUTTON + theme::TITLE_TOOLS_GAP;
         Some(
             div()
-                .debug_selector(|| "view-head".into())
+                .debug_selector(|| "title-tools".into())
                 .absolute()
                 .top_0()
-                .left(px(self.board_left()))
                 .right(px(right))
                 .h(px(theme::WIN_CHROME_H))
                 .flex()
                 .items_center()
-                .gap(px(theme::VIEW_HEAD_GAP))
-                .pl(px(theme::VIEW_HEAD_PAD_X))
-                // Against the panel, the head's end stands in as its start
-                // does, so `New thread` never abuts the panel's tabs; the
-                // toggle's room is laid flush, under the frame's toggle.
-                .when(!toggle_room, |head| head.pr(px(theme::VIEW_HEAD_PAD_X)))
-                .font_family(theme::FONT_UI)
-                .text_size(px(theme::FS_UI))
-                .line_height(px(theme::LH_UI))
-                .whitespace_nowrap()
-                .children(parts)
+                .gap(px(theme::TITLE_TOOLS_GAP))
+                .children(tools.into_iter().map(|tool| self.title_tool(tool, cx)))
                 .into_any_element(),
         )
+    }
+
+    fn title_tool(&self, tool: TitleTool, cx: &mut Context<Self>) -> AnyElement {
+        let (key, glyph) = match tool {
+            TitleTool::Review => ("title-review", icons::DIFF),
+            TitleTool::Reveal => ("title-reveal", icons::FOLDER),
+            TitleTool::Split => ("title-split", icons::SPLIT_RIGHT),
+        };
+        let door = crate::nav::icon_button(
+            key,
+            glyph,
+            theme::NAV_TOGGLE_GLYPH,
+            theme::ICON_BUTTON,
+            theme::R_CONTROL,
+        )
+        .occlude();
+        let door = match tool {
+            TitleTool::Review => door.tooltip(ferrite_ui::menu::action_tooltip(
+                "Review branch",
+                "palette::ReviewBranch",
+            )),
+            TitleTool::Reveal => door.tooltip(ferrite_ui::menu::tooltip("Reveal in Finder")),
+            TitleTool::Split => door.tooltip(ferrite_ui::menu::tooltip("Open a thread beside")),
+        };
+        door.on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            match tool {
+                TitleTool::Review => view.open_beside(
+                    super::beside::Beside::Review(ferrite_reviewr::model::Scope::Branch),
+                    window,
+                    cx,
+                ),
+                TitleTool::Reveal => {
+                    let path = view
+                        .focused_thread()
+                        .and_then(|thread| view.thread_path(thread));
+                    if let Some(path) = path {
+                        cx.reveal_path(&path);
+                    }
+                }
+                TitleTool::Split => view.open_palette_beside(window, cx),
+            }
+        }))
+        .into_any_element()
     }
 
     /// Solo: the focused Thread's title and its ▾, then where it works —
@@ -172,6 +314,75 @@ impl CockpitView {
     }
 }
 
+/// A title-bar tool (Claude's, where Ferrite has the surface).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TitleTool {
+    /// Claude's diff: the branch in the Review beside the Pane (⌘⇧D).
+    Review,
+    /// Claude's files: the checkout in Finder.
+    Reveal,
+    /// A Thread beside this one (the old tab strip's split-right button).
+    Split,
+}
+
+/// Which tools show: the Review and Finder need a checkout, and Finder one
+/// on this computer (a machine's is not); a board of Panes already has
+/// them side by side, so it offers no split.
+fn title_tools(checkout: bool, on_machine: bool, grid_board: bool) -> Vec<TitleTool> {
+    let mut tools = Vec::new();
+    if checkout {
+        tools.push(TitleTool::Review);
+        if !on_machine {
+            tools.push(TitleTool::Reveal);
+        }
+    }
+    if !grid_board {
+        tools.push(TitleTool::Split);
+    }
+    tools
+}
+
+/// `count` tools' doors, `TITLE_TOOLS_GAP` apart.
+fn tools_width(count: usize) -> f32 {
+    count as f32 * theme::ICON_BUTTON + count.saturating_sub(1) as f32 * theme::TITLE_TOOLS_GAP
+}
+
+/// One history arrow: the sidebar toggle's door while there is somewhere
+/// to go, else its glyph in `HISTORY_ARROW_DISABLED_INK` with no hover.
+/// The tooltip shows either way, so the chord is learnt at the ends too.
+fn history_arrow(
+    key: &'static str,
+    glyph: &'static str,
+    label: &'static str,
+    action: &'static str,
+    enabled: bool,
+) -> Stateful<Div> {
+    let door = if enabled {
+        crate::nav::icon_button(
+            key,
+            glyph,
+            theme::NAV_TOGGLE_GLYPH,
+            theme::ICON_BUTTON,
+            theme::R_CONTROL,
+        )
+    } else {
+        div()
+            .id(key)
+            .debug_selector(move || key.into())
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .size(px(theme::ICON_BUTTON))
+            .child(ferrite_ui::icons::icon(
+                glyph,
+                theme::NAV_TOGGLE_GLYPH,
+                theme::HISTORY_ARROW_DISABLED_INK,
+            ))
+    };
+    door.tooltip(ferrite_ui::menu::action_tooltip(label, action))
+}
+
 /// Where a Thread works, as the head says it: its Project, then its branch
 /// — unless the branch only repeats the Project's name, as a worktree named
 /// after its branch does (`transcript-app-style · transcript-app-style`).
@@ -229,7 +440,25 @@ fn control(button: impl IntoElement) -> AnyElement {
 
 #[cfg(test)]
 mod tests {
-    use super::place_words;
+    use super::{place_words, title_tools, TitleTool};
+
+    /// Each tool shows only with something behind it.
+    #[test]
+    fn a_title_tool_shows_only_with_its_surface() {
+        use TitleTool::*;
+        assert_eq!(title_tools(true, false, false), [Review, Reveal, Split]);
+        assert_eq!(
+            title_tools(true, true, false),
+            [Review, Split],
+            "a machine's checkout is not in this Finder"
+        );
+        assert_eq!(title_tools(false, false, false), [Split]);
+        assert_eq!(
+            title_tools(true, false, true),
+            [Review, Reveal],
+            "a board already has Panes side by side"
+        );
+    }
 
     /// components.md "Title bar": the branch shows only when it says more
     /// than the workspace's name.

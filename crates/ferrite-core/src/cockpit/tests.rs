@@ -3,6 +3,8 @@
 
 #[path = "tests/context.rs"]
 mod context;
+#[path = "tests/rewind.rs"]
+mod rewind;
 use super::*;
 use crate::cockpit::Cockpit;
 use crate::roster::{PaneIdentity, View};
@@ -35,9 +37,45 @@ struct Scripted {
     answer_later: Rc<RefCell<bool>>,
     answers: Rc<RefCell<Vec<mpsc::SyncSender<io::Result<()>>>>>,
     native_suggestion: Rc<RefCell<Option<String>>>,
+    rewinds: Rc<RefCell<Vec<crate::providers::RewindRequest>>>,
+    rewindable: Rc<RefCell<bool>>,
 }
 
 impl crate::providers::Session for Scripted {
+    fn supports_control(&self, kind: crate::ControlKind) -> bool {
+        kind == crate::ControlKind::Rewind && *self.rewindable.borrow()
+    }
+    /// Cuts in place at once, restoring one file when asked to.
+    fn rewind(
+        &mut self,
+        request: crate::providers::RewindRequest,
+    ) -> io::Result<crate::providers::RewindAck> {
+        let files = request.files.then(|| crate::providers::FilesRestored {
+            files: 1,
+            insertions: 2,
+            deletions: 3,
+        });
+        self.rewinds.borrow_mut().push(request);
+        let (answer, ack) = mpsc::sync_channel(1);
+        answer
+            .send(Ok(crate::providers::Rewound {
+                cut: crate::providers::Cut::InPlace,
+                files,
+            }))
+            .unwrap();
+        Ok(ack)
+    }
+    /// Forks afresh: the new Thread's agent starts a conversation of its own.
+    fn fork(
+        &mut self,
+        request: crate::providers::RewindRequest,
+    ) -> io::Result<crate::providers::ForkAck> {
+        self.rewinds.borrow_mut().push(request);
+        let (answer, ack) = mpsc::sync_channel(1);
+        answer.send(Ok(crate::providers::Forked::Fresh)).unwrap();
+        Ok(ack)
+    }
+
     fn enqueue(&mut self, id: &str, text: &str) -> io::Result<()> {
         self.native.borrow_mut().push((id.into(), text.into()));
         self.tx
@@ -145,6 +183,11 @@ struct Fake {
     fail_send: Rc<RefCell<bool>>,
     suggestions: Rc<RefCell<Vec<crate::suggest::Request>>>,
     native_suggestion: Rc<RefCell<Option<String>>>,
+    /// Every rewind and fork a Session was asked for.
+    rewinds: Rc<RefCell<Vec<crate::providers::RewindRequest>>>,
+    /// While set, Sessions offer rewind (`ControlKind::Rewind`): off, the
+    /// controls they announce stay what other tests pin.
+    rewindable: Rc<RefCell<bool>>,
 }
 
 impl Fake {
@@ -216,6 +259,8 @@ impl Spawner for Fake {
             answer_later: self.answer_later.clone(),
             answers: self.answers.clone(),
             native_suggestion: self.native_suggestion.clone(),
+            rewinds: self.rewinds.clone(),
+            rewindable: self.rewindable.clone(),
         }))
     }
 }

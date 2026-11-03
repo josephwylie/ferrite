@@ -263,8 +263,8 @@ fn native_file_drops_follow_the_pointer_across_panes_and_groups(cx: &mut TestApp
         );
         let image = cx
             .debug_bounds("sent-image")
-            .expect("a sent image is a thumbnail under its bubble");
-        assert!(image.top() >= bubble.bottom(), "{image:?} under {bubble:?}");
+            .expect("a sent image is a thumbnail over its bubble");
+        assert!(image.bottom() <= bubble.top(), "{image:?} over {bubble:?}");
         view.read_with(cx, |view, cx| {
             assert!(view.panes[view.focused()].composer.read(cx).is_empty());
         });

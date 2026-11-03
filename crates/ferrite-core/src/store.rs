@@ -36,6 +36,8 @@ pub(crate) mod compat_tests;
 mod durability_tests;
 #[cfg(test)]
 mod revive_tests;
+#[cfg(test)]
+mod rewind_tests;
 
 /// The schema this store writes. Every log names the schema it was written
 /// at in its header line; `load` accepts this version and every version
@@ -89,7 +91,14 @@ mod revive_tests;
 /// - **14** — `tool_summary` records (a provider's summary of the calls it
 ///   names). A v1–v13 log loads with no summaries, which is what it
 ///   recorded.
-const SCHEMA_VERSION: u32 = 14;
+/// - **15** — rewinds (docs/research/edit-rewind.md): a prompt's
+///   observation carries the id it was sent under; a `rewind` record cuts
+///   the conversation back to before the prompt it names, replay dropping
+///   that prompt and everything after it; a `resume_at` record points the
+///   next Session at an earlier entry of the provider's conversation. A
+///   v1–v14 log loads with no ids, so none of its prompts can be rewound
+///   to, and no rewinds.
+const SCHEMA_VERSION: u32 = 15;
 
 /// How far apart the store's marks sit, at least: what a peek or a reopen
 /// reads back from the end of a log to find its facts.
@@ -309,6 +318,7 @@ impl Summary {
                 self.prompted = true;
             }
             Record::ConversationReset { .. } => self.turns = 0,
+            Record::Rewind { dropped, .. } => self.turns = self.turns.saturating_sub(*dropped),
             _ => {}
         }
     }
@@ -483,6 +493,30 @@ enum Record {
     /// time.
     PromptObservation {
         sent_at: String,
+        /// Schema 15: the id the prompt was sent under, which a rewind
+        /// names it by. Absent from older logs and for a prompt whose
+        /// provider took no id: neither can be rewound to.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt_id: Option<String>,
+    },
+    /// Schema 15: the conversation went back to before the prompt whose
+    /// observation carries `prompt`. Replay drops that prompt and every
+    /// line after it up to here; the log itself stays append-only.
+    /// `dropped` is how many prompts went, for the turn count.
+    Rewind {
+        prompt: String,
+        dropped: u64,
+    },
+    /// Schema 15: the conversation the next Session resumes, when it is
+    /// not the one the last Init named (`ResumePoint`): the provider's
+    /// `session`, at its entry `at` rather than at its end, forked into a
+    /// conversation of its own when `fork`.
+    ResumeAt {
+        session: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        fork: bool,
     },
     Closed {
         reason: String,
@@ -556,8 +590,13 @@ impl LogRecord {
         Some(Self(match input {
             Input::Event(event) => Record::from_event(event, duration)?,
             Input::Prompt(text) => Record::Prompt { text: text.clone() },
-            Input::PromptObservation { sent_at } => Record::PromptObservation {
+            Input::PromptObservation { sent_at, prompt_id } => Record::PromptObservation {
                 sent_at: sent_at.clone(),
+                prompt_id: prompt_id.clone(),
+            },
+            Input::Rewind { prompt, dropped } => Record::Rewind {
+                prompt: prompt.clone(),
+                dropped: *dropped,
             },
             Input::CompletionObservation {
                 elapsed_ms,
@@ -587,7 +626,7 @@ impl LogRecord {
     /// (facts and marks), which a reader skips.
     pub fn input(&self) -> Option<Input> {
         match &self.0 {
-            Record::Facts { .. } | Record::Mark { .. } => None,
+            Record::Facts { .. } | Record::Mark { .. } | Record::ResumeAt { .. } => None,
             record => Some(record.input()),
         }
     }
@@ -1373,8 +1412,13 @@ impl Record {
                 input_tokens: *input_tokens,
                 output_tokens: *output_tokens,
             },
-            Record::PromptObservation { sent_at } => Input::PromptObservation {
+            Record::PromptObservation { sent_at, prompt_id } => Input::PromptObservation {
                 sent_at: sent_at.clone(),
+                prompt_id: prompt_id.clone(),
+            },
+            Record::Rewind { prompt, dropped } => Input::Rewind {
+                prompt: prompt.clone(),
+                dropped: *dropped,
             },
             Record::ReasoningSummary {
                 text,
@@ -1420,6 +1464,9 @@ impl Record {
             Record::Facts { .. } | Record::Mark { .. } => {
                 unreachable!("the store's bookkeeping is folded when a log is read")
             }
+            Record::ResumeAt { .. } => {
+                unreachable!("a resume point is the next Session's, never replayed")
+            }
         }
     }
 
@@ -1434,6 +1481,8 @@ impl Record {
                     | Record::CompletionObservation { .. }
                     | Record::Closed { .. }
                     | Record::Handover { .. }
+                    | Record::Rewind { .. }
+                    | Record::ResumeAt { .. }
             )
     }
 
@@ -2514,6 +2563,71 @@ impl Store {
             base: None,
         };
         Ok((id, self.writer_on(id, file, tail)))
+    }
+
+    /// A new Thread holding `source`'s conversation since its last reset
+    /// up to the prompt `prompt` names, without it: `source`'s facts but
+    /// its title, and its records but the provider conversation ids they
+    /// name — the fork takes up `native` instead, or starts afresh. The
+    /// source's writer must have flushed what the fork is to hold.
+    pub fn fork(
+        &self,
+        source: ThreadId,
+        prompt: &str,
+        native: Option<&ResumePoint>,
+    ) -> Result<ThreadId, LoadError> {
+        let snapshot = self.load(source)?;
+        let records = &snapshot.records;
+        let observed = records
+            .iter()
+            .rposition(|record| {
+                matches!(record, Record::PromptObservation { prompt_id: Some(id), .. } if id == prompt)
+            })
+            .ok_or_else(|| io::Error::other("that prompt is not in the Thread's log"))?;
+        let cut = records[..observed]
+            .iter()
+            .rposition(|record| matches!(record, Record::Prompt { .. }))
+            .unwrap_or(observed);
+        let start = records[..cut]
+            .iter()
+            .rposition(|record| {
+                matches!(
+                    record,
+                    Record::ConversationReset { .. } | Record::Handover { .. }
+                )
+            })
+            .map_or(0, |at| at + 1);
+        let facts = Facts {
+            title: None,
+            ..snapshot.facts()
+        };
+        let binding = facts
+            .workspace
+            .as_ref()
+            .map(PersistedBinding::live)
+            .ok_or_else(|| io::Error::other("the Thread records no checkout to fork into"))?;
+        let (id, writer) = self.create_with_model(
+            facts.provider,
+            facts.model.clone(),
+            facts.project_id,
+            binding,
+        )?;
+        let mut state = writer.lock();
+        state.commit(Record::Facts { facts })?;
+        for record in &records[start..cut] {
+            if !matches!(record, Record::Init { .. } | Record::ResumeAt { .. }) {
+                state.push(record.clone())?;
+            }
+        }
+        if let Some(point) = native {
+            state.push(Record::ResumeAt {
+                session: point.session.clone(),
+                at: point.at.clone(),
+                fork: point.fork,
+            })?;
+        }
+        state.flush_fully()?;
+        Ok(id)
     }
 
     /// Take the next Thread id and its directory. Ids are never reused: the
@@ -3662,6 +3776,17 @@ impl ExchangeRead {
     }
 }
 
+/// Where the next Session takes up a provider conversation
+/// (`ThreadSnapshot::resume_at`): `session`, at its entry `at` when not at
+/// its end (Claude's `--resume-session-at`), forked into a conversation of
+/// its own when `fork` (`--fork-session`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumePoint {
+    pub session: String,
+    pub at: Option<String>,
+    pub fork: bool,
+}
+
 /// The last provider switch a log records, and what the next prompt on
 /// the new provider owes it.
 pub(crate) struct Handover {
@@ -3812,6 +3937,7 @@ impl ThreadSnapshot {
         self.records.iter().rev().find_map(|record| match record {
             Record::Init { session_id, .. } => Some(Some(session_id.as_str())),
             Record::ConversationReset { session_id } => Some(Some(session_id.as_str())),
+            Record::ResumeAt { session, .. } => Some(Some(session.as_str())),
             Record::Handover { .. } => Some(None),
             _ => None,
         })?
@@ -3863,6 +3989,9 @@ impl ThreadSnapshot {
         for record in &self.records[after_reset..at] {
             match record {
                 Record::Prompt { text } => exchanges.push((text.clone(), AnswerText::default())),
+                Record::Rewind { dropped, .. } => {
+                    exchanges.truncate(exchanges.len().saturating_sub(*dropped as usize))
+                }
                 Record::Text { text } => {
                     if let Some((_, answer)) = exchanges.last_mut() {
                         answer.parts.push(text.clone());
@@ -3901,7 +4030,7 @@ impl ThreadSnapshot {
                     outcome: outcome.live(),
                     cost_usd: *cost_usd,
                 })),
-                Record::Activity { .. } => None,
+                Record::Activity { .. } | Record::ResumeAt { .. } => None,
                 _ => Some(record.input()),
             })
             .collect()
@@ -3915,6 +4044,7 @@ impl ThreadSnapshot {
         let mut inputs: Vec<_> = self
             .records
             .iter()
+            .filter(|record| !matches!(record, Record::ResumeAt { .. }))
             .map(|record| match record {
                 Record::Activity { observation } => ActivityInput::ReplayEvent(observation.live()),
                 _ => ActivityInput::Replay(record.input()),
@@ -3981,13 +4111,47 @@ impl ThreadSnapshot {
             .rposition(|record| matches!(record, Record::ConversationReset { .. }))
             .map(|index| index + 1)
             .unwrap_or(0);
-        self.records[after_reset..]
-            .iter()
-            .filter_map(|record| match record {
-                Record::Prompt { text } => Some(text.clone()),
-                _ => None,
-            })
-            .collect()
+        let mut prompts = Vec::new();
+        for record in &self.records[after_reset..] {
+            match record {
+                Record::Prompt { text } => prompts.push(text.clone()),
+                Record::Rewind { dropped, .. } => {
+                    prompts.truncate(prompts.len().saturating_sub(*dropped as usize))
+                }
+                _ => {}
+            }
+        }
+        prompts
+    }
+
+    /// Where the next Session resumes the provider's conversation when not
+    /// at its end: the newest resume point not yet taken. A fork's is taken
+    /// by the Init of the conversation it forked; an in-place one by the
+    /// next prompt, which branches the conversation there for good.
+    pub fn resume_at(&self) -> Option<ResumePoint> {
+        let mut started = false;
+        for record in self.records.iter().rev() {
+            match record {
+                Record::ResumeAt {
+                    session,
+                    at: Some(at),
+                    fork,
+                } if !(started && *fork) => {
+                    return Some(ResumePoint {
+                        session: session.clone(),
+                        at: Some(at.clone()),
+                        fork: *fork,
+                    })
+                }
+                Record::ResumeAt { .. }
+                | Record::Prompt { .. }
+                | Record::ConversationReset { .. }
+                | Record::Handover { .. } => return None,
+                Record::Init { .. } => started = true,
+                _ => {}
+            }
+        }
+        None
     }
 }
 
@@ -4043,9 +4207,31 @@ impl ThreadWriter {
         self.lock().record_prompt(text)
     }
 
-    /// Buffer when the prompt just recorded was sent (`7:31 pm`).
-    pub fn record_prompt_observation(&mut self, sent_at: &str) -> io::Result<()> {
-        self.lock().record_prompt_observation(sent_at)
+    /// Buffer when the prompt just recorded was sent (`7:31 pm`), and the
+    /// id it was sent under when its provider took one.
+    pub fn record_prompt_observation(
+        &mut self,
+        sent_at: &str,
+        prompt_id: Option<&str>,
+    ) -> io::Result<()> {
+        self.lock().record_prompt_observation(sent_at, prompt_id)
+    }
+
+    /// Record a rewind to before the prompt `prompt` names, which took
+    /// `dropped` prompts: on disk before this answers, with a mark after
+    /// it, so no reopen starts a replay from a turn the rewind dropped.
+    pub fn record_rewind(&mut self, prompt: &str, dropped: u64) -> io::Result<()> {
+        self.lock().record_rewind(prompt, dropped)
+    }
+
+    /// Point the next Session at `point` (`ThreadSnapshot::resume_at`);
+    /// on disk before this answers.
+    pub fn record_resume_at(&mut self, point: &ResumePoint) -> io::Result<()> {
+        self.lock().commit(Record::ResumeAt {
+            session: point.session.clone(),
+            at: point.at.clone(),
+            fork: point.fork,
+        })
     }
 
     /// Record a provider switch the old way: a handover carrying no facts.
@@ -4323,10 +4509,26 @@ impl WriterState {
 
     /// Buffer when the prompt just recorded was sent (`7:31 pm`), so replay
     /// draws the time it was sent rather than none.
-    pub fn record_prompt_observation(&mut self, sent_at: &str) -> io::Result<()> {
+    pub fn record_prompt_observation(
+        &mut self,
+        sent_at: &str,
+        prompt_id: Option<&str>,
+    ) -> io::Result<()> {
         self.push(Record::PromptObservation {
             sent_at: sent_at.into(),
+            prompt_id: prompt_id.map(str::to_string),
         })
+    }
+
+    fn record_rewind(&mut self, prompt: &str, dropped: u64) -> io::Result<()> {
+        self.push(Record::Rewind {
+            prompt: prompt.into(),
+            dropped,
+        })?;
+        // A base a mark named may be a turn this dropped: none until the
+        // tracker finds one after it, and a mark saying so now.
+        self.inherited = None;
+        self.flush_fully()
     }
 
     /// Record a provider switch after the first prompt: a boundary, so it
@@ -5784,7 +5986,7 @@ mod tests {
         let store = Store::open(&dir).unwrap();
         let (id, mut writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
         writer.record_prompt("apply it").unwrap();
-        writer.record_prompt_observation("7:31 pm").unwrap();
+        writer.record_prompt_observation("7:31 pm", None).unwrap();
         writer
             .record_event(
                 &SessionEvent::TurnEnded {

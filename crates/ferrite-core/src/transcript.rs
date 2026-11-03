@@ -38,6 +38,10 @@ pub struct Block {
     /// live and on replay alike. `None` for every other Block and for a
     /// prompt from a log written before the time was kept.
     pub sent_at: Option<String>,
+    /// The prompt's own id (`Input::PromptObservation`), which a rewind
+    /// names it by: `None` for every other Block and for a prompt sent
+    /// before Ferrite kept one, which cannot be rewound to.
+    pub prompt_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -629,6 +633,16 @@ pub enum Input {
     /// value; a log from before it was kept draws no time.
     PromptObservation {
         sent_at: String,
+        /// The id the prompt was sent under (Claude's message uuid), from
+        /// the prompt ids' first release on; `None` in older logs.
+        prompt_id: Option<String>,
+    },
+    /// The conversation went back to before the prompt `prompt` names:
+    /// that prompt and everything after it are gone (`truncate_from`).
+    /// `dropped` counts the prompts it took, for the log's turn count.
+    Rewind {
+        prompt: String,
+        dropped: u64,
     },
 }
 
@@ -1361,9 +1375,12 @@ impl Transcript {
         if let Some(call) = started {
             self.settle_orphan(&call, &mut update);
         }
-        update.evicted = self.evict();
-        if !update.evicted.is_empty() {
+        // What the fold cut (a rewind) stays evicted beside what the limit
+        // trims.
+        let trimmed = self.evict();
+        if !trimmed.is_empty() {
             self.forget_evicted();
+            update.evicted.extend(trimmed);
         }
         update
     }
@@ -1388,6 +1405,38 @@ impl Transcript {
         if self.blocks.is_empty() {
             self.thinking_open = false;
         }
+        self.forget_evicted();
+        self.advance_revision();
+        Update {
+            evicted,
+            ..Update::default()
+        }
+    }
+
+    /// Drop the prompt `prompt` names and every Block after it: a rewind.
+    /// A prompt no longer here fell away with the oldest Blocks, so all
+    /// that remains came after it and goes too. What the dropped turns
+    /// left behind — their diff, their outcome, an open section or
+    /// thought — goes with them; the next prompt starts clean.
+    pub fn truncate_from(&mut self, prompt: &str) -> Update {
+        let start = self
+            .blocks
+            .iter()
+            .rposition(|block| block.prompt_id.as_deref() == Some(prompt))
+            .unwrap_or(0);
+        let evicted: Vec<BlockId> = self.blocks.drain(start..).map(|block| block.id).collect();
+        if evicted.is_empty() {
+            return Update::default();
+        }
+        let cut = evicted[0];
+        self.reasoning_parts.retain(|_, id| *id < cut);
+        self.section.clear();
+        self.thinking_open = false;
+        self.thought = None;
+        self.latest_reasoning_part = None;
+        self.orphan_results.clear();
+        self.turn_diff = None;
+        self.turn_outcome = None;
         self.forget_evicted();
         self.advance_revision();
         Update {
@@ -1466,7 +1515,7 @@ impl Transcript {
                     ..Update::default()
                 }
             }
-            Input::PromptObservation { sent_at } => {
+            Input::PromptObservation { sent_at, prompt_id } => {
                 // The prompt it was recorded right after: the latest one.
                 let Some(block) = self
                     .blocks
@@ -1476,15 +1525,19 @@ impl Transcript {
                 else {
                     return Update::default();
                 };
-                if block.sent_at.as_deref() == Some(sent_at.as_str()) {
+                if block.sent_at.as_deref() == Some(sent_at.as_str())
+                    && block.prompt_id == prompt_id
+                {
                     return Update::default();
                 }
                 block.sent_at = Some(sent_at);
+                block.prompt_id = prompt_id;
                 Update {
                     dirty: vec![block.id],
                     ..Update::default()
                 }
             }
+            Input::Rewind { prompt, .. } => self.truncate_from(&prompt),
             Input::Event(SessionEvent::ReasoningSummaryPart {
                 item_id,
                 summary_index,
@@ -2399,6 +2452,7 @@ impl Transcript {
             markdown: None,
             markdown_run: None,
             sent_at: None,
+            prompt_id: None,
         });
         self.section.clear();
         id
@@ -2827,6 +2881,45 @@ mod tests {
         assert_eq!(end.text(), "12s \u{b7} 620 tokens");
     }
 
+    /// A rewind takes its prompt and everything after it; the turns before
+    /// it stay as they were, ids and all.
+    #[test]
+    fn a_rewind_drops_its_prompt_and_everything_after_it() {
+        let mut transcript = Transcript::default();
+        let turn = |transcript: &mut Transcript, prompt: &str, id: &str, answer: &str| {
+            transcript.apply(Input::Prompt(prompt.into()));
+            transcript.apply(Input::PromptObservation {
+                sent_at: "7:18 pm".into(),
+                prompt_id: Some(id.into()),
+            });
+            transcript.apply(Input::Event(SessionEvent::TextDelta {
+                text: format!("{answer}\n\n"),
+            }));
+            transcript.apply(Input::Event(SessionEvent::TurnEnded {
+                outcome: crate::TurnOutcome::Completed,
+                cost_usd: None,
+            }));
+        };
+        turn(&mut transcript, "first", "p1", "one");
+        let kept: Vec<_> = transcript.blocks().iter().map(|block| block.id).collect();
+        turn(&mut transcript, "second", "p2", "two");
+        turn(&mut transcript, "third", "p3", "three");
+        let update = transcript.apply(Input::Rewind {
+            prompt: "p2".into(),
+            dropped: 2,
+        });
+        let left: Vec<_> = transcript.blocks().iter().map(|block| block.id).collect();
+        assert_eq!(left, kept);
+        assert!(!update.evicted.is_empty());
+        assert!(update.evicted.iter().all(|id| !kept.contains(id)));
+        // One no longer here went with the oldest: everything left is after it.
+        transcript.apply(Input::Rewind {
+            prompt: "gone".into(),
+            dropped: 1,
+        });
+        assert!(transcript.blocks().is_empty());
+    }
+
     /// CT-3: a prompt's send time rides the observation recorded after it;
     /// a prompt with none draws no time, never a fresh clock.
     #[test]
@@ -2836,6 +2929,7 @@ mod tests {
         assert_eq!(transcript.blocks()[0].sent_at, None);
         let update = transcript.apply(Input::PromptObservation {
             sent_at: "7:18 pm".into(),
+            prompt_id: None,
         });
         assert_eq!(update.dirty, vec![transcript.blocks()[0].id]);
         assert_eq!(transcript.blocks()[0].sent_at.as_deref(), Some("7:18 pm"));
@@ -2853,6 +2947,7 @@ mod tests {
         transcript.apply(Input::Prompt("second".into()));
         transcript.apply(Input::PromptObservation {
             sent_at: "7:31 pm".into(),
+            prompt_id: None,
         });
         let prompts: Vec<_> = transcript
             .blocks()

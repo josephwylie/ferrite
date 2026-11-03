@@ -857,8 +857,6 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
         .with_link(rgb(theme::LINK_INK).into())
         .with_link_underline(Some(rgb(theme::LINK_INK).into()))
         .with_link_underline_on_hover(false)
-        // A column of numbers reads right-aligned, as a terminal table does.
-        .with_numeric_columns_right(true)
         // An image in an answer sits in the prompt image's frame:
         // `IMAGE_CELLS` wide at the prose's size, a 1px `LINE` edge.
         .with_image(
@@ -909,8 +907,9 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
         .with_inline_code_font(Some(theme::FONT_CODE.into()))
         .with_inline_code_wash(Some(inline_code_wash()))
         // A table runs the full column (Claude's and Codex's), its columns
-        // shared by their content; its rules, the head's and the rows', are
-        // the one `LINE`.
+        // shared by their content, every one left-aligned as Claude's are —
+        // numbers too, unless the table's own `---:` asks otherwise; its
+        // rules, the head's and the rows', are the one `LINE`.
         .with_border(theme::paint::LINE.into())
         .with_table({
             // No box and no ground.

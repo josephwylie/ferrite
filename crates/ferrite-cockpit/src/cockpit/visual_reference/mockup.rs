@@ -709,8 +709,6 @@ const CRASH_FIX_CONTEXT: [(&str, u64); 5] = [
 fn context(categories: &[(&str, u64)]) -> SessionEvent {
     SessionEvent::ContextDetails {
         details: ferrite_core::ContextDetails {
-            usable_window: None,
-            auto_compact_threshold: None,
             is_auto_compact_enabled: None,
             categories: categories
                 .iter()
@@ -719,6 +717,7 @@ fn context(categories: &[(&str, u64)]) -> SessionEvent {
                     tokens: *tokens,
                 })
                 .collect(),
+            ..Default::default()
         },
     }
 }

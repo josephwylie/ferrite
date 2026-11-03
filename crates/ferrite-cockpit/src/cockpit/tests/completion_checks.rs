@@ -493,7 +493,7 @@ fn small_tool_output_copies_blank_lines_and_trailing_spaces_exactly(cx: &mut Tes
         })
         .unwrap();
     tick(cx);
-    // Open the call: its shell card holds what it printed, exactly.
+    // Open the call: its open body holds what it printed, exactly.
     view.update(cx, |view, cx| {
         view.panes[0].toggle_tool(&pane::DisclosureId::Tool("exact".into()));
         cx.notify();

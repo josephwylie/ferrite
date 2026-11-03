@@ -465,7 +465,8 @@ fn caption_of(
 }
 
 /// The call the turn runs now: its newest running call, looked for in the
-/// current turn only (back to its prompt).
+/// current turn only (back to its prompt). Not an agent: its own row in
+/// the agents' card runs with it, and the line never says a row twice.
 fn running_call(transcript: &Transcript) -> Option<&ToolBlock> {
     transcript
         .blocks()
@@ -473,7 +474,9 @@ fn running_call(transcript: &Transcript) -> Option<&ToolBlock> {
         .rev()
         .take_while(|block| !matches!(block.body, Body::Prompt(_)))
         .find_map(|block| match &block.body {
-            Body::Tool(tool) if tool.state == ToolState::Running => Some(tool),
+            Body::Tool(tool) if tool.state == ToolState::Running && !super::is_agent(tool) => {
+                Some(tool)
+            }
             _ => None,
         })
 }

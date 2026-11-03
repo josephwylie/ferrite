@@ -366,3 +366,43 @@ fn the_context_section_reads_the_shown_threads_context(cx: &mut TestAppContext) 
     assert!(cx.debug_bounds("panel-context").is_some());
     assert!(cx.debug_bounds("panel-no-context").is_none());
 }
+
+/// Connectors folds, as Claude's: its head says how many are connected,
+/// and a press on it opens the servers' lines, and shuts them again.
+#[gpui::test]
+fn connectors_fold_under_their_count(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("panel-connectors", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    own_settings(&view, "panel-connectors", cx);
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    let server = |name: &str, status| ferrite_core::McpServer {
+        name: name.into(),
+        status,
+        error: None,
+    };
+    fake.streams.borrow()[0]
+        .send(SessionEvent::McpServers {
+            servers: vec![
+                server("github", ferrite_core::McpStatus::Connected),
+                server("linear", ferrite_core::McpStatus::NeedsAuth),
+            ],
+        })
+        .unwrap();
+    tick(cx);
+    let head = cx
+        .debug_bounds("panel-connectors-head")
+        .expect("Connectors, with a server");
+    assert!(
+        cx.debug_bounds("panel-connector-0").is_none(),
+        "folded at first"
+    );
+    cx.simulate_click(head.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("panel-connector-0").is_some());
+    assert!(cx.debug_bounds("panel-connector-1").is_some());
+    cx.simulate_click(head.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("panel-connector-0").is_none(), "shut again");
+}

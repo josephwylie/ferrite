@@ -89,6 +89,8 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         // The system's own verbs: the menu bar spells them.
         "ferrite::Hide" | "ferrite::HideOthers" | "ferrite::Minimize" => Hidden,
         // The board.
+        "cockpit::GoBack" => Row(Board, "Back"),
+        "cockpit::GoForward" => Row(Board, "Forward"),
         "cockpit::NextPane" => Row(Board, "Next pane"),
         "cockpit::PreviousPane" => Row(Board, "Previous pane"),
         "cockpit::FocusThread1" => Row(Board, "Focus pane 1\u{2013}9"),

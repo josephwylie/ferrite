@@ -43,10 +43,9 @@ fn the_solo_thread_is_named_by_the_view_head_and_meters_no_plan(cx: &mut TestApp
         head.bottom() <= px(ferrite_ui::theme::WIN_CHROME_H),
         "in the head row"
     );
-    // The plan reads in the task list alone, and a lone `Main` tab costs
-    // no strip.
+    // The plan reads in the task list alone, and Main wears no strip.
     assert!(cx.debug_bounds("tasks-meter-1").is_none(), "no plan meter");
-    assert!(cx.debug_bounds("pane-tabs-1").is_none(), "no tab strip");
+    assert!(cx.debug_bounds("pane-subagent-1").is_none(), "no strip");
     assert!(
         cx.debug_bounds("ci-mark-1").is_none(),
         "no PR/CI chip in the chrome"

@@ -37,6 +37,8 @@ enum Carry {
     Prompt,
     /// A conversation reset: recall starts again.
     Reset,
+    /// A rewind: recall loses the prompts it dropped.
+    Rewind(u64),
     /// A full task (or background) list: the deltas before it are spent.
     Snapshot(&'static str),
     /// A task (or background) delta, folded onto the newest snapshot.
@@ -84,8 +86,10 @@ fn classify(record: &Record) -> Carry {
         Record::TurnEnded { .. } => latest("turn_ended"),
         Record::TurnDiff { .. } => latest("turn_diff"),
         Record::Closed { .. } => latest("closed"),
+        Record::ResumeAt { .. } => latest("resume_at"),
         Record::Progress { event } => progress(event),
         Record::Prompt { .. } => Carry::Prompt,
+        Record::Rewind { dropped, .. } => Carry::Rewind(*dropped),
         Record::Activity { observation } => match observation {
             PersistedActivity::MainContent { event, .. } => match event {
                 Execution::Progress { event } => progress(event),
@@ -122,7 +126,7 @@ fn classify(record: &Record) -> Carry {
 /// a base must have at least twice the Main budget of this after it.
 pub(super) fn main_cost(record: &Record) -> u64 {
     let input = match record {
-        Record::Facts { .. } | Record::Mark { .. } => return 0,
+        Record::Facts { .. } | Record::Mark { .. } | Record::ResumeAt { .. } => return 0,
         Record::Activity { observation } => match observation {
             // A retraction removes content; it adds none.
             PersistedActivity::MainContent {
@@ -220,6 +224,8 @@ impl Tracker {
                         ..
                     },
             } => self.busy = false,
+            // Every turn start so far may be one it dropped.
+            Record::Rewind { .. } => self.candidates.clear(),
             _ => {}
         }
         self.cost += main_cost(record);
@@ -233,6 +239,9 @@ impl Tracker {
             }
             Carry::Identity => self.identity.push(at),
             Carry::Prompt => self.prompts.push(at),
+            Carry::Rewind(dropped) => self
+                .prompts
+                .truncate(self.prompts.len().saturating_sub(dropped as usize)),
             Carry::Reset => {
                 self.prompts.clear();
                 self.slots.insert(Slot::Latest("reset"), at);

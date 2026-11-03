@@ -13,7 +13,7 @@ use crate::{
 };
 
 /// Every control a Session may offer, in the order the windows list them.
-const CONTROLS: [ControlKind; 8] = [
+const CONTROLS: [ControlKind; 9] = [
     ControlKind::RefreshContext,
     ControlKind::RefreshMcp,
     ControlKind::ReconnectMcp,
@@ -22,6 +22,7 @@ const CONTROLS: [ControlKind; 8] = [
     ControlKind::StopTask,
     ControlKind::BackgroundTasks,
     ControlKind::SetPermissionMode,
+    ControlKind::Rewind,
 ];
 
 #[derive(Default, PartialEq, serde::Serialize, serde::Deserialize)]

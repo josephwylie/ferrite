@@ -46,6 +46,7 @@ mod history;
 mod launch_args;
 mod parked;
 mod queue;
+mod rewind;
 mod threads;
 mod windows;
 
@@ -97,6 +98,10 @@ pub struct SpawnRequest<'a> {
     /// The provider-native id of a Thread being revived, which the provider
     /// reloads its own history from.
     pub resume: Option<&'a str>,
+    /// With `resume`: where in that conversation to take it up, when not
+    /// at its end, and whether as a fork of it (a rewind or a fork the
+    /// provider could not make in place).
+    pub resume_at: Option<&'a crate::store::ResumePoint>,
     /// The permission mode the Thread's last agent ran in, in the
     /// provider's own word (ADR 0032). `None` is the operator's default for
     /// the provider (Settings).
@@ -658,6 +663,12 @@ struct Thread {
     /// Its state may differ from what its windows were last told
     /// (`Threads`).
     state_changed: bool,
+    /// Where the next Session takes up the conversation when not at the
+    /// end `resume` names: a rewind or a fork its provider could not make
+    /// in place (`ThreadSnapshot::resume_at`).
+    resume_at: Option<crate::store::ResumePoint>,
+    /// A rewind or fork asked of its agent and not yet answered.
+    rewinding: Option<rewind::Rewinding>,
 }
 
 impl Thread {
@@ -721,6 +732,8 @@ impl Thread {
             agent_args: None,
             project: None,
             state_changed: true,
+            resume_at: None,
+            rewinding: None,
         };
         if let Some(notice) = state.native_queue.take_unreadable() {
             state.apply(Input::Notice(notice));
@@ -1414,6 +1427,7 @@ impl Engine {
                 model: thread.model.as_deref(),
                 effort: thread.effort.as_deref(),
                 resume: resume.as_deref(),
+                resume_at: thread.resume_at.as_ref(),
                 permission_mode: thread.announced.permission_mode(),
                 cwd: cwd.as_deref(),
                 name: thread.title.as_deref(),
@@ -1619,6 +1633,7 @@ impl Engine {
             model: model.as_deref(),
             effort: effort.as_deref(),
             resume: resume.as_deref(),
+            resume_at: None,
             permission_mode: None,
             cwd: workspace::effective_cwd(None, Some(&binding)),
             name: None,
@@ -1962,6 +1977,7 @@ impl Engine {
                     model: model.as_deref(),
                     effort: effort.as_deref(),
                     resume,
+                    resume_at: None,
                     // Another Provider's word means nothing to the next.
                     permission_mode: (provider == state.provider)
                         .then(|| state.announced.permission_mode())
@@ -2377,6 +2393,7 @@ impl Engine {
             state.carry = Some(carry_digest(handover.from, &handover.exchanges));
         }
         state.prompt_history = PromptHistory::new(revival.snapshot().prompt_texts());
+        state.resume_at = revival.snapshot().resume_at();
         state.first_prompt_sent = revival.prompted();
         state.read_back(revival.activity_inputs());
         for kept in self.store.pending_records(thread) {
@@ -2550,6 +2567,7 @@ impl Engine {
                 model: state.model.as_deref(),
                 effort: state.effort.as_deref(),
                 resume: state.resume.as_deref(),
+                resume_at: state.resume_at.as_ref(),
                 permission_mode: state.announced.permission_mode(),
                 cwd: cwd.as_deref(),
                 name: state.title.as_deref(),
@@ -3249,12 +3267,17 @@ impl Engine {
                         } else {
                             thread.invalidate_suggestion();
                             let sent_at = crate::clock::now_label();
-                            if let Err(error) = thread.writer.record_prompt_observation(&sent_at) {
+                            let prompt_id = change.client_id.clone();
+                            if let Err(error) = thread
+                                .writer
+                                .record_prompt_observation(&sent_at, prompt_id.as_deref())
+                            {
                                 thread.report_store_error(error);
                             }
                             let applied = thread.apply(Input::Prompt(text));
                             update.dirty.extend(applied.dirty);
-                            let stamped = thread.apply(Input::PromptObservation { sent_at });
+                            let stamped =
+                                thread.apply(Input::PromptObservation { sent_at, prompt_id });
                             update.dirty.extend(stamped.dirty);
                         }
                     }
@@ -3488,6 +3511,7 @@ impl Engine {
         // After the walk: whatever the provider said before its answer to a
         // setting change is in the transcript ahead of the change's line.
         frame.extend(self.settle_tuning());
+        frame.extend(self.settle_rewinds());
         // After the walk: a Thread settles on the frame its last event lands.
         self.end_unused_sessions();
         // A landed prediction changes only the Composer's idle line, so it
@@ -5400,7 +5424,14 @@ fn deliver(state: &mut Thread, text: String, suggestions_enabled: bool) -> io::R
         wire.insert_str(operator, &format!("{carry}\n\n"));
     }
     session.set_suggestions_enabled(suggestions_enabled)?;
-    session.send(&wire)?;
+    // The id it goes under: what a rewind or a fork names it by.
+    let prompt_id = client_id(state.generation);
+    session.send_as(&prompt_id, &wire)?;
+    // An in-place resume point is taken by the first prompt after it: the
+    // conversation branches there for good.
+    if state.resume_at.as_ref().is_some_and(|point| !point.fork) {
+        state.resume_at = None;
+    }
     state.invalidate_suggestion();
     state.carry = None;
     // The Session's first prompt has gone out; every later one is bare.
@@ -5412,14 +5443,22 @@ fn deliver(state: &mut Thread, text: String, suggestions_enabled: bool) -> io::R
     if let Err(error) = state.writer.record_prompt(&text) {
         state.report_store_error(error);
     }
-    if let Err(error) = state.writer.record_prompt_observation(&sent_at) {
+    if let Err(error) = state
+        .writer
+        .record_prompt_observation(&sent_at, Some(&prompt_id))
+    {
         state.report_store_error(error);
     }
     state.prompt_history.append(text.clone());
     let mut update = state.apply(Input::Prompt(text));
-    update
-        .dirty
-        .extend(state.apply(Input::PromptObservation { sent_at }).dirty);
+    update.dirty.extend(
+        state
+            .apply(Input::PromptObservation {
+                sent_at,
+                prompt_id: Some(prompt_id),
+            })
+            .dirty,
+    );
     Ok(update)
 }
 
@@ -5751,7 +5790,13 @@ fn fold(state: &mut Thread, event: &SessionEvent) {
         | SessionEvent::Models { .. }
         | SessionEvent::PermissionMode { .. }
         | SessionEvent::McpServers { .. } => state.announced.hear(event),
-        SessionEvent::Init { session_id, .. } => state.resume = Some(session_id.clone()),
+        SessionEvent::Init { session_id, .. } => {
+            state.resume = Some(session_id.clone());
+            // A fork's resume point is taken by the conversation it made.
+            if state.resume_at.as_ref().is_some_and(|point| point.fork) {
+                state.resume_at = None;
+            }
+        }
         SessionEvent::ScheduledWork { pending } => state.scheduled_work = *pending,
         SessionEvent::ConversationReset { session_id } => {
             state.resume = Some(session_id.clone());

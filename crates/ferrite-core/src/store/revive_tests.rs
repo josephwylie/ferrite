@@ -142,10 +142,9 @@ fn write_thread(store: &Store, seed: u64, turns: usize) -> ThreadId {
                         },
                         _ => SessionEvent::ContextDetails {
                             details: crate::ContextDetails {
-                                usable_window: Some(rng.below(100_000)),
-                                auto_compact_threshold: None,
                                 is_auto_compact_enabled: Some(true),
                                 categories: vec![],
+                                ..Default::default()
                             },
                         },
                     },

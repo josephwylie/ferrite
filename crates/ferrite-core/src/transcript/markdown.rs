@@ -418,6 +418,7 @@ fn write(
         markdown: Some(source.to_string()),
         markdown_run: Some(markdown_run),
         sent_at: None,
+        prompt_id: None,
     });
     *open_id = Some(id);
     Some(id)

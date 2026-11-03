@@ -1086,11 +1086,13 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     name: name.into(),
                     tokens,
                 };
+                let item = |name: &str, tokens| ferrite_core::ContextItem {
+                    name: name.into(),
+                    tokens,
+                };
                 for event in [
                     SessionEvent::ContextDetails {
                         details: ferrite_core::ContextDetails {
-                            usable_window: Some(167_000),
-                            auto_compact_threshold: Some(155_000),
                             is_auto_compact_enabled: Some(true),
                             categories: vec![
                                 category("Messages", 38_400),
@@ -1098,7 +1100,19 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                                 category("MCP tools", 6_200),
                                 category("System prompt", 3_400),
                                 category("Memory files", 1_200),
+                                category("Autocompact buffer", 33_000),
                                 category("Free space", 103_600),
+                                category("MCP tools (deferred)", 9_000),
+                            ],
+                            mcp_tools: vec![
+                                item("mcp__github__create_pull_request", 1_900),
+                                item("mcp__github__get_issue", 1_100),
+                                item("mcp__linear__list_issues", 1_800),
+                            ],
+                            skills: vec![item("release-notes", 1_300)],
+                            memory_files: vec![
+                                item("/Users/demo/.claude/CLAUDE.md", 400),
+                                item("/Users/demo/work/ferrite/CLAUDE.md", 800),
                             ],
                         },
                     },
@@ -1125,7 +1139,6 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let setup: Setup = Box::new(|view, _, cx| {
                 let thread = view.panes[0].thread().expect("a Thread Pane");
                 view.open_panel(thread, cx);
-                view.context_usage_expanded = true;
             });
             (scene, setup)
         }

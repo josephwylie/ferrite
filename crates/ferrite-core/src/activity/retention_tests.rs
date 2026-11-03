@@ -159,6 +159,7 @@ fn main_input(rng: &mut Rng) -> Input {
             } else {
                 Input::PromptObservation {
                     sent_at: format!("7:{:02} pm", rng.below(60)),
+                    prompt_id: None,
                 }
             }
         }

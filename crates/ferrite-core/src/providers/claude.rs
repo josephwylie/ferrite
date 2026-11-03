@@ -13,6 +13,7 @@ mod file_search;
 mod mcp;
 mod menu;
 mod queue;
+mod rewind;
 mod shell_output;
 mod skill_mentions;
 mod suggestions;
@@ -31,7 +32,7 @@ use std::time::{Duration, Instant};
 use crate::activity::AgentKey;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
-use super::{FileSearchReply, SettingAck};
+use super::{FileSearchReply, ForkAck, RewindAck, RewindRequest, SettingAck};
 
 /// Minimum `claude` CLI version for stable stream-json + stdio control
 /// protocol. Vendor releases below this break loudly at spawn, not weirdly
@@ -97,6 +98,13 @@ pub struct ClaudeConfig {
     /// announces the *same* session id in its init line, so the target stays
     /// stable across any number of resumes.
     pub resume: Option<String>,
+    /// With `resume`: keep the conversation only up to and including its
+    /// entry with this uuid (`--resume-session-at`), the way a rewind or a
+    /// fork is resumed when the CLI cannot cut in place.
+    pub resume_at: Option<String>,
+    /// With `resume`: continue it as a new session of its own
+    /// (`--fork-session`), leaving the original as it was.
+    pub fork: bool,
     /// Ferrite's own `show_visual` tool (`crate::visual`): the operator's
     /// level and the app's renderer. `None`, or a level of Off, offers
     /// nothing. Fixed for the Session: the CLI lists its tools once.
@@ -124,6 +132,8 @@ impl Default for ClaudeConfig {
             name: None,
             permission_mode: None,
             resume: None,
+            resume_at: None,
+            fork: false,
             visuals: None,
             env: Vec::new(),
             launcher: Vec::new(),
@@ -231,6 +241,7 @@ pub struct ClaudeSession {
     suggestions: Arc<Mutex<suggestions::Inbox>>,
     skills: Arc<Mutex<skill_mentions::Skills>>,
     file_search: Arc<Mutex<file_search::Requests>>,
+    rewinds: Arc<Mutex<rewind::Rewinds>>,
 }
 
 impl ClaudeSession {
@@ -288,6 +299,12 @@ impl ClaudeSession {
             // CLI reloads history from its own session files; probed on
             // 2.1.243, the resumed process keeps the same session id.
             command.args(["--resume", session_id.as_str()]);
+            if let Some(at) = &config.resume_at {
+                command.args(["--resume-session-at", at.as_str()]);
+            }
+            if config.fork {
+                command.arg("--fork-session");
+            }
         }
         if let Some(model) = &config.model {
             command.args(["--model", model.as_str()]);
@@ -352,6 +369,7 @@ impl ClaudeSession {
         let suggestions = Arc::new(Mutex::new(inbox));
         let skills = Arc::new(Mutex::new(skill_mentions::Skills::default()));
         let file_search = Arc::new(Mutex::new(file_search::Requests::default()));
+        let rewinds = Arc::new(Mutex::new(rewind::Rewinds::default()));
         let server = mcp::Server::new(config.visuals.clone(), Arc::clone(&stdin));
         let capabilities = read_stdout(
             stdout,
@@ -367,6 +385,7 @@ impl ClaudeSession {
             suggestions.clone(),
             skills.clone(),
             file_search.clone(),
+            rewinds.clone(),
             server,
         );
 
@@ -387,6 +406,7 @@ impl ClaudeSession {
             suggestions,
             skills,
             file_search,
+            rewinds,
         };
         // Before the operator is offered anything: ask the CLI what it can do.
         // A write failure here is a CLI that died on startup, which the reader
@@ -483,6 +503,7 @@ impl ClaudeSession {
                 | ControlKind::StopTask
                 | ControlKind::BackgroundTasks
                 | ControlKind::SetPermissionMode
+                | ControlKind::Rewind
         )
     }
 
@@ -640,6 +661,39 @@ impl ClaudeSession {
         }))
     }
 
+    /// Send one prompt under `uuid`, which the CLI keeps as its message's
+    /// own: what a rewind or a fork names the prompt by.
+    pub fn send_as(&mut self, uuid: &str, text: &str) -> io::Result<()> {
+        lock(&self.suggestions).sent();
+        self.write_line(&serde_json::json!({
+            "type": "user",
+            "uuid": uuid,
+            "message": {
+                "role": "user",
+                "content": wire::input_content(text, &lock(&self.skills), self.cwd.as_deref()),
+            },
+        }))
+    }
+
+    /// Cut the conversation back to before the prompt `request` names,
+    /// its files first when asked (`rewind`); answered on the ack.
+    pub fn rewind(&mut self, request: RewindRequest) -> io::Result<RewindAck> {
+        let request_id = self.take_request_id();
+        let (reply, ack) = sync_channel(1);
+        let line = lock(&self.rewinds).begin(request_id, request, reply);
+        self.write_line(&line)?;
+        Ok(ack)
+    }
+
+    /// Where a fork before the prompt `request` names starts: its session
+    /// resumed at the entry before it, forked; answered at once.
+    pub fn fork(&mut self, request: RewindRequest) -> io::Result<ForkAck> {
+        let forked = rewind::fork(&request)?;
+        let (reply, ack) = sync_channel(1);
+        let _ = reply.send(Ok(forked));
+        Ok(ack)
+    }
+
     /// Stop one Subagent and nothing else: `stop_task` with its task id.
     pub fn stop_subagent(&mut self, key: &AgentKey) -> io::Result<()> {
         let id = lock(&self.decoder).task_of(key).ok_or_else(|| {
@@ -756,6 +810,7 @@ fn read_stdout(
     suggestions: Arc<Mutex<suggestions::Inbox>>,
     skills: Arc<Mutex<skill_mentions::Skills>>,
     file_search: Arc<Mutex<file_search::Requests>>,
+    rewinds: Arc<Mutex<rewind::Rewinds>>,
     server: mcp::Server,
 ) -> Receiver<ClaudeCapabilities> {
     let (handshake, capabilities) = sync_channel(1);
@@ -777,6 +832,9 @@ fn read_stdout(
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
                 shells.observe(&value, &sender);
                 if lock(&file_search).observe(&value) {
+                    continue;
+                }
+                if lock(&rewinds).observe(&value, &stdin) {
                     continue;
                 }
                 if server.observe(&value) {
@@ -955,15 +1013,27 @@ fn read_stdout(
     capabilities
 }
 
+/// The items `get_context_usage` lists behind a category (`mcpTools`,
+/// `skills.skillFrontmatter`, `memoryFiles`): each one's `key` and tokens.
+fn context_items(list: &serde_json::Value, key: &str) -> Vec<crate::ContextItem> {
+    list.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            Some(crate::ContextItem {
+                name: item[key].as_str()?.to_owned(),
+                tokens: item["tokens"].as_u64().unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
 fn control_events(action: &SessionControl, response: &serde_json::Value) -> Vec<SessionEvent> {
     match action {
         SessionControl::RefreshContext => {
             let total = response["totalTokens"].as_u64().unwrap_or(0);
             let raw_max = response["rawMaxTokens"].as_u64();
-            let max = response["maxTokens"].as_u64();
             let details = crate::ContextDetails {
-                usable_window: max,
-                auto_compact_threshold: response["autoCompactThreshold"].as_u64(),
                 is_auto_compact_enabled: response["isAutoCompactEnabled"].as_bool(),
                 categories: response["categories"]
                     .as_array()
@@ -976,6 +1046,9 @@ fn control_events(action: &SessionControl, response: &serde_json::Value) -> Vec<
                         })
                     })
                     .collect(),
+                mcp_tools: context_items(&response["mcpTools"], "name"),
+                skills: context_items(&response["skills"]["skillFrontmatter"], "name"),
+                memory_files: context_items(&response["memoryFiles"], "path"),
             };
             vec![
                 SessionEvent::ContextUsage {

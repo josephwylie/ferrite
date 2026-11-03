@@ -548,10 +548,6 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
             "2 waiting; 3 unread completions never count"
         );
     });
-    assert!(
-        cx.debug_bounds("nav-needs-you-pill").is_some(),
-        "the Inbox's pill"
-    );
     cx.simulate_keystrokes("cmd-i");
     tick(cx);
     let column = cx.debug_bounds("nav-column").unwrap();

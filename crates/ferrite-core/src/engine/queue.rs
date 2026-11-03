@@ -62,6 +62,8 @@ pub(super) struct Queue {
 }
 pub(super) struct Change {
     pub prompt: Option<String>,
+    /// The client id `prompt` was queued under: the id it was sent as.
+    pub client_id: Option<String>,
     pub historical: bool,
     pub notice: Option<String>,
 }
@@ -211,6 +213,7 @@ impl Queue {
     pub fn observe(&mut self, event: QueueEvent) -> Change {
         let mut change = Change {
             prompt: None,
+            client_id: None,
             historical: false,
             notice: None,
         };
@@ -242,6 +245,7 @@ impl Queue {
                     return change;
                 }
                 change.historical = historical;
+                change.client_id = Some(client_id.clone());
                 self.admitting.retain(|id| *id != client_id);
                 if !self.metadata.consumed.contains(&client_id) {
                     change.prompt = self

@@ -23,6 +23,13 @@ impl PromptHistory {
         !self.entries.is_empty()
     }
 
+    /// Forget the latest `count` prompts: what a rewind took back.
+    pub(crate) fn forget_latest(&mut self, count: usize) {
+        self.entries
+            .truncate(self.entries.len().saturating_sub(count));
+        self.reset();
+    }
+
     pub(crate) fn recall(
         &mut self,
         direction: HistoryDirection,

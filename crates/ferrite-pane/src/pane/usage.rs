@@ -1,68 +1,91 @@
-//! Context and account usage: the Context tab, its bars and ink, and the
-//! Composer footer's plan-usage ring and its card.
+//! Context and plan usage: the panel's Context section (its reading, its
+//! stacked bar, the legend and the lists behind it) and the Composer
+//! footer's plan-usage ring with its popover.
 
 use super::*;
+use ferrite_core::transcript::RateLimits;
+use ferrite_core::{ContextDetails, ContextItem, RateLimitWindow};
 
-/// The footer's plan-usage ring (Claude's): the fullest account window
-/// the provider reported, drawn round a `CONTEXT_RING` circle, its card
-/// (`plan_usage_card`) on hover. None while the provider reports no
-/// window: no reading is invented. Context fill is the side panel's.
+/// The footer's plan-usage ring (Claude's): the fullest account window the
+/// provider reported, drawn round a `CONTEXT_RING` circle in a footer
+/// chip's box. Under the pointer its tooltip reads that window in one line
+/// (`Weekly · all models: 17% · Resets Tue 3:30 pm`); a click opens the
+/// popover above it (`plan_usage_card`), which the box wears as selected
+/// while it is open. None while the provider reports no window: no
+/// reading is invented. Context fill is the side panel's.
 pub fn plan_usage_ring(
     id: impl Into<gpui::ElementId>,
-    limits: ferrite_core::transcript::RateLimits,
-) -> Option<Stateful<Div>> {
-    let fraction = plan_usage_fraction(limits)?;
+    limits: RateLimits,
+    cx: &gpui::App,
+) -> Option<impl IntoElement> {
+    let now = ferrite_core::clock::system_time();
+    let (name, fullest, span) =
+        plan_windows(limits).max_by(|a, b| a.1.used_fraction.total_cmp(&b.1.used_fraction))?;
+    let used = fullest.used_fraction.clamp(0., 1.);
+    let tip = std::iter::once(format!("{name}: {}", percent(used)))
+        .chain(reset_label(fullest.resets_at, span, now).map(|reset| reset.to_string()))
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ");
+    let id = id.into();
+    let trigger = toolbar_chip(id.clone(), cx)
+        .debug_selector(|| "plan-usage-ring".into())
+        .flex_shrink_0()
+        .px(px((theme::FOOTER_CHIP_H - theme::CONTEXT_RING) / 2.))
+        .tip(tip)
+        .child(usage_ring(used));
     Some(
-        div()
-            .id(id)
-            .debug_selector(|| "plan-usage-ring".into())
-            .flex()
-            .items_center()
-            .child(usage_ring(fraction))
-            .tooltip(move |window, cx| {
-                let now = ferrite_core::clock::system_time();
-                gpui::component::tooltip::Tooltip::element(move |_, _| plan_usage_card(limits, now))
-                    .font_family(theme::FONT_UI)
-                    .text_size(px(theme::FS_UI))
-                    .line_height(px(theme::LH_UI))
-                    .px(px(theme::TOOLTIP_PAD_X))
-                    .py(px(theme::TOOLTIP_PAD_Y))
-                    .w(px(theme::USAGE_TIP_W))
-                    .rounded(px(theme::R_FLOAT))
-                    .border_color(theme::paint::FLOAT_EDGE)
-                    .shadow(components::float_shadow())
-                    .build(window, cx)
-            }),
+        gpui::component::popover::Popover::new(gpui::ElementId::NamedChild(
+            std::sync::Arc::new(id),
+            "popover".into(),
+        ))
+        // The card is its own surface; the kit's would frame it again.
+        .appearance(false)
+        .anchor(gpui::Anchor::BottomRight)
+        // Its foot `USAGE_POP_OFFSET` above the box's top (the kit
+        // leaves 4).
+        .bottom(px(theme::USAGE_POP_OFFSET))
+        .trigger(trigger)
+        .content(move |_, _, _| plan_usage_card(limits, now)),
     )
 }
 
 /// The ring's reading: the fullest window reported, or None.
-pub fn plan_usage_fraction(limits: ferrite_core::transcript::RateLimits) -> Option<f32> {
-    [limits.five_hour, limits.weekly]
-        .into_iter()
-        .flatten()
-        .map(|limit| limit.used_fraction.clamp(0., 1.))
+pub fn plan_usage_fraction(limits: RateLimits) -> Option<f32> {
+    plan_windows(limits)
+        .map(|(_, limit, _)| limit.used_fraction.clamp(0., 1.))
         .reduce(f32::max)
 }
 
-/// The ring's card (Claude's `Plan usage limits`): a quiet head, then each
-/// reported window — its name, when it resets, the share used in
-/// `usage_ink` — over its bar.
-fn plan_usage_card(limits: ferrite_core::transcript::RateLimits, now: SystemTime) -> Div {
-    let window = |label: &'static str, limit: ferrite_core::RateLimitWindow, span: Duration| {
+/// The account windows the provider reported, as the popover names them,
+/// with their spans.
+fn plan_windows(
+    limits: RateLimits,
+) -> impl Iterator<Item = (&'static str, RateLimitWindow, Duration)> {
+    [
+        ("5-hour \u{b7} all models", limits.five_hour, 5 * 3_600),
+        ("Weekly \u{b7} all models", limits.weekly, 7 * 86_400),
+    ]
+    .into_iter()
+    .filter_map(|(name, limit, span)| Some((name, limit?, Duration::from_secs(span))))
+}
+
+/// A share as the usage surfaces print it: `18%`.
+fn percent(fraction: f32) -> String {
+    format!("{}%", (fraction.clamp(0., 1.) * 100.).round() as u32)
+}
+
+/// The ring's popover (Claude's `Plan usage limits`): a quiet head, then
+/// each reported window — its name, when it resets and the share used, over
+/// its bar in `usage_ink`.
+fn plan_usage_card(limits: RateLimits, now: SystemTime) -> Div {
+    let window = |(name, limit, span): (&'static str, RateLimitWindow, Duration)| {
         let used = limit.used_fraction.clamp(0., 1.);
-        let percent = (used * 100.).round() as u32;
-        let reset = reset_label(limit.resets_at, span, now).map(|label| {
-            let mut chars = label.chars();
-            chars
-                .next()
-                .map(|first| first.to_uppercase().chain(chars).collect::<String>())
-                .unwrap_or_default()
-        });
+        let reading = percent(used);
+        let selector = format!("plan-usage-{}", reading.trim_end_matches('%'));
         div()
             .flex()
             .flex_col()
-            .gap(px(theme::USAGE_CARD_ROW_GAP))
+            .gap(px(theme::USAGE_POP_BAR_GAP))
             .child(
                 div()
                     .flex()
@@ -73,10 +96,10 @@ fn plan_usage_card(limits: ferrite_core::transcript::RateLimits, now: SystemTime
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_color(rgb(INK))
-                            .child(label),
+                            .text_color(rgb(INK_STRONG))
+                            .child(name),
                     )
-                    .children(reset.map(|reset| {
+                    .children(reset_label(limit.resets_at, span, now).map(|reset| {
                         div()
                             .flex_shrink_0()
                             .text_color(rgb(INK_SUBTLE))
@@ -84,45 +107,36 @@ fn plan_usage_card(limits: ferrite_core::transcript::RateLimits, now: SystemTime
                     }))
                     .child(components::tabular(
                         div()
-                            .debug_selector(move || format!("plan-usage-{percent}"))
+                            .debug_selector(move || selector.clone())
                             .flex_shrink_0()
-                            .text_color(rgb(usage_ink(used)))
-                            .child(format!("{percent}%")),
+                            .text_color(rgb(INK_SUBTLE))
+                            .child(reading),
                     )),
             )
-            .child(usage_bar(used))
+            .child(
+                div()
+                    .w_full()
+                    .h(px(theme::USAGE_POP_BAR_H))
+                    .rounded_full()
+                    .overflow_hidden()
+                    .bg(rgb(theme::USAGE_POP_TRACK))
+                    .child(div().h_full().w(relative(used)).bg(rgb(usage_ink(used)))),
+            )
     };
-    div()
+    components::floating_surface()
+        .debug_selector(|| "plan-usage-card".into())
         .flex()
         .flex_col()
-        .gap(px(theme::USAGE_CARD_GAP))
-        .child(
-            div()
-                .text_size(px(theme::FS_META))
-                .text_color(rgb(INK_SUBTLE))
-                .child("Plan usage limits"),
-        )
-        .children(
-            limits
-                .five_hour
-                .map(|limit| window("5-hour", limit, Duration::from_secs(5 * 3_600))),
-        )
-        .children(
-            limits
-                .weekly
-                .map(|limit| window("Weekly", limit, Duration::from_secs(7 * 86_400))),
-        )
-}
-
-/// One `USAGE_CARD_BAR_H` bar, full width, on the meter's track in
-/// `usage_ink`.
-fn usage_bar(fraction: f32) -> Div {
-    let used = fraction.clamp(0., 1.);
-    div()
-        .w_full()
-        .h(px(theme::USAGE_CARD_BAR_H))
-        .bg(theme::paint::LINE)
-        .child(div().h_full().w(relative(used)).bg(rgb(usage_ink(used))))
+        .gap(px(theme::USAGE_POP_GAP))
+        .w(px(theme::USAGE_POP_W))
+        .px(px(theme::USAGE_POP_PAD_X))
+        .py(px(theme::USAGE_POP_PAD_Y))
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_META))
+        .line_height(px(theme::LH_UI))
+        .whitespace_nowrap()
+        .child(div().text_color(rgb(INK_SUBTLE)).child("Plan usage limits"))
+        .children(plan_windows(limits).map(window))
 }
 
 /// A usage ring: a `CONTEXT_RING` circle, its track a hairline, `fraction`
@@ -172,43 +186,21 @@ fn usage_ring(fraction: f32) -> Div {
     )
 }
 
-/// A subscription window's plausible Unix reset instant in compact, useful
-/// units. Providers disagree on the field's units, so only a future value
-/// inside the window's own maximum span is safe to present as a countdown.
+/// When a subscription window resets, as the popover reads it: `Resets
+/// 3:30 pm` today, `Resets Tue 3:30 pm` later in the week. Providers
+/// disagree on the field's units, so only a future value inside the
+/// window's own span is read as a Unix instant: a guess is worse than none.
 pub(super) fn reset_label(
     resets_at: Option<u64>,
     span: Duration,
     now: SystemTime,
 ) -> Option<SharedString> {
-    let now = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-    // A reset the provider did not report, one already past, or one
-    // outside the window's span reads nothing: a guess is worse than none.
-    let remaining = resets_at?
-        .checked_sub(now)
+    let seconds = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let at = resets_at?;
+    at.checked_sub(seconds)
         .filter(|remaining| (1..=span.as_secs()).contains(remaining))?;
-    let label = match remaining {
-        0..=59 => "resets in <1m".into(),
-        60..=3_599 => format!("resets in {}m", remaining / 60),
-        3_600..=86_399 => {
-            let hours = remaining / 3_600;
-            let minutes = remaining % 3_600 / 60;
-            if minutes == 0 {
-                format!("resets in {hours}h")
-            } else {
-                format!("resets in {hours}h {minutes}m")
-            }
-        }
-        86_400.. => {
-            let days = remaining / 86_400;
-            let hours = remaining % 86_400 / 3_600;
-            if hours == 0 {
-                format!("resets in {days}d")
-            } else {
-                format!("resets in {days}d {hours}h")
-            }
-        }
-    };
-    Some(SharedString::from(label))
+    let at = UNIX_EPOCH + Duration::from_secs(at);
+    Some(format!("Resets {}", ferrite_core::clock::day_label(at, now)).into())
 }
 
 /// A token count as the card reads it (rule 2.11.6): only as precise as it
@@ -293,12 +285,12 @@ pub fn context_segments(
         .collect()
 }
 
-/// What the Panel foot's context meter draws: one segment per category in
+/// A context meter with no legend to keep: one segment per category in
 /// the window, in its `CTX_*` ink and at its share of `window`, or one
 /// `CTX_CYCLE[0]` segment when the provider names none; past
-/// `CTX_METER_WARN` every segment wears the state's ink (`ctx_meter_ink`),
-/// the foot having no legend to keep. The Context tab draws the same
-/// segments but keeps each category's ink to match its legend
+/// `CTX_METER_WARN` every segment wears the state's ink (`ctx_meter_ink`).
+/// The Context section's bar uses it only when the provider names no
+/// categories; with them it keeps each category's ink to match its legend
 /// (`context_usage`).
 pub fn context_meter_segments(
     total: u64,
@@ -321,103 +313,23 @@ pub fn context_meter_segments(
     segments
 }
 
-/// The panel's Context tab (SPEC §5.6): the context window and the
-/// account windows, in that order, each a labelled bar over the reading
-/// behind it. Counts are reported values, never estimates. An account
-/// window the provider has not reported is left out; when it reports
-/// neither, one line says so (`Limits not reported by this provider`) in
-/// place of two empty bars. Each block holds the rows' inset
-/// (the panel's `PANEL_ROW_ICON_X`).
-///
-/// The context bar is stacked by category when the provider says what
-/// fills the window, and its heading is a row that opens the legend: every
-/// category with its ink, its count and its share of the window. The tab
-/// grows to `max_h` (the panel's room) and scrolls past it.
-#[allow(clippy::too_many_arguments)]
+/// The panel's Context section under its head (SPEC §5.6, Claude's): how
+/// full the window is (`27% used`, `109.9k / 400k`) over a bar stacked by
+/// category, then the legend, always open — each category in the window
+/// with its ink, its count and its share; the deferred ones apart, counted
+/// but taking no share; and the lists behind the categories that have
+/// them (`MCP tools`, `Skills`, `Memory files`), each folding open to its
+/// items. Counts are reported values, never estimates. The turn's usage
+/// and its cost close it when the provider reports them.
 pub fn context_usage(
     usage: ferrite_core::transcript::Usage,
-    limits: ferrite_core::transcript::RateLimits,
-    details: Option<&ferrite_core::ContextDetails>,
+    details: Option<&ContextDetails>,
     usage_details: Option<&ferrite_core::UsageDetails>,
     last_cost: Option<f64>,
-    expanded: bool,
-    max_h: f32,
-    on_toggle: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl IntoElement {
     let maximum = usage.context_window.filter(|limit| *limit > 0);
-    let now = ferrite_core::clock::system_time();
-    let bar = usage_bar;
-    // A window's heading: its name at the left, what it reads at the
-    // right — the one line that answers the question at a glance. The
-    // name is a row's label, not a title: `W_BODY`.
-    let heading = |label: &'static str, value: AnyElement| {
-        div()
-            .flex()
-            .items_baseline()
-            .justify_between()
-            .gap(px(theme::SPACE_3))
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .font_weight(theme::W_BODY)
-                    .text_color(rgb(INK))
-                    .child(label),
-            )
-            .child(value)
-    };
-    let percent_value = |key: &'static str, fraction: f32| {
-        let percent = (fraction.clamp(0., 1.) * 100.).round() as u32;
-        div()
-            .id(key)
-            .debug_selector(move || format!("context-usage-{key}-{percent}"))
-            .flex_shrink_0()
-            .child(SharedString::from(format!("{percent}%")))
-    };
-    // The context window's percentage wears its state past the warning,
-    // the bar keeping its categories' inks.
-    let context_percent = |fraction: f32| {
-        let reading = percent_value("context", fraction);
-        if fraction >= theme::CTX_METER_WARN {
-            reading.text_color(rgb(ctx_meter_ink(fraction)))
-        } else {
-            reading
-        }
-    };
-    let reset_value = |key: &'static str, resets_at: Option<u64>, span: Duration| {
-        reset_label(resets_at, span, now).map(|label| {
-            div()
-                .id(SharedString::from(format!("reset-{key}")))
-                .text_size(px(theme::FS_UI))
-                .debug_selector(move || format!("context-usage-{key}-reset-reported"))
-                .text_color(rgb(INK_SUBTLE))
-                .child(label)
-                .into_any_element()
-        })
-    };
-    let block = || {
-        div()
-            .flex()
-            .flex_col()
-            .flex_shrink_0()
-            .gap(px(theme::USAGE_CARD_ROW_GAP))
-            .px(px(theme::PANEL_ROW_ICON_X))
-    };
-    let window =
-        |label: &'static str, key: &'static str, fraction: f32, detail: Option<AnyElement>| {
-            block()
-                .child(heading(
-                    label,
-                    percent_value(key, fraction).into_any_element(),
-                ))
-                .child(bar(fraction))
-                .children(detail)
-        };
+    let current = usage.total_tokens;
     let categories = details.map_or(&[][..], |details| details.categories.as_slice());
-    let expandable = details.is_some_and(|details| {
-        !details.categories.is_empty()
-            || details.usable_window.is_some()
-            || details.auto_compact_threshold.is_some()
-    });
     // Shares are of the whole window when the provider reports one; of
     // what the categories add up to when it does not.
     let denominator = maximum.unwrap_or_else(|| {
@@ -434,274 +346,159 @@ pub fn context_usage(
             tokens as f32 / denominator as f32
         }
     };
-    // The counts behind the context bar, in the card's quietest ink: the
-    // bar says how full, this says of what — `64k / 200k tokens`. When
-    // there is a legend behind it, a chevron after the counts says so.
-    let current = usage.total_tokens;
-    let counts = components::tabular(
-        div()
-            .id("context-usage-counts")
-            .flex()
-            .items_center()
-            .gap(px(theme::SPACE_1))
-            .text_size(px(theme::FS_UI))
-            .text_color(rgb(INK_SUBTLE))
-            .debug_selector(move || match maximum {
-                Some(maximum) => format!("context-usage-maximum-{maximum}"),
-                None => "context-usage-maximum-unknown".into(),
-            })
-            .child(
-                div()
-                    .debug_selector(move || format!("context-usage-current-{current}"))
-                    .child(SharedString::from(match maximum {
-                        Some(maximum) => format!(
-                            "{} / {} tokens",
-                            compact_count(current),
-                            compact_count(maximum)
-                        ),
-                        None => format!("{} tokens", compact_count(current)),
-                    })),
-            ),
-    );
-    let context_fraction = maximum.map(|maximum| current as f32 / maximum as f32);
+
+    // The reading: the share used at the left, in its state's ink past
+    // the warning (rule 6: colour on the word, the bar keeping its
+    // categories' inks); the counts behind it at the right.
+    let reading = match maximum {
+        Some(maximum) => {
+            let fraction = current as f32 / maximum as f32;
+            let label = format!("{} used", percent(fraction));
+            let selector = format!(
+                "context-usage-context-{}",
+                percent(fraction).trim_end_matches('%')
+            );
+            let ink = if fraction >= theme::CTX_METER_WARN {
+                ctx_meter_ink(fraction)
+            } else {
+                INK_STRONG
+            };
+            div()
+                .debug_selector(move || selector.clone())
+                .flex_shrink_0()
+                .text_color(rgb(ink))
+                .child(label)
+        }
+        None => div()
+            .flex_shrink_0()
+            .text_color(rgb(INK_STRONG))
+            .child(format!("{} tokens", compact_count(current))),
+    };
+    let counts = div()
+        .debug_selector(move || match maximum {
+            Some(maximum) => format!("context-usage-maximum-{maximum}"),
+            None => "context-usage-maximum-unknown".into(),
+        })
+        .flex_shrink_0()
+        .text_color(rgb(INK_SUBTLE))
+        .children(
+            maximum
+                .map(|maximum| format!("{} / {}", compact_count(current), compact_count(maximum))),
+        );
+    let head = div()
+        .debug_selector(move || format!("context-usage-current-{current}"))
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(theme::SPACE_3))
+        .h(px(LH_UI))
+        .child(reading)
+        .child(counts);
+
     // The bar: each category in its own ink, as the legend under it shows
-    // it, at its share of the window (or, with no window, of what the
-    // categories add up to). A provider that names no categories gets the
-    // Panel foot's one segment (`context_meter_segments`), warning ink and
-    // all; with categories, past `CTX_METER_WARN` the state rides on the
-    // heading's percentage instead (rule 6: colour on the word).
+    // it, at its share of the window. A provider that names no categories
+    // gets one segment (`context_meter_segments`), warning ink and all.
     let by_category = context_segments(categories, denominator);
     let in_window = match maximum {
         Some(maximum) if by_category.is_empty() => context_meter_segments(current, maximum, None),
         _ => by_category,
     };
-    let context_bar = if !in_window.is_empty() {
-        Some(
-            div()
-                .flex()
-                .w_full()
-                .h(px(theme::USAGE_CARD_BAR_H))
-                .overflow_hidden()
-                .bg(theme::paint::LINE)
-                .children(in_window.into_iter().map(|(ink, share)| {
-                    div()
-                        .flex_shrink_0()
-                        .h_full()
-                        .w(relative(share.clamp(0., 1.)))
-                        .bg(rgb(ink))
-                }))
-                .into_any_element(),
-        )
-    } else {
-        // Nothing to draw: the count alone, no empty bar.
-        None
-    };
-    // The context heading is the legend's door when there is one: the
-    // whole line is the hit row, lifting to the hover face like a menu row,
-    // with the chevron after the reading. It reads as every Panel section's
-    // head does (`panel::panel_section_head`: 30 high, 12/500 `INK_SUBTLE`,
-    // its reading at the right), so the sections read alike.
-    let context_heading = div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap(px(theme::SPACE_3))
-        .h(px(theme::PANEL_SECTION_H))
-        .text_size(px(theme::FS_META))
-        .text_color(rgb(INK_SUBTLE))
-        .child(
-            div()
-                .flex_shrink_0()
-                .font_weight(theme::W_LABEL)
-                .child("Context"),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(theme::SPACE_1))
-                .children(context_fraction.map(context_percent))
-                // One chevron that turns a quarter as the legend opens, over
-                // `motion::CHEVRON` — the disclosures' turn.
-                .when(expandable, |reading| {
-                    reading.child(ferrite_ui::motion::settled(
-                        "context-legend-turn",
-                        expanded,
-                        ferrite_ui::motion::CHEVRON,
-                        |turn| {
-                            icon(icons::CHEVRON_RIGHT, theme::ICON_CHEVRON, INK_SUBTLE)
-                                .with_transformation(gpui::Transformation::rotate(gpui::radians(
-                                    std::f32::consts::FRAC_PI_2 * turn,
-                                )))
-                        },
-                    ))
-                })
-                .into_any_element(),
-        );
-    let context_heading = if expandable {
-        let id = gpui::ElementId::from("context-window-toggle");
-        let key = ferrite_ui::pointer::hover_key(&id);
+    let bar = (!in_window.is_empty()).then(|| {
         div()
-            .id(id)
-            .debug_selector(|| "context-window-toggle".into())
-            .mx(px(-theme::PANEL_ROW_ICON_X))
-            .px(px(theme::PANEL_ROW_ICON_X))
-            .cursor_pointer()
-            .hover_raised(key)
-            .press_raised()
-            .on_click(on_toggle)
-            .child(context_heading)
-            .into_any_element()
-    } else {
-        context_heading.into_any_element()
+            .flex()
+            .w_full()
+            .mt(px(theme::SPACE_1))
+            .h(px(theme::USAGE_CARD_BAR_H))
+            .rounded_full()
+            .overflow_hidden()
+            .bg(theme::paint::LINE)
+            .children(in_window.into_iter().map(|(ink, share)| {
+                div()
+                    .flex_shrink_0()
+                    .h_full()
+                    .w(relative(share.clamp(0., 1.)))
+                    .bg(rgb(ink))
+            }))
+    });
+
+    let group = || {
+        div()
+            .flex()
+            .flex_col()
+            .mt(px(theme::USAGE_LEGEND_GROUP_GAP))
     };
-    let mut context = block()
-        .child(context_heading)
-        .children(context_bar)
-        .child(counts);
-    // The legend: an ink square, the name, the count muted and the share
-    // at the right edge, in tabular figures so the column lines up.
-    let legend = |selector: String,
-                  swatch: Option<u32>,
-                  label: SharedString,
-                  count: String,
-                  share: SharedString| {
-        components::tabular(
-            div()
-                .id(SharedString::from(selector.clone()))
-                .debug_selector(move || selector.clone())
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap(px(theme::SPACE_2))
-                .h(px(theme::USAGE_LEGEND_ROW_H))
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .size(px(theme::USAGE_SWATCH))
-                        .rounded(px(theme::R_TIGHT))
-                        .when_some(swatch, |square, ink| square.bg(rgb(ink))),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(rgb(INK))
-                        .child(label),
-                )
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_color(rgb(INK_SUBTLE))
-                        .child(count),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .flex_shrink_0()
-                        .w(px(theme::USAGE_SHARE_W))
-                        .text_color(rgb(INK))
-                        .child(share),
-                ),
-        )
-    };
-    if let Some(details) = details.filter(|_| expanded && expandable) {
-        let mut rows = div().flex().flex_col().pt(px(theme::SPACE_1));
-        for (index, category) in details.categories.iter().enumerate() {
-            let tokens = category.tokens;
-            // Deferred tools are loaded on demand: listed, but no share.
-            let share = if category.name.to_ascii_lowercase().contains("deferred") {
-                "\u{2014}".into()
-            } else {
-                format!("{:.1}%", share_of(tokens) * 100.)
-            };
-            rows = rows.child(legend(
+    let mut held = group();
+    let mut deferred = group();
+    let mut any_deferred = false;
+    for (index, category) in categories.iter().enumerate() {
+        let tokens = category.tokens;
+        let row = |share: String| {
+            legend_row(
                 format!("context-category-{index}-{tokens}"),
-                Some(category_ink(&category.name, index)),
-                sentence_case(&category.name).into(),
-                compact_count(tokens),
-                share.into(),
-            ));
+                category_ink(&category.name, index),
+                sentence_case(&category.name),
+                tokens,
+                share,
+            )
+        };
+        if category.name.to_ascii_lowercase().contains("deferred") {
+            // Loaded on demand: counted, but no share of the window.
+            any_deferred = true;
+            deferred = deferred.child(row("\u{2014}".into()));
+        } else {
+            held = held.child(row(format!("{:.1}%", share_of(tokens) * 100.)));
         }
-        if let Some(usable) = details.usable_window {
-            rows = rows.child(legend(
-                format!("context-usable-{usable}"),
-                None,
-                "Usable window".into(),
-                compact_count(usable),
-                "".into(),
-            ));
-        }
-        if let Some(threshold) = details.auto_compact_threshold {
-            rows = rows.child(legend(
-                format!("context-compaction-{threshold}"),
-                None,
-                "Auto-compact at".into(),
-                compact_count(threshold),
-                match details.is_auto_compact_enabled {
-                    Some(false) => "off".into(),
-                    _ => "".into(),
-                },
-            ));
-        }
-        // The legend's rows fade in as it opens (`ROW_IN`, opacity only);
-        // closing is instant, like every exit.
-        context = context.child(ferrite_ui::motion::fade_in(
-            "context-legend-in",
-            rows,
-            ferrite_ui::motion::ROW_IN,
-            1.0,
-        ));
     }
+    let lists = details.map(|details| {
+        group().children(
+            [
+                (
+                    "mcp-tools",
+                    "MCP tools",
+                    &details.mcp_tools,
+                    ListItem::McpTool,
+                ),
+                ("skills", "Skills", &details.skills, ListItem::Plain),
+                (
+                    "memory-files",
+                    "Memory files",
+                    &details.memory_files,
+                    ListItem::Path,
+                ),
+            ]
+            .into_iter()
+            .filter(|(_, _, items, _)| !items.is_empty())
+            .map(|(key, label, items, kind)| ContextList {
+                key,
+                label,
+                items: items.iter().map(|item| kind.row(item)).collect(),
+            }),
+        )
+    });
+
     let mut card = div()
         .id("context-usage-body")
         .flex()
         .flex_col()
         .w_full()
-        .gap(px(theme::USAGE_CARD_GAP))
-        .text_size(px(theme::FS_UI))
+        .px(px(theme::PANEL_ROW_ICON_X))
+        .text_size(px(theme::FS_META))
         .line_height(px(theme::LH_UI))
         .text_color(rgb(INK))
-        .child(context);
-    if limits.five_hour.is_none() && limits.weekly.is_none() {
-        // On the blocks' inset, not a float's: the card's left edge.
-        card = card.child(
-            block()
-                .id("context-usage-limits-unknown")
-                .debug_selector(|| "context-usage-limits-unknown".into())
-                .whitespace_normal()
-                .text_color(rgb(INK_SUBTLE))
-                .child("Limits not reported by this provider"),
-        );
-    }
-    if let Some(limit) = limits.five_hour {
-        card = card.child(window(
-            "5-hour limit",
-            "five-hour",
-            limit.used_fraction,
-            reset_value("five-hour", limit.resets_at, Duration::from_secs(5 * 3_600)),
-        ));
-    }
-    if let Some(limit) = limits.weekly {
-        card = card.child(window(
-            "Weekly limit",
-            "weekly",
-            limit.used_fraction,
-            reset_value("weekly", limit.resets_at, Duration::from_secs(7 * 86_400)),
-        ));
-    }
-    // Everything below the windows is a terminal readout: a quiet key at
-    // the left, the reported value right-aligned in tabular digits, and a
-    // section head where the scope changes.
+        .child(head)
+        .children(bar)
+        .child(held)
+        .when(any_deferred, |card| card.child(deferred))
+        .children(lists);
+
+    // The turn's usage: a quiet key at the left, the reported value
+    // right-aligned in tabular digits, under the scope's heading.
     let row = |key: String, value: String| {
         div()
             .flex()
             .flex_shrink_0()
             .justify_between()
             .gap(px(theme::SPACE_3))
-            .px(px(theme::PANEL_ROW_ICON_X))
             .child(
                 div()
                     .min_w_0()
@@ -711,6 +508,10 @@ pub fn context_usage(
             )
             .child(components::tabular(div().flex_shrink_0().child(value)))
     };
+    let cost = last_cost.map(|cost| {
+        row("Last turn".into(), cost_label(cost))
+            .debug_selector(move || format!("usage-cost-{cost}"))
+    });
     if let Some(details) = usage_details {
         let scope = match details.scope {
             ferrite_core::UsageScope::Message => ("message", "This message"),
@@ -721,6 +522,7 @@ pub fn context_usage(
             .flex()
             .flex_col()
             .flex_shrink_0()
+            .mt(px(theme::USAGE_CARD_GAP))
             .gap(px(theme::SPACE_0_5))
             .child(
                 ferrite_ui::menu::section(scope.1, None, None)
@@ -741,25 +543,188 @@ pub fn context_usage(
                     .debug_selector(move || format!("usage-{key}-{count}")),
             );
         }
-        if let Some(cost) = last_cost {
-            section = section.child(
-                row("Last turn".into(), cost_label(cost))
-                    .debug_selector(move || format!("usage-cost-{cost}")),
-            );
-        }
-        card = card.child(section);
-    } else if let Some(cost) = last_cost {
-        card = card.child(
-            row("Last turn".into(), cost_label(cost))
-                .debug_selector(move || format!("usage-cost-{cost}")),
-        );
+        card = card.child(section.children(cost));
+    } else if let Some(cost) = cost {
+        card = card.child(cost.mt(px(theme::USAGE_CARD_GAP)));
     }
-    // Counts, percentages and the cost tick while the card is open. Every
-    // block holds its height (`flex_shrink_0`): once the open legend
-    // outgrows the room the card scrolls rather than squeezing its rows.
+    // Counts, percentages and the cost tick while the panel is open.
     components::tabular(card)
-        .max_h(px(max_h))
-        .overflow_y_scrollbar()
+}
+
+/// One legend row (`USAGE_LEGEND_ROW_H`): the category's square in the
+/// name column's gutter, its name, its count and its share, the share
+/// right-aligned in `USAGE_SHARE_W` so the column lines up.
+fn legend_row(selector: String, ink: u32, name: String, tokens: u64, share: String) -> Div {
+    div()
+        .debug_selector(move || selector.clone())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(theme::USAGE_LEGEND_ROW_H))
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(theme::USAGE_LEGEND_TEXT_X))
+                .child(
+                    div()
+                        .size(px(theme::USAGE_SWATCH))
+                        .rounded(px(theme::R_TIGHT))
+                        .bg(rgb(ink)),
+                ),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(INK_SUBTLE))
+                .child(name),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .pl(px(theme::SPACE_2))
+                .text_color(rgb(INK_SUBTLE))
+                .child(compact_count(tokens)),
+        )
+        .child(
+            div()
+                .flex()
+                .justify_end()
+                .flex_shrink_0()
+                .w(px(theme::USAGE_SHARE_W))
+                .text_color(rgb(INK_STRONG))
+                .child(share),
+        )
+}
+
+/// How a list's items read.
+#[derive(Clone, Copy)]
+enum ListItem {
+    /// As reported: a skill's name.
+    Plain,
+    /// `mcp__github__get_issue` as `github · get_issue`.
+    McpTool,
+    /// A memory file's path, the home spelled `~`.
+    Path,
+}
+
+impl ListItem {
+    fn row(self, item: &ContextItem) -> (String, u64) {
+        let name = match self {
+            ListItem::Plain => item.name.clone(),
+            ListItem::McpTool => mcp_tool_name(&item.name),
+            ListItem::Path => components::home_relative(std::path::Path::new(&item.name)),
+        };
+        (name, item.tokens)
+    }
+}
+
+/// An MCP tool's full name as the list reads it: its server, then the tool
+/// (`github · get_issue`); a name that is not `mcp__server__tool` reads
+/// whole.
+fn mcp_tool_name(name: &str) -> String {
+    name.strip_prefix("mcp__")
+        .and_then(|rest| rest.split_once("__"))
+        .map_or_else(
+            || name.to_owned(),
+            |(server, tool)| format!("{server} \u{b7} {tool}"),
+        )
+}
+
+/// A list behind a category (`MCP tools 197`): a row that folds open to
+/// its items, its chevron in the name column's gutter and its count at the
+/// right. Under the pointer its words blend up to `INK`. The fold is this
+/// element's own, kept while the panel shows.
+#[derive(IntoElement)]
+struct ContextList {
+    key: &'static str,
+    label: &'static str,
+    items: Vec<(String, u64)>,
+}
+
+impl RenderOnce for ContextList {
+    fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        let id = SharedString::from(format!("context-list-{}", self.key));
+        let open = window.use_keyed_state(id.clone(), cx, |_, _| false);
+        let unfolded = *open.read(cx);
+        let hover = ferrite_ui::pointer::hover_key(&gpui::ElementId::from(id.clone()));
+        let count = self.items.len();
+        let head = div()
+            .id(id.clone())
+            .debug_selector({
+                let id = id.clone();
+                move || id.to_string()
+            })
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .h(px(theme::USAGE_LEGEND_ROW_H))
+            .cursor_pointer()
+            .text_color(ferrite_ui::motion::hover_blend(
+                &hover,
+                rgb(INK_SUBTLE).into(),
+                rgb(INK).into(),
+            ))
+            .on_hover(ferrite_ui::motion::hover_listener(hover))
+            .child(
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .w(px(theme::USAGE_LEGEND_TEXT_X))
+                    .child(components::fold_chevron(
+                        format!("{id}-turn"),
+                        unfolded,
+                        theme::ICON_CHEVRON,
+                        INK_SUBTLE,
+                    )),
+            )
+            .child(div().flex_1().min_w_0().truncate().child(self.label))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .pl(px(theme::SPACE_2))
+                    .child(count.to_string()),
+            )
+            .on_click(move |_, _, cx| {
+                open.update(cx, |open, cx| {
+                    *open = !*open;
+                    cx.notify();
+                })
+            });
+        let key = self.key;
+        div().flex().flex_col().child(head).when(unfolded, |list| {
+            list.children(
+                self.items
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (name, tokens))| {
+                        div()
+                            .debug_selector(move || format!("context-list-{key}-{index}"))
+                            .flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .h(px(theme::USAGE_LEGEND_ROW_H))
+                            .pl(px(theme::USAGE_LEGEND_TEXT_X))
+                            .text_color(rgb(INK_SUBTLE))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_ellipsis_middle()
+                                    .child(name),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .pl(px(theme::SPACE_2))
+                                    .child(compact_count(tokens)),
+                            )
+                    }),
+            )
+        })
+    }
 }
 
 /// A usage reading's ink: neutral `INK` until the window runs tight

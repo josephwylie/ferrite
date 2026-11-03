@@ -1,7 +1,8 @@
 //! The nav tree's keyboard (§5.1.10): ⌘⇧E hands the tree the keys, the
 //! way ⌘I hands them to the Inbox. ↑↓ walk the rows the tree draws, in the
-//! order it draws them — each Project's heading, its loose Threads, its
-//! Groups and their members —
+//! order it draws them — `Pinned` and its rows, each Project's heading,
+//! its loose Threads (those `Show more` leaves out), its Groups and their
+//! members —
 //! ⏎ opens what the row stands for (a heading's ⏎ folds it), ← folds the
 //! fold the row heads, or from a row inside one moves to its head and
 //! folds it, and → unfolds what the row heads. Esc gives the keys back to
@@ -38,6 +39,18 @@ impl CockpitView {
         if machine_folded {
             return items;
         }
+        if !state.pinned.is_empty() {
+            let head = NavCursor::heading(NavFold::Pinned, "nav-pinned-heading");
+            items.push(Placed::head(head.clone()));
+            if !state.pinned_folded {
+                items.extend(
+                    state
+                        .pinned
+                        .iter()
+                        .map(|row| Placed::under(NavCursor::thread(row.thread, None), Some(&head))),
+                );
+            }
+        }
         for (index, section) in state.sections.iter().enumerate() {
             let head = match (section.mixed, section.project) {
                 (true, _) => Some(NavCursor::heading(NavFold::Groups, "nav-groups-heading")),
@@ -45,14 +58,14 @@ impl CockpitView {
                     NavFold::Project(project),
                     format!("nav-project-section-{index}"),
                 )),
-                // `Other` names no Project, and its heading folds nothing.
+                // Recents names no Project, and its heading folds nothing.
                 (false, None) => None,
             };
             items.extend(head.clone().map(Placed::head));
             if section.folded {
                 continue;
             }
-            items.extend(section.solos.iter().map(|row| {
+            items.extend(section.drawn.iter().map(|row| {
                 Placed::under(
                     NavCursor::thread(state.solos[*row].thread, None),
                     head.as_ref(),
@@ -166,7 +179,7 @@ impl CockpitView {
         };
         match item {
             NavItem::Heading(fold) => {
-                let folded = self.nav_folds.contains(&fold);
+                let folded = self.nav_folded(fold);
                 self.set_nav_fold(fold, !folded, cx);
             }
             NavItem::Thread(thread, group) => {

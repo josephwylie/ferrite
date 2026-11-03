@@ -1,0 +1,5 @@
+{"type":"control_response","response":{"subtype":"success","request_id":"req_7","response":{"canRewind":true,"filesChanged":["src/lib.rs","src/main.rs"],"insertions":3,"deletions":7}}}
+{"type":"control_response","response":{"subtype":"success","request_id":"req_7_conversation","response":{"rewound":true,"targetMessageUuid":"p2","prefillText":"second","precedingAssistantUuid":"a1"}}}
+{"type":"control_response","response":{"subtype":"success","request_id":"req_8","response":{"rewound":false,"prefillText":null,"error":"A turn is running","reason":"turn_running"}}}
+{"type":"control_response","response":{"subtype":"error","request_id":"req_9","error":"Unsupported control request subtype: rewind_conversation"}}
+{"type":"control_response","response":{"subtype":"error","request_id":"req_10","error":"Failed to rewind: No file checkpoint found for this message."}}

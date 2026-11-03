@@ -96,6 +96,18 @@ pub fn label(at: DateTime<Local>) -> String {
     at.format("%-I:%M %P").to_string()
 }
 
+/// A wall time within the week ahead of `now`, as a reset reads one: the
+/// stamp alone on the same day (`3:30 pm`), after its weekday otherwise
+/// (`Tue 3:30 pm`).
+pub fn day_label(at: SystemTime, now: SystemTime) -> String {
+    let at = DateTime::<Local>::from(at);
+    if at.date_naive() == DateTime::<Local>::from(now).date_naive() {
+        label(at)
+    } else {
+        format!("{} {}", at.format("%a"), label(at))
+    }
+}
+
 /// The wall time now, as a stamp prints it.
 pub fn now_label() -> String {
     label(now())
@@ -213,6 +225,21 @@ mod tests {
         let before = instant();
         std::thread::sleep(Duration::from_millis(2));
         assert!(instant() > before);
+    }
+
+    #[test]
+    fn a_day_label_names_the_weekday_past_today() {
+        let at = |day, hour| {
+            SystemTime::from(
+                Local
+                    .with_ymd_and_hms(2026, 11, day, hour, 30, 0)
+                    .single()
+                    .expect("an unambiguous local time"),
+            )
+        };
+        // Tuesday 3 November 2026.
+        assert_eq!(day_label(at(3, 15), at(3, 9)), "3:30 pm");
+        assert_eq!(day_label(at(10, 3), at(3, 9)), "Tue 3:30 am");
     }
 
     #[test]

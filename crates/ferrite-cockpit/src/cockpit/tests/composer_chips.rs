@@ -2,13 +2,14 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// The panel's Context section reads the Session's reported usage: the
-/// context window's counts and the account windows, following live
-/// readings and never inventing a window. It is the panel's one context
-/// reading: no foot repeats it. With no account window reported, one line
-/// says so.
+/// The panel's Context section reads the Session's reported context
+/// window, following live readings and never inventing a window. Account
+/// windows are not the panel's: the Composer's ring reads them, and a
+/// click opens Claude's `Plan usage limits` popover over it — its foot
+/// `USAGE_POP_OFFSET` above the ring's box, their right edges level.
 #[gpui::test]
-fn the_context_section_shows_context_and_subscription_windows(cx: &mut TestAppContext) {
+fn the_context_section_reads_the_window_and_the_ring_the_plan(cx: &mut TestAppContext) {
+    use ferrite_ui::theme::USAGE_POP_OFFSET;
     let (core, fake) = cockpit("context-tab", 1);
     bind_production_keys(cx);
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -26,12 +27,11 @@ fn the_context_section_shows_context_and_subscription_windows(cx: &mut TestAppCo
         .unwrap();
     tick(cx);
     assert!(cx.debug_bounds("context-usage-current-64000").is_some());
+    assert!(cx.debug_bounds("context-usage-context-32").is_some());
     assert!(
-        cx.debug_bounds("context-usage-limits-unknown").is_some(),
-        "no account window reported: one line, no bars"
+        cx.debug_bounds("plan-usage-ring").is_none(),
+        "no account window reported: no ring"
     );
-    assert!(cx.debug_bounds("context-usage-five-hour-0").is_none());
-    // Resets inside their windows: a reset already past reads nothing.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -54,18 +54,22 @@ fn the_context_section_shows_context_and_subscription_windows(cx: &mut TestAppCo
     tick(cx);
     assert!(cx.debug_bounds("context-usage-current-124000").is_some());
     assert!(cx.debug_bounds("context-usage-maximum-200000").is_some());
-    assert!(cx.debug_bounds("context-usage-five-hour-52").is_some());
-    assert!(cx.debug_bounds("context-usage-weekly-8").is_some());
-    assert!(cx
-        .debug_bounds("context-usage-five-hour-reset-reported")
-        .is_some());
-    assert!(cx
-        .debug_bounds("context-usage-weekly-reset-reported")
-        .is_some());
+    let ring = cx
+        .debug_bounds("plan-usage-ring")
+        .expect("the ring reads the plan");
     assert!(
-        cx.debug_bounds("context-usage-limits-unknown").is_none(),
-        "both windows reported: no note"
+        cx.debug_bounds("plan-usage-card").is_none(),
+        "shut until pressed"
     );
+    cx.simulate_click(ring.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    let card = cx
+        .debug_bounds("plan-usage-card")
+        .expect("a press opens it");
+    assert!(cx.debug_bounds("plan-usage-52").is_some());
+    assert!(cx.debug_bounds("plan-usage-8").is_some());
+    assert_eq!(card.bottom(), ring.top() - px(USAGE_POP_OFFSET));
+    assert_eq!(card.right(), ring.right());
     fake.streams.borrow()[0].send(usage(31_000, None)).unwrap();
     tick(cx);
     assert!(
@@ -102,7 +106,7 @@ fn the_model_picker_rests_above_the_bar_inside_the_window(cx: &mut TestAppContex
     let composer = cx.debug_bounds("composer-block").unwrap();
     assert!(
         (menu.bottom() - (chip.top() - px(ferrite_ui::theme::MODEL_PICKER_GAP))).abs() <= px(1.),
-        "FL-13: the picker's foot 5px over its chip: {menu:?} / {chip:?}"
+        "FL-13: the picker's foot 7px over its chip: {menu:?} / {chip:?}"
     );
     assert!(
         (menu.size.width - px(ferrite_ui::theme::MODEL_PICKER_W)).abs() <= px(1.),
@@ -229,4 +233,100 @@ fn a_draft_band_menu_hangs_off_its_chip_in_the_bar(cx: &mut TestAppContext) {
         rows.bottom() <= chip.top() - px(ferrite_ui::theme::FLOAT_OFFSET),
         "it rests above its chip: {rows:?} / {chip:?}"
     );
+}
+
+/// Claude's model menu leads with the model in force, its ✓ in the check
+/// blue and no digit; the chip that opened it wears the pressed fill.
+#[gpui::test]
+fn the_model_menu_leads_with_the_model_in_force(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("model-menu-first", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
+    tick(cx);
+    let first = cx.debug_bounds("choice-row-0").expect("a first row");
+    let check = cx
+        .debug_bounds("float-check")
+        .expect("a ✓ on the model in force");
+    assert!(
+        first.contains(&check.center()),
+        "the ✓ row leads: {check:?} / {first:?}"
+    );
+}
+
+/// The `+` menu's `Plugins ›` lists the plugins a Session's commands come
+/// from: the CLI names a plugin's commands `plugin:name`.
+#[test]
+fn plugins_are_read_off_their_commands_namespaces() {
+    let command = |name: &str| ferrite_core::SessionCommand {
+        name: name.into(),
+        description: String::new(),
+        path: None,
+    };
+    let commands = [
+        command("review"),
+        command("superpowers:brainstorm"),
+        command("mcp__github__issue"),
+        command("superpowers:plan"),
+        command("figma:inspect"),
+        command(":odd"),
+    ];
+    assert_eq!(plugin_names(&commands), ["superpowers", "figma"]);
+}
+
+/// The `+` menu's `Connectors ›` lists the Session's MCP servers: a pick
+/// signs in to one waiting on it; `Manage connectors` opens the panel.
+#[gpui::test]
+fn the_plus_menu_reaches_the_connectors(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("plus-connectors", 1);
+    bind_production_keys(cx);
+    *fake.native_controls.borrow_mut() = true;
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::McpServers {
+            servers: vec![ferrite_core::McpServer {
+                name: "search".into(),
+                status: ferrite_core::McpStatus::NeedsAuth,
+                error: None,
+            }],
+        })
+        .unwrap();
+    tick(cx);
+    let open = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.update(cx, |view, cx| {
+            view.attach_menu = Some(view.panes[0].identity);
+            cx.notify();
+        });
+        tick(cx);
+        let row = cx
+            .debug_bounds("choice-submenu-row-0")
+            .expect("Connectors rides the + menu");
+        cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
+        tick(cx);
+    };
+    open(&view, cx);
+    let server = cx.debug_bounds("choice-sub-0").expect("the server's row");
+    cx.simulate_click(server.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(fake
+        .controls
+        .borrow()
+        .contains(&ferrite_core::SessionControl::LoginMcp {
+            server: "search".into()
+        }));
+    view.update(cx, |view, cx| {
+        view.change_settings(|settings| settings.panel_shown = false, cx)
+    });
+    open(&view, cx);
+    let manage = cx.debug_bounds("choice-sub-1").expect("Manage connectors");
+    cx.simulate_click(manage.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.attach_menu.is_none(), "a pick closes the menu");
+        assert!(view.prefs.settings.panel_shown, "the panel shows");
+    });
 }

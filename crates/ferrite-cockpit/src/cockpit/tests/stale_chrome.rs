@@ -366,6 +366,7 @@ fn the_model_picker_opens_placed_and_its_cursor_follows_the_arrows(cx: &mut Test
         .update(b.cx, |view, cx| view.open_provider_picker(thread, cx));
     frames(b.cx, 300);
     let drawn = ferrite_ui::menu::testing::drawn();
+    assert_eq!(drawn.lit, None, "at rest no row is filled (Claude's)");
     let menu =
         b.cx.debug_bounds("choice-menu")
             .expect("the picker is open");
@@ -383,6 +384,11 @@ fn the_model_picker_opens_placed_and_its_cursor_follows_the_arrows(cx: &mut Test
         moved.is_some() && moved != drawn.cursor,
         "↓ moves the drawn cursor: {:?} → {moved:?}",
         drawn.cursor
+    );
+    assert_eq!(
+        ferrite_ui::menu::testing::drawn().lit,
+        moved,
+        "the keyboard's cursor row is filled"
     );
     b.cx.simulate_keystrokes("up");
     frames(b.cx, 50);

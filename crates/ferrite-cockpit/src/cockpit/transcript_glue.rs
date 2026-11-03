@@ -1,7 +1,7 @@
 //! The cockpit's side of a transcript: what `sync_transcript` hands each
 //! retained `TranscriptView` besides its blocks (its tail row,
 //! the call a pending Decision gates, the checkout its paths resolve
-//! against), and the commands that act on the transcript the operator is
+//! against, the subagents its calls started), and the commands that act on the transcript the operator is
 //! reading — copy and resend the prompt in view, scroll to a target, open a
 //! path's hover card, open a path in a reader.
 //!
@@ -16,7 +16,69 @@ use ferrite_core::ThreadId;
 use gpui::{App, ClipboardItem, Context, IntoElement, SharedString, Window};
 
 use super::CockpitView;
-use ferrite_pane::transcript::{ScrollTarget, TranscriptTail};
+use ferrite_core::activity::{ActivityView, AgentStatus};
+use ferrite_core::transcript::BlockId;
+use ferrite_pane::pane::{AgentFace, AgentFaces, AgentRun};
+use ferrite_pane::transcript::{PromptAction, ScrollTarget, TranscriptTail};
+
+/// Whether a sent prompt's Edit, Rewind and Fork can be asked of `open`
+/// now (`TranscriptInput::rewind`): not drawn when its agent offers none,
+/// disabled with the reason while a turn runs, prompts wait, a request
+/// waits for an answer, or the agent is changing — the cut never races
+/// them. Core refuses the same, in the same words.
+pub(super) fn rewind_gate(
+    open: &ferrite_core::cockpit::ThreadView<'_>,
+) -> Option<Result<(), SharedString>> {
+    if !open.supports_control(ferrite_core::ControlKind::Rewind) {
+        return None;
+    }
+    let why = if open.busy() {
+        Some("a turn is running; stop it first")
+    } else if !open.queue().is_empty() {
+        Some("prompts are queued; send or take them back first")
+    } else if open.pending().is_some() {
+        Some("a request waits for an answer")
+    } else if open.tuning() {
+        Some("its agent is changing; try again in a moment")
+    } else {
+        None
+    };
+    Some(why.map_or(Ok(()), |why| Err(why.into())))
+}
+
+/// How each subagent stands, by the call that started it, for that call's
+/// row (`pane::render_agent`): running while it starts, works or waits on
+/// the operator — saying what it does, its latest progress summary, or that
+/// it needs you —, failed, or done. Every Subject's transcript reads the
+/// same faces: a subagent's own agent calls open its children.
+pub(super) fn agent_faces(activity: ActivityView<'_>) -> AgentFaces {
+    let mut faces = AgentFaces::default();
+    for (call, agent) in activity.invocations() {
+        let run = match agent.status() {
+            AgentStatus::Failed | AgentStatus::NotFound => AgentRun::Failed,
+            AgentStatus::Working
+            | AgentStatus::Pending
+            | AgentStatus::Waiting
+            | AgentStatus::Unknown
+                if agent.fresh() =>
+            {
+                AgentRun::Running
+            }
+            _ => AgentRun::Done,
+        };
+        let summary = (run == AgentRun::Running)
+            .then(|| {
+                if agent.status() == AgentStatus::Waiting {
+                    return Some(ferrite_ui::theme::words::NEEDS_YOU.to_owned());
+                }
+                let detail = agent.transcript().progress().detail.trim();
+                (!detail.is_empty()).then(|| detail.to_owned())
+            })
+            .flatten();
+        faces.insert(call, AgentFace { run, summary });
+    }
+    faces
+}
 
 /// What the failure strip says of a failed turn: the provider's reason,
 /// its first line (the strip is one line), in the operator's words where
@@ -135,6 +197,34 @@ impl CockpitView {
         });
     }
 
+    /// A press on an agent call's row in Pane `index`: that agent's own
+    /// transcript takes the Pane (`select_subject`). The transcript's event
+    /// carries no window, so it opens on the next turn of the loop.
+    pub(super) fn open_agent_from(&mut self, index: usize, call: String, cx: &mut Context<Self>) {
+        let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
+            return;
+        };
+        let Some(subject) = self.cockpit.thread(thread).and_then(|open| {
+            open.activity()
+                .invocations()
+                .find(|(native, _)| *native == call)
+                .map(|(_, agent)| agent.subject())
+        }) else {
+            return;
+        };
+        let Some(window) = cx.active_window() else {
+            return;
+        };
+        let cockpit = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                let _ = cockpit.update(cx, |view, cx| {
+                    view.select_subject(thread, subject, window, cx);
+                });
+            });
+        });
+    }
+
     /// The prompt the operator is reading in Pane `index`: the pinned
     /// band's turn, else the latest prompt in view.
     fn reading_prompt(&self, index: usize, cx: &App) -> Option<String> {
@@ -172,9 +262,70 @@ impl CockpitView {
         self.send_again(index, thread, prompt, cx)
     }
 
+    /// A press on a sent prompt's Edit, Rewind or Fork in Pane `index`:
+    /// Edit and Fork ask at once; Rewind opens its menu at `at`, whose rows
+    /// say what the cut does not bring back.
+    pub(super) fn prompt_action(
+        &mut self,
+        index: usize,
+        block: BlockId,
+        action: PromptAction,
+        at: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_pane(index);
+        let Some(thread) = self.panes[index].thread() else {
+            return;
+        };
+        match action {
+            PromptAction::Rewind => {
+                self.open_context_menu(super::MenuTarget::Prompt { thread, block }, at, cx)
+            }
+            PromptAction::Edit | PromptAction::Fork => {
+                self.cut_at_prompt(thread, block, action, false, cx)
+            }
+        }
+    }
+
+    /// Ask `thread` for `action` at the prompt Block `block` (its files
+    /// too when `files`); a refusal is said in its Pane.
+    pub(super) fn cut_at_prompt(
+        &mut self,
+        thread: ThreadId,
+        block: BlockId,
+        action: PromptAction,
+        files: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(prompt) = self.cockpit.thread(thread).and_then(|open| {
+            open.transcript()
+                .blocks()
+                .iter()
+                .find(|shown| shown.id == block)?
+                .prompt_id
+                .clone()
+        }) else {
+            return;
+        };
+        let asked = match action {
+            PromptAction::Edit => self.cockpit.rewind(thread, &prompt, false, true),
+            PromptAction::Rewind => self.cockpit.rewind(thread, &prompt, files, false),
+            PromptAction::Fork => self.cockpit.fork(thread, &prompt),
+        };
+        if let Err(why) = asked {
+            let noun = if action == PromptAction::Fork {
+                "fork"
+            } else {
+                "rewind"
+            };
+            self.cockpit.say(thread, format!("{noun} refused: {why}"));
+        }
+        cx.notify();
+    }
+
     /// Send `prompt` to Pane `index`'s Thread again, queued behind a
     /// running turn.
-    fn send_again(
+    pub(super) fn send_again(
         &mut self,
         index: usize,
         thread: ThreadId,
