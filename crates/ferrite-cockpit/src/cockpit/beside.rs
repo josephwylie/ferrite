@@ -734,14 +734,14 @@ impl CockpitView {
                 div()
                     .flex_shrink_0()
                     .font_weight(W_LABEL)
-                    .text_color(rgb(TEXT))
+                    .text_color(rgb(INK))
                     .child("Review"),
             )
             .child(
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(rgb(INK_SUBTLE))
                     .child(format!(" \u{b7} {}", shown.title)),
             );
         let close = head_door(

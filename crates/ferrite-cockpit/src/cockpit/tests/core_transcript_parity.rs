@@ -23,28 +23,28 @@ fn call(name: &str, summary: &str, state: ToolState, output: &str) -> ToolBlock 
     }
 }
 
-/// Standard reads at 13px on an 18px line (the type table's 1.4), in Solo
-/// and in a Group Pane alike; its diffs and fences a step smaller, 12 on
-/// 17. A cell is 7.8px, so an image's frame is 374.4px.
+/// Standard reads at 14px on a 21px line (the type table's 1.5), in Solo
+/// and in a Group Pane alike; its diffs and fences a step smaller, 13 on
+/// 20. A cell is 8.4px, so an image's frame is 403.2px.
 #[test]
-fn standard_reads_at_13_on_an_18px_line() {
+fn standard_reads_at_14_on_a_21px_line() {
     use ferrite_core::settings::ReadingSize;
     assert_eq!(
         ferrite_ui::theme::answer_text_size(ReadingSize::STANDARD),
-        13.
+        14.
     );
     assert_eq!(
         ferrite_ui::theme::answer_line_height(ReadingSize::STANDARD),
-        18.
+        21.
     );
     let grid = pane::Grid::of(ReadingSize::STANDARD);
-    assert!((grid.cell() - 7.8).abs() < 1e-4);
-    assert!((ferrite_ui::theme::IMAGE_CELLS * grid.cell() - 374.4).abs() < 1e-3);
+    assert!((grid.cell() - 8.4).abs() < 1e-4);
+    assert!((ferrite_ui::theme::IMAGE_CELLS * grid.cell() - 403.2).abs() < 1e-3);
     let solo = pane::Grid::pane(ReadingSize::STANDARD, true);
-    assert_eq!((solo.size, solo.line), (13., 18.));
+    assert_eq!((solo.size, solo.line), (14., 21.));
     let group = pane::Grid::pane(ReadingSize::STANDARD, false);
-    assert_eq!((group.size, group.line), (13., 18.));
-    assert_eq!((grid.block().size, grid.block().line), (12., 17.));
+    assert_eq!((group.size, group.line), (14., 21.));
+    assert_eq!((grid.block().size, grid.block().line), (13., 20.));
 }
 
 /// `✻ 41s · 1.1k tokens`: no clock time.

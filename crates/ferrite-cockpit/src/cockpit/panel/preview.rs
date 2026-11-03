@@ -246,9 +246,9 @@ impl CockpitView {
             .occlude()
             .map(|face| {
                 if active {
-                    face.hover_carried(key).text_color(rgb(TEXT_STRONG))
+                    face.hover_carried(key).text_color(rgb(INK_STRONG))
                 } else {
-                    face.text_color(rgb(TEXT_MUTED))
+                    face.text_color(rgb(INK))
                         .hover_raised(key)
                         .press_raised()
                 }
@@ -267,7 +267,7 @@ impl CockpitView {
     }
 
     /// The Preview tab's body: the preview as a card on the Panel's frame,
-    /// the board's cards' twin (`R_PANE` on `CARD`, ringed), its top and
+    /// the board's cards' twin (`R_CARD` on `CARD`, ringed), its top and
     /// foot level with theirs and its head level with the Pane head beside
     /// it. The head (`reading_head`) reads the file's path from the
     /// Thread's workspace in `LINK_INK` and its `:line` dim — an image its
@@ -370,7 +370,7 @@ impl CockpitView {
                         .child(
                             ferrite_ui::components::copy_button("preview-copy-path", shown)
                                 .tooltip("Copy path")
-                                .door(ICON_BUTTON, ICON_BUTTON_GLYPH, R_TAB),
+                                .door(ICON_BUTTON, ICON_BUTTON_GLYPH, R_CONTROL),
                         )
                         .into_any_element(),
                     head_door(
@@ -417,14 +417,14 @@ impl CockpitView {
             .flex_1()
             .min_w_0()
             .min_h_0()
-            .rounded(px(R_PANE))
+            .rounded(px(R_CARD))
             .bg(paint::CARD)
             .whitespace_normal()
             .text_size(px(FS_UI))
             .line_height(px(LH_UI))
             .child(reading_head(label, doors))
             .child(body)
-            .child(pane::card_ring(rgba(CARD_RING)))
+            .child(pane::card_ring(paint::CARD_RING))
             .on_action(cx.listener(move |view, _: &Close, _, cx| {
                 if let Some(index) = view.index_of(owner) {
                     view.close_preview(index, cx);
@@ -612,7 +612,7 @@ impl CockpitView {
 /// `READER_NUMBER_W` column of numbers, right-aligned and dim,
 /// `READER_NUMBER_GAP` before the code, the code in its syntax colours
 /// (`highlight_tokens` for the path's language). The target line lies on
-/// `paint::SELECTED` with its number in `TEXT_STRONG`. A line wider than
+/// `paint::SELECTED` with its number in `INK_STRONG`. A line wider than
 /// the preview is never cut: the list scrolls sideways as wide as its
 /// widest line, the numbers standing still over the code on the card's
 /// own ground while it slides under them; a find's occurrence past the
@@ -685,7 +685,7 @@ fn numbered_lines(
                             .h(px(LH_UI))
                             .pr(px(READER_NUMBER_GAP))
                             .bg(if marked { paint::SELECTED } else { paint::CARD })
-                            .text_color(rgb(if marked { TEXT_STRONG } else { TEXT_DIM }))
+                            .text_color(rgb(if marked { INK_STRONG } else { INK_SUBTLE }))
                             .child(SharedString::from(number.to_string())),
                     )
             })
@@ -721,7 +721,7 @@ fn unshown(why: &Unshown, path: &Path, cx: &mut Context<CockpitView>) -> AnyElem
         .justify_center()
         .gap(px(SPACE_2))
         .px(px(IMAGE_INSET))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(note)
         .children(detail.map(|detail| {
             div()
@@ -737,7 +737,7 @@ fn unshown(why: &Unshown, path: &Path, cx: &mut Context<CockpitView>) -> AnyElem
                 .px(px(CH))
                 .child(ferrite_ui::components::form_label(
                     "open original",
-                    TEXT_DIM,
+                    INK_SUBTLE,
                 ))
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();

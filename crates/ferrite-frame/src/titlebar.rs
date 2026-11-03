@@ -183,9 +183,9 @@ pub fn bar(bar: Bar) -> Div {
 }
 
 /// The bottom bar (SPEC §5.7), the window's one bar (ADR 0014, amended by
-/// ADR 0033): full width on `paint::BAR`, closed above by a `BAR_TOP`
+/// ADR 0033): full width on `paint::BAR`, closed above by a `LINE`
 /// hairline, `BAR_PAD_X` in from each end, `BAR_GAP` between its items,
-/// Geist `FS_META` in `TEXT_DIM`.
+/// Geist `FS_META` in `INK_SUBTLE`.
 /// Left the view `tabs`; the `vitals` pushed to the right end.
 ///
 /// The hairline lies on the frame's last row above the bar, as the
@@ -212,7 +212,7 @@ fn bottom_bar(tabs: Vec<AnyElement>, vitals: AnyElement) -> Div {
                 // the nav and the board, but under the panel (which stops
                 // a hairline short) only the window's ground lies there.
                 .bg(paint::BAR)
-                .child(div().size_full().bg(paint::BAR_TOP)),
+                .child(div().size_full().bg(paint::LINE)),
         )
         .child(
             div()
@@ -225,7 +225,7 @@ fn bottom_bar(tabs: Vec<AnyElement>, vitals: AnyElement) -> Div {
                 .font_family(FONT_UI)
                 .text_size(px(FS_META))
                 .line_height(px(LH_META))
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .whitespace_nowrap()
                 .overflow_hidden()
                 .child(
@@ -274,9 +274,9 @@ enum Face {
 }
 
 /// One view's tab (SPEC §5.7): `1 Solo`, `2 Work` — `BAR_TAB_H` high,
-/// `BAR_TAB_PAD_X` in, radius `R_SMALL`, the digit in `TEXT_DIM` and the
-/// name in `TEXT_BAR`, then the view's roll-up dot. The current view's
-/// sits on `paint::SELECTED` with its name `TEXT_STRONG` at the label
+/// `BAR_TAB_PAD_X` in, radius `R_CONTROL`, the digit in `INK_SUBTLE` and the
+/// name in `INK`, then the view's roll-up dot. The current view's
+/// sits on `paint::SELECTED` with its name `INK_STRONG` at the label
 /// weight; the rest take the hover fill under the pointer. A lone view is
 /// its words alone, on no ground and answering no pointer. The cockpit
 /// wires the press.
@@ -299,18 +299,18 @@ fn bar_tab(
         .gap(px(SPACE_1_5))
         .h(px(BAR_TAB_H))
         .px(px(BAR_TAB_PAD_X))
-        .rounded(px(R_SMALL))
+        .rounded(px(R_CONTROL))
         .map(|tab| match face {
             Face::Current => tab
                 .cursor_pointer()
                 .bg(paint::SELECTED)
-                .text_color(rgb(TEXT_STRONG))
+                .text_color(rgb(INK_STRONG))
                 .font_weight(W_LABEL),
-            Face::Other => tab.hover_row(key).press_row().text_color(rgb(TEXT_BAR)),
-            Face::Lone => tab.text_color(rgb(TEXT_BAR)),
+            Face::Other => tab.hover_row(key).press_row().text_color(rgb(INK)),
+            Face::Lone => tab.text_color(rgb(INK)),
         })
         .child(
-            components::tabular(div().text_color(rgb(TEXT_DIM)))
+            components::tabular(div().text_color(rgb(INK_SUBTLE)))
                 .child(SharedString::from(ordinal.to_string())),
         )
         .child(label)
@@ -320,16 +320,16 @@ fn bar_tab(
 }
 
 /// The need-you count (SPEC §5.7): a `BAR_NEED_DOT` `ATTENTION` dot and
-/// `words::needs_you` (`1 needs you`, `2 need you`) in `TEXT_BAR`. `None`
+/// `words::needs_you` (`1 needs you`, `2 need you`) in `INK`. `None`
 /// at zero. The cockpit wires the press to the Inbox. A press target among the vitals, it answers the
-/// pointer as the nav's doors do — its words brighten to `TEXT_STRONG`
+/// pointer as the nav's doors do — its words brighten to `INK_STRONG`
 /// over the hover blend — rather than with a ground: a ground would need
 /// padding the vitals' even gaps cannot spare.
 fn bar_needs_you(count: usize) -> Option<Stateful<Div>> {
     (count > 0).then(|| {
         let blend = SharedString::from("bottom-bar-needs-you");
         let ink =
-            ferrite_ui::motion::hover_blend(&blend, rgb(TEXT_BAR).into(), rgb(TEXT_STRONG).into());
+            ferrite_ui::motion::hover_blend(&blend, rgb(INK).into(), rgb(INK_STRONG).into());
         div()
             .id("bottom-bar-needs-you")
             .debug_selector(|| "bottom-bar-needs-you".into())
@@ -407,13 +407,13 @@ fn bar_free_disk(bytes: u64) -> Option<Div> {
     )
 }
 
-/// The clock (`progress::clock_label`) in `TEXT_BAR`, tabular figures.
+/// The clock (`progress::clock_label`) in `INK`, tabular figures.
 fn bar_clock(clock: SharedString) -> Div {
     components::tabular(
         div()
             .debug_selector(|| "bottom-bar-clock".into())
             .flex_shrink_0()
-            .text_color(rgb(TEXT_BAR)),
+            .text_color(rgb(INK)),
     )
     .child(clock)
 }
@@ -452,7 +452,7 @@ fn caption_buttons(maximized: bool) -> Div {
 /// control, because the pointer stops at the window's corner and the hover
 /// face has to be there when it does. Full height — the buttons win the top
 /// edge from the resize border, as Windows' own do. The mark rests at
-/// `TEXT_DIM` and brightens under the pointer; `close` lays the platform
+/// `INK_SUBTLE` and brightens under the pointer; `close` lays the platform
 /// red under it.
 fn button(
     id: &'static str,
@@ -463,7 +463,7 @@ fn button(
     let hover_ink = if close {
         CAPTION_CLOSE_INK
     } else {
-        TEXT_STRONG
+        INK_STRONG
     };
     div()
         .id(id)
@@ -505,7 +505,7 @@ fn button(
             )
         })
         .child(
-            icon(glyph, CAPTION_GLYPH, TEXT_DIM)
+            icon(glyph, CAPTION_GLYPH, INK_SUBTLE)
                 .group_hover(id, move |style| style.text_color(rgb(hover_ink))),
         )
 }

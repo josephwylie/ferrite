@@ -1229,7 +1229,7 @@ fn a_working_thread_loops_on_the_pulse_clock_and_parks_when_it_ends(cx: &mut Tes
     tick(cx);
     assert!(cx.debug_bounds("progress-mark-live").is_none());
     cx.executor().advance_clock(Duration::from_millis(
-        ferrite_ui::theme::MOTION_WORKING_FRAME_MS + 2 * ferrite_ui::theme::MOTION_PULSE_TICK_MS,
+        ferrite_ui::theme::MOTION_WORKING_DOTS_MS + 2 * ferrite_ui::theme::MOTION_PULSE_TICK_MS,
     ));
     cx.run_until_parked();
     assert!(pulse_parked(cx), "the lapsed clock parks");
@@ -2496,11 +2496,11 @@ fn frames_over(cx: &mut gpui::VisualTestContext, ms: u64) -> usize {
     frames
 }
 
-/// A menu the Cockpit draws fades in over `motion::MENU_IN` by redrawing
-/// the frame around the cached parts: after the frame that opens it, no
-/// Pane is rebuilt for its entrance, and it parks once it lands.
+/// A menu the Cockpit draws snaps open (`motion::MENU_IN` is 0ms): after
+/// the frame that opens it, nothing more is drawn for it and no Pane is
+/// rebuilt.
 #[gpui::test]
-fn a_menu_entrance_redraws_the_frame_and_no_pane(cx: &mut TestAppContext) {
+fn a_menu_snaps_open_and_rebuilds_no_pane(cx: &mut TestAppContext) {
     let (view, _fake, threads, cx) = group_board("menu-entrance", &[], cx);
     view.update(cx, |view, cx| {
         view.open_context_menu(
@@ -2510,16 +2510,15 @@ fn a_menu_entrance_redraws_the_frame_and_no_pane(cx: &mut TestAppContext) {
         )
     });
     cx.run_until_parked();
-    // The frame that opens it is the Cockpit's change; the entrance is
-    // every frame after.
-    let mut frames = frames_over(cx, 16);
+    // The frame that opens it is the Cockpit's change; a snap asks for no
+    // frame after it.
+    frames_over(cx, 16);
     let panes = pane_builds(&threads);
-    frames += frames_over(cx, theme::MOTION_MENU_IN_MS + 16);
+    let frames = frames_over(cx, 160);
     let built = built_since(&threads, &panes);
-    eprintln!("MENU_ENTRANCE frames={frames} pane_builds={built:?}");
-    assert!(frames > 0, "the menu fades in");
-    assert_eq!(built, [0, 0, 0, 0], "its entrance rebuilt a Pane");
-    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+    eprintln!("MENU_OPEN frames={frames} pane_builds={built:?}");
+    assert_eq!(frames, 0, "the menu snaps open: no entrance frames");
+    assert_eq!(built, [0, 0, 0, 0], "opening it rebuilt a Pane");
 }
 
 /// The pointer on a row of a menu the Cockpit draws blends the row's wash
@@ -2759,25 +2758,13 @@ fn plays_beside_nav_rebuilds(
 }
 
 /// A part's rebuild landing mid-entrance — the nav rebuilt alone on every
-/// frame — starves no `motion::Played` entrance the Cockpit draws: a menu,
-/// the palette, a sheet. The part's ancestors are dirtied with it, so the
-/// Cockpit around it draws again and each entrance asks there for its
-/// next frame.
+/// frame — starves no `motion::Played` entrance the Cockpit draws: the
+/// palette, a sheet (a menu snaps, so it has none). The part's ancestors
+/// are dirtied with it, so the Cockpit around it draws again and each
+/// entrance asks there for its next frame.
 #[gpui::test]
 fn nav_rebuilds_starve_no_entrance(cx: &mut TestAppContext) {
-    let (view, _fake, threads, cx) = group_board("nav-rebuild-entrances", &[], cx);
-    view.update(cx, |view, cx| {
-        view.open_context_menu(
-            MenuTarget::Pane(threads[0]),
-            gpui::point(px(400.), px(300.)),
-            cx,
-        )
-    });
-    cx.run_until_parked();
-    plays_beside_nav_rebuilds(&view, theme::MOTION_MENU_IN_MS, "menu", cx);
-    cx.simulate_keystrokes("escape");
-    cockpit_renders_over(cx, 300);
-
+    let (view, _fake, _threads, cx) = group_board("nav-rebuild-entrances", &[], cx);
     view.update_in(cx, |view, window, cx| {
         view.open_palette(crate::palette::PaletteScope::All, "", window, cx)
     });
@@ -2859,11 +2846,11 @@ fn the_palette_comes_in_and_rebuilds_no_pane(cx: &mut TestAppContext) {
     assert_eq!(display_frames(cx), 0, "landed: no more frames");
 }
 
-/// A Composer's choice menu fades in where it measured itself to stand,
-/// from its first placed frame (`Opens::InPlace`), standing still as it
-/// comes in, and asks for nothing once it lands.
+/// A Composer's choice menu opens where it measured itself to stand
+/// (`Opens::InPlace`), standing still once placed, and asks for nothing
+/// after.
 #[gpui::test]
-fn a_choice_menu_fades_in_in_place_and_then_rests(cx: &mut TestAppContext) {
+fn a_choice_menu_opens_in_place_and_then_rests(cx: &mut TestAppContext) {
     let (view, _fake, threads, cx) = group_board("choice-menu-entrance", &[], cx);
     view.update(cx, |view, cx| {
         view.cockpit.toggle_fullscreen();
@@ -2872,25 +2859,20 @@ fn a_choice_menu_fades_in_in_place_and_then_rests(cx: &mut TestAppContext) {
     cockpit_renders_over(cx, 300);
     view.update(cx, |view, cx| view.open_provider_picker(threads[0], cx));
     cx.run_until_parked();
-    let mut frames = 0;
     let mut stood = Vec::new();
-    for _ in 0..(theme::MOTION_MENU_IN_MS + 48) / 16 {
+    for _ in 0..160 / 16 {
         cx.executor().advance_clock(Duration::from_millis(16));
         cx.run_until_parked();
-        frames += display_frames(cx);
+        display_frames(cx);
         if ferrite_ui::menu::testing::drawn().placed {
             stood.extend(cx.debug_bounds("choice-menu").map(|menu| menu.bottom()));
         }
     }
-    assert!(frames > 0, "it fades in");
-    assert_eq!(display_frames(cx), 0, "landed: no more frames");
-    assert!(
-        stood.len() > 2,
-        "the premise: it was drawn placed as it came in"
-    );
+    assert_eq!(display_frames(cx), 0, "placed: no more frames");
+    assert!(!stood.is_empty(), "the premise: it was drawn placed");
     assert!(
         stood.windows(2).all(|pair| pair[0] == pair[1]),
-        "it stood still as it came in: {stood:?}"
+        "it stood still once placed: {stood:?}"
     );
 }
 

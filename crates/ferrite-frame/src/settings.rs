@@ -155,7 +155,7 @@ fn shown(pages: &[Page], selected: PageKey, query: &str) -> Shown {
 
 /// The Settings body under its head: the sidebar (the search line, the
 /// pages, `About` at the foot) beside the selected page, or the search's
-/// results, split by a `FLOAT_RULE`.
+/// results, split by a `FLOAT_EDGE` rule.
 fn body(
     pages: Vec<Page>,
     selected: PageKey,
@@ -187,7 +187,7 @@ fn body(
         .w(px(SETTINGS_SIDEBAR_W))
         .min_h_0()
         .border_r_1()
-        .border_color(FLOAT_RULE)
+        .border_color(paint::FLOAT_EDGE)
         .pb(px(HALF_ROW))
         .child(search_field(search, window, cx))
         .child(
@@ -228,8 +228,8 @@ fn body(
                 .items_center()
                 .h(px(ROW))
                 .px(px(SETTINGS_ROW_PAD_X))
-                .font_weight(W_STRONG)
-                .text_color(rgb(TEXT_STRONG))
+                .font_weight(W_LABEL)
+                .text_color(rgb(INK_STRONG))
                 .child(shown.title.clone()),
         )
         .child(
@@ -243,7 +243,7 @@ fn body(
                     list.child(
                         components::text_ui()
                             .px(px(SETTINGS_ROW_PAD_X))
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(rgb(INK_SUBTLE))
                             .child("No matching settings"),
                     )
                 })
@@ -257,7 +257,7 @@ fn body(
 
     // The page scrolls under a fade at its foot, so a row cut by the
     // sheet's edge reads as more below rather than as clipped.
-    let ground: gpui::Hsla = FLOAT_GROUND.into();
+    let ground: gpui::Hsla = paint::FLOAT.into();
     let content = div()
         .relative()
         .flex()
@@ -288,7 +288,7 @@ fn body(
 }
 
 /// The search line atop the sidebar: the `search` icon, then the field,
-/// over a `HAIRLINE` — the palette's own input line. The icon stands on
+/// over a `FLOAT_EDGE` rule — the palette's own input line. The icon stands on
 /// the page names' edge (`FLOAT_PAD_X`).
 fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
     let focused = gpui::Focusable::focus_handle(search.read(cx), cx).is_focused(window);
@@ -302,11 +302,11 @@ fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
             .h(px(ROW + 2.0 * SPACE_1))
             .px(px(FLOAT_PAD_X))
             .border_b_1()
-            .border_color(paint::HAIRLINE)
+            .border_color(paint::FLOAT_EDGE)
             .child(ferrite_ui::icons::icon(
                 ferrite_ui::icons::SEARCH,
                 FIND_ICON,
-                TEXT_DIM,
+                INK_SUBTLE,
             ))
             .child(
                 div()
@@ -319,27 +319,27 @@ fn search_field(search: &Entity<InputState>, window: &Window, cx: &App) -> Div {
 }
 
 /// A sidebar row, a menu row of the sheet's float: inset `FLOAT_PAD` from
-/// its edges, radius `R_MENU_ROW`, the page's name. The page shown is
-/// `FLOAT_SEL` in `TEXT_STRONG`; the rest `TEXT`, `FLOAT_HOVER` under the
+/// its edges, radius `R_CONTROL`, the page's name. The page shown is
+/// `FLOAT_SEL` in `INK_STRONG`; the rest `INK`, `FLOAT_HOVER` under the
 /// pointer — the float's own steps, which read on every platform (the
 /// frame's `RAISED` is the float's own grey once opaque). While a search
-/// runs, a page with no match reads `TEXT_DIM`.
+/// runs, a page with no match reads `INK_SUBTLE`.
 fn nav_row(key: PageKey, selected: bool, hit: bool, cx: &App) -> Button {
     let (rest, hover): (gpui::Hsla, gpui::Hsla) = if selected {
-        (FLOAT_SEL.into(), FLOAT_SEL.into())
+        (paint::FLOAT_SEL.into(), paint::FLOAT_SEL.into())
     } else {
-        (gpui::rgba(TRANSPARENT).into(), FLOAT_HOVER.into())
+        (gpui::rgba(TRANSPARENT).into(), paint::FLOAT_HOVER.into())
     };
     let ink = match (selected, hit) {
-        (true, _) => TEXT_STRONG,
-        (false, true) => TEXT,
-        (false, false) => TEXT_DIM,
+        (true, _) => INK_STRONG,
+        (false, true) => INK,
+        (false, false) => INK_SUBTLE,
     };
     components::faded_button(
         key.selector(),
         rest,
         hover,
-        FLOAT_SEL.into(),
+        paint::FLOAT_SEL.into(),
         rgb(ink).into(),
         cx,
     )
@@ -349,7 +349,7 @@ fn nav_row(key: PageKey, selected: bool, hit: bool, cx: &App) -> Button {
     .w_full()
     .h(px(SETTINGS_NAV_ROW_H))
     .px(px(MENU_ROW_PAD_X))
-    .rounded(px(R_MENU_ROW))
+    .rounded(px(R_CONTROL))
     .child(
         div()
             .flex()
@@ -359,8 +359,8 @@ fn nav_row(key: PageKey, selected: bool, hit: bool, cx: &App) -> Button {
     )
 }
 
-/// A group: its label (and a provider's mark) as a `TEXT_DIM` row, then
-/// its rows, each over a `FLOAT_RULE` hairline. The title, the label and
+/// A group: its label (and a provider's mark) as a `INK_SUBTLE` row, then
+/// its rows, each over a `FLOAT_EDGE` rule. The title, the label and
 /// every row's text stand on one edge, `SETTINGS_ROW_PAD_X` in; only the
 /// hairlines reach the column's edges.
 fn group_rows(
@@ -384,7 +384,7 @@ fn group_rows(
                 .gap(px(CH))
                 .h(px(ROW))
                 .px(px(SETTINGS_ROW_PAD_X))
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .children(group.mark.map(|(path, ink)| icon(path, STATUS_LOGO, ink)))
                 .child(section_words(&label))
         }))
@@ -395,7 +395,7 @@ fn group_rows(
                 .px(px(SETTINGS_ROW_PAD_X))
                 .text_size(px(FS_META))
                 .line_height(px(LH_META))
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .child(note)
         }))
 }
@@ -445,7 +445,7 @@ fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> Div {
                         .truncate()
                         .text_size(px(FS_TITLE))
                         .line_height(px(LH_UI))
-                        .text_color(rgb(TEXT_STRONG))
+                        .text_color(rgb(INK_STRONG))
                         .child(row.title.clone()),
                 )
                 .when(hinted, |text| text.child(hint(row.hint.clone()))),
@@ -468,18 +468,18 @@ fn setting_row(row: &Row, window: &mut Window, cx: &mut App) -> Div {
         )
 }
 
-/// A row's description: `TEXT_DIM` at 13, wrapping to a second line where
+/// A row's description: `INK_SUBTLE` at 13, wrapping to a second line where
 /// it needs one. One that opens with a key table's chord (`cmd-B toggles it
 /// any time`) draws the chord as keys (`⌘B`, `components::key_combo`): the
 /// face has no command glyph.
 fn hint(detail: SharedString) -> Div {
-    let line = components::text_ui().min_w_0().text_color(rgb(TEXT_DIM));
+    let line = components::text_ui().min_w_0().text_color(rgb(INK_SUBTLE));
     match detail.split_once(' ') {
         Some((chord, rest)) if chord.starts_with("cmd-") => line
             .flex()
             .items_center()
             .gap(px(CH))
-            .child(components::key_combo(chord, TEXT_DIM))
+            .child(components::key_combo(chord, INK_SUBTLE))
             .child(SharedString::from(rest.to_string())),
         _ => line.child(detail),
     }
@@ -498,7 +498,7 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
             .gap(px(SPACE_0_5))
             .rounded(px(R_CONTROL))
             .border_1()
-            .border_color(gpui::rgba(BORDER))
+            .border_color(paint::FLOAT_EDGE)
             .children(
                 options
                     .into_iter()
@@ -528,7 +528,7 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
             .px(px(SETTINGS_SEGMENT_PAD_X))
             .rounded(px(R_CONTROL))
             .border_1()
-            .border_color(gpui::rgba(BORDER))
+            .border_color(paint::FLOAT_EDGE)
             .child(
                 div()
                     .flex()
@@ -539,7 +539,7 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
                         div()
                             .min_w_0()
                             .truncate()
-                            .child(components::form_label(selected.clone(), TEXT)),
+                            .child(components::form_label(selected.clone(), INK)),
                     )
                     .child(icon(icons::CHEVRON_DOWN, ICON_CHEVRON, ICON_INK).flex_shrink_0()),
             )
@@ -578,7 +578,7 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
             change,
         } => {
             let none: gpui::Hsla = gpui::rgba(TRANSPARENT).into();
-            components::faded_button(id, none, none, none, rgb(TEXT).into(), cx)
+            components::faded_button(id, none, none, none, rgb(INK).into(), cx)
                 .tab_stop(true)
                 .selected(checked)
                 .debug_selector(move || id.into())
@@ -608,7 +608,7 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
         } => {
             let button = |at: usize, label: &'static str, delta: i32, live: bool| {
                 let step = step.clone();
-                let ink = if live { TEXT } else { TEXT_FAINT };
+                let ink = if live { INK } else { TEXT_FAINT };
                 let none: gpui::Hsla = gpui::rgba(TRANSPARENT).into();
                 let (hover, press): (gpui::Hsla, gpui::Hsla) = if live {
                     (paint::HOVER.into(), paint::PRESS.into())
@@ -638,7 +638,7 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
                         .min_w(px(SETTINGS_STEPPER_VALUE_W))
                         .flex()
                         .justify_center()
-                        .child(components::form_label(value.clone(), TEXT)),
+                        .child(components::form_label(value.clone(), INK)),
                 ))
                 .child(button(1, "\u{203a}", 1, can_up))
                 .into_any_element()
@@ -709,7 +709,7 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
                     }),
             )
             .into_any_element(),
-        // A read-only fact (About): its value at the right in `TEXT_DIM`
+        // A read-only fact (About): its value at the right in `INK_SUBTLE`
         // (versions are machine text), wrapping anywhere rather than cut.
         Control::Fact { value } => fact_value(&title, value).into_any_element(),
         // The one button that does something about the row: the primary
@@ -774,7 +774,7 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
                         if copied { RUNNING } else { TEXT_FAINT },
                     )
                     .flex_shrink_0()
-                    .group_hover(COPY_GROUP, |style| style.text_color(rgb(TEXT_DIM))),
+                    .group_hover(COPY_GROUP, |style| style.text_color(rgb(INK_SUBTLE))),
                 )
                 .into_any_element()
         }
@@ -785,16 +785,16 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
 const CLI_DEFAULT_NOTE: &str = "follows the CLI";
 
 /// One segment of a short choice (theme `SETTINGS_SEGMENT_*`): chosen, it
-/// is lit — `paint::SELECTED` with `TEXT_STRONG` at `W_LABEL`; the rest
-/// `TEXT_DIM` on nothing, `paint::HOVER` under the pointer. A tab stop.
+/// is lit — `paint::FLOAT_SEL` with `INK_STRONG` at `W_LABEL`; the rest
+/// `INK_SUBTLE` on nothing, `paint::HOVER` under the pointer. A tab stop.
 fn segment(id: (&'static str, usize), label: SharedString, selected: bool, cx: &App) -> Button {
     let (rest, hover, ink): (gpui::Hsla, gpui::Hsla, u32) = if selected {
-        (paint::SELECTED.into(), paint::SELECTED.into(), TEXT_STRONG)
+        (paint::FLOAT_SEL.into(), paint::FLOAT_SEL.into(), INK_STRONG)
     } else {
         (
             gpui::rgba(TRANSPARENT).into(),
             paint::HOVER.into(),
-            TEXT_DIM,
+            INK_SUBTLE,
         )
     };
     components::faded_button(id, rest, hover, paint::PRESS.into(), rgb(ink).into(), cx)
@@ -804,7 +804,7 @@ fn segment(id: (&'static str, usize), label: SharedString, selected: bool, cx: &
         .debug_selector(move || format!("{}-{}", id.0, id.1))
         .h(px(SETTINGS_SEGMENT_H))
         .px(px(SETTINGS_SEGMENT_PAD_X))
-        .rounded(px(R_SMALL))
+        .rounded(px(R_CONTROL))
         .child(
             components::text_ui()
                 .font_weight(if selected { W_LABEL } else { W_BODY })
@@ -814,7 +814,7 @@ fn segment(id: (&'static str, usize), label: SharedString, selected: bool, cx: &
 }
 
 /// An action on a row (`Copy`, `Restart`, `Add`, `Remove`): the quiet
-/// bordered button — `TEXT` on nothing in a `BORDER` ring, radius
+/// bordered button — `INK` on nothing in a `FLOAT_EDGE` ring, radius
 /// `R_CONTROL`, `paint::HOVER` under the pointer. Settings has no filled
 /// button; what changes state is a switch or a segment.
 fn quiet_button(id: impl Into<gpui::ElementId>, label: SharedString, cx: &App) -> Button {
@@ -823,7 +823,7 @@ fn quiet_button(id: impl Into<gpui::ElementId>, label: SharedString, cx: &App) -
         gpui::rgba(TRANSPARENT).into(),
         paint::HOVER.into(),
         paint::PRESS.into(),
-        rgb(TEXT).into(),
+        rgb(INK).into(),
         cx,
     )
     .tab_stop(true)
@@ -831,8 +831,8 @@ fn quiet_button(id: impl Into<gpui::ElementId>, label: SharedString, cx: &App) -
     .px(px(SETTINGS_SEGMENT_PAD_X))
     .rounded(px(R_CONTROL))
     .border_1()
-    .border_color(gpui::rgba(BORDER))
-    .child(components::form_label(label, TEXT))
+    .border_color(paint::FLOAT_EDGE)
+    .child(components::form_label(label, INK))
 }
 
 /// A path fact's hover reaches its copy mark through this group.
@@ -846,7 +846,7 @@ fn fact_value(title: &SharedString, value: SharedString) -> Div {
         .text_right()
         .font_family(FONT_CODE)
         .font_weight(W_BODY)
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(value)
 }
 
@@ -860,8 +860,8 @@ mod tests {
     fn the_settings_sheet_is_the_sheet_recipe() {
         let mut drawn = settings_sheet();
         let style = drawn.style();
-        assert_eq!(style.background, Some(FLOAT_GROUND.into()));
-        assert_eq!(style.border_color, Some(FLOAT_EDGE.into()));
+        assert_eq!(style.background, Some(paint::FLOAT.into()));
+        assert_eq!(style.border_color, Some(paint::FLOAT_EDGE.into()));
         assert_eq!(style.box_shadow, Some(components::float_shadow()));
         for head in [settings_head(div()), sheet_head("Project", div())] {
             let mut head = head;
@@ -941,7 +941,7 @@ mod tests {
             ferrite_pane::pane::init_components(cx);
             let mut on = segment(("c", 0), "Claude".into(), true, cx);
             let mut off = segment(("c", 1), "Codex".into(), false, cx);
-            assert_eq!(on.style().background, Some(paint::SELECTED.into()));
+            assert_eq!(on.style().background, Some(paint::FLOAT_SEL.into()));
             assert_eq!(off.style().background, None);
         });
     }

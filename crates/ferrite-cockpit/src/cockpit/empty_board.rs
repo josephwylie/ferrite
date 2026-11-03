@@ -4,7 +4,7 @@
 //! and the four Threads used last.
 //!
 //! In the chrome's grammar (theme `EMPTY_*`, SPEC §2, §5.8): sentence-case
-//! labels, an icon column, keys read from the key table in `TEXT_DIM`, the
+//! labels, an icon column, keys read from the key table in `INK_SUBTLE`, the
 //! selection a rounded `SELECTED` row and the rest the row hover.
 //!
 //! The rows are a list with its own focus and key context (`EmptyBoard`):
@@ -83,7 +83,7 @@ fn home_row(
                 .items_center()
                 .gap(px(SPACE_3))
                 .text_size(px(FS_META))
-                .text_color(rgb(TEXT_DIM)),
+                .text_color(rgb(INK_SUBTLE)),
         )
 }
 
@@ -221,7 +221,7 @@ impl CockpitView {
             .whitespace_nowrap()
             .text_size(px(FS_META))
             .line_height(px(LH_META))
-            .text_color(rgb(TEXT_DIM));
+            .text_color(rgb(INK_SUBTLE));
         if found.is_empty() {
             return Some(line.child("No provider CLI found"));
         }
@@ -275,15 +275,15 @@ impl CockpitView {
                 ..
             } = row;
             let selected = at == cursor;
-            let ink = if selected { TEXT_STRONG } else { TEXT };
+            let ink = if selected { INK_STRONG } else { INK };
             let keys = Self::key_label(action);
             let row = home_row(
                 ("empty-board-command", at),
-                ferrite_ui::icons::icon(glyph, NAV_ICON, if selected { TEXT } else { TEXT_DIM })
+                ferrite_ui::icons::icon(glyph, NAV_ICON, if selected { INK } else { INK_SUBTLE })
                     .into_any_element(),
                 div().text_color(rgb(ink)).child(verb),
                 div().children(keys.map(|keys| {
-                    ferrite_ui::components::key_combo(&keys, TEXT_DIM)
+                    ferrite_ui::components::key_combo(&keys, INK_SUBTLE)
                         .font_family(FONT_UI)
                         .text_size(px(FS_META))
                 })),
@@ -320,7 +320,7 @@ impl CockpitView {
             home_row(
                 ("empty-board-recent", thread.get() as usize),
                 nav::mark(row.status, false),
-                div().text_color(rgb(TEXT)).child(row.name.clone()),
+                div().text_color(rgb(INK)).child(row.name.clone()),
                 div()
                     .children(row.project.clone())
                     .children(age.filter(|age| !age.is_empty())),
@@ -352,7 +352,7 @@ impl CockpitView {
                         .text_size(px(FS_META))
                         .line_height(px(LH_META))
                         .font_weight(W_LABEL)
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(rgb(INK_SUBTLE))
                         .child("Recent"),
                 )
                 .children(recent_rows)
@@ -382,7 +382,7 @@ impl CockpitView {
             .font_family(FONT_UI)
             .text_size(px(FS_UI))
             .line_height(px(LH_UI))
-            .text_color(rgb(TEXT))
+            .text_color(rgb(INK))
             // Centred, a touch above the middle (`EMPTY_LIFT`), and pinned
             // to the top once it no longer fits.
             .child(div().flex_1().min_h_0())

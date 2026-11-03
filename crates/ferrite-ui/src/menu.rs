@@ -4,13 +4,13 @@
 //! decides the rows and runs the verbs.
 //!
 //! Every menu, picker, popover and card draws in this one grammar, the
-//! palette's shell at a smaller scale: the float (`float`: `FLOAT_GROUND`,
-//! radius `R_BLOCK`, a 1px `FLOAT_EDGE` ring, the float shadow), a head
+//! palette's shell at a smaller scale: the float (`float`: `paint::FLOAT`,
+//! radius `R_FLOAT`, a 1px `FLOAT_EDGE` ring, the float shadow), a head
 //! row (`head`), section headings (`section`), rows `FLOAT_ROW_H` high
 //! inset `FLOAT_PAD` from the float's edge (`row`, `item_row`), the cursor
-//! row a `FLOAT_SEL` fill with its label `TEXT_STRONG`, and a footer of key
-//! hints under a `FLOAT_RULE` hairline (`footer`), every word of it
-//! `TEXT_DIM`. A short ladder's chosen step is a lit token (`token`).
+//! row a `FLOAT_SEL` fill with its label `INK_STRONG`, and a footer of key
+//! hints under a `FLOAT_EDGE` rule (`footer`), every word of it
+//! `INK_SUBTLE`. A short ladder's chosen step is a lit token (`token`).
 //! Floats are opaque (theme WP-E, FL-15), so their rows wear the float
 //! inks (`FLOAT_SEL` on the cursor row, `FLOAT_HOVER` under the pointer),
 //! steps over `FLOAT`.
@@ -43,8 +43,8 @@ pub fn float() -> Div {
     components::floating_surface().p(px(0.))
 }
 
-/// A float's head row: its title in `TEXT_STRONG` at `W_LABEL`, and at the
-/// right whatever the caller adds (its command, a verb), in `TEXT_DIM`.
+/// A float's head row: its title in `INK_STRONG` at `W_LABEL`, and at the
+/// right whatever the caller adds (its command, a verb), in `INK_SUBTLE`.
 pub fn head(title: impl Into<SharedString>) -> Div {
     components::text_ui()
         .flex()
@@ -55,19 +55,19 @@ pub fn head(title: impl Into<SharedString>) -> Div {
         .h(px(FLOAT_ROW_H))
         .px(px(FLOAT_PAD_X))
         .whitespace_nowrap()
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(
             div()
                 .min_w_0()
                 .truncate()
                 .font_weight(W_LABEL)
-                .text_color(rgb(TEXT_STRONG))
+                .text_color(rgb(INK_STRONG))
                 .child(title.into()),
         )
 }
 
 /// A section heading, as the palette sets one at the float's scale: its
-/// word in 12/500 `TEXT_DIM` on the heading's foot, led by a provider's
+/// word in 12/500 `INK_SUBTLE` on the heading's foot, led by a provider's
 /// logomark in its brand colour, an optional note after a `·`.
 pub fn section(
     title: impl Into<SharedString>,
@@ -89,7 +89,7 @@ pub fn section(
         // The meta pair's line, so the word and its logo share one centre.
         .line_height(px(LH_META))
         .font_weight(W_LABEL)
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .when_some(logo, |line, (path, ink)| {
             line.child(
                 div()
@@ -114,26 +114,26 @@ const ARMED_SEAM: &str = " \u{b7} ";
 const ARMED_ASK: &str = "press again";
 
 /// A row's inks: its label, and the ground (`FLOAT_SEL` on the cursor and
-/// an armed row). Its description and key are `TEXT_DIM` (`detail_ink`).
+/// an armed row). Its description and key are `INK_SUBTLE` (`detail_ink`).
 fn label_ink(item: &Item, cursor: bool, armed: bool) -> u32 {
     if item.disabled {
-        TEXT_DIM
+        INK_SUBTLE
     } else if armed {
         BLOCKED
     } else if cursor {
-        TEXT_STRONG
+        INK_STRONG
     } else {
-        TEXT
+        INK
     }
 }
 
-/// A row's description and key: `TEXT_DIM`, lifted to `TEXT_MUTED` on
+/// A row's description and key: `INK_SUBTLE`, lifted to `INK` on
 /// the filled cursor row so they keep their floor on its step.
 fn detail_ink(item: &Item, cursor: bool, armed: bool) -> u32 {
     if armed || (cursor && !item.disabled) {
-        TEXT_MUTED
+        INK
     } else {
-        TEXT_DIM
+        INK_SUBTLE
     }
 }
 
@@ -156,10 +156,10 @@ pub fn key_label(keys: &str, ink: u32) -> AnyElement {
 
 /// A row's face with no id and no pointer role, for kit hosts that own the
 /// row's interaction: `FLOAT_ROW_H`, inset `FLOAT_PAD` from the float's
-/// edge, radius `R_MENU_ROW`; a leading mark, the label (strong on its
+/// edge, radius `R_CONTROL`; a leading mark, the label (strong on its
 /// fuzzy matches), the description after it, the key hard right, and a
 /// `✓` on the standing choice. The cursor (or an armed) row is `FLOAT_SEL`
-/// with its label `TEXT_STRONG`.
+/// with its label `INK_STRONG`.
 pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
     let ink = label_ink(item, cursor, armed);
     let dim = detail_ink(item, cursor, armed);
@@ -227,9 +227,9 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
         }))
         .mx(px(FLOAT_PAD))
         .px(px(MENU_ROW_PAD_X))
-        .rounded(px(R_MENU_ROW))
+        .rounded(px(R_CONTROL))
         .whitespace_nowrap()
-        .when(armed || (cursor && !item.disabled), |row| row.bg(FLOAT_SEL))
+        .when(armed || (cursor && !item.disabled), |row| row.bg(paint::FLOAT_SEL))
         .text_color(rgb(ink))
         .when_some(item.leading, |row, (path, mark)| {
             row.child(
@@ -263,22 +263,22 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
                     .flex()
                     .flex_shrink_0()
                     .debug_selector(|| "float-check".into())
-                    .child(components::glyph("\u{2713}", TEXT_STRONG)),
+                    .child(components::glyph("\u{2713}", INK_STRONG)),
             )
         })
 }
 
-/// A row's tag (`Recommended`, `Default`): the badge size in `TEXT_DIM` on
-/// a hairline fill at `R_SMALL` — a word set apart, not a button.
+/// A row's tag (`Recommended`, `Default`): the badge size in `INK_SUBTLE` on
+/// a hairline fill at `R_CONTROL` — a word set apart, not a button.
 fn badge_face(text: SharedString) -> Div {
     div()
         .flex_shrink_0()
         .px(px(SPACE_1_5))
-        .rounded(px(R_SMALL))
+        .rounded(px(R_CONTROL))
         .bg(gpui::rgba(BADGE_FILL))
         .text_size(px(FS_BADGE))
         .line_height(px(LH_META))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(text)
 }
 
@@ -300,7 +300,7 @@ pub fn item_row(id: impl Into<ElementId>, item: &Item, cursor: bool, armed: bool
 }
 
 /// An inert line in a float (loading, empty, a refusal): one row in
-/// `TEXT_DIM` on the rows' text edge.
+/// `INK_SUBTLE` on the rows' text edge.
 pub fn note(text: impl Into<SharedString>) -> Div {
     components::text_ui()
         .flex()
@@ -309,12 +309,12 @@ pub fn note(text: impl Into<SharedString>) -> Div {
         .min_h(px(FLOAT_ROW_H))
         .px(px(FLOAT_PAD_X))
         .cursor_default()
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(text.into())
 }
 
-/// A float's footer: a `FLOAT_RULE` rule, then one row of key hints —
-/// `↑↓ select · ⏎ open · esc` — all `TEXT_DIM`, its `·` too (FL-14).
+/// A float's footer: a `FLOAT_EDGE` rule, then one row of key hints —
+/// `↑↓ select · ⏎ open · esc` — all `INK_SUBTLE`, its `·` too (FL-14).
 pub fn footer(hints: &[(&str, &str)]) -> Div {
     let text = hints
         .iter()
@@ -330,7 +330,7 @@ pub fn footer(hints: &[(&str, &str)]) -> Div {
     footer_line(text)
 }
 
-/// A footer row of already-joined words, all `TEXT_DIM`: cut with an
+/// A footer row of already-joined words, all `INK_SUBTLE`: cut with an
 /// ellipsis where the row is narrower than its hints.
 pub fn footer_line(text: impl Into<SharedString>) -> Div {
     let text: SharedString = text.into();
@@ -338,7 +338,7 @@ pub fn footer_line(text: impl Into<SharedString>) -> Div {
 }
 
 /// The footer's row with nothing in it yet: `FLOAT_SECTION_GAP` of air,
-/// the `FLOAT_RULE` hairline, one row of 12 `TEXT_DIM`. For a footer whose
+/// the `FLOAT_EDGE` rule, one row of 12 `INK_SUBTLE`. For a footer whose
 /// keys are set as key combinations (`⌘`, `components::key_combo`).
 pub fn footer_shell() -> Div {
     components::text_ui()
@@ -349,18 +349,18 @@ pub fn footer_shell() -> Div {
         .mt(px(FLOAT_SECTION_GAP))
         .px(px(FLOAT_PAD_X))
         .border_t_1()
-        .border_color(FLOAT_RULE)
+        .border_color(paint::FLOAT_EDGE)
         .whitespace_nowrap()
         .overflow_hidden()
         .text_size(px(FS_META))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
 }
 
 /// One step of a short ladder (an effort level, a two-way setting), a
 /// `TOKEN_H` pill `TOKEN_PAD_X` either side of its word: the chosen one
-/// on the selection fill (`FLOAT_SEL`) in `TEXT_STRONG` — a segmented
+/// on the selection fill (`FLOAT_SEL`) in `INK_STRONG` — a segmented
 /// control's lit step, the same lift a cursor row gets, not a second
-/// primary button — the rest `TEXT_DIM`, `FLOAT_HOVER` under the pointer.
+/// primary button — the rest `INK_SUBTLE`, `FLOAT_HOVER` under the pointer.
 /// The lit step changes fill and ink only, never weight: picking another
 /// step never moves the steps beside it.
 pub fn token(
@@ -379,16 +379,16 @@ pub fn token(
         .justify_center()
         .h(px(TOKEN_H))
         .px(px(TOKEN_PAD_X))
-        .rounded(px(R_SMALL))
+        .rounded(px(R_CONTROL))
         .whitespace_nowrap()
         .child(label);
     if chosen {
         token
-            .bg(FLOAT_SEL)
-            .text_color(rgb(TEXT_STRONG))
+            .bg(paint::FLOAT_SEL)
+            .text_color(rgb(INK_STRONG))
     } else {
         token
-            .text_color(rgb(TEXT_DIM))
+            .text_color(rgb(INK_SUBTLE))
             .cursor_pointer()
             .hover_float(key)
             .press_float()
@@ -425,7 +425,7 @@ pub fn row(index: usize, item: &Item, armed: bool) -> Stateful<Div> {
                 div()
                     .flex()
                     .flex_shrink_0()
-                    .child(key_label(&keys, TEXT_DIM)),
+                    .child(key_label(&keys, INK_SUBTLE)),
             )
         },
     )
@@ -447,15 +447,15 @@ pub fn tooltip(
             .px(px(TOOLTIP_PAD_X))
             .py(px(TOOLTIP_PAD_Y))
             .max_w(px(TOOLTIP_MAX_W))
-            .rounded(px(R_BLOCK))
-            .border_color(FLOAT_EDGE)
+            .rounded(px(R_FLOAT))
+            .border_color(paint::FLOAT_EDGE)
             .shadow(components::float_shadow())
             .build(window, cx)
     }
 }
 
 /// A tooltip that names a verb and its key (`Toggle sidebar ⌘B`,
-/// `Close esc`, `Send ↵`): the label, then the key in `TEXT_DIM`,
+/// `Close esc`, `Send ↵`): the label, then the key in `INK_SUBTLE`,
 /// modifiers drawn as glyphs (`components::key_combo`). No parentheses,
 /// and no suffix when `key` is `None` — a key is read from the key table
 /// (`components::bound_chord`), never typed, so a tooltip never names a
@@ -479,7 +479,7 @@ pub fn tooltip_with_key(
                 .child(gpui::div().min_w_0().child(label.clone()))
                 .children(
                     key.as_ref()
-                        .map(|key| components::key_combo(key, TEXT_DIM).flex_shrink_0()),
+                        .map(|key| components::key_combo(key, INK_SUBTLE).flex_shrink_0()),
                 )
         })
         .font_family(FONT_UI)
@@ -488,8 +488,8 @@ pub fn tooltip_with_key(
         .px(px(TOOLTIP_PAD_X))
         .py(px(TOOLTIP_PAD_Y))
         .max_w(px(TOOLTIP_MAX_W))
-        .rounded(px(R_BLOCK))
-        .border_color(FLOAT_EDGE)
+        .rounded(px(R_FLOAT))
+        .border_color(paint::FLOAT_EDGE)
         .shadow(components::float_shadow())
         .build(window, cx)
     }
@@ -787,14 +787,14 @@ impl ChoiceContent {
                 .h(px(FLOAT_ROW_H + 1.0))
                 .px(px(FLOAT_PAD_X))
                 .border_t_1()
-                .border_color(FLOAT_RULE)
+                .border_color(paint::FLOAT_EDGE)
                 .whitespace_nowrap()
                 .child(
                     div()
                         .flex_shrink_0()
                         .mr(px(SPACE_2))
                         .whitespace_nowrap()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(rgb(INK_SUBTLE))
                         .child(ladder.label.clone()),
                 );
             for (at, step) in ladder.steps.iter().enumerate() {
@@ -815,8 +815,9 @@ impl ChoiceContent {
         }
         let menu = self.clone();
         // It enters (`menu-in`, in place: it measures its own box) from its
-        // first frame on its measured place; until then it is drawn at zero
-        // opacity, so the entrance is keyed on being placed.
+        // first frame on its measured place; until then the popover draws it
+        // at zero opacity, so the entrance is keyed on being placed. (At
+        // 0ms the entrance is a snap and draws nothing of its own.)
         let entrance = ("choice-menu-in", self.state.read(cx).placed as usize);
         let surface = components::on_bounds(surface, move |bounds, window, cx| {
             if let Some(place) = menu.place {
@@ -1055,7 +1056,7 @@ mod tests {
         assert_eq!(drawn.style().mouse_cursor, None);
     }
 
-    /// FL-14: a footer's words and seams are all `TEXT_DIM` (no faint
+    /// FL-14: a footer's words and seams are all `INK_SUBTLE` (no faint
     /// `·`), under the float's own rule.
     #[test]
     fn a_footer_is_one_muted_line_under_the_float_rule() {
@@ -1064,13 +1065,13 @@ mod tests {
             ("\u{23ce}", "apply"),
             ("esc", ""),
         ]);
-        assert_eq!(drawn.style().text.color, Some(rgb(TEXT_DIM).into()));
-        assert_eq!(drawn.style().border_color, Some(FLOAT_RULE.into()));
+        assert_eq!(drawn.style().text.color, Some(rgb(INK_SUBTLE).into()));
+        assert_eq!(drawn.style().border_color, Some(paint::FLOAT_EDGE.into()));
         // The cursor row keeps its bar under the pointer; another row only
         // takes the float's hover ink.
         let cursor = Item::new("Opus 5.5 (1M)");
         let mut drawn = item_row("c", &cursor, true, false);
-        assert_eq!(drawn.style().background, Some(FLOAT_SEL.into()));
+        assert_eq!(drawn.style().background, Some(paint::FLOAT_SEL.into()));
         let mut rest = item_row("r", &cursor, false, false);
         assert_eq!(rest.style().background, None);
     }
@@ -1112,12 +1113,12 @@ mod tests {
     fn an_armed_destructive_row_holds_the_fill_and_colours_its_word() {
         let delete = Item::new("Delete thread").destructive();
         let mut drawn = row(2, &delete, true);
-        assert_eq!(drawn.style().background, Some(FLOAT_SEL.into()));
+        assert_eq!(drawn.style().background, Some(paint::FLOAT_SEL.into()));
         let mut calm = row(2, &delete, false);
         assert_eq!(calm.style().background, None);
         assert_eq!(
             components::row_inks(&delete, false, false).label,
-            TEXT,
+            INK,
             "a destructive verb reads like any row before it arms"
         );
         assert_eq!(

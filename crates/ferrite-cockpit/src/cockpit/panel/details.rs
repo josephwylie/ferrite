@@ -199,7 +199,7 @@ fn detail_row(
                 .absolute()
                 .left(px(PANEL_ROW_ICON_X))
                 .top(px((PANEL_SECTION_H - PANEL_ROW_ICON) / 2.))
-                .child(icon(glyph, PANEL_ROW_ICON, TEXT_MUTED)),
+                .child(icon(glyph, PANEL_ROW_ICON, INK)),
         )
         .child(
             div()
@@ -207,7 +207,7 @@ fn detail_row(
                 .max_w_full()
                 .min_w_0()
                 .truncate()
-                .text_color(rgb(TEXT))
+                .text_color(rgb(INK))
                 .child(label.into()),
         )
         .children(meta.map(|meta| {
@@ -216,7 +216,7 @@ fn detail_row(
                 .min_w_0()
                 .truncate()
                 .text_size(px(FS_META))
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .child(SharedString::from(meta))
         }))
 }
@@ -227,12 +227,12 @@ fn detail_row(
 fn connector_row(index: usize, server: &McpServer) -> Div {
     use ferrite_ui::theme::*;
     let (word, ink) = match server.status {
-        McpStatus::Connected => ("connected", TEXT_DIM),
-        McpStatus::Connecting => ("connecting", TEXT_DIM),
+        McpStatus::Connected => ("connected", INK_SUBTLE),
+        McpStatus::Connecting => ("connecting", INK_SUBTLE),
         McpStatus::NeedsAuth => ("needs auth", ATTENTION),
         McpStatus::Failed => (words::FAILED, BLOCKED),
-        McpStatus::Disabled => ("off", TEXT_DIM),
-        McpStatus::Unknown => ("", TEXT_DIM),
+        McpStatus::Disabled => ("off", INK_SUBTLE),
+        McpStatus::Unknown => ("", INK_SUBTLE),
     };
     div()
         .debug_selector(move || format!("panel-connector-{index}"))
@@ -249,14 +249,14 @@ fn connector_row(index: usize, server: &McpServer) -> Div {
                 .absolute()
                 .left(px(PANEL_ROW_ICON_X))
                 .top(px((PANEL_SECTION_H - PANEL_ROW_ICON) / 2.))
-                .child(icon(icons::PLUG, PANEL_ROW_ICON, TEXT_MUTED)),
+                .child(icon(icons::PLUG, PANEL_ROW_ICON, INK)),
         )
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .text_color(rgb(TEXT))
+                .text_color(rgb(INK))
                 .child(SharedString::from(server.name.clone())),
         )
         .child(
@@ -278,7 +278,7 @@ fn quiet_line(selector: &'static str) -> Div {
         .h(px(PANEL_SECTION_H))
         .px(px(PANEL_ROW_ICON_X))
         .text_size(px(FS_META))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
 }
 
 /// The files a Thread created, in the order it created them: a path whose

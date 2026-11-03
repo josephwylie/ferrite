@@ -14,25 +14,25 @@ pub fn model_label(model: &str) -> SharedString {
 }
 
 /// The model's word under the box (SPEC §5.5, Claude's footer): the model
-/// as the picker names it, plain, in `TEXT_DIM`. Render-only; the cockpit
+/// as the picker names it, plain, in `INK_SUBTLE`. Render-only; the cockpit
 /// gives it its button and its menu.
 pub fn model_chip(label: SharedString) -> Div {
-    chip_face(label, TEXT_DIM)
+    chip_face(label, INK_SUBTLE)
 }
 
 /// The effort's word under the box: the level in force, sentence case.
 pub fn effort_chip(label: SharedString) -> Div {
-    chip_face(label, TEXT_DIM)
+    chip_face(label, INK_SUBTLE)
 }
 
-/// The permission mode's word under the box: `TEXT_DIM` in the provider's
-/// default mode, else in `ATTENTION` — a mode that changes what runs
+/// The permission mode's word under the box: `INK_SUBTLE` in the provider's
+/// default mode, else in `RISKY_INK` — a mode that changes what runs
 /// without asking is worth seeing (`theme::mode_is_default`).
 pub fn mode_chip(label: SharedString, mode: &str) -> Div {
     let ink = if theme::mode_is_default(mode) {
-        TEXT_DIM
+        INK_SUBTLE
     } else {
-        theme::ATTENTION
+        theme::RISKY_INK
     };
     chip_face(label, ink)
 }
@@ -55,7 +55,7 @@ pub(super) fn chip_face(label: SharedString, ink: u32) -> Div {
         .child(div().min_w_0().truncate().child(label))
 }
 
-/// A footer word's button: `FOOTER_CHIP_H` high at `R_CHIP`,
+/// A footer word's button: `FOOTER_CHIP_H` high at `R_CONTROL`,
 /// `FOOTER_CHIP_PAD_X` at each side, no ground at rest, `paint::RAISED`
 /// under the pointer. The cockpit gives it its face and its menu. It may
 /// narrow past its label, which then cuts (`composer_footer`).
@@ -69,7 +69,7 @@ pub fn toolbar_chip(
         .px(px(theme::FOOTER_CHIP_PAD_X))
         .min_w_0()
         .flex_shrink(1.)
-        .rounded(px(theme::R_CHIP))
+        .rounded(px(theme::R_CONTROL))
 }
 
 /// The toolbar's `+`: a `COMPOSER_ATTACH` square that attaches files.
@@ -79,7 +79,7 @@ pub fn attach_button(cx: &gpui::App) -> gpui::component::button::Button {
         .p_0()
         .size(px(theme::COMPOSER_ATTACH))
         .flex_shrink_0()
-        .rounded(px(theme::R_CHIP))
+        .rounded(px(theme::R_CONTROL))
         .tip("Attach files")
         .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, ICON_INK))
 }
@@ -96,9 +96,9 @@ pub fn send_is_stop(running: bool, empty: bool, compact: bool) -> bool {
 /// §5.9, `SEND_CIRCLE_SM` with its glyph `SEND_GLYPH_SM`, spaced by its
 /// box's gap). Three faces, as Claude's and Codex's: with something to send,
 /// lit — `PRIMARY` with an `ON_PRIMARY` `arrow-up`; with nothing (`empty`),
-/// at rest — `paint::SEND` with the arrow in `TEXT_DIM` (still pressable:
+/// at rest — `paint::SEND` with the arrow in `INK_SUBTLE` (still pressable:
 /// an empty ↵ has its own acts); while a turn runs with nothing typed
-/// (`stop`), `paint::SEND` with `stop` in `TEXT_STRONG`. The ground changes
+/// (`stop`), `paint::SEND` with `stop` in `INK_STRONG`. The ground changes
 /// at once with the keystroke that changes it; the glyph morphs
 /// (`send_glyph`). The tooltip names the key.
 pub fn send_button(
@@ -116,8 +116,8 @@ pub fn send_button(
     let (rest, hover, press, ink): (gpui::Hsla, gpui::Hsla, gpui::Hsla, u32) = if lit {
         (
             rgb(theme::PRIMARY).into(),
-            rgb(TEXT).into(),
-            rgb(TEXT).into(),
+            rgb(INK).into(),
+            rgb(INK).into(),
             theme::ON_PRIMARY,
         )
     } else {
@@ -125,7 +125,7 @@ pub fn send_button(
             theme::paint::SEND.into(),
             theme::paint::SEND.into(),
             theme::paint::PRESS.into(),
-            if stop { TEXT_STRONG } else { TEXT_DIM },
+            if stop { INK_STRONG } else { INK_SUBTLE },
         )
     };
     components::faded_button("composer-send", rest, hover, press, rgb(ink).into(), cx)
@@ -304,7 +304,7 @@ pub(super) fn composer_region(view: &PaneView, transcript: Option<&Transcript>, 
 }
 
 /// The Solo Composer (SPEC §5.5): a box `COMPOSER_INSET` inside the card's
-/// sides and foot — `paint::FIELD` at `R_PANE`, its `FIELD_RING` laid
+/// sides and foot — `paint::FIELD` at `R_FLOAT`, its `FIELD_RING` laid
 /// outside it — holding the queued row, the pending files, the input
 /// (Geist, no `❯`) and the toolbar the cockpit wires. Files dragged over
 /// it light its edge and say `Drop files to attach` over its contents.
@@ -329,7 +329,7 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
     } = stack;
     let geometry = view.geometry.clone();
     let namespace = view.text_namespace();
-    let ring = |ink: u32| components::outer_ring(theme::R_PANE, rgba(ink));
+    let ring = |ink: u32| components::outer_ring(theme::R_FLOAT, rgba(ink));
     let field = div()
         .debug_selector(|| "composer-block".into())
         .when(drop_target, |field| {
@@ -340,14 +340,14 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         .flex_col()
         .flex_shrink_0()
         .min_w_0()
-        .rounded(px(theme::R_PANE))
+        .rounded(px(theme::R_FLOAT))
         .bg(theme::paint::FIELD)
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT))
+        .text_color(rgb(INK))
         .when(decision.is_some(), |field| field.key_context("Decision"))
-        .child(ring(theme::FIELD_RING));
+        .child(ring(theme::paint::FIELD_RING.rgba()));
     let mut field = components::on_bounds(field, move |bounds, _, _| {
         geometry.set(PaneGeometry {
             composer: Some(bounds),
@@ -366,10 +366,10 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
                 .items_center()
                 .justify_center()
                 .gap(px(theme::SPACE_2))
-                .rounded(px(theme::R_PANE))
+                .rounded(px(theme::R_FLOAT))
                 .bg(theme::paint::FIELD)
-                .text_color(rgb(TEXT_MUTED))
-                .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, TEXT_MUTED))
+                .text_color(rgb(INK))
+                .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, INK))
                 .child("Drop files to attach")
     });
     if drop_target {
@@ -426,7 +426,7 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         .font_weight(theme::W_BODY)
         .text_size(px(theme::FS_COMPOSER))
         .line_height(px(theme::COMPOSER_ROW_H))
-        .text_color(rgb(TEXT_STRONG))
+        .text_color(rgb(INK_STRONG))
         .child(view.composer.clone());
     if empty {
         let ghost = placeholder(decision.is_some(), draft, transcript, suggestion);
@@ -558,7 +558,7 @@ pub(super) fn in_column(inset: f32, column: bool, row: impl IntoElement) -> Div 
         )
 }
 
-/// The Solo box's queued row (`QUEUED_ROW_H`, a `HAIRLINE` under it):
+/// The Solo box's queued row (`QUEUED_ROW_H`, a `FIELD_RING` rule under it):
 /// `Queued`, the top of the pile on one cut line — the prompt ↑ takes back
 /// and ⌫ drops — `+N` for the rest, and the close button that drops it.
 /// The keys act as ever; they are not printed. None with nothing queued.
@@ -578,14 +578,14 @@ pub(super) fn queued_row(queued: &[&str], namespace: &str, close: Option<AnyElem
             .pl(px(theme::QUEUED_PAD_L))
             .pr(px(theme::QUEUED_PAD_R))
             .border_b_1()
-            .border_color(theme::paint::HAIRLINE)
+            .border_color(theme::paint::FIELD_RING)
             .whitespace_nowrap()
             .child(
                 div()
                     .flex_shrink_0()
                     .text_size(px(theme::FS_META))
                     .font_weight(theme::W_LABEL)
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(rgb(INK_SUBTLE))
                     .child("Queued"),
             )
             .child(
@@ -594,7 +594,7 @@ pub(super) fn queued_row(queued: &[&str], namespace: &str, close: Option<AnyElem
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(INK))
                     .child(SharedString::from(queued_preview(latest))),
             )
             .when(more > 0, |row| {
@@ -602,7 +602,7 @@ pub(super) fn queued_row(queued: &[&str], namespace: &str, close: Option<AnyElem
                     div()
                         .debug_selector(|| "queued-more".into())
                         .flex_shrink_0()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(rgb(INK_SUBTLE))
                         .child(format!("+{more}")),
                 ))
             })
@@ -610,8 +610,8 @@ pub(super) fn queued_row(queued: &[&str], namespace: &str, close: Option<AnyElem
     )
 }
 
-/// The queued row's close button: a `QUEUED_CLOSE` square at `R_TAB`, the
-/// `close` icon in `TEXT_DIM`, `paint::RAISED` under the pointer. The
+/// The queued row's close button: a `QUEUED_CLOSE` square at `R_CONTROL`, the
+/// `close` icon in `INK_SUBTLE`, `paint::RAISED` under the pointer. The
 /// cockpit wires its click.
 pub fn queued_close(cx: &gpui::App) -> gpui::component::button::Button {
     chip_button("queued-close", cx)
@@ -619,7 +619,7 @@ pub fn queued_close(cx: &gpui::App) -> gpui::component::button::Button {
         .p_0()
         .size(px(theme::QUEUED_CLOSE))
         .flex_shrink_0()
-        .rounded(px(theme::R_TAB))
+        .rounded(px(theme::R_CONTROL))
         .tip("Remove queued message")
         .child(icon(icons::CLOSE, theme::QUEUED_CLOSE_ICON, ICON_INK))
 }
@@ -632,12 +632,12 @@ fn chip_button(id: impl Into<gpui::ElementId>, cx: &gpui::App) -> gpui::componen
         gpui::rgba(theme::TRANSPARENT).into(),
         theme::paint::HOVER.into(),
         theme::paint::PRESS.into(),
-        rgb(TEXT_DIM).into(),
+        rgb(INK_SUBTLE).into(),
         cx,
     )
 }
 
-/// The idle line's placeholder: a couple of words in `TEXT_DIM` after
+/// The idle line's placeholder: a couple of words in `PLACEHOLDER_INK` after
 /// the caret cell and a space, cut at their end only where even they do not
 /// fit. The keys live behind `?` (ADR 0014), not on the line.
 ///
@@ -732,7 +732,7 @@ pub(super) fn ghost_row(ghost: Ghost, left: f32) -> Div {
         .flex()
         .overflow_hidden()
         .whitespace_nowrap()
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(theme::PLACEHOLDER_INK))
         .child(
             div()
                 .flex_shrink(1.)

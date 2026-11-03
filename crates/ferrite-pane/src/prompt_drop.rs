@@ -47,7 +47,7 @@ pub fn target(
 }
 
 /// The sheet a Pane wears while files hover it: the whole Pane, raised, with
-/// `TEXT_STRONG`'s non-focus edge like a Pane drop's wash, saying what a
+/// `INK_STRONG`'s non-focus edge like a Pane drop's wash, saying what a
 /// release does. The Pane lays it just before its Composer, so the Composer
 /// paints above the sheet, edged in the same strong: that is where the
 /// files land.
@@ -60,7 +60,7 @@ pub fn sheet() -> Div {
         .flex_col()
         .items_center()
         .justify_center()
-        .rounded(px(theme::R_PANE))
+        .rounded(px(theme::R_FLOAT))
         .bg(theme::paint::PROMPT_BAND)
         .border_1()
         .border_color(rgba(theme::DROP_EDGE))
@@ -68,6 +68,6 @@ pub fn sheet() -> Div {
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(theme::TEXT_STRONG))
+        .text_color(rgb(theme::INK_STRONG))
         .child("Drop files to add to prompt")
 }

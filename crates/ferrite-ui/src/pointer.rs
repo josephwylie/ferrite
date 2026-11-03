@@ -2,7 +2,7 @@
 //! clickable surface, and a render site only says which role a thing is —
 //! the trait owns the tokens, the cursor, and the pairing between them.
 //! Hover is achromatic: it answers "would a click here land?" and never
-//! borrows `TEXT_STRONG` (keyboard position) or amber/red (attention).
+//! borrows `INK_STRONG` (keyboard position) or amber/red (attention).
 //!
 //! Only widget constructors call these (`menu_row`, `keycap`, nav's row
 //! frames, the cell shell …) — render sites never write a hover refinement
@@ -12,7 +12,7 @@
 //! select.rs.
 //!
 //! **One hover blend** (rule 2.10.2). Every role paints its ground through
-//! `motion::hover_blend` over 150ms (`MOTION_HOVER_FADE_MS`), driven by an
+//! `motion::hover_blend` over 100ms (`MOTION_HOVER_FADE_MS`), driven by an
 //! `on_hover` listener on the same element, under a stable `key` the caller
 //! derives from the element's id (unique across the window: add the Pane or
 //! Thread when the id alone repeats). The role owns the element's ground:
@@ -41,7 +41,8 @@ use gpui::{rgba, App, Hsla, SharedString, StyleRefinement};
 
 use crate::motion;
 use crate::theme::{
-    paint, FLOAT_BAND2, FLOAT_HOVER, FLOAT_SEL, PALETTE_HOVER, PALETTE_SEL, TRANSPARENT,
+    paint::{self, FLOAT_HOVER, FLOAT_SEL},
+    TRANSPARENT,
 };
 
 /// The hover styles, named by role. Blanket-implemented: anything styleable
@@ -109,11 +110,11 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
     }
 
     /// A quick answer on a float (a toast's `1 allow`): a pill of the
-    /// float's band (`FLOAT_BAND2`) at rest, so it reads as a control,
+    /// float's hover fill (`FLOAT_HOVER`) at rest, so it reads as a control,
     /// stepping up to `FLOAT_SEL` under the pointer.
     fn hover_quick(self, key: impl Into<SharedString>) -> Self {
         let key = key.into();
-        let ground = motion::hover_blend(&key, FLOAT_BAND2.into(), FLOAT_SEL.into());
+        let ground = motion::hover_blend(&key, FLOAT_HOVER.into(), FLOAT_SEL.into());
         let mut element = self.cursor_pointer().bg(ground);
         listen(&mut element, key);
         element
@@ -126,19 +127,19 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
     }
 
     /// A row on the palette, whose ground is the frame's grey: nothing at
-    /// rest, `PALETTE_HOVER` under the pointer, pointer cursor.
+    /// rest, `FLOAT_HOVER` under the pointer, pointer cursor.
     fn hover_palette(self, key: impl Into<SharedString>) -> Self {
         blended(
             self.cursor_pointer(),
             key.into(),
             rgba(TRANSPARENT).into(),
-            PALETTE_HOVER.into(),
+            FLOAT_HOVER.into(),
         )
     }
 
-    /// The palette's cursor row: `PALETTE_SEL`, held under the pointer.
+    /// The palette's cursor row: `FLOAT_SEL`, held under the pointer.
     fn palette_cursor(self) -> Self {
-        self.cursor_pointer().bg(PALETTE_SEL)
+        self.cursor_pointer().bg(FLOAT_SEL)
     }
 
     /// Selectable transcript text (#27): the I-beam says characters are
@@ -302,7 +303,7 @@ mod tests {
         // The palette's rows step over its frame-grey ground instead; a
         // toast's quick answer rests on its pill.
         let mut cursor = div().id("palette-cursor").palette_cursor();
-        assert_eq!(background(cursor.style()), Some(&Fill::from(PALETTE_SEL)));
+        assert_eq!(background(cursor.style()), Some(&Fill::from(FLOAT_SEL)));
         let mut palette_row = div()
             .id("palette-row")
             .hover_palette("pointer-test-palette");
@@ -310,7 +311,7 @@ mod tests {
         let mut quick = div().id("quick").hover_quick("pointer-test-quick");
         assert_eq!(
             background(quick.style()),
-            Some(&Fill::from(Hsla::from(FLOAT_BAND2)))
+            Some(&Fill::from(Hsla::from(FLOAT_HOVER)))
         );
         assert_eq!(
             float_row.style().mouse_cursor,
@@ -350,7 +351,7 @@ mod tests {
     /// One hover blend (rule 2.10.2): no render site writes its own hover
     /// refinement or a kit variant's snapping hover. Every hover goes
     /// through the roles here (or `components::faded_button`), so every
-    /// hover in the window blends over 150ms.
+    /// hover in the window blends over 100ms.
     #[test]
     fn no_render_site_writes_its_own_hover() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

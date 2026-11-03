@@ -1,6 +1,6 @@
 //! The Composer menus' fuzzy filter (#23): an ASCII case-insensitive
 //! subsequence match, scored so contiguous runs and early hits float up,
-//! answering the byte ranges the rows highlight in TEXT_STRONG. Pure — no
+//! answering the byte ranges the rows highlight in INK_STRONG. Pure — no
 //! window, no provider.
 //!
 //! The palette's match (`palette_match`, the prototype's `#palette`) is

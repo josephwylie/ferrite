@@ -959,7 +959,7 @@ impl TranscriptView {
                         .px(px(theme::SPACE_1))
                         .text_size(px(theme::FS_META))
                         .line_height(px(theme::LH_META))
-                        .text_color(gpui::rgb(theme::TEXT_DIM))
+                        .text_color(gpui::rgb(theme::INK_SUBTLE))
                         .child(SharedString::from(at))
                 }))
                 // Its words, as the bubble shows them: the attachments'
@@ -1452,7 +1452,7 @@ impl TranscriptView {
                             .child(ferrite_ui::icons::icon(
                                 ferrite_ui::icons::ARROW_DOWN,
                                 theme::ICON_BUTTON_GLYPH,
-                                theme::TEXT,
+                                theme::INK,
                             )),
                 )
                 .into_any_element(),
@@ -1543,7 +1543,7 @@ pub(crate) enum Mark {
 impl Mark {
     fn ink(self) -> u32 {
         match self {
-            Self::Prompt => theme::TEXT_STRONG,
+            Self::Prompt => theme::INK_STRONG,
             Self::Failure => theme::BLOCKED,
             Self::Decision => theme::ATTENTION,
             Self::Pass => theme::RUNNING,
@@ -2097,7 +2097,7 @@ impl Render for TranscriptView {
             .font_family(theme::FONT_UI)
             .text_size(px(grid.size))
             .line_height(px(grid.line))
-            .text_color(gpui::rgb(theme::TEXT))
+            .text_color(gpui::rgb(theme::INK))
             .hover_text()
             .track_focus(&self.transcript_focus)
             .child(list)

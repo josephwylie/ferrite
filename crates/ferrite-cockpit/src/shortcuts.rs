@@ -340,7 +340,7 @@ impl Render for Shortcuts {
             div()
                 .flex_shrink_0()
                 .text_size(px(FS_META))
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .child("esc"),
         );
         let query = self.input.read(cx).text().to_string();
@@ -375,7 +375,7 @@ impl Render for Shortcuts {
                     .px(px(PALETTE_ROW_PAD_X))
                     .whitespace_nowrap()
                     .child(
-                        div().min_w_0().truncate().text_color(rgb(TEXT)).child(
+                        div().min_w_0().truncate().text_color(rgb(INK)).child(
                             StyledText::new(row.label)
                                 .with_highlights(components::match_highlights(lit, false)),
                         ),
@@ -384,7 +384,7 @@ impl Render for Shortcuts {
                         div()
                             .flex_shrink_0()
                             .text_size(px(FS_META))
-                            .child(components::key_combo(&row.keys, TEXT_DIM)),
+                            .child(components::key_combo(&row.keys, INK_SUBTLE)),
                     ),
             );
         }

@@ -1,7 +1,7 @@
 //! The cadence: when a loop's picture next changes, and when the one timer
 //! serving every loop on screen has to wake for it.
 //!
-//! A loop (the caret's soft blink, a spinner's glyphs, the shimmer's crest,
+//! A loop (the caret's blink, a spinner's glyphs, the shimmer's crest,
 //! Ferrite's starting mark) is a phase over a period from an origin. Most of
 //! the time most loops hold still: the caret sits solid for 45% of its turn
 //! and dim for 40%, a spinner holds each glyph for a whole step. Drawn at a

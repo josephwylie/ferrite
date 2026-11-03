@@ -289,7 +289,7 @@ pub struct Markdown {
     source: SharedString,
     cache: TextCache,
     muted: bool,
-    /// Body ink in place of `TEXT` (a prompt's `TEXT_STRONG`).
+    /// Body ink in place of `INK` (a prompt's `INK_STRONG`).
     ink: Option<u32>,
     /// The work's tier (`quiet`): muted, its code plain.
     quiet: bool,
@@ -332,7 +332,7 @@ impl Markdown {
         self
     }
 
-    /// Set the run in the work's tier (narration, activity): `TEXT_DIM`
+    /// Set the run in the work's tier (narration, activity): `INK_SUBTLE`
     /// unless inked otherwise, its code (a command, a bundle id) a step
     /// brighter on no chip.
     pub fn quiet(mut self) -> Self {
@@ -411,15 +411,15 @@ impl gpui::RenderOnce for Markdown {
         let text_style = if self.muted {
             // A thought stays one step down the ink ladder, headings too.
             (1..=6).fold(
-                text_style.with_foreground(rgb(theme::TEXT_DIM).into()),
+                text_style.with_foreground(rgb(theme::INK_SUBTLE).into()),
                 |style, level| {
-                    style.with_heading(level, heading(level, base).text_color(rgb(theme::TEXT_DIM)))
+                    style.with_heading(level, heading(level, base).text_color(rgb(theme::INK_SUBTLE)))
                 },
             )
         } else {
             text_style
         };
-        let ink = self.ink.or(self.quiet.then_some(theme::TEXT_DIM));
+        let ink = self.ink.or(self.quiet.then_some(theme::INK_SUBTLE));
         let text_style = match ink {
             Some(ink) => {
                 let strong = gpui::HighlightStyle {
@@ -438,7 +438,7 @@ impl gpui::RenderOnce for Markdown {
         let text_style = if self.quiet {
             text_style
                 .with_inline_code(gpui::HighlightStyle {
-                    color: Some(rgb(theme::TEXT).into()),
+                    color: Some(rgb(theme::INK).into()),
                     font_weight: Some(theme::W_BODY),
                     ..Default::default()
                 })
@@ -664,7 +664,7 @@ impl gpui::Render for CodeActions {
             .font_family(theme::FONT_UI)
             .text_size(px(theme::FS_UI))
             .line_height(px(theme::LH_UI))
-            .text_color(rgb(theme::TEXT_DIM));
+            .text_color(rgb(theme::INK_SUBTLE));
         let mut hovered = gpui::div()
             .flex()
             .items_center()
@@ -755,7 +755,7 @@ impl gpui::Render for CodeActions {
     }
 }
 
-/// A quiet text action in a fence's overlay: `FS_UI` `TEXT_DIM` with no
+/// A quiet text action in a fence's overlay: `FS_UI` `INK_SUBTLE` with no
 /// ground, the hover overlay under the pointer (the one 150ms blend),
 /// pressed at once, a stable `CODE_ACTION_MIN_W` target one row high.
 fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
@@ -764,13 +764,13 @@ fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
         rgba(theme::TRANSPARENT).into(),
         theme::paint::HOVER.into(),
         theme::paint::PRESS.into(),
-        rgb(theme::TEXT_DIM).into(),
+        rgb(theme::INK_SUBTLE).into(),
         cx,
     )
     .h(px(theme::LH_UI))
     .min_w(px(theme::CODE_ACTION_MIN_W))
     .px(px(theme::CH))
-    .rounded(px(theme::R_CHIP))
+    .rounded(px(theme::R_CONTROL))
     .font_family(theme::FONT_UI)
     .text_size(px(theme::FS_UI))
     .line_height(px(theme::LH_UI))
@@ -820,8 +820,8 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
     let code_cell = theme::tx_cell(code_size);
     let mut style = TextViewStyle::default()
         .with_dark(true)
-        .with_foreground(rgb(theme::TEXT_PROSE).into())
-        .with_muted_foreground(rgb(theme::TEXT_DIM).into())
+        .with_foreground(rgb(theme::INK_STRONG).into())
+        .with_muted_foreground(rgb(theme::INK_SUBTLE).into())
         // Links and paths read `LINK_INK`, underlined at rest, as the
         // Claude app's are.
         .with_link(rgb(theme::LINK_INK).into())
@@ -833,21 +833,21 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
         // edge (the prototype's `table.t`, `.clean … :first-child`).
         .with_table_fit(Some(px(cell)))
         // An image in an answer sits in the prompt image's frame:
-        // `IMAGE_CELLS` wide at the prose's size, a 1px `LINE2` edge.
+        // `IMAGE_CELLS` wide at the prose's size, a 1px `LINE` edge.
         .with_image(
             gpui::StyleRefinement::default()
                 .w(px(theme::IMAGE_CELLS * cell))
                 .border_1()
-                .border_color(theme::paint::LINE2),
+                .border_color(theme::paint::LINE),
         )
         .with_selection(rgba(theme::TEXT_SELECTION_WASH).into())
         .with_strong(gpui::HighlightStyle {
-            color: Some(rgb(theme::TEXT_STRONG).into()),
+            color: Some(rgb(theme::INK_STRONG).into()),
             font_weight: Some(theme::W_STRONG),
             ..Default::default()
         })
         // A fence is the diff's block box (`pane::block_box`): `BLOCK`,
-        // `R_CONTROL` corners, a 1px `HAIRLINE`, `BLOCK_PAD_Y` above and
+        // `R_CONTROL` corners, a 1px `BLOCK_RING`, `BLOCK_PAD_Y` above and
         // below, the code `CODE_PAD_CELLS` in, a half step under the prose.
         .with_code_background(gpui::transparent_black())
         .with_code_block(
@@ -863,7 +863,7 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
                 .mr(px(hang))
                 .bg(theme::paint::BLOCK)
                 .border_1()
-                .border_color(theme::paint::HAIRLINE)
+                .border_color(theme::paint::BLOCK_RING)
                 .rounded(px(theme::R_CONTROL))
                 .font_family(theme::FONT_CODE)
                 .font_weight(theme::W_BODY)
@@ -871,8 +871,8 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
                 .line_height(px(code_line))
                 .text_color(rgb(theme::SYN_PLAIN)),
         )
-        // Inline code is a chip (SPEC §5.4): `TEXT_STRONG` at body weight
-        // on a `RAISED` wash, `R_INLINE` corners, `INLINE_CODE_PAD_X` of
+        // Inline code is a chip (SPEC §5.4): `INK_STRONG` at body weight
+        // on a `RAISED` wash, `R_CONTROL` corners, `INLINE_CODE_PAD_X` of
         // room either side.
         .with_inline_code(gpui::HighlightStyle {
             color: Some(rgb(theme::INLINE_CODE_INK).into()),
@@ -881,7 +881,7 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
         })
         .with_inline_code_font(Some(theme::FONT_CODE.into()))
         .with_inline_code_wash(Some(inline_code_wash()))
-        // A table's row rules are the one `LINE`; its head's is `LINE2`.
+        // A table's rules, head and rows alike, are the one `LINE`.
         .with_border(theme::paint::LINE.into())
         .with_table({
             // No box and no ground.
@@ -914,15 +914,15 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
         .with_table_head(
             gpui::StyleRefinement::default()
                 .bg(gpui::transparent_black())
-                .text_color(rgb(theme::TEXT_STRONG))
+                .text_color(rgb(theme::INK_STRONG))
                 .font_weight(theme::W_STRONG)
-                .border_color(theme::paint::LINE2),
+                .border_color(theme::paint::LINE),
         )
         .with_blockquote(
             gpui::StyleRefinement::default()
                 .border_l(px(theme::QUOTE_RULE_W))
-                .border_color(theme::paint::LINE2)
-                .text_color(rgb(theme::TEXT_DIM))
+                .border_color(theme::paint::LINE)
+                .text_color(rgb(theme::INK_SUBTLE))
                 .not_italic()
                 .pl(px(2.0 * cell - theme::QUOTE_RULE_W))
                 .pr(px(0.)),
@@ -946,9 +946,9 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
             gap: px(cell),
         }))
         .with_list_markers(
-            gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_DIM)),
+            gpui::StyleRefinement::default().text_color(rgb(theme::INK_SUBTLE)),
             ferrite_ui::components::tabular(
-                gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_DIM)),
+                gpui::StyleRefinement::default().text_color(rgb(theme::INK_SUBTLE)),
             ),
         )
         // One blank line between blocks, as a terminal prints them; a
@@ -969,7 +969,7 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
 pub fn inline_code_wash() -> gpui::base::text::InlineCodeWash {
     gpui::base::text::InlineCodeWash {
         color: theme::paint::RAISED.hsla(),
-        radius: px(theme::R_INLINE),
+        radius: px(theme::R_CONTROL),
         // The wash covers the laid-out room either side and no more, so
         // it meets neither neighbouring space.
         overhang: px(0.),
@@ -991,7 +991,7 @@ fn heading(level: u8, base: gpui::Pixels) -> gpui::StyleRefinement {
     let size = heading_size(level, f32::from(base));
     gpui::StyleRefinement::default()
         .font_weight(theme::W_STRONG)
-        .text_color(rgb(theme::TEXT_STRONG))
+        .text_color(rgb(theme::INK_STRONG))
         .line_height(px(theme::prose_line_height(size)))
 }
 
@@ -1142,19 +1142,19 @@ pub fn reading_dialog(
                 .text_size(px(theme::FS_UI))
                 .line_height(px(theme::LH_UI))
                 .font_weight(theme::W_LABEL)
-                .text_color(rgb(theme::TEXT_STRONG))
+                .text_color(rgb(theme::INK_STRONG))
                 .child(title.into()),
         )
         .width(px(theme::READING_MAX_W))
         .bg(theme::paint::FLOAT)
-        .rounded(px(theme::R_PANE))
+        .rounded(px(theme::R_FLOAT))
         .child(
             gpui::div()
                 .id(id)
                 .font_family(theme::FONT_UI)
                 .text_size(px(theme::FS_PROSE))
                 .line_height(px(theme::LH_PROSE))
-                .text_color(rgb(theme::TEXT))
+                .text_color(rgb(theme::INK))
                 .max_h(px(theme::READING_DIALOG_MAX_H))
                 .overflow_y_scroll()
                 .child(body),
@@ -2602,7 +2602,7 @@ mod vendor_knob_tests {
                 .with_inline_code_font(Some(theme::FONT_CODE.into()))
                 .with_inline_code_wash(Some(gpui::base::text::InlineCodeWash {
                     color: rgba(0xffffff0f).into(),
-                    radius: px(theme::R_CHIP),
+                    radius: px(theme::R_CONTROL),
                     overhang: px(2.),
                     pad: px(0.),
                     inset_y: px(1.),
@@ -2664,15 +2664,15 @@ mod style_tests {
         rgb(value).into()
     }
 
-    /// SPEC §5.4: prose `TEXT_PROSE`, strong `W_STRONG` `TEXT_STRONG`,
+    /// SPEC §5.4: prose `INK_STRONG`, strong `W_STRONG` `INK_STRONG`,
     /// links and paths `LINK_INK` underlined at rest, inline code
     /// a `RAISED` chip, a fence in the block box.
     #[test]
     fn prose_is_prose_ink_with_semibold_strong_and_link_blue_links() {
         let style = style(px(theme::FS_UI));
-        assert_eq!(style.foreground(), solid(theme::TEXT_PROSE));
+        assert_eq!(style.foreground(), solid(theme::INK_STRONG));
         assert_eq!(style.strong().font_weight, Some(theme::W_STRONG));
-        assert_eq!(style.strong().color, Some(solid(theme::TEXT_STRONG)));
+        assert_eq!(style.strong().color, Some(solid(theme::INK_STRONG)));
         assert_eq!(style.link(), solid(theme::LINK_INK));
         // The underline is the link's own ink, painted at rest.
         assert_eq!(style.link_underline(), Some(solid(theme::LINK_INK)));
@@ -2689,8 +2689,8 @@ mod style_tests {
         );
         assert_eq!(
             style.code_block().border_color,
-            Some(theme::paint::HAIRLINE.into()),
-            "a fence's box has the hairline"
+            Some(theme::paint::BLOCK_RING.into()),
+            "a fence's box has its ring"
         );
     }
 
@@ -2705,11 +2705,11 @@ mod style_tests {
             assert_eq!(style.heading_font_size(3), Some(px(base)));
             let h1 = style.heading(1);
             assert_eq!(h1.text.font_weight, Some(theme::W_STRONG));
-            assert_eq!(h1.text.color, Some(solid(theme::TEXT_STRONG)));
+            assert_eq!(h1.text.color, Some(solid(theme::INK_STRONG)));
             assert_eq!(h1.text.line_height, Some(px(h1_line).into()));
             let h4 = style.heading(4);
             assert_eq!(h4.text.font_weight, Some(theme::W_STRONG));
-            assert_eq!(h4.text.color, Some(solid(theme::TEXT_STRONG)));
+            assert_eq!(h4.text.color, Some(solid(theme::INK_STRONG)));
             assert_eq!(h4.text.font_style, None, "headings are never italic");
         }
         // Every heading is the body size at every reading size.
@@ -2749,15 +2749,15 @@ mod style_tests {
         }
     }
 
-    /// SPEC §5.4: inline code is `TEXT_STRONG` (`INLINE_CODE_INK`) at body
-    /// weight on its `RAISED` chip, `R_INLINE` round.
+    /// SPEC §5.4: inline code is `INK_STRONG` (`INLINE_CODE_INK`) at body
+    /// weight on its `RAISED` chip, `R_CONTROL` round.
     #[test]
     fn inline_code_is_a_strong_chip_at_body_weight() {
         use ferrite_core::settings::ReadingSize;
-        assert_eq!(theme::INLINE_CODE_INK, theme::TEXT_STRONG);
+        assert_eq!(theme::INLINE_CODE_INK, theme::INK_STRONG);
         let wash = inline_code_wash();
         assert_eq!(wash.color, theme::paint::RAISED.hsla());
-        assert_eq!(wash.radius, px(theme::R_INLINE));
+        assert_eq!(wash.radius, px(theme::R_CONTROL));
         // The same chip at every reading size.
         for size in [
             ReadingSize::STANDARD,
@@ -2830,7 +2830,7 @@ mod style_tests {
         }
     }
 
-    /// Terminal-native (clean): a `W_STRONG` head over a `LINE2` rule, row
+    /// Terminal-native (clean): a `W_STRONG` head over a `LINE` rule, row
     /// rules in `LINE`, each row one prose line, no box.
     #[test]
     fn tables_are_rows_on_the_grid_under_a_strong_header_rule() {
@@ -2848,8 +2848,8 @@ mod style_tests {
         );
         let head = style.table_head();
         assert_eq!(head.text.font_weight, Some(theme::W_STRONG));
-        assert_eq!(head.text.color, Some(solid(theme::TEXT_STRONG)));
-        assert_eq!(head.border_color, Some(theme::paint::LINE2.into()));
+        assert_eq!(head.text.color, Some(solid(theme::INK_STRONG)));
+        assert_eq!(head.border_color, Some(theme::paint::LINE.into()));
     }
 
     #[test]
@@ -2857,7 +2857,7 @@ mod style_tests {
         let style = style(px(theme::FS_UI));
         assert_eq!(
             style.blockquote().border_color,
-            Some(theme::paint::LINE2.into())
+            Some(theme::paint::LINE.into())
         );
         assert_eq!(
             style.rule().background,

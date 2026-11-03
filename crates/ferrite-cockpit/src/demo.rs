@@ -1088,8 +1088,8 @@ pub fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider, demo: bool)
     // Group is the only view that shows more than one Pane. The nav's
     // selected fill is carried by the current Group too — the one holding
     // the focused Pane's Thread — so a seed of nothing but solo Threads
-    // leaves that fill unpainted and every Group title at `TEXT` instead of
-    // `TEXT_STRONG`. A store that already holds
+    // leaves that fill unpainted and every Group title at `INK` instead of
+    // `INK_STRONG`. A store that already holds
     // Groups (any run after the first) is therefore revived from the first
     // Group's members before anything else; a fresh store has no Group to
     // revive from and gets one from `seed_groups`, over the Threads

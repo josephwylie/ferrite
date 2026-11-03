@@ -339,7 +339,7 @@ fn flatten(rows: &[Row], out: &mut Vec<Line>) {
 
 /// The hunk area (`BLOCK`, the panel's diff face): each line on a 2.5ch sign
 /// column inset 1ch, changed lines on their wash in body ink, context in
-/// `TEXT_DIM`; a hairline between hunks.
+/// `INK_SUBTLE`; a hairline between hunks.
 fn hunks_element(index: usize, shown: &Shown) -> Div {
     use ferrite_ui::theme::*;
     let cell = FS_PANEL_DIFF * CODE_ADVANCE;
@@ -365,7 +365,7 @@ fn hunks_element(index: usize, shown: &Shown) -> Div {
     let hunks = match shown {
         Shown::Hunks(hunks) => hunks,
         Shown::Note(note) => {
-            return area.child(row().text_color(rgb(TEXT_DIM)).child(note.clone()));
+            return area.child(row().text_color(rgb(INK_SUBTLE)).child(note.clone()));
         }
     };
     let total: usize = hunks.iter().map(Vec::len).sum();
@@ -382,12 +382,12 @@ fn hunks_element(index: usize, shown: &Shown) -> Div {
                     .flex_shrink_0()
                     .h(px(1.))
                     .my(px(PANEL_HUNK_PAD_T))
-                    .bg(paint::HAIRLINE),
+                    .bg(paint::LINE),
             );
         }
         for line in hunk.iter().take(left) {
             let (glyph, sign_ink, ink, wash) = match line.sign {
-                Sign::Context => ("", TEXT_DIM, TEXT_DIM, None),
+                Sign::Context => ("", INK_SUBTLE, INK_SUBTLE, None),
                 Sign::Added => ("+", DIFF_ADDED_SIGN, DIFF_ADDED_INK, Some(DIFF_ADDED_WASH)),
                 Sign::Removed => (
                     "\u{2212}",
@@ -425,7 +425,7 @@ fn hunks_element(index: usize, shown: &Shown) -> Div {
         area = area.child(
             row()
                 .pl(px((PANEL_HUNK_INSET_CELLS + PANEL_HUNK_SIGN_CELLS) * cell))
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .child(SharedString::from(format!(
                     "\u{2026} +{} lines",
                     total - drawn

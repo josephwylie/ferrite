@@ -403,7 +403,7 @@ pub struct WallCard {
     pub lines: Vec<WallLine>,
 }
 
-/// One line of a wall tile: one `TEXT_MUTED` run, its glyph included —
+/// One line of a wall tile: one `INK` run, its glyph included —
 /// `● Update(canvas.rs) +31 −9`, `  └ 212/357 tests`, `◆ Bash wants to
 /// run`, `  $ gh issue close 212`, `? Which fix do you want?`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

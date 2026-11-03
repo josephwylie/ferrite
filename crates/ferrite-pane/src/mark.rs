@@ -77,8 +77,8 @@ impl NavTail {
             NavTail::Waiting(_) => Some((words::NEEDS_YOU.into(), ATTENTION)),
             NavTail::Failed => Some((words::FAILED.into(), BLOCKED)),
             NavTail::Failing(_) => self.text().map(|text| (text, BLOCKED)),
-            NavTail::Working(elapsed) if !elapsed.is_empty() => Some((elapsed.clone(), TEXT_DIM)),
-            NavTail::Done => Some((words::DONE.into(), TEXT_DIM)),
+            NavTail::Working(elapsed) if !elapsed.is_empty() => Some((elapsed.clone(), INK_SUBTLE)),
+            NavTail::Done => Some((words::DONE.into(), INK_SUBTLE)),
             _ => None,
         }
     }

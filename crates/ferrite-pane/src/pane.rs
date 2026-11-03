@@ -4,7 +4,7 @@
 //! cockpit above it.
 //!
 //! A Pane is a card on the frame (theme WP-C, SPEC §5.3): `paint::CARD` at
-//! `R_PANE`; its content starts at the card's own edges, and its 1px ring
+//! `R_CARD`; its content starts at the card's own edges, and its 1px ring
 //! is an overlay just outside them (`card_ring`) that only changes colour —
 //! `CARD_RING` at rest, `FOCUS_RING` when focused on a board, `WAIT_RING`
 //! while it waits (a focused waiting Pane shows only the yellow; its focus
@@ -1095,7 +1095,7 @@ pub fn render_pane(
             // Pane's foot says so, where its state reads (theme rule 7).
             pane = pane.children(expand_question.then(|| question_door(key)));
             // The drop sheet covers the Pane beneath the Composer, which
-            // paints after it and so stays in view, edged in `TEXT_STRONG`.
+            // paints after it and so stays in view, edged in `INK_STRONG`.
             pane = pane.children(drop_target.then(crate::prompt_drop::sheet));
             pane = pane.children(l1_composer(&mut cx));
         }
@@ -1202,14 +1202,14 @@ fn record_card(shell: Div, view: &PaneView) -> Div {
 
 /// The Pane on the plane (theme rule 2, SPEC §5.3): `paint::CARD`, its
 /// content flush to its own edges — the ring is an overlay (`pane_frame`),
-/// never a border in layout. A Group's Pane is a cell at `R_PANE`; a Solo
+/// never a border in layout. A Group's Pane is a cell at `R_CARD`; a Solo
 /// Pane (`PaneEdge::Flush`) is the plane itself, square. `overflow:
 /// hidden` clips the children to the box.
 fn pane_shell(edge: PaneEdge) -> Div {
     let radius = if edge == PaneEdge::Flush {
         0.0
     } else {
-        theme::R_PANE
+        theme::R_CARD
     };
     div()
         .relative()
@@ -1254,7 +1254,7 @@ impl PaneEdge {
         match self {
             PaneEdge::Attention => rgba(WAIT_RING).into(),
             PaneEdge::Focused => rgba(FOCUS_RING).into(),
-            PaneEdge::Rest => rgba(CARD_RING).into(),
+            PaneEdge::Rest => theme::paint::CARD_RING.into(),
             PaneEdge::Flush => rgba(theme::TRANSPARENT).into(),
         }
     }
@@ -1296,7 +1296,7 @@ pub fn card_ring(ink: impl Into<gpui::Hsla>) -> Div {
     div()
         .absolute()
         .inset_0()
-        .child(components::outer_ring(theme::R_PANE, ink))
+        .child(components::outer_ring(theme::R_CARD, ink))
 }
 
 // ------------------------------------------------------------------ drafts
@@ -1421,7 +1421,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
 }
 
 /// A Draft is disposable state, so its Pane advertises the same close action
-/// as cmd-w: an `ICON_BUTTON` × in `TEXT_DIM` — the Group head's slot on a
+/// as cmd-w: an `ICON_BUTTON` × in `INK_SUBTLE` — the Group head's slot on a
 /// board (Solo has no head: cmd-w alone). Its tooltip names the key
 /// only where one is bound. Live Threads deliberately keep keyboard and
 /// context-menu closure instead of adding this control to every Pane.
@@ -1467,11 +1467,11 @@ pub fn band_chip(slot: usize, label: SharedString, focused: bool) -> Stateful<Di
         .items_center()
         .h(px(theme::FOOTER_CHIP_H))
         .px(px(theme::FOOTER_CHIP_PAD_X))
-        .rounded(px(theme::R_CHIP))
+        .rounded(px(theme::R_CONTROL))
         .map(|chip| components::focused(chip, focused))
         .hover_raised(format!("band-chip-{slot}"))
         .press_raised()
-        .child(chip_face(label, TEXT_DIM))
+        .child(chip_face(label, INK_SUBTLE))
 }
 
 /// A band chip's text: the choice itself (the chip draws its own chevron).
@@ -1656,19 +1656,19 @@ fn wall_word(word: &HeadSlot, card: &WallCard) -> Div {
             .gap(px(theme::CH))
             .whitespace_nowrap()
             .overflow_hidden()
-            .font_weight(theme::W_STRONG)
+            .font_weight(theme::W_LABEL)
             .child(div().flex_shrink_0().text_color(rgb(ink)).child(lead))
             .children(rest.map(|rest| {
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(rgb(INK_SUBTLE))
                     .child(rest)
             })),
     )
 }
 
-/// One of a tile's rows: one `TEXT_DIM` run, its glyph included, on one
+/// One of a tile's rows: one `INK_SUBTLE` run, its glyph included, on one
 /// line that truncates with `…` at the tile's edge. A continuation lays
 /// its line's glyph run out unseen first, so it hangs under the first word.
 fn wall_line(row: WallRow) -> Div {
@@ -1678,7 +1678,7 @@ fn wall_line(row: WallRow) -> Div {
         .w_full()
         .min_w_0()
         .h(px(theme::LH_UI))
-        .text_color(rgb(TEXT_DIM));
+        .text_color(rgb(INK_SUBTLE));
     match row.hang {
         None => line.truncate().child(row.text),
         Some(hang) => line
@@ -1713,9 +1713,9 @@ pub fn quick_answers(buttons: Vec<AnyElement>) -> Div {
 
 /// One quick answer (F-7): `1 allow` as a secondary button, no edge
 /// (theme rule: no grey borders) — a `paint::RAISED` face, radius
-/// `R_TAB`, `QUICK_ANSWER_H` (22px) tall, 1ch in from each side. The digit
-/// is `TEXT_DIM` on every waiting tile, the word `TEXT`; under the pointer
-/// the face blends to `paint::SELECTED` and the word to `TEXT_STRONG` over
+/// `R_CONTROL`, `QUICK_ANSWER_H` (22px) tall, 1ch in from each side. The digit
+/// is `INK_SUBTLE` on every waiting tile, the word `INK`; under the pointer
+/// the face blends to `paint::SELECTED` and the word to `INK_STRONG` over
 /// the one 150ms hover blend, the digit staying dim. A label wider than
 /// the tile ends in `…` inside the button, the digit kept, and reads whole
 /// in its tooltip.
@@ -1726,7 +1726,7 @@ pub fn quick_answer(id: SharedString, key: SharedString, label: SharedString) ->
         theme::paint::RAISED.hsla(),
         theme::paint::SELECTED.hsla(),
     );
-    let word = ferrite_ui::motion::hover_blend(&hover, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
+    let word = ferrite_ui::motion::hover_blend(&hover, rgb(INK).into(), rgb(INK_STRONG).into());
     let selector = id.clone();
     // Its two runs and a cell of padding each side, capped at the tile.
     let key = format!("{key} ");
@@ -1747,12 +1747,12 @@ pub fn quick_answer(id: SharedString, key: SharedString, label: SharedString) ->
         .tooltip(ferrite_ui::menu::tooltip(whole))
         .h(px(theme::QUICK_ANSWER_H))
         .px(px(theme::QUICK_ANSWER_PAD_X))
-        .rounded(px(theme::R_TAB))
+        .rounded(px(theme::R_CONTROL))
         .bg(ground)
         .cursor_pointer()
         .whitespace_nowrap()
         .on_hover(ferrite_ui::motion::hover_listener(hover))
-        .child(components::cells(key).text_color(rgb(TEXT_DIM)))
+        .child(components::cells(key).text_color(rgb(INK_SUBTLE)))
         .child(
             div()
                 .flex_1()
@@ -1838,7 +1838,7 @@ impl HeadSlot {
     pub(crate) fn ink(&self) -> u32 {
         match self {
             HeadSlot::Failing(_) | HeadSlot::Failed => BLOCKED,
-            _ => TEXT_DIM,
+            _ => INK_SUBTLE,
         }
     }
 }
@@ -1938,7 +1938,7 @@ fn question_door(key: u64) -> AnyElement {
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(
             div()
                 .flex()
@@ -1967,7 +1967,7 @@ fn question_door(key: u64) -> AnyElement {
                 .items_center()
                 .gap(px(theme::CH))
                 .child(div().text_color(rgb(TEXT_FAINT)).child("\u{b7}"))
-                .child(components::key_combo(&keys, TEXT_DIM))
+                .child(components::key_combo(&keys, INK_SUBTLE))
                 .child("answers in full")
         }));
     div()
@@ -1991,10 +1991,10 @@ fn question_door(key: u64) -> AnyElement {
 // ------------------------------------------------------------- the head
 
 /// The one Group head (SPEC §5.9), for a transcript Pane and a wall tile
-/// alike: one `PANE_HEAD_H` row (38px) closed by a `HAIRLINE`, padded
+/// alike: one `PANE_HEAD_H` row (38px) closed by a `LINE`, padded
 /// `PANE_HEAD_PAD_L` / `PANE_HEAD_PAD_R`, its items `PANE_HEAD_GAP` apart.
 /// In order: the state mark (`mark::head_mark`), the title in `FS_LABEL`
-/// at `W_LABEL` — `TEXT_STRONG` on the focused Pane, `TEXT` elsewhere —
+/// at `W_LABEL` — `INK_STRONG` on the focused Pane, `INK` elsewhere —
 /// kept to its `title_floor`, the state word in `FS_META` and its ink, a
 /// spacer, the provider's 13px logo and the trailing control: the fill
 /// button, or a draft's ×. No band on the focused head: the ring says focus.
@@ -2047,7 +2047,7 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
     let word = word.filter(|_| fit.word);
     let provider = provider.filter(|_| fit.provider);
     let floor = fit.floor;
-    let title_ink = if focused { TEXT_STRONG } else { TEXT };
+    let title_ink = if focused { INK_STRONG } else { INK };
     div()
         .debug_selector(move || format!("pane-head-{key}"))
         .flex()
@@ -2059,7 +2059,7 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
         .pl(px(theme::PANE_HEAD_PAD_L))
         .pr(px(theme::PANE_HEAD_PAD_R))
         .border_b_1()
-        .border_color(theme::paint::HAIRLINE)
+        .border_color(theme::paint::LINE)
         .min_w_0()
         .overflow_hidden()
         .whitespace_nowrap()
@@ -2205,7 +2205,7 @@ pub fn fill_button(key: u64) -> Stateful<Div> {
         .items_center()
         .justify_center()
         .size(px(theme::ICON_BUTTON))
-        .rounded(px(theme::R_TAB))
+        .rounded(px(theme::R_CONTROL))
         .cursor_pointer()
         .when(t > 0.0, |door| {
             door.bg(ferrite_ui::motion::mix(
@@ -2224,8 +2224,8 @@ pub fn fill_button(key: u64) -> Stateful<Div> {
 
 /// The failure strip (SPEC §5.9 item 4), the transcript's tail row under
 /// a failed turn's failure line, Solo's and a Group Pane's alike:
-/// `FAILURE_STRIP_H` at `R_BLOCK` on `FAILURE_WASH`, an `x-circle` in
-/// `BLOCKED`, `Stopped 3m ago` in `TEXT`, and at the right the wired
+/// `FAILURE_STRIP_H` at `R_CARD` on `FAILURE_WASH`, an `x-circle` in
+/// `BLOCKED`, `Stopped 3m ago` in `INK`, and at the right the wired
 /// `Retry` (`retry_button`), which a closed Session goes without.
 pub fn failure_strip(key: u64, words: SharedString, retry: Option<AnyElement>) -> Div {
     div()
@@ -2239,7 +2239,7 @@ pub fn failure_strip(key: u64, words: SharedString, retry: Option<AnyElement>) -
         .h(px(theme::FAILURE_STRIP_H))
         .pl(px(theme::FAILURE_STRIP_PAD_L))
         .pr(px(theme::FAILURE_STRIP_PAD_R))
-        .rounded(px(theme::R_BLOCK))
+        .rounded(px(theme::R_CARD))
         .bg(rgba(theme::FAILURE_WASH))
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_LABEL))
@@ -2250,15 +2250,15 @@ pub fn failure_strip(key: u64, words: SharedString, retry: Option<AnyElement>) -
             div()
                 .min_w_0()
                 .truncate()
-                .text_color(rgb(TEXT))
+                .text_color(rgb(INK))
                 .child(words),
         )
         .child(div().flex_1())
         .children(retry)
 }
 
-/// The strip's `Retry`: `RETRY_H` at `R_TAB` on `SELECTED`, padded
-/// `RETRY_PAD_X`, its label at `W_LABEL` in `TEXT_STRONG`. The caller wires
+/// The strip's `Retry`: `RETRY_H` at `R_CONTROL` on `SELECTED`, padded
+/// `RETRY_PAD_X`, its label at `W_LABEL` in `INK_STRONG`. The caller wires
 /// the press.
 pub fn retry_button(key: u64, cx: &gpui::App) -> gpui::component::button::Button {
     components::faded_button(
@@ -2266,19 +2266,19 @@ pub fn retry_button(key: u64, cx: &gpui::App) -> gpui::component::button::Button
         theme::paint::SELECTED.into(),
         theme::paint::SELECTION_HOVER.into(),
         theme::paint::PRESS.into(),
-        rgb(TEXT_STRONG).into(),
+        rgb(INK_STRONG).into(),
         cx,
     )
     .debug_selector(move || format!("failure-retry-{key}"))
     .flex_shrink_0()
     .h(px(theme::RETRY_H))
     .px(px(theme::RETRY_PAD_X))
-    .rounded(px(theme::R_TAB))
+    .rounded(px(theme::R_CONTROL))
     .child(
         components::text_ui()
             .text_size(px(theme::FS_LABEL))
             .font_weight(theme::W_LABEL)
-            .text_color(rgb(TEXT_STRONG))
+            .text_color(rgb(INK_STRONG))
             .child("Retry"),
     )
 }
@@ -2308,8 +2308,8 @@ pub(crate) fn needs_you_door(id: SharedString, selector: SharedString, face: Div
 
 /// The card's tab strip (SPEC §5.3), under the head on a board and at the
 /// card's top edge in Solo: one `SUBJECT_STRIP_H` row padded
-/// `SUBJECT_STRIP_PAD_X`, closed by a `HAIRLINE` — the tabs and their menu
-/// taking the width, then the plan's meter in 12 `TEXT_DIM` and the split
+/// `SUBJECT_STRIP_PAD_X`, closed by a `LINE` — the tabs and their menu
+/// taking the width, then the plan's meter in 12 `INK_SUBTLE` and the split
 /// button at the right.
 fn tab_strip(
     key: u64,
@@ -2327,10 +2327,10 @@ fn tab_strip(
         .h(px(theme::SUBJECT_STRIP_H + 1.))
         .px(px(theme::SUBJECT_STRIP_PAD_X))
         .border_b_1()
-        .border_color(theme::paint::HAIRLINE)
+        .border_color(theme::paint::LINE)
         .text_size(px(theme::FS_LABEL))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(agents)
         .children(tasks.map(|tasks| {
             div()
@@ -2416,9 +2416,9 @@ pub fn checks_head(pr: &PullRequest) -> Div {
     let tally = pr.tally();
     let parts: Vec<(String, u32)> = [
         (tally.failing, "failed", BLOCKED),
-        (tally.pending, "running", TEXT_DIM),
-        (tally.passing, "passed", TEXT_DIM),
-        (tally.skipped, "skipped", TEXT_DIM),
+        (tally.pending, "running", INK_SUBTLE),
+        (tally.passing, "passed", INK_SUBTLE),
+        (tally.skipped, "skipped", INK_SUBTLE),
     ]
     .into_iter()
     .filter(|(count, _, _)| *count > 0)
@@ -2436,7 +2436,7 @@ pub fn checks_head(pr: &PullRequest) -> Div {
         }
         let at = text.len();
         text.push_str(&part);
-        if ink != TEXT_DIM {
+        if ink != INK_SUBTLE {
             runs.push((at..text.len(), ink));
         }
     }
@@ -2456,7 +2456,7 @@ pub fn checks_head(pr: &PullRequest) -> Div {
         .debug_selector(|| "checks-tally".into())
         .min_w_0()
         .truncate()
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(StyledText::new(text).with_highlights(runs));
     let tally_line = components::tabular(tally_line);
     div()
@@ -2476,12 +2476,12 @@ pub fn checks_head(pr: &PullRequest) -> Div {
                 .child(
                     div()
                         .font_weight(theme::W_LABEL)
-                        .text_color(rgb(TEXT_STRONG))
+                        .text_color(rgb(INK_STRONG))
                         .child("Checks"),
                 )
                 .child(
                     div()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(rgb(INK_SUBTLE))
                         .child(SharedString::from(format!("#{}", pr.number))),
                 ),
         )
@@ -2522,7 +2522,7 @@ pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
         .gap(px(theme::SPACE_2))
         .h(px(theme::CHECKS_ROW_H))
         .px(px(theme::MENU_ROW_PAD_X))
-        .rounded(px(theme::R_CHIP))
+        .rounded(px(theme::R_CONTROL))
         // A matrix job's name can outrun the card; the whole of it is one
         // hover away.
         .tooltip(ferrite_ui::menu::tooltip(SharedString::from(format!(
@@ -2535,7 +2535,7 @@ pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
                 .min_w_0()
                 .flex_1()
                 .truncate()
-                .text_color(rgb(if openable { TEXT } else { TEXT_DIM }))
+                .text_color(rgb(if openable { INK } else { INK_SUBTLE }))
                 .child(name),
         )
         .child(
@@ -2579,10 +2579,10 @@ pub(crate) fn meter_layout(done: usize, total: usize) -> MeterLayout {
 }
 
 /// The painted plan meter beside the subagent tabs (neither face has
-/// `▰▱`): done steps in `TEXT_DIM`, the rest unlit. `live` lights the
+/// `▰▱`): done steps in `INK_SUBTLE`, the rest unlit. `live` lights the
 /// step being run in `RUNNING` — the one colour on a meter, because a step
 /// in progress is live state. Finishing a plan is not a status: a full
-/// meter is all `TEXT_DIM`, no check and no green.
+/// meter is all `INK_SUBTLE`, no check and no green.
 fn meter_bar(done: usize, total: usize, live: bool) -> Div {
     let segment = |ink: gpui::Hsla| {
         div()
@@ -2600,7 +2600,7 @@ fn meter_bar(done: usize, total: usize, live: bool) -> Div {
             .gap(px(theme::METER_SEG_GAP))
             .children((0..total).map(|index| {
                 segment(if index < done {
-                    rgb(TEXT_DIM).into()
+                    rgb(INK_SUBTLE).into()
                 } else if index == done && live {
                     rgb(RUNNING).into()
                 } else {
@@ -2618,7 +2618,7 @@ fn meter_bar(done: usize, total: usize, live: bool) -> Div {
                     .h_full()
                     .w(px(theme::METER_TRACK_W * fraction))
                     .rounded(px(theme::METER_SEG_R))
-                    .bg(rgb(TEXT_DIM)),
+                    .bg(rgb(INK_SUBTLE)),
             ),
     }
 }
@@ -2635,7 +2635,7 @@ fn meter(done: usize, total: usize, live: bool) -> Div {
         .child(components::tabular(
             div()
                 .flex_shrink_0()
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .child(SharedString::from(format!("{done}/{total}"))),
         ))
 }
@@ -2835,7 +2835,7 @@ pub fn questions_of(decision: &Decision) -> Option<&[ferrite_core::questions::Qu
 // ------------------------------------------------------------ shared bits
 
 /// A card's refusal, the one line grammar (rule 2.11.3): `failed` in
-/// `BLOCKED`, the `·` in structure ink, then the message in `TEXT`, all
+/// `BLOCKED`, the `·` in structure ink, then the message in `INK`, all
 /// the grid's type as one run that wraps, on the rows' inset.
 pub fn card_error(message: impl Into<SharedString>) -> Div {
     let message = message.into();
@@ -2854,7 +2854,7 @@ pub fn card_error(message: impl Into<SharedString>) -> Div {
         .flex_shrink_0()
         .px(px(theme::MENU_ROW_PAD_X))
         .py(px(theme::SPACE_1))
-        .text_color(rgb(TEXT))
+        .text_color(rgb(INK))
         .whitespace_normal()
         .child(StyledText::new(text).with_highlights(runs))
 }
@@ -3036,12 +3036,12 @@ impl Grid {
 }
 
 /// A provider's brand colour, for its `✻` and its working spinner;
-/// `TEXT_DIM` when the provider is not known.
+/// `INK_SUBTLE` when the provider is not known.
 pub(crate) fn provider_ink(provider: Option<Provider>) -> u32 {
     match provider {
         Some(Provider::Claude) => theme::PROVIDER_CLAUDE,
         Some(Provider::Codex) => theme::PROVIDER_CODEX,
-        None => TEXT_DIM,
+        None => INK_SUBTLE,
     }
 }
 
@@ -3118,7 +3118,7 @@ pub(crate) fn render_block(
 ) -> AnyElement {
     let grid = row_cx.grid();
     let selection = row_cx.selection;
-    let prose_ink = if row_cx.narration { TEXT_DIM } else { TEXT };
+    let prose_ink = if row_cx.narration { INK_SUBTLE } else { INK };
     let row = div()
         .w_full()
         .min_w_0()
@@ -3145,7 +3145,7 @@ pub(crate) fn render_block(
             .child(
                 content_row(grid)
                     .font_weight(theme::W_STRONG)
-                    .text_color(rgb(if row_cx.narration { TEXT_DIM } else { TEXT_STRONG }))
+                    .text_color(rgb(if row_cx.narration { INK_SUBTLE } else { INK_STRONG }))
                     .child(
                         div()
                             .flex_1()
@@ -3164,7 +3164,7 @@ pub(crate) fn render_block(
                         div()
                             .flex_shrink_0()
                             .w(px(2.0 * grid.cell()))
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(rgb(INK_SUBTLE))
                             .child("\u{2022}"),
                     )
                     .child(
@@ -3179,7 +3179,7 @@ pub(crate) fn render_block(
         // fold learned to drop it) draws nothing — not even its margin.
         Body::Thinking(thought) if thought.trim().is_empty() => div().into_any_element(),
         // Reasoning is agent prose one ink down, under the drawn `∴`,
-        // `TEXT_DIM`, never italic. A short thought shows whole; a long one
+        // `INK_SUBTLE`, never italic. A short thought shows whole; a long one
         // is its first line with the rest disclosed.
         Body::Thinking(thought) => {
             let (summary, details) = reasoning_text(thought);
@@ -3189,7 +3189,7 @@ pub(crate) fn render_block(
                 // visible, wrapped and selectable without a false disclosure.
                 return row
                     .child(
-                        grid_row(mark()).text_color(rgb(TEXT_DIM)).child(
+                        grid_row(mark()).text_color(rgb(INK_SUBTLE)).child(
                             div().flex_1().min_w_0().child(
                                 selection
                                     .markdown(block.id, thought.trim().to_owned())
@@ -3228,7 +3228,7 @@ pub(crate) fn render_block(
                     ),
                 );
             }
-            row.text_color(rgb(TEXT_DIM)).child(body).into_any_element()
+            row.text_color(rgb(INK_SUBTLE)).child(body).into_any_element()
         }
         // A notice: an activity line, its words cut at the column's edge
         // with the whole of it one hover away. A Decision
@@ -3248,7 +3248,7 @@ pub(crate) fn render_block(
                     .tooltip(ferrite_ui::menu::tooltip(text.clone()))
                     .child(edge_cut(
                         grid.line,
-                        TEXT_DIM,
+                        INK_SUBTLE,
                         selection.line(block.id, text, highlights),
                     )),
             );
@@ -3286,9 +3286,9 @@ pub(crate) fn render_block(
                         .overflow_hidden()
                         .pl(px(2.0 * grid.cell()))
                         .border_l_1()
-                        .border_color(theme::paint::LINE2)
+                        .border_color(theme::paint::LINE)
                         .font_family(theme::FONT_CODE)
-                        .text_color(rgb(TEXT))
+                        .text_color(rgb(INK))
                         .children(code_lines(
                             block.id,
                             source,
@@ -3378,7 +3378,7 @@ fn prompt_markdown(text: &str, files: &[std::path::PathBuf]) -> String {
 }
 
 /// A prompt's words: its literal run or its Markdown with its chips, in
-/// `TEXT_STRONG`; in the selection, or (`clamp`, the pinned band) outside
+/// `INK_STRONG`; in the selection, or (`clamp`, the pinned band) outside
 /// it, ending its last kept line in `…` so it says there is more above.
 /// `None` for a prompt of attachments alone.
 fn prompt_words(
@@ -3411,7 +3411,7 @@ fn prompt_words(
             ),
             None => row_cx.selection.markdown(block.id, source),
         }
-        .ink(TEXT_STRONG)
+        .ink(INK_STRONG)
         .chips(row_cx.preview.clone(), gallery.clone())
         .into_any_element(),
     })
@@ -3428,9 +3428,9 @@ fn prompt_gallery(files: &[std::path::PathBuf]) -> std::sync::Arc<[std::path::Pa
 }
 
 /// The prompt echo (the prototype's `.me`): right-aligned, the operator's
-/// words in a `paint::RAISED` bubble at `R_BUBBLE` that shrinks to them
+/// words in a `paint::RAISED` bubble at `R_CARD` that shrinks to them
 /// (never wider than `PROMPT_BUBBLE_MAX_W` of the column), Geist
-/// `TEXT_STRONG` at body weight with its non-image files' chips flowing
+/// `INK_STRONG` at body weight with its non-image files' chips flowing
 /// inline after them; its images as thumbnails in a wrapping row under it.
 /// `actions` (the transcript's: its send time, `Copy`) stand left of the
 /// bubble, on its foot.
@@ -3489,7 +3489,7 @@ pub(crate) fn prompt_row(
 
 /// The pinned prompt: the turn's bubble (`prompt_row`'s) stuck to the top
 /// of the body while its output scrolls under it — the same `paint::RAISED`
-/// bubble at `R_BUBBLE`, right-aligned, its words clamped to `lines` with
+/// bubble at `R_CARD`, right-aligned, its words clamped to `lines` with
 /// all its files' chips (its images' too) flowing inline after them. Not
 /// part of the selection; the transcript makes it the way back to its turn.
 pub(crate) fn pinned_prompt(
@@ -3524,7 +3524,7 @@ pub(crate) fn pinned_prompt(
 }
 
 /// The prompt's bubble (the prototype's `.me`): `paint::RAISED` at
-/// `R_BUBBLE`, shrinking to its words in Geist `TEXT_STRONG` at body
+/// `R_CARD`, shrinking to its words in Geist `INK_STRONG` at body
 /// weight, never wider than `PROMPT_BUBBLE_MAX_W` of the column. One face
 /// for the echo in its row and its pinned copy.
 fn prompt_bubble() -> Div {
@@ -3534,10 +3534,10 @@ fn prompt_bubble() -> Div {
         .py(px(theme::PROMPT_BUBBLE_PAD_Y))
         .px(px(theme::PROMPT_BUBBLE_PAD_X))
         .bg(theme::paint::RAISED)
-        .rounded(px(theme::R_BUBBLE))
+        .rounded(px(theme::R_CARD))
         .font_family(theme::FONT_UI)
         .font_weight(theme::W_BODY)
-        .text_color(rgb(TEXT_STRONG))
+        .text_color(rgb(INK_STRONG))
 }
 
 /// Open a sent file in the Pane's preview (the Panel's Preview tab), an
@@ -3553,8 +3553,8 @@ fn open_file(
 }
 
 /// A prompt's file as its band's inline chip (SPEC §5.4): the 12px image
-/// mark (or the file mark), a cell, the name, all `TEXT_STRONG`, on
-/// `paint::RAISED` at `R_INLINE` with a cell of padding each side. A click opens it (an
+/// mark (or the file mark), a cell, the name, all `INK_STRONG`, on
+/// `paint::RAISED` at `R_CONTROL` with a cell of padding each side. A click opens it (an
 /// image in the Pane's preview, in the Panel, among its prompt's `gallery`).
 /// Sized for the Markdown flow that places it: monospace cells at the size
 /// it is drawn in, its name set in `FONT_CODE` so it fills them.
@@ -3590,16 +3590,16 @@ pub(crate) fn prompt_chip(
         .h(line)
         .px(px(cell))
         .bg(theme::paint::RAISED)
-        .rounded(px(theme::R_INLINE))
+        .rounded(px(theme::R_CONTROL))
         .cursor_pointer()
         .whitespace_nowrap()
         .font_family(theme::FONT_CODE)
         .font_weight(theme::W_BODY)
-        .text_color(rgb(TEXT_STRONG))
+        .text_color(rgb(INK_STRONG))
         .child(icon(
             if image { icons::IMAGE } else { icons::FILE },
             theme::GLYPH_BOX,
-            TEXT_STRONG,
+            INK_STRONG,
         ))
         // The chip is sized in whole cells; the label never cuts (a
         // measured run rounds up past its cells by a fraction of a pixel).
@@ -3619,7 +3619,7 @@ pub(crate) fn prompt_chip(
 /// A sent image under its prompt (the prototype's `.thumb`): the picture
 /// at its own proportions, no larger than `THUMB_MAX_W` × `THUMB_MAX_H`
 /// nor its own size (covering that box when its header cannot be read), at
-/// `R_THUMB` in a 1px `FIELD_RING`; its caption (`name · W×H · 41 KB`) is
+/// `R_CARD` in a 1px `LINE`; its caption (`name · W×H · 41 KB`) is
 /// its tooltip. A click opens it in the Pane's preview, among its
 /// prompt's `gallery`.
 fn inline_image(
@@ -3660,9 +3660,9 @@ fn inline_image(
         .id(SharedString::from(format!("sent-image-{block:?}-{index}")))
         .debug_selector(|| "sent-image".into())
         .flex_shrink_0()
-        .rounded(px(theme::R_THUMB))
+        .rounded(px(theme::R_CARD))
         .border_1()
-        .border_color(rgba(theme::FIELD_RING))
+        .border_color(theme::paint::LINE)
         .overflow_hidden()
         .cursor_pointer()
         .tooltip(ferrite_ui::menu::tooltip(caption))
@@ -3674,7 +3674,7 @@ fn inline_image(
             gpui::img(path.to_path_buf())
                 .w(px(width))
                 .h(px(height))
-                .rounded(px(theme::R_THUMB - theme::HAIRLINE_W))
+                .rounded(px(theme::R_CARD - theme::HAIRLINE_W))
                 .object_fit(gpui::ObjectFit::Cover),
         )
         .into_any_element()
@@ -3806,7 +3806,7 @@ pub(crate) fn omitted_line(bytes: usize) -> Div {
     div()
         .min_w_0()
         .truncate()
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(SharedString::from(format!(
             "\u{2026} {} not kept",
             text::byte_size(bytes)
@@ -3815,10 +3815,10 @@ pub(crate) fn omitted_line(bytes: usize) -> Div {
 
 /// How a turn ended (`text::turn_stamp`), one selectable run that copies
 /// back as it reads. A completed turn that took a while closes on `Worked
-/// for 5m 22s` in `TEXT_DIM`, a `HAIRLINE` running on from it to the
+/// for 5m 22s` in `INK_SUBTLE`, a `LINE` running on from it to the
 /// column's end; an interrupted or failed one is an activity line, `failed
 /// · 0.1s · API Error: 529 overloaded`, its lead word the only coloured
-/// one — `interrupted` in `TEXT` (the operator did it; nothing failed),
+/// one — `interrupted` in `INK` (the operator did it; nothing failed),
 /// `failed` in `BLOCKED`. A quick completed turn has no row at all.
 fn turn_end(
     block: BlockId,
@@ -3832,7 +3832,7 @@ fn turn_end(
     let mut highlights = separators(&text);
     let lead = match &end.outcome {
         TurnOutcome::Completed => None,
-        TurnOutcome::Interrupted => Some((TEXT, theme::words::INTERRUPTED.len())),
+        TurnOutcome::Interrupted => Some((INK, theme::words::INTERRUPTED.len())),
         TurnOutcome::Error(_) => Some((BLOCKED, theme::words::FAILED.len())),
     };
     if let Some((ink, len)) = lead {
@@ -3858,13 +3858,13 @@ fn turn_end(
         return line
             .items_center()
             .gap(px(theme::TURN_STAMP_RULE_GAP))
-            .child(div().flex_1().h(px(1.)).bg(theme::paint::HAIRLINE))
+            .child(div().flex_1().h(px(1.)).bg(theme::paint::LINE))
             .into_any_element();
     }
     line.into_any_element()
 }
 
-/// The `·` seams in a transcript line: `TEXT_DIM`, at body weight
+/// The `·` seams in a transcript line: `INK_SUBTLE`, at body weight
 /// (CT-23: a seam inside the transcript reads as the words around it — the
 /// status line's faint seams are the Composer's). Highlighted in place so
 /// the line stays one run and copies back exactly as written.
@@ -3874,7 +3874,7 @@ fn separators(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
             (
                 at..at + dot.len(),
                 HighlightStyle {
-                    color: Some(rgb(TEXT_DIM).into()),
+                    color: Some(rgb(INK_SUBTLE).into()),
                     font_weight: Some(theme::W_BODY),
                     ..Default::default()
                 },
@@ -3926,7 +3926,7 @@ pub fn trail_diff_stat(added: usize, removed: usize) -> StyledText {
 
 /// An activity row's line (a call, a group's summary, a visual, a notice,
 /// the stamp; the reference's `Edited 3 files ›`): plain words a step under
-/// the prose (`Grid::activity`) in `TEXT_DIM` on the row's own line, from
+/// the prose (`Grid::activity`) in `INK_SUBTLE` on the row's own line, from
 /// the column's edge — no icon, no time — after a `mark` where the row has
 /// one (the stamp's `✻`).
 pub(crate) fn activity_line(grid: Grid, mark: Option<AnyElement>, words: Div) -> Div {
@@ -3939,7 +3939,7 @@ pub(crate) fn activity_line(grid: Grid, mark: Option<AnyElement>, words: Div) ->
         .h(px(grid.line))
         .relative()
         .text_size(px(small.size))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .children(mark.map(|mark| mark_gutter(grid, mark)))
         .child(words.flex().items_center().min_w_0())
 }
@@ -4085,11 +4085,11 @@ impl gpui::Element for EdgeCut {
 
 /// A line under an activity row, in its words (a visual's caption, a
 /// decision record, why a page is missing): a step under the prose in
-/// `TEXT_DIM`.
+/// `INK_SUBTLE`.
 pub(crate) fn activity_note(grid: Grid) -> Div {
     content_row(grid)
         .text_size(px(grid.activity().size))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
 }
 
 /// A tool call (the reference's `Built AcmeField ›`): one muted line in the
@@ -4155,7 +4155,7 @@ pub(crate) fn render_tool(
     // register as they are built: the call line first, then its verdict.
     let call = selection
         .markdown(block, text::call_markdown(tool))
-        .ink(TEXT_DIM)
+        .ink(INK_SUBTLE)
         .activity();
     let verdict = text::call_verdict(tool).map(|verdict| {
         let mut highlights = separators(&verdict);
@@ -4182,7 +4182,7 @@ pub(crate) fn render_tool(
                 .min_w_0()
                 .child(edge_cut(
                     grid.line,
-                    TEXT_DIM,
+                    INK_SUBTLE,
                     div().pr(px(small.cell())).child(call),
                 )),
         )
@@ -4201,7 +4201,7 @@ pub(crate) fn render_tool(
             on_cells(content_row(grid))
                 .debug_selector(|| "tool-failure".into())
                 .text_size(px(small.size))
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .child(
                     div()
                         .flex_1()
@@ -4305,15 +4305,15 @@ pub(crate) struct GroupCx<'a> {
 
 /// A run of calls under one summary (`text::group_summary`), an activity
 /// line as a call's is (`activity_line`): `Edited 3 files, ran 2 commands ·
-/// 1 failed ›`. The summary reads in `TEXT_DIM`, its failure count in
-/// `BLOCKED`. The whole line is the pointer's toggle — it lifts to `TEXT`
+/// 1 failed ›`. The summary reads in `INK_SUBTLE`, its failure count in
+/// `BLOCKED`. The whole line is the pointer's toggle — it lifts to `INK`
 /// under the pointer, its chevron always shown, a quarter turned when open
 /// — and the keyboard's (`ToolDisclosure`), wearing `paint::RAISED` when
 /// targeted.
 ///
 /// Open, the calls hang under the summary one gutter in, each the row it
 /// would be on its own (its folds and details its own), on a 1px
-/// `paint::LINE2` rail, easing in; shut, a working call
+/// `paint::LINE` rail, easing in; shut, a working call
 /// hangs there alone so a live suite's bar and a command's live line stay
 /// in view.
 pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupCx) -> AnyElement {
@@ -4346,7 +4346,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
     // failure count in the failure ink.
     for (range, mark) in &summary.marks {
         let ink = match mark {
-            text::SummaryMark::File => TEXT,
+            text::SummaryMark::File => INK,
             text::SummaryMark::Added => RUNNING,
             text::SummaryMark::Removed | text::SummaryMark::Failed => BLOCKED,
         };
@@ -4366,10 +4366,10 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
                 .debug_selector(|| "tool-group-summary".into())
                 .flex_shrink(1.)
                 .min_w_0()
-                .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(TEXT)))
+                .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(INK)))
                 .child(edge_cut(
                     grid.line,
-                    TEXT_DIM,
+                    INK_SUBTLE,
                     row_cx
                         .selection
                         .line(leader.id, summary.text.clone(), highlights),
@@ -4410,7 +4410,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
                     .bottom_0()
                     .left(px((grid.cell() / 2.).floor()))
                     .w(px(1.))
-                    .bg(theme::paint::LINE2),
+                    .bg(theme::paint::LINE),
             )
             .children(members)
     };
@@ -4450,7 +4450,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
         .w_full()
         .min_w_0()
         .flex_shrink_0()
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(header)
         .child(body)
         .into_any_element()
@@ -4564,14 +4564,14 @@ pub fn tool_disclosure_control(
 
 /// A reasoning row's trailing chevron: `ICON_CHEVRON` in `TEXT_FAINT`, its
 /// box always reserved so nothing moves when it shows. It shows while the
-/// pointer is on the row (lifting to `TEXT_DIM`) or while the keyboard
+/// pointer is on the row (lifting to `INK_SUBTLE`) or while the keyboard
 /// targets the row, and it turns a quarter when open. The turn eases over
 /// `motion::CHEVRON` only when the pointer flipped it (`eased`); a keyboard
 /// toggle, reduced motion and a row drawn already open are simply turned.
 pub fn disclosure_chevron(expanded: bool, targeted: bool, eased: bool) -> AnyElement {
     let chevron = |turn: f32| {
         icon(icons::CHEVRON_RIGHT, theme::ICON_CHEVRON, TEXT_FAINT)
-            .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(TEXT_DIM)))
+            .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(INK_SUBTLE)))
             .with_transformation(gpui::Transformation::rotate(gpui::radians(
                 std::f32::consts::FRAC_PI_2 * turn,
             )))
@@ -4605,7 +4605,7 @@ pub fn disclosure_chevron(expanded: bool, targeted: bool, eased: bool) -> AnyEle
 
 /// The box a diff or a code fence sits in (SPEC §5.4): `paint::BLOCK`,
 /// `R_CONTROL` corners, `BLOCK_PAD_Y` above and below its lines, and an
-/// inset 1px `HAIRLINE` laid over it (so it moves nothing), set at the
+/// inset 1px `BLOCK_RING` laid over it (so it moves nothing), set at the
 /// block's grid (`Grid::block`).
 pub(crate) fn block_box(grid: Grid) -> Div {
     div()
@@ -4623,7 +4623,7 @@ pub(crate) fn block_box(grid: Grid) -> Div {
                 .inset_0()
                 .rounded(px(theme::R_CONTROL))
                 .border_1()
-                .border_color(theme::paint::HAIRLINE),
+                .border_color(theme::paint::BLOCK_RING),
         )
 }
 
@@ -4654,13 +4654,13 @@ fn span_style(style: Style) -> Option<HighlightStyle> {
             color: Some(rgb(INLINE_CODE_INK).into()),
             ..Default::default()
         }),
-        // `strong`: weight 600 in `TEXT_STRONG`.
+        // `strong`: weight 600 in `INK_STRONG`.
         Style::Bold => Some(HighlightStyle {
-            color: Some(rgb(TEXT_STRONG).into()),
+            color: Some(rgb(INK_STRONG).into()),
             font_weight: Some(W_STRONG),
             ..Default::default()
         }),
-        // A link or a path reads `TEXT_STRONG`, with no underline at rest.
+        // A link or a path reads `INK_STRONG`, with no underline at rest.
         // Inert — paths render, nothing opens.
         Style::Link => Some(HighlightStyle {
             color: Some(rgb(theme::LINK_INK).into()),
@@ -4677,7 +4677,7 @@ fn prose(block: BlockId, spans: &[Span], selection: &TextRuns, quiet: bool) -> A
     if quiet {
         for (range, style) in &mut highlights {
             let code = spans_style_at(spans, range.start) == Some(Style::Code);
-            style.color = code.then(|| rgb(TEXT).into());
+            style.color = code.then(|| rgb(INK).into());
         }
     }
     selection.line(block, text, highlights).into_any_element()
@@ -6059,7 +6059,7 @@ mod tests {
             DiffKind::Context.paint(),
             DiffPaint {
                 sign: "",
-                sign_color: TEXT_DIM,
+                sign_color: INK_SUBTLE,
                 number_color: TEXT_FAINT,
                 code_color: theme::SYN_PLAIN,
                 wash: None,
@@ -6493,7 +6493,7 @@ mod tests {
         assert_eq!(PaneEdge::of(false, true, false), PaneEdge::Attention);
         assert_eq!(PaneEdge::of(true, false, false), PaneEdge::Focused);
         assert_eq!(PaneEdge::of(false, false, false), PaneEdge::Rest);
-        assert_eq!(PaneEdge::Rest.ink(), rgba(CARD_RING).into());
+        assert_eq!(PaneEdge::Rest.ink(), theme::paint::CARD_RING.into());
         assert_eq!(PaneEdge::Focused.ink(), rgba(FOCUS_RING).into());
         assert_eq!(PaneEdge::Attention.ink(), rgba(WAIT_RING).into());
         for focused in [false, true] {
@@ -6521,14 +6521,14 @@ mod tests {
         }
         assert_eq!(CheckMark::Failed.word_ink(), BLOCKED);
         assert_eq!(CheckMark::Running.ink(), RUNNING);
-        assert_eq!(CheckMark::Passed.ink(), TEXT_DIM);
+        assert_eq!(CheckMark::Passed.ink(), INK_SUBTLE);
         for mark in [
             CheckMark::Running,
             CheckMark::Queued,
             CheckMark::Passed,
             CheckMark::Skipped,
         ] {
-            assert_eq!(mark.word_ink(), TEXT_DIM, "{mark:?}");
+            assert_eq!(mark.word_ink(), INK_SUBTLE, "{mark:?}");
             assert_ne!(mark.ink(), ATTENTION, "{mark:?}");
         }
         // A run's word is the lexicon's, lowercase, whatever the forge said.
@@ -6785,8 +6785,8 @@ mod tests {
     /// Usage is neutral until it runs tight: colour is state.
     #[test]
     fn usage_reads_neutral_until_it_runs_tight() {
-        assert_eq!(usage_ink(0.62), TEXT);
-        assert_eq!(usage_ink(0.79), TEXT);
+        assert_eq!(usage_ink(0.62), INK);
+        assert_eq!(usage_ink(0.79), INK);
         assert_eq!(usage_ink(theme::USAGE_TIGHT), ATTENTION);
         assert_eq!(usage_ink(0.9), ATTENTION);
         assert_eq!(usage_ink(0.95), ATTENTION);

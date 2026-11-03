@@ -294,7 +294,7 @@ pub fn ferrite_icon(size: f32) -> AnyElement {
             .path(path)
             // GPUI skips `paint_svg` without a concrete text color, even
             // where the SVG paints only its own gradient.
-            .text_color(rgb(theme::TEXT))
+            .text_color(rgb(theme::INK))
     };
     div()
         .relative()
@@ -345,7 +345,7 @@ impl RenderOnce for FerriteSnap {
                 .path(path)
                 // GPUI skips `paint_svg` entirely without a concrete text
                 // color, even when the SVG paints only its own gradient.
-                .text_color(rgb(theme::TEXT))
+                .text_color(rgb(theme::INK))
                 .with_transformation(Transformation::translate(point(
                     px(x * size * displacement),
                     px(y * size * displacement),

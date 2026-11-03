@@ -583,7 +583,7 @@ impl Render for Palette {
                     .px(px(PALETTE_PAD_X - PALETTE_TAB_PAD_X))
                     .pb(px(SPACE_1_5))
                     .border_b_1()
-                    .border_color(gpui::rgba(HAIRLINE)),
+                    .border_color(paint::FLOAT_EDGE),
                 |row, (at, tab)| {
                     let tab = *tab;
                     row.child(self.tab_element(at, tab, cx))
@@ -689,7 +689,7 @@ impl Palette {
             .px(px(PALETTE_TAB_PAD_X))
             .rounded(px(R_CONTROL))
             .whitespace_nowrap()
-            .text_color(rgb(if chosen { TEXT_STRONG } else { TEXT_DIM }))
+            .text_color(rgb(if chosen { INK_STRONG } else { INK_SUBTLE }))
             .when(chosen, |pill| pill.font_weight(W_LABEL))
             .child(tab.title())
             .on_click(cx.listener(move |palette, _: &gpui::ClickEvent, _, cx| {
@@ -697,15 +697,15 @@ impl Palette {
                 palette.set_tab(tab, cx);
             }));
         if chosen {
-            pill.bg(paint::SELECTED)
+            pill.bg(paint::FLOAT_SEL)
         } else {
             pill.hover_palette(key).press_float()
         }
     }
 }
 
-/// The footer's hints: each word in `TEXT_DIM`, its key after it in
-/// `TEXT_MUTED`, `PALETTE_HINT_GAP` apart — plain text, no keycaps.
+/// The footer's hints: each word in `INK_SUBTLE`, its key after it in
+/// `INK`, `PALETTE_HINT_GAP` apart — plain text, no keycaps.
 fn hint_line(hints: &[(&'static str, &'static str)]) -> gpui::Div {
     hints.iter().fold(
         div()
@@ -720,14 +720,14 @@ fn hint_line(hints: &[(&'static str, &'static str)]) -> gpui::Div {
                     .items_center()
                     .gap(px(SPACE_1_5))
                     .child(*word)
-                    .child(components::glyph(*key, TEXT_MUTED)),
+                    .child(components::glyph(*key, INK)),
             )
         },
     )
 }
 
 /// What a dialog's list says when it has nothing to show (the palette's,
-/// the shortcuts sheet's): its note, `TEXT_DIM`, centred in
+/// the shortcuts sheet's): its note, `INK_SUBTLE`, centred in
 /// `PALETTE_EMPTY_H`.
 pub(crate) fn empty_note(note: impl Into<SharedString>) -> gpui::Div {
     div()
@@ -737,23 +737,23 @@ pub(crate) fn empty_note(note: impl Into<SharedString>) -> gpui::Div {
         .items_center()
         .justify_center()
         .h(px(PALETTE_EMPTY_H))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(note.into())
 }
 
 /// The status filter's word in its state's ink: hue for the two states
-/// that have one (needs you, working), `TEXT_DIM` for idle and done (done
+/// that have one (needs you, working), `INK_SUBTLE` for idle and done (done
 /// is a shape, not a hue).
 fn filter_ink(filter: Attention) -> u32 {
     match filter {
         Attention::Blocked => ATTENTION,
         Attention::Working => RUNNING,
-        Attention::Idle | Attention::Done => TEXT_DIM,
+        Attention::Idle | Attention::Done => INK_SUBTLE,
     }
 }
 
-/// The dialog's shell (SPEC §5.8): `PALETTE_W` on `PALETTE_GROUND`,
-/// radius `R_PALETTE`, clipped to it, the 1px `HAIRLINE_STRONG` ring drawn
+/// The dialog's shell (SPEC §5.8): `PALETTE_W` on `paint::FLOAT`,
+/// radius `R_FLOAT`, clipped to it, the 1px `FLOAT_EDGE` ring drawn
 /// *outside* the box (so it keeps its full 640 inside) and the deep shadow
 /// under it (`components::dialog_shadow`). The
 /// shortcuts sheet wears it too.
@@ -765,15 +765,15 @@ pub(crate) fn dialog() -> gpui::Div {
         .flex_col()
         .w(px(PALETTE_W))
         .overflow_hidden()
-        .rounded(px(R_PALETTE))
-        .bg(PALETTE_GROUND)
+        .rounded(px(R_FLOAT))
+        .bg(paint::FLOAT)
         .shadow(components::dialog_shadow())
 }
 
 /// The dialog's input row (the palette's, the shortcuts sheet's filter):
-/// `PALETTE_INPUT_H`, the `search` icon in `TEXT_DIM`, then the line in
-/// `FS_PALETTE` `TEXT_STRONG`, its `placeholder` in `TEXT_DIM` while it is
-/// empty; over a `HAIRLINE` when `rule` (⌘K's tabs carry it instead). The
+/// `PALETTE_INPUT_H`, the `search` icon in `INK_SUBTLE`, then the line in
+/// `FS_PALETTE` `INK_STRONG`, its `placeholder` in `PLACEHOLDER_INK` while it is
+/// empty; over a `FLOAT_EDGE` rule when `rule` (⌘K's tabs carry it instead). The
 /// caller adds what stands at its right.
 pub(crate) fn input_row(
     selector: &'static str,
@@ -794,7 +794,7 @@ pub(crate) fn input_row(
             if rule {
                 row.h(px(PALETTE_INPUT_H + 1.0))
                     .border_b_1()
-                    .border_color(gpui::rgba(HAIRLINE))
+                    .border_color(paint::FLOAT_EDGE)
             } else {
                 row.h(px(PALETTE_INPUT_H))
             }
@@ -802,7 +802,7 @@ pub(crate) fn input_row(
         .child(ferrite_ui::icons::icon(
             ferrite_ui::icons::SEARCH,
             PALETTE_SEARCH_ICON,
-            TEXT_DIM,
+            INK_SUBTLE,
         ))
         .child(
             div()
@@ -812,21 +812,21 @@ pub(crate) fn input_row(
                 .font_family(FONT_UI)
                 .text_size(px(FS_PALETTE))
                 .line_height(px(LH_UI))
-                .text_color(rgb(TEXT_STRONG))
+                .text_color(rgb(INK_STRONG))
                 // Behind the line, so the caret stands at its start.
                 .children(placeholder.map(|words| {
                     div()
                         .absolute()
                         .left_0()
                         .top_0()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(rgb(PLACEHOLDER_INK))
                         .child(words)
                 }))
                 .child(input),
         )
 }
 
-/// A section heading: its word in 12/500 `TEXT_DIM`, set on the heading's
+/// A section heading: its word in 12/500 `INK_SUBTLE`, set on the heading's
 /// foot; a heading after the first stands `PALETTE_SECTION_GAP` taller.
 pub(crate) fn section_heading(title: &'static str, first: bool) -> gpui::Div {
     div()
@@ -839,14 +839,14 @@ pub(crate) fn section_heading(title: &'static str, first: bool) -> gpui::Div {
         .pb(px(PALETTE_SECTION_PAD_B))
         .text_size(px(FS_META))
         .font_weight(W_LABEL)
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .whitespace_nowrap()
         .child(title)
 }
 
-/// The footer: `PALETTE_FOOT_H` under a `HAIRLINE`, the key hints at the
+/// The footer: `PALETTE_FOOT_H` under a `FLOAT_EDGE` rule, the key hints at the
 /// left, and at the right the cursor row's directory or the result count,
-/// cut from its start where it runs long; all 12 `TEXT_DIM`.
+/// cut from its start where it runs long; all 12 `INK_SUBTLE`.
 pub(crate) fn footer_row(left: impl IntoElement, right: SharedString) -> gpui::Div {
     div()
         .flex()
@@ -857,9 +857,9 @@ pub(crate) fn footer_row(left: impl IntoElement, right: SharedString) -> gpui::D
         .h(px(PALETTE_FOOT_H + 1.0))
         .px(px(PALETTE_PAD_X))
         .border_t_1()
-        .border_color(gpui::rgba(HAIRLINE))
+        .border_color(paint::FLOAT_EDGE)
         .text_size(px(FS_META))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .whitespace_nowrap()
         .child(div().flex_shrink_0().child(left))
         .child(
@@ -880,18 +880,18 @@ fn mark(row: &Row) -> Option<gpui::AnyElement> {
     match (row.status, &row.act) {
         (Some(status), _) => Some(crate::nav::mark(status, false)),
         (None, Act::Command(command)) => command.icon().map(|icon| {
-            ferrite_ui::icons::icon(icon, PALETTE_MARK_ICON, TEXT_DIM).into_any_element()
+            ferrite_ui::icons::icon(icon, PALETTE_MARK_ICON, INK_SUBTLE).into_any_element()
         }),
         _ => None,
     }
 }
 
 /// One palette row (SPEC §5.8): `PALETTE_ROW_H`, radius `R_CONTROL`, its
-/// parts `PALETTE_GAP` apart — the mark column, the name (`TEXT`, its
-/// matches 600 `TEXT_STRONG`), the context at the right in 12 `TEXT_DIM`,
+/// parts `PALETTE_GAP` apart — the mark column, the name (`INK`, its
+/// matches 600 `INK_STRONG`), the context at the right in 12 `INK_SUBTLE`,
 /// then the key column, `PALETTE_KEYS_W` on every row so the contexts end
-/// on one edge: the chord as plain 12 `TEXT_DIM` text, or, on a chordless
-/// cursor row (`SELECTED`, its name all `TEXT_STRONG`), `corner-down-left`.
+/// on one edge: the chord as plain 12 `INK_SUBTLE` text, or, on a chordless
+/// cursor row (`SELECTED`, its name all `INK_STRONG`), `corner-down-left`.
 fn row_element(
     at: usize,
     row: &Row,
@@ -900,10 +900,10 @@ fn row_element(
 ) -> gpui::Stateful<gpui::Div> {
     let id = gpui::ElementId::from(("palette-row", at));
     let key = ferrite_ui::pointer::hover_key(&id);
-    let ink = if cursor { TEXT_STRONG } else { TEXT };
+    let ink = if cursor { INK_STRONG } else { INK };
     let name =
         StyledText::new(row.name.clone()).with_highlights(components::match_highlights(lit, false));
-    let meta = || div().text_size(px(FS_META)).text_color(rgb(TEXT_DIM));
+    let meta = || div().text_size(px(FS_META)).text_color(rgb(INK_SUBTLE));
     let element = div()
         .id(id)
         .debug_selector(move || format!("palette-row-{at}"))
@@ -939,14 +939,14 @@ fn row_element(
                 .min_w(px(PALETTE_KEYS_W))
                 .map(|cell| match row.keys.clone() {
                     Some(keys) => cell.child(
-                        components::key_combo(&keys, TEXT_DIM)
+                        components::key_combo(&keys, INK_SUBTLE)
                             .font_family(FONT_UI)
                             .text_size(px(FS_META)),
                     ),
                     None if cursor => cell.child(ferrite_ui::icons::icon(
                         ferrite_ui::icons::CORNER_DOWN_LEFT,
                         PALETTE_ENTER_ICON,
-                        TEXT_DIM,
+                        INK_SUBTLE,
                     )),
                     None => cell,
                 }),

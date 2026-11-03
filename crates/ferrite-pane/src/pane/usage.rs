@@ -9,12 +9,12 @@ use super::*;
 pub fn context_ring(fraction: f32) -> Div {
     let fraction = fraction.clamp(0., 1.);
     let ink: gpui::Hsla = rgb(if fraction < theme::CTX_METER_WARN {
-        TEXT_DIM
+        INK_SUBTLE
     } else {
         ctx_meter_ink(fraction)
     })
     .into();
-    let track: gpui::Hsla = rgba(theme::HAIRLINE_STRONG).into();
+    let track: gpui::Hsla = theme::paint::LINE.into();
     div()
         .debug_selector(|| "context-ring".into())
         .flex_shrink_0()
@@ -230,7 +230,7 @@ pub fn context_usage(
         div()
             .w_full()
             .h(px(theme::USAGE_CARD_BAR_H))
-            .bg(theme::paint::LINE2)
+            .bg(theme::paint::LINE)
             .child(div().h_full().w(relative(used)).bg(rgb(usage_ink(used))))
     };
     // A window's heading: its name at the left, what it reads at the
@@ -246,7 +246,7 @@ pub fn context_usage(
                 div()
                     .flex_shrink_0()
                     .font_weight(theme::W_BODY)
-                    .text_color(rgb(TEXT))
+                    .text_color(rgb(INK))
                     .child(label),
             )
             .child(value)
@@ -275,7 +275,7 @@ pub fn context_usage(
                 .id(SharedString::from(format!("reset-{key}")))
                 .text_size(px(theme::FS_UI))
                 .debug_selector(move || format!("context-usage-{key}-reset-reported"))
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .child(label)
                 .into_any_element()
         })
@@ -331,7 +331,7 @@ pub fn context_usage(
             .items_center()
             .gap(px(theme::SPACE_1))
             .text_size(px(theme::FS_UI))
-            .text_color(rgb(TEXT_DIM))
+            .text_color(rgb(INK_SUBTLE))
             .debug_selector(move || match maximum {
                 Some(maximum) => format!("context-usage-maximum-{maximum}"),
                 None => "context-usage-maximum-unknown".into(),
@@ -370,7 +370,7 @@ pub fn context_usage(
                 .w_full()
                 .h(px(theme::USAGE_CARD_BAR_H))
                 .overflow_hidden()
-                .bg(theme::paint::LINE2)
+                .bg(theme::paint::LINE)
                 .children(in_window.into_iter().map(|(ink, share)| {
                     div()
                         .flex_shrink_0()
@@ -387,7 +387,7 @@ pub fn context_usage(
     // The context heading is the legend's door when there is one: the
     // whole line is the hit row, lifting to the hover face like a menu row,
     // with the chevron after the reading. It reads as every Panel section's
-    // head does (`panel::panel_section_head`: 30 high, 12/500 `TEXT_DIM`,
+    // head does (`panel::panel_section_head`: 30 high, 12/500 `INK_SUBTLE`,
     // its reading at the right), so the Details tab's sections read alike.
     let context_heading = div()
         .flex()
@@ -396,7 +396,7 @@ pub fn context_usage(
         .gap(px(theme::SPACE_3))
         .h(px(theme::PANEL_SECTION_H))
         .text_size(px(theme::FS_META))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(
             div()
                 .flex_shrink_0()
@@ -417,7 +417,7 @@ pub fn context_usage(
                     expanded,
                     ferrite_ui::motion::CHEVRON,
                     |turn| {
-                        icon(icons::CHEVRON_RIGHT, theme::ICON_CHEVRON, TEXT_DIM)
+                        icon(icons::CHEVRON_RIGHT, theme::ICON_CHEVRON, INK_SUBTLE)
                             .with_transformation(gpui::Transformation::rotate(gpui::radians(
                                 std::f32::consts::FRAC_PI_2 * turn,
                             )))
@@ -475,17 +475,17 @@ pub fn context_usage(
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_color(rgb(TEXT))
+                        .text_color(rgb(INK))
                         .child(label),
                 )
-                .child(div().flex_shrink_0().text_color(rgb(TEXT_DIM)).child(count))
+                .child(div().flex_shrink_0().text_color(rgb(INK_SUBTLE)).child(count))
                 .child(
                     div()
                         .flex()
                         .justify_end()
                         .flex_shrink_0()
                         .w(px(theme::USAGE_SHARE_W))
-                        .text_color(rgb(TEXT))
+                        .text_color(rgb(INK))
                         .child(share),
                 ),
         )
@@ -546,7 +546,7 @@ pub fn context_usage(
         .gap(px(theme::USAGE_CARD_GAP))
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT))
+        .text_color(rgb(INK))
         .child(context);
     if limits.five_hour.is_none() && limits.weekly.is_none() {
         // On the blocks' inset, not a float's: the card's left edge.
@@ -554,7 +554,7 @@ pub fn context_usage(
             block()
                 .id("context-usage-limits-unknown")
                 .debug_selector(|| "context-usage-limits-unknown".into())
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .child("Limits not reported by this provider"),
         );
     }
@@ -588,7 +588,7 @@ pub fn context_usage(
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(rgb(INK_SUBTLE))
                     .child(key),
             )
             .child(components::tabular(div().flex_shrink_0().child(value)))
@@ -644,7 +644,7 @@ pub fn context_usage(
         .overflow_y_scrollbar()
 }
 
-/// A usage reading's ink: neutral `TEXT` until the window runs tight
+/// A usage reading's ink: neutral `INK` until the window runs tight
 /// (`USAGE_TIGHT`), then `ATTENTION`. There is no `BLOCKED` step: a full
 /// window stops nothing until the provider says so. Colour is state; a
 /// context half full is not one.
@@ -652,7 +652,7 @@ pub fn usage_ink(fraction: f32) -> u32 {
     if fraction >= theme::USAGE_TIGHT {
         ATTENTION
     } else {
-        TEXT
+        INK
     }
 }
 

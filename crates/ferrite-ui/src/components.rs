@@ -135,23 +135,23 @@ pub fn form_button_on(id: impl Into<ElementId>, rest: theme::Paint, cx: &App) ->
         rest.into(),
         hover.into(),
         theme::paint::PRESS.into(),
-        rgb(theme::TEXT).into(),
+        rgb(theme::INK).into(),
         cx,
     )
     .tab_stop(true)
 }
 
 /// The completing action: the strongest ink as a fill (`PRIMARY`) with
-/// dark `ON_PRIMARY` ink, stepping down to `TEXT` under the pointer and
-/// pressed; disabled is `SELECTION` with `TEXT_DIM` ink. On the filled face
-/// the focus outline is `TEXT_STRONG`.
+/// dark `ON_PRIMARY` ink, stepping down to `INK` under the pointer and
+/// pressed; disabled is `SELECTION` with `INK_SUBTLE` ink. On the filled face
+/// the focus outline is `INK_STRONG`.
 pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> Button {
     use gpui::component::Disableable;
     let face: Hsla = rgb(primary_face(disabled)).into();
     let (hover, press) = if disabled {
         (face, face)
     } else {
-        (rgb(theme::TEXT).into(), rgb(theme::TEXT).into())
+        (rgb(theme::INK).into(), rgb(theme::INK).into())
     };
     faded_button(
         id,
@@ -168,10 +168,10 @@ pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> But
     .when(disabled, |button| button.cursor_default())
 }
 
-/// A primary button's keyboard focus: the outline in `TEXT_STRONG`, which
+/// A primary button's keyboard focus: the outline in `INK_STRONG`, which
 /// reads on its steel face where `FOCUS_RING` would not.
 fn primary_focus(style: StyleRefinement) -> StyleRefinement {
-    focus_outline(style, rgb(theme::TEXT_STRONG).into())
+    focus_outline(style, rgb(theme::INK_STRONG).into())
 }
 
 fn primary_face(disabled: bool) -> u32 {
@@ -184,7 +184,7 @@ fn primary_face(disabled: bool) -> u32 {
 
 fn primary_ink(disabled: bool) -> u32 {
     if disabled {
-        theme::TEXT_DIM
+        theme::INK_SUBTLE
     } else {
         theme::ON_PRIMARY
     }
@@ -204,26 +204,26 @@ pub fn form_label(text: impl Into<SharedString>, ink: u32) -> impl IntoElement {
 // ------------------------------------------------------------------- type
 
 /// A line of the grid: Geist Mono (`FONT_UI`) · `FS_UI` 13 on `LH_UI` 20 ·
-/// `TEXT`.
+/// `INK`.
 pub fn text_ui() -> Div {
     div()
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(theme::TEXT))
+        .text_color(rgb(theme::INK))
 }
 
-/// Metadata: the same grid line in `TEXT_DIM` (one size per surface:
+/// Metadata: the same grid line in `INK_SUBTLE` (one size per surface:
 /// metadata is ink, not a smaller size).
 pub fn text_meta() -> Div {
     div()
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(theme::TEXT_DIM))
+        .text_color(rgb(theme::INK_SUBTLE))
 }
 
-/// A group's title inside a surface: the grid's type, `W_LABEL` `TEXT_DIM`,
+/// A group's title inside a surface: the grid's type, `W_LABEL` `INK_SUBTLE`,
 /// written as-is (terminal case, no rule), 8px above what it heads.
 pub fn section_label(text: impl Into<SharedString>) -> Div {
     text_meta()
@@ -355,13 +355,13 @@ pub fn float_shadow() -> Vec<BoxShadow> {
     )]
 }
 
-/// The palette's dialog's shadows (SPEC §5.8): its 1px `HAIRLINE_STRONG`
+/// The palette's dialog's shadows (SPEC §5.8): its 1px `FLOAT_EDGE`
 /// ring as a spread, then the float's shadow deepened (`SHADOW_PALETTE_*`).
 /// The dialog clips its rows to its radius, which would clip an
 /// `outer_ring` overlay, so its ring is a shadow: the same 1px outside.
 pub fn dialog_shadow() -> Vec<BoxShadow> {
     vec![
-        layer(theme::HAIRLINE_STRONG, 0., 0., theme::FOCUS_RING_W),
+        layer(theme::paint::FLOAT_EDGE.rgba(), 0., 0., theme::FOCUS_RING_W),
         layer(
             theme::SHADOW_PALETTE,
             theme::SHADOW_PALETTE_Y,
@@ -392,8 +392,8 @@ pub fn outer_ring(radius: f32, ink: impl Into<Hsla>) -> Div {
 
 /// A floating surface (menu, picker, popover, card, toast, sheet; SPEC
 /// §5.8's shell at the float's scale): the float's opaque ground
-/// (`FLOAT_GROUND`; floats cannot frost, theme WP-E FL-15), radius
-/// `R_BLOCK`, a 1px `FLOAT_EDGE` ring, the float shadow, `FLOAT_PAD`
+/// (`paint::FLOAT`; floats cannot frost, theme WP-E FL-15), radius
+/// `R_FLOAT`, a 1px `FLOAT_EDGE` ring, the float shadow, `FLOAT_PAD`
 /// inside, the UI type. It occludes what it covers and owns its cursor.
 /// The caller states its width and position. (The palette's dialog is the
 /// same shell at its own scale, `palette::dialog`.)
@@ -409,10 +409,10 @@ pub fn float_ground() -> Div {
         .flex()
         .flex_col()
         .p(px(theme::FLOAT_PAD))
-        .rounded(px(theme::R_BLOCK))
-        .bg(theme::FLOAT_GROUND)
+        .rounded(px(theme::R_FLOAT))
+        .bg(theme::paint::FLOAT)
         .border_1()
-        .border_color(theme::FLOAT_EDGE)
+        .border_color(theme::paint::FLOAT_EDGE)
         .shadow(float_shadow())
 }
 
@@ -485,17 +485,6 @@ mod loops {
         '\u{2827}', '\u{2807}', '\u{280f}',
     ];
 
-    /// The working spinner's frames, Claude Code's cycle out and back:
-    /// `· ✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳ ✢`. Frame 4, `✻` (`WORKED`), is its still state.
-    pub const WORKING_FRAMES: [char; 10] = [
-        '\u{b7}', '\u{2722}', '\u{2733}', '\u{2736}', '\u{273b}', '\u{273d}', '\u{273b}',
-        '\u{2736}', '\u{2733}', '\u{2722}',
-    ];
-
-    /// `✻`: a finished turn's mark (`✻ Worked for 41s`) and the working
-    /// spinner under reduced motion.
-    pub const WORKED: char = '\u{273b}';
-
     /// Which of `frames` a loop shows at `phase` [0, 1) of its turn: the
     /// cadence's own count, so the frame drawn and the step the pulse clock
     /// wakes for never disagree.
@@ -517,7 +506,7 @@ mod loops {
             frame_ms: theme::MOTION_BRAILLE_FRAME_MS,
             still: '\u{25cf}',
             ink,
-            weight: theme::W_STRONG,
+            weight: theme::W_LABEL,
             selector: "braille-spinner",
         };
         let mut spinner = div().child(crate::loops_overlay::hosted(move || {
@@ -825,27 +814,18 @@ mod loops {
         }
     }
 
-    /// Where `caret_blink` moves: only through its fall (45%–55%) and its
-    /// rise (95% to the turn's end). Its two plateaus repaint nothing, so the
-    /// pulse clock draws each of them once.
-    pub const CARET_FADES: motion::Motion<'static> =
-        motion::Motion::Spans(&[(0.45, 0.55), (0.95, 1.0)]);
+    /// How `caret_blink` moves: two equal steps a turn, shown then hidden,
+    /// so the pulse clock draws it twice a turn and nothing between.
+    pub const CARET_STEPS: motion::Motion<'static> = motion::Motion::Frames(2);
 
-    /// The soft block caret's opacity at `phase` [0, 1) of
-    /// `MOTION_CARET_BLINK_MS` (the prototype's keyframes): full to 45%, eased
-    /// down to `CARET_BLINK_MIN` by 55%, held to 95%, eased back to full.
+    /// The caret's opacity at `phase` [0, 1) of `MOTION_CARET_BLINK_MS`: a
+    /// hard blink, shown for the first half of the turn and hidden for the
+    /// second, as both reference apps blink theirs.
     pub fn caret_blink(phase: f32) -> f32 {
-        const EASE_IN_OUT: motion::CubicBezier = motion::CubicBezier::new(0.42, 0.0, 0.58, 1.0);
-        let low = theme::CARET_BLINK_MIN;
-        let p = phase.rem_euclid(1.0);
-        if p < 0.45 {
+        if frame_at(phase, 2) == 0 {
             1.0
-        } else if p < 0.55 {
-            motion::lerp(1.0, low, EASE_IN_OUT.eval((p - 0.45) / 0.10))
-        } else if p < 0.95 {
-            low
         } else {
-            motion::lerp(low, 1.0, EASE_IN_OUT.eval((p - 0.95) / 0.05))
+            0.0
         }
     }
 
@@ -861,7 +841,7 @@ mod loops {
         let turn = Duration::from_millis(theme::MOTION_CARET_BLINK_MS);
         caret_blink(motion::css_phase(
             turn,
-            CARET_FADES,
+            CARET_STEPS,
             window.current_view(),
             cx,
         ))
@@ -968,20 +948,20 @@ pub fn chord_text(keys: &str) -> String {
 /// semibold weight in one character cell, as the prototype's `.g` sets it:
 /// the face the platform falls back to draws it (`glyph`). The transcript
 /// prompt, the Composer, the nav cursor and every selection bar share it;
-/// `ink` is `TEXT_STRONG` where it marks the live input or the selected row,
-/// `TEXT_DIM` where it does not.
+/// `ink` is `INK_STRONG` where it marks the live input or the selected row,
+/// `INK_SUBTLE` where it does not.
 pub fn prompt_mark(ink: u32) -> AnyElement {
     div()
         .flex_shrink_0()
         .w(px(theme::CH))
-        .font_weight(theme::W_STRONG)
+        .font_weight(theme::W_LABEL)
         .child(glyph("\u{276f}", ink))
         .into_any_element()
 }
 
 /// An on/off switch's face (theme `SWITCH_*`): a pill track, `PRIMARY` on
 /// and `SWITCH_OFF` off, its round knob at the end that says which —
-/// `ON_PRIMARY` on, `TEXT_DIM` off. A flip slides the knob and blends the
+/// `ON_PRIMARY` on, `INK_SUBTLE` off. A flip slides the knob and blends the
 /// track over `FADE_QUICK` (`motion::settled`); under reduced motion it
 /// lands at once. The caller makes it a control (a tab stop that flips on
 /// a press, Enter or Space).
@@ -1006,7 +986,7 @@ pub fn switch(id: impl Into<ElementId>, on: bool) -> impl IntoElement {
                     .size(px(knob))
                     .rounded_full()
                     .bg(motion::mix(
-                        rgb(theme::TEXT_DIM).into(),
+                        rgb(theme::INK_SUBTLE).into(),
                         rgb(theme::ON_PRIMARY).into(),
                         t,
                     )),
@@ -1033,8 +1013,8 @@ pub fn greeting() -> Div {
                 .font_family(theme::FONT_UI)
                 .text_size(px(theme::FS_HOME_TITLE))
                 .line_height(px(theme::LH_HOME_TITLE))
-                .font_weight(theme::W_STRONG)
-                .text_color(rgb(theme::TEXT_STRONG))
+                .font_weight(theme::W_LABEL)
+                .text_color(rgb(theme::INK_STRONG))
                 .whitespace_nowrap()
                 .child(GREETING),
         )
@@ -1269,7 +1249,7 @@ pub fn key_word(key: &str) -> String {
     }
 }
 
-/// A quiet text control: `CONTROL_H`, the grid's type, `W_BODY` `TEXT`;
+/// A quiet text control: `CONTROL_H`, the grid's type, `W_BODY` `INK`;
 /// hover `paint::HOVER`, press `paint::PRESS`. A button is read like any
 /// row, so it never takes the heading weight.
 pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
@@ -1278,7 +1258,7 @@ pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx
         rgba(theme::TRANSPARENT).into(),
         theme::paint::HOVER.into(),
         theme::paint::PRESS.into(),
-        rgb(theme::TEXT).into(),
+        rgb(theme::INK).into(),
         cx,
     )
     .h(px(theme::CONTROL_H))
@@ -1286,7 +1266,7 @@ pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx
     .child(
         text_ui()
             .font_weight(theme::W_BODY)
-            .text_color(rgb(theme::TEXT))
+            .text_color(rgb(theme::INK))
             .child(label.into()),
     )
 }
@@ -1294,7 +1274,7 @@ pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx
 /// A secondary button (SPEC §5.2, §5.3): `CONTROL_H` at `R_CONTROL` on
 /// `paint::RAISED`, stepping to `paint::SELECTED` under the pointer and
 /// `paint::PRESS` pressed; its label `FS_LABEL` at `W_LABEL` in
-/// `TEXT_STRONG`, led by a `CONTROL_CHIP_ICON` glyph when it has one (then
+/// `INK_STRONG`, led by a `CONTROL_CHIP_ICON` glyph when it has one (then
 /// padded 10 / 12, the icon `CONTROL_CHIP_GAP` before the label).
 pub fn secondary_button(
     id: impl Into<ElementId>,
@@ -1307,7 +1287,7 @@ pub fn secondary_button(
         theme::paint::RAISED.into(),
         theme::paint::SELECTED.into(),
         theme::paint::PRESS.into(),
-        rgb(theme::TEXT_STRONG).into(),
+        rgb(theme::INK_STRONG).into(),
         cx,
     )
     .h(px(theme::CONTROL_H))
@@ -1325,9 +1305,9 @@ pub fn secondary_button(
             .gap(px(theme::CONTROL_CHIP_GAP))
             .text_size(px(theme::FS_LABEL))
             .font_weight(theme::W_LABEL)
-            .text_color(rgb(theme::TEXT_STRONG))
+            .text_color(rgb(theme::INK_STRONG))
             .children(
-                glyph.map(|glyph| icons::icon(glyph, theme::CONTROL_CHIP_ICON, theme::TEXT_STRONG)),
+                glyph.map(|glyph| icons::icon(glyph, theme::CONTROL_CHIP_ICON, theme::INK_STRONG)),
             )
             .child(label.into()),
     )
@@ -1339,21 +1319,21 @@ pub fn secondary_button(
 #[derive(Clone, Debug, Default)]
 pub struct MenuItem {
     pub label: SharedString,
-    /// Fuzzy-match runs in `label`, drawn in `TEXT_STRONG` at `W_STRONG`.
+    /// Fuzzy-match runs in `label`, drawn in `INK_STRONG` at `W_LABEL`.
     pub matched: Vec<Range<usize>>,
     /// An aligned name column's width, when the rows share one.
     pub label_w: Option<f32>,
     /// A 12px leading mark and its ink.
     pub leading: Option<(&'static str, u32)>,
-    /// A trailing detail: Ferrite's description of the row (`TEXT_DIM` in
+    /// A trailing detail: Ferrite's description of the row (`INK_SUBTLE` in
     /// every state), or — when `mono` — machine text such as an `@` path,
-    /// `TEXT_DIM`, cut at its head so the useful tail survives.
+    /// `INK_SUBTLE`, cut at its head so the useful tail survives.
     pub detail: Option<SharedString>,
     /// `detail` is machine text (rule 2.1.1): drawn in the code face.
     pub mono: bool,
     /// The key that does the same thing, faint at the right edge.
     pub shortcut: Option<SharedString>,
-    /// A one-line description under the label (`TEXT_DIM`, the meta size):
+    /// A one-line description under the label (`INK_SUBTLE`, the meta size):
     /// the row grows to `FLOAT_ROW_NOTE_H` (a mode's "Always ask before
     /// making changes").
     pub note: Option<SharedString>,
@@ -1433,40 +1413,40 @@ pub struct RowInks {
 
 /// The row state table, as data: rest, cursor, disabled, armed. A
 /// destructive row reads like any other until it arms; armed, it holds the
-/// cursor's `paint::SELECTED` ground and its label alone turns `BLOCKED` —
+/// cursor's `paint::FLOAT_SEL` ground and its label alone turns `BLOCKED` —
 /// colour on the word, never a wash (rule 2.2.4).
 pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
     if item.disabled {
         return RowInks {
-            label: theme::TEXT_DIM,
-            detail: theme::TEXT_DIM,
-            shortcut: theme::TEXT_DIM,
+            label: theme::INK_SUBTLE,
+            detail: theme::INK_SUBTLE,
+            shortcut: theme::INK_SUBTLE,
             ground: None,
         };
     }
     if armed {
         return RowInks {
             label: theme::BLOCKED,
-            detail: theme::TEXT_DIM,
-            shortcut: theme::TEXT_DIM,
-            ground: Some(theme::paint::SELECTED.rgba()),
+            detail: theme::INK_SUBTLE,
+            shortcut: theme::INK_SUBTLE,
+            ground: Some(theme::paint::FLOAT_SEL.rgba()),
         };
     }
     let label = if cursor {
-        theme::TEXT_STRONG
+        theme::INK_STRONG
     } else {
-        theme::TEXT
+        theme::INK
     };
     RowInks {
         label,
-        detail: theme::TEXT_DIM,
-        shortcut: theme::TEXT_DIM,
-        ground: cursor.then_some(theme::paint::SELECTED.rgba()),
+        detail: theme::INK_SUBTLE,
+        shortcut: theme::INK_SUBTLE,
+        ground: cursor.then_some(theme::paint::FLOAT_SEL.rgba()),
     }
 }
 
-/// Fuzzy-match runs as highlights (the prototype's `.m`): `TEXT_STRONG` at
-/// `W_STRONG`, in every float that filters — the palette, the `/` and `@`
+/// Fuzzy-match runs as highlights (the prototype's `.m`): `INK_STRONG` at
+/// `W_LABEL`, in every float that filters — the palette, the `/` and `@`
 /// menus. One face, so the heavier run never moves a column. A disabled
 /// row paints none.
 pub fn match_highlights(
@@ -1482,8 +1462,8 @@ pub fn match_highlights(
             (
                 range.clone(),
                 HighlightStyle {
-                    color: Some(rgb(theme::TEXT_STRONG).into()),
-                    font_weight: Some(theme::W_STRONG),
+                    color: Some(rgb(theme::INK_STRONG).into()),
+                    font_weight: Some(theme::W_LABEL),
                     ..Default::default()
                 },
             )
@@ -1529,7 +1509,7 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
         .min_w_0()
         .h(px(theme::FLOAT_ROW_H))
         .px(px(theme::MENU_ROW_PAD_X))
-        .rounded(px(theme::R_MENU_ROW))
+        .rounded(px(theme::R_CONTROL))
         .when_some(inks.ground, |row, ground| row.bg(rgba(ground)))
         .text_color(rgb(inks.label))
         .when_some(item.leading, |row, (path, ink)| {
@@ -1553,7 +1533,7 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
             let cell = if item.mono {
                 cell.font_family(theme::FONT_CODE)
                     .text_size(px(theme::FS_UI))
-                    .text_color(rgb(theme::TEXT_DIM))
+                    .text_color(rgb(theme::INK_SUBTLE))
                     .text_ellipsis_start()
             } else {
                 cell.font_family(theme::FONT_UI)
@@ -1573,7 +1553,7 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
             )
         })
         .when(item.checked, |row| {
-            row.child(glyph("\u{2713}", theme::TEXT_STRONG))
+            row.child(glyph("\u{2713}", theme::INK_STRONG))
         })
 }
 
@@ -1618,7 +1598,7 @@ pub fn menu_row(
     }
 }
 
-/// A menu section title: the grid's type, `W_LABEL` `TEXT_DIM`, an optional
+/// A menu section title: the grid's type, `W_LABEL` `INK_SUBTLE`, an optional
 /// leading mark and an optional note after it. Its mark and title share the
 /// rows' leading edge. A section that follows rows is set apart from them
 /// by `.mt(MENU_GROUP_GAP)` (space), never a rule.
@@ -1894,7 +1874,7 @@ pub fn scrollbar_bar(
 /// (the Pane head's checks card, the PR tab's checks and its readiness
 /// row), so a state reads the same a click apart. Colour is state (rule 6):
 /// a failure is `BLOCKED`; a run still going the braille spinner in
-/// `RUNNING`; a pass is done, a shape (`check-circle`) in `TEXT_DIM`, never
+/// `RUNNING`; a pass is done, a shape (`check-circle`) in `INK_SUBTLE`, never
 /// the green a running one wears; a queued run a hollow ring and a skipped
 /// one the ring crossed by a dash, both in `TEXT_FAINT` — they claim
 /// nothing. Only a failure colours its word.
@@ -1913,7 +1893,7 @@ impl CheckMark {
         match self {
             CheckMark::Failed => theme::BLOCKED,
             CheckMark::Running => theme::RUNNING,
-            CheckMark::Passed => theme::TEXT_DIM,
+            CheckMark::Passed => theme::INK_SUBTLE,
             CheckMark::Queued | CheckMark::Skipped => theme::TEXT_FAINT,
         }
     }
@@ -1922,7 +1902,7 @@ impl CheckMark {
     pub fn word_ink(self) -> u32 {
         match self {
             CheckMark::Failed => theme::BLOCKED,
-            _ => theme::TEXT_DIM,
+            _ => theme::INK_SUBTLE,
         }
     }
 
@@ -1971,7 +1951,7 @@ impl CheckMark {
 /// then back. The check alone says it: gpui hides a tooltip on the press
 /// and builds the next one once, so a swapped tooltip would show late and
 /// outlive the hold. The door is `size` square at
-/// `radius` holding a `glyph`-sized icon in `TEXT_DIM`; its hover is the
+/// `radius` holding a `glyph`-sized icon in `INK_SUBTLE`; its hover is the
 /// raised blend, or, on a ground already `RAISED` (`on_raised`), a step up
 /// to `SELECTED`. It keeps its own moment of having copied (keyed by `id`),
 /// so a caller holds no state for it. A press on it is its own: it never
@@ -1995,7 +1975,7 @@ pub fn copy_button(id: impl Into<ElementId>, text: impl Into<SharedString>) -> C
         tooltip: "Copy".into(),
         size: theme::MESSAGE_ACTION,
         glyph: theme::MESSAGE_ACTION_GLYPH,
-        radius: theme::R_CHIP,
+        radius: theme::R_CONTROL,
         on_raised: false,
     }
 }
@@ -2082,7 +2062,7 @@ impl gpui::RenderOnce for CopyButton {
             .child(icons::icon(
                 if shown { icons::CHECK } else { icons::COPY },
                 self.glyph,
-                theme::TEXT_DIM,
+                theme::INK_SUBTLE,
             ))
     }
 }
@@ -2127,11 +2107,11 @@ mod tests {
     fn a_floating_surface_wears_the_float_ground_the_strong_line_and_the_shadow() {
         let mut surface = floating_surface();
         let style = surface.style();
-        assert_eq!(style.background, Some(Fill::from(theme::FLOAT_GROUND)));
-        assert_eq!(style.border_color, Some(theme::FLOAT_EDGE.into()));
+        assert_eq!(style.background, Some(Fill::from(theme::paint::FLOAT)));
+        assert_eq!(style.border_color, Some(theme::paint::FLOAT_EDGE.into()));
         // Floats are opaque (FL-15).
-        assert!(theme::FLOAT_GROUND.is_opaque() && theme::FLOAT_SEL.is_opaque());
-        assert_eq!(style.corner_radii.top_left, Some(px(theme::R_BLOCK).into()));
+        assert!(theme::paint::FLOAT.is_opaque() && theme::paint::FLOAT_SEL.is_opaque());
+        assert_eq!(style.corner_radii.top_left, Some(px(theme::R_FLOAT).into()));
         assert_eq!(style.box_shadow, Some(float_shadow()));
         assert_eq!(style.text.font_family, Some(theme::FONT_UI.into()));
     }
@@ -2144,14 +2124,14 @@ mod tests {
                 theme::FONT_UI,
                 theme::FS_UI,
                 theme::LH_UI,
-                theme::TEXT,
+                theme::INK,
             ),
             (
                 text_meta(),
                 theme::FONT_UI,
                 theme::FS_UI,
                 theme::LH_UI,
-                theme::TEXT_DIM,
+                theme::INK_SUBTLE,
             ),
         ] {
             let text = &run.style().text;
@@ -2176,11 +2156,11 @@ mod tests {
         assert_eq!(plain.style().box_shadow, None);
         let primary = primary_focus(StyleRefinement::default());
         let shadow = &primary.box_shadow.expect("an inset outline")[0];
-        assert_eq!(shadow.color, rgb(theme::TEXT_STRONG).into());
+        assert_eq!(shadow.color, rgb(theme::INK_STRONG).into());
         assert_eq!(primary_face(false), theme::PRIMARY);
         assert_eq!(primary_ink(false), theme::ON_PRIMARY);
         assert_eq!(primary_face(true), theme::SELECTED);
-        assert_eq!(primary_ink(true), theme::TEXT_DIM);
+        assert_eq!(primary_ink(true), theme::INK_SUBTLE);
     }
 
     #[test]
@@ -2202,29 +2182,29 @@ mod tests {
     #[test]
     fn menu_rows_follow_the_state_table() {
         let rest = MenuItem::new("Rename");
-        let fill = theme::paint::SELECTED.rgba();
+        let fill = theme::paint::FLOAT_SEL.rgba();
         assert_eq!(
             row_inks(&rest, false, false),
             RowInks {
-                label: theme::TEXT,
-                detail: theme::TEXT_DIM,
-                shortcut: theme::TEXT_DIM,
+                label: theme::INK,
+                detail: theme::INK_SUBTLE,
+                shortcut: theme::INK_SUBTLE,
                 ground: None
             }
         );
         let cursor = row_inks(&rest, true, false);
         assert_eq!(
             (cursor.label, cursor.ground),
-            (theme::TEXT_STRONG, Some(fill))
+            (theme::INK_STRONG, Some(fill))
         );
         let delete = MenuItem::new("Delete thread").destructive();
-        assert_eq!(row_inks(&delete, false, false).label, theme::TEXT);
-        assert_eq!(row_inks(&delete, true, false).label, theme::TEXT_STRONG);
+        assert_eq!(row_inks(&delete, false, false).label, theme::INK);
+        assert_eq!(row_inks(&delete, true, false).label, theme::INK_STRONG);
         let armed = row_inks(&delete, false, true);
         assert_eq!((armed.label, armed.ground), (theme::BLOCKED, Some(fill)));
         let dead = MenuItem::new("Reveal").disabled(true);
         let inks = row_inks(&dead, true, false);
-        assert_eq!((inks.label, inks.ground), (theme::TEXT_DIM, None));
+        assert_eq!((inks.label, inks.ground), (theme::INK_SUBTLE, None));
         // TEXT_FAINT is never text, in any state.
         for inks in [row_inks(&rest, false, false), cursor, armed, inks] {
             assert!(![inks.label, inks.detail, inks.shortcut].contains(&theme::TEXT_FAINT));
@@ -2232,8 +2212,8 @@ mod tests {
         assert_eq!(MenuItem::new("x").shortcut("").shortcut, None);
         assert!(match_highlights(std::slice::from_ref(&(0..2)), true).is_empty());
         let lit = match_highlights(std::slice::from_ref(&(0..2)), false);
-        assert_eq!(lit[0].1.font_weight, Some(theme::W_STRONG));
-        assert_eq!(lit[0].1.color, Some(rgb(theme::TEXT_STRONG).into()));
+        assert_eq!(lit[0].1.font_weight, Some(theme::W_LABEL));
+        assert_eq!(lit[0].1.color, Some(rgb(theme::INK_STRONG).into()));
     }
 
     #[test]
@@ -2274,7 +2254,7 @@ mod tests {
         };
         assert_eq!(
             row_inks(&dead.item(true), false, false).label,
-            theme::TEXT_DIM
+            theme::INK_SUBTLE
         );
     }
 
@@ -2288,14 +2268,9 @@ mod tests {
         assert_eq!(frame_at(0.95, 10), 9);
         assert_eq!(frame_at(1.0, 10), 0, "a turn wraps");
         assert_eq!(frame_at(0.9999999, 10), 9);
-        // The working cycle goes out and back, and holds ✻ when still.
-        assert_eq!(WORKING_FRAMES[4], WORKED);
-        for (out, back) in [(1, 9), (2, 8), (3, 7), (4, 6)] {
-            assert_eq!(WORKING_FRAMES[out], WORKING_FRAMES[back]);
-        }
-        // 80ms and 120ms frames, as the prototype ticks them.
-        assert_eq!(theme::MOTION_BRAILLE_FRAME_MS * 10, 800);
-        assert_eq!(theme::MOTION_WORKING_FRAME_MS * 10, 1_200);
+        // The braille spinner's 66ms frames land on the pulse grid.
+        assert_eq!(theme::MOTION_BRAILLE_FRAME_MS, 66);
+        assert_eq!(theme::MOTION_BRAILLE_FRAME_MS % theme::MOTION_PULSE_TICK_MS, 0);
     }
 
     /// The shimmer's crest travels left to right across the run, peaks at
@@ -2319,39 +2294,29 @@ mod tests {
         assert!(crest.l > base.l);
     }
 
-    /// The caret's soft blink: full, eased down, held low, eased back.
+    /// The caret's hard blink: shown for the first half of a 1s turn,
+    /// hidden for the second, nothing between.
     #[test]
-    fn the_caret_blinks_softly() {
+    fn the_caret_blinks_hard() {
+        assert_eq!(theme::MOTION_CARET_BLINK_MS, 1_000);
         assert_eq!(caret_blink(0.0), 1.0);
-        assert_eq!(caret_blink(0.44), 1.0);
-        assert_eq!(caret_blink(0.6), theme::CARET_BLINK_MIN);
-        assert_eq!(caret_blink(0.9), theme::CARET_BLINK_MIN);
-        let falling = caret_blink(0.5);
-        assert!(theme::CARET_BLINK_MIN < falling && falling < 1.0);
-        assert!((caret_blink(0.9999) - 1.0).abs() < 0.01);
+        assert_eq!(caret_blink(0.49), 1.0);
+        assert_eq!(caret_blink(0.5), 0.0);
+        assert_eq!(caret_blink(0.9999), 0.0);
         assert_eq!(caret_blink(1.0), 1.0, "a period wraps");
     }
 
-    /// The pulse clock draws the caret only through `CARET_FADES`: outside
-    /// them the blink holds exactly one value per plateau.
+    /// The pulse clock draws the caret on `CARET_STEPS`: inside each step
+    /// the blink holds exactly one value.
     #[test]
-    fn the_caret_holds_still_outside_its_declared_fades() {
-        let motion::Motion::Spans(fades) = CARET_FADES else {
-            unreachable!("the blink moves in spans")
+    fn the_caret_holds_still_inside_each_declared_step() {
+        let motion::Motion::Frames(steps) = CARET_STEPS else {
+            unreachable!("the blink moves in steps")
         };
-        let moving = |p: f32| fades.iter().any(|(from, to)| (*from..*to).contains(&p));
-        let mut plateau: Option<f32> = None;
         for step in 0..100_000 {
             let p = step as f32 / 100_000.0;
-            if moving(p) {
-                plateau = None;
-                continue;
-            }
-            let alpha = caret_blink(p);
-            match plateau {
-                Some(held) => assert_eq!(alpha, held, "moved at {p} outside a fade"),
-                None => plateau = Some(alpha),
-            }
+            let first = (frame_at(p, steps) as f32) / steps as f32;
+            assert_eq!(caret_blink(p), caret_blink(first), "moved at {p} inside a step");
         }
     }
 

@@ -104,8 +104,8 @@ impl CockpitView {
             .min_w_0()
             .truncate()
             .text_size(px(theme::FS_TITLE))
-            .font_weight(theme::W_STRONG)
-            .text_color(rgb(theme::TEXT_STRONG))
+            .font_weight(theme::W_LABEL)
+            .text_color(rgb(theme::INK_STRONG))
             .child(self.facts.name(thread).clone())
             .tooltip(ferrite_ui::menu::tooltip("Rename \u{b7} double-click"))
             .on_mouse_down(
@@ -147,8 +147,8 @@ impl CockpitView {
             .min_w_0()
             .truncate()
             .text_size(px(theme::FS_TITLE))
-            .font_weight(theme::W_STRONG)
-            .text_color(rgb(theme::TEXT_STRONG))
+            .font_weight(theme::W_LABEL)
+            .text_color(rgb(theme::INK_STRONG))
             // The operator's title as typed (SPEC §7), as the bar and nav
             // show it.
             .child(SharedString::from(found.display_title()))
@@ -176,12 +176,12 @@ impl CockpitView {
     }
 }
 
-/// The head's second word, `TEXT_DIM`: where the Thread works, or a
+/// The head's second word, `INK_SUBTLE`: where the Thread works, or a
 /// Group's tally.
 fn head_meta(text: SharedString) -> AnyElement {
     div()
         .flex_shrink_0()
-        .text_color(rgb(theme::TEXT_DIM))
+        .text_color(rgb(theme::INK_SUBTLE))
         .child(text)
         .into_any_element()
 }

@@ -505,8 +505,8 @@ fn mark_slot(mark: Option<AnyElement>) -> Div {
 
 /// One Subject tab's face on the headless tab (its role and selection are
 /// the platform's): `width` wide (`tab_width`), `SUBJECT_TAB_H` high at
-/// `R_TAB`. Selected, `paint::TAB_ACTIVE` in `TEXT_STRONG`; otherwise no
-/// ground, `TEXT_MUTED` blending to `TEXT` through the one hover blend.
+/// `R_CONTROL`. Selected, `paint::RAISED` in `INK_STRONG`; otherwise no
+/// ground, `INK` blending to `INK` through the one hover blend.
 fn subject_tab_face(
     at: usize,
     selected: bool,
@@ -525,7 +525,7 @@ fn subject_tab_face(
         .pl(px(theme::SUBJECT_TAB_PAD_L))
         .pr(px(pad_right))
         .overflow_hidden()
-        .rounded(px(theme::R_TAB))
+        .rounded(px(theme::R_CONTROL))
         .cursor_pointer()
         .text_size(px(theme::FS_LABEL))
         .line_height(px(theme::LH_UI))
@@ -533,8 +533,8 @@ fn subject_tab_face(
             // The tab's own debug name is its Subject's; the selected face
             // is named by a box laid exactly over it.
             tab.relative()
-                .bg(theme::paint::TAB_ACTIVE)
-                .text_color(rgb(theme::TEXT_STRONG))
+                .bg(theme::paint::RAISED)
+                .text_color(rgb(theme::INK_STRONG))
                 .child(
                     div()
                         .debug_selector(|| "subject-tab-selected".into())
@@ -545,8 +545,8 @@ fn subject_tab_face(
         .when(!selected, |tab| {
             tab.text_color(ferrite_ui::motion::hover_blend(
                 &key,
-                rgb(theme::TEXT_MUTED).into(),
-                rgb(theme::TEXT).into(),
+                rgb(theme::INK).into(),
+                rgb(theme::INK).into(),
             ))
             .on_hover(ferrite_ui::motion::hover_listener(key.clone()))
         })
@@ -697,7 +697,7 @@ impl CockpitView {
             let run = gpui::TextRun {
                 len: text.len(),
                 font: gpui::font(theme::FONT_UI),
-                color: rgb(theme::TEXT_MUTED).into(),
+                color: rgb(theme::INK).into(),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
@@ -768,9 +768,9 @@ impl CockpitView {
                     ferrite_ui::icons::TERMINAL,
                     theme::SUBJECT_TAB_ICON,
                     if main_selected {
-                        theme::TEXT_STRONG
+                        theme::INK_STRONG
                     } else {
-                        theme::TEXT_MUTED
+                        theme::INK
                     },
                 ))
                 .child(
@@ -854,7 +854,7 @@ impl CockpitView {
                         .w(px(1.))
                         .h(px(theme::SUBJECT_SEPARATOR_H))
                         .mx(px(theme::SUBJECT_SEPARATOR_MX))
-                        .bg(theme::paint::HAIRLINE),
+                        .bg(theme::paint::LINE),
                 )
                 .child(self.subject_menu(index, thread, &children, &plan, cx));
         }
@@ -957,7 +957,7 @@ impl CockpitView {
                 .h(px(theme::SUBJECT_TAB_H))
                 .pl(px(theme::SUBJECT_TAB_PAD_L))
                 .pr(px(theme::SUBJECT_MAIN_PAD_R))
-                .rounded(px(theme::R_TAB))
+                .rounded(px(theme::R_CONTROL))
                 .accessibility_label("More subagents")
                 .tooltip("More subagents")
                 .debug_selector(move || format!("subject-overflow-{}", thread.get()))
@@ -969,17 +969,17 @@ impl CockpitView {
                         .gap(px(theme::SUBJECT_MENU_GAP))
                         .text_size(px(theme::FS_LABEL))
                         .line_height(px(theme::LH_UI))
-                        .text_color(rgb(theme::TEXT_DIM))
+                        .text_color(rgb(theme::INK_SUBTLE))
                         .child(ferrite_ui::icons::icon(
                             ferrite_ui::icons::CHECK_CIRCLE,
                             theme::SUBJECT_TAB_ICON,
-                            theme::TEXT_DIM,
+                            theme::INK_SUBTLE,
                         ))
                         .child(components::tabular(div().child(label)))
                         .child(ferrite_ui::icons::icon(
                             ferrite_ui::icons::CHEVRON_DOWN,
                             theme::SUBJECT_MENU_CHEVRON,
-                            theme::TEXT_DIM,
+                            theme::INK_SUBTLE,
                         )),
                 ),
             choices,
@@ -1024,13 +1024,13 @@ impl CockpitView {
                 .w(px(theme::ICON_BUTTON))
                 .h(px(theme::ICON_BUTTON))
                 .p_0()
-                .rounded(px(theme::R_TAB))
+                .rounded(px(theme::R_CONTROL))
                 .accessibility_label("Open a thread beside")
                 .tooltip("Open a thread beside")
                 .child(ferrite_ui::icons::icon(
                     ferrite_ui::icons::SPLIT_RIGHT,
                     theme::ICON_BUTTON_GLYPH,
-                    theme::TEXT_DIM,
+                    theme::INK_SUBTLE,
                 ))
                 .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                     cx.stop_propagation();
@@ -1162,7 +1162,7 @@ impl CockpitView {
             .items_center()
             .min_w_0()
             .overflow_hidden()
-            .text_color(rgb(theme::TEXT_DIM));
+            .text_color(rgb(theme::INK_SUBTLE));
         let text = match (&error, coverage) {
             // `failed · could not load transcript · <error>`: only the
             // state word carries the hue, and the error is machine text.
@@ -1193,7 +1193,7 @@ impl CockpitView {
         // A read-only line in the Composer's slot (SPEC §5.3): one fixed
         // `CHILD_FOOTER_H` row on the card's own ground — no box, no edge,
         // nothing to type here — inset as the Composer's box is, its words
-        // where the input's stand in `TEXT_DIM` and `Back to Main`, a
+        // where the input's stand in `INK_SUBTLE` and `Back to Main`, a
         // secondary button, where send stands.
         let (inset, pad_l, pad_r) = if self.grid_board() {
             (
@@ -2382,7 +2382,7 @@ impl Cards {
                 })
                 .child(
                     div()
-                        .text_color(rgb(theme::TEXT))
+                        .text_color(rgb(theme::INK))
                         .child(field.label.clone()),
                 );
             if !field.description.is_empty() {
@@ -2815,7 +2815,7 @@ impl Cards {
                                 .w(px(theme::FS_META * theme::CODE_ADVANCE))
                                 .font_family(theme::FONT_CODE)
                                 .text_size(px(theme::FS_META))
-                                .text_color(rgb(theme::TEXT_DIM))
+                                .text_color(rgb(theme::INK_SUBTLE))
                                 .children(digit(question.options.len())),
                         )
                         .child(
@@ -2839,7 +2839,7 @@ impl Cards {
                                     .py(px(0.))
                                     .font_family(theme::FONT_UI)
                                     .text_size(px(theme::FS_UI))
-                                    .text_color(rgb(theme::TEXT)),
+                                    .text_color(rgb(theme::INK)),
                                 ),
                         ),
                 );

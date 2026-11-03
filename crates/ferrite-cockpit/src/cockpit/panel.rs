@@ -407,13 +407,13 @@ impl CockpitView {
     /// (`nav::icon_button`), the `panel-right` glyph, its tooltip and chord
     /// read from the keymap.
     fn panel_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
-        use ferrite_ui::theme::{ICON_BUTTON, NAV_TOGGLE_GLYPH, R_TAB};
+        use ferrite_ui::theme::{ICON_BUTTON, NAV_TOGGLE_GLYPH, R_CONTROL};
         crate::nav::icon_button(
             "panel-toggle",
             icons::PANEL_RIGHT,
             NAV_TOGGLE_GLYPH,
             ICON_BUTTON,
-            R_TAB,
+            R_CONTROL,
         )
         .occlude()
         .tooltip(ferrite_ui::menu::action_tooltip(
@@ -502,7 +502,7 @@ impl CockpitView {
             .font_family(FONT_UI)
             .text_size(px(FS_UI))
             .line_height(px(LH_UI))
-            .text_color(rgb(TEXT))
+            .text_color(rgb(INK))
             .whitespace_nowrap()
             .child(self.panel_head(owner, tab, cx));
         let content = match (tab, thread) {
@@ -545,7 +545,7 @@ impl CockpitView {
                 .top_0()
                 .right_0()
                 // A hairline short of the bar: the bar's top rule
-                // (`BAR_TOP`) lies on the frame's last row, and the panel
+                // (the bar's `LINE`) lies on the frame's last row, and the panel
                 // paints after the bar, so it would cover the rule's run
                 // under it. The bar keeps its line the window's width.
                 .bottom(px(STATUS_BAR_H + ferrite_ui::theme::HAIRLINE_W))
@@ -629,9 +629,9 @@ impl CockpitView {
                     // way, so the tab the pointer left while it was shown
                     // has let its hover go.
                     if active {
-                        face.hover_carried(key).text_color(rgb(TEXT_STRONG))
+                        face.hover_carried(key).text_color(rgb(INK_STRONG))
                     } else {
-                        face.text_color(rgb(TEXT_MUTED))
+                        face.text_color(rgb(INK))
                             .hover_raised(key)
                             .press_raised()
                     }
@@ -646,7 +646,7 @@ impl CockpitView {
             div()
                 .text_size(px(FS_META))
                 .font_weight(W_BODY)
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .child(SharedString::from(changed.to_string()))
                 .into_any_element()
         });
@@ -655,7 +655,7 @@ impl CockpitView {
                 .font_family(FONT_CODE)
                 .text_size(px(FS_CHROME_CODE))
                 .font_weight(W_BODY)
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .child(SharedString::from(format!("#{number}")))
                 .into_any_element()
         });
@@ -704,9 +704,9 @@ impl CockpitView {
         let noun = if count == 1 { "file" } else { "files" };
         // The section line folds and unfolds every file at once, its
         // chevron on the rows' icon column and its words on their text's.
-        // Under the pointer its words blend up to `TEXT`, as the nav's fold
+        // Under the pointer its words blend up to `INK`, as the nav's fold
         // headings do (a wash would run past the columns it is laid to); a
-        // press lands at `TEXT_STRONG`.
+        // press lands at `INK_STRONG`.
         let section_key = SharedString::from(format!("panel-changes-section-{}", thread.get()));
         let all = self.panel_files_unfolded(thread, files.iter().map(|file| file.path.as_str()));
         let paths: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
@@ -724,11 +724,11 @@ impl CockpitView {
                 .text_size(px(FS_META))
                 .text_color(ferrite_ui::motion::hover_blend(
                     &section_key,
-                    rgb(TEXT_DIM).into(),
-                    rgb(TEXT).into(),
+                    rgb(INK_SUBTLE).into(),
+                    rgb(INK).into(),
                 ))
                 .on_hover(ferrite_ui::motion::hover_listener(section_key))
-                .active(|style| style.text_color(rgb(TEXT_STRONG)))
+                .active(|style| style.text_color(rgb(INK_STRONG)))
                 .cursor_pointer()
                 .tooltip(ferrite_ui::menu::tooltip(if all {
                     "Collapse all"
@@ -747,7 +747,7 @@ impl CockpitView {
                             format!("panel-fold-all-{}", thread.get()),
                             all,
                             PANEL_ROW_ICON,
-                            TEXT_DIM,
+                            INK_SUBTLE,
                         )),
                 )
                 .child(
@@ -778,7 +778,7 @@ impl CockpitView {
                 .bg(paint::RAISED)
                 .text_size(px(FS_LABEL))
                 .font_weight(W_LABEL)
-                .text_color(rgb(TEXT_STRONG))
+                .text_color(rgb(INK_STRONG))
                 .hover_control(review_key)
                 .press_control()
                 .child("Review changes")
@@ -813,7 +813,7 @@ impl CockpitView {
             }
             (!words.is_empty()).then(|| words.join(" \u{b7} "))
         });
-        panel_row(icons::BRANCH, TEXT_DIM, base.is_some())
+        panel_row(icons::BRANCH, INK_SUBTLE, base.is_some())
             .debug_selector(|| "panel-branch".into())
             .child(
                 div()
@@ -826,14 +826,14 @@ impl CockpitView {
                             .min_w_0()
                             .truncate()
                             .font_weight(W_LABEL)
-                            .text_color(rgb(TEXT_STRONG))
+                            .text_color(rgb(INK_STRONG))
                             .child(branch),
                     )
                     .children(drift.map(|drift| {
                         div()
                             .flex_shrink_0()
                             .text_size(px(FS_META))
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(rgb(INK_SUBTLE))
                             .child(SharedString::from(drift))
                     })),
             )
@@ -841,7 +841,7 @@ impl CockpitView {
                 div()
                     .truncate()
                     .text_size(px(FS_META))
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(rgb(INK_SUBTLE))
                     .child(SharedString::from(format!("from {base}")))
             }))
     }
@@ -898,7 +898,7 @@ impl CockpitView {
                     .absolute()
                     .inset_0()
                     .group_hover(group.clone(), |style| style.invisible())
-                    .child(icon(icons::FILE, PANEL_ROW_ICON, TEXT_MUTED)),
+                    .child(icon(icons::FILE, PANEL_ROW_ICON, INK)),
             )
             .child(
                 div()
@@ -910,7 +910,7 @@ impl CockpitView {
                         format!("panel-fold-turn-{}-{}", thread.get(), file.path),
                         unfolded,
                         PANEL_ROW_ICON,
-                        TEXT_MUTED,
+                        INK,
                     )),
             );
         let fold_path = file.path.clone();
@@ -936,7 +936,7 @@ impl CockpitView {
                             .truncate()
                             .cursor_pointer()
                             .font_weight(W_LABEL)
-                            .text_color(rgb(TEXT_STRONG))
+                            .text_color(rgb(INK_STRONG))
                             .child(SharedString::from(name))
                             .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                                 cx.stop_propagation();
@@ -950,7 +950,7 @@ impl CockpitView {
                 div()
                     .truncate()
                     .text_size(px(FS_META))
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(rgb(INK_SUBTLE))
                     .child(SharedString::from(dir))
             }))
             .child(
@@ -962,7 +962,7 @@ impl CockpitView {
             .flex()
             .flex_col()
             .flex_shrink_0()
-            .rounded(px(R_BLOCK))
+            .rounded(px(R_CARD))
             .overflow_hidden()
             .child(head)
             .child(self.panel_hunks_element(thread, index, &file.path, unfolded))
@@ -1002,16 +1002,16 @@ impl CockpitView {
                 .pb(px(PANEL_FOOT_PAD_B))
                 .px(px(PANEL_ROW_ICON_X))
                 .border_t_1()
-                .border_color(paint::HAIRLINE)
+                .border_color(paint::LINE)
                 .text_size(px(FS_META))
                 .child(
                     div()
                         .flex()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(rgb(INK_SUBTLE))
                         .child(div().flex_1().font_weight(W_LABEL).child("Context"))
                         .child(
                             div()
-                                .text_color(rgb(TEXT_MUTED))
+                                .text_color(rgb(INK))
                                 .child(SharedString::from(reading)),
                         ),
                 )
@@ -1041,7 +1041,7 @@ fn overhang(content_w: f32, width: f32) -> f32 {
     (content_w - width).clamp(0., content_w - ferrite_ui::theme::PANEL_W)
 }
 
-/// A section's head, the Panel's one (30): its name in 12/500 `TEXT_DIM`
+/// A section's head, the Panel's one (30): its name in 12/500 `INK_SUBTLE`
 /// on the rows' content edge, its reading (a count, `3 connected`) at the
 /// right — the PR tab's sections, the Details tab's, and the Context
 /// card's own heading (`pane::context_usage`) alike.
@@ -1059,7 +1059,7 @@ pub(super) fn panel_section_head(
         .h(px(PANEL_SECTION_H))
         .px(px(PANEL_ROW_ICON_X))
         .text_size(px(FS_META))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(div().flex_1().font_weight(W_LABEL).child(name))
         .children(reading.map(SharedString::from))
 }
@@ -1094,15 +1094,15 @@ pub(super) fn panel_empty(
                 .items_center()
                 .justify_center()
                 .size(px(PANEL_EMPTY_BADGE))
-                .rounded(px(R_PANE))
+                .rounded(px(R_CARD))
                 .bg(paint::RAISED)
-                .child(icon(glyph, PANEL_EMPTY_ICON, TEXT_MUTED))
+                .child(icon(glyph, PANEL_EMPTY_ICON, INK))
         }))
         .child(
             div()
                 .text_size(px(FS_UI))
                 .font_weight(W_LABEL)
-                .text_color(rgb(TEXT_STRONG))
+                .text_color(rgb(INK_STRONG))
                 .child(title),
         )
         .child(
@@ -1112,7 +1112,7 @@ pub(super) fn panel_empty(
                 .text_center()
                 .text_size(px(FS_LABEL))
                 .line_height(px(PR_BODY_LH))
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .child(detail),
         )
 }
@@ -1224,7 +1224,7 @@ fn file_actions(
             .items_center()
             .justify_center()
             .size(px(PANEL_FILE_ACTION))
-            .rounded(px(R_SMALL))
+            .rounded(px(R_CONTROL))
             .cursor_pointer()
             .bg(ferrite_ui::motion::hover_blend(
                 &key,
@@ -1234,7 +1234,7 @@ fn file_actions(
             .on_hover(ferrite_ui::motion::hover_listener(key))
             .press_control()
             .tooltip(ferrite_ui::menu::tooltip(tooltip))
-            .child(icon(glyph, PANEL_FILE_ACTION_GLYPH, TEXT_MUTED))
+            .child(icon(glyph, PANEL_FILE_ACTION_GLYPH, INK))
     };
     div()
         .absolute()
@@ -1252,7 +1252,7 @@ fn file_actions(
                 .child(
                     ferrite_ui::components::copy_button(("panel-file-copy", index), shown_path)
                         .tooltip("Copy path")
-                        .door(PANEL_FILE_ACTION, PANEL_FILE_ACTION_GLYPH, R_SMALL)
+                        .door(PANEL_FILE_ACTION, PANEL_FILE_ACTION_GLYPH, R_CONTROL)
                         .on_raised(),
                 ),
         )

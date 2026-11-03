@@ -12,16 +12,15 @@
 //!
 //! | Zeron | Spec | Ferrite surface |
 //! | --- | --- | --- |
-//! | `transition-colors` hover | [`HOVER_FADE`] 150ms | every pointer hover (`pointer.rs`'s roles, `components::faded_button`): the face blends in and out; a press and every keyboard change land on their frame |
+//! | `transition-colors` hover | [`HOVER_FADE`] 100ms | every pointer hover, the one hover duration (`pointer.rs`'s roles, `components::faded_button`, the nav's rows and buttons, a board seam's strong line): the face blends in and out; a press and every keyboard change land on their frame |
 //! | selection move | none | the nav's one selection ground (`paint::SELECTED`) moves at once: selection is keyboard-rate, a high-frequency interaction |
 //! | toasts | [`TOAST_IN`] 180ms, 4px drop / [`TOAST_OUT`] 100ms | the Needs-you toast (FL-18), hung top right under the window's head, drops into place from 0.3 ([`toast_in`]); one that goes on its own fades away lifting 2px, drawn as a face that answers no pointer ([`toast_out`], `notifications::ToastStage`), under whatever stands next. The kit's toast stack (the Server and update toasts) settles on the same two tokens (`DefaultToastMotion`); its card's own slide is the kit's (see below) |
 //! | loops | pulse clock | the working line's spinner and shimmer, the sidebar and Pane-head braille spinners and the Composer's caret blink ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; no dot breathes |
-//! | `menu-in` | [`MENU_IN`] 140ms, 0.96 → 1 scale | every Ferrite-drawn floating surface: the context menu (a nav row's, a Project's, a Group's, the Parked fold's, a Pane's), the plan card, the Composer's menus (`/`, `@`, the band's pickers) and the head's cards (session controls, checks) and the find bar (a transcript's or a preview's), via [`menu_in`], settling away from their opener ([`Opens`]); the Composer's choice menus (model, effort, mode) in place, from their first placed frame ([`Opens::InPlace`]) |
+//! | `menu-in` | [`MENU_IN`] 0ms: a snap, as both reference apps open their menus | every Ferrite-drawn floating surface: the context menu (a nav row's, a Project's, a Group's, the Parked fold's, a Pane's), the plan card, the Composer's menus (`/`, `@`, the band's pickers) and the head's cards (session controls, checks) and the find bar (a transcript's or a preview's), via [`menu_in`], settling away from their opener ([`Opens`]); the Composer's choice menus (model, effort, mode) in place, from their first placed frame ([`Opens::InPlace`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
 //! | `dialog-in` | [`DIALOG_IN`] 180ms, 0.96 → 1 scale | the Settings and Project sheets via [`dialog_in`]; the palette and the shortcuts sheet with their own shadow (or none) via [`dialog_in_casting`]; each over its veil darkening in over [`FADE_QUICK`] ([`veil_in`]); none has an exit |
 //! | sidebar width | [`RESIZE`] 200ms CSS `ease` | nav collapse (cmd-B): an interruptible [`Tween`] on the column's width down to nothing; the content fades 1 → 0 folding and 0 → 1 opening over its own 150ms (the nav's `MOTION_NAV_*` tokens); the board rides the same tween, every frame, so the Panes widen with the column. The Panel rides the same way at the board's right edge, through [`ColumnRide`], between hidden, its 304 and a preview's wide width (`cockpit/panel.rs`): coming and going (⌥⌘B, a preview opening while it is hidden, focus moving to or from a Pane with none) its content fades on the nav's clock; changing width (a preview opening or closing, a tab picked) it does not. Its content keeps its layout at rest and never re-wraps — the Panel's own width anchored to the window's edge, a preview's beyond it pinned to the board's edge, so it slides in with it |
 //! | (Ferrite's) slot slide | [`SLOT_OPEN`] 240ms / [`SLOT_CLOSE`] 200ms, [`EASE_SLIDE`] | the Review beside its Pane, in the reader slot (`cockpit/beside.rs`): a [`Reveal`] on its split's share (`Tree::reveal`) slides it in from its far edge while the Pane narrows, every frame, its content laid out at its resting size and clipped so it never re-wraps; closing slides it out, a little quicker, and only then is the slot removed; a flip mid-slide turns around; a seam drag lands it |
-//! | seam strong | [`SEAM_FADE`] 120ms | a board seam's strong line under the pointer, the whole linked line at once ([`hover_listener_with`]) |
 //! | zoom | [`IMAGE_ZOOM`] 240ms | the image viewer's zoom (`image_viewer.rs`): a click between fit and actual size and ⌘= ⌘- ⌘0 ease the picture's scale with an interruptible [`Tween`] on its logarithm, the point under the pointer held still; a pinch and a pan follow the hand with no ease |
 //! | image in | [`FADE_QUICK`] 150ms | an image that lands in the viewer after its preview is up fades in; one replacing another crossfades with it, the old picture held until the new one is ready (opacity only) |
 //! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, and the Panel's folds: a changed file's hunks, the PR tab's `N resolved` and `Show more`) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
@@ -29,7 +28,7 @@
 //! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | every transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
 //! | row-in | [`ROW_IN`] 180ms, opacity only | a line arriving inside a card that is already open (the usage card's legend), and a changed file's hunks arriving under its block once the operator unfolds it in the Panel ([`settled`], so a block drawn already unfolded shows them at once); a preview opening in the Panel, or another document replacing it, and a Panel tab's body when the operator picks the tab, from 0.3 ([`swap_in`]) — an image stepping to the next crossfades in the viewer instead |
 //! | (Ferrite's) swap | [`SWAP`] 120ms, from 0.5 | the board settling on what it now shows, Solo's Thread or the view ([`Swap`]): a veil of the card's grey lifts off the cards (`components::card_veil`), drawn by the Cockpit over its cached Panes, which replay untouched; never first paint, and a switch within 120ms of the last (a held key) lands at once |
-//! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 150ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 150ms, and widens 4 → 6px under the pointer over [`HOVER_FADE`] (`scrollbar::step_widen`); idle, nothing is drawn |
+//! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 100ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 100ms, and widens 4 → 6px under the pointer over [`HOVER_FADE`] (`scrollbar::step_widen`); idle, nothing is drawn |
 //!
 //! Kit-drawn surfaces (gpui-kit's `PopupMenu`, its dialogs, its tooltips)
 //! keep the kit's own behaviour. A tool group's disclosure in the transcript
@@ -88,7 +87,8 @@ use std::time::{Duration, Instant};
 
 use ferrite_core::cadence;
 use gpui::{
-    px, App, ElementId, EntityId, Global, Hsla, IntoElement, Rgba, SharedString, Styled, Window,
+    px, AnyElement, App, ElementId, EntityId, Global, Hsla, IntoElement, Rgba, SharedString,
+    Styled, Window,
 };
 
 use crate::theme;
@@ -229,9 +229,6 @@ pub const FADE_IN: MotionSpec = MotionSpec::new(theme::MOTION_FADE_IN_MS, EASE_O
 /// prototype's `transition: grid-template-columns .2s ease`, so CSS `ease`
 /// (`cubic-bezier(.25,.1,.25,1)`), not `ease-out`.
 pub const RESIZE: MotionSpec = MotionSpec::new(theme::MOTION_RESIZE_MS, EASE);
-/// A board seam's strong line fading in under the pointer: the prototype's
-/// `.seam::before{transition: opacity .12s}`.
-pub const SEAM_FADE: MotionSpec = MotionSpec::new(theme::MOTION_SEAM_FADE_MS, EASE);
 pub const FADE_QUICK: MotionSpec = MotionSpec::new(theme::MOTION_FADE_QUICK_MS, EASE);
 pub const MENU_IN: MotionSpec = MotionSpec::new(theme::MOTION_MENU_IN_MS, EASE);
 pub const DIALOG_IN: MotionSpec = MotionSpec::new(theme::MOTION_DIALOG_IN_MS, EASE);
@@ -329,11 +326,15 @@ fn grown<E: Styled>(el: E, t: f32) -> E {
 /// `menu-in` for a floating surface in flow (inside `anchored` or a
 /// wrapper): fades up from `MOTION_MENU_FROM_OPACITY` and grows from
 /// `MOTION_FLOAT_FROM_SCALE` while settling `MOTION_MENU_SHIFT` away from
-/// its opener.
-pub fn menu_in<E>(id: impl Into<ElementId>, element: E, opens: Opens) -> impl IntoElement
+/// its opener. At 0ms (`MOTION_MENU_IN_MS`, a snap) it is the element
+/// itself: no entrance state, no face, no frame.
+pub fn menu_in<E>(id: impl Into<ElementId>, element: E, opens: Opens) -> AnyElement
 where
     E: Styled + IntoElement + 'static,
 {
+    if MENU_IN.duration_ms == 0 {
+        return element.into_any_element();
+    }
     entrance(id, MENU_IN, element, move |el, t| {
         grown(
             float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t)),
@@ -342,6 +343,7 @@ where
         .relative()
         .top(px(opens.shift(t)))
     })
+    .into_any_element()
 }
 
 /// `dialog-in` for a sheet: opacity 0 → 1, growing from
@@ -1275,7 +1277,7 @@ pub struct HoverFades {
 }
 
 impl HoverFades {
-    /// `set_with` on the one 150ms blend, from no view.
+    /// `set_with` on the one 100ms blend, from no view.
     #[cfg(test)]
     pub fn set_at(&mut self, key: &SharedString, hovered: bool, reduced: bool, now: Instant) {
         self.set_with(key, hovered, reduced, now, HOVER_FADE, None);
@@ -1384,16 +1386,8 @@ pub fn hover_t(key: &str) -> f32 {
 
 /// An `on_hover` listener driving the blend for `key`: pair it with a
 /// [`hover_blend`] read of the same key on the same element.
+/// Every hover blends over the one `HOVER_FADE`.
 pub fn hover_listener(key: SharedString) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
-    hover_listener_with(key, HOVER_FADE)
-}
-
-/// [`hover_listener`] on a surface's own timing: the nav's 80ms row wash,
-/// its sidebar toggle's 100ms (the prototype's own transitions).
-pub fn hover_listener_with(
-    key: SharedString,
-    spec: MotionSpec,
-) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
     move |hovered, window, cx| {
         let reduced = reduced_motion(cx);
         let now = cx.background_executor().now();
@@ -1401,7 +1395,7 @@ pub fn hover_listener_with(
         HOVER_FADES.with(|fades| {
             fades
                 .borrow_mut()
-                .set_with(&key, *hovered, reduced, now, spec, view)
+                .set_with(&key, *hovered, reduced, now, HOVER_FADE, view)
         });
         // Only the view that painted the blend draws it: notifying that
         // view (through the one that redraws it most cheaply) redraws it
@@ -1682,14 +1676,13 @@ mod tests {
         assert_eq!(theme::MOTION_FADE_IN_RISE, 4.0);
         assert_eq!(RESIZE.duration_ms, 200);
         assert_eq!(RESIZE.curve, CubicBezier::new(0.25, 0.1, 0.25, 1.0));
-        assert_eq!(SEAM_FADE.duration_ms, 120);
         assert_eq!(FADE_QUICK.duration_ms, 150);
-        assert_eq!(MENU_IN.duration_ms, 140);
+        assert_eq!(MENU_IN.duration_ms, 0, "menus snap open");
         assert_eq!(DIALOG_IN.duration_ms, 180);
         assert_eq!(theme::MOTION_TOAST_IN_MS, 180);
         assert_eq!(theme::MOTION_TOAST_OUT_MS, 100);
         assert_eq!(theme::MOTION_SCROLLBAR_LINGER_MS, 1_400);
-        assert_eq!(HOVER_FADE.duration_ms, 150);
+        assert_eq!(HOVER_FADE.duration_ms, 100);
         assert_eq!(HOVER_FADE.curve, CubicBezier::new(0.4, 0.0, 0.2, 1.0));
     }
 
@@ -1849,18 +1842,6 @@ mod tests {
         let ride = Tween::new(280.8, 0.0, RESIZE, t0);
         let half = t0 + Duration::from_millis(100);
         close(ride.value(half, false), 280.8 * 0.1976, 0.5, "mid-ride");
-    }
-
-    /// A seam's strong line fades over its own 120ms, not the hover 150ms.
-    #[test]
-    fn a_seam_blend_runs_on_its_own_timeline() {
-        let mut fades = HoverFades::default();
-        let key = SharedString::from("seam");
-        let t0 = Instant::now();
-        let ms = |m: u64| t0 + Duration::from_millis(m);
-        fades.set_with(&key, true, false, t0, SEAM_FADE, None);
-        assert!(fades.value_at("seam", ms(60)) < 1.0);
-        assert_eq!(fades.value_at("seam", ms(120)), 1.0);
     }
 
     #[test]
@@ -2126,7 +2107,7 @@ mod tests {
                 el
             };
             div().when(self.mounted, |root| match self.left {
-                None => root.child(entrance("entering", MENU_IN, div().size_4(), face)),
+                None => root.child(entrance("entering", DIALOG_IN, div().size_4(), face)),
                 Some(left) => root.child(Played {
                     origin: Origin::At(left),
                     spec: TOAST_OUT,
@@ -2169,7 +2150,7 @@ mod tests {
         let mid = drawn.get();
         assert!(mid > 0.0 && mid < 1.0, "mid-flight at 70ms: {mid}");
         cx.executor()
-            .advance_clock(Duration::from_millis(theme::MOTION_MENU_IN_MS));
+            .advance_clock(Duration::from_millis(theme::MOTION_DIALOG_IN_MS));
         next_frame(cx);
         assert_eq!(drawn.get(), 1.0, "landed");
         assert_eq!(next_frame(cx), 0, "and asks for nothing");

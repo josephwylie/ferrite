@@ -545,7 +545,7 @@ fn native_tab_overflow_keeps_main_and_selected_subject_visible_in_child_order(
                 &[gpui::TextRun {
                     len: "Main".len(),
                     font: gpui::font(theme::FONT_UI),
-                    color: rgb(theme::TEXT).into(),
+                    color: rgb(theme::INK).into(),
                     background_color: None,
                     underline: None,
                     strikethrough: None,

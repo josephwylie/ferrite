@@ -1423,7 +1423,7 @@ impl ReviewView {
                     .truncate()
                     .text_ellipsis_start()
                     .font_weight(W_LABEL)
-                    .text_color(rgb(TEXT_STRONG))
+                    .text_color(rgb(INK_STRONG))
                     .child(SharedString::from(path)),
             )
             // A file the model declined counts nothing: no `+0 −0`.
@@ -1468,7 +1468,7 @@ impl ReviewView {
                     .items_center()
                     .h(px(line_h))
                     .pl(px(indent))
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(rgb(INK_SUBTLE))
                     .map(|row| pickable(row, self.hover_key(format!("fold-{at}"), cx), picked))
                     .child(SharedString::from(format!(
                         "\u{22ef} {hidden} line{}",
@@ -1489,9 +1489,9 @@ impl ReviewView {
         let (indent_cells, text, highlights) = hang(&text, highlights);
         // The numbers wear a tool row's diff ink (structure on a context
         // row, the sign's hue dimmed on a changed one); the pick's are the
-        // keyboard's `TEXT_STRONG`.
+        // keyboard's `INK_STRONG`.
         let number_ink = if picked {
-            TEXT_STRONG
+            INK_STRONG
         } else {
             ink.number_color
         };
@@ -1553,7 +1553,7 @@ impl ReviewView {
                                 .debug_selector(|| "review-add-comment".into())
                                 .pl(px(2. * cell))
                                 .pr(px(cell))
-                                .text_color(rgb(TEXT_STRONG))
+                                .text_color(rgb(INK_STRONG))
                                 .hover_control(format!("review-comment-on-{at}"))
                                 .child(COMMENT_ON)
                                 // On the press, before the row's own press re-picks one line.
@@ -1620,10 +1620,10 @@ impl ReviewView {
                     .items_center()
                     .h(px(TOKEN_H))
                     .px(px(TOKEN_PAD_X))
-                    .rounded(px(R_SMALL))
+                    .rounded(px(R_CONTROL))
                     .font_family(FONT_UI)
                     .text_size(px(FS_META))
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(rgb(INK_SUBTLE))
                     .hover_control(self.hover_key(id.into(), cx))
                     .child(words)
             };
@@ -1679,7 +1679,7 @@ impl ReviewView {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .text_color(rgb(TEXT))
+                    .text_color(rgb(INK))
                     .child(SharedString::from(comment.text.clone())),
             )
             .child(
@@ -1692,8 +1692,8 @@ impl ReviewView {
                     .justify_center()
                     .w(px(2. * cell))
                     .h(px(self.grid.line))
-                    .rounded(px(R_SMALL))
-                    .text_color(rgb(TEXT_DIM))
+                    .rounded(px(R_CONTROL))
+                    .text_color(rgb(INK_SUBTLE))
                     .hover_control(self.hover_key(format!("uncomment-{id}"), cx))
                     .child("\u{d7}")
                     .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
@@ -1720,7 +1720,7 @@ impl ReviewView {
                 div()
                     .h(px(self.grid.line))
                     .pl(px(self.code_x()))
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(rgb(INK_SUBTLE))
                     .child(message),
             )
             .into_any_element()
@@ -1772,7 +1772,7 @@ impl ReviewView {
             .child(
                 div()
                     .flex_shrink_0()
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(rgb(INK_SUBTLE))
                     .child(SharedString::from(abbreviate_oid(&commit.sha))),
             )
             .child(
@@ -1780,14 +1780,14 @@ impl ReviewView {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(TEXT))
+                    .text_color(rgb(INK))
                     .child(SharedString::from(commit.subject.clone())),
             )
             .when(!commit.author.is_empty(), |row| {
                 row.child(
                     div()
                         .flex_shrink_0()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(rgb(INK_SUBTLE))
                         .child(SharedString::from(commit.author.clone())),
                 )
             })
@@ -1838,7 +1838,7 @@ impl ReviewView {
         let cell = self.grid.cell();
         let muted = |text: String| {
             div()
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .child(SharedString::from(text))
         };
         let mut body = div()
@@ -1856,7 +1856,7 @@ impl ReviewView {
             .child(
                 div()
                     .font_weight(W_LABEL)
-                    .text_color(rgb(TEXT_STRONG))
+                    .text_color(rgb(INK_STRONG))
                     .child(SharedString::from(format!("#{} {}", pr.number, pr.title))),
             )
             .child(muted(pr_facts(pr)))
@@ -1865,7 +1865,7 @@ impl ReviewView {
             body = body.child(
                 div()
                     .mt(px(self.grid.half()))
-                    .text_color(rgb(TEXT))
+                    .text_color(rgb(INK))
                     .child(SharedString::from(pr.body.clone())),
             );
         }
@@ -1876,7 +1876,7 @@ impl ReviewView {
                     WireCheckStatus::Success => ("\u{2713}", GREEN),
                     WireCheckStatus::Failure => ("\u{2717}", RED),
                     WireCheckStatus::Running | WireCheckStatus::Pending => ("\u{25cb}", YELLOW),
-                    WireCheckStatus::Skipped | WireCheckStatus::Unknown => ("\u{2013}", TEXT_DIM),
+                    WireCheckStatus::Skipped | WireCheckStatus::Unknown => ("\u{2013}", INK_SUBTLE),
                 };
                 // The marks differ in width: a box of their own keeps the
                 // names on one edge.
@@ -1892,7 +1892,7 @@ impl ReviewView {
                         )
                         .child(
                             div()
-                                .text_color(rgb(TEXT))
+                                .text_color(rgb(INK))
                                 .child(SharedString::from(check.name.clone())),
                         ),
                 );
@@ -1915,7 +1915,7 @@ impl ReviewView {
                 .debug_selector(move || format!("review-pr-comment-{index}"))
                 .mt(px(self.grid.half()))
                 .p(px(cell))
-                .rounded(px(R_BLOCK))
+                .rounded(px(R_CARD))
                 .bg(paint::RAISED)
                 // A review or a comment is anchored to its own kind's
                 // word: only a finding's place is worth a second mention.
@@ -1935,7 +1935,7 @@ impl ReviewView {
                 )))
                 .child(
                     div()
-                        .text_color(rgb(TEXT))
+                        .text_color(rgb(INK))
                         .child(SharedString::from(comment.body.clone())),
                 );
             for reply in &comment.replies {
@@ -1945,7 +1945,7 @@ impl ReviewView {
                         .child(muted(reply.author.clone()))
                         .child(
                             div()
-                                .text_color(rgb(TEXT))
+                                .text_color(rgb(INK))
                                 .child(SharedString::from(reply.body.clone())),
                         ),
                 );
@@ -2034,7 +2034,7 @@ impl ReviewView {
                                         .flex_1()
                                         .min_w_0()
                                         .truncate()
-                                        .text_color(rgb(TEXT))
+                                        .text_color(rgb(INK))
                                         .child(
                                             StyledText::new(SharedString::from(text))
                                                 .with_highlights(marks),
@@ -2061,7 +2061,7 @@ impl ReviewView {
                     .h(px(FLOAT_ROW_H))
                     .px(px(CH))
                     .gap(px(CH))
-                    .child(ferrite_ui::components::prompt_mark(TEXT_STRONG))
+                    .child(ferrite_ui::components::prompt_mark(INK_STRONG))
                     .child(div().flex_1().min_w_0().child(search.field.clone())),
             )
             .child(results)
@@ -2069,7 +2069,7 @@ impl ReviewView {
     }
 
     /// Every file as reviewr's tree: directories first, a changed file in
-    /// `TEXT_STRONG`, a closed directory holding one marked, an ignored entry
+    /// `INK_STRONG`, a closed directory holding one marked, an ignored entry
     /// quiet.
     fn tree_body(&self, tree: &TreePanel, cx: &mut Context<Self>) -> AnyElement {
         let entries = match &tree.entries {
@@ -2116,9 +2116,9 @@ impl ReviewView {
                     }
                     RowKind::File { index } => {
                         let ink = if entries[*index].annotation.is_some() {
-                            TEXT_STRONG
+                            INK_STRONG
                         } else {
-                            TEXT
+                            INK
                         };
                         (row.name.clone(), ink)
                     }
@@ -2138,7 +2138,7 @@ impl ReviewView {
                             index == tree.pick,
                         )
                     })
-                    .text_color(rgb(if row.ignored { TEXT_DIM } else { ink }))
+                    .text_color(rgb(if row.ignored { INK_SUBTLE } else { ink }))
                     .child(div().min_w_0().truncate().child(SharedString::from(label)))
                     .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                         window.focus(&view.focus, cx);
@@ -2217,7 +2217,7 @@ impl ReviewView {
                                 .child(
                                     div()
                                         .flex_shrink_0()
-                                        .text_color(rgb(TEXT_DIM))
+                                        .text_color(rgb(INK_SUBTLE))
                                         .child(SharedString::from(facts.join(" \u{b7} "))),
                                 )
                                 .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
@@ -2244,7 +2244,7 @@ impl ReviewView {
                     .h(px(FLOAT_ROW_H))
                     .px(px(CH))
                     .gap(px(CH))
-                    .child(ferrite_ui::components::prompt_mark(TEXT_STRONG))
+                    .child(ferrite_ui::components::prompt_mark(INK_STRONG))
                     .child(div().flex_1().min_w_0().child(panel.field.clone())),
             )
             .child(list)
@@ -2402,7 +2402,7 @@ impl ReviewView {
                     .when(selector == "review-file-shown", |shown| {
                         shown.text_ellipsis_start()
                     })
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(rgb(INK_SUBTLE))
                     .child(SharedString::from(text))
             }))
             // A read that failed shows no diff, so no stat of one; the stat
@@ -2472,7 +2472,7 @@ fn stat(files: &[ReviewFile], gap: f32) -> gpui::Div {
                     div()
                         .debug_selector(|| "review-stat-count".into())
                         .flex_shrink_0()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(rgb(INK_SUBTLE))
                         .child(SharedString::from(count)),
                 ),
         )

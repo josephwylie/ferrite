@@ -1,5 +1,5 @@
 //! The files a draft carries, as shelf chips over the Composer (SPEC §5.5):
-//! `SHELF_CHIP_H` high at `R_CHIP` on `paint::RAISED`, Geist `FS_META`,
+//! `SHELF_CHIP_H` high at `R_CONTROL` on `paint::RAISED`, Geist `FS_META`,
 //! the image mark (or the file mark) and the name in `LINK_INK`. This module owns presentation and
 //! opening (in the Pane's preview, the Panel's Preview tab: `Preview::open`); callers
 //! only supply paths and, for a draft, a removal callback. The prompt codec owns persistence. A draft's review comments
@@ -154,7 +154,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             .max_w(px(theme::ATTACH_CHIP_MAX_W))
             .min_w_0()
             .px(px(theme::SPACE_2))
-            .rounded(px(theme::R_CHIP))
+            .rounded(px(theme::R_CONTROL))
             .bg(theme::paint::RAISED)
             .cursor_pointer()
             .hover_carried(format!("attachment-{index}-{}", open.display()))
@@ -222,7 +222,7 @@ fn review_chip(comments: usize, on_drop: Option<DropReview>) -> gpui::Div {
         .gap(px(theme::CH))
         .h(px(theme::ATTACH_CHIP_H))
         .px(px(theme::SPACE_2))
-        .rounded(px(theme::R_CHIP))
+        .rounded(px(theme::R_CONTROL))
         .bg(theme::paint::RAISED)
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_META))
@@ -251,7 +251,7 @@ fn review_chip(comments: usize, on_drop: Option<DropReview>) -> gpui::Div {
 }
 
 /// A chip's remove control: the `close` icon (`ATTACH_REMOVE_ICON`) in
-/// `TEXT_DIM` in an `ATTACH_REMOVE`-wide slot, the kit ghost's fill under the
+/// `INK_SUBTLE` in an `ATTACH_REMOVE`-wide slot, the kit ghost's fill under the
 /// pointer — a tab stop in the `PromptAttachment` context, so its Enter
 /// never sends.
 fn remove_button(id: impl Into<ElementId>) -> gpui::component::button::Button {
@@ -267,7 +267,7 @@ fn remove_button(id: impl Into<ElementId>) -> gpui::component::button::Button {
         .child(ferrite_ui::icons::icon(
             ferrite_ui::icons::CLOSE,
             theme::ATTACH_REMOVE_ICON,
-            theme::TEXT_DIM,
+            theme::INK_SUBTLE,
         ))
 }
 
@@ -280,7 +280,7 @@ impl RenderOnce for Attachments {
 }
 
 /// A file link in prose (the prototype's `.path`): the path as the prose
-/// wrote it in `LINK_INK` with no chip, a `:line` suffix in `TEXT_DIM`. It
+/// wrote it in `LINK_INK` with no chip, a `:line` suffix in `INK_SUBTLE`. It
 /// is a path target (`file_links::wire_inline`): a `LINK_INK` underline only
 /// under the pointer, the hover card while it is there (hosted by `scope`,
 /// the transcript it sits in), ⌘-click to the Thread's preview; a plain
@@ -388,7 +388,7 @@ pub fn inline_file(
                     title.child(
                         gpui::div()
                             .flex_none()
-                            .text_color(rgb(theme::TEXT_DIM))
+                            .text_color(rgb(theme::INK_SUBTLE))
                             .child(location),
                     )
                 }),
@@ -411,7 +411,7 @@ pub fn inline_file(
         .size_full()
         .min_w_0()
         .p_0()
-        .rounded(px(theme::R_CHIP))
+        .rounded(px(theme::R_CONTROL))
         .on_click(open);
     let element = gpui::div()
         .id("inline-file")

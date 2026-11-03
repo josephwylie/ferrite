@@ -270,7 +270,7 @@ impl Find {
     }
 
     /// The bar: the palette's input row as a float of its own — the
-    /// `search` icon in `TEXT_DIM`, the query in `TEXT_STRONG`, the count
+    /// `search` icon in `INK_SUBTLE`, the query in `INK_STRONG`, the count
     /// muted at the right — hung `FLOAT_OFFSET` under the top right of its host, the
     /// text it searches (`relative`). A host narrower than the bar narrows
     /// the query, never the count. It opens like every float (`menu_in`).
@@ -290,7 +290,7 @@ impl Find {
                     .child(ferrite_ui::icons::icon(
                         ferrite_ui::icons::SEARCH,
                         FIND_ICON,
-                        TEXT_DIM,
+                        INK_SUBTLE,
                     ))
                     .child(
                         div()
@@ -298,7 +298,7 @@ impl Find {
                             .min_w_0()
                             .font_family(FONT_UI)
                             .line_height(px(LH_UI))
-                            .text_color(rgb(TEXT_STRONG))
+                            .text_color(rgb(INK_STRONG))
                             .child(self.field.clone()),
                     )
                     .children(self.count().map(|count| {
@@ -307,7 +307,7 @@ impl Find {
                             .flex_shrink_0()
                             .ml(px(FLOAT_DETAIL_GAP))
                             .whitespace_nowrap()
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(rgb(INK_SUBTLE))
                             .child(count)
                     })),
             );

@@ -265,7 +265,7 @@ pub(crate) fn command_open(tool: &ToolBlock) -> Option<(String, usize)> {
 }
 
 /// The clickable words of a fold (`+ 7 lines`, `− fold`):
-/// dim, lifting to `TEXT` under the pointer; a click flips the call's
+/// dim, lifting to `INK` under the pointer; a click flips the call's
 /// disclosure.
 pub(super) fn fold_label(id: SharedString, label: String, toggle: Option<DisclosureToggle>) -> Stateful<Div> {
     let group = id.clone();
@@ -276,8 +276,8 @@ pub(super) fn fold_label(id: SharedString, label: String, toggle: Option<Disclos
         .flex_shrink_0()
         .whitespace_nowrap()
         .cursor_pointer()
-        .text_color(rgb(TEXT_DIM))
-        .group_hover(group, |style| style.text_color(rgb(TEXT)))
+        .text_color(rgb(INK_SUBTLE))
+        .group_hover(group, |style| style.text_color(rgb(INK)))
         .child(SharedString::from(label))
         .when_some(toggle, |line, toggle| {
             line.on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
@@ -323,7 +323,7 @@ pub(super) fn eased_fold(
 }
 
 /// Lines of output in a call's output box (one non-wrapping run, cut at
-/// the box's edge like a terminal's), in `TEXT_DIM` with only their verdict
+/// the box's edge like a terminal's), in `INK_SUBTLE` with only their verdict
 /// words coloured.
 pub(super) fn output_lines_run(block: BlockId, text: String, selection: &TextRuns) -> Div {
     div()
@@ -332,7 +332,7 @@ pub(super) fn output_lines_run(block: BlockId, text: String, selection: &TextRun
         .min_w_0()
         .overflow_hidden()
         .whitespace_nowrap()
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(selection.line(block, text.clone(), result_highlights(&text)))
 }
 
@@ -353,7 +353,7 @@ pub(super) fn fold_open(
         let viewer = div()
             .w_full()
             .min_w_0()
-            .text_color(rgb(TEXT_DIM))
+            .text_color(rgb(INK_SUBTLE))
             .child(selection.output(block, "result", full))
             .into_any_element();
         return (viewer, lines);
@@ -366,14 +366,14 @@ pub(super) fn fold_open(
 }
 
 /// A running suite's line under its call (CT-25): `running 357 tests`, its
-/// bar, and `212/357` in tabular `TEXT_DIM`.
+/// bar, and `212/357` in tabular `INK_SUBTLE`.
 pub(super) fn running_tests(call: &str, progress: ferrite_core::transcript::TestProgress, grid: Grid) -> Div {
     let small = grid.activity();
     let line = content_row(grid)
         .debug_selector(|| "tool-test-progress".into())
         .items_center()
         .text_size(px(small.size))
-        .text_color(rgb(TEXT_DIM));
+        .text_color(rgb(INK_SUBTLE));
     // The runner's total unheard (`TestProgress::known`): the count alone,
     // where `212/357` would stand, and no bar to fill against nothing.
     if !progress.known() {
@@ -415,7 +415,7 @@ pub(super) fn running_tests(call: &str, progress: ferrite_core::transcript::Test
 }
 
 /// A running test's bar (the prototype's `.bar`): `TEST_BAR_CELLS` wide and
-/// `TEST_BAR_H` tall on a `paint::LINE2` track, a cell's margin each side,
+/// `TEST_BAR_H` tall on a `paint::LINE` track, a cell's margin each side,
 /// its `RUNNING` fill at sub-pixel precision easing to each new count over
 /// `TEST_BAR_EASE_MS`.
 #[derive(IntoElement)]
@@ -469,7 +469,7 @@ impl gpui::RenderOnce for TestBar {
             .h(px(theme::TEST_BAR_H))
             .rounded(px(theme::TEST_BAR_R))
             .overflow_hidden()
-            .bg(theme::paint::LINE2)
+            .bg(theme::paint::LINE)
             .child(
                 div()
                     .absolute()
@@ -574,7 +574,7 @@ pub(super) fn tool_details(block: BlockId, tool: &ToolBlock, selection: &TextRun
 }
 
 /// A result's verdict words in their state ink, the rest in the line's
-/// `TEXT_DIM` (CT-15): a line's lead `ok` (`RUNNING`) or `failed`
+/// `INK_SUBTLE` (CT-15): a line's lead `ok` (`RUNNING`) or `failed`
 /// (`BLOCKED`); a test line's trailing `... ok` / `... FAILED`; and the
 /// verdict of a `test result:` line. `24 passed`, `357 passed; 2 failed`
 /// and every other `passed` or `failed` stay muted.
@@ -608,7 +608,7 @@ pub(super) fn result_highlights(text: &str) -> Vec<(std::ops::Range<usize>, High
                 let start = offset + indent;
                 highlights.push(ink(
                     start..start + word.len(),
-                    verdict_ink(word).unwrap_or(TEXT_DIM),
+                    verdict_ink(word).unwrap_or(INK_SUBTLE),
                 ));
             }
         }
@@ -627,7 +627,7 @@ pub(super) fn result_highlights(text: &str) -> Vec<(std::ops::Range<usize>, High
                     let start = offset + indent + "test result: ".len();
                     highlights.push(ink(
                         start..start + word.len(),
-                        verdict_ink(word).unwrap_or(TEXT_DIM),
+                        verdict_ink(word).unwrap_or(INK_SUBTLE),
                     ));
                 }
             }
@@ -650,7 +650,7 @@ pub(crate) fn output_block(block: BlockId, part: &str, text: &str, selection: &T
         .flex_col()
         .w_full()
         .min_w_0()
-        .text_color(rgb(TEXT_DIM));
+        .text_color(rgb(INK_SUBTLE));
     if text::output_scrolls(text) {
         let hidden = text::output_lines(text).saturating_sub(theme::OUTPUT_MAX_LINES);
         return rows
@@ -1029,7 +1029,7 @@ fn diff_highlights(side: &DiffSide, language: Option<&str>) -> (Vec<Highlight>, 
 /// (`block_box`) on the content column — a header naming the file in the
 /// app's words with its size (`+4 −1`) hard right over a 1px `paint::LINE`,
 /// then the unified diff set `TX_BLOCK_STEP` under the transcript. A
-/// `TEXT_DIM` hunk header opens a hunk that names a section (none
+/// `INK_SUBTLE` hunk header opens a hunk that names a section (none
 /// otherwise); each row is `[number][sign][code]`: the number
 /// right-aligned in `DIFF_NUMBER_CELLS` with `DIFF_NUMBER_PAD_CELLS` after
 /// it, in `TEXT_FAINT` or the add/delete number tint; the sign
@@ -1080,7 +1080,7 @@ pub(super) fn render_diff(
             .pl(px(pad + number_w + sign_w))
             .pr(px(pad))
             .truncate()
-            .text_color(rgb(TEXT_DIM))
+            .text_color(rgb(INK_SUBTLE))
             .child(SharedString::from(text))
     };
     let mut lines = div()
@@ -1090,7 +1090,7 @@ pub(super) fn render_diff(
         .w_full()
         .min_w_0()
         .py(px(theme::BLOCK_PAD_Y))
-        .text_color(rgb(TEXT));
+        .text_color(rgb(INK));
     for row in diff_rows(diff, cap) {
         lines = lines.child(match &row {
             DiffRow::Hunk(header) => note("diff-hunk", header.clone()),
@@ -1169,7 +1169,7 @@ pub(super) fn render_diff(
         .border_color(theme::paint::LINE)
         .font_family(theme::FONT_UI)
         .text_size(px(small.size))
-        .text_color(rgb(TEXT))
+        .text_color(rgb(INK))
         .child(div().min_w_0().truncate().child(SharedString::from(name)))
         .child(div().flex_1())
         .child(
@@ -1516,7 +1516,7 @@ impl DiffKind {
             },
             Self::Context => DiffPaint {
                 sign: "",
-                sign_color: TEXT_DIM,
+                sign_color: INK_SUBTLE,
                 number_color: TEXT_FAINT,
                 code_color: theme::SYN_PLAIN,
                 wash: None,

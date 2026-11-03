@@ -1,6 +1,6 @@
 //! Explicit Project editing modal, on the sheet recipe (`ferrite_ui::sheet`), in
 //! the float grammar (theme WP-E): one face on the grid, section labels in
-//! `TEXT_DIM`, a field as a 1px box, words for buttons.
+//! `INK_SUBTLE`, a field as a 1px box, words for buttons.
 
 use gpui::component::{button::Button, Disableable};
 use gpui::prelude::*;
@@ -53,7 +53,7 @@ pub fn body() -> gpui::Stateful<Div> {
         .gap(px(HALF_ROW))
 }
 
-/// A section header: its title as a `TEXT_DIM` row, its hint under it in
+/// A section header: its title as a `INK_SUBTLE` row, its hint under it in
 /// the same ink.
 pub fn section_label(title: &'static str, hint: &'static str) -> Div {
     div()
@@ -62,10 +62,10 @@ pub fn section_label(title: &'static str, hint: &'static str) -> Div {
         .flex_col()
         .pt(px(HALF_ROW))
         .child(components::section_label(title).pb(px(0.)))
-        .child(components::text_ui().text_color(rgb(TEXT_DIM)).child(hint))
+        .child(components::text_ui().text_color(rgb(INK_SUBTLE)).child(hint))
 }
 
-/// The Project name row: its label as a `TEXT_DIM` row over a field — a
+/// The Project name row: its label as a `INK_SUBTLE` row over a field — a
 /// box a cell in, one row high, rounded as every control is (`R_CONTROL`)
 /// and ringed with the Composer's hairline (`FIELD_RING`), the strong edge
 /// (`CONTROL_FOCUS`) while the keyboard is in it — recognizable before the
@@ -111,7 +111,7 @@ fn field(
                             .border_color(rgb(CONTROL_FOCUS))
                             .debug_selector(|| focused_selector.into())
                     } else {
-                        field.border_color(gpui::rgba(FIELD_RING))
+                        field.border_color(paint::FIELD_RING)
                     }
                 })
                 .child(div().min_w_0().flex_1().child(editor)),
@@ -119,7 +119,7 @@ fn field(
 }
 
 /// One directory the machine's Server listed under what the path field
-/// holds: its name and a `/`, `TEXT_DIM`, `paint::RAISED` under the
+/// holds: its name and a `/`, `INK_SUBTLE`, `paint::RAISED` under the
 /// pointer, hung a cell outside the text's edge like a directory row.
 pub fn path_completion(index: usize, name: &str) -> gpui::Stateful<Div> {
     let selector: SharedString = format!("project-path-completion:{name}").into();
@@ -138,7 +138,7 @@ pub fn path_completion(index: usize, name: &str) -> gpui::Stateful<Div> {
             components::text_ui()
                 .min_w_0()
                 .truncate()
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .child(format!("{name}/")),
         )
 }
@@ -158,8 +158,8 @@ pub fn directory_list(rows: Vec<gpui::Stateful<Div>>) -> Div {
 }
 
 /// The quiet text control under the list that adds a directory (`+ Add
-/// directory`, or `+ Add main directory` while there is none): `TEXT_DIM`,
-/// `TEXT` on `paint::RAISED` under the pointer, on the text's own edge.
+/// directory`, or `+ Add main directory` while there is none): `INK_SUBTLE`,
+/// `INK` on `paint::RAISED` under the pointer, on the text's own edge.
 pub fn add_directory(label: &'static str, cx: &App) -> Button {
     components::form_button("add-project-directory", cx)
         .debug_selector(|| "project-add-directory".into())
@@ -169,8 +169,8 @@ pub fn add_directory(label: &'static str, cx: &App) -> Button {
         .px(px(CH))
         .child(
             components::text_ui()
-                .text_color(rgb(TEXT_DIM))
-                .group_hover(ADD_GROUP, |style| style.text_color(rgb(TEXT)))
+                .text_color(rgb(INK_SUBTLE))
+                .group_hover(ADD_GROUP, |style| style.text_color(rgb(INK)))
                 .child(label),
         )
 }
@@ -178,7 +178,7 @@ pub fn add_directory(label: &'static str, cx: &App) -> Button {
 const ADD_GROUP: &str = "project-add-directory";
 const DESTRUCTIVE_GROUP: &str = "project-destructive";
 
-/// The confirming button: the one filled control on the card, `TEXT_STRONG`
+/// The confirming button: the one filled control on the card, `INK_STRONG`
 /// with dark ink.
 pub fn primary_button(
     id: impl Into<gpui::ElementId>,
@@ -192,12 +192,12 @@ pub fn primary_button(
         .px(px(FORM_BUTTON_PAD_X))
         .child(components::form_label(
             label,
-            if disabled { TEXT_DIM } else { ON_PRIMARY },
+            if disabled { INK_SUBTLE } else { ON_PRIMARY },
         ))
 }
 
 /// One directory: its name, `main` beside the first, and its path under
-/// it as the operator reads it (`shown`, home spelled `~`) in `TEXT_DIM`,
+/// it as the operator reads it (`shown`, home spelled `~`) in `INK_SUBTLE`,
 /// one line cut from its start — a path's end names it — and whole in the
 /// tooltip. Under the pointer the row takes `paint::RAISED`, hung a cell
 /// outside the text's edge, so the text stays on the sheet's column.
@@ -248,14 +248,14 @@ pub fn directory_row(
                             components::text_ui()
                                 .min_w_0()
                                 .truncate()
-                                .text_color(rgb(TEXT))
+                                .text_color(rgb(INK))
                                 .child(name),
                         )
                         .when(main, |line| {
                             line.child(
                                 components::text_ui()
                                     .flex_shrink_0()
-                                    .text_color(rgb(TEXT_DIM))
+                                    .text_color(rgb(INK_SUBTLE))
                                     .debug_selector(|| "project-directory-main".into())
                                     .child("main"),
                             )
@@ -267,17 +267,17 @@ pub fn directory_row(
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis_start()
-                        .text_color(rgb(TEXT_DIM))
+                        .text_color(rgb(INK_SUBTLE))
                         .child(shown),
                 ),
         )
         .child(div().flex_shrink_0().child(actions))
 }
 
-/// A destructive action: a word in a 1px `paint::LINE2` box (the
-/// prototype's quick buttons) — `TEXT_DIM` at rest, `TEXT` on
+/// A destructive action: a word in a 1px `paint::FLOAT_EDGE` box (the
+/// prototype's quick buttons) — `INK_SUBTLE` at rest, `INK` on
 /// `paint::RAISED` under the pointer. No red and no wash: colour is state,
-/// and a verb is not one. Disabled, it stays `TEXT_DIM` and takes no face.
+/// and a verb is not one. Disabled, it stays `INK_SUBTLE` and takes no face.
 pub fn destructive_button(
     id: impl Into<gpui::ElementId>,
     label: &'static str,
@@ -290,7 +290,7 @@ pub fn destructive_button(
     } else {
         (paint::HOVER.into(), paint::PRESS.into())
     };
-    components::faded_button(id, none, hover, press, rgb(TEXT_DIM).into(), cx)
+    components::faded_button(id, none, hover, press, rgb(INK_SUBTLE).into(), cx)
         .tab_stop(true)
         .group(DESTRUCTIVE_GROUP)
         .disabled(disabled)
@@ -298,13 +298,13 @@ pub fn destructive_button(
         .h(px(FORM_CONTROL_H))
         .px(px(FORM_BUTTON_PAD_X))
         .border_1()
-        .border_color(paint::LINE2)
+        .border_color(paint::FLOAT_EDGE)
         .child(
             components::text_ui()
                 .font_weight(W_BODY)
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .when(!disabled, |text| {
-                    text.group_hover(DESTRUCTIVE_GROUP, |style| style.text_color(rgb(TEXT)))
+                    text.group_hover(DESTRUCTIVE_GROUP, |style| style.text_color(rgb(INK)))
                 })
                 .child(label),
         )

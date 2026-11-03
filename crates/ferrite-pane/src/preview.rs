@@ -384,7 +384,7 @@ impl Document {
 
 /// The head both reading surfaces wear — the Panel's preview card and the
 /// Review's slot on the board: the Group head's twin, `PANE_HEAD_H` over
-/// its `paint::HAIRLINE`, its insets and gap, so it lines up with the head
+/// its `paint::LINE`, its insets and gap, so it lines up with the head
 /// of the Pane beside it. `label` at the left, `doors` (`head_door`s) at
 /// the right.
 pub fn reading_head(label: Div, doors: impl IntoIterator<Item = gpui::AnyElement>) -> Div {
@@ -399,7 +399,7 @@ pub fn reading_head(label: Div, doors: impl IntoIterator<Item = gpui::AnyElement
         .pl(px(PANE_HEAD_PAD_L))
         .pr(px(PANE_HEAD_PAD_R))
         .border_b_1()
-        .border_color(paint::HAIRLINE)
+        .border_color(paint::LINE)
         .whitespace_nowrap()
         .child(label)
         .child(div().flex_1())
@@ -425,16 +425,16 @@ pub fn head_title(title: impl Into<SharedString>) -> Div {
 pub fn head_suffix(text: String) -> Div {
     div()
         .flex_shrink_0()
-        .text_color(rgb(ferrite_ui::theme::TEXT_DIM))
+        .text_color(rgb(ferrite_ui::theme::INK_SUBTLE))
         .child(text)
 }
 
 /// One of a head's doors at the right, the Group head's fill button's
-/// twin: an `ICON_BUTTON` square at `R_TAB` holding `glyph`, quiet until
+/// twin: an `ICON_BUTTON` square at `R_CONTROL` holding `glyph`, quiet until
 /// the pointer is on it (`hover`, its blend's key). A press here acts; it
 /// must not also pick the slot up as a drag.
 pub fn head_door(id: &'static str, hover: String, glyph: &'static str) -> gpui::Stateful<Div> {
-    use ferrite_ui::theme::{ICON_BUTTON, ICON_BUTTON_GLYPH, R_TAB, TEXT_DIM};
+    use ferrite_ui::theme::{ICON_BUTTON, ICON_BUTTON_GLYPH, R_CONTROL, INK_SUBTLE};
     div()
         .id(id)
         .debug_selector(move || id.into())
@@ -443,10 +443,10 @@ pub fn head_door(id: &'static str, hover: String, glyph: &'static str) -> gpui::
         .items_center()
         .justify_center()
         .size(px(ICON_BUTTON))
-        .rounded(px(R_TAB))
+        .rounded(px(R_CONTROL))
         .hover_control(hover)
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(ferrite_ui::icons::icon(glyph, ICON_BUTTON_GLYPH, TEXT_DIM))
+        .child(ferrite_ui::icons::icon(glyph, ICON_BUTTON_GLYPH, INK_SUBTLE))
 }
 
 /// The OS opens the original file in its own viewer, where it can be

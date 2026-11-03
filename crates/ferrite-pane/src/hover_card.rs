@@ -2,14 +2,14 @@
 //! transcript names shows the file around the line it points at, hung under
 //! the path, flipping above it near the window's foot (`hang`).
 //!
-//! `HOVER_CARD_CELLS` cells wide in the float's shell (`FLOAT_GROUND`,
-//! radius `R_BLOCK`, the `FLOAT_EDGE` ring, the float shadow); it takes no
+//! `HOVER_CARD_CELLS` cells wide in the float's shell (`paint::FLOAT`,
+//! radius `R_FLOAT`, the `FLOAT_EDGE` ring, the float shadow); it takes no
 //! pointer. Its head
-//! is the path in `LINK_INK` and `:211` in `TEXT_DIM`, with `⌘-click opens
+//! is the path in `LINK_INK` and `:211` in `INK_SUBTLE`, with `⌘-click opens
 //! in a reader pane` at its right; its body six numbered lines,
 //! `line-3..line+2`, the target line on `paint::SELECTED` with its number in
-//! `TEXT_STRONG`, the code syntax-coloured and cut with `…`; its foot, over a
-//! `FLOAT_RULE` hairline, `modified in this thread · +9−4 · 2 min ago` when
+//! `INK_STRONG`, the code syntax-coloured and cut with `…`; its foot, over a
+//! `FLOAT_EDGE` rule, `modified in this thread · +9−4 · 2 min ago` when
 //! the Thread changed the file.
 //!
 //! State is a window-wide global: a path target on enter names itself and
@@ -250,7 +250,7 @@ impl gpui::Render for HoverCard {
             (
                 path.len()..head_text.len(),
                 gpui::HighlightStyle {
-                    color: Some(rgb(theme::TEXT_DIM).into()),
+                    color: Some(rgb(theme::INK_SUBTLE).into()),
                     ..Default::default()
                 },
             ),
@@ -272,8 +272,8 @@ impl gpui::Render for HoverCard {
                     .flex_shrink_0()
                     .items_center()
                     .pl(px(2.0 * cell))
-                    .text_color(rgb(theme::TEXT_DIM))
-                    .child(ferrite_ui::components::key_combo("cmd", theme::TEXT_DIM))
+                    .text_color(rgb(theme::INK_SUBTLE))
+                    .child(ferrite_ui::components::key_combo("cmd", theme::INK_SUBTLE))
                     // Exactly its cells: the hint is right-aligned, and a
                     // measured run rounds up a pixel and would stand it
                     // that much left.
@@ -304,9 +304,9 @@ impl gpui::Render for HoverCard {
                         .text_right()
                         .whitespace_nowrap()
                         .text_color(rgb(if on {
-                            theme::TEXT_STRONG
+                            theme::INK_STRONG
                         } else {
-                            theme::TEXT_DIM
+                            theme::INK_SUBTLE
                         }))
                         .child(SharedString::from(number.to_string())),
                 ))
@@ -331,9 +331,9 @@ impl gpui::Render for HoverCard {
                 .pl(px(inset_l))
                 .pr(px(inset_r))
                 .border_t_1()
-                .border_color(theme::FLOAT_RULE)
+                .border_color(theme::paint::FLOAT_EDGE)
                 .whitespace_nowrap()
-                .text_color(rgb(theme::TEXT_DIM))
+                .text_color(rgb(theme::INK_SUBTLE))
                 .child(StyledText::new(SharedString::from(text)).with_highlights(highlights))
         });
         div()
@@ -341,16 +341,16 @@ impl gpui::Render for HoverCard {
             .w(px(theme::HOVER_CARD_CELLS * cell))
             .flex()
             .flex_col()
-            .bg(theme::FLOAT_GROUND)
-            .rounded(px(theme::R_BLOCK))
+            .bg(theme::paint::FLOAT)
+            .rounded(px(theme::R_FLOAT))
             .overflow_hidden()
             .border_1()
-            .border_color(theme::FLOAT_EDGE)
+            .border_color(theme::paint::FLOAT_EDGE)
             .shadow(ferrite_ui::components::float_shadow())
             .font_family(theme::FONT_CODE)
             .text_size(px(theme::FS_UI))
             .line_height(px(theme::LH_UI))
-            .text_color(rgb(theme::TEXT))
+            .text_color(rgb(theme::INK))
             .child(head)
             .children(rows)
             .children(foot)

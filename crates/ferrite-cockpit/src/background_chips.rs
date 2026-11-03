@@ -76,7 +76,7 @@ impl RenderOnce for BackgroundChips {
     }
 }
 
-/// One shelf chip (SPEC §5.5): `SHELF_CHIP_H` at `R_CHIP` on
+/// One shelf chip (SPEC §5.5): `SHELF_CHIP_H` at `R_CONTROL` on
 /// `paint::RAISED`, Geist `FS_META` — a still `RUNNING` dot, the task's own description cut to the
 /// chip's width, and a quiet `×` where stopping is wired. The whole
 /// description and the task's kind wait in the tooltip.
@@ -102,13 +102,13 @@ fn chip(index: usize, task: BackgroundTask, on_stop: Option<Stop>) -> impl IntoE
         .max_w(px(theme::BG_CHIP_MAX_W))
         .h(px(theme::SHELF_CHIP_H))
         .px(px(theme::SPACE_2))
-        .rounded(px(theme::R_CHIP))
+        .rounded(px(theme::R_CONTROL))
         .bg(theme::paint::RAISED)
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_META))
         .line_height(px(theme::LH_META))
         .whitespace_nowrap()
-        .text_color(rgb(theme::TEXT))
+        .text_color(rgb(theme::INK))
         .tooltip(ferrite_ui::menu::tooltip(tooltip))
         // Working is the normal state: a still dot (theme rule 8 — one
         // thing moves, and it is the working line).
@@ -126,7 +126,7 @@ fn chip(index: usize, task: BackgroundTask, on_stop: Option<Stop>) -> impl IntoE
                 .justify_center()
                 .h(px(theme::SHELF_CHIP_H))
                 .px(px(theme::SPACE_0_5))
-                .text_color(rgb(theme::TEXT_DIM))
+                .text_color(rgb(theme::INK_SUBTLE))
                 .hover_carried(format!("background-chip-stop-{index}"))
                 .child("\u{d7}")
                 .on_click(move |_: &ClickEvent, window, cx| {

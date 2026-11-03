@@ -11,7 +11,7 @@ pub struct MenuRow {
     pub insert: SharedString,
     /// The row's leading text: `/name`, or the file's name.
     pub name: SharedString,
-    /// Matched byte ranges inside `name`, painted `TEXT_STRONG` at `W_STRONG`
+    /// Matched byte ranges inside `name`, painted `INK_STRONG` at `W_LABEL`
     /// (`components::match_highlights`; one face, so nothing reflows).
     pub matched: Vec<std::ops::Range<usize>>,
     /// The dimmer text after it: a command's description, or the file's
@@ -36,7 +36,7 @@ pub fn menu_popover() -> Div {
 }
 
 /// A `/` or `@` row in the float grammar: the cursor row's fill, the name with
-/// its matches in `TEXT_STRONG`, the detail muted in its own column
+/// its matches in `INK_STRONG`, the detail muted in its own column
 /// (`label_w` aligns the slash commands' descriptions), `↵` on the cursor
 /// row.
 pub fn menu_row(

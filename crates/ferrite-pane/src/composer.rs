@@ -7,7 +7,7 @@
 //! table of visual rows, so wrapped and hard-broken lines read alike.
 //!
 //! The caret is a bar (theme WP-D): `CARET_W` wide at the cursor's shaped
-//! x, one row high, in `TEXT_STRONG`, blinking softly while this line holds
+//! x, one row high, in `INK_STRONG`, blinking softly while this line holds
 //! the keyboard, and not drawn at all when it does not. A line the cockpit
 //! keeps lit (`set_caret_lit`: Solo's, and the focused board Pane's) draws
 //! its bar whoever holds the keyboard; an unfocused board Pane's box shows
@@ -87,9 +87,9 @@ pub enum Caret {
     Hidden,
 }
 
-/// The block caret's opacity `since` its blink last restarted (a focus or
-/// an edit): the soft cycle of `MOTION_CARET_BLINK_MS` from its solid
-/// start (`components::caret_blink`).
+/// The caret's opacity `since` its blink last restarted (a focus or an
+/// edit): the hard blink of `MOTION_CARET_BLINK_MS` from its shown start
+/// (`components::caret_blink`).
 pub fn caret_alpha(since: Duration) -> f32 {
     let turn = Duration::from_millis(ferrite_ui::theme::MOTION_CARET_BLINK_MS).as_nanos();
     let phase = (since.as_nanos() % turn) as f32 / turn as f32;
@@ -965,9 +965,9 @@ fn pill_ranges(text: &str, mentions: &[SharedString]) -> Vec<Range<usize>> {
 }
 
 /// The line's text runs: the base style, a picked mention in `MENTION_INK`
-/// over `pills`, the selection's own `TEXT_STRONG` ink over `selected` —
+/// over `pills`, the selection's own `INK_STRONG` ink over `selected` —
 /// the selection quad is the app's one translucent selection wash, painted
-/// under the shaped line — and the IME underline (`TEXT_DIM`, 1px) over
+/// under the shaped line — and the IME underline (`INK_SUBTLE`, 1px) over
 /// `marked`. Split at every boundary so each run wears exactly its styles.
 fn runs_for(
     base: &TextRun,
@@ -1008,14 +1008,14 @@ fn runs_for(
             .as_ref()
             .is_some_and(|selected| selected.start <= from && to <= selected.end)
         {
-            run.color = rgb(ferrite_ui::theme::TEXT_STRONG).into();
+            run.color = rgb(ferrite_ui::theme::INK_STRONG).into();
         }
         if marked
             .as_ref()
             .is_some_and(|marked| marked.start <= from && to <= marked.end)
         {
             run.underline = Some(UnderlineStyle {
-                color: Some(rgb(ferrite_ui::theme::TEXT_DIM).into()),
+                color: Some(rgb(ferrite_ui::theme::INK_SUBTLE).into()),
                 thickness: px(1.),
                 wavy: false,
             });
@@ -1315,7 +1315,7 @@ impl Element for LineElement {
             && selected.is_empty()
             && blinks
             && ferrite_ui::loops_overlay::hosting(window, cx);
-        // The soft blink rides the shared pulse clock (theme rule 8), which
+        // The blink rides the shared pulse clock (theme rule 8), which
         // draws it again through its fades and holds its plateaus; while
         // this line holds the keyboard the phase is the line's own, from its
         // last focus or edit. Still and solid under reduced motion.
@@ -1394,7 +1394,7 @@ impl Element for LineElement {
                             point(bounds.left() + to, row_top(index) + line_height),
                         ),
                         // One selection colour everywhere, whoever paints it:
-                        // the translucent wash, with `TEXT_STRONG` runs over it.
+                        // the translucent wash, with `INK_STRONG` runs over it.
                         rgba(ferrite_ui::theme::COMPOSER_SELECTION),
                     )
                 })
@@ -1502,16 +1502,16 @@ impl Element for LineElement {
     }
 }
 
-/// The soft block's opacity now, declaring the drawing view on the pulse
-/// clock through the blink's fades: from the line's own last focus or edit
+/// The caret's opacity now, declaring the drawing view on the pulse clock
+/// at the blink's two steps: from the line's own last focus or edit
 /// (`origin`), else on the shared epoch (a lit line blinking under a float).
 fn caret_blink_now(origin: Option<Instant>, window: &mut Window, cx: &mut App) -> f32 {
     let turn = Duration::from_millis(ferrite_ui::theme::MOTION_CARET_BLINK_MS);
-    let fades = ferrite_ui::components::CARET_FADES;
+    let steps = ferrite_ui::components::CARET_STEPS;
     let view = window.current_view();
     let phase = match origin {
-        Some(from) => ferrite_ui::motion::loop_phase_from(from, turn, fades, view, cx),
-        None => ferrite_ui::motion::loop_phase(turn, fades, view, cx),
+        Some(from) => ferrite_ui::motion::loop_phase_from(from, turn, steps, view, cx),
+        None => ferrite_ui::motion::loop_phase(turn, steps, view, cx),
     };
     ferrite_ui::components::caret_blink(phase)
 }
@@ -1783,7 +1783,7 @@ mod tests {
         assert_eq!(lens.iter().sum::<usize>(), text.len());
         assert_eq!(lens, [5, 2, 1, 3]);
         // A picked mention is a path: the terminal's cyan, on no ground —
-        // never `TEXT_STRONG`, never a chip (theme WP-D).
+        // never `INK_STRONG`, never a chip (theme WP-D).
         assert_eq!(runs[1].color, rgb(ferrite_ui::theme::MENTION_INK).into());
         assert_eq!(ferrite_ui::theme::MENTION_INK, ferrite_ui::theme::LINK_INK);
         assert!(runs[1].background_color.is_none());
@@ -1795,23 +1795,17 @@ mod tests {
         assert_eq!(runs_for(&base, 0, None, &[], None).len(), 1);
     }
 
-    /// The block's soft blink (the prototype's keyframes): solid from its
-    /// start for 45% of the turn, eased down to `CARET_BLINK_MIN`, held,
-    /// and back up — so a fresh focus or edit always shows it solid.
+    /// The caret's hard blink: shown from its start for half the turn,
+    /// then hidden — so a fresh focus or edit always shows it.
     #[test]
-    fn the_block_blinks_softly_from_a_solid_start() {
+    fn the_caret_blinks_hard_from_a_shown_start() {
         let turn = ferrite_ui::theme::MOTION_CARET_BLINK_MS;
         let at = |ms: u64| caret_alpha(Duration::from_millis(ms));
-        assert_eq!(at(0), 1.0, "a restart is solid");
-        assert_eq!(at(turn * 4 / 10), 1.0);
-        assert_eq!(at(turn * 7 / 10), ferrite_ui::theme::CARET_BLINK_MIN);
+        assert_eq!(at(0), 1.0, "a restart is shown");
+        assert_eq!(at(turn / 2 - 1), 1.0);
+        assert_eq!(at(turn / 2), 0.0);
+        assert_eq!(at(turn - 1), 0.0);
         assert_eq!(at(turn), 1.0, "and round again");
-        const {
-            assert!(
-                ferrite_ui::theme::CARET_BLINK_MIN > 0.0,
-                "soft: it never vanishes"
-            )
-        };
     }
 
     /// The selection wash is painted under the shaped line, so every covered
@@ -1821,7 +1815,7 @@ mod tests {
         let base = TextRun {
             len: 0,
             font: gpui::font(ferrite_ui::theme::FONT_CODE),
-            color: rgb(ferrite_ui::theme::TEXT).into(),
+            color: rgb(ferrite_ui::theme::INK).into(),
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -1829,7 +1823,7 @@ mod tests {
         let runs = runs_for(&base, 11, None, &[], Some(5..7));
         let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
         assert_eq!(lens, [5, 2, 4]);
-        assert_eq!(runs[1].color, rgb(ferrite_ui::theme::TEXT_STRONG).into());
+        assert_eq!(runs[1].color, rgb(ferrite_ui::theme::INK_STRONG).into());
         assert_eq!(runs[0].color, base.color);
     }
 
@@ -2072,14 +2066,13 @@ mod tests {
             })
     }
 
-    /// The soft blink on the pulse clock's declared cadence keeps its look:
+    /// The hard blink on the pulse clock's declared cadence keeps its look:
     /// at every instant of the clock's 33ms grid, the caret on screen is
-    /// the blink's value there (what the fixed ~30fps rate drew); the fades
-    /// are drawn on every grid instant, land on solid and on
-    /// `CARET_BLINK_MIN`, and the plateaus between them draw nothing new —
-    /// yet the clock stays armed across them.
+    /// the blink's value there (what the fixed ~30fps rate drew); it lands
+    /// on shown and on hidden every turn, and the halves between draw
+    /// nothing new — yet the clock stays armed across them.
     #[gpui::test]
-    fn the_blink_draws_only_its_fades_and_keeps_its_look(cx: &mut TestAppContext) {
+    fn the_blink_draws_only_its_steps_and_keeps_its_look(cx: &mut TestAppContext) {
         ferrite_ui::motion::testing::drive();
         let (host, cx) = host(cx);
         let composer = composer(&host, cx);
@@ -2102,7 +2095,7 @@ mod tests {
         let (epoch, tick) = cx
             .update(|_, cx| ferrite_ui::motion::testing::grid(cx))
             .expect("the blink declared on the clock");
-        let low = ferrite_ui::theme::CARET_BLINK_MIN;
+        let low = 0.0;
 
         // Every grid instant shows what the fixed rate drew there.
         let first = draws.first().map(|(at, _)| *at).unwrap_or(end);
@@ -2138,12 +2131,12 @@ mod tests {
                 .filter(|pair| pair[0].1 != value && pair[1].1 == value)
                 .count()
         };
-        assert!(landings(low) >= 3, "every fall lands on the dim plateau");
-        assert!(landings(1.0) >= 2, "every rise lands solid");
-        // The plateaus repaint nothing: a handful of draws per turn.
+        assert!(landings(low) >= 3, "every turn hides the caret");
+        assert!(landings(1.0) >= 2, "and shows it again");
+        // The halves repaint nothing: a draw or two per step.
         assert!(
-            draws.len() <= 3 * 8,
-            "{} caret draws in three turns; the fades need at most 8 a turn",
+            draws.len() <= 3 * 4,
+            "{} caret draws in three turns; the steps need at most 4 a turn",
             draws.len()
         );
     }

@@ -3,11 +3,11 @@
 //! (`Settings sheet`, WP-E).
 //!
 //! **The sheet recipe**: a `VEIL` over the Cockpit; the sheet is the
-//! float's shell at sheet size — `FLOAT_GROUND`, radius `R_BLOCK`, a 1px
+//! float's shell at sheet size — `paint::FLOAT`, radius `R_FLOAT`, a 1px
 //! `FLOAT_EDGE` ring, the float shadow; a `MODAL_HEAD_H` head (the title
-//! in `TEXT_STRONG` at `W_STRONG` and the one close control, `×` with the
-//! tooltip `Close esc`) over a `FLOAT_RULE`; a scrolling body; a footer
-//! pinned under a `FLOAT_RULE`. Inside: rows and rules, words for controls.
+//! in `INK_STRONG` at `W_LABEL` and the one close control, `×` with the
+//! tooltip `Close esc`) over a `FLOAT_EDGE` rule; a scrolling body; a footer
+//! pinned under a `FLOAT_EDGE` rule. Inside: rows and rules, words for controls.
 
 use gpui::prelude::*;
 use gpui::{div, px, rgb, App, Div, SharedString};
@@ -47,14 +47,14 @@ fn sheet_frame(width: f32) -> Div {
         .w(px(width))
         .max_w(gpui::relative(MODAL_VIEWPORT_FRACTION))
         .overflow_hidden()
-        .rounded(px(R_BLOCK))
-        .bg(FLOAT_GROUND)
+        .rounded(px(R_FLOAT))
+        .bg(paint::FLOAT)
         .border_1()
-        .border_color(FLOAT_EDGE)
+        .border_color(paint::FLOAT_EDGE)
         .shadow(components::elevation(components::Elevation::Sheet))
 }
 
-/// A sheet's head: its title, then the close button, over a `FLOAT_RULE`.
+/// A sheet's head: its title, then the close button, over a `FLOAT_EDGE` rule.
 /// The close button's tooltip names `esc`; no keycap repeats it.
 pub fn sheet_head(title: impl Into<SharedString>, close: impl IntoElement) -> Div {
     div()
@@ -70,8 +70,8 @@ pub fn sheet_head(title: impl Into<SharedString>, close: impl IntoElement) -> Di
                 .min_w_0()
                 .flex_1()
                 .truncate()
-                .font_weight(W_STRONG)
-                .text_color(rgb(TEXT_STRONG))
+                .font_weight(W_LABEL)
+                .text_color(rgb(INK_STRONG))
                 .child(title.into()),
         )
         // The kit button's own tooltip takes only a string; the chord
@@ -84,7 +84,7 @@ pub fn sheet_head(title: impl Into<SharedString>, close: impl IntoElement) -> Di
                 .child(close),
         )
         .border_b_1()
-        .border_color(FLOAT_RULE)
+        .border_color(paint::FLOAT_EDGE)
 }
 
 /// A sheet's close button, the one close control on every sheet: the close
@@ -101,7 +101,7 @@ pub fn sheet_close(id: &'static str, label: &'static str, cx: &App) -> Button {
         .child(icon(icons::CLOSE, ICON_BUTTON_GLYPH, ICON_INK))
 }
 
-/// The pinned footer under a `FLOAT_RULE`: secondary actions left, the
+/// The pinned footer under a `FLOAT_EDGE` rule: secondary actions left, the
 /// completing action right. It never scrolls with the body.
 pub fn sheet_footer(left: impl IntoElement, right: impl IntoElement) -> Div {
     div()
@@ -113,7 +113,7 @@ pub fn sheet_footer(left: impl IntoElement, right: impl IntoElement) -> Div {
         .px(px(MODAL_PAD))
         .py(px(MODAL_GAP))
         .border_t_1()
-        .border_color(FLOAT_RULE)
+        .border_color(paint::FLOAT_EDGE)
         .child(left)
         .child(right)
 }
@@ -123,16 +123,16 @@ mod tests {
     use super::*;
 
     /// A sheet is the float's shell at sheet size — the float ground, the
-    /// `FLOAT_EDGE` ring, radius `R_BLOCK`, the one float shadow — over the
+    /// `FLOAT_EDGE` ring, radius `R_FLOAT`, the one float shadow — over the
     /// veil.
     #[test]
     fn the_sheet_is_the_float_over_the_veil() {
         let mut drawn = sheet(SETTINGS_W, SETTINGS_H);
         let style = drawn.style();
-        assert_eq!(style.background, Some(FLOAT_GROUND.into()));
-        assert_eq!(style.border_color, Some(FLOAT_EDGE.into()));
+        assert_eq!(style.background, Some(paint::FLOAT.into()));
+        assert_eq!(style.border_color, Some(paint::FLOAT_EDGE.into()));
         assert_eq!(style.box_shadow, Some(components::float_shadow()));
-        assert_eq!(style.corner_radii.top_left, Some(px(R_BLOCK).into()));
+        assert_eq!(style.corner_radii.top_left, Some(px(R_FLOAT).into()));
         assert_eq!(veil().style().background, Some(gpui::rgba(VEIL).into()));
     }
 }

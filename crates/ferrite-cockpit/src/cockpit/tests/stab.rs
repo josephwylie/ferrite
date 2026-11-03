@@ -103,7 +103,7 @@ fn a_dragged_pane_dims_its_source_until_the_release(cx: &mut TestAppContext) {
 }
 
 /// Native files dragged over a Pane lay the drop sheet over that Pane and
-/// edge its Composer in `TEXT_STRONG`; the sheet follows the pointer to the
+/// edge its Composer in `INK_STRONG`; the sheet follows the pointer to the
 /// next Pane, and leaving the window or dropping clears both.
 #[gpui::test]
 fn files_over_a_pane_edge_its_composer_in_the_accent(cx: &mut TestAppContext) {
@@ -860,7 +860,7 @@ fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
                 &[gpui::TextRun {
                     len: text.len(),
                     font: gpui::font(ferrite_ui::theme::FONT_UI),
-                    color: gpui::rgb(ferrite_ui::theme::TEXT).into(),
+                    color: gpui::rgb(ferrite_ui::theme::INK).into(),
                     background_color: None,
                     underline: None,
                     strikethrough: None,
@@ -1084,7 +1084,7 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
             "keys",
             ui(ferrite_ui::components::key_combo(
                 "cmd-F",
-                ferrite_ui::theme::TEXT,
+                ferrite_ui::theme::INK,
             )),
         ),
         (

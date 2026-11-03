@@ -844,10 +844,10 @@ impl Render for PaneGhost {
             );
         }
         let marker = if self.face.reader {
-            ferrite_ui::icons::icon(ferrite_ui::icons::FILE, theme::ROW_ICON, theme::TEXT_DIM)
+            ferrite_ui::icons::icon(ferrite_ui::icons::FILE, theme::ROW_ICON, theme::INK_SUBTLE)
                 .into_any_element()
         } else {
-            ferrite_ui::components::status_dot(theme::TEXT_DIM).into_any_element()
+            ferrite_ui::components::status_dot(theme::INK_SUBTLE).into_any_element()
         };
         let head = div()
             .flex()
@@ -868,7 +868,7 @@ impl Render for PaneGhost {
                     .font_weight(theme::W_LABEL)
                     .text_size(px(theme::FS_UI))
                     .line_height(px(theme::LH_UI))
-                    .text_color(rgb(theme::TEXT_STRONG))
+                    .text_color(rgb(theme::INK_STRONG))
                     .child(self.face.title.clone()),
             )
             .children(self.face.detail.clone().map(|detail| {
@@ -878,7 +878,7 @@ impl Render for PaneGhost {
                     .truncate()
                     .text_size(px(theme::FS_UI))
                     .line_height(px(theme::LH_UI))
-                    .text_color(rgb(theme::TEXT_DIM))
+                    .text_color(rgb(theme::INK_SUBTLE))
                     .child(detail)
             }));
         let card = div()
@@ -1040,7 +1040,7 @@ fn version_label(version: &str, dev: bool) -> String {
 }
 
 /// A rename editor with its keys beside it while it edits: `↵ save · esc
-/// cancel` in mono `TEXT_DIM`, the `·` in structure ink. The keys live
+/// cancel` in mono `INK_SUBTLE`, the `·` in structure ink. The keys live
 /// here, where they act, rather than on the menu row that opened it.
 fn rename_field(editor: Entity<ferrite_pane::composer::Composer>) -> Div {
     let text = "↵ save · esc cancel";
@@ -1127,7 +1127,7 @@ impl Render for NavDragPreview {
 }
 
 /// What a row says while a drag hovers it: the wash of the answer core
-/// already knows — `DROP_WASH`, `TEXT_STRONG` as a ground, where the drop would
+/// already knows — `DROP_WASH`, `INK_STRONG` as a ground, where the drop would
 /// land, or `BLOCKED_WASH` where core refuses it. The wash alone speaks: a
 /// ring would need an edge the rows do not have, and adding one mid-drag
 /// would move the row.
@@ -3176,9 +3176,9 @@ impl CockpitView {
     }
 
     /// The plan card (`open_plan`): the float grammar's head (`plan · 3/4`),
-    /// then one row per step — done `TEXT_DIM` behind a dim check, the
-    /// step being worked `TEXT_STRONG` behind the strong `❯`, the rest
-    /// `TEXT` behind a faint ring.
+    /// then one row per step — done `INK_SUBTLE` behind a dim check, the
+    /// step being worked `INK_STRONG` behind the strong `❯`, the rest
+    /// `INK` behind a faint ring.
     fn plan_card_element(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
         let thread = self.plan_card?;
@@ -3210,9 +3210,9 @@ impl CockpitView {
             let working = !done && !marked && current == Some(step.text.as_str());
             marked |= working;
             let mark = if done {
-                ferrite_ui::components::glyph("\u{2713}", TEXT_DIM).into_any_element()
+                ferrite_ui::components::glyph("\u{2713}", INK_SUBTLE).into_any_element()
             } else if working {
-                ferrite_ui::components::prompt_mark(TEXT_STRONG)
+                ferrite_ui::components::prompt_mark(INK_STRONG)
             } else {
                 div()
                     .text_color(rgb(TEXT_FAINT))
@@ -3239,11 +3239,11 @@ impl CockpitView {
                             .min_w_0()
                             .truncate()
                             .text_color(rgb(if done {
-                                TEXT_DIM
+                                INK_SUBTLE
                             } else if working {
-                                TEXT_STRONG
+                                INK_STRONG
                             } else {
-                                TEXT
+                                INK
                             }))
                             .child(SharedString::from(step.text.clone())),
                     ),
@@ -4031,7 +4031,7 @@ impl CockpitView {
                     };
                     // A reader is a card beside the Pane, at rest.
                     cell.relative()
-                        .child(pane::card_ring(rgba(ferrite_ui::theme::CARD_RING)))
+                        .child(pane::card_ring(ferrite_ui::theme::paint::CARD_RING))
                 }
             };
             // The cell lies on its track as laid out; gpui rounds its edges
@@ -4062,7 +4062,7 @@ impl CockpitView {
         // At rest the line is nothing: the gutter separates the cards.
         // Under the pointer (any band of the set) and while held, the whole
         // line draws `SEAM_LINE_W` of `SEAM_HOVER`, fading in over
-        // `motion::SEAM_FADE`.
+        // `motion::HOVER_FADE`.
         let seams = tree.seams(bounds, ferrite_ui::theme::BOARD_SEAM, SEAM_GRAB);
         let mut drawn: Vec<SeamId> = Vec::new();
         for seam in &seams {
@@ -4167,10 +4167,7 @@ impl CockpitView {
                         .w(px(band.w))
                         .h(px(band.h))
                         .cursor(cursor)
-                        .on_hover(ferrite_ui::motion::hover_listener_with(
-                            key.clone(),
-                            ferrite_ui::motion::SEAM_FADE,
-                        ))
+                        .on_hover(ferrite_ui::motion::hover_listener(key.clone()))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |view, _: &MouseDownEvent, _, cx| {
@@ -4198,7 +4195,7 @@ impl CockpitView {
                         .top(px(wash.y))
                         .w(px(wash.w))
                         .h(px(wash.h))
-                        .rounded(px(ferrite_ui::theme::R_PANE))
+                        .rounded(px(ferrite_ui::theme::R_CARD))
                         .bg(rgba(ferrite_ui::theme::DROP_WASH))
                         .border_1()
                         .border_color(rgba(ferrite_ui::theme::DROP_EDGE))
@@ -4209,15 +4206,15 @@ impl CockpitView {
                             div()
                                 .px(px(ferrite_ui::theme::DROP_LABEL_PAD_X))
                                 .py(px(ferrite_ui::theme::DROP_LABEL_PAD_Y))
-                                .bg(ferrite_ui::theme::FLOAT_GROUND)
-                                .rounded(px(ferrite_ui::theme::R_BLOCK))
+                                .bg(ferrite_ui::theme::paint::FLOAT)
+                                .rounded(px(ferrite_ui::theme::R_CONTROL))
                                 .border_1()
-                                .border_color(ferrite_ui::theme::FLOAT_EDGE)
+                                .border_color(ferrite_ui::theme::paint::FLOAT_EDGE)
                                 .shadow(ferrite_ui::components::float_shadow())
                                 .font_family(ferrite_ui::theme::FONT_UI)
                                 .text_size(px(ferrite_ui::theme::FS_UI))
                                 .line_height(px(ferrite_ui::theme::LH_UI))
-                                .text_color(rgb(ferrite_ui::theme::TEXT_STRONG))
+                                .text_color(rgb(ferrite_ui::theme::INK_STRONG))
                                 .child(match zone {
                                     Zone::Swap => "swap",
                                     Zone::Split(Edge::Left) => "split left",
@@ -5794,14 +5791,14 @@ impl CockpitView {
         self.cockpit.roster().focused_thread()
     }
 
-    /// The one plane's seams (theme rule 2): a `BORDER` hairline the
+    /// The one plane's seams (theme rule 2): a `LINE` hairline the
     /// window's width under the head row, and from it down to the bottom
     /// bar's rule, one at the nav's edge and one at the panel's. They paint
     /// over the regions and take no pointer, so a region needs no edge of
     /// its own.
     fn plane_seams(&self, panel_w: f32) -> gpui::Div {
         use ferrite_ui::theme::{paint, HAIRLINE_W, STATUS_BAR_H, WIN_CHROME_H};
-        let line = || div().absolute().bg(paint::HAIRLINE);
+        let line = || div().absolute().bg(paint::LINE);
         let column = |at: gpui::Div| {
             at.top(px(WIN_CHROME_H))
                 .bottom(px(STATUS_BAR_H + HAIRLINE_W))
@@ -5841,7 +5838,7 @@ impl CockpitView {
         let veil = self.board_swap.veil((view, thread), window, cx);
         // A Group's cells are rounded; a Solo Pane is the square plane.
         let radius = if self.grid_board() {
-            ferrite_ui::theme::R_PANE
+            ferrite_ui::theme::R_CARD
         } else {
             0.0
         };
@@ -8574,7 +8571,7 @@ impl CockpitView {
         .enumerate()
         .map(|(at, (label, mark))| ferrite_ui::components::Choice {
             label: label.into(),
-            icon: Some((mark, ferrite_ui::theme::TEXT_DIM)),
+            icon: Some((mark, ferrite_ui::theme::INK_SUBTLE)),
             // The key that does it from anywhere (the menu's digits are
             // the modes'; this one is a chord).
             shortcut: (at == 0)
@@ -12076,31 +12073,31 @@ impl CockpitView {
             ferrite_ui::components::faded_button(
                 id,
                 gpui::rgba(ferrite_ui::theme::TRANSPARENT).into(),
-                ferrite_ui::theme::FLOAT_HOVER.into(),
-                ferrite_ui::theme::FLOAT_SEL.into(),
-                rgb(ferrite_ui::theme::TEXT_DIM).into(),
+                ferrite_ui::theme::paint::FLOAT_HOVER.into(),
+                ferrite_ui::theme::paint::FLOAT_SEL.into(),
+                rgb(ferrite_ui::theme::INK_SUBTLE).into(),
                 cx,
             )
             .h(px(ferrite_ui::theme::TOKEN_H))
             .px(px(ferrite_ui::theme::TOKEN_PAD_X))
-            .rounded(px(ferrite_ui::theme::R_SMALL))
+            .rounded(px(ferrite_ui::theme::R_CONTROL))
             .child(ferrite_ui::components::text_meta().child(verb))
         };
         // A card-wide verb is a whole float row: one row, the rows' inset,
-        // `TEXT`, `FLOAT_HOVER` under the pointer.
+        // `INK`, `FLOAT_HOVER` under the pointer.
         let action_row = |id: SharedString, verb: &'static str| {
             ferrite_ui::components::form_button(id, cx)
                 .h(px(ferrite_ui::theme::FLOAT_ROW_H))
                 .mx(px(ferrite_ui::theme::FLOAT_PAD))
                 .px(px(ferrite_ui::theme::MENU_ROW_PAD_X))
-                .rounded(px(ferrite_ui::theme::R_MENU_ROW))
+                .rounded(px(ferrite_ui::theme::R_CONTROL))
                 .child(
                     div()
                         .flex()
                         .w_full()
                         .text_size(px(ferrite_ui::theme::FS_UI))
                         .line_height(px(ferrite_ui::theme::LH_UI))
-                        .text_color(rgb(ferrite_ui::theme::TEXT))
+                        .text_color(rgb(ferrite_ui::theme::INK))
                         .child(verb),
                 )
         };
@@ -12151,7 +12148,7 @@ impl CockpitView {
                 .h(px(ferrite_ui::theme::FLOAT_ROW_H))
                 .mx(px(ferrite_ui::theme::FLOAT_PAD))
                 .px(px(ferrite_ui::theme::MENU_ROW_PAD_X))
-                .rounded(px(ferrite_ui::theme::R_MENU_ROW))
+                .rounded(px(ferrite_ui::theme::R_CONTROL))
                 .accessibility_label(mode.label.clone())
                 .child(
                     div()
@@ -12168,16 +12165,16 @@ impl CockpitView {
                                 .text_size(px(ferrite_ui::theme::FS_UI))
                                 .line_height(px(ferrite_ui::theme::LH_UI))
                                 .text_color(rgb(if checked {
-                                    ferrite_ui::theme::TEXT_STRONG
+                                    ferrite_ui::theme::INK_STRONG
                                 } else {
-                                    ferrite_ui::theme::TEXT
+                                    ferrite_ui::theme::INK
                                 }))
                                 .child(mode.label),
                         )
                         .children(checked.then(|| {
                             ferrite_ui::components::glyph(
                                 "\u{2713}",
-                                ferrite_ui::theme::TEXT_STRONG,
+                                ferrite_ui::theme::INK_STRONG,
                             )
                         })),
                 )
@@ -12237,7 +12234,7 @@ impl CockpitView {
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_color(rgb(ferrite_ui::theme::TEXT))
+                        .text_color(rgb(ferrite_ui::theme::INK))
                         // A long server name gives way to its state and
                         // actions; the whole of it is one hover away.
                         .tooltip(ferrite_ui::menu::tooltip(server.name.clone()))
@@ -12254,7 +12251,7 @@ impl CockpitView {
                             .text_color(rgb(if server.status == ferrite_core::McpStatus::Failed {
                                 ferrite_ui::theme::BLOCKED
                             } else {
-                                ferrite_ui::theme::TEXT_DIM
+                                ferrite_ui::theme::INK_SUBTLE
                             }))
                             .child(word),
                     )
@@ -12352,7 +12349,7 @@ impl CockpitView {
                             + ferrite_ui::theme::CH))
                         .pr(px(ferrite_ui::theme::FLOAT_PAD_X))
                         .text_size(px(ferrite_ui::theme::FS_UI))
-                        .text_color(rgb(ferrite_ui::theme::TEXT_DIM))
+                        .text_color(rgb(ferrite_ui::theme::INK_SUBTLE))
                         .whitespace_normal()
                         .child(error.clone()),
                 );
@@ -12389,7 +12386,7 @@ impl CockpitView {
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_color(rgb(ferrite_ui::theme::TEXT))
+                        .text_color(rgb(ferrite_ui::theme::INK))
                         .child(task.label.clone()),
                 );
             if working && open.supports_control(ferrite_core::ControlKind::StopTask) {
@@ -13706,7 +13703,7 @@ impl CockpitView {
                 .items_center()
                 .h(px(ferrite_ui::theme::NAV_HEADING_BUTTON))
                 .px(px(ferrite_ui::theme::SPACE_1))
-                .rounded(px(ferrite_ui::theme::R_SMALL))
+                .rounded(px(ferrite_ui::theme::R_CONTROL))
                 .hover_row("notifications-mark-read")
                 .press_row()
                 .font_weight(ferrite_ui::theme::W_BODY)

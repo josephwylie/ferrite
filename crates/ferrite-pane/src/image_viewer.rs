@@ -9,8 +9,8 @@
 //!
 //! The image lies centred on the card's ground, fitted inside
 //! `IMAGE_INSET` and never drawn past its own size (an image pixel to a
-//! point), at `R_CHIP` with a 1px white-at-10% ring
-//! (`paint::HAIRLINE_STRONG`) for its edge on the dark ground. A click
+//! point), at `R_CONTROL` with a 1px white-at-10% ring
+//! (`paint::LINE`) for its edge on the dark ground. A click
 //! toggles fit and actual size, holding the point under the pointer still;
 //! ⌘= and ⌘- step through `IMAGE_ZOOM_STOPS` and ⌘0 fits again — each easing
 //! the scale over `motion::IMAGE_ZOOM`, interruptibly (a zoom mid-flight
@@ -461,7 +461,7 @@ impl Render for ImageViewer {
                 .opacity(shown)
                 .child(
                     div()
-                        .text_color(rgb(theme::TEXT_DIM))
+                        .text_color(rgb(theme::INK_SUBTLE))
                         .child("Could not read this image"),
                 )
                 .child(
@@ -471,7 +471,7 @@ impl Render for ImageViewer {
                         .px(px(theme::CH))
                         .child(ferrite_ui::components::form_label(
                             "open original",
-                            theme::TEXT_DIM,
+                            theme::INK_SUBTLE,
                         ))
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();
@@ -541,11 +541,11 @@ fn offset(by: Point<Pixels>) -> Point<f32> {
     point(f32::from(by.x), f32::from(by.y))
 }
 
-/// One picture `size` large: the image filling it at `R_CHIP`, its edge
+/// One picture `size` large: the image filling it at `R_CONTROL`, its edge
 /// ringed just inside by the strong hairline (white at 10%), so it holds
 /// its shape on the dark ground whatever its own edge is.
 fn picture(path: PathBuf, size: Size<Pixels>, opacity: f32) -> AnyElement {
-    let radius = px(theme::R_CHIP);
+    let radius = px(theme::R_CONTROL);
     let id = gpui::SharedString::from(format!("image-viewer-{}", path.display()));
     div()
         .debug_selector(|| "image-viewer-picture".into())
@@ -566,7 +566,7 @@ fn picture(path: PathBuf, size: Size<Pixels>, opacity: f32) -> AnyElement {
                 .inset_0()
                 .rounded(radius)
                 .border_1()
-                .border_color(theme::paint::HAIRLINE_STRONG),
+                .border_color(theme::paint::LINE),
         )
         .into_any_element()
 }

@@ -39,7 +39,7 @@ const THUMB_ACTIVE_WIDTH: Pixels = px(theme::SCROLLBAR_THUMB_W_HOVER);
 const THUMB_ACTIVE_RADIUS: Pixels = px(theme::SCROLLBAR_THUMB_W_HOVER / 2.);
 
 /// C26: a thumb holds `MOTION_SCROLLBAR_LINGER_MS` (1.4s) after the last
-/// scroll frame, then fades over the one hover blend (150ms): gone by 1.55s.
+/// scroll frame, then fades over the one hover blend (100ms): gone by 1.5s.
 const FADE_OUT_DELAY: f32 = theme::MOTION_SCROLLBAR_LINGER_MS as f32 / 1000.0;
 const FADE_OUT_DURATION: f32 = FADE_OUT_DELAY + theme::MOTION_HOVER_FADE_MS as f32 / 1000.0;
 
@@ -632,7 +632,7 @@ impl Element for Scrollbar {
                         state.set(state.get().with_last_scroll_time(Some(Instant::now())));
                         idle_state = self.style_for_normal(cx);
                     } else if let Some(last_time) = state.get().last_scroll_time {
-                        // Hold 1.4s, then fade out over 150ms (C26).
+                        // Hold 1.4s, then fade out over 100ms (C26).
                         let elapsed = Instant::now().duration_since(last_time).as_secs_f32();
                         if is_hovered_on_bar {
                             state.set(state.get().with_last_scroll_time(Some(Instant::now())));
@@ -1115,7 +1115,7 @@ mod tests {
     }
 
     /// C26: after a scroll the thumb holds for 1.4s at full ink, fades on
-    /// the hover blend, and is gone (nothing drawn, no frame) by 1.55s.
+    /// the hover blend, and is gone (nothing drawn, no frame) by 1.5s.
     #[test]
     fn the_idle_thumb_lingers_then_fades_and_is_gone() {
         assert_eq!(idle_thumb_opacity(0.0, false), Some(1.0));

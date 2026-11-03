@@ -2,8 +2,8 @@
 //!
 //! Solo's Composer (`box_composer`) carries its controls; a Group Pane's is
 //! the input, and on the focused Pane the queued row. One 38px input row,
-//! `COMPACT_COMPOSER_INSET` in from the card's sides and foot, at `R_BLOCK`
-//! on `FIELD_COMPACT`, inside a 1px ring just outside it (`COMPACT_RING`,
+//! `COMPACT_COMPOSER_INSET` in from the card's sides and foot, at `R_FLOAT`
+//! on `FIELD_COMPACT`, inside a 1px ring just outside it (`LINE`,
 //! `COMPACT_RING_FOCUSED` on the focused Pane). While something is queued
 //! the focused Pane's box grows by Solo's queued row (`queued_row`, its
 //! hairline under it) above the input. The input is Geist 13; its
@@ -91,7 +91,7 @@ pub(super) fn compact_composer(
     } else if focused {
         theme::COMPACT_RING_FOCUSED
     } else {
-        theme::COMPACT_RING
+        theme::paint::LINE.rgba()
     };
     let geometry = view.geometry.clone();
     let row = div()
@@ -129,16 +129,16 @@ pub(super) fn compact_composer(
         .flex_col()
         .min_w_0()
         .mx(px(theme::COMPACT_COMPOSER_INSET))
-        .rounded(px(theme::R_BLOCK))
+        .rounded(px(theme::R_FLOAT))
         .bg(theme::paint::FIELD_COMPACT)
         .font_family(theme::FONT_UI)
         .font_weight(theme::W_BODY)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(TEXT))
+        .text_color(rgb(INK))
         .when(decision.is_some(), |field| field.key_context("Decision"))
         // Its ring takes no layout, so the box keeps its 38.
-        .child(components::outer_ring(theme::R_BLOCK, rgba(ring)))
+        .child(components::outer_ring(theme::R_FLOAT, rgba(ring)))
         .children(queue)
         .child(row);
     let mut field = components::on_bounds(field, move |bounds, _, _| {

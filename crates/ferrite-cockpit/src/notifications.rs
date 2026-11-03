@@ -596,7 +596,7 @@ impl Default for NeedsYou {
 
 /// A row's or toast's mark, typed in its 2-cell column: `◆` for an
 /// approval and `?` for a question, both `ATTENTION`; `✗` `BLOCKED` for a
-/// failure; `✓` `TEXT_DIM` for a turn that finished.
+/// failure; `✓` `INK_SUBTLE` for a turn that finished.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Mark(&'static str, u32);
 
@@ -605,7 +605,7 @@ fn mark(state: State) -> Mark {
         State::NeedsYou(RequestKind::Permission) => Mark("\u{25c6}", ATTENTION),
         State::NeedsYou(RequestKind::Question) => Mark("?", ATTENTION),
         State::Failed => Mark("\u{2717}", BLOCKED),
-        State::Done => Mark("\u{2713}", TEXT_DIM),
+        State::Done => Mark("\u{2713}", INK_SUBTLE),
     }
 }
 
@@ -639,9 +639,9 @@ pub fn fold(rows: Vec<Row>) -> Vec<Row> {
 // ---------------------------------------------------------------- toasts
 
 /// A quick answer's button: the word (sentence case, a button's) in `ink`,
-/// then its key as a hint in `TEXT_DIM` (`Allow 1`, `Open ⏎`), on a
-/// `TOKEN_H` button of the float's raised fill (`FLOAT_BAND2`), radius
-/// `R_SMALL`.
+/// then its key as a hint in `INK_SUBTLE` (`Allow 1`, `Open ⏎`), on a
+/// `TOKEN_H` button of the float's hover fill (`paint::FLOAT_HOVER`), radius
+/// `R_CONTROL`.
 fn quick_pill(key: &'static str, word: &'static str, ink: gpui::Hsla) -> Div {
     div()
         .flex()
@@ -651,15 +651,15 @@ fn quick_pill(key: &'static str, word: &'static str, ink: gpui::Hsla) -> Div {
         .gap(px(SPACE_1_5))
         .h(px(TOKEN_H))
         .px(px(TOKEN_PAD_X))
-        .rounded(px(R_SMALL))
-        .bg(FLOAT_BAND2)
+        .rounded(px(R_CONTROL))
+        .bg(paint::FLOAT_HOVER)
         .whitespace_nowrap()
         .child(div().text_color(ink).child(word))
-        .child(components::glyph(key, TEXT_DIM))
+        .child(components::glyph(key, INK_SUBTLE))
 }
 
 /// A quick answer in a toast: its pill, under the pointer a step up and
-/// the word `TEXT_STRONG`, over the one blend (`hover_quick`).
+/// the word `INK_STRONG`, over the one blend (`hover_quick`).
 fn quick_button(
     id: impl Into<gpui::ElementId>,
     key: &'static str,
@@ -667,7 +667,7 @@ fn quick_button(
 ) -> Stateful<Div> {
     let id = id.into();
     let blend = ferrite_ui::pointer::hover_key(&id);
-    let ink = ferrite_ui::motion::hover_blend(&blend, rgb(TEXT).into(), rgb(TEXT_STRONG).into());
+    let ink = ferrite_ui::motion::hover_blend(&blend, rgb(INK).into(), rgb(INK_STRONG).into());
     quick_pill(key, word, ink)
         .id(id)
         .hover_quick(blend)
@@ -703,7 +703,7 @@ fn toast_card(row: &Row, handle: Option<Handle>, width: f32) -> Div {
                 div()
                     .flex_shrink_0()
                     .whitespace_nowrap()
-                    .text_color(rgb(TEXT))
+                    .text_color(rgb(INK))
                     .child(format!("{tool} wants to run\u{a0}")),
             )
             .child(
@@ -717,7 +717,7 @@ fn toast_card(row: &Row, handle: Option<Handle>, width: f32) -> Div {
         detail => div()
             .min_w_0()
             .truncate()
-            .text_color(rgb(TEXT))
+            .text_color(rgb(INK))
             .child(SharedString::from(detail.text()))
             .into_any_element(),
     };
@@ -741,7 +741,7 @@ fn toast_card(row: &Row, handle: Option<Handle>, width: f32) -> Div {
     answers.push(("toast-open", "\u{23ce}", "Open", row.open_verb()));
     let buttons = answers.into_iter().map(|(name, key, word, verb)| {
         let Some(handle) = handle.clone() else {
-            return quick_pill(key, word, rgb(TEXT).into()).into_any_element();
+            return quick_pill(key, word, rgb(INK).into()).into_any_element();
         };
         quick_button((name, thread), key, word)
             .debug_selector(move || format!("{name}-{thread}"))
@@ -784,7 +784,7 @@ fn toast_card(row: &Row, handle: Option<Handle>, width: f32) -> Div {
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_color(rgb(TEXT_DIM))
+                                .text_color(rgb(INK_SUBTLE))
                                 .child(SharedString::from(format!(" \u{b7} {}", row.title))),
                         ),
                 ),
@@ -1024,9 +1024,9 @@ mod tests {
         let done = row(State::Done, Detail::None);
         assert_eq!(
             (done.word(), word_ink(done.word())),
-            (words::DONE, TEXT_DIM)
+            (words::DONE, INK_SUBTLE)
         );
-        assert_eq!(mark(State::Done), Mark("\u{2713}", TEXT_DIM));
+        assert_eq!(mark(State::Done), Mark("\u{2713}", INK_SUBTLE));
         const { assert!(ROW_TEXT_CELLS >= 40) };
     }
 

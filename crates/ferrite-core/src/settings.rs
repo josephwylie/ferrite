@@ -67,7 +67,7 @@ pub struct Settings {
     pub placeholder_suggestions: bool,
     /// The transcript's text size, in every Pane: the answer prose in px,
     /// one of `ReadingSize::STEPS`; every other transcript measure scales
-    /// from it. Default: 13, the chrome's own size (an explicitly saved size
+    /// from it. Default: 14, the chrome's own size (an explicitly saved size
     /// is kept as it was).
     pub reading_size: ReadingSize,
     /// Whether a newer provider CLI is installed without asking, once no
@@ -163,7 +163,7 @@ impl ForgeHosts {
 }
 
 /// The transcript's text size in px, independent of provider and Thread:
-/// a browser-style zoom over `STEPS`, 13 the standard (the chrome's grid).
+/// a browser-style zoom over `STEPS`, 14 the standard (the chrome's size).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ReadingSize(u8);
@@ -172,7 +172,7 @@ impl ReadingSize {
     /// The sizes cmd-= and cmd-- step through: one pixel at a time where a
     /// pixel is a visible step, two above 16.
     pub const STEPS: [u8; 9] = [12, 13, 14, 15, 16, 18, 20, 22, 24];
-    pub const STANDARD: ReadingSize = ReadingSize(13);
+    pub const STANDARD: ReadingSize = ReadingSize(14);
     pub const SMALLEST: ReadingSize = ReadingSize(Self::STEPS[0]);
     pub const LARGEST: ReadingSize = ReadingSize(Self::STEPS[Self::STEPS.len() - 1]);
 
@@ -182,7 +182,7 @@ impl ReadingSize {
             .iter()
             .copied()
             .min_by_key(|step| (i16::from(*step) - i16::from(px)).abs())
-            .unwrap_or(13);
+            .unwrap_or(Self::STANDARD.0);
         ReadingSize(step)
     }
 
@@ -195,7 +195,7 @@ impl ReadingSize {
         let at = Self::STEPS
             .iter()
             .position(|step| *step == self.0)
-            .unwrap_or(1) as i32;
+            .unwrap_or(2) as i32;
         let to = (at + delta).clamp(0, Self::STEPS.len() as i32 - 1) as usize;
         ReadingSize(Self::STEPS[to])
     }
@@ -563,10 +563,10 @@ mod tests {
     #[test]
     fn the_reading_size_steps_and_stops_at_its_ends() {
         let standard = ReadingSize::STANDARD;
-        assert_eq!(standard.px(), 13, "the standard is the chrome's 13");
-        assert_eq!(standard.step(1).px(), 14);
-        assert_eq!(standard.step(-1).px(), 12);
-        assert_eq!(standard.step(3).px(), 16);
+        assert_eq!(standard.px(), 14, "the standard is the chrome's 14");
+        assert_eq!(standard.step(1).px(), 15);
+        assert_eq!(standard.step(-1).px(), 13);
+        assert_eq!(standard.step(3).px(), 18);
         // A saved size is read as it was saved, never migrated.
         assert_eq!(ReadingSize::nearest(14).px(), 14);
         assert_eq!(ReadingSize::LARGEST.step(1), ReadingSize::LARGEST);

@@ -91,7 +91,7 @@ pub fn working_tail(facts: WorkingFacts) -> Option<crate::transcript::Transcript
 /// The working line's shape while a Session starts: nothing the provider
 /// says yet, so Ferrite's own mark holds the gutter — its shards snapping on
 /// the focused Pane, assembled and still elsewhere and under reduced motion
-/// — and `Starting` in `TEXT_DIM`, on the working line's own line (Solo's
+/// — and `Starting` in `INK_SUBTLE`, on the working line's own line (Solo's
 /// or a Group Pane's), so the line never shifts when the turn's words
 /// replace it. Its element id is a constant: the timeline has to survive
 /// every re-render of the line.
@@ -121,7 +121,7 @@ pub(super) fn starting_line(still: bool, solo: bool) -> Div {
         .font_family(theme::FONT_UI)
         .text_size(px(grid.activity().size))
         .line_height(px(grid.line))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(
             div()
                 .flex()
@@ -187,7 +187,7 @@ impl RenderOnce for LiveClock {
 }
 
 /// The working line with no provider known: the spinner and caption in
-/// `TEXT_DIM` (the L2 cell's, retired with it; kept for the tests).
+/// `INK_SUBTLE` (the L2 cell's, retired with it; kept for the tests).
 #[cfg(test)]
 pub(super) fn working_row(
     transcript: &Transcript,
@@ -215,8 +215,8 @@ pub(super) fn working_row(
 /// live caption in its colour — the turn's spinner verb (`Reticulating…`,
 /// `progress::spinner_verb`, held for the whole turn) unless the provider
 /// has something better to say (R16) — then `1m04s · ↑ 4.1k tokens` in
-/// `TEXT_DIM`, and, where no stop button stands for the key (`interrupt`),
-/// `esc to interrupt` (`TEXT_DIM`) at the line's right. Every working line's spinner cycles,
+/// `INK_SUBTLE`, and, where no stop button stands for the key (`interrupt`),
+/// `esc to interrupt` (`INK_SUBTLE`) at the line's right. Every working line's spinner cycles,
 /// on the one shared clock, so all of them show the same frame (the
 /// prototype's `.spin`); only the focused Pane's caption shimmers. The seconds
 /// are whole (`progress::live_seconds`), tabular, so the text changes once a
@@ -401,12 +401,12 @@ impl WorkingLine {
             // the dots' (a working glyph, rule 6).
             let caption = SharedString::from(caption);
             let text = if live {
-                components::shimmer(caption, TEXT)
+                components::shimmer(caption, INK)
             } else {
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(TEXT))
+                    .text_color(rgb(INK))
                     .child(caption)
                     .into_any_element()
             };
@@ -444,7 +444,7 @@ impl WorkingLine {
                             .flex()
                             .flex_shrink_0()
                             .whitespace_nowrap()
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(rgb(INK_SUBTLE))
                             .child("\u{a0}")
                             .children(started.map(live_clock))
                             .children(rest),
@@ -458,7 +458,7 @@ impl WorkingLine {
                             .debug_selector(|| "progress-interrupt".into())
                             .flex_shrink_0()
                             .whitespace_nowrap()
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(rgb(INK_SUBTLE))
                             .child(INTERRUPT_HINT),
                     )
                 });
@@ -488,22 +488,22 @@ fn task_list(plan: &[(String, TaskState)], grid: Grid) -> Div {
         .w_full()
         .min_w_0()
         .p(px(theme::TASK_CARD_PAD))
-        .rounded(px(theme::R_CONTROL))
+        .rounded(px(theme::R_CARD))
         .border_1()
-        .border_color(theme::paint::HAIRLINE)
+        .border_color(theme::paint::CARD_RING)
         .font_family(theme::FONT_UI)
         .text_size(px(grid.activity().size))
         .line_height(px(grid.line))
         .children(plan.iter().map(|(words, state)| {
             let (mark, ink) = match state {
                 TaskState::Done => (
-                    icon(icons::CHECK_CIRCLE, theme::TASK_ICON, TEXT_DIM).into_any_element(),
-                    TEXT_DIM,
+                    icon(icons::CHECK_CIRCLE, theme::TASK_ICON, INK_SUBTLE).into_any_element(),
+                    INK_SUBTLE,
                 ),
-                TaskState::Current => (components::braille_spinner(RUNNING), TEXT_STRONG),
+                TaskState::Current => (components::braille_spinner(RUNNING), INK_STRONG),
                 TaskState::ToDo => (
-                    icon(icons::CIRCLE_DASHED, theme::TASK_ICON, TEXT_DIM).into_any_element(),
-                    TEXT,
+                    icon(icons::CIRCLE_DASHED, theme::TASK_ICON, INK_SUBTLE).into_any_element(),
+                    INK,
                 ),
             };
             div()

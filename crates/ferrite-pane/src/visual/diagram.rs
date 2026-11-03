@@ -272,7 +272,7 @@ fn diagram(drawn: Drawn, size: f32) -> AnyElement {
         .min_w_0()
         .pl(px(2.0 * theme::tx_cell(size)))
         .border_l_1()
-        .border_color(theme::paint::LINE2)
+        .border_color(theme::paint::LINE)
         .child(
             img(drawn.image)
                 .w_full()

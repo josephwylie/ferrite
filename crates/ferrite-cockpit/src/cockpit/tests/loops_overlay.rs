@@ -65,7 +65,7 @@ fn shown_at(draws: &[(std::time::Instant, Option<Caret>)], at: std::time::Instan
 }
 
 /// The focused Composer's caret blinks in the overlay: three turns of the
-/// soft blink draw the overlay and not the Cockpit, and at every instant of
+/// hard blink draw the overlay and not the Cockpit, and at every instant of
 /// the pulse clock's grid the caret on screen is the blink's value there.
 #[gpui::test]
 fn the_caret_blinks_in_the_overlay_and_keeps_its_look(cx: &mut TestAppContext) {
@@ -90,8 +90,8 @@ fn the_caret_blinks_in_the_overlay_and_keeps_its_look(cx: &mut TestAppContext) {
     let (from, draws) = composer.read_with(cx, |composer, _| composer.caret_log());
     let from = from.expect("focus restarted the blink");
     assert!(
-        draws.len() >= 3 * 5 && draws.len() <= 3 * 8 + 2,
-        "{} caret draws in three turns: the fades' instants, not the plateaus'",
+        draws.len() >= 3 * 2 && draws.len() <= 3 * 4 + 2,
+        "{} caret draws in three turns: the steps' instants, not the halves'",
         draws.len()
     );
     let (epoch, tick) = cx

@@ -61,14 +61,14 @@ fn colour(name: &str, scheme: Scheme) -> Option<String> {
         ("bg", Dark) => theme::CARD,
         ("band", Dark) => theme::FRAME,
         ("band2", Dark) => theme::FIELD,
-        ("fg", Dark) => theme::TEXT,
-        ("strong", Dark) => theme::TEXT_STRONG,
-        ("muted", Dark) => theme::TEXT_DIM,
+        ("fg", Dark) => theme::INK,
+        ("strong", Dark) => theme::INK_STRONG,
+        ("muted", Dark) => theme::INK_SUBTLE,
         ("faint", Dark) => theme::TEXT_FAINT,
         ("border", Dark) => theme::LINE,
-        ("border2", Dark) => theme::LINE2,
+        ("border2", Dark) => theme::LINE,
         // No accent hue (ADR 0033): the interactive ink is the strongest.
-        ("accent", Dark) => theme::TEXT_STRONG,
+        ("accent", Dark) => theme::INK_STRONG,
         ("on-accent", Dark) => theme::ON_PRIMARY,
         ("float", Dark) => theme::FLOAT,
         ("red", Dark) => theme::RED,
@@ -207,11 +207,11 @@ mod tests {
         assert_eq!(value("bg", Scheme::Dark, reading).unwrap(), hex(theme::CARD));
         assert_eq!(
             value("accent", Scheme::Dark, reading).unwrap(),
-            hex(theme::TEXT_STRONG)
+            hex(theme::INK_STRONG)
         );
         assert_eq!(
             value("fg", Scheme::Dark, reading).unwrap(),
-            hex(theme::TEXT)
+            hex(theme::INK)
         );
         assert_eq!(
             value("font-size", Scheme::Dark, reading).unwrap(),

@@ -16,8 +16,8 @@
 //! `cockpit.rs`, the same split `pane_cell` uses.
 //!
 //! **A list on the frame.** The column is `paint::FRAME` from the window's
-//! top. Rows are rounded, wear `paint::RAISED` under the pointer (80ms) and
-//! `paint::SELECTED` with an inset `ROW_RING` when they stand for what the
+//! top. Rows are rounded, wear `paint::RAISED` under the pointer (the one 100ms hover blend) and
+//! `paint::SELECTED` with an inset `LINE` ring when they stand for what the
 //! board shows: the Solo Thread's row, or the shown Group's. A Thread row
 //! is one quiet line, as Claude's list: its title, and at its right one
 //! mark when a state is worth saying (`state_mark`). Under the pointer a
@@ -136,10 +136,6 @@ const INNER_W: f32 = WIDTH - 2.0 * NAV_COL_PAD;
 
 const COLLAPSE_KEY: &str = "nav-collapse";
 
-/// A nav row's hover wash.
-pub(crate) const ROW_HOVER: MotionSpec = MotionSpec::new(MOTION_NAV_HOVER_MS, motion::EASE);
-/// An icon button's hover, ground and glyph.
-pub(crate) const DOOR_HOVER: MotionSpec = MotionSpec::new(MOTION_NAV_DOOR_MS, motion::EASE);
 /// The column's content fading as it folds or opens, on its own clock
 /// apart from the width's ride.
 pub(crate) const CONTENT_FADE: MotionSpec = MotionSpec::new(MOTION_NAV_FADE_MS, motion::EASE);
@@ -268,7 +264,7 @@ impl ProjectSection {
                     .map(|(branch, _)| short_branch(branch))
             })
             .unwrap_or_else(|| self.count.to_string().into());
-        (text, TEXT_DIM)
+        (text, INK_SUBTLE)
     }
 }
 
@@ -673,7 +669,7 @@ fn trailing(text: impl Into<SharedString>, size: f32, ink: u32) -> Div {
 // ------------------------------------------------------------- the rows
 
 /// The nav's one pointer role: nothing at rest, `paint::RAISED` under the
-/// pointer reaching full in 80ms, and the selected row `paint::SELECTED`
+/// pointer reaching full in 100ms, and the selected row `paint::SELECTED`
 /// whatever the pointer does (its ring is `selection_ring`). The pointer
 /// stays the arrow.
 fn wash<E: Styled + InteractiveElement>(mut element: E, key: SharedString, selected: bool) -> E {
@@ -693,11 +689,11 @@ fn wash<E: Styled + InteractiveElement>(mut element: E, key: SharedString, selec
     }
     element
         .interactivity()
-        .on_hover(motion::hover_listener_with(key, ROW_HOVER));
+        .on_hover(motion::hover_listener(key));
     element
 }
 
-/// The selected row's inset 1px `ROW_RING`, laid over the row so it moves
+/// The selected row's inset 1px `LINE` ring, laid over the row so it moves
 /// nothing.
 fn selection_ring() -> Div {
     div()
@@ -705,7 +701,7 @@ fn selection_ring() -> Div {
         .inset_0()
         .rounded(px(R_CONTROL))
         .border_1()
-        .border_color(rgba(ROW_RING))
+        .border_color(paint::LINE)
 }
 
 /// The frame every row shares: rounded, washed under the pointer.
@@ -792,7 +788,7 @@ pub fn shell(width: f32) -> Div {
         .font_family(FONT_UI)
         .text_size(px(FS_UI))
         .line_height(px(NAV_LINE))
-        .text_color(rgb(TEXT))
+        .text_color(rgb(INK))
 }
 
 /// The column's ground: `paint::FRAME`, top to bottom — what the host's
@@ -845,8 +841,8 @@ pub fn head(drag: impl IntoElement, toggle: impl IntoElement) -> Div {
 }
 
 /// An icon button of the column (the toggle, the gear, the heading's `+`):
-/// `size` square, its glyph `TEXT_DIM`, under the pointer `paint::RAISED`
-/// and the glyph `TEXT`, both over 100ms.
+/// `size` square, its glyph `INK_SUBTLE`, under the pointer `paint::RAISED`
+/// and the glyph `INK`, both over 100ms.
 pub fn icon_button(
     key: impl Into<SharedString>,
     glyph: &'static str,
@@ -873,10 +869,10 @@ pub fn icon_button(
                 t,
             ))
         })
-        .on_hover(motion::hover_listener_with(blend, DOOR_HOVER))
-        .child(icon(glyph, glyph_size, TEXT_DIM).text_color(motion::mix(
-            rgb(TEXT_DIM).into(),
-            rgb(TEXT).into(),
+        .on_hover(motion::hover_listener(blend))
+        .child(icon(glyph, glyph_size, INK_SUBTLE).text_color(motion::mix(
+            rgb(INK_SUBTLE).into(),
+            rgb(INK).into(),
             t,
         )))
 }
@@ -894,7 +890,7 @@ pub fn collapse_button(rail: bool) -> Stateful<Div> {
         icons::SIDEBAR,
         NAV_TOGGLE_GLYPH,
         ICON_BUTTON,
-        R_TAB,
+        R_CONTROL,
     )
     .tooltip(ferrite_ui::menu::action_tooltip(
         "Toggle sidebar",
@@ -926,7 +922,7 @@ pub fn views(rows: Vec<AnyElement>) -> Div {
 }
 
 /// One view row: its 15px icon in `ICON_INK`, its label in primary ink
-/// (`TEXT_STRONG`, as the reference app's rows) and its trailing item;
+/// (`INK_STRONG`, as the reference app's rows) and its trailing item;
 /// under the pointer `paint::RAISED`, the active view `SELECTED`. What a
 /// view holds for the operator its trailing item says (the pill).
 pub fn view_row(
@@ -940,14 +936,14 @@ pub fn view_row(
     let end: Option<AnyElement> = match tail {
         Trailing::None => None,
         Trailing::Chord(keys) => Some(
-            trailing(chord_glyphs(&keys), FS_META, TEXT_DIM)
+            trailing(chord_glyphs(&keys), FS_META, INK_SUBTLE)
                 .debug_selector(move || format!("{key}-chord"))
                 .into_any_element(),
         ),
         Trailing::Pill(0) | Trailing::Count(0) => None,
         Trailing::Pill(count) => Some(pill(count).into_any_element()),
         Trailing::Count(count) => Some(
-            components::tabular(trailing(count.to_string(), FS_META, TEXT_DIM))
+            components::tabular(trailing(count.to_string(), FS_META, INK_SUBTLE))
                 .debug_selector(move || format!("{key}-count"))
                 .into_any_element(),
         ),
@@ -955,7 +951,7 @@ pub fn view_row(
     line_frame(key, blend, active)
         .debug_selector(move || key.into())
         .gap(px(NAV_ICON_GAP))
-        .text_color(rgb(TEXT_STRONG))
+        .text_color(rgb(INK_STRONG))
         .child(div().flex().flex_shrink_0().size(px(NAV_ICON)).child(glyph))
         .child(
             div()
@@ -989,7 +985,7 @@ fn pill(count: usize) -> Div {
             .bg(rgba(NAV_PILL_FILL))
             .text_size(px(FS_BADGE))
             .line_height(px(NAV_PILL))
-            .font_weight(W_STRONG)
+            .font_weight(W_LABEL)
             .text_color(rgb(ATTENTION))
             .child(count.to_string()),
     )
@@ -1003,11 +999,11 @@ fn chord_glyphs(keys: &str) -> String {
 // ------------------------------------------------------------- headings
 
 /// A section heading (§5.1.3): `Projects`, `Groups`, `Recent`, small and
-/// quiet — 12/400 `TEXT_DIM` — with its button (`heading_button`) at the
+/// quiet — 12/400 `INK_SUBTLE` — with its button (`heading_button`) at the
 /// right.
 pub fn heading(key: &'static str, label: &'static str) -> Div {
     heading_frame(key)
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(div().flex_1().child(label))
 }
 
@@ -1026,7 +1022,7 @@ fn heading_frame(key: &'static str) -> Div {
 }
 
 /// A heading whose press folds what it heads (an Attention list section,
-/// `Groups`): `heading`'s line, its label blending to `TEXT` under the
+/// `Groups`): `heading`'s line, its label blending to `INK` under the
 /// pointer, and right after the label its caret (`components::fold_chevron`
 /// at `NAV_HEADING_CARET`): `▸` shut, `▾` open, turning as the fold flips.
 /// The cockpit wires the press.
@@ -1035,8 +1031,8 @@ pub fn fold_heading(key: &'static str, label: &'static str, folded: bool) -> Sta
     let t = motion::hover_t(&blend);
     heading_frame(key)
         .id(key)
-        .text_color(motion::mix(rgb(TEXT_DIM).into(), rgb(TEXT).into(), t))
-        .on_hover(motion::hover_listener_with(blend, ROW_HOVER))
+        .text_color(motion::mix(rgb(INK_SUBTLE).into(), rgb(INK).into(), t))
+        .on_hover(motion::hover_listener(blend))
         .child(
             div()
                 .flex()
@@ -1052,7 +1048,7 @@ pub fn fold_heading(key: &'static str, label: &'static str, folded: bool) -> Sta
                             format!("{key}-chevron"),
                             !folded,
                             NAV_HEADING_CARET,
-                            TEXT_DIM,
+                            INK_SUBTLE,
                         )),
                 ),
         )
@@ -1060,7 +1056,7 @@ pub fn fold_heading(key: &'static str, label: &'static str, folded: bool) -> Sta
 
 /// A heading's 22px icon button (`Projects`' `+`).
 pub fn heading_button(key: &'static str, glyph: &'static str) -> Stateful<Div> {
-    icon_button(key, glyph, NAV_HEADING_GLYPH, NAV_HEADING_BUTTON, R_SMALL)
+    icon_button(key, glyph, NAV_HEADING_GLYPH, NAV_HEADING_BUTTON, R_CONTROL)
 }
 
 /// A row's hover action (§5.1.5): a line-high icon button that stands at
@@ -1070,7 +1066,7 @@ pub fn heading_button(key: &'static str, glyph: &'static str) -> Stateful<Div> {
 pub fn row_action(key: impl Into<SharedString>, glyph: &'static str) -> Stateful<Div> {
     // Its glyph, not its box, meets the row's right padding, where the
     // counts and words it stands in for end.
-    icon_button(key, glyph, NAV_HEADING_GLYPH, NAV_LINE, R_SMALL)
+    icon_button(key, glyph, NAV_HEADING_GLYPH, NAV_LINE, R_CONTROL)
         .mr(px(-(NAV_LINE - NAV_HEADING_GLYPH) / 2.0))
 }
 
@@ -1079,9 +1075,9 @@ fn hovered(key: &SharedString) -> bool {
     motion::hover_t(key) > 0.0
 }
 
-/// A Project heading (§5.1.4): its `folder` icon in `TEXT_DIM`, the label
-/// in 13/500 `TEXT`, and at its right the shared branch's drift. Folded, it
-/// is one quiet row: the label in `TEXT_MUTED` at 400, and at its right
+/// A Project heading (§5.1.4): its `folder` icon in `INK_SUBTLE`, the label
+/// in 13/500 `INK`, and at its right the shared branch's drift. Folded, it
+/// is one quiet row: the label in `INK` at 400, and at its right
 /// what `ProjectSection::folded_summary` says. Under the pointer its
 /// `action` (a new Thread in the Project, `row_action`) stands at its right
 /// instead. The cockpit wires its press to the fold.
@@ -1094,7 +1090,7 @@ pub fn project_section(
     let right = if section.folded {
         Some(section.folded_summary())
     } else {
-        section.drift.clone().map(|drift| (drift, TEXT_DIM))
+        section.drift.clone().map(|drift| (drift, INK_SUBTLE))
     };
     project_row(
         "nav-project-section",
@@ -1125,9 +1121,9 @@ fn project_row(
     measure: &Measure,
 ) -> Stateful<Div> {
     let (ink, weight) = if folded {
-        (TEXT_MUTED, W_BODY)
+        (INK, W_BODY)
     } else {
-        (TEXT_STRONG, W_LABEL)
+        (INK_STRONG, W_LABEL)
     };
     let blend = SharedString::from(format!("{key}-{index}"));
     let action = action.filter(|_| hovered(&blend));
@@ -1281,7 +1277,7 @@ pub fn member_tail(id: GroupId) -> Stateful<Div> {
 }
 
 /// The Group row (§5.1.6), one line: its chevron (`group_fold`) at x 11,
-/// the title — `TEXT_STRONG` 500 while the board shows the Group — and at
+/// the title — `INK_STRONG` 500 while the board shows the Group — and at
 /// the right its roll-up: the worst state's word in its ink, then
 /// `· N threads` dim (`threads_count`). Shown, it takes the selected style
 /// and says only `N threads`: its members say the rest. `depth` levels into the tree, its content moves
@@ -1318,9 +1314,9 @@ pub fn group_row_with_title(
     let mark = roll_up(&row.members).and_then(state_mark);
     let right_w = if mark.is_some() { RIGHT_ROOM } else { 0.0 };
     let (ink, weight) = if row.selected {
-        (TEXT_STRONG, W_LABEL)
+        (INK_STRONG, W_LABEL)
     } else {
-        (TEXT_STRONG, W_BODY)
+        (INK_STRONG, W_BODY)
     };
     let cover = if row.selected {
         1.0
@@ -1351,7 +1347,7 @@ pub fn group_row_with_title(
 
 /// A Group row's chevron, at x 11 from where its row's content starts:
 /// the shared fold chevron (`components::fold_chevron`), turned down while
-/// open (`TEXT_MUTED` on the shown Group, `TEXT_DIM` otherwise). A control
+/// open (`INK` on the shown Group, `INK_SUBTLE` otherwise). A control
 /// of its own — the cockpit wires its press to the fold, which stops
 /// there, so the rest of the row still opens the Group.
 pub fn group_fold(row: &GroupBlock) -> Stateful<Div> {
@@ -1371,7 +1367,7 @@ pub fn group_fold(row: &GroupBlock) -> Stateful<Div> {
             format!("nav-group-chevron-{}", id.get()),
             !row.folded,
             NAV_CHEVRON,
-            if row.selected { TEXT_MUTED } else { TEXT_DIM },
+            if row.selected { INK } else { INK_SUBTLE },
         ))
 }
 
@@ -1428,7 +1424,7 @@ fn guides(key: &str, levels: usize, ends: usize, cover: f32) -> Option<Div> {
                         0.0
                     }))
                     .w(px(NAV_GUIDE_W))
-                    .bg(NAV_GUIDE)
+                    .bg(paint::LINE)
             }))
     })
 }
@@ -1455,17 +1451,17 @@ pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
     )
 }
 
-/// A title's ink and weight (§5.1.5): primary ink (`TEXT_STRONG`), as
+/// A title's ink and weight (§5.1.5): primary ink (`INK_STRONG`), as
 /// the reference app's rows; 500 on the selected row and while a finish is
 /// unseen (the unread rule, said in weight now that every title is
 /// primary); a parked Thread's a step down so what is running reads first.
 fn title_face(row: &ThreadRow) -> (u32, FontWeight) {
     if row.selected || row.status == RowStatus::Done {
-        (TEXT_STRONG, W_LABEL)
+        (INK_STRONG, W_LABEL)
     } else if row.status == RowStatus::Parked {
-        (TEXT_MUTED, W_BODY)
+        (INK, W_BODY)
     } else {
-        (TEXT_STRONG, W_BODY)
+        (INK_STRONG, W_BODY)
     }
 }
 
@@ -1564,7 +1560,7 @@ pub(crate) fn state_mark(status: RowStatus) -> Option<Div> {
             .debug_selector(|| "nav-unread-dot".into())
             .size(px(NAV_UNREAD_DOT))
             .rounded_full()
-            .bg(rgb(TEXT))
+            .bg(rgb(INK))
             .into_any_element(),
         RowStatus::Idle | RowStatus::Parked => return None,
     };
@@ -1615,7 +1611,7 @@ pub fn attention_list(sections: Vec<AnyElement>) -> Div {
 
 /// A Notice under `Recent` in the Inbox (or a request from a
 /// machine off screen above it), two lines: its mark, its title
-/// (`TEXT_STRONG` while unread) and its age, then its state's word and
+/// (`INK_STRONG` while unread) and its age, then its state's word and
 /// detail in the word's ink. The cursor's row is selected.
 pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure) -> Stateful<Div> {
     let key = SharedString::from(format!("notice-row-{index}"));
@@ -1631,7 +1627,7 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
             if cursor {
                 NAV_LINE2_SELECTED
             } else {
-                TEXT_DIM
+                INK_SUBTLE
             }
         }
     };
@@ -1666,7 +1662,7 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
                 .child(fitted(
                     text_w - age_w,
                     FS_UI,
-                    TEXT_STRONG,
+                    INK_STRONG,
                     title_weight,
                     row.title.clone(),
                 ))
@@ -1675,7 +1671,7 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
                         .flex()
                         .flex_1()
                         .justify_end()
-                        .child(components::tabular(trailing(age, FS_META, TEXT_DIM)))
+                        .child(components::tabular(trailing(age, FS_META, INK_SUBTLE)))
                 })),
         )
         .child(div().flex().h(px(NAV_LINE)).child(fitted(
@@ -1697,7 +1693,7 @@ pub fn note(key: &'static str, text: impl Into<SharedString>) -> Div {
         .items_center()
         .h(px(NAV_ROW_H))
         .px(px(NAV_ROW_PAD_X))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(text.into())
 }
 
@@ -1750,7 +1746,7 @@ pub fn loose_ground(index: usize) -> Stateful<Div> {
 }
 
 /// What an empty tree says, sentence case and no full stop: a line in
-/// `TEXT_DIM` and, where there is one, a way forward in the same voice.
+/// `INK_SUBTLE` and, where there is one, a way forward in the same voice.
 /// Filtered to a Project it names the Project rather than shrugging; when
 /// the Parked view holds Threads the filter admits, it says *open* and
 /// offers the door there (`parked_link`, which the cockpit wires). An
@@ -1768,7 +1764,7 @@ pub fn empty_filter(project: Option<&str>, parked: Option<AnyElement>) -> Div {
                 .flex()
                 .items_center()
                 .gap(px(SPACE_1))
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .child(chord_glyphs(&keys))
                 .child("New thread")
                 .into_any_element()
@@ -1786,24 +1782,28 @@ pub fn empty_filter(project: Option<&str>, parked: Option<AnyElement>) -> Div {
         .line_height(px(NAV_LINE))
         .child(
             div()
-                .text_color(rgb(TEXT_DIM))
+                .text_color(rgb(INK_SUBTLE))
                 .child(SharedString::from(message)),
         )
         .children(hint)
 }
 
 /// An empty tree's way to its parked Threads: `Show parked threads`, in
-/// `TEXT_MUTED` blending to `TEXT` under the pointer, a link in the empty
-/// line's voice.
+/// the empty line's `INK_SUBTLE` blending up to `INK` under the pointer, a
+/// link in that line's voice.
 pub fn parked_link() -> Stateful<Div> {
     const KEY: &str = "nav-empty-parked";
     let blend = SharedString::from(KEY);
-    let ink = motion::mix(rgb(TEXT_MUTED).into(), rgb(TEXT).into(), motion::hover_t(&blend));
+    let ink = motion::mix(
+        rgb(INK_SUBTLE).into(),
+        rgb(INK).into(),
+        motion::hover_t(&blend),
+    );
     div()
         .id(KEY)
         .debug_selector(|| KEY.into())
         .text_color(ink)
-        .on_hover(motion::hover_listener_with(blend, ROW_HOVER))
+        .on_hover(motion::hover_listener(blend))
         .child("Show parked threads")
 }
 
@@ -1821,7 +1821,7 @@ pub fn notice(text: SharedString) -> Div {
         .py(px(SPACE_1))
         .text_size(px(FS_META))
         .line_height(px(NAV_LINE))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(
             div()
                 .flex()
@@ -1860,7 +1860,7 @@ pub fn machine_heading(row: &MachineRow, fold: impl IntoElement) -> Stateful<Div
     };
     let glyph = match row.connection {
         Connection::Online => dot(RUNNING),
-        Connection::Connecting => ring(TEXT_DIM),
+        Connection::Connecting => ring(INK_SUBTLE),
         Connection::Attention => dot(ATTENTION),
         Connection::Disabled => ring(TEXT_FAINT),
     };
@@ -1877,10 +1877,10 @@ pub fn machine_heading(row: &MachineRow, fold: impl IntoElement) -> Stateful<Div
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .text_color(rgb(if row.selected { TEXT_STRONG } else { TEXT_DIM }))
+                .text_color(rgb(if row.selected { INK_STRONG } else { INK_SUBTLE }))
                 .child(SharedString::from(row.name.clone())),
         )
-        .children(word.map(|word| trailing(word, FS_META, TEXT_DIM)))
+        .children(word.map(|word| trailing(word, FS_META, INK_SUBTLE)))
 }
 
 /// A machine heading's chevron: its press folds the machine to its
@@ -1894,7 +1894,7 @@ pub fn machine_fold(index: usize, folded: bool) -> Stateful<Div> {
             format!("nav-machine-chevron-{index}"),
             !folded,
             NAV_CHEVRON,
-            TEXT_DIM,
+            INK_SUBTLE,
         ))
 }
 
@@ -1905,7 +1905,7 @@ pub fn machine_thread_row(machine: usize, row: &StatusRow, lost: bool) -> Statef
     let (status, word) = if row.waiting {
         (RowStatus::NeedsYou, Some((words::NEEDS_YOU, ATTENTION)))
     } else if row.working {
-        (RowStatus::Working, Some((words::WORKING, TEXT_DIM)))
+        (RowStatus::Working, Some((words::WORKING, INK_SUBTLE)))
     } else {
         (RowStatus::Idle, None)
     };
@@ -1933,7 +1933,7 @@ pub fn machine_thread_row(machine: usize, row: &StatusRow, lost: bool) -> Statef
 // ------------------------------------------------------------- the foot
 
 /// The foot (§5.1.8), Claude's account row: who is at the machine — their
-/// initial on a `NAV_AVATAR` disc and their name in 13 `TEXT_MUTED` — and
+/// initial on a `NAV_AVATAR` disc and their name in 13 `INK` — and
 /// the gear. The version shows under the pointer, as an app's About would.
 pub fn foot(user: &str, version: &str, gear: impl IntoElement) -> Div {
     let initial: SharedString = user
@@ -1973,7 +1973,7 @@ pub fn foot(user: &str, version: &str, gear: impl IntoElement) -> Div {
                         .bg(paint::SELECTED)
                         .text_size(px(FS_AVATAR))
                         .font_weight(W_LABEL)
-                        .text_color(rgb(TEXT_MUTED))
+                        .text_color(rgb(INK))
                         .child(initial),
                 )
                 .child(
@@ -1982,7 +1982,7 @@ pub fn foot(user: &str, version: &str, gear: impl IntoElement) -> Div {
                         .min_w_0()
                         .truncate()
                         .text_size(px(FS_UI))
-                        .text_color(rgb(TEXT_MUTED))
+                        .text_color(rgb(INK))
                         .child(SharedString::from(user.to_string())),
                 ),
         )
@@ -2001,7 +2001,7 @@ pub fn gear_button() -> Stateful<Div> {
         icons::GEAR,
         NAV_TOGGLE_GLYPH,
         ICON_BUTTON,
-        R_TAB,
+        R_CONTROL,
     )
     .tooltip(ferrite_ui::menu::action_tooltip(
         "Settings",
@@ -2047,7 +2047,7 @@ pub fn rail(scroll: &ScrollHandle, toggle: impl IntoElement) -> Stateful<Div> {
 }
 
 /// One rail cell, 32 high: the Thread's mark (the tree row's own, spinner
-/// included), and under it its ⌘ digit in 11 `TEXT_DIM` where a ⌘ key
+/// included), and under it its ⌘ digit in 11 `INK_SUBTLE` where a ⌘ key
 /// reaches it. It washes and selects as a tree row does.
 pub fn rail_row(row: &RailRow) -> Stateful<Div> {
     let thread = row.thread;
@@ -2073,7 +2073,7 @@ pub fn rail_row(row: &RailRow) -> Stateful<Div> {
                     .debug_selector(move || format!("nav-rail-key-{key}"))
                     .text_size(px(NAV_RAIL_KEY_FS))
                     .line_height(px(NAV_RAIL_KEY_FS + 2.0))
-                    .text_color(rgb(if row.selected { TEXT_STRONG } else { TEXT_DIM }))
+                    .text_color(rgb(if row.selected { INK_STRONG } else { INK_SUBTLE }))
                     .child(key.to_string()),
             )
         }))
@@ -2113,11 +2113,11 @@ pub fn drag_row(row: Stateful<Div>) -> Div {
         .font_family(FONT_UI)
         .text_size(px(FS_UI))
         .line_height(px(NAV_LINE))
-        .text_color(rgb(TEXT))
+        .text_color(rgb(INK))
         .bg(paint::FLOAT)
-        .rounded(px(R_BLOCK))
+        .rounded(px(R_CONTROL))
         .border_1()
-        .border_color(paint::HAIRLINE_STRONG)
+        .border_color(paint::FLOAT_EDGE)
         .shadow(ferrite_ui::components::float_shadow())
         .child(row)
 }
@@ -2239,22 +2239,22 @@ mod tests {
         assert_eq!(fill(thread_row(&thread())), None);
     }
 
-    /// §5.1.5: a title is `TEXT`, `TEXT_STRONG` 500 when selected,
-    /// `TEXT_STRONG` while its finish is unseen, a step down when parked.
+    /// §5.1.5: a title is `INK`, `INK_STRONG` 500 when selected,
+    /// `INK_STRONG` while its finish is unseen, a step down when parked.
     #[test]
     fn titles_follow_selection_unread_and_parked() {
-        assert_eq!(title_face(&thread()), (TEXT_STRONG, W_BODY));
-        assert_eq!(title_face(&selected_thread(true)), (TEXT_STRONG, W_LABEL));
+        assert_eq!(title_face(&thread()), (INK_STRONG, W_BODY));
+        assert_eq!(title_face(&selected_thread(true)), (INK_STRONG, W_LABEL));
         let done = ThreadRow {
             status: RowStatus::Done,
             ..thread()
         };
-        assert_eq!(title_face(&done), (TEXT_STRONG, W_LABEL), "unread in weight");
+        assert_eq!(title_face(&done), (INK_STRONG, W_LABEL), "unread in weight");
         let parked = ThreadRow {
             status: RowStatus::Parked,
             ..thread()
         };
-        assert_eq!(title_face(&parked), (TEXT_MUTED, W_BODY));
+        assert_eq!(title_face(&parked), (INK, W_BODY));
     }
 
     /// N-13: the pointer stays the arrow over every row.
@@ -2449,7 +2449,7 @@ mod tests {
     #[test]
     fn a_folded_heading_says_the_first_thing_it_has() {
         let mut section = heading_of(true);
-        assert_eq!(section.folded_summary(), ("2".into(), TEXT_DIM));
+        assert_eq!(section.folded_summary(), ("2".into(), INK_SUBTLE));
         section.branch = Some(("main".into(), true));
         assert_eq!(section.folded_summary().0, "2", "the default says nothing");
         section.branch = Some(("overnight/coach".into(), false));
@@ -2506,7 +2506,7 @@ mod tests {
         );
         assert_eq!(
             NavTail::Working("1m".into()).member_word(),
-            Some(("1m".into(), ferrite_ui::theme::TEXT_DIM))
+            Some(("1m".into(), ferrite_ui::theme::INK_SUBTLE))
         );
         assert_eq!(NavTail::Age(age()).member_word(), None);
     }
@@ -2672,17 +2672,12 @@ mod tests {
         assert!(long.ends_with('\u{2026}'));
     }
 
-    /// The nav's own clocks: the row wash reaches full in 80ms, an icon
-    /// button in 100ms and the content fades over 150ms, each on CSS
-    /// `ease`.
+    /// The nav's own clock: the content fades over 150ms on CSS `ease`
+    /// (its hovers take the one hover blend, `motion::HOVER_FADE`).
     #[test]
     fn the_nav_keeps_its_clocks() {
-        assert_eq!(ROW_HOVER.duration_ms, 80);
-        assert_eq!(DOOR_HOVER.duration_ms, 100);
         assert_eq!(CONTENT_FADE.duration_ms, 150);
-        for spec in [ROW_HOVER, DOOR_HOVER, CONTENT_FADE] {
-            assert_eq!(spec.curve, motion::EASE);
-        }
+        assert_eq!(CONTENT_FADE.curve, motion::EASE);
     }
 }
 

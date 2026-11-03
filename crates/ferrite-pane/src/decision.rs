@@ -697,7 +697,7 @@ pub fn step_cursor(enabled: &[bool], at: usize, step: isize) -> usize {
 // ------------------------------------------------------------------ frame
 
 /// The Decision box (SPEC §5.9 item 3, Claude's card): `DECISION` ground at
-/// `R_BLOCK` inside a 1px `DECISION_RING`, in Geist 13/20, across the
+/// `R_CARD` inside a 1px `DECISION_RING`, in Geist 13/20, across the
 /// transcript column. Its first child is its head (`head`,
 /// `question_head`), laid as a band across the top; the rest are its body,
 /// padded `DECISION_PAD`, `DECISION_GAP` apart. It keeps the
@@ -717,13 +717,13 @@ pub fn card(serial: u64, children: impl IntoIterator<Item = AnyElement>) -> Stat
         .cursor_default()
         .border_1()
         .border_color(rgba(theme::DECISION_RING))
-        .rounded(px(theme::R_BLOCK))
+        .rounded(px(theme::R_CARD))
         .bg(theme::paint::DECISION)
         .font_family(theme::FONT_UI)
         .font_weight(theme::W_BODY)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(theme::TEXT))
+        .text_color(rgb(theme::INK))
         .children(head)
         .child(
             div()
@@ -751,8 +751,8 @@ pub fn section(element: impl IntoElement) -> Div {
 }
 
 /// The approval head (`Allow Claude to run this command?`): the ask in
-/// `TEXT_STRONG` at `W_LABEL`, and at the right the context in 12
-/// `TEXT_DIM`, then a status, on the card's head band (`head_line`). One
+/// `INK_STRONG` at `W_LABEL`, and at the right the context in 12
+/// `INK_SUBTLE`, then a status, on the card's head band (`head_line`). One
 /// line; a long context ends in an ellipsis.
 pub fn head(
     lead: impl Into<SharedString>,
@@ -793,14 +793,14 @@ fn head_line(
         // body's text edge.
         .px(px(theme::DECISION_PAD - 1.0))
         .py(px(theme::DECISION_HEAD_PAD_Y))
-        .rounded_t(px(theme::R_BLOCK - 1.0))
+        .rounded_t(px(theme::R_CARD - 1.0))
         .bg(gpui::rgba(theme::DECISION_HEAD))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .font_weight(theme::W_LABEL)
-                .text_color(rgb(theme::TEXT_STRONG))
+                .text_color(rgb(theme::INK_STRONG))
                 .when(!wraps, |line| line.truncate())
                 .child(lead),
         )
@@ -810,7 +810,7 @@ fn head_line(
                 .min_w_0()
                 .truncate()
                 .text_size(px(theme::FS_META))
-                .text_color(rgb(theme::TEXT_DIM))
+                .text_color(rgb(theme::INK_SUBTLE))
                 .child(detail)
         }))
         .children(status.map(|status| div().flex_shrink_0().child(status)))
@@ -845,11 +845,11 @@ pub fn status(text: impl Into<SharedString>) -> Div {
     div()
         .debug_selector(|| "decision-status".into())
         .flex_shrink_0()
-        .text_color(rgb(theme::TEXT_DIM))
+        .text_color(rgb(theme::INK_SUBTLE))
         .child(text.into())
 }
 
-/// An answer in flight: a still `RUNNING` dot and `sending`, `TEXT_DIM`.
+/// An answer in flight: a still `RUNNING` dot and `sending`, `INK_SUBTLE`.
 /// Nothing on it moves — a Decision is static (rule 2.10.4).
 pub fn sending() -> Div {
     div()
@@ -858,12 +858,12 @@ pub fn sending() -> Div {
         .flex_shrink_0()
         .items_center()
         .gap(px(theme::CH))
-        .text_color(rgb(theme::TEXT_DIM))
+        .text_color(rgb(theme::INK_SUBTLE))
         .child(components::status_dot(theme::RUNNING))
         .child(theme::words::SENDING)
 }
 
-/// One question of several: `W_STRONG` `TEXT_STRONG` on the grid, on the
+/// One question of several: `W_LABEL` `INK_STRONG` on the grid, on the
 /// prose measure.
 pub fn question_text(text: impl Into<SharedString>) -> Div {
     div()
@@ -871,20 +871,20 @@ pub fn question_text(text: impl Into<SharedString>) -> Div {
         .min_w_0()
         .max_w(px(theme::MEASURE_CH * theme::CH))
         .flex_shrink_0()
-        .font_weight(theme::W_STRONG)
-        .text_color(rgb(theme::TEXT_STRONG))
+        .font_weight(theme::W_LABEL)
+        .text_color(rgb(theme::INK_STRONG))
         .child(text.into())
 }
 
 /// What an approval asks, in prose — a reason the command does not say:
-/// `TEXT` on the grid, on the prose measure.
+/// `INK` on the grid, on the prose measure.
 pub fn prose(text: impl Into<SharedString>) -> Div {
     div()
         .w_full()
         .min_w_0()
         .flex_shrink_0()
         .max_w(px(theme::MEASURE_CH * theme::CH))
-        .text_color(rgb(theme::TEXT))
+        .text_color(rgb(theme::INK))
         .child(text.into())
 }
 
@@ -892,14 +892,14 @@ pub fn prose(text: impl Into<SharedString>) -> Div {
 pub fn note(text: impl Into<SharedString>) -> Div {
     div()
         .flex_shrink_0()
-        .text_color(rgb(theme::TEXT_DIM))
+        .text_color(rgb(theme::INK_SUBTLE))
         .child(text.into())
 }
 
 /// The command well (SPEC §5.9): the exact input in `FONT_CODE` `FS_LABEL`
-/// `TEXT_STRONG` on `SUNKEN` at `R_TAB`, padded `DECISION_WELL_PAD_X` /
+/// `INK_STRONG` on `SUNKEN` at `R_CONTROL`, padded `DECISION_WELL_PAD_X` /
 /// `_Y`. A shell command reads `$ gh issue close 212`: the `$ ` is
-/// `TEXT_DIM` and outside the selectable text, so a copy gives the command
+/// `INK_SUBTLE` and outside the selectable text, so a copy gives the command
 /// alone. A long input scrolls inside it.
 pub fn well(prompt: bool, child: impl IntoElement) -> Div {
     div()
@@ -910,19 +910,19 @@ pub fn well(prompt: bool, child: impl IntoElement) -> Div {
         .flex_shrink_1()
         .min_h(px(theme::DECISION_WELL_MIN_H))
         .overflow_hidden()
-        .rounded(px(theme::R_TAB))
+        .rounded(px(theme::R_CONTROL))
         .bg(theme::paint::SUNKEN)
         .px(px(theme::DECISION_WELL_PAD_X))
         .py(px(theme::DECISION_WELL_PAD_Y))
         .font_family(theme::FONT_CODE)
         .text_size(px(theme::FS_LABEL))
-        .text_color(rgb(theme::TEXT_STRONG))
+        .text_color(rgb(theme::INK_STRONG))
         .when(prompt, |well| {
             well.child(
                 div()
                     .debug_selector(|| "approval-prompt".into())
                     .flex_shrink_0()
-                    .text_color(rgb(theme::TEXT_DIM))
+                    .text_color(rgb(theme::INK_SUBTLE))
                     .child("$\u{a0}"),
             )
         })
@@ -950,7 +950,7 @@ pub struct Row {
     pub code: Option<Range<usize>>,
     pub description: Option<SharedString>,
     pub recommended: bool,
-    /// The row under the cursor: `SELECTED`, its label `TEXT_STRONG`.
+    /// The row under the cursor: `SELECTED`, its label `INK_STRONG`.
     pub cursor: bool,
     /// A question's pick (a multi-select's checked option): a trailing
     /// strong check.
@@ -959,10 +959,10 @@ pub struct Row {
 }
 
 /// One option row (SPEC §5.9) on `gpui_base::Button` (tab stop,
-/// Enter/Space, focus ring): `DECISION_OPTION_H` at `R_TAB`, padded
-/// `DECISION_OPTION_PAD_X`; the key in Geist Mono 12 `TEXT_DIM` in a
+/// Enter/Space, focus ring): `DECISION_OPTION_H` at `R_CONTROL`, padded
+/// `DECISION_OPTION_PAD_X`; the key in Geist Mono 12 `INK_SUBTLE` in a
 /// one-cell column, `DECISION_OPTION_GAP` before the label in Geist 13
-/// `TEXT` (`TEXT_STRONG` under the cursor, `TEXT_DIM` disabled), a pattern
+/// `INK` (`INK_STRONG` under the cursor, `INK_SUBTLE` disabled), a pattern
 /// in Geist Mono 12. The cursor's row is `SELECTED` (selector
 /// `decision-cursor`); under the pointer `RAISED`. No `❯`, no keycaps.
 /// The key and the trailing word stand on the label's first line, as a
@@ -971,9 +971,9 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
     let id = id.into();
     let hover = ferrite_ui::pointer::hover_key(&id);
     let ink = match (row.enabled, row.cursor) {
-        (false, _) => theme::TEXT_DIM,
-        (true, true) => theme::TEXT_STRONG,
-        (true, false) => theme::TEXT,
+        (false, _) => theme::INK_SUBTLE,
+        (true, true) => theme::INK_STRONG,
+        (true, false) => theme::INK,
     };
     let accessibility = SharedString::from(format!(
         "{}{}",
@@ -1018,7 +1018,7 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
                 .flex_shrink_0()
                 .pl(px(theme::CH))
                 .text_size(px(theme::FS_META))
-                .text_color(rgb(theme::TEXT_DIM))
+                .text_color(rgb(theme::INK_SUBTLE))
                 .child("Recommended"),
         );
     }
@@ -1046,7 +1046,7 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
         .gap(px(theme::DECISION_OPTION_GAP))
         .px(px(theme::DECISION_OPTION_PAD_X))
         .py(px((theme::DECISION_OPTION_H - theme::LH_UI) / 2.0))
-        .rounded(px(theme::R_TAB))
+        .rounded(px(theme::R_CONTROL))
         .font_family(theme::FONT_UI)
         .font_weight(theme::W_BODY)
         .text_size(px(theme::FS_UI))
@@ -1075,7 +1075,7 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
                 .w(px(theme::FS_META * theme::CODE_ADVANCE))
                 .font_family(theme::FONT_CODE)
                 .text_size(px(theme::FS_META))
-                .text_color(rgb(theme::TEXT_DIM))
+                .text_color(rgb(theme::INK_SUBTLE))
                 .children(key)
         }))
         .child(
@@ -1088,11 +1088,11 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
                 .children(
                     row.description
                         .filter(|text| !text.is_empty())
-                        .map(|text| div().text_color(rgb(theme::TEXT_DIM)).child(text)),
+                        .map(|text| div().text_color(rgb(theme::INK_SUBTLE)).child(text)),
                 ),
         )
         .when(row.picked, |button| {
-            button.child(trailing().child(components::glyph("\u{2713}", theme::TEXT_STRONG)))
+            button.child(trailing().child(components::glyph("\u{2713}", theme::INK_STRONG)))
         })
 }
 
@@ -1112,7 +1112,7 @@ pub fn note_row(field: impl IntoElement) -> Div {
             div()
                 .flex_shrink_0()
                 .pr(px(theme::CH))
-                .text_color(rgb(theme::TEXT_DIM))
+                .text_color(rgb(theme::INK_SUBTLE))
                 .child("note"),
         )
         .child(
@@ -1120,7 +1120,7 @@ pub fn note_row(field: impl IntoElement) -> Div {
                 .flex()
                 .flex_1()
                 .min_w_0()
-                .text_color(rgb(theme::TEXT))
+                .text_color(rgb(theme::INK))
                 .child(field),
         )
 }
@@ -1128,7 +1128,7 @@ pub fn note_row(field: impl IntoElement) -> Div {
 // ---------------------------------------------------------------- footer
 
 /// The one error line: the typed `✗` and `lead` in `BLOCKED` (only that
-/// phrase carries the hue), then `· detail` in `TEXT_DIM`.
+/// phrase carries the hue), then `· detail` in `INK_SUBTLE`.
 pub fn error_line(lead: &'static str, detail: impl Into<SharedString>) -> Div {
     div()
         .flex()
@@ -1153,13 +1153,13 @@ pub fn error_line(lead: &'static str, detail: impl Into<SharedString>) -> Div {
         .child(
             div()
                 .min_w_0()
-                .text_color(rgb(theme::TEXT_DIM))
+                .text_color(rgb(theme::INK_SUBTLE))
                 .child(SharedString::from(format!("\u{b7} {}", detail.into()))),
         )
 }
 
 /// The hint line (`↑↓ select · 1–3 pick · esc deny · tab amend`): one
-/// 12px `TEXT_DIM` run, its `·` seams the same ink, no keycaps.
+/// 12px `INK_SUBTLE` run, its `·` seams the same ink, no keycaps.
 pub fn hint_line<S: AsRef<str>>(parts: &[S]) -> Div {
     div()
         .debug_selector(|| "decision-hints".into())
@@ -1170,7 +1170,7 @@ pub fn hint_line<S: AsRef<str>>(parts: &[S]) -> Div {
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_META))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(theme::TEXT_DIM))
+        .text_color(rgb(theme::INK_SUBTLE))
         .child(SharedString::from(hint_text(parts)))
 }
 
@@ -1204,7 +1204,7 @@ pub fn send_button(
     cx: &App,
 ) -> gpui::component::button::Button {
     let ink = if disabled {
-        theme::TEXT_DIM
+        theme::INK_SUBTLE
     } else {
         theme::ON_PRIMARY
     };
@@ -1224,7 +1224,7 @@ pub fn send_button(
                             .font_family(theme::FONT_CODE)
                             .map(|key| {
                                 if disabled {
-                                    key.text_color(rgb(theme::TEXT_DIM))
+                                    key.text_color(rgb(theme::INK_SUBTLE))
                                 } else {
                                     key.text_color(rgba(theme::SEND_KEY_INK))
                                 }
@@ -1245,13 +1245,13 @@ pub fn decision_chord(action: &str) -> Option<SharedString> {
 }
 
 /// A button's label and its key: the key in the code face at
-/// `SEND_KEY_INK` on the primary, `TEXT_DIM` elsewhere.
+/// `SEND_KEY_INK` on the primary, `INK_SUBTLE` elsewhere.
 fn labelled(label: SharedString, key: Option<SharedString>, primary: bool) -> Div {
     components::text_ui()
         .text_color(rgb(if primary {
             theme::ON_PRIMARY
         } else {
-            theme::TEXT_STRONG
+            theme::INK_STRONG
         }))
         .flex()
         .items_center()
@@ -1265,14 +1265,14 @@ fn labelled(label: SharedString, key: Option<SharedString>, primary: bool) -> Di
                     if primary {
                         key.text_color(rgba(theme::SEND_KEY_INK))
                     } else {
-                        key.text_color(rgb(theme::TEXT_DIM))
+                        key.text_color(rgb(theme::INK_SUBTLE))
                     }
                 })
                 .child(key)
         }))
 }
 
-/// `Deny` (Claude's): a secondary on `paint::RAISED`, `TEXT_STRONG`, its
+/// `Deny` (Claude's): a secondary on `paint::RAISED`, `INK_STRONG`, its
 /// key (`esc`) after the word. Full width when the actions stack.
 pub fn deny_button(
     id: impl Into<ElementId>,
@@ -1286,7 +1286,7 @@ pub fn deny_button(
         theme::paint::RAISED.into(),
         theme::paint::SELECTED.into(),
         theme::paint::PRESS.into(),
-        rgb(theme::TEXT_STRONG).into(),
+        rgb(theme::INK_STRONG).into(),
         cx,
     )
     .tab_stop(true)
@@ -1295,7 +1295,7 @@ pub fn deny_button(
     .px(px(theme::CONTROL_PAD_X))
     .rounded(px(theme::R_CONTROL))
     .when(stacked, |button| button.w_full())
-    .child(labelled("Deny".into(), None, false).text_color(rgb(theme::TEXT_STRONG)))
+    .child(labelled("Deny".into(), None, false).text_color(rgb(theme::INK_STRONG)))
 }
 
 /// The split primary's face: `Always allow` and its chord on `PRIMARY`,
@@ -1426,8 +1426,8 @@ pub fn skip_button(
 // -------------------------------------------------------------------- L2
 
 /// An L2 quick answer — `y allow` — pressable (the prototype's `.qa
-/// button`): a 1px `paint::LINE2` edge, one cell inside, the key dim and
-/// the verb in `TEXT`; under the pointer the hover face and `TEXT_STRONG`.
+/// button`): a 1px `paint::LINE` edge, one cell inside, the key dim and
+/// the verb in `INK`; under the pointer the hover face and `INK_STRONG`.
 /// A narrow cell drops the verb and keeps the key (`verb` false): pairs go
 /// whole, never cut. No keycaps.
 #[cfg(any(test, feature = "test-support"))]
@@ -1446,18 +1446,18 @@ pub fn key_action(
         .gap(px(theme::CH))
         .px(px(theme::CH))
         .border_1()
-        .border_color(theme::paint::LINE2)
+        .border_color(theme::paint::LINE)
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .text_color(rgb(theme::TEXT))
+        .text_color(rgb(theme::INK))
         .hover_raised(id)
         .press_row()
-        .child(div().text_color(rgb(theme::TEXT_DIM)).child(key))
+        .child(div().text_color(rgb(theme::INK_SUBTLE)).child(key))
         .when(with_verb, |pair| {
             pair.child(
                 div()
-                    .group_hover(id, |style| style.text_color(rgb(theme::TEXT_STRONG)))
+                    .group_hover(id, |style| style.text_color(rgb(theme::INK_STRONG)))
                     .child(verb),
             )
         })

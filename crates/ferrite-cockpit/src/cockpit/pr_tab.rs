@@ -348,7 +348,7 @@ impl CockpitView {
                     .bg(paint::RAISED)
                     .text_size(px(FS_LABEL))
                     .font_weight(W_LABEL)
-                    .text_color(rgb(TEXT_STRONG))
+                    .text_color(rgb(INK_STRONG))
                     .hover_control(review_key)
                     .press_control()
                     .child("Review PR")
@@ -414,8 +414,8 @@ impl CockpitView {
                     .line_clamp(3)
                     .text_size(px(FS_PR_TITLE))
                     .line_height(px(LH_UI))
-                    .font_weight(W_STRONG)
-                    .text_color(rgb(TEXT_STRONG))
+                    .font_weight(W_LABEL)
+                    .text_color(rgb(INK_STRONG))
                     .child(SharedString::from(pr.title.clone()))
             }))
             .children(pr.map(|pr| {
@@ -426,13 +426,13 @@ impl CockpitView {
                     .mt(px(SPACE_2))
                     .min_w_0()
                     .text_size(px(FS_META))
-                    .text_color(rgb(TEXT_DIM))
+                    .text_color(rgb(INK_SUBTLE))
                     .child(icon(icons::BRANCH, 13., ICON_INK))
                     .child(
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_color(rgb(TEXT_BAR))
+                            .text_color(rgb(INK))
                             .child(SharedString::from(pr.head.clone())),
                     )
                     .child(icon(icons::ARROW_RIGHT, ICON_CHEVRON, TEXT_FAINT))
@@ -637,7 +637,7 @@ impl CockpitView {
             .gap(px(SPACE_2))
             .min_w_0()
             .text_size(px(FS_META))
-            .text_color(rgb(TEXT_DIM))
+            .text_color(rgb(INK_SUBTLE))
             .child(avatar(&comment.author))
             .child(author(&comment.author))
             .child(kind_word(comment.kind))
@@ -664,7 +664,7 @@ impl CockpitView {
             .gap(px(SPACE_1_5))
             .py(px(PR_COMMENT_PAD_Y))
             .px(px(PANEL_ROW_ICON_X))
-            .rounded(px(R_BLOCK))
+            .rounded(px(R_CARD))
             .bg(paint::RAISED)
             .cursor_pointer()
             .child(line)
@@ -677,7 +677,7 @@ impl CockpitView {
                     .truncate()
                     .font_family(FONT_CODE)
                     .text_size(px(FS_CHROME_CODE))
-                    .text_color(rgb(TEXT_MUTED))
+                    .text_color(rgb(INK))
                     .child(SharedString::from(anchor.label()))
                     .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                         cx.stop_propagation();
@@ -717,7 +717,7 @@ impl CockpitView {
                                         .items_center()
                                         .gap(px(SPACE_2))
                                         .text_size(px(FS_META))
-                                        .text_color(rgb(TEXT_DIM))
+                                        .text_color(rgb(INK_SUBTLE))
                                         .child(author(&reply.author))
                                         .child(age(&reply.created_at)),
                                 )
@@ -783,7 +783,7 @@ impl CockpitView {
                 (
                     range,
                     gpui::HighlightStyle {
-                        color: Some(rgb(TEXT_BAR).into()),
+                        color: Some(rgb(INK).into()),
                         ..Default::default()
                     },
                 )
@@ -830,9 +830,9 @@ impl Pill {
         use ferrite_ui::theme::*;
         let (glyph, word, ink) = match self {
             Pill::Open => (icons::GIT_PULL_REQUEST, "Open", RUNNING),
-            Pill::Draft => (icons::GIT_PULL_REQUEST, "Draft", TEXT_MUTED),
-            Pill::Merged => (icons::GIT_MERGE, "Merged", TEXT),
-            Pill::Closed => (icons::GIT_PULL_REQUEST, "Closed", TEXT_DIM),
+            Pill::Draft => (icons::GIT_PULL_REQUEST, "Draft", INK),
+            Pill::Merged => (icons::GIT_MERGE, "Merged", INK),
+            Pill::Closed => (icons::GIT_PULL_REQUEST, "Closed", INK_SUBTLE),
         };
         div()
             .debug_selector(move || format!("pr-pill-{self:?}"))
@@ -869,7 +869,7 @@ fn pr_icon_button(id: &'static str, label: &'static str, action: &'static str) -
         .items_center()
         .justify_center()
         .size(px(PR_ICON_BUTTON))
-        .rounded(px(R_TAB))
+        .rounded(px(R_CONTROL))
         .hover_control(key)
         .press_control()
         .tooltip(ferrite_ui::menu::action_tooltip(label, action))
@@ -936,7 +936,7 @@ fn quiet_row(id: &'static str, words: String) -> Stateful<Div> {
     flush_row(id.into())
         .debug_selector(move || id.into())
         .text_size(px(FS_LABEL))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(SharedString::from(words))
 }
 
@@ -954,12 +954,12 @@ fn fold_row(
         .debug_selector(move || id.into())
         .gap(px(SPACE_2))
         .text_size(px(FS_LABEL))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child(super::panel::fold_chevron(
             turn,
             unfolded,
             ICON_CHEVRON,
-            TEXT_DIM,
+            INK_SUBTLE,
         ))
         .child(words.into())
 }
@@ -973,7 +973,7 @@ fn checking() -> AnyElement {
         .pt(px(SPACE_2))
         .px(px(PANEL_ROW_ICON_X))
         .text_size(px(FS_META))
-        .text_color(rgb(TEXT_DIM))
+        .text_color(rgb(INK_SUBTLE))
         .child("Checking for a pull request\u{2026}")
         .into_any_element()
 }
@@ -1148,7 +1148,7 @@ fn readiness(pr: &WirePr) -> Vec<Ready> {
             // (`CheckMark::Passed`); the merge state's `No conflicts` is
             // the readiness group's green.
             glyph: Some(icons::CHECK_CIRCLE),
-            ink: TEXT_DIM,
+            ink: INK_SUBTLE,
             text: "All checks passed".into(),
             meta: Some(format!("{passed} of {total}")),
         });
@@ -1158,7 +1158,7 @@ fn readiness(pr: &WirePr) -> Vec<Ready> {
         rows.push(Ready {
             key: "merged",
             glyph: Some(icons::GIT_MERGE),
-            ink: TEXT,
+            ink: INK,
             text: format!("Merged into {base}"),
             meta: None,
         });
@@ -1213,7 +1213,7 @@ fn readiness(pr: &WirePr) -> Vec<Ready> {
         WireSync::InSync => Some((
             "in-sync",
             icons::CHECK_CIRCLE,
-            TEXT_DIM,
+            INK_SUBTLE,
             "In sync with your branch".into(),
         )),
         WireSync::Unknown => None,
@@ -1242,13 +1242,13 @@ fn readiness_group(pr: &WirePr) -> Option<Div> {
             .flex()
             .flex_col()
             .flex_shrink_0()
-            .rounded(px(R_BLOCK))
+            .rounded(px(R_CARD))
             .bg(paint::RAISED)
             .children(rows.into_iter().enumerate().flat_map(|(index, row)| {
                 let key = row.key;
                 // The hairline sits between two rows, outside their 40px.
                 let rule =
-                    (index > 0).then(|| div().h(px(1.)).bg(paint::HAIRLINE).into_any_element());
+                    (index > 0).then(|| div().h(px(1.)).bg(paint::LINE).into_any_element());
                 let row = div()
                     .debug_selector(move || format!("pr-ready-{key}"))
                     .flex()
@@ -1268,7 +1268,7 @@ fn readiness_group(pr: &WirePr) -> Option<Div> {
                         div()
                             .flex_shrink_0()
                             .text_size(px(FS_META))
-                            .text_color(rgb(TEXT_DIM))
+                            .text_color(rgb(INK_SUBTLE))
                             .child(SharedString::from(meta))
                     }))
                     .into_any_element();
@@ -1327,12 +1327,12 @@ fn avatar(author: &str) -> Div {
         .rounded_full()
         .bg(paint::SEND)
         .text_size(px(FS_PR_AVATAR))
-        .font_weight(W_STRONG)
-        .text_color(rgb(TEXT_STRONG))
+        .font_weight(W_LABEL)
+        .text_color(rgb(INK_STRONG))
         .child(SharedString::from(initial))
 }
 
-/// An author's name, `FS_LABEL` at `W_LABEL`, `TEXT_STRONG`.
+/// An author's name, `FS_LABEL` at `W_LABEL`, `INK_STRONG`.
 fn author(name: &str) -> Div {
     use ferrite_ui::theme::*;
     div()
@@ -1340,7 +1340,7 @@ fn author(name: &str) -> Div {
         .truncate()
         .text_size(px(FS_LABEL))
         .font_weight(W_LABEL)
-        .text_color(rgb(TEXT_STRONG))
+        .text_color(rgb(INK_STRONG))
         .child(SharedString::from(name.to_string()))
 }
 
@@ -1415,25 +1415,25 @@ fn clamp(view: TextView, lines: usize) -> TextView {
 }
 
 /// Markdown set small, as a comment card or the description reads it:
-/// 12.5/18 `TEXT`, inline code as chips, and every heading at the body's
+/// 12.5/18 `INK`, inline code as chips, and every heading at the body's
 /// size — set apart by weight, not size, in a column this narrow.
 fn small_markdown(view: TextView, window: &Window) -> TextView {
     use ferrite_ui::theme::*;
     let rem = f32::from(window.rem_size());
     let style = TextViewStyle::default()
         .with_dark(true)
-        .with_foreground(rgb(TEXT).into())
-        .with_muted_foreground(rgb(TEXT_DIM).into())
-        .with_link(rgb(TEXT_STRONG).into())
+        .with_foreground(rgb(INK).into())
+        .with_muted_foreground(rgb(INK_SUBTLE).into())
+        .with_link(rgb(INK_STRONG).into())
         .with_link_underline_on_hover(true)
         .with_paragraph_gap(gpui::rems(PR_BODY_LH / 2. / rem))
         .with_strong(gpui::HighlightStyle {
-            color: Some(rgb(TEXT_STRONG).into()),
+            color: Some(rgb(INK_STRONG).into()),
             font_weight: Some(W_STRONG),
             ..Default::default()
         })
         .with_inline_code(gpui::HighlightStyle {
-            color: Some(rgb(TEXT_STRONG).into()),
+            color: Some(rgb(INK_STRONG).into()),
             font_weight: Some(W_BODY),
             ..Default::default()
         })
@@ -1465,15 +1465,15 @@ fn small_markdown(view: TextView, window: &Window) -> TextView {
             gap: px(SPACE_1_5),
         }))
         .with_list_markers(
-            gpui::StyleRefinement::default().text_color(rgb(TEXT_DIM)),
-            gpui::StyleRefinement::default().text_color(rgb(TEXT_DIM)),
+            gpui::StyleRefinement::default().text_color(rgb(INK_SUBTLE)),
+            gpui::StyleRefinement::default().text_color(rgb(INK_SUBTLE)),
         );
     let style = (1..=6).fold(style, |style, level| {
         style.with_heading(
             level,
             gpui::StyleRefinement::default()
                 .font_weight(W_STRONG)
-                .text_color(rgb(TEXT_STRONG))
+                .text_color(rgb(INK_STRONG))
                 .line_height(px(PR_BODY_LH)),
         )
     });
@@ -1504,7 +1504,7 @@ fn hunk(snippet: &str) -> Div {
         .flex_col()
         .py(px(SPACE_1_5))
         .px(px(SPACE_2))
-        .rounded(px(R_TAB))
+        .rounded(px(R_CONTROL))
         .bg(paint::BLOCK)
         .overflow_hidden()
         .font_family(FONT_CODE)
@@ -1514,7 +1514,7 @@ fn hunk(snippet: &str) -> Div {
             let ink = match line.chars().next() {
                 Some('+') => RUNNING,
                 Some('-') => BLOCKED,
-                _ => TEXT_MUTED,
+                _ => INK,
             };
             div()
                 .truncate()

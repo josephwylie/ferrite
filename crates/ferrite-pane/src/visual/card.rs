@@ -14,7 +14,7 @@
 //! The gutter mark says where the visual is: the braille spinner while the
 //! agent draws it and Ferrite checks it, a muted image icon once shown, a
 //! red one if it failed (with `failed · why` under it). The page sits in a
-//! 1px `LINE` frame. The title and caption are text, selectable and copied
+//! 1px `CARD_RING` frame. The title and caption are text, selectable and copied
 //! like any row's ([`collect_text`] registers exactly what [`render`]
 //! draws).
 
@@ -28,7 +28,7 @@ use super::element::{WebView, PLACEHOLDER_HEIGHT};
 use super::{Visual, VisualStatus};
 use crate::pane::{self, Grid};
 use crate::select::TextRuns;
-use ferrite_ui::theme::{self, BLOCKED, TEXT, TEXT_DIM, TEXT_FAINT};
+use ferrite_ui::theme::{self, BLOCKED, INK, INK_SUBTLE, TEXT_FAINT};
 
 /// The call line's name for every visual.
 pub(crate) const NAME: &str = "Visual";
@@ -136,14 +136,14 @@ pub(crate) fn render(
     let title = NAME.len().min(text.len())..text.len();
     let words = div().child(div().flex_shrink(1.).min_w_0().child(pane::edge_cut(
         grid.line,
-        TEXT_DIM,
+        INK_SUBTLE,
         selection.line(
             block,
             text,
             vec![(
                 title,
                 gpui::HighlightStyle {
-                    color: Some(rgb(TEXT).into()),
+                    color: Some(rgb(INK).into()),
                     ..Default::default()
                 },
             )],
@@ -214,7 +214,7 @@ pub(crate) fn render(
 }
 
 /// The page's frame: on the content column, a half line under the words,
-/// one `LINE` around it.
+/// one `CARD_RING` around it.
 fn frame(grid: Grid) -> Div {
     div()
         .debug_selector(|| "visual-frame".into())
@@ -223,7 +223,7 @@ fn frame(grid: Grid) -> Div {
         .flex_col()
         .min_w_0()
         .border_1()
-        .border_color(theme::paint::LINE)
+        .border_color(theme::paint::CARD_RING)
         .overflow_hidden()
 }
 
@@ -249,8 +249,8 @@ fn action_line(id: &str, actions: Actions, grid: Grid) -> Div {
             .flex_shrink_0()
             .whitespace_nowrap()
             .cursor_pointer()
-            .text_color(rgb(TEXT_DIM))
-            .group_hover(id, |style| style.text_color(rgb(TEXT)))
+            .text_color(rgb(INK_SUBTLE))
+            .group_hover(id, |style| style.text_color(rgb(INK)))
             .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
                 cx.stop_propagation();
                 run(window, cx);
