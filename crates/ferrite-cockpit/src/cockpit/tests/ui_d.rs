@@ -8,8 +8,10 @@ use super::*;
 /// `+`, the 41 footer under it; the bar carries no status line.
 #[gpui::test]
 fn the_composer_box_stands_inside_the_card(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("composer-reading-column", 1);
+    let (core, fake) = cockpit("composer-reading-column", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    spoken(&fake, 0);
     for (width, height) in [(1600., 900.), (700., 700.)] {
         cx.simulate_resize(gpui::size(px(width), px(height)));
         tick(cx);

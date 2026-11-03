@@ -41,8 +41,10 @@ fn back_and_forward_walk_the_threads_shown(cx: &mut TestAppContext) {
     assert_eq!(ends(&view, cx), (true, false));
 }
 
-/// The arrows lead the head, and a click on the live one steps; they show
-/// on the empty board too, where back is the one thing to do.
+/// The arrows stand right of the traffic lights in the sidebar's head, before
+/// the title, and a click on the live one steps; folding the sidebar leaves
+/// them where they were, the title still clear of them; they show on the
+/// empty board too, where back is the one thing to do.
 #[gpui::test]
 fn the_arrows_lead_the_head_and_step_on_a_click(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("history-arrows", 2);
@@ -57,12 +59,35 @@ fn the_arrows_lead_the_head_and_step_on_a_click(cx: &mut TestAppContext) {
     tick(cx);
 
     let back = cx.debug_bounds("history-back").expect("the back arrow");
+    let forward = cx
+        .debug_bounds("history-forward")
+        .expect("the forward arrow");
     let title = cx.debug_bounds("view-title").expect("the title");
+    let bell = cx.debug_bounds("nav-activity").expect("the sidebar's bell");
+    assert_eq!(back.left(), px(ferrite_ui::theme::HISTORY_X));
+    assert!(
+        forward.right() < bell.left(),
+        "in the sidebar head, before its icons"
+    );
     assert!(back.right() < title.left(), "the arrows come first");
     assert!(back.bottom() <= px(ferrite_ui::theme::WIN_CHROME_H));
     cx.simulate_click(back.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(shown(&view, cx), Some(first));
+
+    view.update(cx, |view, cx| {
+        view.nav_forced_open = false;
+        view.set_nav_collapsed(true, cx);
+    });
+    tick(cx);
+    assert_eq!(
+        cx.debug_bounds("history-back").map(|bounds| bounds.left()),
+        Some(back.left()),
+        "folded, the same spot"
+    );
+    let title = cx.debug_bounds("view-title").expect("the title");
+    let forward = cx.debug_bounds("history-forward").unwrap();
+    assert!(forward.right() < title.left(), "the title clears them");
 
     view.update(cx, |view, cx| {
         view.empty_shown = true;

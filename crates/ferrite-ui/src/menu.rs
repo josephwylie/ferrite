@@ -409,9 +409,9 @@ pub fn row(index: usize, item: &Item, armed: bool) -> Stateful<Div> {
     )
 }
 
-/// A tooltip in the float grammar: one `FLOAT_ROW_H` row of the UI type,
-/// its text `FLOAT_PAD_X` in, at most `TOOLTIP_MAX_W` wide (a long path
-/// wraps), on the float's ground, radius and ring with the float shadow.
+/// A tooltip in the float grammar: one meta line, `TOOLTIP_PAD_X` and
+/// `TOOLTIP_PAD_Y` in, at most `TOOLTIP_MAX_W` wide (a long path wraps), on
+/// the float's ground and ring at `R_CONTROL` with the float shadow.
 /// It is also how a label that truncates keeps its full value reachable.
 pub fn tooltip(
     text: impl Into<SharedString>,
@@ -420,12 +420,12 @@ pub fn tooltip(
     move |window, cx| {
         gpui::component::tooltip::Tooltip::new(text.clone())
             .font_family(FONT_UI)
-            .text_size(px(FS_UI))
-            .line_height(px(LH_UI))
+            .text_size(px(FS_META))
+            .line_height(px(LH_META))
             .px(px(TOOLTIP_PAD_X))
             .py(px(TOOLTIP_PAD_Y))
             .max_w(px(TOOLTIP_MAX_W))
-            .rounded(px(R_FLOAT))
+            .rounded(px(R_CONTROL))
             .border_color(paint::FLOAT_EDGE)
             .shadow(components::float_shadow())
             .build(window, cx)
@@ -461,12 +461,12 @@ pub fn tooltip_with_key(
                 )
         })
         .font_family(FONT_UI)
-        .text_size(px(FS_UI))
-        .line_height(px(LH_UI))
+        .text_size(px(FS_META))
+        .line_height(px(LH_META))
         .px(px(TOOLTIP_PAD_X))
         .py(px(TOOLTIP_PAD_Y))
         .max_w(px(TOOLTIP_MAX_W))
-        .rounded(px(R_FLOAT))
+        .rounded(px(R_CONTROL))
         .border_color(paint::FLOAT_EDGE)
         .shadow(components::float_shadow())
         .build(window, cx)
@@ -941,7 +941,10 @@ impl ChoiceContent {
         let row = if submenu.icon.is_some() {
             row
         } else {
-            row.py(px(FLOAT_PAD)).child(
+            // The row above already ends `FLOAT_PAD` short of the rule,
+            // so the rule takes air only under it: 4 + 1 + 4 between the
+            // rows, Claude's 37 pitch (claude/model-menu.png).
+            row.pb(px(FLOAT_PAD)).child(
                 div()
                     .h(px(HAIRLINE_W))
                     .mx(px(FLOAT_PAD_X))

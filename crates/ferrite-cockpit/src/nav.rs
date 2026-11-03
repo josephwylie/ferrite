@@ -547,8 +547,13 @@ fn indent(depth: usize) -> f32 {
 
 // ------------------------------------------------------------- measuring
 
-/// The faces' own advances, summed a character at a time as gpui's
-/// truncation sums them: what a truncating box is pinned against.
+/// The faces' own widths, a character at a time as each lays out alone:
+/// what gpui's truncation sums (`LineWrapper::width_for_char`), and what a
+/// truncating box is pinned against. Never the glyph's bare advance: the
+/// system face lays out wider than its advances at the UI's sizes (its
+/// optical size and tracking), so a box sized from them cut a name that
+/// fits (`ferri…` for `ferrite`). A sum without kerning errs wide, which
+/// keeps a name whole.
 #[derive(Clone, Copy)]
 pub enum Measure<'a> {
     Text(&'a App),
@@ -573,11 +578,7 @@ impl Measure<'_> {
                 };
                 let id = system.resolve_font(&font);
                 text.chars()
-                    .map(|ch| {
-                        system
-                            .advance(id, px(size), ch)
-                            .map_or(size * 0.6, |advance| f32::from(advance.width))
-                    })
+                    .map(|ch| f32::from(system.layout_width(id, px(size), ch)))
                     .sum()
             }
             #[cfg(test)]
@@ -694,7 +695,7 @@ fn line_frame(id: impl Into<gpui::ElementId>, key: SharedString, selected: bool)
 }
 
 /// A list row's share of the gap between rows (`NAV_ROW_GAP`), half above
-/// and half below, so a run of rows steps 32.
+/// and half below, so a run of rows steps 34.
 fn pitched<E: Styled>(row: E) -> E {
     row.my(px(NAV_ROW_GAP / 2.0))
 }
@@ -778,7 +779,7 @@ pub fn content() -> Div {
 }
 
 /// The head (§5.1.1), in the head row: `drag` (the window-drag stretch the
-/// traffic lights sit over), then the Activity bell (`activity_button`),
+/// traffic lights and the cockpit's history arrows sit over), then the Activity bell (`activity_button`),
 /// search (`search_button`) and the sidebar toggle, as Codex's header
 /// holds its bell and search.
 pub fn head(
@@ -1019,7 +1020,11 @@ pub fn fold_heading(key: &'static str, label: &'static str, folded: bool) -> Sta
     let t = motion::hover_t(&blend);
     heading_frame(key)
         .id(key)
-        .text_color(motion::mix(rgb(INK_SUBTLE).into(), rgb(INK_STRONG).into(), t))
+        .text_color(motion::mix(
+            rgb(INK_SUBTLE).into(),
+            rgb(INK_STRONG).into(),
+            t,
+        ))
         .on_hover(motion::hover_listener(blend))
         .child(
             div()
@@ -1334,7 +1339,13 @@ pub fn group_row_with_title(
     .h(px(NAV_ROW_H))
     .pl(px(place.title_x() + NAV_TREE_INDENT))
     .pr(px(NAV_ROW_PAD_X))
-    .child(div().absolute().top_0().left(px(place.title_x())).child(fold))
+    .child(
+        div()
+            .absolute()
+            .top_0()
+            .left(px(place.title_x()))
+            .child(fold),
+    )
     .child(fitted(
         place.text_w() - NAV_TREE_INDENT - right_w,
         FS_UI,
@@ -1471,25 +1482,26 @@ pub fn thread_row_with_title(
     .children(action.map(at_right))
 }
 
-/// What a row says at its right, where its `⋯` stands under the pointer:
-/// the needs-you dot (the one orange on the list), a failure's red dot,
-/// background work's dot, the working spinner (the one thing that moves),
-/// or for a finish not yet seen a smaller dot in the content ink
-/// (`NAV_UNREAD_DOT`), cleared once seen. Idle and parked rows say nothing.
+/// What a row says at its right, where its `⋯` stands under the pointer —
+/// only a state that asks for the operator, as Claude's list marks only
+/// those: the needs-you dot (the one orange on the list), a failure's red
+/// dot, the working spinner (the one thing that moves), or for a finish
+/// not yet seen a smaller dot in the content ink (`NAV_UNREAD_DOT`),
+/// cleared once seen. Idle and parked rows say nothing, nor does an idle
+/// Main with work behind it (`Background`): its Pane and the chips over
+/// its Composer say that.
 pub(crate) fn state_mark(status: RowStatus) -> Option<Div> {
     let face = match status {
-        RowStatus::NeedsYou
-        | RowStatus::Failed
-        | RowStatus::Background
-        | RowStatus::Working
-        | RowStatus::Failing => mark(status, true),
+        RowStatus::NeedsYou | RowStatus::Failed | RowStatus::Working | RowStatus::Failing => {
+            mark(status, true)
+        }
         RowStatus::Done => div()
             .debug_selector(|| "nav-unread-dot".into())
             .size(px(NAV_UNREAD_DOT))
             .rounded_full()
             .bg(rgb(INK_STRONG))
             .into_any_element(),
-        RowStatus::Idle | RowStatus::Parked => return None,
+        RowStatus::Idle | RowStatus::Parked | RowStatus::Background => return None,
     };
     // The `⋯` glyph's box, so the two centre on one spot.
     Some(
@@ -1891,11 +1903,7 @@ pub fn machine_fold(index: usize, folded: bool) -> Stateful<Div> {
         .id(("nav-machine-fold", index))
         .debug_selector(move || format!("nav-machine-fold-{index}"))
         .flex_shrink_0()
-        .child(components::fold_chevron(
-            !folded,
-            NAV_CHEVRON,
-            INK_SUBTLE,
-        ))
+        .child(components::fold_chevron(!folded, NAV_CHEVRON, INK_SUBTLE))
 }
 
 /// One open Thread on a machine the window is not on: its mark, its title
@@ -1921,11 +1929,7 @@ pub fn machine_thread_row(machine: usize, row: &StatusRow, lost: bool) -> Statef
         .h(px(NAV_ROW_H))
         .pl(px(NAV_TITLE_X))
         .pr(px(NAV_ROW_PAD_X))
-        .child(mark_at(
-            status,
-            NAV_ROW_PAD_X - 1.0,
-            MarkSeat::Member,
-        ))
+        .child(mark_at(status, NAV_ROW_PAD_X - 1.0, MarkSeat::Member))
         .child(div().flex_1().min_w_0().truncate().child(title))
         .children(word.map(|(word, ink)| trailing(word, FS_META, ink)))
 }
@@ -2176,7 +2180,7 @@ mod tests {
     }
 
     /// The row grammar (§5.1): rounded rows, a Thread one quiet line at 30
-    /// stepping 32 with its title on its heading's label, a Group and a Project heading one
+    /// stepping 34 with its title on its heading's label, a Group and a Project heading one
     /// line too, a Project section 6px below the one above it.
     #[test]
     fn nav_rows_are_rounded_two_line_and_one_line() {
@@ -2188,8 +2192,8 @@ mod tests {
             "radius 6"
         );
         assert_eq!(style.size.height, Some(px(NAV_ROW_H).into()));
-        assert_eq!(style.margin.top, Some(px(1.0).into()), "pitch 32");
-        assert_eq!(style.margin.bottom, Some(px(1.0).into()));
+        assert_eq!(style.margin.top, Some(px(2.0).into()), "pitch 34");
+        assert_eq!(style.margin.bottom, Some(px(2.0).into()));
         assert_eq!(style.padding.left, Some(px(NAV_ROW_PAD_X).into()));
         assert_eq!(style.padding.right, Some(px(NAV_ROW_PAD_X).into()));
         let mut row = group_row(&group(false, false), 0);
@@ -2210,7 +2214,11 @@ mod tests {
             NAV_ROW_PAD_X,
             "a heading's rows start on its label (Claude's 18 from the edge)"
         );
-        assert_eq!(RowPlace::Inbox.title_x(), NAV_TITLE_X, "past the mark column");
+        assert_eq!(
+            RowPlace::Inbox.title_x(),
+            NAV_TITLE_X,
+            "past the mark column"
+        );
         assert_eq!(RowPlace::Row(1).title_x(), NAV_ROW_PAD_X + NAV_TREE_INDENT);
         assert_eq!(RowPlace::Member(0).title_x(), RowPlace::Row(1).title_x());
     }
@@ -2409,20 +2417,19 @@ mod tests {
 
     /// A row's right says one thing (§5.1.5): the needs-you dot, a
     /// failure's, the working spinner, an unseen finish's small grey dot;
-    /// idle and parked rows say nothing there.
+    /// idle, parked and background-only rows say nothing there.
     #[test]
     fn only_a_state_worth_saying_marks_the_right() {
         for status in [
             RowStatus::NeedsYou,
             RowStatus::Failed,
-            RowStatus::Background,
             RowStatus::Working,
             RowStatus::Failing,
             RowStatus::Done,
         ] {
             assert!(state_mark(status).is_some(), "{status:?}");
         }
-        for status in [RowStatus::Idle, RowStatus::Parked] {
+        for status in [RowStatus::Idle, RowStatus::Parked, RowStatus::Background] {
             assert!(state_mark(status).is_none(), "{status:?}");
         }
         assert!(

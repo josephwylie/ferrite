@@ -12,10 +12,12 @@ use ferrite_core::{ContextDetails, ContextItem, RateLimitWindow};
 /// (`Weekly · all models: 17% · Resets Tue 3:30 pm`); a click opens the
 /// popover above it (`plan_usage_card`), which the box wears as selected
 /// while it is open. None while the provider reports no window: no
-/// reading is invented. Context fill is the side panel's.
+/// reading is invented. Context fill is the side panel's. `held` keeps the
+/// popover open whatever is clicked (a visual-reference scene's).
 pub fn plan_usage_ring(
     id: impl Into<gpui::ElementId>,
     limits: RateLimits,
+    held: bool,
     cx: &gpui::App,
 ) -> Option<impl IntoElement> {
     let now = ferrite_core::clock::system_time();
@@ -33,20 +35,18 @@ pub fn plan_usage_ring(
         .px(px((theme::FOOTER_CHIP_H - theme::CONTEXT_RING) / 2.))
         .tip(tip)
         .child(usage_ring(used));
-    Some(
-        gpui::component::popover::Popover::new(gpui::ElementId::NamedChild(
-            std::sync::Arc::new(id),
-            "popover".into(),
-        ))
-        // The card is its own surface; the kit's would frame it again.
-        .appearance(false)
-        .anchor(gpui::Anchor::BottomRight)
-        // Its foot `USAGE_POP_OFFSET` above the box's top (the kit
-        // leaves 4).
-        .bottom(px(theme::USAGE_POP_OFFSET))
-        .trigger(trigger)
-        .content(move |_, _, _| plan_usage_card(limits, now)),
-    )
+    let popover = gpui::component::popover::Popover::new(gpui::ElementId::NamedChild(
+        std::sync::Arc::new(id),
+        "popover".into(),
+    ))
+    // The card is its own surface; the kit's would frame it again.
+    .appearance(false)
+    .anchor(gpui::Anchor::BottomRight)
+    // Its foot `USAGE_POP_OFFSET` above the box's top (the kit leaves 4).
+    .bottom(px(theme::USAGE_POP_OFFSET))
+    .trigger(trigger)
+    .content(move |_, _, _| plan_usage_card(limits, now));
+    Some(if held { popover.open(true) } else { popover })
 }
 
 /// The ring's reading: the fullest window reported, or None.

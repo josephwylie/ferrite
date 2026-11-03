@@ -1,6 +1,6 @@
 //! The right panel (SPEC §5.6), after Claude's: a fixed column on the
 //! frame, right of the board and outside it, holding one scroll of
-//! sections with no tabs — Environment, Changes, Context, Connectors
+//! sections with no tabs — Environment, Context, Connectors, Changes
 //! (`sections`, `changes`). The pull request is a row in Changes once one
 //! exists. The Review, which needs the board's width and takes line
 //! comments, still opens beside its Pane inside the board (ADR 0021).
@@ -371,7 +371,9 @@ impl CockpitView {
                 if active {
                     face.hover_carried(key).text_color(rgb(INK_STRONG))
                 } else {
-                    face.text_color(rgb(INK_STRONG)).hover_raised(key).press_raised()
+                    face.text_color(rgb(INK_STRONG))
+                        .hover_raised(key)
+                        .press_raised()
                 }
             })
             .child("Overview")

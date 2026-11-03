@@ -97,7 +97,10 @@ fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
     // One left edge: the pill on the column, the box's ring `CARD_OUTSET`
     // outside it.
     assert!(
-        near(pill.left() - card.left(), px(ferrite_ui::theme::CARD_OUTSET)),
+        near(
+            pill.left() - card.left(),
+            px(ferrite_ui::theme::CARD_OUTSET)
+        ),
         "{pill:?} / {card:?}"
     );
     // The band spans the box inside its 1px ring.

@@ -1132,6 +1132,8 @@ fn the_composer_is_one_row_over_its_toolbar(cx: &mut TestAppContext) {
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(800.)));
     tick(cx);
+    spoken(&fake, 0);
+    tick(cx);
     let block = cx.debug_bounds("composer-block").unwrap();
     assert_eq!(
         block.size.height,
@@ -1386,6 +1388,8 @@ fn the_solo_composer_holds_its_place_through_a_decision(cx: &mut TestAppContext)
     let (core, fake) = cockpit("solo-status-line", 1);
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    spoken(&fake, 0);
     tick(cx);
     let rest = cx.debug_bounds("composer-block").expect("the Composer");
     fake.streams.borrow()[0]

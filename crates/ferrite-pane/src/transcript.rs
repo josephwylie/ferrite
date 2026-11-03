@@ -982,7 +982,9 @@ impl TranscriptView {
                     .debug_selector(|| "answer-actions".into())
                     // The first icon's ink, not its box, on the prose's
                     // edge (one left edge).
-                    .ml(px(-(theme::MESSAGE_ACTION - theme::MESSAGE_ACTION_GLYPH) / 2.))
+                    .ml(px(
+                        -(theme::MESSAGE_ACTION - theme::MESSAGE_ACTION_GLYPH) / 2.
+                    ))
                     .child(self.copy_action(row.id(), source.to_owned()))
                     .children(
                         blocks

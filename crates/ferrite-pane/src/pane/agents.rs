@@ -83,7 +83,7 @@ pub(crate) fn is_agent(tool: &ToolBlock) -> bool {
 /// An agent call's row, alone or in its card: `Ran agent` in `INK_SUBTLE`,
 /// its task (the provider's description) a step up in `INK_STRONG`; while the
 /// agent runs, `Running agent`, what it is doing after the seam
-/// (`text::agent_line`) and the running spinner at the row's end; a failed
+/// (`text::agent_line`) and the working mark at the row's end; a failed
 /// one's `Failed` tag, as any call's. No disclosure: `open`, laid over the
 /// whole row, opens the agent's own transcript, and the chevron that shows
 /// under the pointer says the row goes somewhere.
@@ -155,7 +155,7 @@ pub(crate) fn render_agent(
                 .flex_shrink_0()
                 .items_center()
                 .ml(px(theme::SPACE_2))
-                .child(components::running_spinner(theme::TASK_ICON, INK_SUBTLE))
+                .child(components::working_mark(theme::TASK_ICON, INK_SUBTLE))
         }));
     let row_selector = format!("agent-row-{}", tool.call);
     activity_line(grid, None, words)

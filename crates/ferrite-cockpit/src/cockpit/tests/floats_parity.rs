@@ -40,10 +40,10 @@ fn palette_open(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) ->
     view.read_with(cx, |view, _| view.floats.palette.is_some())
 }
 
-/// FL-1: ⌘K opens the palette, 640 wide, centred on the board, its head
+/// FL-1: ⌘K opens the palette, 670 wide, centred on the board, its head
 /// 56px under the board's top, over a veil that covers the board and
-/// nothing else, its input row 50 over a hairline, its rows 36, the
-/// footer 36 under a hairline counting the results (SPEC §5.8); esc closes
+/// nothing else, its input row 54, its tabs 40 over a hairline, its rows 36,
+/// the footer 40 under a hairline counting the results (SPEC §5.8); esc closes
 /// it without interrupting the running turn, and ⌘K toggles it.
 #[gpui::test]
 fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
@@ -61,7 +61,7 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     let board = cx.update(|window, cx| view.read(cx).board_bounds(window));
     assert!(
         (palette.size.width - px(ferrite_ui::theme::PALETTE_W)).abs() <= px(1.),
-        "640 wide: {palette:?}"
+        "670 wide (Claude's): {palette:?}"
     );
     assert!(
         (palette.center().x - px(board.x + board.w / 2.)).abs() <= px(1.),
@@ -82,7 +82,7 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     let input = cx.debug_bounds("palette-input").expect("the input row");
     assert!(
         (input.size.height - px(ferrite_ui::theme::PALETTE_INPUT_H)).abs() < px(0.5),
-        "50, its hairline under the tabs: {input:?}"
+        "54, its hairline under the tabs: {input:?}"
     );
     let tabs = cx.debug_bounds("palette-tabs").expect("the type tabs");
     assert!(
@@ -97,13 +97,13 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     );
     assert!(
         (row.left() - (palette.left() + px(ferrite_ui::theme::PALETTE_LIST_PAD))).abs() < px(0.5),
-        "6 in from the dialog: {row:?} / {palette:?}"
+        "10 in from the dialog: {row:?} / {palette:?}"
     );
     let section = cx.debug_bounds("palette-section-0").expect("a heading");
     assert!(
         (section.top() - (tabs.bottom() + px(ferrite_ui::theme::PALETTE_LIST_PAD))).abs() < px(0.5)
             && (section.size.height - px(ferrite_ui::theme::PALETTE_SECTION_H)).abs() < px(0.5),
-        "the first heading 32 high, 6 under the tabs: {section:?}"
+        "the first heading 38 high, 10 under the tabs: {section:?}"
     );
     let results = cx
         .debug_bounds("palette-results")
@@ -111,7 +111,7 @@ fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     assert!(
         (palette.bottom() - results.center().y - px(ferrite_ui::theme::PALETTE_FOOT_H / 2.)).abs()
             <= px(1.),
-        "the count centred in the 36px footer: {results:?} / {palette:?}"
+        "the count centred in the 40px footer: {results:?} / {palette:?}"
     );
     cx.simulate_keystrokes("escape");
     tick(cx);

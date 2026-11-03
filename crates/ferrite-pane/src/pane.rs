@@ -9,7 +9,7 @@
 //! `CARD_RING` at rest, `FOCUS_RING` when focused on a board, `WAIT_RING`
 //! while it waits (a focused waiting Pane shows only the yellow; its focus
 //! reads in the head ground and title). On a board it wears one head
-//! row — the dot (a working Thread's running spinner), the title, the
+//! row — the dot (a working Thread's working mark), the title, the
 //! provider mark — and no state word; top to bottom then the subagent
 //! strip, the transcript body (its Decision is the transcript's tail), the
 //! Composer. Two altitudes (R12): the transcript, or the wall tile — the
@@ -1355,8 +1355,8 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         },
     );
     // Codex's home: at the body's centre the hero, and the Composer at the
-    // foot, where the Thread it becomes keeps it, so the first send moves
-    // nothing.
+    // foot, where the Thread it becomes keeps it: two rows tall, Codex's,
+    // until the first send makes it Claude's one-row box.
     let card = start.filter(|_| level == Level::Transcript).map(start_hero);
     let body = div()
         .debug_selector(|| "draft-empty".into())
@@ -2235,7 +2235,11 @@ pub fn fill_button(key: u64) -> Stateful<Div> {
             "Fill the board",
             "cockpit::ToggleFullscreen",
         ))
-        .child(icon(icons::MAXIMIZE, theme::PANE_HEAD_FILL_GLYPH, INK_STRONG))
+        .child(icon(
+            icons::MAXIMIZE,
+            theme::PANE_HEAD_FILL_GLYPH,
+            INK_STRONG,
+        ))
 }
 
 /// The failure strip (SPEC §5.9 item 4), the transcript's tail row under
@@ -2263,7 +2267,13 @@ pub fn failure_strip(key: u64, words: SharedString, retry: Option<AnyElement>) -
         .line_height(px(theme::LH_UI))
         .whitespace_nowrap()
         .child(icon(icons::X_CIRCLE, theme::FAILURE_STRIP_ICON, BLOCKED))
-        .child(div().min_w_0().truncate().text_color(rgb(INK_STRONG)).child(words))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(INK_STRONG))
+                .child(words),
+        )
         .child(div().flex_1())
         .children(retry)
 }
@@ -6518,7 +6528,7 @@ mod tests {
         }));
         assert_eq!(
             placeholder(false, false, Some(&running), None).text(),
-            "\u{21b5} to send, esc to stop"
+            "\u{21b5} to send, \u{2318}\u{21b5} to queue for later"
         );
 
         let mut closed = Transcript::default();

@@ -235,8 +235,10 @@ pub(super) fn call_body(
         }
     } else {
         if text::shows_input(tool) {
-            input =
-                Some(output_block(block, "command", &tool.summary, selection).text_color(rgb(INK_STRONG)));
+            input = Some(
+                output_block(block, "command", &tool.summary, selection)
+                    .text_color(rgb(INK_STRONG)),
+            );
         }
         if let Some(output) = text::disclosed_output(tool) {
             part("result", &output.text, output.omitted_bytes, INK_SUBTLE);

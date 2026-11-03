@@ -1364,7 +1364,7 @@ impl CockpitView {
 
     /// The palette's veil (the board only: the sidebar, the titlebar and
     /// the bottom bar stay as they are) and the palette or the shortcuts
-    /// sheet over it, at the palette's geometry: 640 wide, centred on the
+    /// sheet over it, at the palette's geometry: `PALETTE_W` wide, centred on the
     /// board, 56px under its top. A press on the veil closes the float and
     /// nothing else.
     pub(super) fn sheet_floats(

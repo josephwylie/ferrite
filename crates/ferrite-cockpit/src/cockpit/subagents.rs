@@ -319,7 +319,7 @@ fn state_word(status: AgentStatus, fresh: bool) -> &'static str {
     status_label(status, fresh).unwrap_or(theme::words::DONE)
 }
 
-/// A subagent's mark (the nav's, `nav::mark`): the running spinner while
+/// A subagent's mark (the nav's, `nav::mark`): the working mark while
 /// it works, the `ATTENTION` dot while it waits on the operator, the
 /// `BLOCKED` dot once it failed; none otherwise, the slot kept.
 fn agent_mark(status: AgentStatus, fresh: bool, waiting: bool) -> Option<AnyElement> {
@@ -1714,7 +1714,11 @@ impl Cards {
                     let id = field.id.clone();
                     move || format!("form-field-{id}")
                 })
-                .child(div().text_color(rgb(theme::INK_STRONG)).child(field.label.clone()));
+                .child(
+                    div()
+                        .text_color(rgb(theme::INK_STRONG))
+                        .child(field.label.clone()),
+                );
             if !field.description.is_empty() {
                 section = section.child(decision::note(field.description.clone()));
             }

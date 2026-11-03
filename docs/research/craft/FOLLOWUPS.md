@@ -141,3 +141,9 @@
 - [x] Usage popover: the kit `Popover` framed the card in its own surface (`p_3`) and kept its 4px foot, so the card sat 10px short of the ring's right edge and over its top. Now `.appearance(false)` and `.bottom(USAGE_POP_OFFSET)`.
 - [x] `focus_moving_to_another_pane…` pressed `cmd-]`, which is Forward now (lane N); Next Pane is `cmd-}`.
 - [x] `the_model_gives_way…`: with the env words over the box (lane T) the model starts to cut only near 680px, so the test breaks at any cut, not 40px.
+
+## Polish D (density) follow-ups
+- [ ] Three tooltips in pane.rs / panel/preview.rs use the kit default — switch to `ferrite_ui::menu::tooltip`.
+- [ ] Slash menu: check no column still uses the code font (lane D saw mono names).
+- [ ] Palette, dialogs/confirms, toast: need Claude captures (⌘K search, a confirm) to size.
+- [ ] sbs pairs must compare at 1pt = 1px (Ferrite renders 1440×900 vs Claude 1920×1050) — scaling both to 900 high makes ours look ~17% bigger.

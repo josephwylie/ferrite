@@ -399,6 +399,24 @@ fn hide_panel(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext
     });
 }
 
+/// One answered turn on `stream`, the Thread then idle: no longer empty, so
+/// its Composer is the conversation's one-row box, not the hero's two-row
+/// one (`pane::composer::box_composer`).
+fn spoken(fake: &Fake, stream: usize) {
+    let streams = fake.streams.borrow();
+    streams[stream]
+        .send(SessionEvent::TextDelta {
+            text: "Done.".into(),
+        })
+        .unwrap();
+    streams[stream]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+}
+
 fn tick(cx: &mut gpui::VisualTestContext) {
     cx.executor()
         .advance_clock(Duration::from_millis(PUMP_MS * 4));

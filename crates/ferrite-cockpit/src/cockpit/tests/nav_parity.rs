@@ -250,7 +250,7 @@ fn the_triangles_fold_for_real_and_the_folds_hold(cx: &mut TestAppContext) {
 /// with no icon, its loose rows' titles start on that label, its Group's
 /// chevron sits on the same column with the Group's title one
 /// `NAV_TREE_INDENT` past it, and the Group's members start on that title,
-/// rows stepping 32 (`NAV_ROW_GAP`), while every row keeps the column's
+/// rows stepping 34 (`NAV_ROW_GAP`), while every row keeps the column's
 /// full width for its fills. No guides. The shown Group's one-line members
 /// stay where its rows were.
 #[gpui::test]
@@ -291,7 +291,10 @@ fn a_project_is_drawn_on_one_left_edge(cx: &mut TestAppContext) {
     };
     let (loose, x) = indent(cx, threads[2]);
     close(px(x), NAV_ROW_PAD_X, "a loose row, on the Project's label");
-    assert!(label.left() > heading.left() + px(NAV_ROW_PAD_X), "no icon before the label");
+    assert!(
+        label.left() > heading.left() + px(NAV_ROW_PAD_X),
+        "no icon before the label"
+    );
     let group_row = at(cx, format!("nav-group-{}", group.get()));
     let chevron = at(cx, format!("nav-group-fold-{}", group.get()));
     assert!(
@@ -299,7 +302,11 @@ fn a_project_is_drawn_on_one_left_edge(cx: &mut TestAppContext) {
         "the Group's chevron on the label's column: {chevron:?}"
     );
     let (first, x) = indent(cx, threads[0]);
-    close(px(x), NAV_ROW_PAD_X + NAV_TREE_INDENT, "a member, a step in");
+    close(
+        px(x),
+        NAV_ROW_PAD_X + NAV_TREE_INDENT,
+        "a member, a step in",
+    );
     assert!(loose.top() < group_row.top() && group_row.bottom() <= first.top());
     assert_eq!(
         loose.top(),
@@ -310,7 +317,10 @@ fn a_project_is_drawn_on_one_left_edge(cx: &mut TestAppContext) {
         format!("nav-guide-{}-0", threads[0].get()),
         format!("nav-guide-group-{}-0", group.get()),
     ] {
-        assert!(cx.debug_bounds(gone.clone().leak()).is_none(), "no guides: {gone}");
+        assert!(
+            cx.debug_bounds(gone.clone().leak()).is_none(),
+            "no guides: {gone}"
+        );
     }
 
     view.update(cx, |view, cx| view.enter_group(group, cx));

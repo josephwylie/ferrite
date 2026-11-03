@@ -311,7 +311,9 @@ fn the_plus_menu_reaches_the_connectors(cx: &mut TestAppContext) {
     };
     open(&view, cx);
     let plus = cx.debug_bounds("composer-attach").expect("the +");
-    let first = cx.debug_bounds("choice-row-0").expect("Add files or photos");
+    let first = cx
+        .debug_bounds("choice-row-0")
+        .expect("Add files or photos");
     assert!(
         first.left() >= plus.left() && first.left() < plus.right(),
         "the menu hangs from the +, over the box, not the sidebar: {first:?} / {plus:?}"

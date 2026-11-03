@@ -2344,10 +2344,28 @@ impl BlockNode {
         // Measure the widest text per column (max-content width). Never
         // capped: a cap would clip overflowing text *and* leave it outside
         // the scrollable width, making it unreachable.
-        let text_style = window.text_style();
-        let font_size = text_style.font_size.to_pixels(window.rem_size());
+        //
+        // Ferrite: measured in the face the cells draw in — the
+        // `table_cell` refinement's, and the head's over it for the first
+        // row (a bolder head is wider) — and with the cell's own horizontal
+        // padding where the refinement sets it in pixels, so a column fitted
+        // to its content (`table_columns_fit`) never wraps its widest line.
+        let rem = window.rem_size();
+        let cell_refinement = node_cx.style.table_cell();
+        let mut body_style = window.text_style();
+        body_style.refine(&cell_refinement.text);
+        let mut head_style = body_style.clone();
+        head_style.refine(&node_cx.style.table_head().text);
+        let side = |side: Option<DefiniteLength>, default: f32| match side {
+            Some(DefiniteLength::Absolute(length)) => f32::from(length.to_pixels(rem)),
+            _ => default,
+        };
+        let cell_pad = side(cell_refinement.padding.left, CELL_PAD_PX / 2.)
+            + side(cell_refinement.padding.right, CELL_PAD_PX / 2.);
         let mut col_w = vec![CELL_MIN_PX; col_count];
-        for row in table.children.iter() {
+        for (row_ix, row) in table.children.iter().enumerate() {
+            let text_style = if row_ix == 0 { &head_style } else { &body_style };
+            let font_size = text_style.font_size.to_pixels(rem);
             for (ix, cell) in row.children.iter().enumerate() {
                 let Some(slot) = col_w.get_mut(ix) else {
                     continue;
@@ -2363,7 +2381,7 @@ impl BlockNode {
                         .text_system()
                         .layout_line(line, font_size, &[run], None)
                         .width;
-                    w = w.max(f32::from(line_w));
+                    w = w.max(f32::from(line_w).ceil());
                 }
                 // Border-box widths, so the padding and border the cell draws
                 // must leave the measured text its full width.
@@ -2372,7 +2390,7 @@ impl BlockNode {
                 } else {
                     0.
                 };
-                *slot = slot.max(w + CELL_PAD_PX + border);
+                *slot = slot.max(w + cell_pad + border);
             }
         }
         let style = &node_cx.style;
@@ -2429,9 +2447,10 @@ impl BlockNode {
                         // space so a narrow table still fills the frame, while
                         // shrinking is clamped at `min_w` — the flex engine
                         // squeezes columns (their text wraps) down to the
-                        // floors before the track starts to scroll.
+                        // floors before the track starts to scroll. Fitted
+                        // columns (`table_columns_fit`) never grow.
                         .flex_basis(px(width))
-                        .flex_grow(width)
+                        .flex_grow(if style.table_columns_fit() { 0. } else { width })
                         .flex_shrink(1.)
                         .min_w(px(min_width))
                         .overflow_hidden()

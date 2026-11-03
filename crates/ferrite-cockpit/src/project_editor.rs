@@ -180,7 +180,6 @@ pub fn add_directory(label: &'static str, cx: &App) -> Button {
 }
 
 const ADD_GROUP: &str = "project-add-directory";
-const DESTRUCTIVE_GROUP: &str = "project-destructive";
 
 /// The confirming button: the one filled control on the card, `INK_STRONG`
 /// with dark ink.
@@ -278,10 +277,10 @@ pub fn directory_row(
         .child(div().flex_shrink_0().child(actions))
 }
 
-/// A destructive action: a word in a 1px `paint::FLOAT_EDGE` box (the
-/// prototype's quick buttons) — `INK_SUBTLE` at rest, `INK_STRONG` on
-/// `paint::RAISED` under the pointer. No red and no wash: colour is state,
-/// and a verb is not one. Disabled, it stays `INK_SUBTLE` and takes no face.
+/// A destructive action, Claude's (claude/confirm-dialog.png `Delete this
+/// session`): its word in `BLOCKED` in a 1px `BLOCKED` box, no fill at
+/// rest, `BLOCKED_WASH` under the pointer and pressed. Disabled, it is
+/// `INK_SUBTLE` in a `paint::FLOAT_EDGE` box and takes no face.
 pub fn destructive_button(
     id: impl Into<gpui::ElementId>,
     label: &'static str,
@@ -289,27 +288,28 @@ pub fn destructive_button(
     cx: &App,
 ) -> Button {
     let none: gpui::Hsla = gpui::rgba(TRANSPARENT).into();
-    let (hover, press): (gpui::Hsla, gpui::Hsla) = if disabled {
-        (none, none)
+    let wash: gpui::Hsla = gpui::rgba(BLOCKED_WASH).into();
+    let (hover, ink) = if disabled {
+        (none, INK_SUBTLE)
     } else {
-        (paint::HOVER.into(), paint::PRESS.into())
+        (wash, BLOCKED)
     };
-    components::faded_button(id, none, hover, press, rgb(INK_SUBTLE).into(), cx)
+    components::faded_button(id, none, hover, hover, rgb(ink).into(), cx)
         .tab_stop(true)
-        .group(DESTRUCTIVE_GROUP)
         .disabled(disabled)
         .when(disabled, |button| button.cursor_default())
         .h(px(FORM_CONTROL_H))
         .px(px(FORM_BUTTON_PAD_X))
         .border_1()
-        .border_color(paint::FLOAT_EDGE)
+        .border_color(if disabled {
+            paint::FLOAT_EDGE.into()
+        } else {
+            gpui::Hsla::from(rgb(BLOCKED))
+        })
         .child(
             components::text_ui()
                 .font_weight(W_BODY)
-                .text_color(rgb(INK_SUBTLE))
-                .when(!disabled, |text| {
-                    text.group_hover(DESTRUCTIVE_GROUP, |style| style.text_color(rgb(INK_STRONG)))
-                })
+                .text_color(rgb(ink))
                 .child(label),
         )
 }

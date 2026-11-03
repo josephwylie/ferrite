@@ -218,11 +218,12 @@ pub fn label(model: &str, announced: &[ModelInfo]) -> String {
         .unwrap_or_else(|| display_name(model))
 }
 
-/// The model as the Composer's footer names it (Claude's `Opus 5.5`):
-/// `model`, else the provider's default row, the model it resolves to
-/// where the provider says (`Default · Opus 5 (1M)` → `Opus 5`), never
-/// the provider's own name. The context tag (`(1M)`) is the menu's, not
-/// the footer's.
+/// The model as the Composer's footer, and the model menu, name it
+/// (Claude's `Opus 5.5`): `model`, else the provider's default row, the
+/// model it resolves to where the provider says (`Default · Opus 5 (1M)`
+/// → `Opus 5`), never the provider's own name and never the bare word
+/// `Default`: a default nobody has resolved yet names the model the CLI
+/// runs then (`cli_default_model`). The context tag (`(1M)`) is neither's.
 pub fn footer_name(provider: Provider, model: Option<&str>, announced: &[ModelInfo]) -> String {
     let name = match model {
         Some(model) => label(model, announced),
@@ -232,7 +233,21 @@ pub fn footer_name(provider: Provider, model: Option<&str>, announced: &[ModelIn
             .unwrap_or_default(),
     };
     let name = name.rsplit(" \u{b7} ").next().unwrap_or(&name);
-    capitalize(name.split(" (").next().unwrap_or(name).trim())
+    let name = name.split(" (").next().unwrap_or(name).trim();
+    if name.eq_ignore_ascii_case("default") {
+        return footer_name(provider, Some(cli_default_model(provider)), &[]);
+    }
+    capitalize(name)
+}
+
+/// The model a provider's CLI runs when nobody chose one and it has not
+/// said which: Claude Code's Opus with its 1M context, Codex's first row.
+/// Never `default` itself, so `footer_name` resolves in one step.
+pub fn cli_default_model(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Claude => "opus[1m]",
+        Provider::Codex => "gpt-6-astra",
+    }
 }
 
 /// A person's name for a raw model id or alias: `claude-fable-5-1` →
@@ -339,9 +354,20 @@ mod tests {
             footer_name(Provider::Claude, Some("claude-opus-5-5[1m]"), &[]),
             "Opus 5.5"
         );
-        assert_eq!(footer_name(Provider::Claude, Some("opus[1m]"), &[]), "Opus 5.5");
+        assert_eq!(
+            footer_name(Provider::Claude, Some("opus[1m]"), &[]),
+            "Opus 5.5"
+        );
         assert_eq!(footer_name(Provider::Claude, None, &announced), "Opus 5");
-        assert_eq!(footer_name(Provider::Claude, None, &[]), "Default");
+        assert_eq!(
+            footer_name(Provider::Claude, None, &[]),
+            "Opus 5.5",
+            "an unresolved default names the model the CLI runs, never `Default`"
+        );
+        assert_eq!(
+            footer_name(Provider::Claude, Some("default"), &[]),
+            "Opus 5.5"
+        );
         assert_eq!(footer_name(Provider::Codex, None, &[]), "GPT-6 Astra");
     }
 

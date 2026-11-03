@@ -79,12 +79,11 @@ pub fn working_tail(facts: WorkingFacts) -> Option<crate::transcript::Transcript
 }
 
 /// The working line's shape while a Session starts: nothing the provider
-/// says yet, so Ferrite's own mark holds the gutter — its shards snapping on
+/// says yet, so Ferrite's own mark holds the gutter — the working mark on
 /// the focused Pane, assembled and still elsewhere and under reduced motion
 /// — and `Starting` in `INK_SUBTLE`, on the working line's own line (Solo's
 /// or a Group Pane's), so the line never shifts when the turn's words
-/// replace it. Its element id is a constant: the timeline has to survive
-/// every re-render of the line.
+/// replace it.
 pub(super) fn starting_line(still: bool, solo: bool) -> Div {
     let mark = if still {
         div()
@@ -94,10 +93,7 @@ pub(super) fn starting_line(still: bool, solo: bool) -> Div {
     } else {
         div()
             .debug_selector(|| "starting-mark-live".into())
-            .child(icons::animated_ferrite_icon(
-                theme::GLYPH_BOX,
-                "starting-progress-indicator",
-            ))
+            .child(components::working_mark(theme::GLYPH_BOX, INK_STRONG))
             .into_any_element()
     };
     let grid = Grid::pane(Default::default(), solo);
@@ -124,7 +120,7 @@ pub(super) fn starting_line(still: bool, solo: bool) -> Div {
 }
 
 /// The working line's mark: the app's one running glyph
-/// (`components::running_spinner`) in the provider's colour; under reduced
+/// (`components::working_mark`) in the provider's colour; under reduced
 /// motion it holds still. Its selector says which.
 fn working_mark(ink: u32, live: bool) -> AnyElement {
     div()
@@ -135,7 +131,7 @@ fn working_mark(ink: u32, live: bool) -> AnyElement {
                 "progress-mark-still".into()
             }
         })
-        .child(components::running_spinner(theme::GLYPH_BOX, ink))
+        .child(components::working_mark(theme::GLYPH_BOX, ink))
         .into_any_element()
 }
 
@@ -483,7 +479,7 @@ fn running_call(transcript: &Transcript) -> Option<&ToolBlock> {
 
 /// The task list (`TASK_*`): the plan the turn works to, a card on a
 /// hairline ring, one row a step — done `check-circle` and its words
-/// dimmed, the step in hand the running spinner (`RUNNING`) and its words
+/// dimmed, the step in hand the working mark (`RUNNING`) and its words
 /// strong, a step to do a dashed ring and its words in the body's ink.
 fn task_list(plan: &[(String, TaskState)], grid: Grid) -> Div {
     div()
@@ -508,7 +504,7 @@ fn task_list(plan: &[(String, TaskState)], grid: Grid) -> Div {
                     INK_SUBTLE,
                 ),
                 TaskState::Current => (
-                    components::running_spinner(theme::TASK_ICON, RUNNING),
+                    components::working_mark(theme::TASK_ICON, RUNNING),
                     INK_STRONG,
                 ),
                 TaskState::ToDo => (

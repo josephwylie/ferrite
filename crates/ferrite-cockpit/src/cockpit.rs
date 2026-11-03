@@ -492,6 +492,9 @@ pub struct CockpitView {
     mode_picker: Option<(ThreadId, u64)>,
     /// The Composer's `+` menu, open on one Pane.
     attach_menu: Option<ferrite_core::roster::PaneIdentity>,
+    /// Holds every footer's plan-usage popover open, its ring's own clicks
+    /// aside: a visual-reference scene's (`usagepopover`), never the app's.
+    usage_popover_held: bool,
     session_control_error: Option<(ThreadId, u64, String)>,
     /// The header `ci` mark's checks card, tied to its Thread (#29). The runs it lists are read from the same cached
     /// `BranchStatus` the mark was drawn from, so the card can never
@@ -1557,6 +1560,7 @@ impl CockpitView {
             session_controls: None,
             mode_picker: None,
             attach_menu: None,
+            usage_popover_held: false,
             session_control_error: None,
             context_checks: None,
             float_triggers: FloatTriggers::default(),
@@ -7309,13 +7313,18 @@ impl CockpitView {
                     selected = Some(rows.len());
                 }
                 // The picker's voice (the prototype's `#picker`): the CLI's
-                // own default reads `Default`, a name in sentence case as
-                // every model's is (SPEC §7), every description
-                // lowercase-first.
+                // own default reads `Default`; every other model is named
+                // as the footer names it (`Opus 5.5`, no `(1M)`: one name
+                // for one model), the context left to its description;
+                // every description lowercase-first.
                 let name = if model.value == "default" {
                     "Default".to_string()
                 } else {
-                    model.display.clone()
+                    ferrite_core::providers::models::footer_name(
+                        provider,
+                        Some(&model.value),
+                        std::slice::from_ref(&model),
+                    )
                 };
                 rows.push(Row {
                     row: pane::MenuRow {
@@ -8545,6 +8554,7 @@ impl CockpitView {
                     pane::plan_usage_ring(
                         ("plan-usage-ring", thread.get() as usize),
                         self.cockpit.account_limits(open.provider()),
+                        self.usage_popover_held,
                         cx,
                     )
                 });
@@ -8575,7 +8585,7 @@ impl CockpitView {
     /// stands only once there is something to send or stop (Claude's: an
     /// empty box shows no send). The `compact` Composer's always stands and
     /// always sends (queued behind a running turn): its placeholder says
-    /// `↵ to send, esc to stop`.
+    /// `↵ to send, ⌘↵ to queue for later`.
     fn send_button(
         &self,
         index: usize,
@@ -8947,7 +8957,11 @@ impl CockpitView {
             open.rows
                 .iter()
                 .map(|row| {
-                    measure.ui(&row.name, ferrite_ui::theme::FS_UI, ferrite_ui::theme::W_LABEL)
+                    measure.ui(
+                        &row.name,
+                        ferrite_ui::theme::FS_UI,
+                        ferrite_ui::theme::W_LABEL,
+                    )
                 })
                 .fold(0., f32::max)
                 .ceil()
@@ -11102,6 +11116,7 @@ impl CockpitView {
             // the drag region stands down while one is open.
             .child(crate::frame().titlebar(self.board_left(), !self.overlay_open(), self.maximized))
             .child(self.view_head(cx))
+            .child(self.history_arrows_element(cx))
             // The panel over the strip's right end: its tabs take
             // their presses, the gaps between them still drag. Its toggle
             // over both heads, in one place.
@@ -12075,8 +12090,8 @@ impl CockpitView {
         }
         // Claude's mode menu: under its `Mode` heading, `Auto` first, each
         // mode with its one line and its tag (`Recommended`, `Default`),
-        // picked by its digit, ✓ on the mode in force; only `Manual` in
-        // `MODE_ATTENTION_INK`.
+        // picked by its digit, ✓ on the mode in force; every row neutral,
+        // `Manual`'s amber the footer chip's alone.
         let mut modes = modes;
         modes.sort_by_key(|choice| choice.value != "auto");
         let heading = ferrite_ui::components::Choice {
@@ -12097,7 +12112,6 @@ impl CockpitView {
                             (choice.value == "auto").then(|| "Recommended".into())
                         },
                         shortcut: (at < 9).then(|| SharedString::from((at + 1).to_string())),
-                        attention: ferrite_ui::theme::mode_is_manual(&choice.value),
                         ..Default::default()
                     }
                 }))
@@ -13884,11 +13898,9 @@ impl CockpitView {
             list = list.child(nav::note("nav-parked-empty", "Nothing parked"));
         }
         let sections = self.view_tree(state.parked.clone());
-        list = list.children(
-            self.view_sections(&sections, cx, |view, row, place, cx| {
-                view.thread_element(row, None, place, cx)
-            }),
-        );
+        list = list.children(self.view_sections(&sections, cx, |view, row, place, cx| {
+            view.thread_element(row, None, place, cx)
+        }));
         let list = if self.machine_lost() {
             machines::held(list, "machine-lost-parked")
         } else {
@@ -14218,13 +14230,13 @@ impl CockpitView {
                         let key = section.project;
                         solos.push(
                             nav::show_more(index, more, nav::RowPlace::ROOT)
-                            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                                if !view.nav_more.remove(&key) {
-                                    view.nav_more.insert(key);
-                                }
-                                cx.notify();
-                            }))
-                            .into_any_element(),
+                                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                                    if !view.nav_more.remove(&key) {
+                                        view.nav_more.insert(key);
+                                    }
+                                    cx.notify();
+                                }))
+                                .into_any_element(),
                         );
                     }
                     rows.push(self.loose_run(zones, solos, cx));

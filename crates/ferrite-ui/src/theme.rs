@@ -118,9 +118,9 @@
 //!    effort; the right panel holds changes, the pull request and context;
 //!    a Group Pane's head speaks its state word. Nothing shows twice on one
 //!    surface.
-//! 8. **Little moves at once.** What moves: the running spinner
-//!    (`components::running_spinner`, an arc turning every
-//!    `MOTION_SPINNER_TURN_MS`), the app's one running glyph — the working
+//! 8. **Little moves at once.** What moves: the working mark
+//!    (`components::working_mark`, Ferrite's two shards parting, twisting
+//!    and seating home every `MOTION_WORKING_MARK_MS`), the app's one running glyph — the working
 //!    line's mark in the provider's colour, and in `RUNNING` in place of the
 //!    mark of every working Thread and on a plan's current step; the working
 //!    caption's shimmer (`components::shimmer`), on the focused Pane only;
@@ -251,9 +251,6 @@ pub const FRAME: u32 = CARD;
 pub const SIDEBAR: u32 = 0x272727;
 pub const SIDEBAR_HOVER: u32 = 0x2f2f2f;
 pub const SIDEBAR_SELECTED: u32 = 0x474747;
-/// A chip whose menu is open: pressed, Claude's #363636 under its model and
-/// permission chips (claude/model-menu.png x1172, y1018–1041).
-pub const CHIP_OPEN: u32 = 0x363636;
 /// The standing choice's `✓` in a menu: Claude's check blue
 /// (claude/model-menu.png x1266–1280, y744–755) — the owner's call, the one
 /// hue in a menu that is not state (rule 6).
@@ -337,6 +334,12 @@ pub const BLOCK_RING: u32 = 0x333333;
 /// `#1a1a1a` → `#1e1e1e` on the plane, where one opaque grey would step
 /// twice as far on one ground as on another and vanish on a float.
 pub const HOVER_WASH: u32 = 0xffffff04;
+/// A chip whose menu is open: pressed, a 12% white wash (rgba) over
+/// whatever ground it stands on — Claude's #363636 under its model and
+/// permission chips on the card's #1a1a1a (claude/model-menu.png x1172,
+/// y1018–1041), and its #4a4a4a under the box's `+` on the field's #303030
+/// (claude/plus-menu.png). One opaque grey vanished on the field.
+pub const CHIP_OPEN: u32 = 0xffffff1f;
 /// 22% — the focused Pane on a Group (more than one Pane shows), a drop
 /// target's edge.
 pub const FOCUS_RING: u32 = 0xffffff38;
@@ -367,7 +370,7 @@ pub mod paint {
     pub const SIDEBAR: Paint = Paint::solid(super::SIDEBAR);
     pub const SIDEBAR_HOVER: Paint = Paint::solid(super::SIDEBAR_HOVER);
     pub const SIDEBAR_SELECTED: Paint = Paint::solid(super::SIDEBAR_SELECTED);
-    pub const CHIP_OPEN: Paint = Paint::solid(super::CHIP_OPEN);
+    pub const CHIP_OPEN: Paint = Paint(super::CHIP_OPEN);
     pub const ENV_STRIP: Paint = Paint::solid(super::ENV_STRIP);
     /// A diff's or a code fence's box, on a reading surface (the card, the
     /// panel).
@@ -471,14 +474,15 @@ pub const SEAM_HOVER: u32 = 0xefefef66;
 
 // -------------------------------------------------------- state + signals
 
-/// Green — live work: the running dot and spinner, `ok`, a passing
+/// Green — live work: the running dot and working mark, `ok`, a passing
 /// check, diff `+`.
 pub const RUNNING: u32 = GREEN;
 /// Yellow — needs you: the dot, the `◆`, the kind word.
 pub const ATTENTION: u32 = YELLOW;
 /// `#e49b31` amber — the permission mode that stops for the operator before
-/// every change, its word in the Composer's footer and its mode-menu row
-/// (the Claude app's orange `Manual`): yellow would read as "pending".
+/// every change, its word in the Composer's footer alone (the Claude app's
+/// orange `Manual`; its mode-menu row is neutral): yellow would read as
+/// "pending".
 pub const MODE_ATTENTION_INK: u32 = 0xe49b31;
 /// Red — failed: the dot, the word `failed`, diff `−`.
 pub const BLOCKED: u32 = RED;
@@ -490,8 +494,9 @@ pub const BLOCKED_WASH: u32 = 0xf3767b1f;
 pub const IDLE: u32 = INK_SUBTLE;
 
 /// Whether a permission mode is Claude's `Manual` (its `default`: ask
-/// before every change): the one mode the mode menu, and the footer word,
-/// draw in `MODE_ATTENTION_INK`, as the Claude app does. Every other mode,
+/// before every change): the one mode whose footer word draws in
+/// `MODE_ATTENTION_INK`, as the Claude app's does (its menu row stays
+/// neutral). Every other mode,
 /// the ones that ask less (accept edits, bypass) among them, wears the
 /// plain meta ink.
 pub fn mode_is_manual(mode: &str) -> bool {
@@ -625,7 +630,7 @@ pub fn mode_word(id: &str) -> Option<gpui::SharedString> {
 }
 
 /// A provider's logomark in its own brand colour — Claude's clay, Codex's
-/// green. Only the mark and its working spinner wear it: never a label, a
+/// green. Only the logomark and the working mark wear it: never a label, a
 /// row or a state.
 pub const PROVIDER_CODEX: u32 = 0x10a37f;
 pub const PROVIDER_CLAUDE: u32 = 0xd97757;
@@ -739,8 +744,6 @@ pub const LH_META: f32 = 16.0;
 pub const FS_BADGE: f32 = 12.0;
 /// 14 on 20 — the Solo Composer's input (a Group's is `FS_UI`).
 pub const FS_COMPOSER: f32 = 14.0;
-/// 16 — the palette's query.
-pub const FS_PALETTE: f32 = 16.0;
 /// 12 on 18 — the panel's diff, in Geist Mono.
 pub const FS_PANEL_DIFF: f32 = 12.0;
 pub const LH_PANEL_DIFF: f32 = 18.0;
@@ -913,8 +916,8 @@ pub const TITLEBAR_H: f32 = 44.0;
 /// (13). Off the scale: the mockups' head.
 pub const VIEW_HEAD_PAD_X: f32 = 20.0;
 pub const VIEW_HEAD_GAP: f32 = 10.0;
-/// The head's history arrows (Claude's `‹ ›`, claude/answer-done.png x 126
-/// and 153): `ICON_BUTTON` doors edge to edge, a 28pt pitch, the glyph
+/// The history arrows (Claude's `‹ ›`, claude/answer-done.png x 126 and
+/// 153), at `HISTORY_X` in the head row: `ICON_BUTTON` doors edge to edge, a 28pt pitch, the glyph
 /// `NAV_TOGGLE_GLYPH`. At an end the arrow is disabled in `INK_SUBTLE`:
 /// Claude's disabled arrow is 0.6 of its live one (#7a777a by #ccc9cb), as
 /// `INK_SUBTLE` is of the doors' `INK_STRONG`.
@@ -930,6 +933,12 @@ pub const CONTROL_CHIP_ICON: f32 = 14.0;
 /// window's left edge, vertically centred for a 14px button in the band.
 pub const TRAFFIC_X: f32 = 13.0;
 pub const TRAFFIC_Y: f32 = (WIN_CHROME_H - 14.0) / 2.0;
+/// The traffic-light group's width: three 14px buttons 6 apart.
+pub const TRAFFIC_W: f32 = 3.0 * 14.0 + 2.0 * 6.0;
+/// The history arrows' left edge, from the window's: `SPACE_2` past the
+/// traffic lights, where Claude and Codex keep theirs — the sidebar head's
+/// empty left slot while it is open, the same spot over the rail folded.
+pub const HISTORY_X: f32 = TRAFFIC_X + TRAFFIC_W + SPACE_2;
 /// The Pane board: 8px gap on both axes, 10px padding on all four sides.
 /// (The prototype's own render reserves 58px at the bottom for its
 /// mode-switcher; that is prototype-only chrome and its `data-view="window"`
@@ -987,7 +996,9 @@ pub const PANEL_CARD_PAD_X: f32 = SPACE_2;
 /// 32px — a panel line (a section head, an Environment row, a connector,
 /// `N files changed`): Claude's row pitch.
 pub const PANEL_SECTION_H: f32 = 32.0;
-/// 16px — clear above and below the hairline between two sections.
+/// 16px — between two panel sections, space and no rule (Claude's: a
+/// section's last row to the next head steps the row pitch plus 16,
+/// claude/side-panel.png).
 pub const PANEL_SECTION_GAP: f32 = SPACE_4;
 /// 32px — the panel's full-width secondary buttons (`Review changes`).
 pub const PANEL_BUTTON_H: f32 = 32.0;
@@ -1104,9 +1115,10 @@ pub const FLOAT_PAD: f32 = SPACE_1;
 pub const FLOAT_PAD_X: f32 = MENU_ROW_INSET_X + MENU_ROW_PAD_X;
 /// The gap a float keeps from the control that opened it.
 pub const FLOAT_OFFSET: f32 = 6.0;
-/// The context menu's width, and any floating list's height cap before it
-/// scrolls.
-pub const MENU_W: f32 = 256.0;
+/// The context menu's least width (it grows to its longest verb beside
+/// its key: Claude's row menu is 165, claude/row-menu.png), and any
+/// floating list's height cap before it scrolls.
+pub const MENU_W: f32 = 160.0;
 pub const MENU_MAX_H: f32 = 420.0;
 /// A menu row's side inset, its inline padding and the gap between its
 /// label and trailing parts; its fill's radius is `R_CONTROL`, inside the
@@ -1114,9 +1126,11 @@ pub const MENU_MAX_H: f32 = 420.0;
 pub const MENU_ROW_INSET_X: f32 = SPACE_1_5;
 pub const MENU_ROW_PAD_X: f32 = 10.0;
 pub const MENU_ROW_GAP: f32 = SPACE_3;
-/// A section heading: 28px, its 12/500 word sat on the heading's foot
+/// A section heading: 24px, its 13/500 word sat on the heading's foot
 /// (4px under it) so it hugs the rows it heads, as the palette's does.
-pub const FLOAT_SECTION_H: f32 = 28.0;
+/// A heading that opens a float puts its word's cap 12 under the float's
+/// top, Claude's 11 (claude/permission-menu.png `Mode`; 28 drew it 16).
+pub const FLOAT_SECTION_H: f32 = 24.0;
 /// 8px — what splits one group of rows from the next inside any floating
 /// surface. Space, never a rule.
 pub const MENU_GROUP_GAP: f32 = SPACE_2;
@@ -1129,18 +1143,6 @@ pub const ROW_ICON: f32 = 16.0;
 /// The room a typed status dot (`components::status_dot`) takes in a row:
 /// its one cell.
 pub const STATUS_DOT: f32 = CH;
-/// The Ferrite progress mark follows the timing and geometry of the supplied
-/// animated logo. These are artwork tokens rather than general motion tokens:
-/// the SVG's 1254-unit viewBox is the coordinate system behind both offsets.
-pub const FERRITE_SNAP_MS: u64 = 3_000;
-pub const FERRITE_SHARD_X: f32 = 38.0 / 1254.0;
-pub const FERRITE_SHARD_Y: f32 = 46.0 / 1254.0;
-pub const FERRITE_PULL_START: f32 = 0.12;
-pub const FERRITE_PULL_END: f32 = 0.34;
-pub const FERRITE_HOLD_END: f32 = 0.54;
-pub const FERRITE_SNAP_END: f32 = 0.615;
-pub const FERRITE_PULL_EASING: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
-pub const FERRITE_SNAP_EASING: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
 
 // ------------------------------------------------------------------ faces
 
@@ -1640,7 +1642,7 @@ pub const JUMP_LATEST_INSET: f32 = SPACE_3;
 /// **The task list** (a plan the provider works to, over the working line):
 /// a card at `R_CARD` on a `CARD_RING`, `TASK_CARD_PAD` inside,
 /// `TASK_ROW_GAP` between its steps, each a `TASK_ICON` mark and its words —
-/// done `check-circle` dimmed, the current step's running spinner, a step
+/// done `check-circle` dimmed, the current step's working mark, a step
 /// to do a dashed ring.
 pub const TASK_CARD_PAD: f32 = SPACE_3;
 /// 16px — the card's clearance in the flow, above it and down to the
@@ -1918,7 +1920,7 @@ pub const READER_NUMBER_GAP: f32 = 2.0 * CH;
 pub const READER_SHARE: f32 = 0.5;
 
 /// A dragged Pane's drop wash: `DROP_WASH` ground, `DROP_EDGE` edge; its
-/// label is a float tag in the float's shell, one tooltip high.
+/// label is a float tag in the float's shell, in the tooltip's pads.
 pub const DROP_LABEL_PAD_X: f32 = TOOLTIP_PAD_X;
 pub const DROP_LABEL_PAD_Y: f32 = TOOLTIP_PAD_Y;
 /// The Pane a live drag picked up, dimmed in its slot until the release.
@@ -2169,6 +2171,10 @@ pub const COMPOSER_INPUT_PAD_B: f32 = SPACE_2;
 /// box's sides.
 pub const COMPOSER_TOOLBAR_H: f32 = 42.0;
 pub const COMPOSER_TOOLBAR_PAD_X: f32 = SPACE_2;
+/// The hero box's line (a draft's, an empty Thread's: Codex's home
+/// composer, codex/home.png y932–986): at least 54 high over its toolbar
+/// row, so the box stands two rows tall, 96 in all (Codex's 98).
+pub const COMPOSER_HERO_INPUT_H: f32 = 54.0;
 /// The `+` attach button (30, off the scale: the mockup's) and its 18px
 /// icon (Lucide's `+` fills 14 of 24: Claude's 14pt cross at a 1.5 stroke).
 pub const COMPOSER_ATTACH: f32 = 30.0;
@@ -2264,9 +2270,12 @@ pub const FLOAT_FOOT_H: f32 = FLOAT_ROW_H + 1.0;
 /// A ladder's step: 22 high (the bar tab's), radius `R_CONTROL`.
 pub const TOKEN_H: f32 = 22.0;
 pub const TOKEN_PAD_X: f32 = SPACE_2;
-/// The `/` and `@` menus: at most the palette's width, hung over the
-/// Composer.
-pub const SLASH_MENU_W: f32 = PALETTE_W;
+/// The `/` and `@` menus, hung over the Composer: a name column and its
+/// description, so wider than Claude's names-only 238
+/// (claude/slash-picker.png) but not the palette's 640, which left a
+/// third of every row empty. A longer description cuts and keeps its
+/// tooltip.
+pub const SLASH_MENU_W: f32 = 480.0;
 /// The Composer's menus at Claude's widths: the model picker (names only,
 /// a model's description in its tooltip), its effort submenu, the
 /// permission-mode menu (a name and its one line), and the `+` menu. The
@@ -2282,11 +2291,13 @@ pub const SUBMENU_GAP: f32 = 2.0;
 pub const FORM_CONTROL_H: f32 = ROW + 2.0 * SPACE_1 + 2.0;
 pub const FORM_FIELD_PAD_X: f32 = CH;
 pub const FORM_BUTTON_PAD_X: f32 = CH;
-/// A tooltip: one float row (`FLOAT_ROW_H`), its text `FLOAT_PAD_X` in,
-/// wrapping past `TOOLTIP_MAX_W`. It is how a truncated label keeps its
-/// full value reachable.
-pub const TOOLTIP_PAD_X: f32 = FLOAT_PAD_X;
-pub const TOOLTIP_PAD_Y: f32 = (FLOAT_ROW_H - LH_UI) / 2.0;
+/// A tooltip: one meta line (`FS_META` on `LH_META`) `TOOLTIP_PAD_Y`
+/// above and below and `TOOLTIP_PAD_X` either side, radius `R_CONTROL`:
+/// 26 high, Codex's (codex/model-list.png), its text 8 in, Claude's
+/// (claude/slash-picker.png), wrapping past `TOOLTIP_MAX_W`. It is how a
+/// truncated label keeps its full value reachable.
+pub const TOOLTIP_PAD_X: f32 = SPACE_2;
+pub const TOOLTIP_PAD_Y: f32 = SPACE_1;
 pub const TOOLTIP_MAX_W: f32 = 320.0;
 /// **A toast** hangs top right, `TOAST_TOP` under what it clears, and
 /// never over the Composer the operator types in. With the right panel
@@ -2302,72 +2313,85 @@ pub const TOOLTIP_MAX_W: f32 = 320.0;
 pub const TOAST_BOX_RIGHT: f32 = SPACE_4;
 pub const TOAST_TOP: f32 = SPACE_2;
 pub const TOAST_QUICK_GAP: f32 = SPACE_2;
-/// **The palette** (command search, ⌘K; SPEC §5.8, `command-search.png`):
-/// a 640px dialog centred on the board, its head `PALETTE_TOP` under the
-/// board's top, over the veil (`VEIL`, the board only), on
-/// `paint::FLOAT`, radius `R_FLOAT`, a 1px `FLOAT_EDGE` ring and
-/// the deep shadow (`SHADOW_PALETTE_*`). Top to bottom:
+/// **The palette** (command search, ⌘K; SPEC §5.8), measured off the
+/// Claude app's own ⌘K search at 1x (2026-11-03): a `PALETTE_W` dialog
+/// centred on the board, its head `PALETTE_TOP` under the board's top, over
+/// the veil (`VEIL`, the board only), on `paint::FLOAT`, radius `R_FLOAT`,
+/// a 1px `FLOAT_EDGE` ring and the deep shadow (`SHADOW_PALETTE_*`). Top
+/// to bottom:
 ///
-/// - the input row, `PALETTE_INPUT_H` over a `FLOAT_EDGE` rule: the `search`
-///   icon (`PALETTE_SEARCH_ICON`), the query in `FS_PALETTE`, `esc` (or
-///   the status filter's word) at the right, `PALETTE_PAD_X` in from
-///   either edge, `PALETTE_GAP` between;
-/// - the list, `PALETTE_LIST_PAD` in (`PALETTE_LIST_PAD_B` at its foot),
-///   scrolling past `PALETTE_MAX_H`: section headings `PALETTE_SECTION_H`
-///   tall, their 12/500 word on the foot less `PALETTE_SECTION_PAD_B`, every
-///   heading after the first `PALETTE_SECTION_GAP` lower; rows
-///   `PALETTE_ROW_H`, radius `R_CONTROL`, `PALETTE_ROW_PAD_X` in, their
-///   parts `PALETTE_GAP` apart — the `PALETTE_MARK_W` mark column, the
-///   name, the context at the right, then the `PALETTE_KEYS_W` key
-///   column (right-aligned: the row's chord, or on a chordless cursor row
-///   the `PALETTE_ENTER_ICON` enter mark), so every context ends on one
-///   edge;
-/// - the footer, `PALETTE_FOOT_H` under a `FLOAT_EDGE` rule, `PALETTE_PAD_X` in.
+/// - the input row, `PALETTE_INPUT_H`: the `search` icon
+///   (`PALETTE_SEARCH_ICON`) `PALETTE_PAD_X` in — where Claude sets its
+///   query — then the query in `FS_UI`, `PALETTE_GAP` between, the status
+///   filter's word at the right;
+/// - the type tabs, `PALETTE_TABS_H` over the list's hairline (a dialog
+///   without tabs rules its input row instead);
+/// - the list, `PALETTE_LIST_PAD` in on every side, scrolling past
+///   `PALETTE_MAX_H`: section headings `PALETTE_SECTION_H` tall, their
+///   13/500 word on the foot less `PALETTE_SECTION_PAD_B`, every heading
+///   after the first `PALETTE_SECTION_GAP` lower; rows `PALETTE_ROW_H`,
+///   radius `R_CONTROL`, `PALETTE_ROW_PAD_X` in (so a row's mark stands
+///   under the input's icon), their parts `PALETTE_GAP` apart — the
+///   `PALETTE_MARK_W` mark column, the name, the context at the right,
+///   then the `PALETTE_KEYS_W` key column (right-aligned: the row's chord,
+///   or on a chordless cursor row the `PALETTE_ENTER_ICON` enter mark), so
+///   every context ends on one edge;
+/// - the footer, `PALETTE_FOOT_H` under a `FLOAT_EDGE` rule,
+///   `PALETTE_PAD_X` in: each hint's word, then its key on a `KEY_CAP`
+///   cap, `PALETTE_HINT_GAP` apart.
 ///
 /// The shortcuts sheet takes the same width, input row and veil.
-pub const PALETTE_W: f32 = 640.0;
+pub const PALETTE_W: f32 = 670.0;
 pub const PALETTE_TOP: f32 = 56.0;
 /// The dialog is a float (`paint::FLOAT`), so the modal sits a step over
 /// the board it covers, never under it; its rows take the float's own
 /// steps, `paint::FLOAT_HOVER` under the pointer and `paint::FLOAT_SEL`
 /// the cursor. Opaque, as every float is (FL-15).
-pub const PALETTE_INPUT_H: f32 = 50.0;
-pub const PALETTE_PAD_X: f32 = SPACE_4;
-/// 10 — between a row's parts, and the input row's (off the space scale,
-/// the mockup's flex gap).
+/// 54: Claude's query sits 27 under the dialog's top.
+pub const PALETTE_INPUT_H: f32 = 54.0;
+/// 24 — Claude's query, tabs, row marks and footer all start here.
+pub const PALETTE_PAD_X: f32 = SPACE_6;
+/// 10 — between a row's parts, and the input row's (Claude's mark → name).
 pub const PALETTE_GAP: f32 = 10.0;
 pub const PALETTE_SEARCH_ICON: f32 = 16.0;
-pub const PALETTE_LIST_PAD: f32 = SPACE_1_5;
-pub const PALETTE_LIST_PAD_B: f32 = SPACE_2;
-/// 32: a 28px heading and the 4px under its word (the mockup's content
-/// box, `height: 28px; padding-bottom: 4px`); a later heading stands
-/// `PALETTE_SECTION_GAP` taller.
-pub const PALETTE_SECTION_H: f32 = 32.0;
-pub const PALETTE_SECTION_PAD_B: f32 = SPACE_1;
-pub const PALETTE_SECTION_GAP: f32 = SPACE_1;
+/// 10 — the list's inset on every side; Claude's row fill stands 10 in.
+pub const PALETTE_LIST_PAD: f32 = 10.0;
+/// 38: the heading, its word's line `PALETTE_SECTION_PAD_B` over its foot,
+/// so the first row's fill starts 48 under the hairline (Claude's
+/// `Recents`); a later heading stands `PALETTE_SECTION_GAP` taller (41
+/// from row to row across Claude's `Actions`).
+pub const PALETTE_SECTION_H: f32 = 38.0;
+pub const PALETTE_SECTION_PAD_B: f32 = 10.0;
+pub const PALETTE_SECTION_GAP: f32 = SPACE_0_5;
 pub const PALETTE_ROW_H: f32 = 36.0;
-/// 10 — a row's inset, the name column on the input's text edge.
-pub const PALETTE_ROW_PAD_X: f32 = 10.0;
-pub const PALETTE_MARK_W: f32 = 14.0;
-pub const PALETTE_MARK_ICON: f32 = 14.0;
+/// 14 — a row's inset: with `PALETTE_LIST_PAD` its mark lands
+/// `PALETTE_PAD_X` in, under the input's icon.
+pub const PALETTE_ROW_PAD_X: f32 = PALETTE_PAD_X - PALETTE_LIST_PAD;
+/// 16 — Claude's row icons.
+pub const PALETTE_MARK_W: f32 = 16.0;
+pub const PALETTE_MARK_ICON: f32 = 16.0;
 pub const PALETTE_ENTER_ICON: f32 = 13.0;
 /// The note a list with nothing to show stands in (`No matches`), centred
 /// in two rows' height, so an empty result does not collapse the dialog.
 pub const PALETTE_EMPTY_H: f32 = 2.0 * PALETTE_ROW_H;
 /// The key column: wide enough for a four-glyph chord (`⌃⌥⌘K`) at 12px.
 pub const PALETTE_KEYS_W: f32 = SPACE_6 + SPACE_4;
-pub const PALETTE_FOOT_H: f32 = 36.0;
+/// 40 — Claude's footer.
+pub const PALETTE_FOOT_H: f32 = 40.0;
 pub const PALETTE_MAX_H: f32 = 12.0 * PALETTE_ROW_H;
-/// ⌘K's type tabs under its input (the Claude app's search): a row
-/// `PALETTE_TABS_H` tall over the list's hairline, each tab a
-/// `PALETTE_TAB_H` pill `PALETTE_TAB_PAD_X` in, `PALETTE_TAB_GAP` apart —
-/// the chosen one `paint::FLOAT_SEL` in `INK_STRONG`, the rest `INK_SUBTLE`.
-pub const PALETTE_TABS_H: f32 = 36.0;
-pub const PALETTE_TAB_H: f32 = 24.0;
-pub const PALETTE_TAB_PAD_X: f32 = SPACE_2;
+/// ⌘K's type tabs under its input (Claude's search): a row
+/// `PALETTE_TABS_H` tall over the list's hairline, its `PALETTE_TAB_H`
+/// pills at the row's top from `PALETTE_PAD_X` in, each its word
+/// `PALETTE_TAB_PAD_X` in, `PALETTE_TAB_GAP` apart — the chosen one
+/// `paint::FLOAT_SEL` in `INK_STRONG`, the rest `INK_SUBTLE`. Claude's:
+/// 26 pills, 10 in, 4 apart, 15 of air under them to the hairline.
+pub const PALETTE_TABS_H: f32 = 40.0;
+pub const PALETTE_TAB_H: f32 = 26.0;
+pub const PALETTE_TAB_PAD_X: f32 = 10.0;
 pub const PALETTE_TAB_GAP: f32 = SPACE_1;
-/// Between the footer's key hints (`Close esc`, `Change type ← →`).
-pub const PALETTE_HINT_GAP: f32 = SPACE_4;
+/// Between the footer's key hints (`Close esc`, `Change type ← →`):
+/// Claude's 20.
+pub const PALETTE_HINT_GAP: f32 = 20.0;
 /// **The find bar** (⌘F): a one-row float `FIND_W` wide, hung
 /// `FLOAT_OFFSET` under the top right of the text it searches — the
 /// `search` icon (`FIND_ICON`), the query, the count.
@@ -2383,9 +2407,10 @@ pub const FIND_ICON: f32 = 14.0;
 /// stepping up to `paint::FLOAT_SEL` under the pointer.
 /// A sheet (Settings, the Project editor, the image preview) is a float at
 /// sheet size: its head two rows (the title and the one close control over
-/// a `paint::LINE`), its body two cells in, a footer under a `paint::LINE`.
+/// a `paint::LINE`), its body `MODAL_PAD` in, a footer under a `paint::LINE`.
 pub const MODAL_HEAD_H: f32 = 2.0 * ROW;
-pub const MODAL_PAD: f32 = 2.0 * CH;
+/// 16 — Claude's confirm dialog sets its title, body and buttons 16 in.
+pub const MODAL_PAD: f32 = SPACE_4;
 pub const MODAL_GAP: f32 = HALF_ROW;
 /// Editors leave an even breathing edge while making room for a scrolling
 /// form at short desktop heights.
@@ -2551,6 +2576,14 @@ pub const QUESTION_OTHER_H: f32 = LH_UI;
 /// The primary's `↵`: `ON_PRIMARY` at 70%, so the key reads under its label
 /// on the primary fill.
 pub const SEND_KEY_INK: u32 = 0x111214b3;
+/// A button's key, one cap per key (Claude's `⌘` `↩` after `Allow once`,
+/// claude/approval.png x1107–1144): `KEY_CAP` square at `KEY_CAP_R`,
+/// `KEY_CAP_GAP` apart, edged in `KEY_CAP_EDGE` on the primary (Claude's
+/// #c0c0c0 on its #efefef) and `LINE` elsewhere.
+pub const KEY_CAP: f32 = 17.0;
+pub const KEY_CAP_GAP: f32 = 3.0;
+pub const KEY_CAP_R: f32 = 4.0;
+pub const KEY_CAP_EDGE: u32 = 0x11121433;
 
 /// A subagent's head, over its transcript while the Pane shows one (no
 /// capture of Claude's drill-in exists: sized as the strip it replaced): one
@@ -2559,8 +2592,8 @@ pub const SEND_KEY_INK: u32 = 0x111214b3;
 /// clips at. `FS_LABEL` SF Pro: the back button (`ICON_BUTTON`), the `Main`
 /// crumb `SUBAGENT_CRUMB_H` (28) high at `R_CONTROL` in `INK_SUBTLE`, a
 /// `SUBAGENT_CRUMB_ICON` (13) `›` in `TEXT_FAINT`, then the agent's mark in a
-/// fixed `SUBAGENT_MARK_W` slot (a nav mark's icon box, the running
-/// spinner's), its name in `INK_STRONG` and its state word in `INK_SUBTLE`,
+/// fixed `SUBAGENT_MARK_W` slot (a nav mark's icon box, the working
+/// mark's), its name in `INK_STRONG` and its state word in `INK_SUBTLE`,
 /// `SUBAGENT_NAME_GAP` (8) apart.
 pub const SUBAGENT_HEAD_H: f32 = 38.0;
 pub const SUBAGENT_HEAD_PAD_X: f32 = SPACE_1_5;
@@ -2620,10 +2653,10 @@ pub const NAV_ROW_PAD_X: f32 = 10.0;
 /// 30px — a one-line row: a view, a Project heading, a Group, a shown
 /// Group's member, and a Thread row with nothing for line 2.
 pub const NAV_ROW_H: f32 = 30.0;
-/// 2px — between two rows, half above and half below each, so rows step
-/// 32 (geometry.md "Sidebar row height / pitch": Claude's 4 is airier, 2
-/// keeps a multi-project tree dense). A row's guides reach across it.
-pub const NAV_ROW_GAP: f32 = SPACE_0_5;
+/// 4px — between two rows, half above and half below each, so rows step
+/// 34, Claude's pitch (geometry.md "Sidebar row height / pitch";
+/// sbs3/sidebar.jpg). A row's guides reach across it.
+pub const NAV_ROW_GAP: f32 = SPACE_1;
 /// 44px — a two-line Thread row: its title, then its branch or reason.
 pub const NAV_ROW2_H: f32 = 44.0;
 /// 20px — one line of a row (line 1, line 2, a task's extra lines).
@@ -2660,8 +2693,8 @@ pub const NAV_WORD_GAP: f32 = SPACE_2;
 /// 6px — between two Project sections.
 pub const NAV_SECTION_GAP: f32 = SPACE_1_5;
 /// A Thread row's marks (§6): 8px solid dots, no halo (Claude's; 6 on a
-/// member row), 14px icons (13 on a member row) — the running spinner
-/// among them.
+/// member row), 14px icons (13 on a member row) — the working mark among
+/// them.
 pub const NAV_DOT: f32 = 8.0;
 pub const NAV_DOT_SMALL: f32 = 6.0;
 /// The middle of a two-line row's line 1 (its two lines centred in the
@@ -2770,8 +2803,8 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 //   run (`MOTION_STREAM_FADE_MS`), the operator's sent bubble
 //   (`MOTION_BUBBLE_FADE_MS`); first paint and scroll-back never animate.
 //   Nothing on a high-frequency interaction scales, slides or staggers.
-// - **Little moves at once** (theme rule 8). The loops: the running spinner
-//   (`MOTION_SPINNER_TURN_MS`) in place of a working Thread's dot and as the
+// - **Little moves at once** (theme rule 8). The loops: the working mark
+//   (`MOTION_WORKING_MARK_MS`) in place of a working Thread's dot and as the
 //   working line's mark, its caption's shimmer (`MOTION_SHIMMER_MS`) on the
 //   focused Pane, and the focused
 //   Composer's caret blink (`MOTION_CARET_BLINK_MS`). A status dot never
@@ -2868,11 +2901,26 @@ pub const MOTION_SCROLLBAR_LINGER_MS: u64 = 1_400;
 /// stops painting drops off after its last declared tick, and the clock
 /// parks.
 pub const MOTION_PULSE_TICK_MS: u64 = 33;
-/// 924ms — one turn of the running spinner's arc (Claude's and Codex's
-/// spinner turn a little under a second), in `SPINNER_STEPS` steps of two
-/// pulse ticks each, so every step lands on a tick.
-pub const MOTION_SPINNER_TURN_MS: u64 = SPINNER_STEPS as u64 * 2 * MOTION_PULSE_TICK_MS;
-pub const SPINNER_STEPS: usize = 14;
+/// 1.6s — one turn of the working mark (`components::working_mark`): the
+/// Ferrite mark rests, its shards part, twist together and seat home.
+/// About two and a half of Claude's 0.6s glyph breaths: calm across a board
+/// of working Threads, yet the 1.2s of motion inside it reads as alive at
+/// 12px. Its moves are continuous (drawn every pulse tick), never stepped.
+pub const MOTION_WORKING_MARK_MS: u64 = 1_600;
+/// The share of the turn the mark rests assembled, from its start (400ms):
+/// the clock draws nothing through it.
+pub const WORKING_MARK_REST: f32 = 0.25;
+/// The share of the motion the shards take to part, and again to seat
+/// (360ms each), sine in-out.
+pub const WORKING_MARK_PART: f32 = 0.3;
+/// Where in the motion the shards twist, out and back, sine in-out: begun
+/// once they have half parted, done before they touch again.
+pub const WORKING_MARK_TWIST: (f32, f32) = (0.15, 0.85);
+/// How far each shard moves off the seam at full part, in the mark's
+/// 1254-unit viewBox: about 1px at 14px, 3.6px at 48px.
+pub const WORKING_MARK_SPREAD: f32 = 95.0;
+/// How far the shards turn at the twist's height, clockwise, together.
+pub const WORKING_MARK_TWIST_DEG: f32 = 40.0;
 /// 2.4s — one sweep of the shimmer's crest across the working caption,
 /// left to right.
 pub const MOTION_SHIMMER_MS: u64 = 2_400;
@@ -3335,15 +3383,8 @@ mod tests {
         assert_eq!(prose_line_height(FS_PROSE), LH_PROSE);
         // The chrome's roles (SPEC §3.5).
         assert_eq!(
-            [
-                FS_TITLE,
-                FS_LABEL,
-                FS_META,
-                FS_BADGE,
-                FS_COMPOSER,
-                FS_PALETTE
-            ],
-            [14.0, 13.0, 13.0, 12.0, 14.0, 16.0]
+            [FS_TITLE, FS_LABEL, FS_META, FS_BADGE, FS_COMPOSER],
+            [14.0, 13.0, 13.0, 12.0, 14.0]
         );
         for size in [
             FS_UI,
@@ -3353,7 +3394,6 @@ mod tests {
             FS_META,
             FS_BADGE,
             FS_COMPOSER,
-            FS_PALETTE,
             FS_PANEL_DIFF,
             FS_CHROME_CODE,
             FS_HOME_TITLE,

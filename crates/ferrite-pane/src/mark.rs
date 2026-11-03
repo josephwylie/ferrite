@@ -147,8 +147,8 @@ impl RowStatus {
     }
 }
 
-/// A row's mark (§6), at its natural size: a working Thread's running
-/// spinner in `RUNNING` (`BLOCKED` while its tests fail) — the one thing in
+/// A row's mark (§6), at its natural size: a working Thread's working
+/// mark in `RUNNING` (`BLOCKED` while its tests fail) — the one thing in
 /// the column that moves — a blocked Thread's solid `ATTENTION` dot, a failed one's `BLOCKED` dot, background work's `RUNNING` ring, a
 /// finish not yet seen `check-circle`, idle `terminal`, parked `terminal`
 /// at half ink. `small` is a member row's: 6px dots, 13px icons.
@@ -194,7 +194,7 @@ pub(crate) fn head_mark(status: RowStatus) -> AnyElement {
 /// are the surface's sizes.
 fn mark_sized(status: RowStatus, ink: u32, dot: f32, glyph: f32) -> AnyElement {
     match status {
-        RowStatus::Working | RowStatus::Failing => components::running_spinner(glyph, ink),
+        RowStatus::Working | RowStatus::Failing => components::working_mark(glyph, ink),
         RowStatus::NeedsYou | RowStatus::Failed => div()
             .size(px(dot))
             .rounded_full()

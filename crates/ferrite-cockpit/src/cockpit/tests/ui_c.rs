@@ -500,7 +500,7 @@ fn unread_panes_hold_still_and_rest_under_reduced_motion(cx: &mut TestAppContext
     cx.update(|_, cx| cx.set_reduce_motion(true));
     tick(cx);
     cx.executor().advance_clock(Duration::from_millis(
-        ferrite_ui::theme::MOTION_SPINNER_TURN_MS + 2 * ferrite_ui::theme::MOTION_PULSE_TICK_MS,
+        ferrite_ui::theme::MOTION_WORKING_MARK_MS + 2 * ferrite_ui::theme::MOTION_PULSE_TICK_MS,
     ));
     cx.run_until_parked();
     assert!(

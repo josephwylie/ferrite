@@ -964,19 +964,27 @@ Full width. `BAR` ground, a `BAR_TOP` line, padding 0 14, gap 18, Geist
 
 ### 5.8 Palette (command search)
 
-- **Dialog.** 640 wide (replacing `PALETTE_W` 84ch), `PALETTE_TOP` 56,
+Measured off the Claude app's own ⌘K search at 1x (2026-11-03,
+`docs/research/craft/DENSITY.md`), which replaces the mockup's numbers.
+
+- **Dialog.** 670 wide (`PALETTE_W`), `PALETTE_TOP` 56,
   over a `VEIL` scrim. `FLOAT` ground, radius 12, a 1px `HAIRLINE_STRONG`
   ring, and today's one float shadow, deepened to `0 24 64` at 55%.
-- **Input row (50).** A `search` icon 16, then the query in Geist 14.5
-  `TEXT_STRONG`. At the right: `esc` in 12 `TEXT_DIM`, or, under a
-  one-letter filter (`b w i d a`), the state's name in its ink. A hairline
-  sits under the row.
+- **Input row (54).** A `search` icon 16, 24 in, then the query in 14
+  `TEXT_STRONG`. At the right, under a one-letter filter (`b w i d a`),
+  the state's name in its ink.
+- **Type tabs (40).** Pills 26 high, their word 10 in, 4 apart, the first
+  24 in, at the row's top; a hairline under the row (a dialog without tabs
+  rules its input row instead).
 - **Sections.** Today's order and content: `Threads`, `Projects`,
   `Groups`, `Commands`, or `Sessions` for the import picker. Headings are
-  12/500 `TEXT_DIM`, 28–32 high. The mockup's `Actions` is `Commands`.
+  13/500 `TEXT_DIM`. The mockup's `Actions` is `Commands`.
   Its `In transcripts` section is **not** built: there is no transcript
-  search today.
-- **Rows.** 36 high, radius 7, padding 0 10, gap 10.
+  search today. Headings are 38 high, their word's line 10 over the foot,
+  the list 10 in, so the first row's fill starts 48 under the hairline;
+  a later heading stands 2 taller.
+- **Rows.** 36 high, radius 6, padding 0 14 (the mark 24 in, under the
+  input's icon), gap 10, marks 16.
   - A mark column: the Thread's mark (§5.1.5), or the command's icon.
   - The name in `TEXT`, with fuzzy-matched characters in 600
     `TEXT_STRONG` (was accent).
@@ -986,9 +994,9 @@ Full width. `BAR` ground, a `BAR_TOP` line, padding 0 14, gap 18, Geist
   - Then the chord as plain `TEXT_DIM` text.
   - The cursor row is `SELECTED` with `TEXT_STRONG`, plus a
     `corner-down-left` icon at the far right.
-- **Footer (36).** A hairline. On the left, the cursor row's cwd when it
-  has one; otherwise today's keys: `↑↓ select · ⏎ open · ⇥ preview in a
-  pane · esc`. On the right, `N results`. All 12 `TEXT_DIM`.
+- **Footer (40).** A hairline. On the left, the key hints, 20 apart: each
+  word in `TEXT_DIM`, its key on an outlined 17 cap (radius 4). On the
+  right, the cursor row's cwd or `N results`, 12 `TEXT_DIM`. 24 in.
 - **Other floats.** Every other float takes the same shell at a smaller
   scale (radius 8, rows 30): menus, pickers, the checks card, the plan
   card, session controls, tooltips and the Notices list.

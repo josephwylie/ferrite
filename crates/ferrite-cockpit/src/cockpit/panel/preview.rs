@@ -247,7 +247,9 @@ impl CockpitView {
                 if active {
                     face.hover_carried(key).text_color(rgb(INK_STRONG))
                 } else {
-                    face.text_color(rgb(INK_STRONG)).hover_raised(key).press_raised()
+                    face.text_color(rgb(INK_STRONG))
+                        .hover_raised(key)
+                        .press_raised()
                 }
             })
             .child(

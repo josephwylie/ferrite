@@ -1223,9 +1223,45 @@ pub fn decision_chord(action: &str) -> Option<SharedString> {
         .map(|keys| components::chord_text(&keys).into())
 }
 
-/// A button's label and its key: the key in the code face at
-/// `SEND_KEY_INK` on the primary, `INK_SUBTLE` elsewhere.
-fn labelled(label: SharedString, key: Option<SharedString>, primary: bool) -> Div {
+/// The keys of the chord bound to a Decision act, one per cap (Claude's
+/// `⌘` `↩`): the modifiers' glyphs, then the key. Empty when nothing binds
+/// it, so a button never names a key that would not act.
+pub fn decision_keys(action: &str) -> Vec<SharedString> {
+    let Some(keys) = components::bound_chord_in(action, Some("Decision")) else {
+        return Vec::new();
+    };
+    keys.split(' ')
+        .flat_map(components::chord_parts)
+        .map(|part| {
+            components::key_glyph(part)
+                .map_or_else(|| part.to_string(), String::from)
+                .into()
+        })
+        .collect()
+}
+
+/// A button's label and its keys, each on its own cap (`KEY_CAP`, Claude's
+/// two-cap `⌘` `↩`): the glyphs in `SEND_KEY_INK` edged `KEY_CAP_EDGE` on
+/// the primary, `INK_SUBTLE` edged `LINE` elsewhere.
+fn labelled(label: SharedString, keys: Vec<SharedString>, primary: bool) -> Div {
+    let (ink, edge): (gpui::Hsla, gpui::Hsla) = if primary {
+        (
+            rgba(theme::SEND_KEY_INK).into(),
+            rgba(theme::KEY_CAP_EDGE).into(),
+        )
+    } else {
+        (rgb(theme::INK_SUBTLE).into(), theme::paint::LINE.into())
+    };
+    let caps = (!keys.is_empty()).then(|| {
+        div()
+            .debug_selector(|| "decision-key-caps".into())
+            .flex()
+            .gap(px(theme::KEY_CAP_GAP))
+            .children(
+                keys.into_iter()
+                    .map(move |key| components::key_cap(key, ink, edge)),
+            )
+    });
     components::text_ui()
         .text_color(rgb(if primary {
             theme::ON_PRIMARY
@@ -1237,18 +1273,7 @@ fn labelled(label: SharedString, key: Option<SharedString>, primary: bool) -> Di
         .gap(px(theme::SPACE_1_5))
         .whitespace_nowrap()
         .child(label)
-        .children(key.map(|key| {
-            div()
-                .text_size(px(theme::FS_META))
-                .map(|key| {
-                    if primary {
-                        key.text_color(rgba(theme::SEND_KEY_INK))
-                    } else {
-                        key.text_color(rgb(theme::INK_SUBTLE))
-                    }
-                })
-                .child(key)
-        }))
+        .children(caps)
 }
 
 /// `Deny` (Claude's): a secondary on `paint::SECONDARY`, a clear step over
@@ -1274,7 +1299,7 @@ pub fn deny_button(
     .px(px(theme::CONTROL_PAD_X))
     .rounded(px(theme::R_CONTROL))
     .when(stacked, |button| button.w_full())
-    .child(labelled("Deny".into(), None, false).text_color(rgb(theme::INK_STRONG)))
+    .child(labelled("Deny".into(), Vec::new(), false).text_color(rgb(theme::INK_STRONG)))
 }
 
 /// The split primary's face: `Allow once` and its chord (`⌘⏎`) on
@@ -1295,7 +1320,7 @@ pub fn allow_button(
         .when(stacked, |button| button.flex_1())
         .child(labelled(
             "Allow once".into(),
-            decision_chord("cockpit::AllowOnce"),
+            decision_keys("cockpit::AllowOnce"),
             true,
         ))
 }

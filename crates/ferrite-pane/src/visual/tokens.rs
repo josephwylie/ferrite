@@ -212,7 +212,10 @@ mod tests {
             value("accent", Scheme::Dark, reading).unwrap(),
             hex(theme::INK_STRONG)
         );
-        assert_eq!(value("fg", Scheme::Dark, reading).unwrap(), hex(theme::INK_STRONG));
+        assert_eq!(
+            value("fg", Scheme::Dark, reading).unwrap(),
+            hex(theme::INK_STRONG)
+        );
         assert_eq!(
             value("font-size", Scheme::Dark, reading).unwrap(),
             format!("{}px", theme::answer_text_size(reading))

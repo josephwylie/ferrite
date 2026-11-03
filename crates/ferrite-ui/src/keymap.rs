@@ -198,6 +198,10 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // as deep as the deepest, so it outranked the kit's menus, popovers
         // and dialogs, whose Enter picks and Escape closes.
         ("enter".into(), "cockpit::Submit", Some(COCKPIT)),
+        // Claude's `⌘↵ to queue for later`: while a turn runs a send waits
+        // behind it, so ⌘⏎ sends too. After ⏎, so the key sheet shows ⏎;
+        // a Decision's own ⌘⏎ (`AllowOnce`, deeper) still wins over it.
+        (with_primary("enter"), "cockpit::Submit", Some(COCKPIT)),
         // Kit buttons synthesize clicks from Enter/Space; do not submit a prompt.
         ("enter".into(), "zed::NoAction", Some("PromptAttachment")),
         ("escape".into(), "cockpit::Interrupt", Some(COCKPIT)),

@@ -1,7 +1,7 @@
 //! Ferrite's shared primitives: the one way render code opens a text run,
 //! lays a plane or a floating surface, draws a status mark or a shortcut,
 //! builds a control or a menu row, and runs the few loops the terminal
-//! grammar allows (the running spinner, the shimmer, the caret
+//! grammar allows (the working mark, the shimmer, the caret
 //! blink — theme rule 8). Longbridge owns the control mechanics; `theme.rs`
 //! is the only token source.
 //!
@@ -151,7 +151,10 @@ pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> But
     let (hover, press) = if disabled {
         (face, face)
     } else {
-        (rgb(theme::PRIMARY_HOVER).into(), rgb(theme::PRIMARY_HOVER).into())
+        (
+            rgb(theme::PRIMARY_HOVER).into(),
+            rgb(theme::PRIMARY_HOVER).into(),
+        )
     };
     faded_button(
         id,
@@ -475,7 +478,7 @@ pub fn status_ring(ink: u32) -> Div {
 pub use loops::*;
 
 /// The loops (see the section note above): re-exported, so callers name
-/// `components::running_spinner` and friends.
+/// `components::working_mark` and friends.
 mod loops {
     use super::*;
 
@@ -486,41 +489,12 @@ mod loops {
         ferrite_core::cadence::frame_at(phase, frames)
     }
 
-    /// The running mark (theme rule 8), the app's one running glyph: a
-    /// quarter arc over a faint ring (`icons::SPINNER_ARC`), `size` square,
-    /// in `ink`, turning once every `MOTION_SPINNER_TURN_MS` in
-    /// `SPINNER_STEPS` steps on the pulse grid — Claude's and Codex's
-    /// spinner. It marks a working Thread (the nav, Pane heads, subagent
-    /// tabs), a plan's current step and a running check, so a board of them
-    /// shares one tick. Under reduced motion the arc holds still.
-    pub fn running_spinner(size: f32, ink: u32) -> AnyElement {
-        let spinner = Spinner { size, ink };
-        crate::loops_overlay::hosted(move || spinner.into_any_element()).into_any_element()
-    }
-
-    #[derive(IntoElement, Clone, Copy)]
-    struct Spinner {
-        size: f32,
-        ink: u32,
-    }
-
-    impl RenderOnce for Spinner {
-        fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-            let step = if motion::reduced_motion(cx) {
-                0
-            } else {
-                let turn = Duration::from_millis(theme::MOTION_SPINNER_TURN_MS);
-                // Drawn again only when the arc steps.
-                let steps = motion::Motion::Frames(theme::SPINNER_STEPS);
-                let phase = motion::script_phase(turn, steps, window.current_view(), cx);
-                frame_at(phase, theme::SPINNER_STEPS)
-            };
-            let angle = std::f32::consts::TAU * step as f32 / theme::SPINNER_STEPS as f32;
-            icons::icon(icons::SPINNER_ARC, self.size, self.ink)
-                .debug_selector(|| "running-spinner".into())
-                .with_transformation(gpui::Transformation::rotate(gpui::radians(angle)))
-        }
-    }
+    /// The app's one running glyph (theme rule 8): Ferrite's mark, its
+    /// shards parting, twisting and seating home (`working_mark`). It marks
+    /// a working Thread (the nav, Pane heads, subagent tabs), the working
+    /// line, a plan's current step and a running check, so a board of them
+    /// shares one clock.
+    pub use crate::working_mark::working_mark;
 
     /// The colour the shimmer crests at over `base`: Claude's clay crests at
     /// the prototype's `#ffe1d3`; another ink lifted toward white by
@@ -850,6 +824,27 @@ pub fn key_combo(keys: &str, ink: u32) -> Div {
     glyph(SharedString::from(text), ink)
         .font_family(theme::FONT_CODE)
         .debug_selector(move || selector.into())
+}
+
+/// One key on its own cap (Claude's `Esc` in its search's footer, its
+/// `⌘` `↩` after `Allow once`): the glyph in `FS_META` on a `KEY_CAP`
+/// square, at least, at `KEY_CAP_R`, edged 1px in `edge`, no fill.
+pub fn key_cap(key: impl Into<SharedString>, ink: impl Into<Hsla>, edge: impl Into<Hsla>) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .min_w(px(theme::KEY_CAP))
+        .h(px(theme::KEY_CAP))
+        .px(px(theme::SPACE_0_5))
+        .border_1()
+        .border_color(edge.into())
+        .rounded(px(theme::KEY_CAP_R))
+        .text_size(px(theme::FS_META))
+        .line_height(px(theme::KEY_CAP))
+        .text_color(ink.into())
+        .child(key.into())
 }
 
 /// A chord as its glyphs, one stroke after another: `cmd-k` → `⌘K`.
@@ -1264,10 +1259,6 @@ pub struct MenuItem {
     /// Arms before it runs: at rest it reads like any row; armed, its label
     /// turns `BLOCKED` and asks for the second press.
     pub destructive: bool,
-    /// A choice that asks for the operator's attention (the `Manual`
-    /// permission mode): its label in `MODE_ATTENTION_INK`, as its footer
-    /// word is.
-    pub attention: bool,
     pub disabled: bool,
 }
 
@@ -1356,8 +1347,6 @@ pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
     let filled = cursor || armed;
     let label = if armed {
         theme::BLOCKED
-    } else if item.attention {
-        theme::MODE_ATTENTION_INK
     } else {
         theme::INK_STRONG
     };
@@ -1494,9 +1483,9 @@ pub fn home_relative(path: &std::path::Path) -> String {
 /// snap everything, the chevron included).
 pub fn fold_chevron(open: bool, size: f32, ink: u32) -> impl IntoElement {
     let turn = if open { 1.0 } else { 0.0 };
-    icons::icon(icons::CHEVRON_RIGHT, size, ink).with_transformation(
-        gpui::Transformation::rotate(gpui::radians(std::f32::consts::FRAC_PI_2 * turn)),
-    )
+    icons::icon(icons::CHEVRON_RIGHT, size, ink).with_transformation(gpui::Transformation::rotate(
+        gpui::radians(std::f32::consts::FRAC_PI_2 * turn),
+    ))
 }
 
 /// A menu row. The only place a menu row takes its pointer role: the raised
@@ -1668,9 +1657,6 @@ pub struct Choice {
     pub badge: Option<SharedString>,
     /// The key that picks it, at the right edge (a mode's `1`…`5`).
     pub shortcut: Option<SharedString>,
-    /// A choice that asks for the operator's attention
-    /// (`MenuItem::attention`).
-    pub attention: bool,
 }
 
 impl Choice {
@@ -1685,7 +1671,6 @@ impl Choice {
         item.note = self.note.clone();
         item.badge = self.badge.clone();
         item.shortcut = self.shortcut.clone();
-        item.attention = self.attention;
         if let (true, Some((path, ink))) = (marked, self.icon) {
             item = item.leading(path, ink);
         }
@@ -1778,7 +1763,7 @@ pub fn scrollbar_bar(
 
 /// A CI check's state, one vocabulary for every surface that lists checks
 /// (the Pane head's checks card), so a state reads the same a click apart. Colour is state (rule 6):
-/// a failure is `BLOCKED`; a run still going the running spinner in
+/// a failure is `BLOCKED`; a run still going the working mark in
 /// `RUNNING`; a pass is done, a shape (`check-circle`) in `INK_SUBTLE`, never
 /// the green a running one wears; a queued run a hollow ring and a skipped
 /// one the ring crossed by a dash, both in `TEXT_FAINT` — they claim
@@ -1831,7 +1816,7 @@ impl CheckMark {
             CheckMark::Passed => {
                 icons::icon(icons::CHECK_CIRCLE, theme::CHECK_MARK, ink).into_any_element()
             }
-            CheckMark::Running => running_spinner(theme::CHECK_MARK, ink),
+            CheckMark::Running => working_mark(theme::CHECK_MARK, ink),
             CheckMark::Queued => ring().into_any_element(),
             CheckMark::Skipped => ring()
                 .child(div().w(px(theme::CHECK_SKIP_DASH)).h(px(1.)).bg(rgb(ink)))
@@ -2163,15 +2148,15 @@ mod tests {
             row_inks(&dead.item(true), false, false).label,
             theme::INK_SUBTLE
         );
+        // A menu row is neutral whatever it names: `Manual`'s amber is
+        // its footer chip's alone (Claude's).
         let manual = Choice {
             label: "Manual".into(),
-            attention: true,
             ..Default::default()
         };
         assert_eq!(
-            row_inks(&manual.item(false), true, false).label,
-            theme::MODE_ATTENTION_INK,
-            "Manual reads amber, on the cursor too"
+            row_inks(&manual.item(false), false, false).label,
+            theme::INK_STRONG
         );
     }
 
@@ -2185,15 +2170,6 @@ mod tests {
         assert_eq!(frame_at(0.95, 10), 9);
         assert_eq!(frame_at(1.0, 10), 0, "a turn wraps");
         assert_eq!(frame_at(0.9999999, 10), 9);
-        // The running spinner's steps land on the pulse grid, a turn a
-        // little under a second.
-        let step = theme::MOTION_SPINNER_TURN_MS / theme::SPINNER_STEPS as u64;
-        assert_eq!(
-            step * theme::SPINNER_STEPS as u64,
-            theme::MOTION_SPINNER_TURN_MS
-        );
-        assert_eq!(step % theme::MOTION_PULSE_TICK_MS, 0);
-        assert!((800..=1_000).contains(&theme::MOTION_SPINNER_TURN_MS));
     }
 
     /// The shimmer's crest travels left to right across the run, peaks at
@@ -2248,14 +2224,14 @@ mod tests {
     }
 
     /// In tests the kit rests (reduced motion): each loop draws its still
-    /// state and leases nothing, so a board of spinners schedules no frame.
+    /// state and leases nothing, so a board of working marks schedules no frame.
     #[gpui::test]
-    fn spinners_and_the_shimmer_hold_still_at_rest(cx: &mut gpui::TestAppContext) {
+    fn working_marks_and_the_shimmer_hold_still_at_rest(cx: &mut gpui::TestAppContext) {
         struct Board;
         impl gpui::Render for Board {
             fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
                 div()
-                    .child(running_spinner(theme::CHECK_MARK, theme::RUNNING))
+                    .child(working_mark(theme::CHECK_MARK, theme::RUNNING))
                     .child(shimmer("Working", theme::PROVIDER_CLAUDE))
             }
         }
@@ -2291,38 +2267,5 @@ mod tests {
         let painted = painted.expect("the shimmer painted lit");
         assert!(painted.ends_with('…'), "cut with an ellipsis: {painted:?}");
         assert!(painted.len() < "Checking the supplied arguments".len());
-    }
-
-    /// Live, the spinner is drawn when its arc steps and not between: one
-    /// draw a step, where the pulse clock's fixed rate drew 30 a second.
-    #[gpui::test]
-    fn a_spinner_is_drawn_only_when_its_glyph_steps(cx: &mut gpui::TestAppContext) {
-        motion::testing::drive();
-        struct Board(std::rc::Rc<std::cell::Cell<usize>>);
-        impl gpui::Render for Board {
-            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
-                self.0.set(self.0.get() + 1);
-                div().child(running_spinner(theme::CHECK_MARK, theme::RUNNING))
-            }
-        }
-        let renders = std::rc::Rc::new(std::cell::Cell::new(0));
-        let counted = renders.clone();
-        let window = cx.add_window(move |_, _| Board(counted));
-        cx.run_until_parked();
-        let before = renders.get();
-        for _ in 0..1_000 {
-            cx.executor().advance_clock(Duration::from_millis(1));
-            cx.run_until_parked();
-        }
-        let drawn = renders.get() - before;
-        let step = theme::MOTION_SPINNER_TURN_MS as usize / theme::SPINNER_STEPS;
-        let steps = 1_000 / step;
-        assert!(
-            (steps..=steps + 1).contains(&drawn),
-            "{drawn} draws in a second of {step}ms steps"
-        );
-        window
-            .update(cx, |_, _, cx| assert!(!motion::pulse_parked(cx)))
-            .unwrap();
     }
 }

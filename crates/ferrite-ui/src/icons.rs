@@ -24,13 +24,8 @@
 use std::borrow::Cow;
 
 use gpui::prelude::*;
-use gpui::{
-    div, point, px, rgb, svg, AnyElement, App, AssetSource, ElementId, SharedString, Svg,
-    Transformation, Window,
-};
-use std::time::Duration;
+use gpui::{div, px, rgb, svg, AnyElement, AssetSource, SharedString, Svg};
 
-use crate::motion;
 use crate::theme;
 
 macro_rules! icons {
@@ -126,8 +121,6 @@ icons![
     "maximize",
     // A plan's pending step (the transcript's task list).
     "circle-dashed",
-    // The running mark, turned by `components::running_spinner`.
-    "spinner-arc",
     // A row's more menu (the nav's `⋯`).
     "ellipsis",
     // The Composer's `+` menu (Claude's marks).
@@ -150,8 +143,10 @@ pub const CHECK: &str = "icons/check.svg";
 pub const BRANCH: &str = "icons/branch.svg";
 pub const CODEX: &str = "icons/codex.svg";
 pub const CLAUDE: &str = "icons/claude.svg";
-const FERRITE_UPPER: &str = "icons/ferrite-upper.svg";
-const FERRITE_LOWER: &str = "icons/ferrite-lower.svg";
+/// The mark's two shards, drawn apart so the working mark can move them
+/// (`working_mark`).
+pub(crate) const FERRITE_UPPER: &str = "icons/ferrite-upper.svg";
+pub(crate) const FERRITE_LOWER: &str = "icons/ferrite-lower.svg";
 /// The settings gear.
 pub const GEAR: &str = "icons/gear.svg";
 /// A parent Agent branching to two children. (The nav no longer draws it:
@@ -245,9 +240,6 @@ pub const CHECK_CIRCLE: &str = "icons/check-circle.svg";
 pub const X_CIRCLE: &str = "icons/x-circle.svg";
 /// A plan's step still to do: a dashed ring (the task list).
 pub const CIRCLE_DASHED: &str = "icons/circle-dashed.svg";
-/// Running: a quarter arc over a faint ring (`components::running_spinner`
-/// turns it).
-pub const SPINNER_ARC: &str = "icons/spinner-arc.svg";
 /// A row's more menu: `⋯`, under the pointer.
 pub const ELLIPSIS: &str = "icons/ellipsis.svg";
 /// The permission mode.
@@ -313,8 +305,8 @@ pub fn icon(path: &'static str, size: f32, color: u32) -> Svg {
         .text_color(rgb(color))
 }
 
-/// Ferrite's mark at rest: the same two shards the animated icon uses, drawn
-/// assembled. A finished answer is not live, so its mark does not move.
+/// Ferrite's mark at rest: the same two shards the working mark moves
+/// (`components::working_mark`), drawn assembled. A finished answer is not live, so its mark does not move.
 pub fn ferrite_icon(size: f32) -> AnyElement {
     let shard = |path| {
         svg()
@@ -336,125 +328,6 @@ pub fn ferrite_icon(size: f32) -> AnyElement {
         .child(shard(FERRITE_UPPER))
         .child(shard(FERRITE_LOWER))
         .into_any_element()
-}
-
-/// Ferrite's two shards pull apart and snap home on the supplied logo's
-/// three-second timeline. GPUI rasterizes SVG rather than running its CSS, so
-/// the two paths are embedded separately and translated by hand. The phase
-/// comes from the shared pulse clock (`motion::loop_phase`), not a
-/// per-frame `with_animation` loop: the painting view re-renders at ~30fps
-/// while the shards move, not at all while they rest, and nothing is
-/// scheduled once the mark is gone. Every
-/// mark reads the same clock, so no per-element state keys it and `_id` is
-/// kept for callers only. Reduced motion holds the assembled mark.
-pub fn animated_ferrite_icon(size: f32, _id: impl Into<ElementId>) -> AnyElement {
-    crate::loops_overlay::hosted(move || FerriteSnap { size }.into_any_element()).into_any_element()
-}
-
-#[derive(IntoElement)]
-struct FerriteSnap {
-    size: f32,
-}
-
-impl RenderOnce for FerriteSnap {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let period = Duration::from_millis(theme::FERRITE_SNAP_MS);
-        // Drawn again only while the shards pull apart and snap home.
-        let moves = motion::Motion::Spans(&[
-            (theme::FERRITE_PULL_START, theme::FERRITE_PULL_END),
-            (theme::FERRITE_HOLD_END, theme::FERRITE_SNAP_END),
-        ]);
-        let displacement =
-            ferrite_snap(motion::loop_phase(period, moves, window.current_view(), cx));
-        let size = self.size;
-        let shard = |path, x: f32, y: f32| {
-            svg()
-                .absolute()
-                .top_0()
-                .left_0()
-                .w(px(size))
-                .h(px(size))
-                .path(path)
-                // GPUI skips `paint_svg` entirely without a concrete text
-                // color, even when the SVG paints only its own gradient.
-                .text_color(rgb(theme::INK_STRONG))
-                .with_transformation(Transformation::translate(point(
-                    px(x * size * displacement),
-                    px(y * size * displacement),
-                )))
-        };
-        div()
-            .relative()
-            .flex_shrink_0()
-            .w(px(size))
-            .h(px(size))
-            .child(shard(
-                FERRITE_UPPER,
-                theme::FERRITE_SHARD_X,
-                -theme::FERRITE_SHARD_Y,
-            ))
-            .child(shard(
-                FERRITE_LOWER,
-                -theme::FERRITE_SHARD_X,
-                theme::FERRITE_SHARD_Y,
-            ))
-    }
-}
-
-fn ferrite_snap(phase: f32) -> f32 {
-    let [pull_x1, pull_y1, pull_x2, pull_y2] = theme::FERRITE_PULL_EASING;
-    let [snap_x1, snap_y1, snap_x2, snap_y2] = theme::FERRITE_SNAP_EASING;
-    match phase {
-        phase if phase < theme::FERRITE_PULL_START => 0.0,
-        phase if phase < theme::FERRITE_PULL_END => cubic_bezier(
-            (phase - theme::FERRITE_PULL_START)
-                / (theme::FERRITE_PULL_END - theme::FERRITE_PULL_START),
-            pull_x1,
-            pull_y1,
-            pull_x2,
-            pull_y2,
-        ),
-        phase if phase < theme::FERRITE_HOLD_END => 1.0,
-        phase if phase < theme::FERRITE_SNAP_END => {
-            1.0 - cubic_bezier(
-                (phase - theme::FERRITE_HOLD_END)
-                    / (theme::FERRITE_SNAP_END - theme::FERRITE_HOLD_END),
-                snap_x1,
-                snap_y1,
-                snap_x2,
-                snap_y2,
-            )
-        }
-        _ => 0.0,
-    }
-}
-
-/// Evaluate a CSS cubic-bezier easing at an x-position. The curve is
-/// monotonic for both easings in the supplied artwork, so a small binary
-/// search is stable and more than precise enough for a rendered frame.
-fn cubic_bezier(x: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x >= 1.0 {
-        return 1.0;
-    }
-    let component = |t: f32, first: f32, second: f32| {
-        let inverse = 1.0 - t;
-        3.0 * inverse * inverse * t * first + 3.0 * inverse * t * t * second + t * t * t
-    };
-    let mut low = 0.0;
-    let mut high = 1.0;
-    const SEARCH_STEPS: usize = 12;
-    for _ in 0..SEARCH_STEPS {
-        let t = (low + high) / 2.0;
-        if component(t, x1, x2) < x {
-            low = t;
-        } else {
-            high = t;
-        }
-    }
-    component((low + high) / 2.0, y1, y2)
 }
 
 #[cfg(test)]
@@ -582,7 +455,7 @@ mod tests {
     const TITLE_BAR_ICONS: [&str; 3] = [BACK, FORWARD, DIFF];
 
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
-    const REFRESH_ICONS: [&str; 28] = [
+    const REFRESH_ICONS: [&str; 27] = [
         PANEL_RIGHT,
         SEARCH,
         INBOX,
@@ -604,7 +477,6 @@ mod tests {
         EXTERNAL,
         MAXIMIZE,
         CIRCLE_DASHED,
-        SPINNER_ARC,
         ELLIPSIS,
         LAPTOP,
         PLUG,
@@ -636,15 +508,5 @@ mod tests {
     fn an_unknown_key_is_absent_rather_than_an_error() {
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
         assert_eq!(Assets.list("icons/").unwrap().len(), ICONS.len());
-    }
-
-    #[test]
-    fn ferrite_snap_matches_the_supplied_animation_timeline() {
-        assert_eq!(ferrite_snap(0.0), 0.0);
-        assert_eq!(ferrite_snap(theme::FERRITE_PULL_START), 0.0);
-        assert_eq!(ferrite_snap(theme::FERRITE_PULL_END), 1.0);
-        assert_eq!(ferrite_snap(theme::FERRITE_HOLD_END), 1.0);
-        assert_eq!(ferrite_snap(theme::FERRITE_SNAP_END), 0.0);
-        assert_eq!(ferrite_snap(1.0), 0.0);
     }
 }

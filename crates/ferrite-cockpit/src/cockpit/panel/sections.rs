@@ -1,18 +1,19 @@
 //! The Panel's one scroll of sections, Claude's: what a Thread works with,
-//! top to bottom, each under the Panel's one section head
-//! (`panel_section_head`) and split from the next by a hairline.
+//! top to bottom in Claude's order, each under the Panel's one section
+//! head (`panel_section_head`) and `PANEL_SECTION_GAP` clear of the next:
+//! space, not a rule.
 //!
 //! - **Environment**: the machine it runs on, its folder (a click shows the
 //!   folder in the system's file browser), and its branch, with where it
 //!   branched from and the checkout's drift and dirt when git has said.
-//! - **Changes**: what it edited, and its pull request once one exists
-//!   (`changes`); left out with neither.
 //! - **Context**: what fills its context window, by category, and the
 //!   lists behind the categories (`pane::context_usage`); left out until
 //!   the provider reports it. The one place context is read: the
 //!   Composer's ring reads plan usage.
 //! - **Connectors**: `N connected` at its head, which folds its MCP servers
 //!   open, each with how it stands; left out with none.
+//! - **Changes**, last: what it edited, and its pull request once one
+//!   exists (`changes`); left out with neither.
 //!
 //! The work it left running (a dev server, a watch) is not listed here: the
 //! chips over the Composer hold that fact (theme rule 7).
@@ -37,7 +38,6 @@ impl CockpitView {
         // waits for an edit or a pull request, Context for the provider's
         // reading, Connectors for a server.
         let mut sections = vec![self.environment_section(thread)];
-        sections.extend(self.changes_section(thread, cx));
         if let Some(usage) = transcript.usage() {
             let error = self
                 .session_control_error
@@ -67,19 +67,16 @@ impl CockpitView {
         if !servers.is_empty() {
             sections.push(connectors(servers, window, cx));
         }
+        sections.extend(self.changes_section(thread, cx));
 
-        let mut body = div()
+        div()
             .debug_selector(|| "panel-sections".into())
             .flex()
             .flex_col()
-            .pb(px(SPACE_2));
-        for (index, section) in sections.into_iter().enumerate() {
-            if index > 0 {
-                body = body.child(section_rule());
-            }
-            body = body.child(section);
-        }
-        body.into_any_element()
+            .gap(px(PANEL_SECTION_GAP))
+            .pb(px(SPACE_2))
+            .children(sections)
+            .into_any_element()
     }
 
     /// Environment: the machine, the folder, the branch.
@@ -162,17 +159,6 @@ fn branch_meta(branch: &SharedString, facts: &crate::facts::ThreadFacts) -> Opti
         }
     }
     (!words.is_empty()).then(|| words.join(" \u{b7} "))
-}
-
-/// The hairline between two sections, `PANEL_SECTION_GAP` clear above and
-/// below it.
-fn section_rule() -> Div {
-    use ferrite_ui::theme::*;
-    div()
-        .flex_shrink_0()
-        .my(px(PANEL_SECTION_GAP))
-        .h(px(HAIRLINE_W))
-        .bg(paint::LINE)
 }
 
 /// One line under a section (`PANEL_SECTION_H`): its icon on the content

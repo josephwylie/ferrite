@@ -446,6 +446,8 @@ const STATES: &[(&str, &[&str])] = &[
     ("preview", &["app"]),
     ("modemenu", &["app"]),
     ("plusmenu", &["app"]),
+    // The footer's plan-usage popover, for claude/usage-popover.png.
+    ("usagepopover", &["app"]),
     // (end WP-D)
 
     // ---- WP-E states (append above the end line)
@@ -1049,6 +1051,25 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let setup: Setup = Box::new(|view, _, _| {
                 view.attach_menu = Some(view.panes[0].identity);
             });
+            (scene, setup)
+        }
+        "usagepopover" => {
+            let mut scene = conversation(label);
+            // The account's windows, as Claude reports them: the ring
+            // shows only once one is reported.
+            let window = |used_fraction| {
+                Some(ferrite_core::RateLimitWindow {
+                    used_fraction,
+                    resets_at: None,
+                })
+            };
+            let feed = Feed(scene.feeds.borrow()[0].clone());
+            feed.ev(SessionEvent::RateLimits {
+                five_hour: window(0.18),
+                weekly: window(0.42),
+            });
+            scene.core.pump();
+            let setup: Setup = Box::new(|view, _, _| view.usage_popover_held = true);
             (scene, setup)
         }
         // (end WP-D)
@@ -2342,7 +2363,7 @@ fn prose() -> Scene {
 
 /// The loops overlay's pixel parity (`loops_overlay`): one scene — a
 /// working Thread focused in an active window, its working line's star and
-/// shimmer, the nav's running spinner, the Composer's caret blinking over a
+/// shimmer, the nav's working mark, the Composer's caret blinking over a
 /// character of typed text — drawn with the overlay and without it, at the
 /// same instants every 20ms across more than a blink, must give the same
 /// framebuffer; then again with the palette open over it, its caret

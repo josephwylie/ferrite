@@ -317,8 +317,7 @@ impl CockpitView {
             let keys = Self::key_label(action);
             let row = home_row(
                 ("empty-board-command", at),
-                ferrite_ui::icons::icon(glyph, NAV_ICON, INK_STRONG)
-                    .into_any_element(),
+                ferrite_ui::icons::icon(glyph, NAV_ICON, INK_STRONG).into_any_element(),
                 div().text_color(rgb(INK_STRONG)).child(verb),
                 div().children(keys.map(|keys| {
                     ferrite_ui::components::key_combo(&keys, INK_SUBTLE)

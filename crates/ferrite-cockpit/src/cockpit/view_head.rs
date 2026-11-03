@@ -1,8 +1,12 @@
 //! The view head (SPEC §5.2): the head row's slot over the board.
 //!
-//! It opens with the history arrows (Claude's `‹ ›`, `history`), on every
-//! board, the empty one and a draft's too: back is most wanted where there
-//! is nothing else to do.
+//! The history arrows (Claude's and Codex's `‹ ›`, `history`) are not the
+//! head's: they stand in the head row right of the traffic lights
+//! (`history_arrows_element`), in the sidebar head's empty left slot while
+//! the sidebar is open and in the same screen spot over the rail while it
+//! is folded, on every board, the empty one and a draft's too: back is most
+//! wanted where there is nothing else to do. Where they reach over the
+//! board (folded), the head starts clear of them (`view_head_pad_l`).
 //!
 //! Solo names the focused Thread — its title (a double-click renames it),
 //! taking the row's free width, and its ▾ (the Thread's menu, as Claude's
@@ -30,10 +34,10 @@ use super::*;
 use ferrite_ui::{components, icons, theme};
 
 impl CockpitView {
-    /// The head over the board: the history arrows, then the view's name
-    /// when the board shows one — a Thread in Solo, or a Group.
+    /// The head over the board: the view's name when the board shows one
+    /// — a Thread in Solo, or a Group.
     pub(super) fn view_head(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut parts = vec![self.history_arrows(cx)];
+        let mut parts = Vec::new();
         if !self.empty_board_shown() {
             let named = match self.cockpit.roster().view() {
                 View::Solo => self.solo_head(cx),
@@ -63,7 +67,7 @@ impl CockpitView {
             .flex()
             .items_center()
             .gap(px(theme::VIEW_HEAD_GAP))
-            .pl(px(theme::VIEW_HEAD_PAD_X))
+            .pl(px(self.view_head_pad_l()))
             // Against the panel, the head's end stands in as its start
             // does, so `New thread` never abuts the panel's tabs; the
             // toggle's room is laid flush, under the frame's toggle.
@@ -73,6 +77,32 @@ impl CockpitView {
             .line_height(px(theme::LH_UI))
             .whitespace_nowrap()
             .children(parts)
+            .into_any_element()
+    }
+
+    /// Where the view head's content starts, from the board's left edge:
+    /// `VIEW_HEAD_PAD_X`, or past the history arrows where they reach over
+    /// the board (the rail folded, or riding to it).
+    fn view_head_pad_l(&self) -> f32 {
+        let arrows_end = theme::HISTORY_X + 2.0 * theme::ICON_BUTTON;
+        theme::VIEW_HEAD_PAD_X.max(arrows_end + theme::VIEW_HEAD_GAP - self.board_left())
+    }
+
+    /// The history arrows in the head row (Claude's and Codex's place),
+    /// `HISTORY_X` from the window's left whatever the sidebar does: in the
+    /// sidebar head's empty slot between the traffic lights and its bell,
+    /// and where the sidebar is folded to its rail, in the same spot over
+    /// the title strip. Only the arrows occlude: the row around them still
+    /// drags the window.
+    pub(super) fn history_arrows_element(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .absolute()
+            .top_0()
+            .left(px(theme::HISTORY_X))
+            .h(px(theme::WIN_CHROME_H))
+            .flex()
+            .items_center()
+            .child(self.history_arrows(cx))
             .into_any_element()
     }
 

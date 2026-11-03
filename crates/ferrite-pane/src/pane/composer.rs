@@ -33,8 +33,8 @@ pub fn model_effort_chip(model: SharedString, effort: Option<SharedString>) -> D
 }
 
 /// The permission mode's word under the box: `INK_SUBTLE`, or
-/// `MODE_ATTENTION_INK` for `Manual` (`theme::mode_is_manual`), as its menu
-/// row draws it.
+/// `MODE_ATTENTION_INK` for `Manual` (`theme::mode_is_manual`): the one
+/// place it is amber, its menu row neutral (Claude's).
 pub fn mode_chip(label: SharedString, mode: &str) -> Div {
     let ink = if theme::mode_is_manual(mode) {
         theme::MODE_ATTENTION_INK
@@ -516,29 +516,65 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
             .h(px(theme::COMPOSER_ATTACH))
             .child(control)
     };
-    field = field.child(
-        div()
-            .debug_selector(|| "composer-row".into())
-            .flex()
-            .items_end()
-            .gap(px(theme::COMPOSER_ROW_GAP))
-            .min_w_0()
-            .p(px(theme::COMPOSER_ROW_PAD))
-            .when(attached, |row| row.pt(px(theme::ATTACH_ROW_GAP)))
-            .children(attach.map(slot))
+    let live_key = namespace.clone();
+    let live = div()
+        .debug_selector(move || format!("composer-live-{live_key}"))
+        .flex()
+        .items_start()
+        .flex_1()
+        .min_h(px(theme::COMPOSER_ROW_H))
+        .min_w_0()
+        .child(line);
+    // The hero's box (a draft's, an empty Thread's: the ones that say where
+    // their work runs) is Codex's home composer: the line on its own,
+    // `COMPOSER_HERO_INPUT_H` at least, over a toolbar row holding the `+`
+    // at its left and the send circle at its right. Every other box is
+    // Claude's one row.
+    if env.is_some() {
+        field = field
             .child(
                 div()
-                    .debug_selector(move || format!("composer-live-{namespace}"))
+                    .debug_selector(|| "composer-row".into())
                     .flex()
-                    .items_start()
-                    .flex_1()
-                    .min_h(px(theme::COMPOSER_ROW_H))
                     .min_w_0()
-                    .py(px(theme::COMPOSER_TEXT_PAD_Y))
-                    .child(line),
+                    .min_h(px(theme::COMPOSER_HERO_INPUT_H))
+                    .px(px(theme::COMPOSER_INPUT_PAD_X))
+                    .pt(px(if attached {
+                        theme::ATTACH_ROW_GAP
+                    } else {
+                        theme::COMPOSER_INPUT_PAD_T
+                    }))
+                    .pb(px(theme::COMPOSER_INPUT_PAD_B))
+                    // The line fills the room, its text at the top, so
+                    // typing grows the box upward from its fixed foot.
+                    .child(live.items_stretch()),
             )
-            .children(send.map(slot)),
-    );
+            .child(
+                div()
+                    .debug_selector(|| "composer-toolbar".into())
+                    .flex()
+                    .items_center()
+                    .h(px(theme::COMPOSER_TOOLBAR_H))
+                    .px(px(theme::COMPOSER_TOOLBAR_PAD_X))
+                    .children(attach.map(slot))
+                    .child(div().flex_1())
+                    .children(send.map(slot)),
+            );
+    } else {
+        field = field.child(
+            div()
+                .debug_selector(|| "composer-row".into())
+                .flex()
+                .items_end()
+                .gap(px(theme::COMPOSER_ROW_GAP))
+                .min_w_0()
+                .p(px(theme::COMPOSER_ROW_PAD))
+                .when(attached, |row| row.pt(px(theme::ATTACH_ROW_GAP)))
+                .children(attach.map(slot))
+                .child(live.py(px(theme::COMPOSER_TEXT_PAD_Y)))
+                .children(send.map(slot)),
+        );
+    }
     field = field.children(drop_hint);
     // The `/` or `@` popover paints above the stack — deferred, so it
     // escapes the Pane's clip and draws over the transcript (#24) — from
@@ -802,11 +838,12 @@ const ACCEPT_HINT: &str = "\u{21e5} accept";
 
 /// The resting line's words, and a running turn's.
 const IDLE_PLACEHOLDER: &str = "Type / for commands";
-const RUNNING_PLACEHOLDER: &str = "\u{21b5} to send, esc to stop";
+const RUNNING_PLACEHOLDER: &str = "\u{21b5} to send, \u{2318}\u{21b5} to queue for later";
 
 /// The placeholder for this line, Claude's three: the first prompt, a
-/// draft's or an empty Thread's; while a turn runs, that ↵ still sends
-/// (into the running turn) and Esc stops it; else the way to the commands.
+/// draft's or an empty Thread's; while a turn runs, Claude's words: ↵
+/// still sends (into the running turn) and ⌘↵ queues it for after; else
+/// the way to the commands.
 /// A landed prediction shows verbatim instead. A Decision or a dead
 /// Session changes nothing here: the line still takes typing, and sending
 /// revives.

@@ -883,10 +883,12 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
         })
         .with_inline_code_font(Some(theme::FONT_CODE.into()))
         .with_inline_code_wash(Some(inline_code_wash()))
-        // A table runs the full column (Claude's and Codex's), its columns
-        // shared by their content, every one left-aligned as Claude's are —
-        // numbers too, unless the table's own `---:` asks otherwise; its
-        // rules, the head's and the rows', are the one `LINE`.
+        // A table's rules run the full column (Claude's), its columns as
+        // wide as their content and no wider, the spare width left empty at
+        // the right; every one left-aligned as Claude's are — numbers too,
+        // unless the table's own `---:` asks otherwise; its rules, the
+        // head's and the rows', are the one `LINE`.
+        .with_table_columns_fit(true)
         .with_border(theme::paint::LINE.into())
         .with_table({
             // No box and no ground.
@@ -1802,9 +1804,7 @@ mod file_link_tests {
     /// padding down, the code's own inset in from the right, one code line
     /// high. No language tag stands there at rest.
     #[gpui::test]
-    fn a_fences_actions_stand_on_its_first_line_with_no_language_tag(
-        cx: &mut TestAppContext,
-    ) {
+    fn a_fences_actions_stand_on_its_first_line_with_no_language_tag(cx: &mut TestAppContext) {
         let (_, cx) = fixture(
             cx,
             "```rust

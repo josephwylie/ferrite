@@ -13,6 +13,7 @@ pub mod pointer;
 mod scrollbar;
 pub mod sheet;
 pub mod theme;
+mod working_mark;
 
 use gpui::App;
 

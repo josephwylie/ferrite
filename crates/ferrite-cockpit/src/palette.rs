@@ -580,8 +580,9 @@ impl Render for Palette {
                     .items_center()
                     .gap(px(PALETTE_TAB_GAP))
                     .h(px(PALETTE_TABS_H + 1.0))
-                    .px(px(PALETTE_PAD_X - PALETTE_TAB_PAD_X))
-                    .pb(px(SPACE_1_5))
+                    .px(px(PALETTE_PAD_X))
+                    // The pills hang at the row's top, the air under them.
+                    .pb(px(PALETTE_TABS_H - PALETTE_TAB_H))
                     .border_b_1()
                     .border_color(paint::FLOAT_EDGE),
                 |row, (at, tab)| {
@@ -598,9 +599,7 @@ impl Render for Palette {
             .max_h(px(PALETTE_MAX_H))
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
-            .px(px(PALETTE_LIST_PAD))
-            .pt(px(PALETTE_LIST_PAD))
-            .pb(px(PALETTE_LIST_PAD_B));
+            .p(px(PALETTE_LIST_PAD));
         let mut section = None;
         for (at, shown) in self.shown.iter().enumerate() {
             let row = &self.rows[shown.row];
@@ -711,8 +710,9 @@ impl Palette {
     }
 }
 
-/// The footer's hints: each word in `INK_SUBTLE`, its key after it in
-/// `INK_STRONG`, `PALETTE_HINT_GAP` apart — plain text, no keycaps.
+/// The footer's hints: each word in `INK_SUBTLE`, its key after it on a
+/// cap (`components::key_cap`, `INK_STRONG` edged `FLOAT_EDGE`, Claude's),
+/// `PALETTE_HINT_GAP` apart.
 fn hint_line(hints: &[(&'static str, &'static str)]) -> gpui::Div {
     hints.iter().fold(
         div()
@@ -727,7 +727,11 @@ fn hint_line(hints: &[(&'static str, &'static str)]) -> gpui::Div {
                     .items_center()
                     .gap(px(SPACE_1_5))
                     .child(*word)
-                    .child(components::glyph(*key, INK_STRONG)),
+                    .child(components::key_cap(
+                        *key,
+                        rgb(INK_STRONG),
+                        paint::FLOAT_EDGE,
+                    )),
             )
         },
     )
@@ -761,7 +765,7 @@ fn filter_ink(filter: Attention) -> u32 {
 
 /// The dialog's shell (SPEC §5.8): `PALETTE_W` on `paint::FLOAT`,
 /// radius `R_FLOAT`, clipped to it, the 1px `FLOAT_EDGE` ring drawn
-/// *outside* the box (so it keeps its full 640 inside) and the deep shadow
+/// *outside* the box (so it keeps its full `PALETTE_W` inside) and the deep shadow
 /// under it (`components::dialog_shadow`). The
 /// shortcuts sheet wears it too.
 pub(crate) fn dialog() -> gpui::Div {
@@ -779,7 +783,7 @@ pub(crate) fn dialog() -> gpui::Div {
 
 /// The dialog's input row (the palette's, the shortcuts sheet's filter):
 /// `PALETTE_INPUT_H`, the `search` icon in `INK_SUBTLE`, then the line in
-/// `FS_PALETTE` `INK_STRONG`, its `placeholder` in `PLACEHOLDER_INK` while it is
+/// `FS_UI` `INK_STRONG`, its `placeholder` in `PLACEHOLDER_INK` while it is
 /// empty; over a `FLOAT_EDGE` rule when `rule` (⌘K's tabs carry it instead). The
 /// caller adds what stands at its right.
 pub(crate) fn input_row(
@@ -817,7 +821,7 @@ pub(crate) fn input_row(
                 .flex_1()
                 .min_w_0()
                 .font_family(FONT_UI)
-                .text_size(px(FS_PALETTE))
+                .text_size(px(FS_UI))
                 .line_height(px(LH_UI))
                 .text_color(rgb(INK_STRONG))
                 // Behind the line, so the caret stands at its start.
