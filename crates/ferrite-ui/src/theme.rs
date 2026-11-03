@@ -1042,8 +1042,8 @@ pub const CHECK_MARK: f32 = 15.0;
 pub const CHECK_MARK_RING: f32 = 11.0;
 pub const CHECK_SKIP_DASH: f32 = 5.0;
 
-/// A toast's widest: over the right panel it takes the panel's content
-/// column instead, when that is narrower (`cockpit::toast_float`).
+/// A toast's widest, less where the board is narrower
+/// (`cockpit::toast_float`).
 pub const TOAST_W: f32 = 320.0;
 /// The gap the kit fans a stack out by under the pointer. The stack holds
 /// one toast (`max_items`), so this is only ever the kit's own spacing.
@@ -2349,14 +2349,12 @@ pub const FORM_BUTTON_PAD_X: f32 = CH;
 pub const TOOLTIP_PAD_X: f32 = SPACE_2;
 pub const TOOLTIP_PAD_Y: f32 = SPACE_1;
 pub const TOOLTIP_MAX_W: f32 = 320.0;
-/// **A toast** hangs top right, `TOAST_TOP` under what it clears, and
-/// never over the Composer the operator types in. With the right panel
-/// shown it stands in the panel's content column (its pads in, at most
-/// `TOAST_W`), under the window's head: the panel is reference, the board
-/// is what is being read. With no panel it is `TOAST_W` wide, its right
-/// edge `TOAST_BOX_RIGHT` in, under a Pane's head or tab strip
-/// (`PANE_HEAD_H`), so it covers no head's controls (the kit's toast stack
-/// stands there too).
+/// **A toast** hangs top right of the transcript's column, `TOAST_TOP`
+/// under what it clears, never over the Composer the operator types in nor
+/// the right panel: `TOAST_W` wide (less where the board is narrower), its
+/// right edge `TOAST_BOX_RIGHT` in from the board's (the panel's left while
+/// it shows), under a Pane's head or tab strip (`PANE_HEAD_H`), so it
+/// covers no head's controls (the kit's toast stack stands there too).
 /// One row of head (`◆ needs you · <title>`), one body line, then
 /// the quick answers: `TOKEN_H` buttons (`Allow 1`, `Deny 3`, `Open ⏎`),
 /// `TOAST_QUICK_GAP` over the float's edge.
