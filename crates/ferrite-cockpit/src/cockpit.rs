@@ -717,11 +717,17 @@ pub struct Preferences {
 }
 
 impl Preferences {
-    /// Defaults saved nowhere — the test constructor's and the demo's.
+    /// Defaults saved nowhere — the test constructor's and the demo's —
+    /// with the right panel shown: the suites and scenes measure the
+    /// window with it, and close it where they mean to (`hide_panel`,
+    /// `PANEL_CLOSED`). A launch reads the closed default.
     #[cfg_attr(not(any(test, feature = "visual-reference")), allow(dead_code))]
     fn ephemeral() -> Self {
         Self {
-            settings: ferrite_core::settings::Settings::default(),
+            settings: ferrite_core::settings::Settings {
+                panel_shown: true,
+                ..Default::default()
+            },
             dir: std::env::temp_dir().join(format!("ferrite-prefs-{}", std::process::id())),
             defaults: std::sync::Arc::new(std::sync::Mutex::new(
                 ferrite_core::spawner::SessionDefaults::default(),

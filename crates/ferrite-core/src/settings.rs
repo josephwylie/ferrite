@@ -52,7 +52,8 @@ pub struct Settings {
     pub nav_collapsed: bool,
     /// Whether the Solo view's right panel (Changes, PR, Context) shows
     /// where the window has room for it; ⌥⌘B and its own hide button
-    /// flip it. Default: true.
+    /// flip it. Default: false, as Claude opens with the transcript alone;
+    /// a saved choice is kept.
     pub panel_shown: bool,
     /// The Threads the nav's `Pinned` section holds, in the order they
     /// were pinned (the row menu's `Pin`). An id whose Thread is gone is
@@ -245,7 +246,7 @@ impl Default for Settings {
             codex_approval_policy: "on-request".to_string(),
             codex_sandbox: None,
             nav_collapsed: false,
-            panel_shown: true,
+            panel_shown: false,
             pinned_threads: Vec::new(),
             folded_projects: Vec::new(),
             thread_list_order: ThreadListOrder::Created,
@@ -445,7 +446,7 @@ mod tests {
             codex_approval_policy: "never".to_string(),
             codex_sandbox: Some("workspace-write".to_string()),
             nav_collapsed: true,
-            panel_shown: false,
+            panel_shown: true,
             pinned_threads: vec![crate::ThreadId::new(7)],
             folded_projects: vec![serde_json::from_str("3").unwrap()],
             thread_list_order: ThreadListOrder::Recent,
@@ -504,6 +505,18 @@ mod tests {
         assert_eq!(entries(&dir), [Settings::FILE], "the temp was renamed over");
     }
 
+    /// The panel starts closed, but a file that chose to show it (any file
+    /// saved while the default was open) keeps it shown.
+    #[test]
+    fn a_saved_panel_choice_outlives_the_closed_default() {
+        let dir = scratch("panel-shown");
+        fs::write(dir.join(Settings::FILE), r#"{"panel_shown": true}"#).unwrap();
+        assert!(Settings::load(&dir).unwrap().panel_shown);
+
+        fs::write(dir.join(Settings::FILE), "{}").unwrap();
+        assert!(!Settings::load(&dir).unwrap().panel_shown);
+    }
+
     /// The retired orders (one activity stream, Project sections) load as
     /// creation order, which replaced both; `sort: recent` and `sort:
     /// attention` round-trip.
@@ -553,7 +566,7 @@ mod tests {
         assert_eq!(settings.codex_approval_policy, "on-request");
         assert_eq!(settings.codex_sandbox, None);
         assert!(!settings.nav_collapsed);
-        assert!(settings.panel_shown);
+        assert!(!settings.panel_shown, "the panel starts closed");
         assert_eq!(settings.thread_list_order, ThreadListOrder::Created);
         assert!(settings.confirm_delete);
         assert!(settings.auto_title);
