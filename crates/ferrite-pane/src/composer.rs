@@ -173,6 +173,9 @@ pub struct Composer {
     /// The first visual row painted. Zero until the text passes the visible cap;
     /// then prepaint slides it so the caret's row stays in view.
     scroll: usize,
+    /// The box's height in rows, easing to the rows the text shows when it
+    /// gains or loses one (`motion::COMPOSER_GROW`).
+    height: Option<ferrite_ui::motion::Tween>,
     /// The x a row step keeps aiming at across successive ↑/↓ presses —
     /// a short row in between does not lose the column. Any other edit
     /// clears it.
@@ -223,6 +226,7 @@ impl Composer {
             last_bounds: None,
             visible_row_limit: MAX_ROWS,
             scroll: 0,
+            height: None,
             goal_x: None,
             dragging: false,
             blink_from: None,
@@ -547,6 +551,22 @@ impl Composer {
     /// The staged chip tokens, as picked — display state only.
     pub fn chips(&self) -> &[SharedString] {
         &self.chips
+    }
+
+    /// The box's height in rows now, for text showing `rows`: easing to it
+    /// over `COMPOSER_GROW` when that changes (from wherever a running ease
+    /// has it), at once under reduced motion and on the first layout.
+    fn shown_rows(&mut self, rows: usize, cx: &App) -> f32 {
+        use ferrite_ui::motion::{reduced_motion, Tween, COMPOSER_GROW};
+        let now = cx.background_executor().now();
+        let reduced = reduced_motion(cx);
+        let rows = rows as f32;
+        let height = match self.height {
+            Some(height) if height.to == rows => height,
+            previous => Tween::retarget(previous, rows, rows, COMPOSER_GROW, now, reduced),
+        };
+        self.height = Some(height);
+        height.value(now, reduced)
     }
 
     /// How many visual rows the text last painted as — the box's height in
@@ -1303,10 +1323,9 @@ impl Element for LineElement {
                 });
                 let layout =
                     Layout::shape(composer.read(cx), &text_style, line_height, width, window);
-                size(
-                    width.unwrap_or_else(|| layout.width()),
-                    line_height * layout.rows().min(composer.read(cx).visible_row_limit),
-                )
+                let rows = layout.rows().min(composer.read(cx).visible_row_limit);
+                let shown = composer.update(cx, |composer, cx| composer.shown_rows(rows, cx));
+                size(width.unwrap_or_else(|| layout.width()), line_height * shown)
             });
         (layout_id, ())
     }
@@ -1385,8 +1404,21 @@ impl Element for LineElement {
         );
 
         // Scroll only as far as it takes to show the caret's row, and never
-        // past the last row.
-        let visible = ((bounds.size.height / line_height).round() as usize).max(1);
+        // past the last row. A box mid-ease holds the rows it eases to,
+        // clipped, never scrolled; it asks for its next frame.
+        let reduced = ferrite_ui::motion::reduced_motion(cx);
+        let easing = composer
+            .height
+            .filter(|height| height.running(now, reduced));
+        let visible = easing
+            .map_or_else(
+                || (bounds.size.height / line_height).round() as usize,
+                |height| height.to as usize,
+            )
+            .max(1);
+        if easing.is_some() {
+            ferrite_ui::motion::request_frame(window);
+        }
         let caret_row = layout.row_of(cursor);
         let mut scroll = composer.scroll.min(layout.rows().saturating_sub(visible));
         if caret_row < scroll {
@@ -1931,6 +1963,7 @@ mod tests {
                 KeyBinding::new("up", HistoryOlder, Some("ComposerHistory")),
                 KeyBinding::new("up", Up, Some("Composer")),
                 KeyBinding::new("down", Down, Some("Composer")),
+                KeyBinding::new("backspace", Backspace, Some("Composer")),
             ]);
         });
         let (host, cx) = cx.add_window_view(|window, cx| {
@@ -2221,6 +2254,47 @@ mod tests {
                 .all(|(_, caret)| *caret == Some(Caret::Bar(1.0))),
             "solid and still: {draws:?}"
         );
+    }
+
+    /// With motion on, a row gained eases the box to its new height over
+    /// `COMPOSER_GROW` instead of jumping, and a row lost eases it back;
+    /// the box asks for frames only while it moves.
+    #[gpui::test]
+    fn the_box_eases_to_its_new_height(cx: &mut TestAppContext) {
+        ferrite_ui::motion::testing::drive();
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        cx.run_until_parked();
+        let (_, pitch) = geometry(&composer, cx);
+        let height = |cx: &mut VisualTestContext| geometry(&composer, cx).0.size.height;
+        // Step the clock and deliver the frame the box asked for.
+        let at = |step: Duration, cx: &mut VisualTestContext| {
+            cx.executor().advance_clock(step);
+            cx.update(|window, cx| window.simulate_next_frame(cx));
+            cx.run_until_parked();
+        };
+        assert_eq!(height(cx), pitch, "one row, at rest from the first layout");
+
+        cx.simulate_input("short");
+        cx.simulate_keystrokes("shift-enter");
+        let rows = composer.read_with(cx, |composer, _| composer.rows());
+        assert_eq!(rows, 2, "a second row");
+        let half = Duration::from_millis(ferrite_ui::theme::MOTION_COMPOSER_GROW_MS / 2);
+        at(half, cx);
+        let midway = height(cx);
+        assert!(pitch < midway && midway < pitch * 2, "midway: {midway:?}");
+        at(half * 2, cx);
+        assert_eq!(height(cx), pitch * 2, "landed on two rows");
+
+        cx.simulate_keystrokes("backspace");
+        at(half, cx);
+        let midway = height(cx);
+        assert!(
+            pitch < midway && midway < pitch * 2,
+            "shrinking: {midway:?}"
+        );
+        at(half * 2, cx);
+        assert_eq!(height(cx), pitch, "back to one row");
     }
 
     #[gpui::test]

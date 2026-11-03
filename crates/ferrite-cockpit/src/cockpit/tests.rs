@@ -96,6 +96,7 @@ struct Scripted {
     answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
     controls: Rc<RefCell<Vec<ferrite_core::SessionControl>>>,
     native_controls: Rc<RefCell<bool>>,
+    withheld: Rc<RefCell<Vec<ferrite_core::ControlKind>>>,
     modes: Rc<RefCell<Option<Vec<ferrite_core::PermissionModeChoice>>>>,
     file_searches: Rc<RefCell<Vec<(String, ferrite_core::providers::FileSearchReply)>>>,
     native_files: Rc<RefCell<bool>>,
@@ -132,8 +133,8 @@ impl Session for Scripted {
             vec![]
         }
     }
-    fn supports_control(&self, _: ferrite_core::ControlKind) -> bool {
-        *self.native_controls.borrow()
+    fn supports_control(&self, kind: ferrite_core::ControlKind) -> bool {
+        *self.native_controls.borrow() && !self.withheld.borrow().contains(&kind)
     }
     fn control(&mut self, action: ferrite_core::SessionControl) -> std::io::Result<()> {
         self.controls.borrow_mut().push(action);
@@ -234,6 +235,8 @@ struct Fake {
     answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
     controls: Rc<RefCell<Vec<ferrite_core::SessionControl>>>,
     native_controls: Rc<RefCell<bool>>,
+    /// Controls the native ones leave out, as a provider without them does.
+    withheld: Rc<RefCell<Vec<ferrite_core::ControlKind>>>,
     /// When set, the permission modes every Session offers.
     modes: Rc<RefCell<Option<Vec<ferrite_core::PermissionModeChoice>>>>,
     file_searches: Rc<RefCell<Vec<(String, ferrite_core::providers::FileSearchReply)>>>,
@@ -288,6 +291,7 @@ impl Spawner for Fake {
             answered: self.answered.clone(),
             controls: self.controls.clone(),
             native_controls: self.native_controls.clone(),
+            withheld: self.withheld.clone(),
             modes: self.modes.clone(),
             file_searches: self.file_searches.clone(),
             native_files: self.native_files.clone(),

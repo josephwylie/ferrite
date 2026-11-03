@@ -1368,6 +1368,43 @@ pub mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every tooltip Ferrite draws is the measured one (`tooltip`, its
+    /// keyed kin): nothing builds the kit's default `Tooltip` itself, and
+    /// no kit button is handed bare text, which the kit draws in its own
+    /// default (a kit button takes `tooltip_builder(tooltip(..))`).
+    #[test]
+    fn no_tooltip_falls_back_to_the_kits_default() {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut stale = Vec::new();
+        let mut dirs = vec![crates];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|ext| ext != "rs") || path.ends_with("menu.rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                for (at, line) in text.lines().enumerate() {
+                    let code = line.trim_start();
+                    if code.starts_with("//") {
+                        continue;
+                    }
+                    if code.contains("Tooltip::new(")
+                        || code.contains(".tooltip(\"")
+                        || code.contains(".tooltip(format!")
+                    {
+                        stale.push(format!("{}:{}", path.display(), at + 1));
+                    }
+                }
+            }
+        }
+        assert!(stale.is_empty(), "the kit's default tooltip at {stale:?}");
+    }
     use gpui::{deferred, div, Context, CursorStyle, Render};
     use std::{cell::Cell, rc::Rc};
 

@@ -1827,8 +1827,9 @@ fn a_working_board_renders_the_cockpit_only_when_a_loop_steps(cx: &mut TestAppCo
         "WORKING_BOARD cockpit_renders_5s focused_working={shimmering} (pulse ticks {ticked}) \
          focused_idle={stepping}"
     );
-    // The shimmer's crest moves every tick: the Cockpit draws at the
-    // clock's rate, never faster (A-2 takes the loops off the Cockpit).
+    // The loops step on the clock's grid at most: the Cockpit draws at
+    // its rate, never faster (A-2 takes the loops off the Cockpit; the
+    // shimmer, like the orbs, rides the overlay's display frames).
     let tick_rate = (5_000 / ferrite_ui::theme::MOTION_PULSE_TICK_MS) as usize;
     assert!(
         ticked <= tick_rate + 1,
@@ -2417,6 +2418,55 @@ fn a_kit_toast_coming_in_rebuilds_no_pane(cx: &mut TestAppContext) {
     let built = built_since(&threads, &panes);
     eprintln!("KIT_TOAST_IN pane_builds={built:?}");
     assert_eq!(built, [0, 0, 0, 0], "a toast sliding in rebuilt a Pane");
+}
+
+/// The kit's toast card moves as Ferrite's own toasts do (the vendored
+/// gpui-component's patch): it slides down its own height out from under
+/// the edge it hangs on, never further, and lands within `TOAST_IN`
+/// (200ms), not the kit's 400ms rise from 96px.
+#[gpui::test]
+fn a_kit_toast_slides_its_own_height_on_the_toast_tokens(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (_view, _fake, _threads, cx) = group_board("kit-toast-motion", &[], cx);
+    cx.update(|window, cx| {
+        use gpui::component::WindowExt;
+        window.push_notification(
+            gpui::component::notification::Notification::new().message("Server restarted"),
+            cx,
+        )
+    });
+    // The card slides on the wall clock: let real time pass with the frames.
+    let started = std::time::Instant::now();
+    let mut tops = Vec::new();
+    let mut height = px(0.);
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_millis(16));
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        display_frames(cx);
+        if let Some(card) = cx.debug_bounds("notification-card") {
+            tops.push((started.elapsed(), card.top()));
+            height = card.size.height;
+        }
+    }
+    let rest = tops.last().expect("the card was drawn").1;
+    let (first_at, first) = tops[0];
+    assert!(
+        first_at < Duration::from_millis(150),
+        "the premise: seen early"
+    );
+    assert!(first < rest - px(1.), "it came down into place: {tops:?}");
+    assert!(
+        first >= rest - height - px(1.),
+        "from its own height, no more"
+    );
+    let landed = Duration::from_millis(ferrite_ui::theme::MOTION_TOAST_IN_MS + 48);
+    assert!(
+        tops.iter()
+            .filter(|(at, _)| *at >= landed)
+            .all(|(_, top)| (*top - rest).abs() < px(0.5)),
+        "at rest once TOAST_IN has run: {tops:?}"
+    );
 }
 
 /// One display frame: the clock moves on 16ms and the frame the window

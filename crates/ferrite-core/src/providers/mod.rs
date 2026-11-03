@@ -426,6 +426,15 @@ impl Session for CodexSession {
     fn send(&mut self, text: &str) -> io::Result<()> {
         CodexSession::send(self, text)
     }
+    fn send_as(&mut self, id: &str, text: &str) -> io::Result<()> {
+        CodexSession::send_as(self, id, text)
+    }
+    fn rewind(&mut self, request: RewindRequest) -> io::Result<RewindAck> {
+        CodexSession::rewind(self, request)
+    }
+    fn fork(&mut self, request: ForkRequest) -> io::Result<ForkAck> {
+        CodexSession::fork(self, request)
+    }
 
     fn interrupt(&mut self) -> io::Result<()> {
         CodexSession::interrupt(self)

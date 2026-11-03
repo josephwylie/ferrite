@@ -12,8 +12,11 @@
 //! `stroke-linecap`/`linejoin` attributes on their root element. In the
 //! prototype those come from a `.stroke` class in the page's stylesheet;
 //! resvg parses a standalone file and never sees it, so an icon without
-//! them renders as a filled blob. Every line icon strokes 1.33px at 16px
-//! (`theme::ICON_STROKE`), its `stroke-width` scaled to its viewBox.
+//! them renders as a filled blob. Every line icon strokes
+//! `theme::ICON_STROKE` at whatever size it is drawn: `icon()` names the
+//! size in the key (`drawn_at`), and `Assets` rewrites the baked
+//! `stroke-width` against the viewBox for it (`stroke_at`). A baked width
+//! alone scales with the box: Lucide's 2 on 24 is 1.33px at 16, 1.17 at 14.
 //! `codex.svg` and `claude.svg` are fill
 //! logomarks with no stroke at all, their path data copied verbatim from
 //! the prototype.
@@ -98,7 +101,7 @@ icons![
     // (end title bar)
     "update",
     // ---- UI refresh icons (SPEC §3.7): Lucide's shapes on a 24 grid,
-    // stroked 2 — the family's 1.33px at 16px.
+    // stroked 2 as Lucide ships them (`icon()` restrokes them to 1px).
     "panel-right",
     "search",
     "inbox",
@@ -292,10 +295,20 @@ pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        let (path, size) = match path
+            .rsplit_once('@')
+            .map(|(path, size)| (path, size.parse()))
+        {
+            Some((path, Ok(size))) => (path, Some(size)),
+            _ => (path, None),
+        };
         Ok(ICONS
             .iter()
             .find(|(name, _)| *name == path)
-            .map(|(_, bytes)| Cow::Borrowed(*bytes))
+            .map(|(_, bytes)| match size {
+                Some(size) => Cow::Owned(stroke_at(bytes, size)),
+                None => Cow::Borrowed(*bytes),
+            })
             .or_else(|| gpui::assets::Assets::get(path).map(|asset| asset.data)))
     }
 
@@ -314,11 +327,46 @@ impl AssetSource for Assets {
 #[allow(dead_code)]
 pub fn icon(path: &'static str, size: f32, color: u32) -> Svg {
     svg()
-        .path(path)
+        .path(drawn_at(path, size))
         .w(px(size))
         .h(px(size))
         .flex_shrink_0()
         .text_color(rgb(color))
+}
+
+/// The key of `path` drawn `size` px square: `Assets` strokes it at
+/// `theme::ICON_STROKE` for that size. gpui rasterises an SVG per key and
+/// device size, and hands `AssetSource::load` only the key, so the size
+/// rides in it.
+fn drawn_at(path: &str, size: f32) -> SharedString {
+    format!("{path}@{size}").into()
+}
+
+/// `svg` with every `stroke-width` set so that, scaled from its viewBox to
+/// `size` px, it strokes `theme::ICON_STROKE`. An SVG with no stroke (a
+/// fill logomark) is returned as it is.
+fn stroke_at(svg: &[u8], size: f32) -> Vec<u8> {
+    let Ok(text) = std::str::from_utf8(svg) else {
+        return svg.to_vec();
+    };
+    let view = text
+        .split_once(r#"viewBox=""#)
+        .and_then(|(_, rest)| rest.split('"').next())
+        .and_then(|view| view.split_whitespace().nth(2)?.parse::<f32>().ok());
+    let Some(view) = view else {
+        return svg.to_vec();
+    };
+    let width = format!("{}", theme::ICON_STROKE * view / size);
+    let mut pieces = text.split(r#"stroke-width=""#);
+    let mut out = pieces.next().unwrap_or_default().to_string();
+    for piece in pieces {
+        let rest = piece.split_once('"').map_or("", |(_, rest)| rest);
+        out.push_str(r#"stroke-width=""#);
+        out.push_str(&width);
+        out.push('"');
+        out.push_str(rest);
+    }
+    out.into_bytes()
 }
 
 /// Ferrite's mark at rest: its two shards, drawn assembled. A finished
@@ -444,14 +492,32 @@ mod tests {
             let svg = std::str::from_utf8(&bytes).unwrap();
             assert!(svg.contains(r#"fill="none""#), "{key} does not fill");
             assert!(svg.contains(r#"stroke="currentColor""#), "{key} strokes");
-            // One drawn weight whatever the viewBox: 1.33px at 16px.
-            assert!(
-                (effective_stroke(svg) - theme::ICON_STROKE).abs() < 0.01,
-                "{key} draws {} at 16px, not {}",
-                effective_stroke(svg),
-                theme::ICON_STROKE
-            );
+            // One drawn weight whatever the viewBox or the size drawn.
+            for size in [10.0, 13.0, 14.0, 15.0, 16.0, 18.0] {
+                let bytes = Assets.load(&drawn_at(key, size)).unwrap().unwrap();
+                let drawn = std::str::from_utf8(&bytes).unwrap();
+                assert!(
+                    (drawn_stroke(drawn, size) - theme::ICON_STROKE).abs() < 0.001,
+                    "{key} draws {} at {size}px, not {}",
+                    drawn_stroke(drawn, size),
+                    theme::ICON_STROKE
+                );
+                let unstroked = |svg: &str| {
+                    svg.replace(
+                        &format!(r#"stroke-width="{}""#, attr(svg, "stroke-width")),
+                        "",
+                    )
+                };
+                assert_eq!(
+                    unstroked(drawn),
+                    unstroked(svg),
+                    "{key} changes only its stroke"
+                );
+            }
         }
+        // A logomark has no stroke to change.
+        let claude = Assets.load(&drawn_at(CLAUDE, 14.0)).unwrap().unwrap();
+        assert_eq!(&*claude, &*Assets.load(CLAUDE).unwrap().unwrap());
 
         // The image mark is the prototype's `#image` symbol as written:
         // square-ended, its sun filled.
@@ -506,21 +572,22 @@ mod tests {
         MINIMIZE,
     ];
 
-    /// `stroke-width × 16 / viewBox` — the stroke an icon draws at 16px.
-    fn effective_stroke(svg: &str) -> f32 {
-        let attr = |name: &str| {
-            let at = svg.find(&format!("{name}=\"")).unwrap() + name.len() + 2;
-            let end = at + svg[at..].find('"').unwrap();
-            svg[at..end].to_string()
-        };
-        let stroke: f32 = attr("stroke-width").parse().unwrap();
-        let view: f32 = attr("viewBox")
+    fn attr(svg: &str, name: &str) -> String {
+        let at = svg.find(&format!("{name}=\"")).unwrap() + name.len() + 2;
+        let end = at + svg[at..].find('"').unwrap();
+        svg[at..end].to_string()
+    }
+
+    /// `stroke-width × size / viewBox`: the stroke an icon draws at `size`.
+    fn drawn_stroke(svg: &str, size: f32) -> f32 {
+        let stroke: f32 = attr(svg, "stroke-width").parse().unwrap();
+        let view: f32 = attr(svg, "viewBox")
             .split_whitespace()
             .nth(2)
             .unwrap()
             .parse()
             .unwrap();
-        stroke * 16.0 / view
+        stroke * size / view
     }
 
     /// A name nothing embeds is `Ok(None)`, not an error: gpui asks for a

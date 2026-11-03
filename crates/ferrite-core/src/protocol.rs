@@ -1343,6 +1343,7 @@ pub enum WireControlKind {
     BackgroundTasks,
     SetPermissionMode,
     Rewind,
+    RewindFiles,
     #[serde(other)]
     Unknown,
 }
@@ -2631,6 +2632,7 @@ impl From<&crate::ControlKind> for WireControlKind {
             Kind::BackgroundTasks => Self::BackgroundTasks,
             Kind::SetPermissionMode => Self::SetPermissionMode,
             Kind::Rewind => Self::Rewind,
+            Kind::RewindFiles => Self::RewindFiles,
         }
     }
 }
@@ -2649,6 +2651,7 @@ impl TryFrom<&WireControlKind> for crate::ControlKind {
             Kind::BackgroundTasks => Self::BackgroundTasks,
             Kind::SetPermissionMode => Self::SetPermissionMode,
             Kind::Rewind => Self::Rewind,
+            Kind::RewindFiles => Self::RewindFiles,
             Kind::Unknown => return Err(Unknown),
         })
     }

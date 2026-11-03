@@ -389,7 +389,7 @@ impl CockpitView {
                         .debug_selector(|| "preview-copy-path".into())
                         .child(
                             ferrite_ui::components::copy_button("preview-copy-path", shown)
-                                .tooltip("Copy path")
+                                .tooltip_text("Copy path")
                                 .door(ICON_BUTTON, ICON_BUTTON_GLYPH, R_CONTROL),
                         )
                         .into_any_element(),

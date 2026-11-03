@@ -507,6 +507,7 @@ impl ClaudeSession {
                 | ControlKind::BackgroundTasks
                 | ControlKind::SetPermissionMode
                 | ControlKind::Rewind
+                | ControlKind::RewindFiles
         )
     }
 

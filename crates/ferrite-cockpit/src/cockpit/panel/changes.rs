@@ -481,7 +481,7 @@ fn file_actions(
                 .debug_selector(move || format!("panel-file-copy-{index}"))
                 .child(
                     ferrite_ui::components::copy_button(("panel-file-copy", index), shown_path)
-                        .tooltip("Copy path")
+                        .tooltip_text("Copy path")
                         .door(PANEL_FILE_ACTION, PANEL_FILE_ACTION_GLYPH, R_CONTROL)
                         .on_raised(),
                 ),

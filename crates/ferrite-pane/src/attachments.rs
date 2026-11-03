@@ -183,7 +183,10 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
                 chip.child(
                     remove_button(("remove-attachment", index))
                         .accessibility_label(format!("Remove {name}"))
-                        .tooltip(format!("Remove {}", path.display()))
+                        .tooltip_builder(ferrite_ui::menu::tooltip(format!(
+                            "Remove {}",
+                            path.display()
+                        )))
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();
                             remove(&removed, window, cx);
@@ -303,7 +306,10 @@ fn image_card(
                     .border_color(theme::paint::LINE)
                     .key_context("PromptAttachment")
                     .accessibility_label(format!("Remove {name}"))
-                    .tooltip(format!("Remove {}", path.display()))
+                    .tooltip_builder(ferrite_ui::menu::tooltip(format!(
+                        "Remove {}",
+                        path.display()
+                    )))
                     .child(ferrite_ui::icons::icon(
                         ferrite_ui::icons::CLOSE,
                         theme::ATTACH_REMOVE_ICON,
@@ -408,7 +414,7 @@ pub fn quote_row(
                 remove_button(("remove-quote", index))
                     .debug_selector(move || format!("remove-quote-{index}"))
                     .accessibility_label("Remove quote")
-                    .tooltip("Remove quote")
+                    .tooltip_builder(ferrite_ui::menu::tooltip("Remove quote"))
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         remove(window, cx);
@@ -453,7 +459,7 @@ fn review_chip(comments: usize, on_drop: Option<DropReview>) -> gpui::Div {
                 remove_button("drop-review-comments")
                     .debug_selector(|| "drop-review-comments".into())
                     .accessibility_label("Remove the review comments")
-                    .tooltip("Remove the review comments")
+                    .tooltip_builder(ferrite_ui::menu::tooltip("Remove the review comments"))
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         on_drop(window, cx);

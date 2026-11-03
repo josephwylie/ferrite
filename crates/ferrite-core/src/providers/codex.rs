@@ -21,6 +21,7 @@ mod live_catalogs;
 mod questions;
 mod queue;
 mod requests;
+mod rewind;
 pub(super) mod wire;
 pub(crate) use queue::is_steer_id;
 pub(crate) use wire::file_change_diffs;
@@ -39,7 +40,7 @@ use crate::activity::AgentKey;
 use crate::store::Provider;
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
-use super::FileSearchReply;
+use super::{FileSearchReply, ForkAck, ForkRequest, RewindAck, RewindRequest};
 
 use wire::ThreadHandshake;
 
@@ -271,6 +272,7 @@ pub struct CodexSession {
     native_questions: Arc<Mutex<questions::NativeRequests>>,
     file_search: Arc<Mutex<file_search::Requests>>,
     queue: Arc<Mutex<queue::Queue>>,
+    rewinds: Arc<Mutex<rewind::Rewinds>>,
 }
 
 impl CodexSession {
@@ -348,6 +350,7 @@ impl CodexSession {
         let file_search = Arc::new(Mutex::new(file_search::Requests::default()));
         let (skills_sender, skills_ready) = sync_channel(1);
         let queue = Arc::new(Mutex::new(queue::Queue::default()));
+        let rewinds = Arc::new(Mutex::new(rewind::Rewinds::default()));
         let handshake = read_stdout(
             stdout,
             Arc::downgrade(&stdin),
@@ -363,6 +366,7 @@ impl CodexSession {
             Arc::clone(&native_questions),
             Arc::clone(&file_search),
             queue.clone(),
+            Arc::clone(&rewinds),
             config.cwd.clone(),
             config.resume.is_some(),
             config.visuals.clone(),
@@ -391,6 +395,7 @@ impl CodexSession {
             native_questions,
             file_search,
             queue,
+            rewinds,
         };
 
         // The handshake, in the server's required order. A failed one must
@@ -596,11 +601,24 @@ impl CodexSession {
     }
 
     pub fn send(&mut self, text: &str) -> io::Result<()> {
+        self.start_turn(None, text)
+    }
+
+    /// Send one prompt under Ferrite's `id`, which its `userMessage` keeps
+    /// as `clientId`: how a rewind or a fork finds the prompt's turn.
+    pub fn send_as(&mut self, id: &str, text: &str) -> io::Result<()> {
+        self.start_turn(Some(id), text)
+    }
+
+    fn start_turn(&mut self, id: Option<&str>, text: &str) -> io::Result<()> {
         let input = wire::input_items(text, &lock(&self.skills), self.cwd.as_deref());
         // The Pane makes its own compact preview; request the detailed
         // provider summary so expanding it can reveal additional text.
         let mut params =
             serde_json::json!({"threadId": self.thread_id, "input": input, "summary": "detailed"});
+        if let Some(id) = id {
+            params["clientUserMessageId"] = serde_json::json!(id);
+        }
         if let Some(effort) = &self.effort {
             params["effort"] = serde_json::json!(effort);
         }
@@ -620,6 +638,31 @@ impl CodexSession {
             lock(&self.requests).discard(id);
         }
         result
+    }
+
+    /// Cut the conversation back to before the prompt `request` names
+    /// (`thread/revert`, in place); answered on the ack. Codex keeps no
+    /// file checkpoints, so a rewind with its files is refused at once.
+    pub fn rewind(&mut self, request: RewindRequest) -> io::Result<RewindAck> {
+        if request.files {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Codex cannot restore files",
+            ));
+        }
+        let (reply, ack) = sync_channel(1);
+        let line = lock(&self.rewinds).rewind(&self.thread_id, request, reply);
+        self.write_line(&line)?;
+        Ok(ack)
+    }
+
+    /// A new Codex thread holding this one up to before the prompt
+    /// `request` names, or all of it (`thread/fork`); answered on the ack.
+    pub fn fork(&mut self, request: ForkRequest) -> io::Result<ForkAck> {
+        let (reply, ack) = sync_channel(1);
+        let line = lock(&self.rewinds).fork(&self.thread_id, request, reply);
+        self.write_line(&line)?;
+        Ok(ack)
     }
 
     /// Ask the app-server for its ranked fuzzy matches. Its one cancellation
@@ -715,6 +758,9 @@ impl CodexSession {
                 // Codex verb for Claude's "send everything to the
                 // background", so `BackgroundTasks` stays unsupported.
                 | ControlKind::StopTask
+                // `thread/revert` and `thread/fork`; no file checkpoints,
+                // so never `RewindFiles`.
+                | ControlKind::Rewind
         )
     }
 
@@ -916,6 +962,7 @@ fn read_stdout(
     native_questions: Arc<Mutex<questions::NativeRequests>>,
     file_search: Arc<Mutex<file_search::Requests>>,
     queue: Arc<Mutex<queue::Queue>>,
+    rewinds: Arc<Mutex<rewind::Rewinds>>,
     cwd: Option<PathBuf>,
     resumed: bool,
     visuals: Option<crate::visual::Visuals>,
@@ -1057,6 +1104,15 @@ fn read_stdout(
                     }
                 }
                 if lock(&file_search).observe(&frame) {
+                    continue;
+                }
+                if lock(&rewinds).owns(&frame) {
+                    let next = lock(&rewinds).observe(&frame);
+                    if let (Some(request), Some(stdin)) = (next, stdin.upgrade()) {
+                        if let Err(error) = write_request(&stdin, &request) {
+                            lock(&rewinds).write_failed(error);
+                        }
+                    }
                     continue;
                 }
                 if let Some(update) = catalogs.observe(&frame) {

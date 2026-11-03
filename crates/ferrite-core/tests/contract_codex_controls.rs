@@ -177,3 +177,42 @@ fn codex_background_terminals_are_read_off_the_item_stream() {
         "one snapshot when the terminal is backgrounded, one when it ends"
     );
 }
+
+/// Edit, Rewind and Fork on Codex: a prompt goes out under Ferrite's id as
+/// `clientUserMessageId`, and a rewind or fork first pages the thread's
+/// turns for it. Codex keeps no file checkpoints, so it offers no file
+/// restore and refuses one.
+#[test]
+fn codex_rewinds_by_the_prompts_client_id_and_never_restores_files() {
+    use ferrite_core::providers::{ForkRequest, RewindRequest};
+    let mut r = Replay::new("codex", vec![]);
+    r.drain();
+    assert!(r.session.supports_control(ControlKind::Rewind));
+    assert!(!r.session.supports_control(ControlKind::RewindFiles));
+    r.session.send_as("p1", "hello").unwrap();
+    let start = r.wait_host(|v| v["method"] == "turn/start");
+    assert_eq!(start["params"]["clientUserMessageId"], "p1");
+
+    let request = |files| RewindRequest {
+        prompt: "p1".into(),
+        latest: None,
+        files,
+        session: Some("root".into()),
+    };
+    let refused = r.session.rewind(request(true)).err().expect("no files");
+    assert_eq!(refused.kind(), std::io::ErrorKind::Unsupported);
+    let _ack = r.session.rewind(request(false)).unwrap();
+    let page = r.wait_host(|v| v["method"] == "thread/turns/list" && v["id"].is_string());
+    assert_eq!(page["params"]["threadId"], "root");
+    assert_eq!(page["params"]["sortDirection"], "desc");
+
+    let _ack = r
+        .session
+        .fork(ForkRequest {
+            before: None,
+            session: Some("root".into()),
+        })
+        .unwrap();
+    let fork = r.wait_host(|v| v["method"] == "thread/fork");
+    assert_eq!(fork["params"]["threadId"], "root");
+}

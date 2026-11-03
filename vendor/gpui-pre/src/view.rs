@@ -303,6 +303,9 @@ pub(crate) struct ViewElementState {
     prepaint_range: Range<PrepaintStateIndex>,
     paint_range: Range<PaintIndex>,
     cache_key: ViewElementCacheKey,
+    /// The entities the view accessed while it was last drawn, in any phase,
+    /// restored when its prepaint is reused so the window stays subscribed
+    /// (upstream zed#65952).
     accessed_entities: FxHashSet<EntityId>,
 }
 
@@ -445,7 +448,7 @@ impl<V: View> Element for ViewElement<V> {
                             let prepaint_start = window.prepaint_index();
                             window.reuse_prepaint(element_state.prepaint_range.clone());
                             cx.entities
-                                .extend_accessed(&element_state.accessed_entities);
+                                .extend_accessed(element_state.accessed_entities.iter().copied());
                             let prepaint_end = window.prepaint_index();
                             element_state.prepaint_range = prepaint_start..prepaint_end;
 
@@ -535,7 +538,11 @@ impl<V: View> Element for ViewElement<V> {
                                 if !self.tracks_reads {
                                     window.refreshing = true;
                                 }
-                                element.paint(window, cx);
+                                // Upstream zed#65952: what paint reads (a
+                                // `canvas` callback) is the view's too.
+                                let ((), accessed_entities) =
+                                    cx.detect_accessed_entities(|cx| element.paint(window, cx));
+                                element_state.accessed_entities.extend(accessed_entities);
                                 window.refreshing = refreshing;
                                 element_state.cache_key.opacity = opacity;
                             } else {

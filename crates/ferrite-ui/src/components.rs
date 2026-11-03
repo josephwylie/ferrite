@@ -566,23 +566,20 @@ mod loops {
     }
 
     impl RenderOnce for Shimmer {
-        fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
             let base: Hsla = rgb(self.base).into();
-            let lit = (!motion::reduced_motion(cx)).then(|| {
-                let turn = Duration::from_millis(theme::MOTION_SHIMMER_MS);
-                // The crest moves a few device columns every tick.
-                let sweep = motion::Motion::Continuous;
-                (
-                    motion::css_phase(turn, sweep, window.current_view(), cx),
-                    shimmer_crest(self.base),
-                )
-            });
+            // The crest moves at every instant: a frame loop at the
+            // display's rate, as the orbs beside it are.
+            let turn = Duration::from_millis(theme::MOTION_SHIMMER_MS);
+            let frame = motion::frame_loop(turn, motion::LoopClock::Css, cx);
+            let lit = frame.map(|frame| (frame.phase, shimmer_crest(self.base)));
+            let leases = frame.is_some_and(|frame| frame.leases);
             div()
                 .min_w_0()
                 .truncate()
                 .text_color(base)
                 .debug_selector(|| "shimmer".into())
-                .child(ShimmerText::new(self.text, base, lit))
+                .child(ShimmerText::new(self.text, base, lit, leases))
         }
     }
 
@@ -596,6 +593,8 @@ mod loops {
         base: Hsla,
         /// The crest's phase and colour; `None` holds the run still.
         lit: Option<(f32, Hsla)>,
+        /// Whether this draw asks for the next frame (`motion::lease_frame`).
+        leases: bool,
         child: AnyElement,
         layout: gpui::TextLayout,
     }
@@ -608,12 +607,13 @@ mod loops {
     }
 
     impl ShimmerText {
-        fn new(text: SharedString, base: Hsla, lit: Option<(f32, Hsla)>) -> Self {
+        fn new(text: SharedString, base: Hsla, lit: Option<(f32, Hsla)>, leases: bool) -> Self {
             let text = gpui::StyledText::new(text);
             let layout = text.layout().clone();
             Self {
                 base,
                 lit,
+                leases,
                 child: text.into_any_element(),
                 layout,
             }
@@ -654,11 +654,15 @@ mod loops {
             &mut self,
             _: Option<&gpui::GlobalElementId>,
             _: Option<&gpui::InspectorElementId>,
-            _: gpui::Bounds<gpui::Pixels>,
+            bounds: gpui::Bounds<gpui::Pixels>,
             _: &mut (),
             window: &mut Window,
             cx: &mut App,
         ) {
+            // The next frame, only while the crest can be seen.
+            if self.leases && window.content_mask().bounds.intersects(&bounds) {
+                motion::lease_frame(window, cx);
+            }
             self.child.prepaint(window, cx);
         }
 
@@ -1910,8 +1914,9 @@ pub fn copy_button(id: impl Into<ElementId>, text: impl Into<SharedString>) -> C
 }
 
 impl CopyButton {
-    /// The tooltip at rest (`Copy path`).
-    pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
+    /// The words of its tooltip at rest (`Copy path`), drawn as the
+    /// measured tooltip (`menu::tooltip`).
+    pub fn tooltip_text(mut self, tooltip: impl Into<SharedString>) -> Self {
         self.tooltip = tooltip.into();
         self
     }
@@ -2302,6 +2307,28 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         cx.update(|cx| assert!(motion::pulse_parked(cx), "no loop leased the clock"));
+    }
+
+    /// Lit, the shimmer rides the display's frames, as the orbs do: it
+    /// asks for the next frame and declares nothing on the ~30fps pulse
+    /// clock, which stays parked.
+    #[gpui::test]
+    fn a_lit_shimmer_leases_display_frames_not_the_pulse_clock(cx: &mut gpui::TestAppContext) {
+        motion::testing::drive();
+        struct Line;
+        impl gpui::Render for Line {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                div().child(shimmer("Working", theme::PROVIDER_CLAUDE))
+            }
+        }
+        let window = cx.add_window(|_, _| Line);
+        cx.run_until_parked();
+        window
+            .update(cx, |_, window, cx| {
+                assert!(motion::testing::frame_leased(window, cx), "one frame asked");
+                assert!(motion::pulse_parked(cx), "no 30fps tick declared");
+            })
+            .unwrap();
     }
 
     /// Lit, the shimmer paints the line its run laid out as: in a box

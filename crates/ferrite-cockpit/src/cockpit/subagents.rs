@@ -473,7 +473,7 @@ impl CockpitView {
             .p_0()
             .rounded(px(theme::R_CONTROL))
             .accessibility_label("Back to Main")
-            .tooltip("Back to Main")
+            .tooltip_builder(ferrite_ui::menu::tooltip("Back to Main"))
             .child(ferrite_ui::icons::icon(
                 ferrite_ui::icons::BACK,
                 theme::ICON_BUTTON_GLYPH,

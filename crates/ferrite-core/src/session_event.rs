@@ -252,6 +252,9 @@ pub enum ControlKind {
     SetPermissionMode,
     /// Rewind and fork from a prompt (`Session::rewind`, `Session::fork`).
     Rewind,
+    /// A rewind that also restores the files the agent checkpointed
+    /// (`RewindRequest::files`).
+    RewindFiles,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

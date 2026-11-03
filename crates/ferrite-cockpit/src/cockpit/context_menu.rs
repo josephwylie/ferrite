@@ -286,8 +286,9 @@ impl CockpitView {
                 rows.push(Some((menu::Item::new("Copy"), MenuVerb::CopySelection)));
             }
             // A prompt's Rewind: each row says what does not come back, and
-            // arms before it runs.
-            MenuTarget::Prompt { .. } => {
+            // arms before it runs. The code comes back only where the agent
+            // keeps file checkpoints.
+            MenuTarget::Prompt { thread, .. } => {
                 rows.push(Some((
                     menu::Item {
                         note: Some("Your files stay as they are now".into()),
@@ -295,15 +296,20 @@ impl CockpitView {
                     },
                     MenuVerb::Rewind,
                 )));
-                rows.push(Some((
-                    menu::Item {
-                        note: Some(
-                            "Edits made by Bash or subagents don't come back; see git".into(),
-                        ),
-                        ..menu::Item::new("Rewind conversation and code").destructive()
-                    },
-                    MenuVerb::RewindCode,
-                )));
+                let files = self.cockpit.thread(thread).is_some_and(|open| {
+                    open.supports_control(ferrite_core::ControlKind::RewindFiles)
+                });
+                rows.extend(files.then(|| {
+                    Some((
+                        menu::Item {
+                            note: Some(
+                                "Edits made by Bash or subagents don't come back; see git".into(),
+                            ),
+                            ..menu::Item::new("Rewind conversation and code").destructive()
+                        },
+                        MenuVerb::RewindCode,
+                    ))
+                }));
             }
             MenuTarget::Page(owner) => {
                 let address = self

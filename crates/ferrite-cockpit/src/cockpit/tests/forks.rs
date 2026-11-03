@@ -185,3 +185,50 @@ fn the_menu_and_the_palette_fork_and_rewind(cx: &mut TestAppContext) {
         assert!(matches!(menu.target, MenuTarget::Prompt { thread: on, .. } if on == thread));
     });
 }
+
+/// A prompt's Rewind menu offers its code back only where the agent keeps
+/// file checkpoints (`ControlKind::RewindFiles`): Claude does, Codex does
+/// not, and the menu asks the agent, never the provider's name.
+#[gpui::test]
+fn the_rewind_menu_offers_the_code_only_where_the_agent_restores_files(cx: &mut TestAppContext) {
+    // The rows never depend on which prompt: any block names one.
+    let labels = |view: &CockpitView, thread| {
+        let block = view
+            .cockpit
+            .thread(thread)
+            .and_then(|open| open.transcript().blocks().first().map(|shown| shown.id));
+        let Some(block) = block else {
+            return Vec::new();
+        };
+        view.context_rows(MenuTarget::Prompt { thread, block })
+            .into_iter()
+            .flatten()
+            .map(|(item, _)| item.label.to_string())
+            .collect::<Vec<_>>()
+    };
+    let (view, _fake, cx) = answered("rewind-code", cx);
+    view.read_with(cx, |view, _| {
+        let thread = view.cockpit.threads()[0];
+        assert_eq!(
+            labels(view, thread),
+            ["Rewind conversation", "Rewind conversation and code"]
+        );
+    });
+
+    let (core, fake) = cockpit("rewind-no-code", 1);
+    *fake.native_controls.borrow_mut() = true;
+    fake.withheld
+        .borrow_mut()
+        .push(ferrite_core::ControlKind::RewindFiles);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "alpha\n\n".into(),
+        })
+        .unwrap();
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        let thread = view.cockpit.threads()[0];
+        assert_eq!(labels(view, thread), ["Rewind conversation"]);
+    });
+}

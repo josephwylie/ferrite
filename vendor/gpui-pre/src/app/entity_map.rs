@@ -171,10 +171,17 @@ impl EntityMap {
         );
     }
 
-    pub fn extend_accessed(&mut self, entities: &FxHashSet<EntityId>) {
-        self.accessed_entities
-            .get_mut()
-            .extend(entities.iter().copied());
+    /// Records entities accessed by a reused draw. Entities released since it
+    /// recorded them are skipped, because the window would otherwise subscribe
+    /// to them again after `App` has cleaned up their subscriptions, and
+    /// nothing would clean those up (upstream zed#65952).
+    pub fn extend_accessed(&mut self, entities: impl IntoIterator<Item = EntityId>) {
+        let ref_counts = self.ref_counts.read();
+        self.accessed_entities.get_mut().extend(
+            entities
+                .into_iter()
+                .filter(|entity_id| ref_counts.counts.contains_key(*entity_id)),
+        );
     }
 
     pub fn clear_accessed(&mut self) {

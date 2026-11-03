@@ -54,6 +54,7 @@ yaml-rust2 = { version = "0.10", default-features = false }
 
 [patch.crates-io]
 gpui-base = { path = "vendor/gpui-base" }
+gpui-component = { path = "vendor/gpui-component" }
 gpui-pre = { path = "vendor/gpui-pre" }
 gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 taffy = { path = "vendor/taffy" }

@@ -35,11 +35,11 @@ These are kept as they are:
 ## Lane M — motion, from Claude's source (`motion-claude-source.md`)
 
 - [x] All 14 gaps, the ⌘B snap, the row-hover snap, and the preview MP4 (`2735a69f`).
-- [ ] Composer height eases instead of jumping.
-- [ ] Crossfade on thread and view switch, if Claude has one; check the source doc.
-- [ ] The working-line shimmer leaves the ~30 fps clock.
-- [ ] The kit's toasts follow Ferrite's motion.
-- [ ] Three tooltips still use the old default style (`panel/preview.rs:371` and others).
+- [x] Composer height eases instead of jumping. Claude's `ChatComposer` snaps (doc row "Composer grow"), so the 200 ms comes from Claude's one height ease, the comment card's envelope, on the ease-out quart (`theme::MOTION_COMPOSER_GROW_MS`, `motion::COMPOSER_GROW`). The box tweens its row count; only the composer re-measures while it runs. Test: `composer::tests::the_box_eases_to_its_new_height`.
+- [x] Crossfade on thread and view switch: Claude snaps; matched. `motion-claude-source.md` "Thread switch" row: a warm switch lands at once (rows fade over 300 ms only on a slow load), and "Leave alone" lists the thread switch and the panel among what snaps.
+- [x] The working-line shimmer leaves the ~30 fps clock. `Shimmer` reads `motion::frame_loop(.., LoopClock::Css, ..)` and its text leases one display frame while it is lit and on screen (`motion::lease_frame`), as the orbs do; nothing is requested at rest. Test: `components::tests::a_lit_shimmer_leases_display_frames_not_the_pulse_clock`.
+- [x] The kit's toasts follow Ferrite's motion. `vendor/gpui-component` (0.6.0, patched in `notification.rs`): in over `MOTION_TOAST_IN_MS` sliding the card's own height, out over 200 ms fading and scaling to 0.85, on the quart, read from `DefaultToastMotion`. Test: `render_performance::a_kit_toast_slides_its_own_height_on_the_toast_tokens`.
+- [x] Three tooltips still use the old default style (`panel/preview.rs:371` and others). Every one now draws `menu::tooltip`: the pane's band chip and tool buttons, the attachment and quote × buttons, Back to Main (through the kit patch `Button::tooltip_builder`). `CopyButton::tooltip` was renamed `tooltip_text`, since it already drew the measured one. Test: `menu::tests::no_tooltip_falls_back_to_the_kits_default` scans the crates.
 
 ## Lane W — the working line and transcript rows
 
@@ -88,13 +88,13 @@ These are kept as they are:
 
 ## Lane X — Codex parity and checks
 
-- [ ] Edit and rewind on Codex threads.
+- [x] Edit and rewind on Codex threads. Codex 0.166's app-server has a real rollback, so this is not fork-and-resend. Each prompt goes out with `clientUserMessageId`; a rewind pages `thread/turns/list` to the turn that prompt started and sends `thread/revert {beforeTurnId}`. A fork sends `thread/fork {beforeTurnId}` (experimental), then lets the new thread go (`providers/codex/rewind.rs`). Codex restores no files, so the new `ControlKind::RewindFiles` capability hides "Rewind conversation and code" wherever it isn't reported. A prompt steered into another's turn, or sent before this change, is refused in words. Tests: `codex::rewind::tests` (against `tests/fixtures/codex-rewind-0.166.0.jsonl`, written from the schema), `contract_codex_controls::codex_rewinds_by_the_prompts_client_id_and_never_restores_files`, and `forks::the_rewind_menu_offers_the_code_only_where_the_agent_restores_files`.
 - [ ] Check the subagent drill-in against a Claude capture. It needs the Claude app on screen, so it waits for the owner.
 
 ## Lane G — GPUI and assets
 
-- [ ] Apply upstream #65952: fresh updates for reused cached views.
-- [ ] Icons at a true 1px stroke.
+- [x] Apply upstream #65952: fresh updates for reused cached views. Hand-merged into `vendor/gpui-pre` (`view.rs`, `window.rs`, `app/entity_map.rs`; see `vendor/README.md`). A deferred draw records what it reads and restores it when reused, a cached view adds what its paint reads, and released entities are skipped. Upstream's scope stack is not taken; Ferrite's earlier `detect_accessed_entities` patch already scopes reads. Test: `ferrite-ui` `vendored_gpui::a_reused_cached_view_keeps_what_it_read_subscribed`, upstream's own test.
+- [x] Icons at a true 1px stroke. The cause: each SVG baked its `stroke-width` against its viewBox (Lucide's 2 on 24, 1.333 on 16), so the stroke scaled with the drawn size: 1.33px at 16, 1.17 at 14. Now `icons::icon` names the drawn size in the asset key, and `Assets` rewrites every `stroke-width` to `ICON_STROKE` (now 1.0) × viewBox ÷ size. Logomarks are untouched. Test: `icons::tests::line_icons_bake_the_stroke_class_and_logomarks_do_not` checks every line icon at 10–18 px.
 
 ## Waiting on the owner (asked in the morning summary)
 

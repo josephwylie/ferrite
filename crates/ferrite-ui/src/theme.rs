@@ -144,8 +144,8 @@
 //!     `CHROME_GLYPHS` lists the non-ASCII glyphs Geist Mono sets and
 //!     `FALLBACK_GLYPHS` the ones it lacks; a test checks each against the
 //!     face (the system UI font covers the chrome's own, `⇧ ↑ ↓ · ⌘`).
-//!     Icons are Ferrite's own line family (`icons.rs`), every stroke 1.33
-//!     at 16 (`ICON_STROKE`), drawn at 14–16.
+//!     Icons are Ferrite's own line family (`icons.rs`), every stroke 1px
+//!     at any drawn size (`ICON_STROKE`), drawn at 14–16.
 //! 11. **Words.** Ferrite's own copy speaks one shared word list
 //!     (`theme::words`, beside the state inks and tested against the
 //!     notifications, the Decision card and the transcript): `needs you`,
@@ -760,11 +760,11 @@ pub const FS_PANEL_DIFF: f32 = 12.0;
 pub const LH_PANEL_DIFF: f32 = 18.0;
 /// 12 — a diffstat, a spinner or a `#N` set in Geist Mono inside chrome.
 pub const FS_CHROME_CODE: f32 = 12.0;
-/// 1.33px — every line icon's stroke as drawn at 16px, whatever its viewBox
-/// (rule 10): Lucide's 2 on 24, Claude's 1.25 against its 1.27 text stems.
-/// The stroke is baked into each SVG and scales with the drawn size (1.17
-/// at 14), so icons are drawn at 14–16 and never thinner than the text.
-pub const ICON_STROKE: f32 = 4.0 / 3.0;
+/// 1px — every line icon's stroke as drawn, whatever its viewBox and the
+/// size it is drawn at (rule 10; the owner's call over Claude's 1.25). The
+/// baked `stroke-width` would scale with the drawn size (Lucide's 2 on 24 is
+/// 1.33 at 16, 1.17 at 14); `icons::icon` restrokes each icon for its size.
+pub const ICON_STROKE: f32 = 1.0;
 /// **The type scale** (rule 9): every chrome size is one of these.
 pub const TYPE_SCALE: [f32; 6] = [12.0, 13.0, 14.0, 16.0, 18.0, 24.0];
 
@@ -2962,6 +2962,12 @@ pub const MOTION_EASE_MORPH: [f32; 4] = [0.2, 0.0, 0.0, 1.0];
 pub const MOTION_EASE_OUT_CUBIC: [f32; 4] = [0.215, 0.61, 0.355, 1.0];
 /// Linear: streamed text (Claude's `delta-fade`).
 pub const MOTION_EASE_LINEAR: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+/// The Composer's box easing to its new height as its text gains or loses
+/// a row, on `MOTION_EASE_OUT_QUART`. Claude's `ChatComposer` snaps; its
+/// one eased height is the comment card's envelope, over 200ms, which this
+/// takes (`motion-claude-source.md`).
+pub const MOTION_COMPOSER_GROW_MS: u64 = MOTION_DUR_BASE_MS;
 
 /// `row-in`: 180ms on `MOTION_EASE_OUT_EXPO`, opacity only, nothing moves:
 /// a Panel preview or tab body swapping in (`motion::swap_in`).

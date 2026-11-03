@@ -1475,9 +1475,7 @@ pub fn band_chip(
     let tooltip = SharedString::from(format!("{label} \u{b7} Tab, then \u{21b5} to change"));
     div()
         .id(("band-chip", slot))
-        .tooltip(move |window, cx| {
-            gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
-        })
+        .tooltip(ferrite_ui::menu::tooltip(tooltip))
         .debug_selector(move || format!("band-chip-{slot}"))
         .flex()
         .flex_shrink(1.)
@@ -4318,9 +4316,7 @@ pub fn tool_disclosure_control(
                 .flex_shrink_0()
                 .w(px(hit))
                 .h(px(hit.max(theme::TOOL_DISCLOSURE_HIT)))
-                .tooltip(move |window, cx| {
-                    gpui::component::tooltip::Tooltip::new(tooltip).build(window, cx)
-                }),
+                .tooltip(ferrite_ui::menu::tooltip(tooltip)),
         )
 }
 

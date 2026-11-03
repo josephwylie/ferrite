@@ -18,8 +18,8 @@
 //! | button press | [`PRESS_IN`] 60ms quart to 0.975 / [`PRESS_OUT`] 450ms overshoot | a kit button (`components::faded_button`) squishes while held and springs back ([`pressable`]) |
 //! | row hover | [`HOVER_SNAP`], at once | a nav row, the sidebar's own buttons and headings, a menu row, a float or palette row ([`hover_snap`]), as Claude's rows do |
 //! | selection move | none | the nav's one selection ground (`paint::SELECTED`) moves at once: selection is keyboard-rate |
-//! | toasts | [`TOAST_IN`] 200ms quart, its own height / [`TOAST_OUT`] 200ms quart to 0.85 | the Needs-you toast (FL-18), hung top right under the window's head, slides out from under it ([`toast_in`]); one that goes on its own fades away shrinking, drawn as a face that answers no pointer ([`toast_out`], [`Exits`]). The kit's toast stack (the Server and update toasts) settles on the same two tokens (`DefaultToastMotion`); its card's own slide is the kit's (see below) |
-//! | loops | pulse clock / display | the working line's shimmer and the Composer's caret blink ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; the working marks (the working line, nav, Pane heads, plan steps), whose orbs move at every instant, ride [`frame_loop`]: the display's rate, one request a frame for the window, only while one can be seen; no dot breathes |
+//! | toasts | [`TOAST_IN`] 200ms quart, its own height / [`TOAST_OUT`] 200ms quart to 0.85 | the Needs-you toast (FL-18), hung top right under the window's head, slides out from under it ([`toast_in`]); one that goes on its own fades away shrinking, drawn as a face that answers no pointer ([`toast_out`], [`Exits`]). The kit's toasts (the Server and update toasts) move the same way on the same two tokens (`DefaultToastMotion`; the card through Ferrite's patch to the vendored gpui-component) |
+//! | loops | pulse clock / display | the Composer's caret blink and the spinners ride [`loop_phase`] (one timer on a ~30fps grid, woken only when a loop's picture changes, parks) instead of a per-frame repeat; the working marks (the working line, nav, Pane heads, plan steps), whose orbs move at every instant, and the working line's shimmer, whose crest does, ride [`frame_loop`]: the display's rate, one request a frame for the window, only while one can be seen; no dot breathes |
 //! | menus, popovers | [`MENU_IN`] 0ms: a snap | every Ferrite-drawn menu and popover, open and shut ([`menu_in`]), as Claude's `Menu`, `ContextMenu` and `Popover` |
 //! | dialog | [`DIALOG_IN`] / [`DIALOG_OUT`] 200ms quart, 0.98 ↔ 1 | the Settings and Project sheets, in ([`dialog_in`]) and out ([`dialog_out`]), over their veil fading both ways over [`VEIL`] ([`veil_in`], [`veil_out`]) |
 //! | palette | [`DIALOG_IN`] in from its top, [`PALETTE_OUT`] 120ms out | the palette and the shortcuts sheet ([`dialog_in_casting`], [`float_out`]), their veil fading over [`PALETTE_VEIL`] 50ms both ways |
@@ -78,12 +78,6 @@
 //! - **Frost.** A fork-only paint effect; not ported. An edge fade is a
 //!   `linear_gradient` overlay in the surface's own fill (the transcript's
 //!   top fade, `EDGE_FADE`).
-//! - **The kit's toast card.** Ferrite sets the kit stack's timing
-//!   (`DefaultToastMotion`, from the toast tokens), but gpui-component's
-//!   `Notification` (not vendored) hard-codes its own 400ms rise from 96px
-//!   and 200ms exit on the card itself, so the Server and update
-//!   toasts keep that slide; the Needs-you toast, Ferrite's own, wears the
-//!   catalog's.
 //!
 //! # Reduced motion
 //!
@@ -326,6 +320,9 @@ pub const SLOT_OPEN: MotionSpec = spec(theme::MOTION_SLOT_OPEN_MS, EASE_SNAP);
 pub const SLOT_CLOSE: MotionSpec = spec(theme::MOTION_SLOT_CLOSE_MS, EASE_SNAP);
 // A slot's exit is quicker than its entrance.
 const _: () = assert!(theme::MOTION_SLOT_CLOSE_MS < theme::MOTION_SLOT_OPEN_MS);
+
+/// The Composer's box easing to a new row count.
+pub const COMPOSER_GROW: MotionSpec = spec(theme::MOTION_COMPOSER_GROW_MS, EASE_OUT_QUART);
 
 /// A toast coming in under the window's head, and going when it goes on
 /// its own: the toast tokens, on the quart.
@@ -1545,8 +1542,8 @@ pub fn script_phase(period: Duration, motion: Motion, view: EntityId, cx: &mut A
 // Frame loops: a loop drawn at the display's rate
 // ---------------------------------------------------------------------------
 //
-// The working mark's orbs move at every instant, and a 30fps tick shows as
-// steps. They read their phase on the pulse clock's epoch, so they stay in
+// The working mark's orbs and the working caption's shimmer move at every
+// instant, and a 30fps tick shows as steps. They read their phase on the pulse clock's epoch, so they stay in
 // step with every other loop, and ask the display for the next frame. Every
 // frame loop in a window shares one request: the first lease in a frame
 // asks, later ones join it, and the frame notifies each view that leased.
@@ -1564,15 +1561,29 @@ pub struct FrameLoop {
     pub leases: bool,
 }
 
+/// Which of a browser's two loop clocks a frame loop reproduces when a
+/// capture holds the loops (`HeldLoops`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoopClock {
+    /// A CSS animation's: the shimmer.
+    Css,
+    /// A scripted animation's: the working mark.
+    Script,
+}
+
 /// A frame loop with this `period`, now, on the shared epoch; `None` under
 /// reduced motion, where the loop draws its still state.
-pub fn frame_loop(period: Duration, cx: &mut App) -> Option<FrameLoop> {
+pub fn frame_loop(period: Duration, clock: LoopClock, cx: &mut App) -> Option<FrameLoop> {
     if reduced_motion(cx) {
         return None;
     }
     if let Some(held) = held_loops() {
+        let elapsed = match clock {
+            LoopClock::Css => held.css,
+            LoopClock::Script => held.script,
+        };
         return Some(FrameLoop {
-            phase: phase_at(held.script, period),
+            phase: phase_at(elapsed, period),
             leases: false,
         });
     }

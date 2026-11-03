@@ -192,6 +192,30 @@ by its width rounded up to the layout unit, 1/64px, as a browser lays out an
 inline box, so the fragment after a link card starts where the browser's
 would (`layout_unit`).
 
+## GPUI Component
+
+`gpui-component/` is the crates.io `gpui-component` **0.6.0** source (the
+kit's components, from longbridge/gpui-kit). Its Apache-2.0 license and
+upstream README are retained; its lockfile is omitted.
+
+Patches (each change marked "Ferrite's patch"):
+
+- A `Notification` card (the Server and update toasts) moves as Ferrite's own
+  toasts do: in over `DefaultToastMotion::duration`, fading up while sliding
+  its own height (measured as last laid out: the stack item has no definite
+  height for a relative inset) out from under the edge it hangs on, clipped
+  to its resting box; out over `exit_duration`, fading away while shrinking to 0.85. Both on
+  the ease-out quart. Upstream hard-codes a 400ms rise from 96px and a 200ms
+  rise out. The list's lifecycle clock reads the same `DefaultToastMotion`
+  (`src/notification.rs`).
+- `Button::tooltip_builder` (`src/button/button.rs`) sets the button's tooltip
+  view, so a kit button wears Ferrite's measured tooltip
+  (`ferrite_ui::menu::tooltip`) rather than the kit's default. Upstream keeps
+  the field but sets it only from `tooltip(text)`.
+
+Cargo applies them through the root `[patch.crates-io]`. Remove a patch when
+upstream lets an app set the card's motion, or a button's tooltip view.
+
 ## GPUI
 
 `gpui-pre/` is the crates.io `gpui-pre` **0.3.3** source (Zed's GPUI,
@@ -315,6 +339,16 @@ browser does, so the same CSS geometry lands on the same device pixels:
   sprite batches. Upstream also moved `tile` first in the sprite structs;
   that needs the shaders to match, including the registry's Windows and
   Linux ones, so it is not taken. Remove when the vendored GPUI includes it.
+- **Reused cached views keep what they read subscribed** (`view.rs`,
+  `window.rs`, `app/entity_map.rs`; upstream zed#65952, `decd2399`,
+  hand-merged). A deferred draw records the entities it reads, in prepaint
+  and paint, and restores them when its prepaint is reused; a cached view
+  adds what its paint reads (a `canvas` callback) to its recorded set; and
+  restoring a recorded set skips entities released since. Upstream's
+  scope stack for `detect_accessed_entities` is not taken: Ferrite's earlier
+  patch to it already gives each scope exactly its own reads at the cost of
+  those reads. Ferrite's `vendored_gpui` test in `ferrite-ui` carries
+  upstream's. Remove when the vendored GPUI includes it.
 - **Debug bounds on a window** (`window.rs`, test support only).
   `Window::debug_bounds` reads the last frame's `debug_selector` bounds,
   which upstream exposes only through `VisualTestContext`: the live

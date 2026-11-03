@@ -108,13 +108,17 @@ impl Session for FixtureSession {
             .collect()
     }
     /// MCP sign-in and reconnect, as both CLIs answer them, a mode switch
-    /// (the Composer's mode menu, an approval's `Allow and switch`), and
-    /// Claude's rewind and fork (a message's Fork, the row menu's).
+    /// (the Composer's mode menu, an approval's `Allow and switch`), rewind
+    /// and fork (a message's Fork, the row menu's), and Claude's file
+    /// restore with a rewind.
     fn supports_control(&self, kind: ControlKind) -> bool {
         matches!(
             kind,
-            ControlKind::LoginMcp | ControlKind::ReconnectMcp | ControlKind::SetPermissionMode
-        ) || (kind == ControlKind::Rewind && self.provider == Provider::Claude)
+            ControlKind::LoginMcp
+                | ControlKind::ReconnectMcp
+                | ControlKind::SetPermissionMode
+                | ControlKind::Rewind
+        ) || (kind == ControlKind::RewindFiles && self.provider == Provider::Claude)
     }
     fn interrupt(&mut self) -> io::Result<()> {
         Ok(())

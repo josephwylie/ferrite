@@ -315,7 +315,7 @@ thread_local! {
 impl RenderOnce for WorkingMark {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let period = Duration::from_millis(theme::MOTION_WORKING_MARK_MS);
-        let frame = motion::frame_loop(period, cx);
+        let frame = motion::frame_loop(period, motion::LoopClock::Script, cx);
         let orbs = frame.map_or(REST, |frame| {
             orbs_at(frame.phase * theme::MOTION_WORKING_MARK_MS as f32)
         });
