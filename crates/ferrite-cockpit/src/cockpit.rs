@@ -9270,7 +9270,6 @@ impl CockpitView {
                 mixed: true,
                 label: SharedString::from("groups"),
                 branch: None,
-                drift: None,
                 folded: self.nav_folds.contains(&NavFold::Groups),
                 roll_up: nav::RollUp::of(rows.iter().copied()),
                 count: rows.len(),
@@ -9330,10 +9329,7 @@ impl CockpitView {
                 .collect();
             // A heading names its rows' shared checkout; `Other` names no
             // Project, so no checkout either.
-            let (branch, drift) = match key {
-                Some(_) => self.section_checkout(&own),
-                None => (None, None),
-            };
+            let branch = key.and_then(|_| self.section_branch(&own));
             let rows: Vec<&nav::ThreadRow> = section_solos
                 .iter()
                 .map(|index| &solos[*index])
@@ -9351,7 +9347,6 @@ impl CockpitView {
                 mixed: false,
                 label,
                 branch,
-                drift: drift.and_then(|(ahead, behind)| nav::drift_text(ahead, behind)),
                 roll_up,
                 count,
                 folded: key.is_some_and(|project| self.nav_folded(NavFold::Project(project))),
@@ -9584,27 +9579,18 @@ impl CockpitView {
     }
 
     /// What a Project heading says of its rows' checkouts (§5.1.4): the
-    /// branch every one of them is on, whether that is the Project's
-    /// default, and that branch's drift when every row shares it too. Cache
-    /// reads only; the checkouts that say no branch (a parked row may not)
+    /// branch every one of them is on and whether that is the Project's
+    /// default. Cache reads only; the checkouts that say no branch (a parked row may not)
     /// say nothing either way.
-    fn section_checkout(&self, rows: &[ThreadId]) -> SectionCheckout {
-        let read: Vec<(SharedString, (u32, u32))> = rows
+    fn section_branch(&self, rows: &[ThreadId]) -> Option<(SharedString, bool)> {
+        let read: Vec<SharedString> = rows
             .iter()
             .filter_map(|thread| self.facts.get(*thread))
-            .filter_map(|facts| {
-                let drift = facts
-                    .status
-                    .as_ref()
-                    .map_or((0, 0), |status| (status.ahead, status.behind));
-                Some((Self::checkout_branch(facts)?, drift))
-            })
+            .filter_map(Self::checkout_branch)
             .collect();
-        let Some((first, drift)) = read.first().cloned() else {
-            return (None, None);
-        };
-        if !read.iter().all(|(branch, _)| *branch == first) {
-            return (None, None);
+        let first = read.first().cloned()?;
+        if !read.iter().all(|branch| *branch == first) {
+            return None;
         }
         let default = rows
             .iter()
@@ -9617,8 +9603,7 @@ impl CockpitView {
                 || matches!(first.as_ref(), "main" | "master"),
                 |default| default == first,
             );
-        let shared = read.iter().all(|(_, each)| *each == drift);
-        (Some((first, default)), shared.then_some(drift))
+        Some((first, default))
     }
 
     /// Land on a Thread from the nav's other doors — an Activity or rail
@@ -14712,11 +14697,6 @@ impl CockpitView {
             .into_any_element()
     }
 }
-
-/// What a Project heading says of its rows' checkouts
-/// (`CockpitView::section_checkout`): the shared branch and whether it is
-/// the default, and its drift (ahead, behind) when that is shared too.
-type SectionCheckout = (Option<(SharedString, bool)>, Option<(u32, u32)>);
 
 /// A typed path with `~` spelled out — the type-a-path row accepts what an
 /// operator would type at a shell.

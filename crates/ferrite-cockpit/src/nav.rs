@@ -251,9 +251,6 @@ pub struct ProjectSection {
     /// The branch every one of its own rows is on, when they share one,
     /// and whether it is the Project's default.
     pub branch: Option<(SharedString, bool)>,
-    /// What the heading says at its right: the shared branch's drift
-    /// against its upstream (`↑715`, `↑1 ↓5`). `None` says nothing.
-    pub drift: Option<SharedString>,
     /// The heading folded it: one row, and nothing under it.
     pub folded: bool,
     /// Its own rows' roll-up word (`RollUp::of`), which a folded heading
@@ -298,21 +295,17 @@ impl ProjectSection {
     }
 
     /// What a folded heading says at its right, the first that has
-    /// something to say: its rows' roll-up word, its drift, its branch when
-    /// that is not the default, its row count.
+    /// something to say: its rows' roll-up word, its branch when that is
+    /// not the default, its row count.
     pub fn folded_summary(&self) -> (SharedString, u32) {
         if let Some(word) = &self.roll_up {
             return (word.text.clone(), word.ink);
         }
         let text = self
-            .drift
-            .clone()
-            .or_else(|| {
-                self.branch
-                    .as_ref()
-                    .filter(|(_, default)| !default)
-                    .map(|(branch, _)| short_branch(branch))
-            })
+            .branch
+            .as_ref()
+            .filter(|(_, default)| !default)
+            .map(|(branch, _)| short_branch(branch))
             .unwrap_or_else(|| self.count.to_string().into());
         (text, INK_SUBTLE)
     }
@@ -486,17 +479,6 @@ pub struct ThreadRow {
     pub selected: bool,
     /// Its state's word (C10): what line 2 says for a state with a reason.
     pub tail: NavTail,
-}
-
-/// A drift as a Project heading says it: `↑715`, `↑1 ↓5`; `None` when
-/// even.
-pub fn drift_text(ahead: u32, behind: u32) -> Option<SharedString> {
-    let parts: Vec<String> = [(ahead, '\u{2191}'), (behind, '\u{2193}')]
-        .into_iter()
-        .filter(|(count, _)| *count > 0)
-        .map(|(count, arrow)| format!("{arrow}{count}"))
-        .collect();
-    (!parts.is_empty()).then(|| parts.join(" ").into())
 }
 
 /// What a set of rows rolls up to: the most urgent of them. `None` for
@@ -1069,8 +1051,8 @@ fn hovered(key: &SharedString) -> bool {
 
 /// A Project heading (§5.1.4, Claude's): the label alone, no icon, in the
 /// headings' quiet face (13/400 `INK_SUBTLE`) with its fold's caret right
-/// after it (`▾`, `▸` folded), and at its right the shared branch's drift.
-/// Folded, at its right what `ProjectSection::folded_summary` says. Under the pointer its
+/// after it (`▾`, `▸` folded), and nothing at its right: Claude's carry
+/// no ahead/behind counts. Folded, at its right what `ProjectSection::folded_summary` says. Under the pointer its
 /// `action` (a new Thread in the Project, `row_action`) stands at its right
 /// instead. The cockpit wires its press to the fold.
 pub fn project_section(
@@ -1079,11 +1061,7 @@ pub fn project_section(
     action: Option<AnyElement>,
     measure: &Measure,
 ) -> Stateful<Div> {
-    let right = if section.folded {
-        Some(section.folded_summary())
-    } else {
-        section.drift.clone().map(|drift| (drift, INK_SUBTLE))
-    };
+    let right = section.folded.then(|| section.folded_summary());
     project_row(
         "nav-project-section",
         index,
@@ -2168,7 +2146,6 @@ mod tests {
             mixed: false,
             label: "ferrite".into(),
             branch: None,
-            drift: None,
             folded,
             roll_up: None,
             count: 2,
@@ -2480,7 +2457,7 @@ mod tests {
     }
 
     /// A folded Project heading says, first that has something: its
-    /// roll-up word, its drift, a branch off the default, its count.
+    /// roll-up word, a branch off the default, its count.
     #[test]
     fn a_folded_heading_says_the_first_thing_it_has() {
         let mut section = heading_of(true);
@@ -2489,15 +2466,11 @@ mod tests {
         assert_eq!(section.folded_summary().0, "2", "the default says nothing");
         section.branch = Some(("overnight/coach".into(), false));
         assert_eq!(section.folded_summary().0, "overnight/coach");
-        section.drift = drift_text(715, 0);
-        assert_eq!(section.folded_summary().0, "\u{2191}715");
         section.roll_up = Some(RollUp {
             text: "1 failed".into(),
             ink: BLOCKED,
         });
         assert_eq!(section.folded_summary(), ("1 failed".into(), BLOCKED));
-        assert_eq!(drift_text(1, 5).as_deref(), Some("\u{2191}1 \u{2193}5"));
-        assert_eq!(drift_text(0, 0), None);
     }
 
     /// The word says one thing, in priority order, and the Pane's head slot

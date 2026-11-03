@@ -144,7 +144,7 @@ pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
     clock.set(hms(8, 0, 0));
     let worktree = lay_out_ferrite(&project("ferrite"), &home);
     // agenticos' main is 715 commits ahead of its upstream; invoicemate's
-    // one ahead and five behind (the headings' `↑715`, `↑1 ↓5`).
+    // one ahead and five behind (the Pane head says the drift).
     lay_out_tracking(&project("agenticos"), &home, "agenticos", 715, 0);
     lay_out_tracking(&project("invoicemate"), &home, "invoicemate", 1, 5);
     for name in ["production-scheduling", "strat", "workmate", "tempo"] {
