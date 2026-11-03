@@ -80,7 +80,8 @@ fn the_context_section_shows_context_and_subscription_windows(cx: &mut TestAppCo
 
 /// The model picker rests above its chip in the Composer's toolbar
 /// (SPEC §5.5): its foot `MODEL_PICKER_GAP` over the chip, its right
-/// edge inside the Composer, every row one menu row high.
+/// edge at the chip's (Claude's), inside the Composer, every row one menu
+/// row high.
 #[gpui::test]
 fn the_model_picker_rests_above_the_bar_inside_the_window(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("model-picker-place", 1);
@@ -108,9 +109,11 @@ fn the_model_picker_rests_above_the_bar_inside_the_window(cx: &mut TestAppContex
         "Claude's compact model menu: {menu:?}"
     );
     assert!(menu.right() <= composer.right() + px(1.5));
-    let row = cx
-        .debug_bounds("choice-row-1")
-        .expect("a live row under the section");
+    assert!(
+        (menu.right() - chip.right()).abs() <= px(1.5),
+        "anchored on its chip, not the window's edge: {menu:?} / {chip:?}"
+    );
+    let row = cx.debug_bounds("choice-row-1").expect("a live model row");
     // Terminal-native (WP-E): a float row is one grid row.
     assert_eq!(row.size.height, px(ferrite_ui::theme::FLOAT_ROW_H));
 }
@@ -136,7 +139,7 @@ fn the_model_picker_opens_its_effort_as_a_submenu(cx: &mut TestAppContext) {
     tick(cx);
     let menu = cx.debug_bounds("choice-menu").expect("the picker is open");
     let row = cx
-        .debug_bounds("choice-submenu-row")
+        .debug_bounds("choice-submenu-row-0")
         .expect("the effort row rides the model picker");
     assert!(
         cx.debug_bounds("choice-submenu").is_none(),

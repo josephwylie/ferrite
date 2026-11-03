@@ -8406,7 +8406,9 @@ impl CockpitView {
         let (lead, mut words, mode, ring) = match pane.thread() {
             None => (
                 self.draft_band_chips(index, cx),
-                self.draft_model_chip(index, cx).into_iter().collect::<Vec<_>>(),
+                self.draft_model_chip(index, cx)
+                    .into_iter()
+                    .collect::<Vec<_>>(),
                 None,
                 None,
             ),
@@ -8506,7 +8508,7 @@ impl CockpitView {
         let weak = cx.entity().downgrade();
         let picker = weak.clone();
         ferrite_ui::menu::ChoiceMenu {
-            submenu: None,
+            submenus: Vec::new(),
             width: Some(ferrite_ui::theme::ATTACH_MENU_W),
             id: SharedString::from(format!("attach-menu-{index}")),
             trigger: pane::attach_button(cx),
@@ -11071,6 +11073,17 @@ impl CockpitView {
             fill: self
                 .grid_board()
                 .then(|| self.fill_button(index, thread, cx)),
+            // An empty Thread in Solo wears the draft's start card until
+            // its first prompt.
+            start: if l1
+                && !self.grid_board()
+                && pane.is_main()
+                && open.is_some_and(|open| open.transcript().blocks().is_empty())
+            {
+                self.thread_start(thread)
+            } else {
+                Vec::new()
+            },
         };
         cell.child(pane::render_pane(pane, facts, wiring, level))
     }
@@ -11699,8 +11712,8 @@ impl CockpitView {
     }
 
     /// The Composer's permission mode chip (SPEC §5.5, §D.7): the mode's
-    /// label (`pane::permission_mode_label`), in `RISKY_INK` for a mode that never asks
-    /// (`theme::mode_is_risky`). Always shown once the
+    /// label (`pane::permission_mode_label`), in `MODE_ATTENTION_INK` for
+    /// `Manual` (`theme::mode_is_manual`). Always shown once the
     /// Thread has a list or a mode, so the mode can be changed, from the
     /// cached answers when no Session runs (ADR 0032). Its menu is that
     /// list, ✓ on the mode in force, a pick sent as the native
@@ -11716,6 +11729,16 @@ impl CockpitView {
         }
         let mode = open.permission_mode().unwrap_or("default").to_string();
         let label = pane::permission_mode_label(&mode, &modes);
+        // The mode new Threads start in, from Settings: the menu's
+        // `Default` tag.
+        let settings = &self.prefs.settings;
+        let configured = match open.provider() {
+            Provider::Claude => settings
+                .claude_permission_mode
+                .clone()
+                .unwrap_or_else(|| "default".into()),
+            Provider::Codex => settings.codex_approval_policy.clone(),
+        };
         let key = thread.get() as usize;
         let trigger = pane::toolbar_chip(("mode-picker", key), cx)
             .debug_selector(move || format!("mode-picker-{key}"))
@@ -11732,9 +11755,12 @@ impl CockpitView {
         {
             return Some(wrap(trigger.into_any_element()));
         }
-        // Claude's mode menu: under its `Mode` heading, each mode with its
-        // one line, picked by its digit, ✓ on the mode in force; only a
-        // mode that never asks in `RISKY_INK`.
+        // Claude's mode menu: under its `Mode` heading, `Auto` first, each
+        // mode with its one line and its tag (`Recommended`, `Default`),
+        // picked by its digit, ✓ on the mode in force; only `Manual` in
+        // `MODE_ATTENTION_INK`.
+        let mut modes = modes;
+        modes.sort_by_key(|choice| choice.value != "auto");
         let heading = ferrite_ui::components::Choice {
             label: "Mode".into(),
             section: true,
@@ -11747,9 +11773,13 @@ impl CockpitView {
                         label: pane::permission_mode_label(&choice.value, &modes),
                         checked: choice.value == mode,
                         note: ferrite_ui::theme::mode_note(&choice.value).map(SharedString::from),
-                        badge: (choice.value == "auto").then(|| "Recommended".into()),
+                        badge: if choice.value == configured {
+                            Some("Default".into())
+                        } else {
+                            (choice.value == "auto").then(|| "Recommended".into())
+                        },
                         shortcut: (at < 9).then(|| SharedString::from((at + 1).to_string())),
-                        risky: ferrite_ui::theme::mode_is_risky(&choice.value),
+                        attention: ferrite_ui::theme::mode_is_manual(&choice.value),
                         ..Default::default()
                     }
                 }))
@@ -11767,7 +11797,7 @@ impl CockpitView {
         let picker = weak.clone();
         Some(wrap(
             ferrite_ui::menu::ChoiceMenu {
-                submenu: None,
+                submenus: Vec::new(),
                 width: Some(ferrite_ui::theme::MODE_MENU_W),
                 id: format!("mode-picker-{key}").into(),
                 trigger,
@@ -12431,66 +12461,56 @@ impl CockpitView {
         let identity = self.panes[index].identity;
         let slot = kind.picker_slot().expect("native choice menu");
         let (effort, band) = slot;
-        // The model picker — a Thread's or a draft's — opens its effort as
-        // a submenu (Claude's `Effort  Medium ›`): a pick there sets the
-        // level at once, as the effort menu's own pick does.
-        let submenu = (!effort)
-            .then(|| self.effort_submenu(index, cx))
-            .flatten();
         let open = self
             .popover
             .as_ref()
             .filter(|open| open.pane == identity && open.kind.picker_slot() == Some(slot));
+        // Which of the popover's rows the menu shows, in order: every one
+        // for the effort picker; the model picker's are split (`model_menu`).
+        let (shown, more, carry) = match open {
+            Some(open) if !effort => self.model_menu(index, open),
+            Some(open) => ((0..open.rows.len()).collect(), None, None),
+            None => (Vec::new(), None, None),
+        };
         let choices = open
-            .map(|open| {
-                let mut provider = None;
-                // The live rows' digits, `1`…`9` (Claude's model menu).
-                let mut digit = 0;
-                open.rows
-                    .iter()
-                    .map(|row| {
-                        let section = row.inert
-                            && row.consequence_is_inert()
-                            && provider_of_title(&row.name).is_some();
-                        if section {
-                            provider = provider_of_title(&row.name);
-                        }
-                        let shortcut = (!row.inert && digit < 9).then(|| {
-                            digit += 1;
-                            SharedString::from(digit.to_string())
-                        });
-                        let detail = (!row.detail.is_empty()).then(|| row.detail.clone());
-                        ferrite_ui::components::Choice {
-                            shortcut,
-                            label: row.name.clone(),
-                            checked: row.active,
-                            disabled: row.inert,
-                            section,
-                            // Names only: a section keeps its handover note,
-                            // a row's description (`most capable…`, `Opus
-                            // 5.5 (1M) · from Settings`) is its tooltip.
-                            detail: detail.clone().filter(|_| section),
-                            // Why the row is dead for now, else what it is.
-                            why: match open.hold.filter(|_| row.inert && !section) {
-                                Some(hold) => Some(SharedString::from(hold)),
-                                None => detail.filter(|_| !section),
-                            },
-                            icon: provider.map(|provider| match provider {
-                                Provider::Claude => (
-                                    ferrite_ui::icons::CLAUDE,
-                                    ferrite_ui::theme::PROVIDER_CLAUDE,
-                                ),
-                                Provider::Codex => {
-                                    (ferrite_ui::icons::CODEX, ferrite_ui::theme::PROVIDER_CODEX)
-                                }
-                            }),
-                            ..Default::default()
-                        }
-                    })
-                    .collect()
-            })
+            .map(|open| self.picker_choices(open, &shown, carry))
             .unwrap_or_default();
-        let weak = cx.entity().downgrade();
+        let view = cx.entity().downgrade();
+        // The model picker — a Thread's or a draft's — opens its effort as
+        // a submenu (Claude's `Effort  Medium ›`): a pick there sets the
+        // level at once, as the effort menu's own pick does. Then the other
+        // Provider's models (`More models ›`), a handover once the Thread
+        // has begun.
+        let mut submenus = Vec::new();
+        if !effort {
+            submenus.extend(self.effort_submenu(index, cx));
+            if let (Some(open), Some((provider, rows))) = (open, more) {
+                let handover = open.rows.iter().any(|row| {
+                    row.inert
+                        && provider_of_title(&row.name) == Some(provider)
+                        && row.detail == "handover"
+                });
+                let choices = self.picker_choices(open, &rows, None);
+                let view = view.clone();
+                submenus.push(ferrite_ui::menu::Submenu {
+                    label: "More models".into(),
+                    value: SharedString::from(if handover {
+                        format!("{} \u{b7} handover", provider_title(provider))
+                    } else {
+                        provider_title(provider).to_string()
+                    }),
+                    choices,
+                    width: ferrite_ui::theme::MODEL_PICKER_W,
+                    on_pick: std::rc::Rc::new(move |at, window, cx| {
+                        let Some(&row) = rows.get(at) else {
+                            return;
+                        };
+                        let _ = view.update(cx, |view, cx| view.pick(row, window, cx));
+                    }),
+                });
+            }
+        }
+        let weak = view;
         let picker = weak.clone();
         let hold = identity.thread().and_then(|thread| {
             self.cockpit
@@ -12498,7 +12518,7 @@ impl CockpitView {
                 .and_then(|thread| tuning_hold(&thread))
         });
         ferrite_ui::menu::ChoiceMenu {
-            submenu,
+            submenus,
             width: Some(if effort {
                 ferrite_ui::theme::EFFORT_MENU_W
             } else {
@@ -12534,10 +12554,146 @@ impl CockpitView {
                 });
             }),
             on_pick: std::rc::Rc::new(move |at, window, cx| {
-                let _ = picker.update(cx, |view, cx| view.pick(at, window, cx));
+                let Some(&row) = shown.get(at) else {
+                    return;
+                };
+                let _ = picker.update(cx, |view, cx| view.pick(row, window, cx));
             }),
             place: Some(self.composer_place(index)),
         }
+    }
+
+    /// The model picker's shape, Claude's: the Pane's own Provider's models
+    /// as the menu's rows — no section title, and no `Default` row once
+    /// the ✓ has a model to sit on — and the other Provider's models, for
+    /// the `More models` submenu; and the row that carries the ✓ in the
+    /// hidden `Default` row's place. Indices into `open.rows`.
+    fn model_menu(
+        &self,
+        index: usize,
+        open: &Popover,
+    ) -> (Vec<usize>, Option<(Provider, Vec<usize>)>, Option<usize>) {
+        let pane = &self.panes[index];
+        let (current, serving) = match pane.thread() {
+            Some(thread) => match self.cockpit.thread(thread) {
+                Some(thread) => (
+                    Some(thread.provider()),
+                    thread.transcript().model().map(str::to_string),
+                ),
+                None => (None, None),
+            },
+            None => (
+                pane.draft().map(|draft| draft.binding.provider().provider),
+                None,
+            ),
+        };
+        let mut sections: Vec<(Option<Provider>, Vec<usize>)> = Vec::new();
+        for (at, row) in open.rows.iter().enumerate() {
+            match provider_of_title(&row.name).filter(|_| row.inert && row.consequence_is_inert()) {
+                Some(provider) => sections.push((Some(provider), Vec::new())),
+                None => match sections.last_mut() {
+                    Some((_, rows)) => rows.push(at),
+                    None => sections.push((None, vec![at])),
+                },
+            }
+        }
+        let current = current.or_else(|| sections.first().and_then(|(provider, _)| *provider));
+        let mut own = Vec::new();
+        let mut more = None;
+        for (provider, rows) in sections {
+            if provider.is_none() || provider == current {
+                own.extend(rows);
+            } else if let Some(provider) = provider {
+                more = Some((provider, rows));
+            }
+        }
+        // The CLI's own default is only worth a row while nothing else can
+        // carry the ✓: a known serving model takes it instead.
+        let model_of = |at: usize| match &open.rows[at].consequence {
+            Consequence::Provision(choice) | Consequence::Band(BandChoice::Provider(choice)) => {
+                Some(choice.model.clone())
+            }
+            _ => None,
+        };
+        let default_row = own.iter().copied().find(|at| model_of(*at) == Some(None));
+        let serving_row = current
+            .zip(serving)
+            .and_then(|(provider, serving)| {
+                self.cockpit
+                    .model_catalog(provider)
+                    .into_iter()
+                    .find(|model| model.value != "default" && model.is(&serving))
+            })
+            .and_then(|model| {
+                own.iter()
+                    .copied()
+                    .find(|at| model_of(*at) == Some(Some(model.value.clone())))
+            });
+        let mut carry = None;
+        if let Some(default_row) = default_row {
+            let active = open.rows[default_row].active;
+            if !active || serving_row.is_some() {
+                own.retain(|at| *at != default_row);
+                carry = serving_row.filter(|_| active);
+            }
+        }
+        (own, more, carry)
+    }
+
+    /// The popover's rows at `shown`, as the choice menu draws them: a
+    /// provider's title as a section, the live rows' digits `1`…`9`
+    /// (Claude's model menu), names only — a row's description is its
+    /// tooltip. `carry` wears the ✓ too (`model_menu`).
+    fn picker_choices(
+        &self,
+        open: &Popover,
+        shown: &[usize],
+        carry: Option<usize>,
+    ) -> Vec<ferrite_ui::components::Choice> {
+        let mut provider = None;
+        let mut digit = 0;
+        shown
+            .iter()
+            .map(|at| {
+                let row = &open.rows[*at];
+                let section = row.inert
+                    && row.consequence_is_inert()
+                    && provider_of_title(&row.name).is_some();
+                if section {
+                    provider = provider_of_title(&row.name);
+                }
+                let shortcut = (!row.inert && digit < 9).then(|| {
+                    digit += 1;
+                    SharedString::from(digit.to_string())
+                });
+                let detail = (!row.detail.is_empty()).then(|| row.detail.clone());
+                ferrite_ui::components::Choice {
+                    shortcut,
+                    label: row.name.clone(),
+                    checked: row.active || carry == Some(*at),
+                    disabled: row.inert,
+                    section,
+                    // Names only: a section keeps its handover note, a
+                    // row's description (`most capable…`) is its tooltip.
+                    detail: detail.clone().filter(|_| section),
+                    // Why the row is dead for now, else what it is.
+                    why: match open.hold.filter(|_| row.inert && !section) {
+                        Some(hold) => Some(SharedString::from(hold)),
+                        None => detail.filter(|_| !section),
+                    },
+                    icon: provider.map(|provider| match provider {
+                        Provider::Claude => (
+                            ferrite_ui::icons::CLAUDE,
+                            ferrite_ui::theme::PROVIDER_CLAUDE,
+                        ),
+                        Provider::Codex => {
+                            (ferrite_ui::icons::CODEX, ferrite_ui::theme::PROVIDER_CODEX)
+                        }
+                    }),
+                    ..Default::default()
+                }
+            })
+            .collect()
     }
 
     /// The model picker's effort submenu for Pane `index`, a Thread's or a

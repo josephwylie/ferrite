@@ -593,11 +593,12 @@ fn crash_fix(s: &mut Script, who: ThreadId) {
     s.ev(start, who, limits(0.05, 0.14));
     // `Ran 7 commands`, back to back over 34 seconds.
     let mut at = start + 2;
-    for (at_id, (command, secs, exit, stdout)) in INVESTIGATION.iter().enumerate() {
+    for (at_id, (description, command, secs, exit, stdout)) in INVESTIGATION.iter().enumerate() {
         s.bash(
             at,
             who,
             &format!("toolu_memory_look_{at_id}"),
+            description,
             command,
             Run {
                 stdout: (*stdout).into(),
@@ -620,6 +621,7 @@ fn crash_fix(s: &mut Script, who: ThreadId) {
         suite,
         who,
         "toolu_memory_suite",
+        "Run the core test suite",
         "cargo test -p ferrite-core",
         Run {
             stdout: "running 954 tests\ntest result: ok. 954 passed; 0 failed; 0 ignored; \
@@ -797,7 +799,10 @@ fn supplier_review(s: &mut Script, who: ThreadId) {
         started(
             "toolu_supplier_compare",
             "Bash",
-            serde_json::json!({ "command": "python3 compare_quotes.py" }),
+            serde_json::json!({
+                "command": "python3 compare_quotes.py",
+                "description": "Compare the supplier quotes",
+            }),
         ),
     );
     s.ev(CAPTURE, who, phase("Comparing"));
@@ -908,6 +913,7 @@ fn epicurean_range(s: &mut Script, who: ThreadId) {
         stopped - 3,
         who,
         "toolu_epicurean_build",
+        "Build the range workbook",
         "python3 build_range.py",
         Run {
             stdout: "FileNotFoundError: range.xlsx".into(),
@@ -1005,7 +1011,11 @@ fn asks(s: &mut Script, cast: &Cast) {
         who,
         text("The schema and the API are in. The migration needs to run before the tests.\n\n"),
     );
-    for event in bash_approval("toolu_recipes_migrate", "npm run db:migrate") {
+    for event in bash_approval(
+        "toolu_recipes_migrate",
+        "Run the database migration",
+        "npm run db:migrate",
+    ) {
         s.ev(start + 42, who, event);
     }
 
@@ -1048,7 +1058,11 @@ fn asks(s: &mut Script, cast: &Cast) {
     s.prompt(start, who, "Deploy the strategy site");
     s.ev(start, who, init("mockup-permission", "claude-opus-5-5"));
     s.ev(start, who, mode("default"));
-    for event in bash_approval("toolu_permission_deploy", "gh workflow run deploy.yml") {
+    for event in bash_approval(
+        "toolu_permission_deploy",
+        "Start the deploy workflow",
+        "gh workflow run deploy.yml",
+    ) {
         s.ev(start + 6, who, event);
     }
 }
@@ -1286,20 +1300,23 @@ demand.\n\n";
 
 /// The seven commands before the panic was found: what each ran, for how
 /// many seconds, how it exited and what it printed. The system log refused.
-const INVESTIGATION: [(&str, u64, i64, &str); 7] = [
+const INVESTIGATION: [(&str, &str, u64, i64, &str); 7] = [
     (
+        "Find the running Ferrite process",
         "ps -axo pid,lstart,etime,command | grep -i ferrite | grep -v grep",
         2,
         0,
         "27945 Wed 21 Oct 12:08:56 2026     16:52 /Applications/Ferrite.app/Contents/MacOS/ferrite",
     ),
     (
+        "List the newest Ferrite logs",
         "ls -t ~/Library/Logs/Ferrite | head -5",
         1,
         0,
         "server.log\nwindow.log",
     ),
     (
+        "Read the end of the server log",
         "tail -n 40 ~/Library/Logs/Ferrite/server.log",
         2,
         0,
@@ -1307,24 +1324,28 @@ const INVESTIGATION: [(&str, u64, i64, &str); 7] = [
          12:21:50 thread 'scheduler' panicked at crates/ferrite-core/src/scheduled_work.rs:89:28",
     ),
     (
+        "Show the last 30 minutes of system log",
         "log show --last 30m --predicate 'process == \"ferrite\"' --style compact",
         20,
         1,
         "log: Cannot run while sandboxed",
     ),
     (
+        "Look for Ferrite crash reports",
         "ls ~/Library/Logs/DiagnosticReports | grep -i ferrite",
         3,
         0,
         "ferrite-2026-10-21-122150.ips",
     ),
     (
+        "Read the crash report",
         "head -40 ~/Library/Logs/DiagnosticReports/ferrite-2026-10-21-122150.ips",
         4,
         0,
         "\"exception\" : {\"type\":\"EXC_CRASH\",\"signal\":\"SIGABRT\"}",
     ),
     (
+        "List the worktrees",
         "git worktree list",
         2,
         0,

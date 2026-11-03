@@ -147,7 +147,7 @@ impl RowStatus {
     }
 }
 
-/// A row's mark (§6), at its natural size: a working Thread's braille
+/// A row's mark (§6), at its natural size: a working Thread's running
 /// spinner in `RUNNING` (`BLOCKED` while its tests fail) — the one thing in
 /// the column that moves — a blocked Thread's `ATTENTION` dot with its
 /// halo, a failed one's `BLOCKED` dot, background work's `RUNNING` ring, a
@@ -197,12 +197,7 @@ pub(crate) fn head_mark(status: RowStatus) -> AnyElement {
 fn mark_sized(status: RowStatus, ink: u32, dot: f32, glyph: f32) -> AnyElement {
     let solid = || div().size(px(dot)).rounded_full().bg(rgb(ink));
     match status {
-        RowStatus::Working | RowStatus::Failing => div()
-            .font_family(FONT_CODE)
-            .text_size(px(NAV_SPINNER_FS))
-            .line_height(px(NAV_LINE))
-            .child(components::braille_spinner(ink))
-            .into_any_element(),
+        RowStatus::Working | RowStatus::Failing => components::running_spinner(glyph, ink),
         RowStatus::NeedsYou => div()
             .flex()
             .items_center()

@@ -121,9 +121,9 @@ impl CockpitView {
                 None,
             ));
         if let Some(cwd) = self.thread_path(thread) {
-            let shown = home_relative(&cwd);
+            let (name, place) = folder_words(&cwd);
             section = section.child(
-                detail_row("panel-environment-folder", icons::FOLDER, shown, None)
+                detail_row("panel-environment-folder", icons::FOLDER, name, place)
                     .cursor_pointer()
                     .tooltip(ferrite_ui::menu::tooltip("Show in its folder"))
                     .on_click(move |_, window, cx| {
@@ -144,6 +144,19 @@ impl CockpitView {
             }
         }
         section
+    }
+}
+
+/// A folder as Claude's Environment names it: its own name, then dim where
+/// it lies with the home spelled `~` (`ferrite · ~/Desktop/Projects`). A
+/// folder with no name of its own (the root) reads whole.
+fn folder_words(folder: &std::path::Path) -> (String, Option<String>) {
+    match (folder.file_name(), folder.parent()) {
+        (Some(name), Some(parent)) => (
+            name.to_string_lossy().into_owned(),
+            Some(format!("\u{b7} {}", home_relative(parent))),
+        ),
+        _ => (home_relative(folder), None),
     }
 }
 
@@ -182,7 +195,8 @@ fn section_rule() -> Div {
 
 /// One line under a section (`PANEL_SECTION_H`): its icon on the content
 /// edge, its words on the text column, a second word dim after them (a
-/// file's folder, a branch's base) when there is one.
+/// folder's place, a branch's base) when there is one, cut in its middle
+/// when the line runs out of room so both its ends still read.
 pub(super) fn detail_row(
     id: impl Into<gpui::ElementId>,
     glyph: &'static str,
@@ -223,7 +237,9 @@ pub(super) fn detail_row(
             div()
                 .flex_1()
                 .min_w_0()
-                .truncate()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis_middle()
                 .text_size(px(FS_META))
                 .text_color(rgb(INK_SUBTLE))
                 .child(SharedString::from(meta))
@@ -277,15 +293,34 @@ fn connector_row(index: usize, server: &McpServer) -> Div {
         )
 }
 
-/// A quiet line on the content edge.
+/// A quiet line on the content edge: one `PANEL_SECTION_H` row, its words
+/// wrapping within the panel's padding when they run long.
 pub(super) fn quiet_line(selector: &'static str) -> Div {
     use ferrite_ui::theme::*;
     div()
         .debug_selector(move || selector.into())
-        .flex()
-        .items_center()
-        .h(px(PANEL_SECTION_H))
+        .flex_shrink_0()
+        .whitespace_normal()
+        .py(px((PANEL_SECTION_H - LH_META) / 2.))
         .px(px(PANEL_ROW_ICON_X))
+        .line_height(px(LH_META))
         .text_size(px(FS_META))
         .text_color(rgb(INK_SUBTLE))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::folder_words;
+    use std::path::Path;
+
+    /// The folder reads by its own name, its place dim after it; the root
+    /// has no name of its own and reads whole.
+    #[test]
+    fn a_folder_reads_as_its_name_then_its_place() {
+        assert_eq!(
+            folder_words(Path::new("/srv/work/ferrite")),
+            ("ferrite".to_string(), Some("\u{b7} /srv/work".to_string()))
+        );
+        assert_eq!(folder_words(Path::new("/")), ("/".to_string(), None));
+    }
 }

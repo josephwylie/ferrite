@@ -786,7 +786,9 @@ fn the_draft_model_chip_sets_its_effort_in_a_submenu(cx: &mut TestAppContext) {
         assert!(chosen.is_some(), "the chip names the level in force");
         steps
     });
-    let chip = cx.debug_bounds("draft-model-picker").expect("the model chip");
+    let chip = cx
+        .debug_bounds("draft-model-picker")
+        .expect("the model chip");
     cx.simulate_click(chip.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {
@@ -794,7 +796,7 @@ fn the_draft_model_chip_sets_its_effort_in_a_submenu(cx: &mut TestAppContext) {
         assert!(matches!(band.kind, Kind::Band(pane::BandChip::Provider)));
     });
     let row = cx
-        .debug_bounds("choice-submenu-row")
+        .debug_bounds("choice-submenu-row-0")
         .expect("the effort row rides the draft's model menu");
     cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
     tick(cx);

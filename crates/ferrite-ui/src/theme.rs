@@ -8,7 +8,7 @@
 //!
 //! **A terminal in a card, calm chrome around it.** Ferrite keeps the
 //! provider CLIs' terminal — a monospace transcript, `❯` prompts, `●` tool
-//! bullets, `└` results, braille spinners, state inks — and keeps what only
+//! bullets, `└` results, spinners, state inks — and keeps what only
 //! a native app can do: vector marks, inline images, side-by-side diffs,
 //! folds in place, pixel scrolling, floating pickers. Everything around the
 //! transcript is quieter and modern: sans chrome, rounded cards on a
@@ -99,8 +99,9 @@
 //!    outline. A link is the one ink that is not state: the Claude app's
 //!    link blue (`LINK_INK`), underlined in prose — the owner's spec. Hue
 //!    is for state only: `RUNNING` green (working, `ok`, diff `+`),
-//!    `ATTENTION` yellow (needs you), `RISKY_INK` amber (a permission mode
-//!    that never asks, `mode_is_risky`), `BLOCKED` red (failed, diff
+//!    `ATTENTION` yellow (needs you), `MODE_ATTENTION_INK` amber (the
+//!    permission mode that asks before every change, `mode_is_manual`),
+//!    `BLOCKED` red (failed, diff
 //!    `−`). Done is a shape (`check-circle`) in `INK_SUBTLE`, not a hue. A
 //!    provider's brand colour (`PROVIDER_CLAUDE`, `PROVIDER_CODEX`) is only
 //!    on its logomark and its working glyphs. Syntax colour (`SYN_*`) is for
@@ -116,17 +117,16 @@
 //!    effort; the right panel holds changes, the pull request and context;
 //!    a Group Pane's head speaks its state word. Nothing shows twice on one
 //!    surface.
-//! 8. **Little moves at once.** What moves: the working line's three dots
-//!    (`components::working_dots`, a pulse across them every
-//!    `MOTION_WORKING_DOTS_MS`, the provider's colour) and its caption's
-//!    shimmer (`components::shimmer`), on the focused Pane only; the braille
-//!    spinner (`components::braille_spinner`, `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` at
-//!    `MOTION_BRAILLE_FRAME_MS`, `RUNNING`) in place of the mark of every
-//!    working Thread; the caret blinking in the focused Composer
-//!    (`components::caret_blink`); the nav and the panel riding their width
-//!    (`MOTION_RESIZE_MS`); hover fills blending in. The working dots are
-//!    the only dots that pulse: a status dot never breathes, and unread is
-//!    ink (`INK_STRONG` title), not motion. The motion section below holds
+//! 8. **Little moves at once.** What moves: the running spinner
+//!    (`components::running_spinner`, an arc turning every
+//!    `MOTION_SPINNER_TURN_MS`), the app's one running glyph — the working
+//!    line's mark in the provider's colour, and in `RUNNING` in place of the
+//!    mark of every working Thread and on a plan's current step; the working
+//!    caption's shimmer (`components::shimmer`), on the focused Pane only;
+//!    the caret blinking in the focused Composer (`components::caret_blink`);
+//!    the nav and the panel riding their width (`MOTION_RESIZE_MS`); hover
+//!    fills blending in. No dot pulses: a status dot never breathes, and
+//!    unread is ink (`INK_STRONG` title), not motion. The motion section below holds
 //!    the rest of the catalog, and reduced motion holds every loop on a
 //!    static end state that says the same thing.
 //! 9. **Pixel line heights and a space scale.** Every text role is a (size,
@@ -138,8 +138,8 @@
 //! 10. **Glyph coverage.** Every glyph is text, set in its face where the
 //!     face has it and in the face the platform falls back to where it does
 //!     not — on macOS Menlo for `❯ ◆ ✓ ✗ ▾ ▸ ⌘ ⌥ ⌃` and the stars
-//!     (`✻`), STIX Two Math for `⏵ ⏸`, Apple Braille for the
-//!     braille spinner (`components::glyph`) — on the line's baseline.
+//!     (`✻`), STIX Two Math for `⏵ ⏸` (`components::glyph`) — on the
+//!     line's baseline.
 //!     `CHROME_GLYPHS` lists the non-ASCII glyphs Geist Mono sets and
 //!     `FALLBACK_GLYPHS` the ones it lacks; a test checks each against the
 //!     face (the system UI font covers the chrome's own, `⇧ ↑ ↓ · ⌘`).
@@ -239,6 +239,15 @@ pub const CARD: u32 = 0x1a1a1a;
 /// The frame — the nav, the heads, the right panel, a Group's gutter, the
 /// bottom bar: the plane itself (rule 2).
 pub const FRAME: u32 = CARD;
+/// `#222222` — the sidebar (the nav column): a step over the plane, as
+/// Claude's sidebar sits a little lighter than its transcript (sampled
+/// from claude/*.png: the transcript `#191919`, the sidebar ~12 levels
+/// over it under the window's vibrancy), so the column reads as its own
+/// region and not by its hairline alone. Its rows step up from it:
+/// `SIDEBAR_HOVER` under the pointer, `SIDEBAR_SELECTED` selected.
+pub const SIDEBAR: u32 = 0x222222;
+pub const SIDEBAR_HOVER: u32 = 0x2a2a2a;
+pub const SIDEBAR_SELECTED: u32 = 0x303030;
 /// `#171717` — sunk below the plane: a Decision's command well, the
 /// palette scrim's base.
 pub const SUNKEN: u32 = 0x171717;
@@ -335,6 +344,10 @@ pub mod paint {
     pub const FRAME: Paint = Paint::solid(super::FRAME);
     /// The right panel: the frame's grey.
     pub const PANEL: Paint = FRAME;
+    /// The nav column and its rows (`super::SIDEBAR`).
+    pub const SIDEBAR: Paint = Paint::solid(super::SIDEBAR);
+    pub const SIDEBAR_HOVER: Paint = Paint::solid(super::SIDEBAR_HOVER);
+    pub const SIDEBAR_SELECTED: Paint = Paint::solid(super::SIDEBAR_SELECTED);
     /// A diff's or a code fence's box, on a reading surface (the card, the
     /// panel).
     pub const BLOCK: Paint = Paint::solid(super::BLOCK);
@@ -437,15 +450,15 @@ pub const SEAM_HOVER: u32 = 0xefefef66;
 
 // -------------------------------------------------------- state + signals
 
-/// Green — live work: the running dot and braille spinner, `ok`, a passing
+/// Green — live work: the running dot and spinner, `ok`, a passing
 /// check, diff `+`.
 pub const RUNNING: u32 = GREEN;
 /// Yellow — needs you: the dot, the `◆`, the kind word.
 pub const ATTENTION: u32 = YELLOW;
-/// `#e49b31` amber — a permission mode that changes what runs without
-/// asking, its word in the Composer's footer (the Claude app's `Manual`):
-/// yellow would read as "pending".
-pub const RISKY_INK: u32 = 0xe49b31;
+/// `#e49b31` amber — the permission mode that stops for the operator before
+/// every change, its word in the Composer's footer and its mode-menu row
+/// (the Claude app's orange `Manual`): yellow would read as "pending".
+pub const MODE_ATTENTION_INK: u32 = 0xe49b31;
 /// Red — failed: the dot, the word `failed`, diff `−`.
 pub const BLOCKED: u32 = RED;
 /// Red as a one-line ground (a refused drop, a destructive control under
@@ -455,11 +468,13 @@ pub const BLOCKED_WASH: u32 = 0xf3767b1f;
 /// check-circle, in this ink too: no hue, ADR 0033.)
 pub const IDLE: u32 = INK_SUBTLE;
 
-/// Whether a permission mode lets work run without asking at all (Claude's
-/// `bypassPermissions`, Codex's `never`): the one kind the mode menu, and
-/// the footer word, draw in `RISKY_INK` (Codex's orange full access).
-pub fn mode_is_risky(mode: &str) -> bool {
-    matches!(mode, "bypassPermissions" | "never")
+/// Whether a permission mode is Claude's `Manual` (its `default`: ask
+/// before every change): the one mode the mode menu, and the footer word,
+/// draw in `MODE_ATTENTION_INK`, as the Claude app does. Every other mode,
+/// the ones that ask less (accept edits, bypass) among them, wears the
+/// plain meta ink.
+pub fn mode_is_manual(mode: &str) -> bool {
+    matches!(mode, "" | "default")
 }
 
 /// A permission mode's one-line description in the mode menu, by its id
@@ -808,7 +823,7 @@ pub const CHROME_GLYPHS: &[char] = &[
 #[cfg(any(test, feature = "test-support"))]
 pub const FALLBACK_GLYPHS: &[char] = &[
     '❯', '✻', '◆', '⏵', '✓', '✗', '▾', '▸', '⌘', '⌥', '⌃', '⎿', '∴', '☐', '⎇', '■', '✢', '✳', '✶',
-    '✽', '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏',
+    '✽',
 ];
 
 /// 720px — the reading column's maximum width (legacy: the terminal grammar
@@ -1181,7 +1196,7 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.table_head_foreground = rgb(INK_STRONG).into();
     theme.drag_border = rgba(DROP_EDGE).into();
     theme.drop_target = rgba(DROP_WASH).into();
-    theme.sidebar = rgb(FRAME).into();
+    theme.sidebar = rgb(SIDEBAR).into();
     theme.sidebar_foreground = rgb(INK).into();
     // The selected Settings page is the selection row.
     theme.sidebar_accent = rgb(SELECTED).into();
@@ -1535,8 +1550,8 @@ pub const MESSAGE_ACTIONS_GAP: f32 = SPACE_1;
 pub const COPIED_HOLD_MS: u64 = 1_500;
 /// **The edge fades**: what scrolls under the top of the transcript (or
 /// under its pinned prompt) fades out over this height into the card, so no
-/// row ends on a hard cut; while the reader is scrolled away from the tail,
-/// the foot fades the same way. The nav tree fades at whichever edge still
+/// row ends on a hard cut; while rows run on under the foot (into the
+/// Composer, Codex's fade), the foot fades the same way. The nav tree fades at whichever edge still
 /// has rows past it, into the frame. A fade is solid over its first half,
 /// so a row cut right at the edge is hidden, held near-solid
 /// (`EDGE_FADE_KNEE`) over the next quarter, then eases out
@@ -1552,23 +1567,16 @@ pub const PINNED_PROMPT_PAD_Y: f32 = SPACE_2;
 /// `JUMP_LATEST_INSET` above the transcript's foot; a click glides back to
 /// the tail and follows it again.
 pub const JUMP_LATEST_INSET: f32 = SPACE_3;
-/// **The working dots** (`components::working_dots`, the working line's
-/// mark): three `WORKING_DOT` dots `WORKING_DOT_GAP` apart, resting at
-/// `WORKING_DOT_REST` of their ink, a pulse crossing them every
-/// `MOTION_WORKING_DOTS_MS` in `WORKING_DOTS_STEPS` steps. The owner's spec
-/// (the Claude app's line) supersedes rule 8's "no dot pulses" for this one
-/// mark: it says work is happening, as the star spinner did.
-pub const WORKING_DOT: f32 = 5.0;
-pub const WORKING_DOT_GAP: f32 = 3.0;
-pub const WORKING_DOT_REST: f32 = 0.3;
-pub const MOTION_WORKING_DOTS_MS: u64 = 600;
-pub const WORKING_DOTS_STEPS: usize = 18;
 /// **The task list** (a plan the provider works to, over the working line):
 /// a card at `R_CARD` on a `CARD_RING`, `TASK_CARD_PAD` inside,
 /// `TASK_ROW_GAP` between its steps, each a `TASK_ICON` mark and its words —
-/// done `check-circle` dimmed, the current step's braille spinner, a step
+/// done `check-circle` dimmed, the current step's running spinner, a step
 /// to do a dashed ring.
 pub const TASK_CARD_PAD: f32 = SPACE_3;
+/// 16px — the card's clearance in the flow, above it and down to the
+/// working line, so it reads as its own block (Claude's), never as the body
+/// of the tool group over it.
+pub const TASK_CARD_GAP: f32 = SPACE_4;
 pub const TASK_ROW_GAP: f32 = SPACE_1_5;
 pub const TASK_ICON: f32 = 14.0;
 // ---- (end transcript app pass)
@@ -2455,7 +2463,7 @@ pub const SEND_KEY_INK: u32 = 0x111214b3;
 /// `Main` leads with the `terminal` icon (`SUBJECT_TAB_ICON`, 13) and pads
 /// `SUBJECT_TAB_PAD_L` / `SUBJECT_MAIN_PAD_R` (10 / 8); a live Subagent's
 /// tab pads 10 both sides and leads with its mark in a fixed
-/// `SUBJECT_MARK_W` slot (Geist Mono 12's cell: the braille spinner's), so
+/// `SUBJECT_MARK_W` slot (a nav mark's icon box, the running spinner's), so
 /// a state change never resizes it. Labels ellipsise at
 /// `SUBJECT_LABEL_MAX_W` (200). Icon or mark to label: `SUBJECT_TAB_INNER_GAP`
 /// (8). The `N done ▾` menu button pads 10 / 8, its parts
@@ -2468,7 +2476,7 @@ pub const SUBJECT_TAB_H: f32 = 28.0;
 pub const SUBJECT_TAB_PAD_L: f32 = 10.0;
 pub const SUBJECT_MAIN_PAD_R: f32 = SPACE_2;
 pub const SUBJECT_TAB_ICON: f32 = 13.0;
-pub const SUBJECT_MARK_W: f32 = 0.6 * FS_META;
+pub const SUBJECT_MARK_W: f32 = NAV_MARK_ICON;
 pub const SUBJECT_TAB_INNER_GAP: f32 = SPACE_2;
 pub const SUBJECT_LABEL_MAX_W: f32 = 200.0;
 pub const SUBJECT_MENU_GAP: f32 = SPACE_1_5;
@@ -2580,8 +2588,8 @@ pub const NAV_WORD_GAP: f32 = SPACE_2;
 /// 6px — between two Project sections.
 pub const NAV_SECTION_GAP: f32 = SPACE_1_5;
 /// A Thread row's marks (§6): 7px dots (6 on a member row) with the
-/// blocked one's 3px halo, 14px icons (13 on a member row), the spinner's
-/// Geist Mono 12.
+/// blocked one's 3px halo, 14px icons (13 on a member row) — the running
+/// spinner among them.
 pub const NAV_DOT: f32 = 7.0;
 pub const NAV_DOT_SMALL: f32 = 6.0;
 pub const NAV_HALO: f32 = 3.0;
@@ -2595,13 +2603,10 @@ pub fn nav_halo_box(dot: f32) -> f32 {
 /// baseline, which the eye reads as dropped).
 pub const NAV_LINE1_MID: f32 = (NAV_ROW2_H - 2.0 * NAV_LINE) / 2.0 + NAV_LINE / 2.0;
 /// Where a mark sits, `(x, y)` from its mark column's left and its row's
-/// top: centred on line 1 of a two-line row (the spinner's line box on
-/// line 1's own), centred on a one-line row (`_LINE`) and on a shown
+/// top: centred on line 1 of a two-line row, centred on a one-line row (`_LINE`) and on a shown
 /// Group's member (`_SMALL`). The x are the mockups' (measured, so off the
 /// scale). The blocked dot sits where a dot does, its halo `NAV_HALO` out
 /// round it.
-pub const NAV_SPINNER_AT: (f32, f32) = (2.0, NAV_LINE1_MID - NAV_LINE / 2.0);
-pub const NAV_SPINNER_AT_SMALL: (f32, f32) = (1.0, (NAV_ROW_H - NAV_LINE) / 2.0);
 pub const NAV_DOT_AT: (f32, f32) = (4.0, NAV_LINE1_MID - NAV_DOT / 2.0);
 pub const NAV_DOT_AT_SMALL: (f32, f32) = (3.0, (NAV_ROW_H - NAV_DOT_SMALL) / 2.0);
 pub const NAV_ICON_AT: (f32, f32) = (0.0, NAV_LINE1_MID - NAV_MARK_ICON / 2.0);
@@ -2609,7 +2614,6 @@ pub const NAV_ICON_AT: (f32, f32) = (0.0, NAV_LINE1_MID - NAV_MARK_ICON / 2.0);
 pub const NAV_ICON_AT_LINE: (f32, f32) = (0.0, (NAV_ROW_H - NAV_MARK_ICON) / 2.0);
 pub const NAV_MARK_ICON: f32 = 14.0;
 pub const NAV_MARK_ICON_SMALL: f32 = 13.0;
-pub const NAV_SPINNER_FS: f32 = 12.0;
 /// The parked mark's `terminal`, at half ink.
 pub const NAV_PARKED_OPACITY: f32 = 0.5;
 /// `#a6a6a6` — line 2 of the selected row, a step over `INK_SUBTLE`.
@@ -2714,10 +2718,10 @@ pub const MOTION_NAV_FADE_MS: u64 = 150;
 //   A transcript row appended live rises in (`MOTION_FADE_IN_MS` 500, 4px);
 //   first paint and scroll-back never animate. Nothing on a high-frequency
 //   interaction scales, slides or staggers.
-// - **Little moves at once** (theme rule 8). The loops: the braille spinner
-//   in place of a working Thread's dot (`MOTION_BRAILLE_FRAME_MS`), the
-//   working line's dots (`MOTION_WORKING_DOTS_MS`) and its caption's
-//   shimmer (`MOTION_SHIMMER_MS`) on the focused Pane, and the focused
+// - **Little moves at once** (theme rule 8). The loops: the running spinner
+//   (`MOTION_SPINNER_TURN_MS`) in place of a working Thread's dot and as the
+//   working line's mark, its caption's shimmer (`MOTION_SHIMMER_MS`) on the
+//   focused Pane, and the focused
 //   Composer's caret blink (`MOTION_CARET_BLINK_MS`). A status dot never
 //   pulses or breathes.
 // - **Interruptible.** A state the operator can flip back (a hover, a
@@ -2808,10 +2812,11 @@ pub const MOTION_SCROLLBAR_LINGER_MS: u64 = 1_400;
 /// stops painting drops off after its last declared tick, and the clock
 /// parks.
 pub const MOTION_PULSE_TICK_MS: u64 = 33;
-/// 66ms — one frame of the braille spinner (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`, ten frames, a
-/// 660ms turn) that stands in a working Thread's dot: two ticks of the
-/// pulse grid, so every frame lands on a tick.
-pub const MOTION_BRAILLE_FRAME_MS: u64 = 2 * MOTION_PULSE_TICK_MS;
+/// 924ms — one turn of the running spinner's arc (Claude's and Codex's
+/// spinner turn a little under a second), in `SPINNER_STEPS` steps of two
+/// pulse ticks each, so every step lands on a tick.
+pub const MOTION_SPINNER_TURN_MS: u64 = SPINNER_STEPS as u64 * 2 * MOTION_PULSE_TICK_MS;
+pub const SPINNER_STEPS: usize = 14;
 /// 2.4s — one sweep of the shimmer's crest across the working caption,
 /// left to right.
 pub const MOTION_SHIMMER_MS: u64 = 2_400;
@@ -3180,11 +3185,10 @@ mod tests {
         // path, so a link.
         assert_ne!(LINK_INK, INK_STRONG, "links wear the link blue");
         assert_eq!(MENTION_INK, LINK_INK);
-        assert!(mode_is_risky("bypassPermissions"));
-        assert!(
-            !mode_is_risky("acceptEdits"),
-            "accept edits still asks for commands"
-        );
+        assert!(mode_is_manual("default"), "Manual reads amber");
+        for quiet in ["acceptEdits", "plan", "bypassPermissions", "auto", "never"] {
+            assert!(!mode_is_manual(quiet), "{quiet} wears the plain meta ink");
+        }
         assert_eq!(IDLE, INK_SUBTLE, "done and idle wear no hue");
     }
 
@@ -3195,6 +3199,9 @@ mod tests {
         let paints = [
             (paint::CARD, CARD),
             (paint::FRAME, FRAME),
+            (paint::SIDEBAR, SIDEBAR),
+            (paint::SIDEBAR_HOVER, SIDEBAR_HOVER),
+            (paint::SIDEBAR_SELECTED, SIDEBAR_SELECTED),
             (paint::BLOCK, BLOCK),
             (paint::FIELD, FIELD),
             (paint::RAISED, RAISED),
@@ -3216,6 +3223,8 @@ mod tests {
         assert_eq!(paint::WINDOW, paint::CARD);
         assert_eq!(paint::PANEL, paint::FRAME);
         assert_eq!(FRAME, CARD, "one plane");
+        // The sidebar sits a step over the plane; its rows step up from it.
+        assert!(CARD < SIDEBAR && SIDEBAR < SIDEBAR_HOVER && SIDEBAR_HOVER < SIDEBAR_SELECTED);
         assert_eq!(paint::PRESS, paint::SELECTION_HOVER);
         // Hover is one equal step on every ground (rule 3).
         for ground in [CARD, FRAME, BLOCK, FLOAT] {
@@ -3296,7 +3305,6 @@ mod tests {
             FS_PANEL_DIFF,
             FS_CHROME_CODE,
             FS_HOME_TITLE,
-            NAV_SPINNER_FS,
             NAV_RAIL_KEY_FS,
         ] {
             assert!(TYPE_SCALE.contains(&size), "{size} is off the scale");
@@ -3342,7 +3350,7 @@ mod tests {
             assert_eq!(tokens.selection.color, alpha(TEXT_SELECTION_WASH));
             assert_eq!(tokens.caret.color, solid(INK_STRONG));
             assert_eq!(tokens.link.color, solid(LINK_INK));
-            assert_eq!(tokens.sidebar.color, solid(FRAME));
+            assert_eq!(tokens.sidebar.color, solid(SIDEBAR));
             assert_eq!(tokens.drop_target.color, alpha(DROP_WASH));
             // And the colours the non-token paths read.
             assert_eq!(theme.primary, solid(PRIMARY));
@@ -3438,10 +3446,6 @@ mod tests {
                 !covers(GEIST_MONO, *glyph),
                 "{glyph} is in Geist Mono now (move it to CHROME_GLYPHS)"
             );
-        }
-        // The spinner frames the design animates are the fallback's.
-        for frame in &crate::components::BRAILLE_FRAMES {
-            assert!(FALLBACK_GLYPHS.contains(frame), "{frame}");
         }
     }
 

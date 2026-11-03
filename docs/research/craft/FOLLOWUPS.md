@@ -54,3 +54,13 @@
 - Activity preview: real last-assistant-message field on ThreadFacts (architecture phase).
 - Free-disk warning moved to sidebar foot (<20 GB).
 - Split-right button (lost with the strip, from Lane D): give it a title-bar home.
+
+## Transcript step 1, E-core (delivery) follow-ups
+- [ ] Composer reads `open.queue()` (id + delivery) instead of queued()/queued_all(); per-item edit/remove call edit_queued_item / remove_queued_item; hide edit/remove for Steering.
+- [ ] Then delete mirror queued()/queued_all() and cockpit's untargeted cancel_queued/edit_queued.
+
+## Transcript step 1, lane B (core) follow-ups for step 2 UI
+- [x] caption: None added to the 5 ToolBlock literals (pane.rs tests, core_transcript_parity.rs).
+- [ ] Lane C: WorkKind::of -> tools::policy(name).kind; rows.rs groups()/OWN_ROW -> policy().grouping (StandsAlone/OwnRow break groups); draws_nothing gets !tool.draws_row(); show caption + failure suffix; is_command_run from transcript::tools (pane.rs:3846, :4128, text.rs:669), then delete the docview re-export.
+- [ ] Lane D: failure strip now shows for a session closed mid-turn (TurnOutcome::Error(UNFINISHED)); check wording.
+- Commit order: Step 0, then pure move (snapshot in scratchpad/pure-move/), then lane B rest.

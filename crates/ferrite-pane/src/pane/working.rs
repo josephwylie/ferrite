@@ -123,9 +123,9 @@ pub(super) fn starting_line(still: bool, solo: bool) -> Div {
         .child(div().min_w_0().truncate().child("Starting"))
 }
 
-/// The working line's mark: three dots in the provider's colour, a pulse
-/// running across them (`components::working_dots`, the Claude app's line);
-/// under reduced motion they sit still. Its selector says which.
+/// The working line's mark: the app's one running glyph
+/// (`components::running_spinner`) in the provider's colour; under reduced
+/// motion it holds still. Its selector says which.
 fn working_mark(ink: u32, live: bool) -> AnyElement {
     div()
         .debug_selector(move || {
@@ -135,7 +135,7 @@ fn working_mark(ink: u32, live: bool) -> AnyElement {
                 "progress-mark-still".into()
             }
         })
-        .child(components::working_dots(ink))
+        .child(components::running_spinner(theme::GLYPH_BOX, ink))
         .into_any_element()
 }
 
@@ -196,9 +196,9 @@ pub(super) fn working_row(
 }
 
 /// The working line (SPEC §5.4), the Claude app's one line: the working
-/// dots in the provider's colour, then what the turn is doing, read off its
+/// spinner in the provider's colour, then what the turn is doing, read off its
 /// execution state (`caption_of`), then `1m04s · ↑ 4.1k tokens` in
-/// `INK_SUBTLE`. Every line's dots cycle on the one shared clock; only the
+/// `INK_SUBTLE`. Every line's spinner turns on the one shared clock; only the
 /// focused Pane's caption shimmers. The seconds are whole
 /// (`progress::live_seconds`), tabular, so the text changes once a second.
 /// The caption is what truncates; the facts keep their room. L2
@@ -346,7 +346,7 @@ impl WorkingLine {
             .line_height(px(grid.line));
         if let Some((selector, caption)) = caption {
             // The caption reads in the body's ink; the provider's colour is
-            // the dots' (a working glyph, rule 6).
+            // the spinner's (a working glyph, rule 6).
             let caption = SharedString::from(caption);
             let text = if live {
                 components::shimmer(caption, INK)
@@ -399,14 +399,16 @@ impl WorkingLine {
                     ))
                 });
         }
+        let planned = !plan.is_empty();
         div()
             .flex()
             .flex_col()
-            .gap(px(theme::SPACE_2))
+            .gap(px(theme::TASK_CARD_GAP))
+            .when(planned, |tail| tail.pt(px(theme::TASK_CARD_GAP)))
             .w_full()
             .min_w_0()
             .flex_shrink_0()
-            .children((!plan.is_empty()).then(|| task_list(&plan, grid)))
+            .children(planned.then(|| task_list(&plan, grid)))
             .child(row)
     }
 }
@@ -416,18 +418,18 @@ impl WorkingLine {
 /// and its words:
 ///
 /// - a phase that is not the model's own work — retrying, compacting,
-///   waiting — by name (`Retrying · Server busy…`);
+///   waiting — by name (`Retrying · Server busy`);
 /// - else the call running now, in its call line's words (`Running cargo
 ///   test`): the step itself, as the Claude app's line reads, so the call
 ///   row and the line never say different things;
 /// - else, while the model thinks or writes, the provider's own heading
-///   (`Checking build progress…`), unless its reasoning row is in view
+///   (`Checking build progress`), unless its reasoning row is in view
 ///   (`heading_shown`);
-/// - else the turn's verb (`Reticulating…`, `progress::spinner_verb`, held
+/// - else the turn's verb (`Reticulating`, `progress::spinner_verb`, held
 ///   for the whole turn): only when nothing more specific is known.
 ///
-/// Words of the provider's or the turn's trail off (R16); a call's are its
-/// own and don't.
+/// None trails off: the running glyph says the work goes on, as the Claude
+/// app's line does.
 fn caption_of(
     transcript: &Transcript,
     heading_shown: bool,
@@ -454,14 +456,12 @@ fn caption_of(
     // The selector names what the line means (`Working`); for the generic
     // word, its words are the turn's verb.
     let words = if caption == generic {
-        ferrite_core::progress::spinner_verb(thread, transcript.turn_count()).to_owned()
+        ferrite_core::progress::spinner_verb(thread, transcript.turn_count())
     } else {
-        caption.trim_end_matches('\u{2026}').to_owned()
+        caption.as_str()
     };
-    Some((
-        format!("progress-caption-{caption}"),
-        format!("{words}\u{2026}"),
-    ))
+    let words = words.trim_end_matches(['\u{2026}', '.']).to_owned();
+    Some((format!("progress-caption-{caption}"), words))
 }
 
 /// The call the turn runs now: its newest running call, looked for in the
@@ -480,7 +480,7 @@ fn running_call(transcript: &Transcript) -> Option<&ToolBlock> {
 
 /// The task list (`TASK_*`): the plan the turn works to, a card on a
 /// hairline ring, one row a step — done `check-circle` and its words
-/// dimmed, the step in hand the braille spinner (`RUNNING`) and its words
+/// dimmed, the step in hand the running spinner (`RUNNING`) and its words
 /// strong, a step to do a dashed ring and its words in the body's ink.
 fn task_list(plan: &[(String, TaskState)], grid: Grid) -> Div {
     div()
@@ -503,7 +503,10 @@ fn task_list(plan: &[(String, TaskState)], grid: Grid) -> Div {
                     icon(icons::CHECK_CIRCLE, theme::TASK_ICON, INK_SUBTLE).into_any_element(),
                     INK_SUBTLE,
                 ),
-                TaskState::Current => (components::braille_spinner(RUNNING), INK_STRONG),
+                TaskState::Current => (
+                    components::running_spinner(theme::TASK_ICON, RUNNING),
+                    INK_STRONG,
+                ),
                 TaskState::ToDo => (
                     icon(icons::CIRCLE_DASHED, theme::TASK_ICON, INK_SUBTLE).into_any_element(),
                     INK,

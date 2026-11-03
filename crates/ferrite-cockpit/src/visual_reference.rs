@@ -172,19 +172,42 @@ impl Feed {
     fn ok(&self, id: &str, output: &str) -> &Self {
         self.done(id, output, false, ToolResult::Opaque)
     }
+    /// A shell call as Codex sends it: the command alone.
     fn bash(&self, id: &str, command: &str, stdout: &str, exit: i64, ms: u64) -> &Self {
-        self.tool(id, "Bash", serde_json::json!({ "command": command }))
-            .done(
-                id,
-                stdout,
-                exit != 0,
-                ToolResult::Command {
-                    stdout: stdout.into(),
-                    stderr: String::new(),
-                    exit_code: Some(exit),
-                    duration_ms: Some(ms),
-                },
-            )
+        self.shell(
+            id,
+            serde_json::json!({ "command": command }),
+            stdout,
+            exit,
+            ms,
+        )
+    }
+    /// A Bash call as Claude Code sends it: the command and the words it
+    /// wrote for what the command is for (the row's line).
+    fn claude_bash(
+        &self,
+        id: &str,
+        description: &str,
+        command: &str,
+        stdout: &str,
+        exit: i64,
+        ms: u64,
+    ) -> &Self {
+        let input = serde_json::json!({ "command": command, "description": description });
+        self.shell(id, input, stdout, exit, ms)
+    }
+    fn shell(&self, id: &str, input: serde_json::Value, stdout: &str, exit: i64, ms: u64) -> &Self {
+        self.tool(id, "Bash", input).done(
+            id,
+            stdout,
+            exit != 0,
+            ToolResult::Command {
+                stdout: stdout.into(),
+                stderr: String::new(),
+                exit_code: Some(exit),
+                duration_ms: Some(ms),
+            },
+        )
     }
     fn edit(&self, id: &str, path: &str, hunk: Hunk) -> &Self {
         self.tool(id, "Edit", serde_json::json!({ "file_path": path }))
@@ -1214,15 +1237,20 @@ fn legacy(state: &str) -> (Scene, Setup) {
         _ => "Earlier work remains available after interruption.".into(),
     };
     sender.text(&source);
-    for (id, error, result) in [
-        ("ok", false, "one  two\nthree   four"),
-        ("error", true, "Example failure\nAdditional detail"),
+    for (id, description, error, result) in [
+        ("ok", "Print the fixture", false, "one  two\nthree   four"),
+        (
+            "error",
+            "Print the failing fixture",
+            true,
+            "Example failure\nAdditional detail",
+        ),
     ] {
         sender
             .tool(
                 id,
                 "Bash",
-                serde_json::json!({"command": "printf 'fixture'"}),
+                serde_json::json!({"command": "printf 'fixture'", "description": description}),
             )
             .done(id, result, error, ToolResult::Opaque);
     }
@@ -1410,8 +1438,9 @@ fn conversation(label: &str) -> Scene {
             section: None,
         },
     )
-    .bash(
+    .claude_bash(
         "test-1",
+        "Run the nav tests",
         "cargo test -p ferrite nav::",
         "running 38 tests\ntest nav::tests::rows_follow_the_roster ... ok\ntest nav::tests::parked_rows_keep_their_height ... FAILED\n\nfailures:\n\n---- nav::tests::parked_rows_keep_their_height stdout ----\nassertion `left == right` failed\n  left: 58.0\n right: 44.0\n\ntest result: FAILED. 37 passed; 1 failed; 0 ignored",
         101,
@@ -1435,8 +1464,9 @@ fn conversation(label: &str) -> Scene {
             section: None,
         },
     )
-    .bash(
+    .claude_bash(
         "test-2",
+        "Run the nav tests",
         "cargo test -p ferrite nav::",
         "running 38 tests\ntest result: ok. 38 passed; 0 failed; 0 ignored",
         0,
@@ -1477,7 +1507,14 @@ fn nav() -> (Scene, Setup) {
     );
     feed.boot(Provider::Claude, 132_000)
         .text("Profiling the retained path now. The first pass shows layout dominating, not paint:\n\n")
-        .bash("prof", "cargo run --release -- --panes 24 --load", "frame p50 6.1ms  p99 11.8ms", 0, 42_000)
+        .claude_bash(
+            "prof",
+            "Profile 24 panes under load",
+            "cargo run --release -- --panes 24 --load",
+            "frame p50 6.1ms  p99 11.8ms",
+            0,
+            42_000,
+        )
         .text("Layout is 71% of the frame. Checking whether the block cache is keyed on width")
         .tool(
             "grep-cache",
@@ -1715,8 +1752,9 @@ fn visuals(label: &str) -> Scene {
         "Show me token usage and cost for the last 30 days.".into(),
     );
     feed.boot(Provider::Claude, 41_000)
-        .bash(
+        .claude_bash(
             "usage",
+            "Read the last 30 days of usage",
             "ferrite usage --days 30 --json",
             "{\"days\":30,\"cost\":412.80}",
             0,
@@ -1839,8 +1877,9 @@ fn error_turn(label: &str) -> Scene {
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Fix flaky pump test");
     scene.core.send(thread, "Fix the flaky pump test.".into());
     feed.boot(Provider::Claude, 12_000)
-        .bash(
+        .claude_bash(
             "repro",
+            "Run the pump tests on one thread",
             "cargo test -p ferrite-core pump -- --test-threads 1",
             "test result: ok. 14 passed; 0 failed",
             0,
@@ -1870,30 +1909,34 @@ fn tool_groups(label: &str) -> Scene {
             .ok(id, &"line\n".repeat(lines));
     };
     feed.boot(Provider::Claude, 64_000);
-    feed.bash(
+    feed.claude_bash(
         "probe-1",
+        "List the bill fields",
         "cd outputs/invoice-reconcile/2026-10-06 && python3 -c 'import json; print(list(json.load(open(\"bills.json\"))[0]))'",
         "['SupplierInvoiceNumber', 'DateDue', 'BalanceDue', 'DateOccurred', 'DisplayId', 'Id']",
         0,
         1_400,
     );
-    feed.bash(
+    feed.claude_bash(
         "probe-2",
+        "Run the dry-run match",
         "cd outputs/invoice-reconcile/2026-10-06 && python3 match.py --dry-run",
         "",
         0,
         900,
     );
     read("probe-read", "/tmp/saxon.png", 1);
-    feed.bash(
+    feed.claude_bash(
         "probe-3",
+        "Show the held bills",
         "cd outputs/invoice-reconcile/2026-10-06/myob-prep && python3 prep.py --hold",
         "16:HOLD={\n  'a-p01': 'Rivera',\n  'a-p05': 'platform10',\n  'a-p06': 'Tribe Market'\n}\n  # 61 more held",
         0,
         104_000,
     );
-    feed.bash(
+    feed.claude_bash(
         "probe-4",
+        "Search the notes for the Adelaide invoice",
         "cd outputs/invoice-reconcile && grep -n -i '25436\\|adelaide' notes.md",
         "",
         1,
@@ -1908,15 +1951,17 @@ fn tool_groups(label: &str) -> Scene {
         "probe-5",
         ".claude/skills/integrations/myob/scripts/myob.py:316:    emit(args, call(...))",
     );
-    feed.bash(
+    feed.claude_bash(
         "probe-6",
+        "Look up account 6-3001",
         "cd outputs/invoice-reconcile/2026-10-06/myob-prep && python3 accounts.py 6-3001",
         "{'id': '97', 'code': '6-3001', 'name': 'Kitchen Consumables'}\nTraceback (most recent call last):\n  KeyError: 'tax_id'",
         1,
         700,
     );
-    feed.bash(
+    feed.claude_bash(
         "probe-7",
+        "Summarise the prepared bills",
         "cd outputs/invoice-reconcile/2026-10-06/myob-prep && python3 prep.py --summary",
         "a-p06 skip Tribe Market (Level Group OMO43465)\n+ 12 bills ready",
         0,
@@ -1940,8 +1985,9 @@ fn tool_groups(label: &str) -> Scene {
         },
     );
     read("check-1", "myob-prep/accounts.py", 120);
-    feed.bash(
+    feed.claude_bash(
         "check-2",
+        "Check account 6-3001 resolves",
         "cd myob-prep && python3 accounts.py 6-3001",
         "{'id': '97', 'code': '6-3001', 'tax_id': '1'}",
         0,
@@ -1953,7 +1999,10 @@ fn tool_groups(label: &str) -> Scene {
     feed.tool(
         "live-2",
         "Bash",
-        serde_json::json!({ "command": "cd myob-prep && python3 enter.py --draft --all" }),
+        serde_json::json!({
+            "command": "cd myob-prep && python3 enter.py --draft --all",
+            "description": "Enter the bills as drafts",
+        }),
     );
     scene
 }
@@ -2280,7 +2329,7 @@ fn prose() -> Scene {
 
 /// The loops overlay's pixel parity (`loops_overlay`): one scene — a
 /// working Thread focused in an active window, its working line's star and
-/// shimmer, the nav's braille spinner, the Composer's caret blinking over a
+/// shimmer, the nav's running spinner, the Composer's caret blinking over a
 /// character of typed text — drawn with the overlay and without it, at the
 /// same instants every 20ms across more than a blink, must give the same
 /// framebuffer; then again with the palette open over it, its caret

@@ -62,3 +62,15 @@ Mic/dictation, Codex's plugin catalogue, the Codex "Worked for" header, rewind (
 ## Cost
 
 10 implementation agents: 2 serial in Wave 0, then 8 in parallel. Two full test runs in total: checkpoint 0 and the final checkpoint.
+
+## Wave 2: features (owner's picks, 2026-11-03), after transcript step 2
+
+Same quality bar as Wave 1: measured against the captures, tokens only, snaps per motion-measured.md.
+
+| Lane | Work |
+|---|---|
+| **N. Navigation** | Back/forward arrows in the title bar moving through UI history (thread and view changes), ⌘[ / ⌘], tooltips "Back ⌘[" / "Forward ⌘]", disabled at the ends. Title-bar tool buttons (Claude top right) at the same quality. |
+| **S. Sidebar** | Codex bell = activity filter that replaces Inbox (Priority / Today, as Lane A built); search icon in the sidebar header; Pinned section (pin/unpin from the row menu); collapsible project groups (▾); "Show more" after ~5 threads per project; Recents section. |
+| **P. Side panel** | Create PR in Changes; Context breakdown that opens (MCP tools, skills, memory files lists, deferred tools apart); Connectors collapsible with "N connected"; Environment Save (if confirmed); usage popover from the ring. No Remote Control. |
+| **T. Composer + transcript** | + menu Connectors › and Plugins › submenus; Codex home hero "What should we build in <project>?" with project switcher and env chips above the composer; image attachments as thumbnails in the user bubble; quiet "N background agents completed" line; floating scroll-to-bottom ↓ button. |
+| **R. Edit + rewind** (core + UI) | Edit a sent prompt (Codex) and rewind to a message (Claude): truncate the session at that user message and resend/continue from there. Needs core support per provider (Claude CLI resume-at / fork-session; Codex thread rollback), a protocol op, transcript truncation, and message actions on the user bubble. Research the provider mechanisms first, then build. |

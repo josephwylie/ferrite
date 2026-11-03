@@ -11,7 +11,7 @@
 //!    open in browser · copy html
 //! ```
 //!
-//! The gutter mark says where the visual is: the braille spinner while the
+//! The gutter mark says where the visual is: the running spinner while the
 //! agent draws it and Ferrite checks it, a muted image icon once shown, a
 //! red one if it failed (with `failed · why` under it). The page sits in a
 //! 1px `CARD_RING` frame. The title and caption are text, selectable and copied

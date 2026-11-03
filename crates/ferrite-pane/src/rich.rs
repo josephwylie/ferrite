@@ -341,7 +341,8 @@ impl Markdown {
     }
 
     /// Set the run as an activity line: quiet, one line at its own width,
-    /// never wrapped (its box cuts it, `pane::EdgeCut`).
+    /// never wrapped (its box cuts it, `pane::EdgeCut`), its paths plain
+    /// words underlined only under the pointer.
     pub fn activity(mut self) -> Self {
         self.single_line = true;
         self.quiet()
@@ -451,6 +452,17 @@ impl gpui::RenderOnce for Markdown {
         };
         let text_style = if self.single_line || self.chips.is_some() {
             text_style.with_prose_max_width(None)
+        } else {
+            text_style
+        };
+        // An activity line's path is the row's own words, as Claude's are:
+        // no link ink, no underline until the pointer is on it.
+        let text_style = if self.single_line {
+            let words = text_style.foreground();
+            text_style
+                .with_link(words)
+                .with_link_underline(None)
+                .with_link_underline_on_hover(true)
         } else {
             text_style
         };

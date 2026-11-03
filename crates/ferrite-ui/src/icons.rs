@@ -121,6 +121,8 @@ icons![
     "maximize",
     // A plan's pending step (the transcript's task list).
     "circle-dashed",
+    // The running mark, turned by `components::running_spinner`.
+    "spinner-arc",
     // A row's more menu (the nav's `⋯`).
     "ellipsis",
     // (end UI refresh)
@@ -225,6 +227,9 @@ pub const CHECK_CIRCLE: &str = "icons/check-circle.svg";
 pub const X_CIRCLE: &str = "icons/x-circle.svg";
 /// A plan's step still to do: a dashed ring (the task list).
 pub const CIRCLE_DASHED: &str = "icons/circle-dashed.svg";
+/// Running: a quarter arc over a faint ring (`components::running_spinner`
+/// turns it).
+pub const SPINNER_ARC: &str = "icons/spinner-arc.svg";
 /// A row's more menu: `⋯`, under the pointer.
 pub const ELLIPSIS: &str = "icons/ellipsis.svg";
 /// The permission mode.
@@ -548,7 +553,7 @@ mod tests {
     }
 
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
-    const REFRESH_ICONS: [&str; 24] = [
+    const REFRESH_ICONS: [&str; 25] = [
         PANEL_RIGHT,
         SEARCH,
         INBOX,
@@ -570,6 +575,7 @@ mod tests {
         EXTERNAL,
         MAXIMIZE,
         CIRCLE_DASHED,
+        SPINNER_ARC,
         ELLIPSIS,
         LAPTOP,
         PLUG,

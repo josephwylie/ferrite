@@ -380,7 +380,7 @@ impl Standing {
     }
 
     /// The tab's mark (the nav's, `nav::mark`): a waiting agent's
-    /// `ATTENTION` dot, the braille spinner while working, and a failed
+    /// `ATTENTION` dot, the running spinner while working, and a failed
     /// one's `BLOCKED` dot on its sticky tab. Starting and other done
     /// agents carry none; the slot stays.
     fn mark(self, status: AgentStatus) -> Option<AnyElement> {
@@ -950,7 +950,7 @@ impl CockpitView {
             // The strip runs across the card's top: with no place, the list
             // drops below it.
             place: None,
-            submenu: None,
+            submenus: Vec::new(),
             width: None,
             trigger: components::button(("subject-overflow", thread.get()))
                 .tab_stop(true)

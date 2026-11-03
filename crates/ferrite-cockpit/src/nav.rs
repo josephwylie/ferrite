@@ -17,9 +17,10 @@
 //! the 24-Pane wall smooth with the nav open. Click wiring stays in
 //! `cockpit.rs`, the same split `pane_cell` uses.
 //!
-//! **A list on the frame.** The column is `paint::FRAME` from the window's
-//! top. Rows are rounded, wear `paint::RAISED` under the pointer (the one 100ms hover blend) and
-//! `paint::SELECTED` with an inset `LINE` ring when they stand for what the
+//! **A list on the sidebar.** The column is `paint::SIDEBAR` (a step over
+//! the plane) from the window's top. Rows are rounded, wear
+//! `paint::SIDEBAR_HOVER` under the pointer (the one 100ms hover blend) and
+//! `paint::SIDEBAR_SELECTED` with an inset `LINE` ring when they stand for what the
 //! board shows: the Solo Thread's row, or the shown Group's. A Thread row
 //! is one quiet line, as Claude's list: its title, and at its right one
 //! mark when a state is worth saying (`state_mark`). Under the pointer a
@@ -608,13 +609,14 @@ fn trailing(text: impl Into<SharedString>, size: f32, ink: u32) -> Div {
 
 // ------------------------------------------------------------- the rows
 
-/// The nav's one pointer role: nothing at rest, `paint::RAISED` under the
-/// pointer reaching full in 100ms, and the selected row `paint::SELECTED`
+/// The nav's one pointer role: nothing at rest, `paint::SIDEBAR_HOVER`
+/// under the pointer reaching full in 100ms, and the selected row
+/// `paint::SIDEBAR_SELECTED`
 /// whatever the pointer does (its ring is `selection_ring`). The pointer
 /// stays the arrow.
 fn wash<E: Styled + InteractiveElement>(mut element: E, key: SharedString, selected: bool) -> E {
     if selected {
-        element = element.bg(paint::SELECTED);
+        element = element.bg(paint::SIDEBAR_SELECTED);
     } else {
         let t = motion::hover_t(&key);
         #[cfg(test)]
@@ -622,7 +624,7 @@ fn wash<E: Styled + InteractiveElement>(mut element: E, key: SharedString, selec
         if t > 0.0 {
             element = element.bg(motion::mix(
                 rgba(TRANSPARENT).into(),
-                paint::RAISED.into(),
+                paint::SIDEBAR_HOVER.into(),
                 t,
             ));
         }
@@ -691,15 +693,12 @@ enum MarkSeat {
 /// column's left (`x`) and its row's top.
 fn mark_at(status: RowStatus, x: f32, seat: MarkSeat) -> Div {
     let small = seat == MarkSeat::Member;
-    let spinner = matches!(status, RowStatus::Working | RowStatus::Failing);
     let dot = matches!(
         status,
         RowStatus::NeedsYou | RowStatus::Failed | RowStatus::Background
     );
     let (left, top) = match seat {
-        MarkSeat::TwoLine if spinner => NAV_SPINNER_AT,
         MarkSeat::TwoLine if dot => NAV_DOT_AT,
-        MarkSeat::Member if spinner => NAV_SPINNER_AT_SMALL,
         MarkSeat::Member if dot => NAV_DOT_AT_SMALL,
         MarkSeat::TwoLine => NAV_ICON_AT,
         MarkSeat::Member => NAV_ICON_AT_LINE,
@@ -737,7 +736,7 @@ pub fn shell(width: f32) -> Div {
         .text_color(rgb(INK))
 }
 
-/// The column's ground: `paint::FRAME`, top to bottom — what the host's
+/// The column's ground: `paint::SIDEBAR`, top to bottom — what the host's
 /// traffic lights sit on.
 pub fn body() -> Div {
     div()
@@ -747,7 +746,7 @@ pub fn body() -> Div {
         .bottom_0()
         .left_0()
         .right_0()
-        .bg(paint::FRAME)
+        .bg(paint::SIDEBAR)
 }
 
 /// The column's content at its own width: `NAV_COL_PAD` in at its sides
@@ -1159,14 +1158,14 @@ pub fn scrollbar(scroll: &ScrollHandle, revealed: bool) -> Div {
         )
 }
 
-/// the tree's edge fades (`EDGE_FADE`), in `paint::FRAME`: at the top once it
+/// the tree's edge fades (`EDGE_FADE`), in `paint::SIDEBAR`: at the top once it
 /// has scrolled, at the foot while rows remain below, so no row is cut
 /// mid-glyph against the head or the foot. Siblings of the tree, laid before
 /// the scrollbar so they never cover its thumb.
 pub fn edge_fades(scroll: &ScrollHandle) -> Vec<Div> {
     let y = scroll.offset().y;
     let below = scroll.max_offset().y + y > px(0.);
-    let fill = paint::FRAME.hsla();
+    let fill = paint::SIDEBAR.hsla();
     let top = (y < px(0.)).then(|| {
         div()
             .debug_selector(|| "nav-fade-top".into())
@@ -2330,7 +2329,7 @@ mod tests {
     #[test]
     fn one_selection_marks_what_the_board_shows() {
         let fill = |mut drawn: Stateful<Div>| drawn.style().background.clone();
-        let selection = Some(gpui::Hsla::from(paint::SELECTED).into());
+        let selection = Some(gpui::Hsla::from(paint::SIDEBAR_SELECTED).into());
         assert_eq!(fill(group_row(&group(true, false), 0)), selection);
         assert_eq!(fill(group_row(&group(false, false), 0)), None);
         assert_eq!(
@@ -2721,7 +2720,7 @@ mod tests {
         let mut ground = body();
         assert_eq!(
             ground.style().background,
-            Some(gpui::Hsla::from(paint::FRAME).into())
+            Some(gpui::Hsla::from(paint::SIDEBAR).into())
         );
         let mut inner = content();
         let style = inner.style();
@@ -2747,7 +2746,7 @@ mod tests {
         assert_eq!(rail_row(&row(false)).style().background, None);
         assert_eq!(
             rail_row(&row(true)).style().background,
-            Some(gpui::Hsla::from(paint::SELECTED).into())
+            Some(gpui::Hsla::from(paint::SIDEBAR_SELECTED).into())
         );
         let scroll = ScrollHandle::new();
         assert_eq!(

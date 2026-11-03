@@ -671,6 +671,7 @@ pub fn context_usage(
             block()
                 .id("context-usage-limits-unknown")
                 .debug_selector(|| "context-usage-limits-unknown".into())
+                .whitespace_normal()
                 .text_color(rgb(INK_SUBTLE))
                 .child("Limits not reported by this provider"),
         );

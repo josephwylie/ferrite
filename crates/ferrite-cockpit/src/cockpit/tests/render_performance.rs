@@ -1229,7 +1229,7 @@ fn a_working_thread_loops_on_the_pulse_clock_and_parks_when_it_ends(cx: &mut Tes
     tick(cx);
     assert!(cx.debug_bounds("progress-mark-live").is_none());
     cx.executor().advance_clock(Duration::from_millis(
-        ferrite_ui::theme::MOTION_WORKING_DOTS_MS + 2 * ferrite_ui::theme::MOTION_PULSE_TICK_MS,
+        ferrite_ui::theme::MOTION_SPINNER_TURN_MS + 2 * ferrite_ui::theme::MOTION_PULSE_TICK_MS,
     ));
     cx.run_until_parked();
     assert!(pulse_parked(cx), "the lapsed clock parks");
@@ -1361,9 +1361,9 @@ fn working_and_unread_panes_cost_at_most_one_pulse_tick_rate(cx: &mut TestAppCon
         "the premise: a working mark is on screen"
     );
     // The nav pulses no dot now (theme rule 8): unread is ink. The loop it
-    // keeps is a working Thread's braille spinner, on the same clock.
+    // keeps is a working Thread's running spinner, on the same clock.
     assert!(
-        cx.debug_bounds("braille-spinner").is_some(),
+        cx.debug_bounds("running-spinner").is_some(),
         "the premise: a working Thread's spinner turns in the nav"
     );
     // The second starts on a tick of the shared grid, so it holds the
@@ -1786,7 +1786,7 @@ fn outlast_toasts(cx: &mut gpui::VisualTestContext) {
 }
 
 /// A board at work: four Panes, two of them working, an active window. The
-/// loops on screen — the working lines' stars, the braille spinners in the
+/// loops on screen — the working lines' stars, the running spinners in the
 /// heads and the nav, the caret, and the focused working Pane's shimmer —
 /// are drawn by the loops overlay when one of them steps, never more than
 /// once a pulse tick, and the Cockpit is rebuilt only for its clocks.
@@ -2734,4 +2734,3 @@ fn the_wheel_takes_the_scroll_back_from_a_minimap_glide(cx: &mut TestAppContext)
     frames_over(cx, theme::MINIMAP_SCROLL_MS);
     assert_eq!(display_frames(cx), 0, "and nothing glides on");
 }
-

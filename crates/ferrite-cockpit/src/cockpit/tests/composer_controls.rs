@@ -616,7 +616,7 @@ fn the_toolbar_chips_open_their_pickers_with_and_without_a_session(cx: &mut Test
         let menu = cx.debug_bounds("choice-menu").expect("the picker is drawn");
         assert!(menu.bottom() <= at.top(), "{menu:?} above {at:?}");
         assert!(
-            cx.debug_bounds("choice-submenu-row").is_some(),
+            cx.debug_bounds("choice-submenu-row-0").is_some(),
             "the effort rides the model picker as a submenu row"
         );
         view.update(cx, |view, cx| {

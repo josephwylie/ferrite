@@ -7,6 +7,7 @@ use ferrite_core::transcript::{ToolBlock, ToolOutput, ToolState, TurnEnd};
 /// A settled or running call with its retained output.
 fn call(name: &str, summary: &str, state: ToolState, output: &str) -> ToolBlock {
     ToolBlock {
+        caption: None,
         call: "c".into(),
         name: name.into(),
         title: None,

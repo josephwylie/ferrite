@@ -28,12 +28,12 @@ pub fn model_effort_chip(model: SharedString, effort: Option<SharedString>) -> D
         }))
 }
 
-/// The permission mode's word under the box: `INK_SUBTLE`, or `RISKY_INK`
-/// for a mode that never asks (`theme::mode_is_risky`), as its menu row
-/// draws it.
+/// The permission mode's word under the box: `INK_SUBTLE`, or
+/// `MODE_ATTENTION_INK` for `Manual` (`theme::mode_is_manual`), as its menu
+/// row draws it.
 pub fn mode_chip(label: SharedString, mode: &str) -> Div {
-    let ink = if theme::mode_is_risky(mode) {
-        theme::RISKY_INK
+    let ink = if theme::mode_is_manual(mode) {
+        theme::MODE_ATTENTION_INK
     } else {
         INK_SUBTLE
     };
@@ -740,18 +740,19 @@ const ACCEPT_HINT: &str = "\u{21e5} accept";
 const IDLE_PLACEHOLDER: &str = "Type / for commands";
 const RUNNING_PLACEHOLDER: &str = "\u{21b5} to send, esc to stop";
 
-/// The placeholder for this line, Claude's three: a draft's first prompt;
-/// while a turn runs, that ↵ still sends (into the running turn) and Esc
-/// stops it; else the way to the commands. A landed prediction shows
-/// verbatim instead. A Decision or a dead Session changes nothing here:
-/// the line still takes typing, and sending revives.
+/// The placeholder for this line, Claude's three: the first prompt, a
+/// draft's or an empty Thread's; while a turn runs, that ↵ still sends
+/// (into the running turn) and Esc stops it; else the way to the commands.
+/// A landed prediction shows verbatim instead. A Decision or a dead
+/// Session changes nothing here: the line still takes typing, and sending
+/// revives.
 pub(super) fn placeholder(
     pending: bool,
     draft: bool,
     transcript: Option<&Transcript>,
     suggestion: Option<&str>,
 ) -> Ghost {
-    if draft {
+    if draft || transcript.is_some_and(|transcript| transcript.blocks().is_empty()) {
         return Ghost::says("Describe a task or ask a question");
     }
     let busy = transcript.is_some_and(|transcript| transcript.status() == Status::Streaming);

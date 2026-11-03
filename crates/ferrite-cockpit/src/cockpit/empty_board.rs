@@ -160,9 +160,8 @@ impl CockpitView {
 
     /// An empty draft's start card (`pane::render_draft`), Claude's new
     /// session: where the work runs — the draft's Project and Workspace,
-    /// each a press from the picker its footer chip opens — then up to
-    /// `DRAFT_SUGGESTIONS_MAX` of the home's ways to start that are not a
-    /// new Thread (the draft is one already).
+    /// each a press from the picker its footer chip opens — then the
+    /// suggestions (`start_suggestions`).
     pub(super) fn draft_start(&self, index: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
         use ferrite_ui::icons;
         let Some(draft) = self.panes[index].draft() else {
@@ -201,6 +200,46 @@ impl CockpitView {
             ],
             true,
         );
+        std::iter::once(setup)
+            .chain(self.start_suggestions())
+            .map(IntoElement::into_any_element)
+            .collect()
+    }
+
+    /// An empty Thread's start card (`PaneWiring::start`), the draft's
+    /// once the Thread exists: where the work runs — its folder, a press
+    /// that shows it in the system's file browser — then the suggestions.
+    pub(super) fn thread_start(&self, thread: ThreadId) -> Vec<AnyElement> {
+        use ferrite_ui::icons;
+        let folder = self.thread_path(thread).map(|cwd| {
+            let name = cwd
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| cwd.display().to_string());
+            pane::draft_card_group(
+                "thread-start-setup",
+                [
+                    pane::draft_card_row("thread-start-folder", icons::FOLDER, name, false)
+                        .tooltip(ferrite_ui::menu::tooltip("Show in its folder"))
+                        .on_click(move |_, window, cx| {
+                            ferrite_pane::preview::open_original(&cwd, window, cx);
+                        })
+                        .into_any_element(),
+                ],
+                true,
+            )
+        });
+        folder
+            .into_iter()
+            .chain(self.start_suggestions())
+            .map(IntoElement::into_any_element)
+            .collect()
+    }
+
+    /// The start card's suggestions: up to `DRAFT_SUGGESTIONS_MAX` of the
+    /// home's ways to start that are not a new Thread (the card's Pane is
+    /// one already); `None` with none.
+    fn start_suggestions(&self) -> Option<Div> {
         let suggestions: Vec<AnyElement> = self
             .start_rows()
             .into_iter()
@@ -221,12 +260,8 @@ impl CockpitView {
                     .into_any_element()
             })
             .collect();
-        let suggestions = (!suggestions.is_empty())
-            .then(|| pane::draft_card_group("draft-start-suggestions", suggestions, false));
-        std::iter::once(setup)
-            .chain(suggestions)
-            .map(IntoElement::into_any_element)
-            .collect()
+        (!suggestions.is_empty())
+            .then(|| pane::draft_card_group("draft-start-suggestions", suggestions, false))
     }
 
     fn step_empty(&mut self, delta: isize, cx: &mut Context<Self>) {

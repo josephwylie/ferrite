@@ -331,15 +331,24 @@ impl Script {
         self.ev(end, who, completed(id, &output, is_error, result));
     }
 
-    /// A shell command that ran from `start` for `ms`.
-    pub(crate) fn bash(&mut self, start: Secs, who: ThreadId, id: &str, command: &str, run: Run) {
+    /// A Claude Bash call that ran from `start` for `ms`: the command and
+    /// the words Claude Code wrote for what it is for.
+    pub(crate) fn bash(
+        &mut self,
+        start: Secs,
+        who: ThreadId,
+        id: &str,
+        description: &str,
+        command: &str,
+        run: Run,
+    ) {
         let end = start + (run.ms / 1000) as Secs;
         self.tool(
             (start, end),
             who,
             id,
             "Bash",
-            serde_json::json!({ "command": command }),
+            serde_json::json!({ "command": command, "description": description }),
             (
                 run.stdout.clone(),
                 run.exit != 0,
@@ -569,10 +578,12 @@ pub(crate) fn approval(id: &str, command: &str, family: &[&str]) -> SessionEvent
     }
 }
 
-/// Claude asking to run a command: the call, then its permission request.
-pub(crate) fn bash_approval(id: &str, command: &str) -> [SessionEvent; 2] {
+/// Claude asking to run a command: the call (with the words Claude Code
+/// wrote for it), then its permission request.
+pub(crate) fn bash_approval(id: &str, description: &str, command: &str) -> [SessionEvent; 2] {
+    let input = serde_json::json!({ "command": command, "description": description });
     [
-        started(id, "Bash", serde_json::json!({ "command": command })),
+        started(id, "Bash", input.clone()),
         SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
@@ -581,8 +592,8 @@ pub(crate) fn bash_approval(id: &str, command: &str) -> [SessionEvent; 2] {
                 id: format!("{id}-approval"),
                 tool_use_id: id.into(),
                 tool_name: "Bash".into(),
-                description: command.into(),
-                input: serde_json::json!({ "command": command }),
+                description: description.into(),
+                input,
                 suggestions: vec![],
             },
         },

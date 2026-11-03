@@ -609,6 +609,7 @@ fn box_thread(thread: ThreadId, title: &str) -> ferrite_core::protocol::ThreadSt
         tuning: false,
         native_queue_pending: false,
         queued: vec![],
+        queue: vec![],
         suggestion: None,
         commands: vec![],
         models: vec![],

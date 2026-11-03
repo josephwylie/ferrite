@@ -1368,18 +1368,22 @@ impl TranscriptView {
         )
     }
 
+    /// How far the rows run on under the transcript's foot, past the
+    /// list's own foot room (its padding and runway, which hold no row).
+    fn rows_below(&self) -> gpui::Pixels {
+        let state = self.scroll.list_state();
+        let below = state.max_offset_for_scrollbar().y + state.scroll_px_offset_for_scrollbar().y;
+        below - px(theme::body_pad_b(self.input.solo) + self.runway.get().room)
+    }
+
     /// Jump to latest: while the reader is scrolled away from the tail, a
     /// round button over the transcript's foot glides back to it.
     fn jump_to_latest(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.scroll.is_following_tail() || self.glide.is_some_and(|glide| glide.follow) {
             return None;
         }
-        // Within a couple of lines of the end (past the list's own foot
-        // room) there is nothing to jump to.
-        let state = self.scroll.list_state();
-        let below = state.max_offset_for_scrollbar().y + state.scroll_px_offset_for_scrollbar().y;
-        let room = theme::body_pad_b(self.input.solo) + self.runway.get().room;
-        if below < px(room + 2. * self.grid().line) {
+        // Within a couple of lines of the end there is nothing to jump to.
+        if self.rows_below() < px(2. * self.grid().line) {
             return None;
         }
         let id = gpui::ElementId::from(SharedString::from(format!(
@@ -1474,9 +1478,10 @@ fn top_fade() -> gpui::Div {
     ferrite_ui::components::edge_fade(gpui::rgb(theme::CARD).into(), false)
 }
 
-/// The foot fade: the same fill rising from the transcript's foot while the
-/// reader is scrolled away from the tail, so a row cut there does not read
-/// as one with what stands under it.
+/// The foot fade: the same fill rising from the transcript's foot while a
+/// row runs on under it (the reader scrolled away from the tail, or the
+/// tail grown past it), so a row cut there fades into the Composer rather
+/// than ending on a hard cut.
 fn bottom_fade() -> gpui::Div {
     ferrite_ui::components::edge_fade(gpui::rgb(theme::CARD).into(), true)
 }
@@ -2086,6 +2091,9 @@ impl Render for TranscriptView {
         // later row while the rows fit, so read the pixel offset).
         let scrolled = -self.scroll.list_state().scroll_px_offset_for_scrollbar().y
             > px(self.input.shape().top_pad.max(1.));
+        // A row runs on under the foot: it fades into the Composer, as
+        // Codex's do, rather than ending on a hard cut.
+        let cut_below = self.rows_below() > px(0.);
         let latest = self.jump_to_latest(cx);
         let minimap = self.minimap(cx);
         if crate::file_links::take_fading() {
@@ -2122,7 +2130,7 @@ impl Render for TranscriptView {
                     }),
             )
             .children(pinned)
-            .children(latest.is_some().then(|| {
+            .children(cut_below.then(|| {
                 div()
                     .debug_selector(|| "transcript-bottom-fade".into())
                     .absolute()

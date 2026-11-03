@@ -9,7 +9,7 @@
 //! `CARD_RING` at rest, `FOCUS_RING` when focused on a board, `WAIT_RING`
 //! while it waits (a focused waiting Pane shows only the yellow; its focus
 //! reads in the head ground and title). On a board it wears one head
-//! row — the dot (a working Thread's braille spinner), the title, the
+//! row — the dot (a working Thread's running spinner), the title, the
 //! provider mark — and no state word; top to bottom then the subagent
 //! strip, the transcript body (its Decision is the transcript's tail), the
 //! Composer. Two altitudes (R12): the transcript, or the wall tile — the
@@ -25,8 +25,8 @@ mod working;
 #[cfg(any(test, feature = "test-support"))]
 pub use composer::model_label;
 pub use composer::{
-    attach_button, composer_footer, composer_row_limit, flat_facts_text, footer_word,
-    mode_chip, model_effort_chip, offers_import, permission_mode_label, queued_close, queued_count,
+    attach_button, composer_footer, composer_row_limit, flat_facts_text, footer_word, mode_chip,
+    model_effort_chip, offers_import, permission_mode_label, queued_close, queued_count,
     queued_edit, queued_send_now, send_button, send_is_stop, toolbar_chip, ComposerControls,
 };
 use composer::{
@@ -657,6 +657,9 @@ pub struct PaneWiring {
     /// The Group head's fill button (`fill_button`), wired to fill the
     /// board with this Pane; None in Solo.
     pub fill: Option<AnyElement>,
+    /// An empty Thread's start card groups (`start_card`), centred over
+    /// its body until the first prompt; empty draws none.
+    pub start: Vec<AnyElement>,
 }
 
 /// Turns the Pane head's band into its drag handle: the cockpit gives it an
@@ -907,6 +910,7 @@ pub fn render_pane(
         quick_answers,
         toolbar,
         fill,
+        start,
     } = wiring;
     let has_activity_decisions = activity_decisions.is_some() || expand_question;
     // The Decision is the transcript's tail now (`decision_tail`): no card
@@ -1075,6 +1079,19 @@ pub fn render_pane(
                     .child(
                         retained_transcript.expect("L1 transcript entity is wired by CockpitView"),
                     )
+                    .children((!start.is_empty()).then(|| {
+                        // An empty Thread, as a draft: the start card at
+                        // the body's centre.
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .px(px(theme::SPACE_4))
+                            .child(start_card(start))
+                    }))
                     .children(question_measurement),
             );
             // The order is head · body · progress · dock · composer.
@@ -1362,24 +1379,10 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
             toolbar,
         },
     );
-    // The Claude app's new session: at the body's centre the mark over the
-    // start card (where the work runs, then a suggestion or two), and the
-    // Composer at the foot, where the Thread it becomes keeps it, so the
-    // first send moves nothing.
-    let card = (level == Level::Transcript).then(|| {
-        div()
-            .debug_selector(|| "draft-start".into())
-            .flex()
-            .flex_col()
-            .w_full()
-            .max_w(px(theme::DRAFT_CARD_W))
-            .gap(px(theme::DRAFT_CARD_GAP))
-            .child(div().flex().justify_end().child(components::embossed_mark(
-                theme::DRAFT_MARK,
-                theme::EMBOSS_ON_PANE,
-            )))
-            .children(start)
-    });
+    // The Claude app's new session: at the body's centre the start card,
+    // and the Composer at the foot, where the Thread it becomes keeps it,
+    // so the first send moves nothing.
+    let card = (level == Level::Transcript).then(|| start_card(start));
     let body = div()
         .debug_selector(|| "draft-empty".into())
         .flex_1()
@@ -1401,6 +1404,24 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         edge,
         u64::MAX - key,
     )
+}
+
+/// The start card, the Claude app's new session: the mark over its groups
+/// (where the work runs, then a suggestion or two) — a draft's, and an
+/// empty Thread's.
+fn start_card(groups: Vec<AnyElement>) -> Div {
+    div()
+        .debug_selector(|| "draft-start".into())
+        .flex()
+        .flex_col()
+        .w_full()
+        .max_w(px(theme::DRAFT_CARD_W))
+        .gap(px(theme::DRAFT_CARD_GAP))
+        .child(div().flex().justify_end().child(components::embossed_mark(
+            theme::DRAFT_MARK,
+            theme::EMBOSS_ON_PANE,
+        )))
+        .children(groups)
 }
 
 /// One group of the draft's start card: an `R_CARD` card ringed in
@@ -5530,7 +5551,10 @@ mod tests {
         // (that waits for its call to open, below); the test run says
         // `· 42 passed` after its call line. No `└` elbow joins the run.
         assert!(all.contains("Failed"), "the failure's tag: {all}");
-        assert!(!all.contains("applied"), "a shut call previews nothing: {all}");
+        assert!(
+            !all.contains("applied"),
+            "a shut call previews nothing: {all}"
+        );
         assert!(
             all.contains("Ran `cargo test` \u{b7} 42 passed"),
             "the verdict: {all}"
@@ -5913,6 +5937,7 @@ mod tests {
     #[test]
     fn a_call_line_reads_in_the_apps_words() {
         let tool = |name: &str, summary: &str, state: ToolState| ToolBlock {
+            caption: None,
             call: "c".into(),
             name: name.into(),
             title: None,
@@ -5958,6 +5983,7 @@ mod tests {
         );
         // A shut row previews nothing a command printed.
         let printed = ToolBlock {
+            caption: None,
             result_line: Some("16:HOLD={".into()),
             ..tool("Bash", "python3 prep.py --hold", ToolState::Ok)
         };
@@ -5975,6 +6001,7 @@ mod tests {
         // The provider's description leads, as words; the command waits
         // behind the disclosure.
         let described = ToolBlock {
+            caption: None,
             title: Some("List a directory that doesn't exist".into()),
             ..tool("Bash", "ls /definitely-missing-dir", ToolState::Ok)
         };
@@ -6024,6 +6051,7 @@ mod tests {
     #[test]
     fn a_commands_shell_card_says_how_it_ended() {
         let tool = |state: ToolState, output: Option<&str>| ToolBlock {
+            caption: None,
             call: "c".into(),
             name: "Bash".into(),
             title: None,
@@ -6485,14 +6513,25 @@ mod tests {
         );
     }
 
-    /// Claude's three placeholders: a draft's first prompt, a running
-    /// turn's keys, and else the way to the commands — a Decision and a
-    /// closed Session included, since the line still takes typing. Once a
-    /// prediction lands, it shows verbatim as the operator's own next
-    /// line. None ends in an ellipsis.
+    /// Claude's three placeholders: the first prompt (a draft's, an empty
+    /// Thread's), a running turn's keys, and else the way to the commands —
+    /// a Decision and a closed Session included, since the line still
+    /// takes typing. Once a prediction lands, it shows verbatim as the
+    /// operator's own next line. None ends in an ellipsis.
     #[test]
     fn the_placeholder_says_what_the_pane_is_waiting_on() {
-        let live = Transcript::default();
+        let empty = Transcript::default();
+        assert_eq!(
+            placeholder(false, false, Some(&empty), None).text(),
+            "Describe a task or ask a question",
+            "an empty Thread asks for its first prompt, as a draft does"
+        );
+        let mut live = Transcript::default();
+        live.apply(Input::Prompt("fix the decoder".into()));
+        live.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: None,
+        }));
         assert_eq!(
             placeholder(false, false, Some(&live), None).text(),
             "Type / for commands"
@@ -6512,6 +6551,7 @@ mod tests {
         );
 
         let mut closed = Transcript::default();
+        closed.apply(Input::Prompt("fix the decoder".into()));
         closed.apply(Input::Event(SessionEvent::Closed {
             reason: "the CLI exited".into(),
         }));
