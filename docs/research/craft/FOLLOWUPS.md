@@ -78,7 +78,7 @@
 ## Provider options (audit) — applied / pending
 - [x] Claude spawn env: EMIT_TOOL_USE_SUMMARIES, EMIT_SESSION_STATE_EVENTS, ENABLE_TODO_TOOLS; initialize agentProgressSummaries.
 - [x] activity.rs: invalidate after the Closed append, so a mid-turn close fails its turn (lane D test frame_parity::a_session_closed_mid_turn_leaves_the_strip_without_retry).
-- [ ] thinking_tokens estimate in the live line (working.rs).
+- [x] thinking_tokens estimate in the live line (working.rs).
 - [ ] Later: supportedDialogKinds (refusal_fallback_prompt), question previews (CLAUDE_CODE_QUESTION_PREVIEW_FORMAT=markdown + pane render), --include-hook-events with hook UI; Codex approvalsReviewer auto_review, collaborationMode plan, thread/compact/start, review/start.
 - [ ] Lane D leftovers: turn_stamp Interrupted / None for failed latest Main turn (needs row context); "N background agents completed" row (core block on background-origin turn + quiet row).
 
@@ -100,7 +100,7 @@
 ## Wave 2 lane T follow-ups
 - [x] Menu row height 30 → Claude's 28 (`FLOAT_ROW_H`, ~30 uses) — polish pass (note rows 48 → 46).
 - [x] Panel Connectors row icon: `BLOCKS` (Claude) instead of `PLUG` (lane P).
-- [ ] thinking_tokens estimate: new non-persisted Live event (session_event, protocol, engine, store skip, claude wire, codex match, transcript) → working.rs shows max(reported, estimate). After lane R lands.
+- [x] thinking_tokens estimate: new non-persisted Live event (session_event, protocol, engine, store skip, claude wire, codex match, transcript) → working.rs shows max(reported, estimate). After lane R lands.
 - [ ] Plugins: per-plugin submenus need nested submenus.
 - Checkpoint tests: composer_chips, stab, stale_chrome, provider_picker, composer_controls, boards, image_viewer, core_transcript_parity, ferrite-ui menu/icons.
 
@@ -112,7 +112,7 @@
 
 ## Wave 2 lane P follow-ups
 - [x] Remove `ContextDetails.usable_window` / `auto_compact_threshold` (unused now) after lane R. (Old records still load; the compat fixture keeps the keys.)
-- [ ] Plan name in the usage card ("· Ultra") from initialize `account.subscriptionType` (claude.rs).
+- [x] Plan name in the usage card ("· Ultra") from initialize `account.subscriptionType` (claude.rs). (`SessionEvent::AccountPlan`; `Claude Max` reads `Max`.)
 - [x] `context_meter_segments` doc mentions a panel foot that no longer exists.
 - [x] Apply lane T's 4-arg `composer_footer` at cockpit.rs:8530. (Already applied: lane T's signature is 3-arg, `lead` moved to `env_strip`.)
 - Checkpoint tests: clock day_label, panel::changes create_pr prompt, review::create_pr, panel::connectors_fold, contract_native_controls context refresh, provider_controls context card, composer_chips context/ring, pane rate_limit_resets.
@@ -123,7 +123,7 @@
 - Checkpoint tests: nav_list new 4 + changed, floats_parity notifications, thread_groups:341, nav.rs head test, settings round-trip; watch ui_c.rs and floats_parity for Show more.
 
 ## Wave 2 lane A2 (subagents) follow-ups
-- [ ] Codex: agent rows don't open (agents keyed by thread id); "spawnAgent" not in the tool policy as Agent.
+- [x] Codex: agent rows don't open (agents keyed by thread id); "spawnAgent" not in the tool policy as Agent. (Bridge names spawns `tools::AGENT` and aliases the call id to the child.)
 - [ ] Agent row keyboard stop (details toggle gone).
 - [ ] Faces only where the agent ran live (replay has no agent state).
 - [ ] Drill-in header design is a guess — confirm against a Claude capture.

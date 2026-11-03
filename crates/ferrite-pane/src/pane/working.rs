@@ -268,7 +268,10 @@ impl WorkingLine {
             .turn_elapsed()
             .filter(|_| reduce_motion)
             .map(ferrite_core::progress::live_seconds);
-        let tokens = transcript.turn_output_tokens();
+        // While the model thinks, its estimate runs ahead of the usage.
+        let tokens = transcript
+            .turn_output_tokens()
+            .max(transcript.thinking_estimate());
         let tokens =
             (tokens > 0 && !compact).then(|| format!("\u{2191} {} tokens", tokens_label(tokens)));
         let progress = transcript.progress();
@@ -569,5 +572,48 @@ mod tests {
             input: serde_json::json!({"command": "cargo build --release"}),
         }));
         assert_eq!(line(&transcript, true).as_deref(), Some("progress-call"));
+    }
+
+    /// While the model thinks, the count rises with the provider's
+    /// estimate, stands on what the turn reported before the next message
+    /// thinks, and gives way to the turn's own usage once it reports.
+    #[test]
+    fn the_token_count_rises_while_the_model_thinks() {
+        let (lexer, _) = Lexer::new();
+        let mut transcript = Transcript::new(Arc::new(lexer));
+        transcript.apply(Input::Prompt("Plan it".into()));
+        let tokens = |transcript: &Transcript| {
+            WorkingLine::of(transcript, false, true, true, false, false, 7).tokens
+        };
+        assert_eq!(tokens(&transcript), None);
+        let think = |transcript: &mut Transcript, estimated| {
+            transcript.apply(Input::Event(SessionEvent::ThinkingTokens { estimated }));
+        };
+        think(&mut transcript, 5);
+        assert_eq!(tokens(&transcript).as_deref(), Some("\u{2191} 5 tokens"));
+        think(&mut transcript, 1400);
+        assert_eq!(tokens(&transcript).as_deref(), Some("\u{2191} 1.4k tokens"));
+        transcript.apply(Input::Event(SessionEvent::TokenUsage {
+            total_tokens: 2000,
+            input_tokens: 0,
+            cached_input_tokens: 0,
+            output_tokens: 1500,
+            reasoning_output_tokens: 0,
+            context_window: None,
+        }));
+        assert_eq!(tokens(&transcript).as_deref(), Some("\u{2191} 1.5k tokens"));
+        // The next message thinks on top of the first's report.
+        think(&mut transcript, 600);
+        assert_eq!(tokens(&transcript).as_deref(), Some("\u{2191} 2.1k tokens"));
+        transcript.apply(Input::Event(SessionEvent::UsageDetails {
+            details: ferrite_core::UsageDetails {
+                scope: ferrite_core::UsageScope::Turn,
+                input_tokens: 10,
+                cached_input_tokens: 0,
+                output_tokens: 1800,
+                reasoning_output_tokens: 0,
+            },
+        }));
+        assert_eq!(tokens(&transcript).as_deref(), Some("\u{2191} 1.8k tokens"));
     }
 }

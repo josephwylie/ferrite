@@ -3,7 +3,9 @@
 use super::*;
 
 /// A menu row names the key that does the same thing: a chord the
-/// keymap binds, never one it has moved (⌘F is find, not fullscreen).
+/// keymap binds, never one it has moved (⌘F is find, not fullscreen). A
+/// Thread row's menu keys are Claude's one-letter mnemonics instead, each
+/// its own letter.
 #[gpui::test]
 fn a_menu_shortcut_is_a_bound_chord(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("menu-shortcuts", 1);
@@ -15,7 +17,20 @@ fn a_menu_shortcut_is_a_bound_chord(cx: &mut TestAppContext) {
         .collect();
     view.read_with(cx, |view, _| {
         let thread = view.panes[0].thread().unwrap();
-        for target in [MenuTarget::Thread(thread), MenuTarget::Pane(thread)] {
+        let letters: Vec<String> = view
+            .context_rows(MenuTarget::Thread(thread))
+            .into_iter()
+            .flatten()
+            .map(|(item, _)| item.shortcut.expect("every row has its letter").to_string())
+            .collect();
+        assert!(letters
+            .iter()
+            .all(|key| key.len() == 1 && key.chars().all(|c| c.is_ascii_uppercase())));
+        let mut unique = letters.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), letters.len(), "{letters:?}");
+        for target in [MenuTarget::Pane(thread)] {
             for (item, _) in view.context_rows(target).into_iter().flatten() {
                 if let Some(keys) = &item.shortcut {
                     assert!(

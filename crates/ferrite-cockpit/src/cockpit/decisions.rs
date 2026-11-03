@@ -59,8 +59,9 @@ impl CockpitView {
         })
     }
 
-    /// The head's provider and its context word: Codex's sandbox, Claude's
-    /// permission mode (the Session's, else the one it was spawned with).
+    /// The head's provider and its context word: the sandbox its provider
+    /// runs in, else its permission mode (the Session's, else the one it
+    /// was spawned with).
     pub(super) fn decision_context(
         &self,
         thread: ThreadId,
@@ -71,10 +72,9 @@ impl CockpitView {
         let provider = open.provider();
         let settings = &self.prefs.settings;
         let context = decision::context_label(
-            provider,
             open.permission_mode()
-                .or(settings.claude_permission_mode.as_deref()),
-            settings.codex_sandbox.as_deref(),
+                .unwrap_or(settings.permission_mode_for(provider)),
+            settings.sandbox_for(provider),
         );
         (Some(provider), Some(context))
     }

@@ -301,7 +301,10 @@ fn working_marks_draw_every_frame_in_the_overlay_unclipped(cx: &mut TestAppConte
         .unwrap();
     tick(cx);
     frames(cx, 500);
-    assert!(cx.debug_bounds("progress-mark-live").is_some(), "the premise");
+    assert!(
+        cx.debug_bounds("progress-mark-live").is_some(),
+        "the premise"
+    );
     let marks: Vec<_> = cx
         .update(|window, _| ferrite_ui::loops_overlay::testing::hosted(window))
         .into_iter()
@@ -314,7 +317,11 @@ fn working_marks_draw_every_frame_in_the_overlay_unclipped(cx: &mut TestAppConte
     for (mark, mask) in &marks {
         // Past a quarter of the box the halo is under 1% light.
         let halo = mark.dilate(mark.size.width * 0.25);
-        assert_eq!(mask.intersect(&halo), halo, "{mark:?} is clipped by {mask:?}");
+        assert_eq!(
+            mask.intersect(&halo),
+            halo,
+            "{mark:?} is clipped by {mask:?}"
+        );
     }
     let (cockpit, overlay) = (renders(), overlay_renders());
     for _ in 0..30 {

@@ -532,7 +532,9 @@ pub mod testing {
                         .owners
                         .iter()
                         .filter(|(owner, _)| window.drew_view(**owner))
-                        .flat_map(|(_, loops)| loops.iter().map(|mark| (mark.bounds, mark.mask.bounds)))
+                        .flat_map(|(_, loops)| {
+                            loops.iter().map(|mark| (mark.bounds, mark.mask.bounds))
+                        })
                         .collect()
                 })
         })

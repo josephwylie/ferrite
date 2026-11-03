@@ -199,12 +199,14 @@ fn descendants_read_history_on_parent_connection_and_answer_the_exact_child_requ
             .count(),
         1
     );
-    assert!(!events.iter().any(|event| matches!(
-        event,
-        SessionEvent::ToolStarted { .. }
-            | SessionEvent::ToolCompleted { .. }
-            | SessionEvent::DecisionRequested { .. }
-    )));
+    // Main's only calls are its own spawns (their agent rows); no child's
+    // call or request reaches it.
+    assert!(!events.iter().any(|event| match event {
+        SessionEvent::ToolStarted { id, .. } | SessionEvent::ToolCompleted { id, .. } =>
+            !id.starts_with("spawn-"),
+        SessionEvent::DecisionRequested { .. } => true,
+        _ => false,
+    }));
     let main: String = events
         .iter()
         .filter_map(|event| match event {

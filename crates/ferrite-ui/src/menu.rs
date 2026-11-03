@@ -383,12 +383,20 @@ pub fn shell() -> Div {
     float().min_w(px(MENU_W)).py(px(FLOAT_PAD))
 }
 
-/// The space between two groups of rows: `MENU_GROUP_GAP`, no rule.
-pub fn gap() -> Div {
-    div().flex_shrink_0().h(px(MENU_GROUP_GAP))
+/// The rule between two groups of a context menu's rows, Claude's
+/// (claude/row-menu.png): a `FLOAT_EDGE` hairline on the rows' text edge,
+/// `MENU_RULE_GAP` of air above and below it.
+pub fn rule() -> Div {
+    div()
+        .flex_shrink_0()
+        .h(px(1.))
+        .my(px(MENU_RULE_GAP))
+        .mx(px(MENU_ROW_INSET_X + MENU_ROW_PAD_X))
+        .bg(paint::FLOAT_EDGE)
 }
 
-/// One row, its shortcut hard right. `armed` is a destructive row waiting
+/// One row, its key hard right (a one-letter mnemonic, Claude's `P`, in the
+/// label's size and `INK_SUBTLE`). `armed` is a destructive row waiting
 /// for its second press: `<label> · press again`, the label `BLOCKED`.
 pub fn row(index: usize, item: &Item, armed: bool) -> Stateful<Div> {
     let keys = item.shortcut.clone();
@@ -538,9 +546,9 @@ pub struct ChoiceMenu {
     /// first frame; else it hugs its rows between `CHOICE_MENU_MIN_W` and
     /// `SLASH_MENU_W`.
     pub width: Option<f32>,
-    /// A placed menu hangs by its left edge at the trigger's left instead
-    /// (Claude's `+` menu, which opens over the box, never over the
-    /// sidebar).
+    /// A placed menu hangs by its left edge at the trigger's left instead,
+    /// its foot `PLUS_MENU_GAP` over the floor (Claude's `+` menu, which
+    /// opens just over the box, never over the sidebar).
     pub hang_left: bool,
 }
 
@@ -909,7 +917,14 @@ impl ChoiceContent {
             }
             _ => right - width,
         };
-        let floor = place.floor - MODEL_PICKER_GAP;
+        // The `+` menu rests just over the box (Claude's 3-4pt); a chip's
+        // menu stands off its chip.
+        let floor = place.floor
+            - if self.hang_left {
+                PLUS_MENU_GAP
+            } else {
+                MODEL_PICKER_GAP
+            };
         gpui::anchored()
             .anchor(gpui::Anchor::BottomLeft)
             .position(gpui::point(px(left), px(floor)))
@@ -1210,8 +1225,8 @@ mod tests {
         assert_eq!(calm.style().background, None);
         assert_eq!(
             components::row_inks(&delete, false, false).label,
-            INK_STRONG,
-            "a destructive verb reads like any row before it arms"
+            BLOCKED,
+            "a destructive verb is red before it arms, as Claude's"
         );
         assert_eq!(
             components::row_inks(&delete, false, true).label,

@@ -142,6 +142,20 @@ pub enum SessionEvent {
         /// The model's context window, when the provider states it.
         context_window: Option<u64>,
     },
+    /// The account's plan as the provider names it (Claude's initialize
+    /// `account.subscriptionType`, `Claude Max` → `Max`): the usage
+    /// popover's head. Said again by every Session; never persisted.
+    AccountPlan {
+        name: String,
+    },
+    /// The provider's running estimate of the tokens the model has thought
+    /// in the message it is writing (Claude's `system/thinking_tokens`): it
+    /// grows while the model thinks and starts again with the next message.
+    /// Only an estimate, for the working line: live only, never persisted,
+    /// never usage or cost.
+    ThinkingTokens {
+        estimated: u64,
+    },
     /// Provider-reported occupancy without accounting counters.
     ContextUsage {
         total_tokens: u64,

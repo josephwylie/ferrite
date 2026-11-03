@@ -1332,9 +1332,9 @@ pub struct RowInks {
 /// content (`INK_STRONG`) in every live state, as Claude's menus; the
 /// description and key are meta (`INK_SUBTLE`), lifted to `INK_STRONG` on
 /// the filled cursor (or armed) row, where meta falls under its floor. A
-/// destructive row reads like any other until it arms; armed, it holds the
-/// cursor's `paint::FLOAT_SEL` ground and its label alone turns `BLOCKED` —
-/// colour on the word, never a wash (rule 2.2.4).
+/// destructive row's label is `BLOCKED` in every live state, as Claude's
+/// red `Delete`; armed, it also holds the cursor's `paint::FLOAT_SEL`
+/// ground — colour on the word, never a wash (rule 2.2.4).
 pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
     if item.disabled {
         return RowInks {
@@ -1345,7 +1345,7 @@ pub fn row_inks(item: &MenuItem, cursor: bool, armed: bool) -> RowInks {
         };
     }
     let filled = cursor || armed;
-    let label = if armed {
+    let label = if armed || item.destructive {
         theme::BLOCKED
     } else {
         theme::INK_STRONG
@@ -2092,8 +2092,8 @@ mod tests {
             }
         );
         let delete = MenuItem::new("Delete thread").destructive();
-        assert_eq!(row_inks(&delete, false, false).label, theme::INK_STRONG);
-        assert_eq!(row_inks(&delete, true, false).label, theme::INK_STRONG);
+        assert_eq!(row_inks(&delete, false, false).label, theme::BLOCKED);
+        assert_eq!(row_inks(&delete, true, false).label, theme::BLOCKED);
         let armed = row_inks(&delete, false, true);
         assert_eq!((armed.label, armed.ground), (theme::BLOCKED, Some(fill)));
         let dead = MenuItem::new("Reveal").disabled(true);

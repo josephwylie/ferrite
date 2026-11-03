@@ -43,6 +43,8 @@ struct Child {
     lifecycle_revision: u64,
     active_turn: Option<String>,
     read_queued: bool,
+    /// The call that spawned it, once linked (`link_invocation`).
+    invocation: Option<String>,
 }
 
 /// One in-flight history read. Full-history hydration is deprecated on the
@@ -123,7 +125,7 @@ impl Router {
             for turn in turns {
                 if let Some(items) = turn["items"].as_array() {
                     for item in items {
-                        self.discover_from_item(&root, item, false, &mut update);
+                        self.discover_from_item(&root, None, item, false, &mut update);
                     }
                 }
             }
@@ -389,7 +391,7 @@ impl Router {
             }
         }
         if matches!(method, "item/started" | "item/completed") {
-            self.discover_from_item(&scope, &params["item"], true, update);
+            self.discover_from_item(&scope, turn, &params["item"], true, update);
         }
         if self.root.as_deref() == Some(scope.as_str()) {
             let item_id = params["itemId"].as_str().or(params["item"]["id"].as_str());
@@ -498,7 +500,16 @@ impl Router {
         self.child_frame(&scope, &frame, update);
     }
 
-    fn discover_from_item(&mut self, owner: &str, item: &Value, live: bool, update: &mut Update) {
+    /// `turn` is the turn `item` belongs to, where `owner` is a child: its
+    /// calls are keyed by turn ([`item_key`]); Main's by the item id alone.
+    fn discover_from_item(
+        &mut self,
+        owner: &str,
+        turn: Option<&str>,
+        item: &Value,
+        live: bool,
+        update: &mut Update,
+    ) {
         match item["type"].as_str() {
             Some("subAgentActivity") => {
                 if let Some(id) = item["agentThreadId"].as_str() {
@@ -506,18 +517,23 @@ impl Router {
                     // The read enriches the explicit relationship; path/name is
                     // display data and never parsed as identity.
                     self.discover(id, owner, &json!({"preview":item["agentPath"]}), update);
+                    if wire::spawns_agent(item) {
+                        self.link_invocation(owner, turn, item, id, update);
+                    }
                 }
             }
-            Some("collabAgentToolCall")
-                if item["tool"].as_str() == Some("spawnAgent")
-                    || item["tool"].as_str() == Some("spawn") =>
-            {
+            Some("collabAgentToolCall") if wire::spawns_agent(item) => {
                 if item["senderThreadId"].as_str() != Some(owner) {
                     return;
                 }
                 if let Some(receivers) = item["receiverThreadIds"].as_array() {
-                    for id in receivers.iter().filter_map(Value::as_str) {
+                    let receivers: Vec<&str> = receivers.iter().filter_map(Value::as_str).collect();
+                    for id in &receivers {
                         self.discover(id, owner, &json!({"preview":item["prompt"]}), update);
+                    }
+                    // One call's row opens one agent.
+                    if let [id] = receivers.as_slice() {
+                        self.link_invocation(owner, turn, item, id, update);
                     }
                 }
             }
@@ -554,6 +570,44 @@ impl Router {
                 }
             }
         }
+    }
+
+    /// Name the call that spawned `child` as one of its keys, as a Claude
+    /// agent's key is its spawning call: the call's row in `owner`'s
+    /// transcript then finds the agent it started
+    /// (`ActivityView::invocations`). Once per call.
+    fn link_invocation(
+        &mut self,
+        owner: &str,
+        turn: Option<&str>,
+        item: &Value,
+        child: &str,
+        update: &mut Update,
+    ) {
+        let Some(id) = item["id"].as_str() else {
+            return;
+        };
+        let call = if self.root.as_deref() == Some(owner) {
+            id.to_owned()
+        } else if let Some(turn) = turn {
+            item_key(turn, id)
+        } else {
+            return;
+        };
+        let from = self.key(&call);
+        let Some(target) = self
+            .children
+            .get_mut(child)
+            .filter(|target| target.parent == owner)
+        else {
+            return;
+        };
+        if target.invocation.as_deref() == Some(call.as_str()) {
+            return;
+        }
+        target.invocation = Some(call);
+        let to = target.info.key.clone();
+        update.activity(ActivityEvent::Alias { from, to });
     }
 
     fn supplement_status(
@@ -599,6 +653,7 @@ impl Router {
                     lifecycle_revision: 0,
                     active_turn: None,
                     read_queued: false,
+                    invocation: None,
                 },
             );
         }
@@ -798,7 +853,7 @@ impl Router {
                 };
                 if let Some(items) = turn["items"].as_array() {
                     for item in items {
-                        self.discover_from_item(&read.child, item, false, update);
+                        self.discover_from_item(&read.child, Some(turn_id), item, false, update);
                         let Some(item_id) = item["id"].as_str() else {
                             continue;
                         };
@@ -1493,10 +1548,13 @@ mod tests {
         assert!(router.pending_bytes <= MAX_PENDING_BYTES);
         assert!(router.discarded);
         let update = router.observe(spawn("main", "unknown"));
-        assert!(update
-            .events
-            .iter()
-            .all(|event| matches!(event, SessionEvent::Activity(_))));
+        // Nothing replayed reaches Main; only the spawning call's own row.
+        assert!(update.events.iter().all(|event| match event {
+            SessionEvent::Activity(_) => true,
+            SessionEvent::ToolStarted { id, .. } | SessionEvent::ToolCompleted { id, .. } =>
+                id == "spawn-unknown",
+            _ => false,
+        }));
         assert!(update.events.iter().any(|event| matches!(
             event,
             SessionEvent::Activity(ActivityEvent::Content {
@@ -1733,10 +1791,66 @@ mod tests {
         let update = router.root_history(&json!({"id":"main","turns":[{"items":[item]}]}));
         assert_eq!(router.children.len(), 1);
         assert_eq!(update.requests[0]["method"], "thread/read");
-        assert!(update
-            .events
+        assert!(update.events.iter().all(|event| matches!(
+            event,
+            SessionEvent::Activity(ActivityEvent::Discovered(_) | ActivityEvent::Alias { .. })
+        )));
+    }
+
+    /// A Codex spawn draws as Claude's agent call does: Main's row and a
+    /// child's own spawn row are agent calls (they group as agents), and
+    /// each opens the agent it started, by the call's row id.
+    #[test]
+    fn captured_spawn_rows_are_agent_calls_that_open_their_agents() {
+        use crate::transcript::{tools, Input};
+        let (router, events, _) = fixture(include_str!(
+            "../../../tests/fixtures/subagents/codex-nested-0.153.4.jsonl"
+        ));
+        let root = router.root.clone().unwrap();
+        let mut activity = Activity::default();
+        activity.apply(ActivityInput::Connect { generation: 1 });
+        for event in events {
+            let at = Instant::now();
+            activity.apply(match event {
+                SessionEvent::Activity(event) => ActivityInput::Observe {
+                    generation: 1,
+                    event,
+                    at,
+                },
+                event => ActivityInput::Main {
+                    input: Input::Event(event),
+                    at,
+                },
+            });
+        }
+        let view = activity.view();
+        let opens = |transcript: &crate::transcript::Transcript, call: &str| {
+            let row = transcript.tool(call).expect("the spawn has a row");
+            assert_eq!(tools::policy(&row.name).kind, tools::ToolKind::Agent);
+            assert_eq!(tools::policy(&row.name).grouping, tools::Grouping::Agents);
+            view.invocations()
+                .find(|(native, _)| native == call)
+                .map(|(_, agent)| agent.subject())
+                .expect("the row opens its agent")
+        };
+        let child = opens(view.main().transcript(), "call_WyJWX95Eh2UZcXdDHRxx2ciO");
+        let (child_id, _) = router
+            .children
             .iter()
-            .all(|event| matches!(event, SessionEvent::Activity(ActivityEvent::Discovered(_)))));
+            .find(|(_, child)| child.parent == root)
+            .unwrap();
+        assert_eq!(child, Subject::Subagent(router.key(child_id)));
+        let nested = item_key(
+            "01a0703b-1106-71a2-a96d-0ea868e54ff2",
+            "call_Lf3DS21BQi8liHt5YNxqgRlO",
+        );
+        let grandchild = opens(view.subject(&child).unwrap().transcript(), &nested);
+        let (grandchild_id, _) = router
+            .children
+            .iter()
+            .find(|(_, grandchild)| &grandchild.parent == child_id)
+            .unwrap();
+        assert_eq!(grandchild, Subject::Subagent(router.key(grandchild_id)));
     }
 
     #[test]

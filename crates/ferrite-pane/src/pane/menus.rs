@@ -112,9 +112,9 @@ pub fn picker_row(
 /// optional note after a `·` (`codex · handover`). Non-interactive — the
 /// arrows skip it.
 pub fn picker_section(provider: Provider, note: SharedString) -> Div {
-    let (mark, ink, title) = match provider {
-        Provider::Codex => (icons::CODEX, theme::PROVIDER_CODEX, "codex"),
-        Provider::Claude => (icons::CLAUDE, theme::PROVIDER_CLAUDE, "claude"),
-    };
-    ferrite_ui::menu::section(title, Some((mark, ink)), (!note.is_empty()).then_some(note))
+    ferrite_ui::menu::section(
+        ferrite_ui::provider::word(provider),
+        Some(ferrite_ui::provider::mark(provider)),
+        (!note.is_empty()).then_some(note),
+    )
 }

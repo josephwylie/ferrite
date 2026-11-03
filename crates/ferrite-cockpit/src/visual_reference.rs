@@ -149,6 +149,24 @@ impl Feed {
             output_tokens: 0,
             reasoning_output_tokens: 0,
             context_window: Some(200_000),
+        });
+        // The account as Claude's capture reports it (claude/usage-popover):
+        // a plan, and one window, so the footer ends with its ring as it
+        // does in real use.
+        if provider == Provider::Claude {
+            self.ev(SessionEvent::AccountPlan { name: "Max".into() });
+        }
+        let resets =
+            ferrite_core::clock::system_time() + std::time::Duration::from_secs(4 * 86_400);
+        self.ev(SessionEvent::RateLimits {
+            five_hour: None,
+            weekly: Some(ferrite_core::RateLimitWindow {
+                used_fraction: 0.18,
+                resets_at: resets
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|at| at.as_secs()),
+            }),
         })
     }
     fn text(&self, text: &str) -> &Self {
@@ -1053,22 +1071,9 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
+        // The account's plan and window are every booted Session's (`boot`).
         "usagepopover" => {
-            let mut scene = conversation(label);
-            // The account's windows, as Claude reports them: the ring
-            // shows only once one is reported.
-            let window = |used_fraction| {
-                Some(ferrite_core::RateLimitWindow {
-                    used_fraction,
-                    resets_at: None,
-                })
-            };
-            let feed = Feed(scene.feeds.borrow()[0].clone());
-            feed.ev(SessionEvent::RateLimits {
-                five_hour: window(0.18),
-                weekly: window(0.42),
-            });
-            scene.core.pump();
+            let scene = conversation(label);
             let setup: Setup = Box::new(|view, _, _| view.usage_popover_held = true);
             (scene, setup)
         }
@@ -1610,10 +1615,8 @@ fn nav() -> (Scene, Setup) {
         .send(sync, "Sync board cards with GitHub issues.".into());
     sync_feed
         .boot(Provider::Codex, 9_000)
-        .text("Fetching issues")
-        .ev(SessionEvent::Closed {
-            reason: "codex exited: 401 Unauthorized (run `codex login`)".into(),
-        });
+        .text("Cards now follow their issues.")
+        .end(0.04);
     let (notes, notes_feed) = scene.open(Provider::Claude, &swarmdeck, "Release notes 0.9");
     scene
         .core
@@ -1628,10 +1631,15 @@ fn nav() -> (Scene, Setup) {
     scene.core.send(copy, "Review the checkout copy.".into());
     copy_feed
         .boot(Provider::Claude, 18_000)
-        .text("Two tones are possible here.")
-        .ev(questions("copy-question", "ask"));
+        .text("Two tones are possible here; I kept the warmer one.")
+        .end(0.06);
     let _ = scene.open(Provider::Codex, &site, "Menu photography brief");
 
+    // Claude's list marks only what asks for the operator: the finished
+    // and failed turns here have been seen, so the two runs and the one
+    // approval are the list's only marks.
+    scene.core.pump();
+    scene.core.mark_notices_read();
     scene.core.focus_thread(running);
     // Worktree branches and subagent counts beside titles long and short:
     // the title keeps its floor, the branch and then the count give way.

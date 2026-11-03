@@ -2128,10 +2128,7 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
                 }))
                 .child(div().flex_1())
                 .children(provider.map(|provider| {
-                    let (glyph, ink) = match provider {
-                        Provider::Codex => (icons::CODEX, theme::PROVIDER_CODEX),
-                        Provider::Claude => (icons::CLAUDE, theme::PROVIDER_CLAUDE),
-                    };
+                    let (glyph, ink) = ferrite_ui::provider::mark(provider);
                     div()
                         .debug_selector(move || format!("pane-head-provider-{key}"))
                         .flex()
@@ -4632,8 +4629,7 @@ mod tests {
             let line = |selector: &'static str, line: Div| {
                 div().debug_selector(move || selector.into()).child(line)
             };
-            let working =
-                |solo| working_line_for(&self.0, false, solo, false, false, true, 0);
+            let working = |solo| working_line_for(&self.0, false, solo, false, false, true, 0);
             div()
                 .w_full()
                 .flex()

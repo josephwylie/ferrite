@@ -55,6 +55,10 @@ pub struct ToolPolicy<'a> {
     pub display: &'a str,
 }
 
+/// The name every bridge gives a call that starts a subagent: Claude's own
+/// (`Agent`, `Task` before it), and what the Codex bridge calls its spawns.
+pub const AGENT: &str = "Agent";
+
 /// The tool presentation table. Decided by the name alone, never by a
 /// result still to come; an unknown name is `Other`, rolling up.
 pub fn policy(name: &str) -> ToolPolicy<'_> {
@@ -74,7 +78,7 @@ pub fn policy(name: &str) -> ToolPolicy<'_> {
         "LS" => (List, RollsUp),
         "WebFetch" => (Fetch, RollsUp),
         "WebSearch" | "webSearch" => (WebSearch, RollsUp),
-        "Task" | "Agent" | "collabAgentToolCall" => (Agent, Agents),
+        "Task" | AGENT => (Agent, Agents),
         // `TaskStop` and `TaskOutput` are background-task tools, not the
         // checklist's: they stay ordinary rows.
         "TodoWrite" | "TaskCreate" | "TaskUpdate" | "TaskGet" | "TaskList" => (Todo, StateOnly),
@@ -270,7 +274,6 @@ mod tests {
             ("webSearch", WebSearch, RollsUp),
             ("Task", Agent, Agents),
             ("Agent", Agent, Agents),
-            ("collabAgentToolCall", Agent, Agents),
             ("mcp__ferrite__show_visual", Visual, StandsAlone),
             ("ferrite.show_visual", Visual, StandsAlone),
             ("AskUserQuestion", Question, StandsAlone),

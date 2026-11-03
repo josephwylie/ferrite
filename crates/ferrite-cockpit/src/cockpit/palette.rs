@@ -95,7 +95,7 @@ fn session_row(
         .filter(|age| !age.is_empty());
     let context = project
         .into_iter()
-        .chain([provider_label(candidate.provider).to_string()])
+        .chain([ferrite_ui::provider::word(candidate.provider).to_string()])
         .chain(age)
         .collect::<Vec<_>>()
         .join(" \u{b7} ");

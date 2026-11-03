@@ -594,6 +594,15 @@ impl Highlighter for Unhighlighted {
     fn request(&self, _request: HighlightRequest) {}
 }
 
+/// The provider's thinking estimate for the running turn
+/// (`SessionEvent::ThinkingTokens`): the estimate of the message the model
+/// thinks in, on the output the turn had reported when that message began.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ThinkingEstimate {
+    base: u64,
+    tokens: u64,
+}
+
 /// What a Transcript folds: provider events, and answers to its own requests.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Input {
@@ -725,6 +734,8 @@ pub struct Transcript {
     mcp_servers: Vec<crate::McpServer>,
     mcp_authorizations: std::collections::BTreeMap<String, String>,
     rate_limits: RateLimits,
+    /// The account's plan, as the provider names it (`SessionEvent::AccountPlan`).
+    plan: Option<String>,
     /// When the running turn began — the operator's prompt went out — for
     /// the working line's clock. None between turns.
     turn_started: Option<std::time::Instant>,
@@ -733,6 +744,9 @@ pub struct Transcript {
     /// total; the smaller-report fallback supports older stored events.
     turn_output_tokens: u64,
     last_report: u64,
+    /// The provider's estimate of the message the model thinks in, for the
+    /// working line while no usage has reported it (`thinking_estimate`).
+    thinking: ThinkingEstimate,
     /// Input tokens the running (or last) turn consumed, summed the same way
     /// as `turn_output_tokens` (a running total grows; a smaller report is a
     /// new message's own count).
@@ -992,6 +1006,7 @@ pub(crate) struct Runtime {
     turn_started: Option<std::time::Instant>,
     turn_output_tokens: u64,
     last_report: u64,
+    thinking: ThinkingEstimate,
     turn_input_tokens: u64,
     last_input_report: u64,
     settled_at: std::collections::BTreeMap<String, std::time::SystemTime>,
@@ -1002,6 +1017,7 @@ pub(crate) struct Runtime {
     mcp_servers: Vec<crate::McpServer>,
     mcp_authorizations: std::collections::BTreeMap<String, String>,
     rate_limits: RateLimits,
+    plan: Option<String>,
 }
 
 /// Blocks a long-running Thread keeps in memory. Generous enough that a Pane
@@ -1043,9 +1059,11 @@ impl Transcript {
             mcp_servers: Vec::new(),
             mcp_authorizations: std::collections::BTreeMap::new(),
             rate_limits: RateLimits::default(),
+            plan: None,
             turn_started: None,
             turn_output_tokens: 0,
             last_report: 0,
+            thinking: ThinkingEstimate::default(),
             turn_input_tokens: 0,
             last_input_report: 0,
             settled_at: Default::default(),
@@ -1118,6 +1136,7 @@ impl Transcript {
             turn_started: self.turn_started,
             turn_output_tokens: self.turn_output_tokens,
             last_report: self.last_report,
+            thinking: self.thinking,
             turn_input_tokens: self.turn_input_tokens,
             last_input_report: self.last_input_report,
             settled_at: self.settled_at.clone(),
@@ -1128,6 +1147,7 @@ impl Transcript {
             mcp_servers: self.mcp_servers.clone(),
             mcp_authorizations: self.mcp_authorizations.clone(),
             rate_limits: self.rate_limits,
+            plan: self.plan.clone(),
         }
     }
 
@@ -1156,6 +1176,7 @@ impl Transcript {
         self.turn_started = runtime.turn_started;
         self.turn_output_tokens = runtime.turn_output_tokens;
         self.last_report = runtime.last_report;
+        self.thinking = runtime.thinking;
         self.turn_input_tokens = runtime.turn_input_tokens;
         self.last_input_report = runtime.last_input_report;
         // An edit's time is a live observation the rebuilt content cannot
@@ -1172,6 +1193,7 @@ impl Transcript {
         self.mcp_servers = runtime.mcp_servers;
         self.mcp_authorizations = runtime.mcp_authorizations;
         self.rate_limits = runtime.rate_limits;
+        self.plan = runtime.plan;
         self.advance_revision();
     }
 
@@ -1223,6 +1245,11 @@ impl Transcript {
         self.rate_limits
     }
 
+    /// The account's plan (`Max`), when the provider named it.
+    pub fn plan(&self) -> Option<&str> {
+        self.plan.as_deref()
+    }
+
     /// When the running turn started; None between turns.
     pub fn turn_started(&self) -> Option<std::time::Instant> {
         self.turn_started
@@ -1238,6 +1265,14 @@ impl Transcript {
     /// Output tokens the running (or last) turn produced.
     pub fn turn_output_tokens(&self) -> u64 {
         self.turn_output_tokens
+    }
+
+    /// The running turn's output as estimated while the model thinks: what
+    /// the turn reported before the message it thinks in, and the provider's
+    /// estimate of that message so far. Zero once the turn's own usage has
+    /// reported, and between turns.
+    pub fn thinking_estimate(&self) -> u64 {
+        self.thinking.base + self.thinking.tokens
     }
 
     /// Input tokens the running (or last) turn consumed.
@@ -1810,6 +1845,7 @@ impl Transcript {
                 // A turn's own report (Claude's `result`) is the turn's
                 // count, whatever the running reports summed to.
                 if details.scope == crate::UsageScope::Turn {
+                    self.thinking = ThinkingEstimate::default();
                     self.turn_input_tokens = details.input_tokens;
                     if details.output_tokens > 0 {
                         self.turn_output_tokens = details.output_tokens;
@@ -1820,6 +1856,20 @@ impl Transcript {
             }
             Input::Event(SessionEvent::RateLimits { five_hour, weekly }) => {
                 self.rate_limits = RateLimits { five_hour, weekly };
+                Update::default()
+            }
+            Input::Event(SessionEvent::AccountPlan { name }) => {
+                self.plan = Some(name);
+                Update::default()
+            }
+            Input::Event(SessionEvent::ThinkingTokens { estimated }) => {
+                // A smaller estimate is the next message's: it stands on
+                // what the turn reported by then.
+                if estimated < self.thinking.tokens || self.thinking == ThinkingEstimate::default()
+                {
+                    self.thinking.base = self.turn_output_tokens;
+                }
+                self.thinking.tokens = estimated;
                 Update::default()
             }
             Input::Event(SessionEvent::ContextDetails { details }) => {
@@ -1883,6 +1933,7 @@ impl Transcript {
                     self.turn_started = Some(crate::clock::instant());
                     self.turn_output_tokens = 0;
                     self.last_report = 0;
+                    self.thinking = ThinkingEstimate::default();
                     // The last input report carries over: Codex's counter
                     // is cumulative, so the turn's input is what it grows
                     // by from here.

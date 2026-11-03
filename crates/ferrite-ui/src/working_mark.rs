@@ -168,10 +168,7 @@ pub fn orbs_at(ms: f32) -> [Orb; 4] {
                 (true, true) => back,
                 (true, false) => front,
             };
-            let (vx, vy) = (
-                (corner.x - 0.5) / REST_REACH,
-                (corner.y - 0.5) / REST_REACH,
-            );
+            let (vx, vy) = ((corner.x - 0.5) / REST_REACH, (corner.y - 0.5) / REST_REACH);
             let (ux, uy) = (-vy * sense, vx * sense);
             let a = swap_at(tau, columns);
             let b = swap_at(tau, columns + 1);
@@ -266,7 +263,10 @@ fn paint_orbs(bounds: Bounds<Pixels>, orbs: &[Orb; 4], ink: u32, window: &mut Wi
         point(px((centre.x - half) / scale), px((centre.y - half) / scale)),
         size(px(2.0 * half / scale), px(2.0 * half / scale)),
     );
-    let origin = (f32::from(bounds.origin.x) * scale, f32::from(bounds.origin.y) * scale);
+    let origin = (
+        f32::from(bounds.origin.x) * scale,
+        f32::from(bounds.origin.y) * scale,
+    );
     let at = |x: f32, y: f32| point(ScaledPixels(x), ScaledPixels(y));
     for orb in orbs {
         let to = at(
@@ -360,7 +360,10 @@ mod tests {
     }
 
     fn farthest(a: &[Orb; 4], b: &[Orb; 4]) -> f32 {
-        a.iter().zip(b).map(|(p, q)| distance(*p, *q)).fold(0.0, f32::max)
+        a.iter()
+            .zip(b)
+            .map(|(p, q)| distance(*p, *q))
+            .fold(0.0, f32::max)
     }
 
     /// The table's ends are the rest square: an orb ends a swap on its
@@ -410,8 +413,14 @@ mod tests {
             let ms = ms as f32;
             let here = orbs_at(ms);
             assert!(farthest(&here, &orbs_at(ms + loop_ms)) < 1e-4, "at {ms}");
-            assert!(farthest(&here, &orbs_at(ms - 3.0 * loop_ms)) < 1e-4, "at {ms}");
-            assert!(farthest(&here, &orbs_at(ms + 1.0)) < 0.006, "a jump at {ms}");
+            assert!(
+                farthest(&here, &orbs_at(ms - 3.0 * loop_ms)) < 1e-4,
+                "at {ms}"
+            );
+            assert!(
+                farthest(&here, &orbs_at(ms + 1.0)) < 0.006,
+                "a jump at {ms}"
+            );
         }
         assert!(farthest(&orbs_at(loop_ms - 0.5), &orbs_at(0.0)) < 0.006);
     }
@@ -473,10 +482,11 @@ mod tests {
                 })
                 // Clipped out of its scroller's sight: drawn, never seen.
                 .child(
-                    div()
-                        .size(px(20.))
-                        .overflow_hidden()
-                        .child(div().mt(px(200.)).child(working_mark(16.0, theme::INK_STRONG))),
+                    div().size(px(20.)).overflow_hidden().child(
+                        div()
+                            .mt(px(200.))
+                            .child(working_mark(16.0, theme::INK_STRONG)),
+                    ),
                 )
         }
     }

@@ -4545,6 +4545,9 @@ impl Engine {
         live.push(WireInput::Live(Live::RateLimits {
             limits: transcript.rate_limits().into(),
         }));
+        if let Some(name) = transcript.plan() {
+            live.push(WireInput::Live(Live::AccountPlan { name: name.into() }));
+        }
         // The turn as it stands: a replay never reads one as running, so a
         // watch mid-turn is told it is, as its provider said it.
         use crate::transcript::Status;
@@ -5648,6 +5651,8 @@ pub(crate) fn event_changes_content(event: &SessionEvent) -> bool {
         | SessionEvent::ContextDetails { .. }
         | SessionEvent::McpServers { .. }
         | SessionEvent::McpAuthorization { .. }
+        | SessionEvent::ThinkingTokens { .. }
+        | SessionEvent::AccountPlan { .. }
         | SessionEvent::ScheduledWork { .. } => false,
         _ => true,
     }

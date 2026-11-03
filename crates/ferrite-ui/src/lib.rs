@@ -10,6 +10,7 @@ pub mod menu;
 pub mod motion;
 pub mod platform_text;
 pub mod pointer;
+pub mod provider;
 mod scrollbar;
 pub mod sheet;
 pub mod theme;

@@ -110,41 +110,17 @@ pub fn tool_word(tool_name: &str) -> &str {
     }
 }
 
-/// A provider's name as prose says it (`tell Codex what to do`).
-pub fn provider_name(provider: Provider) -> &'static str {
-    match provider {
-        Provider::Claude => "Claude",
-        Provider::Codex => "Codex",
-    }
-}
-
-/// A provider's lowercase word on a head (`· codex ·`).
-pub fn provider_word(provider: Provider) -> &'static str {
-    match provider {
-        Provider::Claude => "claude",
-        Provider::Codex => "codex",
-    }
-}
-
-/// What the agent may do while it asks, as the head's last detail: Codex's
-/// sandbox (`read-only sandbox`, `workspace-write sandbox`, `full access`;
-/// Codex's own default is read-only), Claude's permission mode (`default`,
-/// `accept edits`, `plan`).
-pub fn context_label(
-    provider: Provider,
-    permission_mode: Option<&str>,
-    codex_sandbox: Option<&str>,
-) -> SharedString {
-    match provider {
-        Provider::Codex => match codex_sandbox {
-            None | Some("read-only") => "read-only sandbox".into(),
-            Some("workspace-write") => "workspace-write sandbox".into(),
-            Some("danger-full-access") => "full access".into(),
-            Some(other) => format!("{other} sandbox").into(),
-        },
-        Provider::Claude => permission_mode
-            .and_then(theme::mode_word)
-            .unwrap_or_else(|| "default".into()),
+/// What the agent may do while it asks, as the head's last detail: the
+/// sandbox it runs in, where its provider has one (`read-only sandbox`,
+/// `workspace-write sandbox`, `full access`: `Settings::sandbox_for`), else
+/// its permission mode (`default`, `accept edits`, `plan`).
+pub fn context_label(permission_mode: &str, sandbox: Option<&str>) -> SharedString {
+    match sandbox {
+        Some("read-only") => "read-only sandbox".into(),
+        Some("workspace-write") => "workspace-write sandbox".into(),
+        Some("danger-full-access") => "full access".into(),
+        Some(other) => format!("{other} sandbox").into(),
+        None => theme::mode_word(permission_mode).unwrap_or_else(|| "default".into()),
     }
 }
 
@@ -153,7 +129,7 @@ pub fn context_label(
 /// <Tool>?` — the provider named (`the agent` when none is known), the tool
 /// as the transcript names it.
 pub fn approval_lead(decision: &Decision, provider: Option<Provider>) -> SharedString {
-    let who = provider.map_or("the agent", provider_name);
+    let who = provider.map_or("the agent", ferrite_ui::provider::title);
     let url = ["url", "uri"]
         .iter()
         .find_map(|key| decision.input.get(*key)?.as_str())
@@ -387,8 +363,12 @@ fn simple_command(command: &str) -> bool {
     !command.contains(['\n', ';', '&', '|', '<', '>', '`']) && !command.contains("$(")
 }
 
-/// The tools whose input names one file.
-const EDIT_TOOLS: [&str; 5] = ["Edit", "Write", "MultiEdit", "NotebookEdit", "fileChange"];
+/// Whether a tool's input names one file: an edit or a write, by the
+/// shared tool table, whichever provider named it.
+fn edits_a_file(tool_name: &str) -> bool {
+    use ferrite_core::transcript::tools::{policy, ToolKind};
+    matches!(policy(tool_name).kind, ToolKind::Edit | ToolKind::Write)
+}
 
 fn edit_path(decision: &Decision) -> Option<&str> {
     ["file_path", "path", "notebook_path"]
@@ -415,7 +395,7 @@ pub fn thread_pattern(decision: &Decision, workspace: Option<&Path>) -> String {
         if !prefix.is_empty() {
             return format!("{} *", prefix.join(" "));
         }
-    } else if EDIT_TOOLS.contains(&decision.tool_name.as_str()) {
+    } else if edits_a_file(&decision.tool_name) {
         if let Some(path) = edit_path(decision) {
             let path = relative(path, workspace);
             let dir = Path::new(path.as_ref())
@@ -622,7 +602,7 @@ pub fn approval_rows(
     let standing = standing_choice(decision).is_some();
     let pattern = option_two_pattern(decision, workspace);
     let lead = "Allow ";
-    let agent = provider.map_or("the agent", provider_name);
+    let agent = provider.map_or("the agent", ferrite_ui::provider::title);
     ApprovalChoice::ALL
         .into_iter()
         .map(|choice| {
@@ -1761,12 +1741,16 @@ mod tests {
             serde_json::json!({ "command": "/bin/zsh -lc 'gh issue close 212'" }),
             vec![],
         );
-        let context = context_label(Provider::Codex, None, Some("read-only"));
+        let context = context_label("on-request", Some("read-only"));
         assert_eq!(
             format!(
                 "{} \u{b7} {}",
                 approval_lead(&decision, Some(Provider::Codex)),
-                head_detail([provider_word(Provider::Codex), context.as_ref()]).unwrap()
+                head_detail([
+                    ferrite_ui::provider::word(Provider::Codex),
+                    context.as_ref()
+                ])
+                .unwrap()
             ),
             "Allow Codex to run this command? \u{b7} codex \u{b7} read-only sandbox"
         );
@@ -1780,27 +1764,21 @@ mod tests {
             "Allow Claude to edit notes.md?"
         );
         assert_eq!(
-            context_label(Provider::Codex, None, None),
+            context_label("on-request", Some("read-only")),
             "read-only sandbox"
         );
         assert_eq!(
-            context_label(Provider::Codex, None, Some("workspace-write")),
+            context_label("on-request", Some("workspace-write")),
             "workspace-write sandbox"
         );
         assert_eq!(
-            context_label(Provider::Codex, None, Some("danger-full-access")),
+            context_label("on-request", Some("danger-full-access")),
             "full access"
         );
-        assert_eq!(context_label(Provider::Claude, None, None), "default");
-        assert_eq!(
-            context_label(Provider::Claude, Some("default"), None),
-            "default"
-        );
-        assert_eq!(
-            context_label(Provider::Claude, Some("acceptEdits"), None),
-            "accept edits"
-        );
-        assert_eq!(context_label(Provider::Claude, Some("plan"), None), "plan");
+        assert_eq!(context_label("default", None), "default");
+        assert_eq!(context_label("default", None), "default");
+        assert_eq!(context_label("acceptEdits", None), "accept edits");
+        assert_eq!(context_label("plan", None), "plan");
     }
 
     /// The standing answer waits in the split's menu, named with its

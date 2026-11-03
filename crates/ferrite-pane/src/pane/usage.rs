@@ -10,13 +10,15 @@ use ferrite_core::{ContextDetails, ContextItem, RateLimitWindow};
 /// provider reported, drawn round a `CONTEXT_RING` circle in a footer
 /// chip's box. Under the pointer its tooltip reads that window in one line
 /// (`Weekly · all models: 17% · Resets Tue 3:30 pm`); a click opens the
-/// popover above it (`plan_usage_card`), which the box wears as selected
-/// while it is open. None while the provider reports no window: no
-/// reading is invented. Context fill is the side panel's. `held` keeps the
+/// popover above it (`plan_usage_card`, headed with the account's `plan`
+/// where the provider named it), which the box wears as selected while it
+/// is open. None while the provider reports no window: no reading is
+/// invented. Context fill is the side panel's. `held` keeps the
 /// popover open whatever is clicked (a visual-reference scene's).
 pub fn plan_usage_ring(
     id: impl Into<gpui::ElementId>,
     limits: RateLimits,
+    plan: Option<SharedString>,
     held: bool,
     cx: &gpui::App,
 ) -> Option<impl IntoElement> {
@@ -45,7 +47,7 @@ pub fn plan_usage_ring(
     // Its foot `USAGE_POP_OFFSET` above the box's top (the kit leaves 4).
     .bottom(px(theme::USAGE_POP_OFFSET))
     .trigger(trigger)
-    .content(move |_, _, _| plan_usage_card(limits, now));
+    .content(move |_, _, _| plan_usage_card(limits, plan.clone(), now));
     Some(if held { popover.open(true) } else { popover })
 }
 
@@ -74,10 +76,12 @@ fn percent(fraction: f32) -> String {
     format!("{}%", (fraction.clamp(0., 1.) * 100.).round() as u32)
 }
 
-/// The ring's popover (Claude's `Plan usage limits`): a quiet head, then
-/// each reported window — its name, when it resets and the share used, over
-/// its bar in `usage_ink`.
-fn plan_usage_card(limits: RateLimits, now: SystemTime) -> Div {
+/// The ring's popover (Claude's `Plan usage limits · Max`): a quiet head
+/// naming the plan where the provider did, then each reported window — its
+/// name, when it resets (`Resets Tue 3:30 pm`) and the share used in full
+/// ink, over its bar in `usage_bar_ink`. No `See all`: nothing in Ferrite
+/// stands behind it.
+fn plan_usage_card(limits: RateLimits, plan: Option<SharedString>, now: SystemTime) -> Div {
     let window = |(name, limit, span): (&'static str, RateLimitWindow, Duration)| {
         let used = limit.used_fraction.clamp(0., 1.);
         let reading = percent(used);
@@ -109,7 +113,7 @@ fn plan_usage_card(limits: RateLimits, now: SystemTime) -> Div {
                         div()
                             .debug_selector(move || selector.clone())
                             .flex_shrink_0()
-                            .text_color(rgb(INK_SUBTLE))
+                            .text_color(rgb(INK_STRONG))
                             .child(reading),
                     )),
             )
@@ -120,7 +124,12 @@ fn plan_usage_card(limits: RateLimits, now: SystemTime) -> Div {
                     .rounded_full()
                     .overflow_hidden()
                     .bg(rgb(theme::USAGE_POP_TRACK))
-                    .child(div().h_full().w(relative(used)).bg(rgb(usage_ink(used)))),
+                    .child(
+                        div()
+                            .h_full()
+                            .w(relative(used))
+                            .bg(rgb(usage_bar_ink(used))),
+                    ),
             )
     };
     components::floating_surface()
@@ -135,7 +144,10 @@ fn plan_usage_card(limits: RateLimits, now: SystemTime) -> Div {
         .text_size(px(theme::FS_META))
         .line_height(px(theme::LH_UI))
         .whitespace_nowrap()
-        .child(div().text_color(rgb(INK_SUBTLE)).child("Plan usage limits"))
+        .child(div().text_color(rgb(INK_SUBTLE)).child(match plan {
+            Some(plan) => SharedString::from(format!("Plan usage limits \u{b7} {plan}")),
+            None => "Plan usage limits".into(),
+        }))
         .children(plan_windows(limits).map(window))
 }
 
@@ -386,8 +398,10 @@ pub fn context_usage(
         .child(counts);
 
     // The bar: each category in its own ink, as the legend under it shows
-    // it, at its share of the window. A provider that names no categories
-    // gets one segment (`context_meter_segments`), warning ink and all.
+    // it, at its share of the window, each its own rounded run
+    // `USAGE_CARD_BAR_SEAM` from the next, as Claude's. A provider that
+    // names no categories gets one segment (`context_meter_segments`),
+    // warning ink and all.
     let by_category = context_segments(categories, denominator);
     let in_window = match maximum {
         Some(maximum) if by_category.is_empty() => context_meter_segments(current, maximum, None),
@@ -399,6 +413,7 @@ pub fn context_usage(
             .w_full()
             .mt(px(theme::SPACE_1))
             .h(px(theme::USAGE_CARD_BAR_H))
+            .gap(px(theme::USAGE_CARD_BAR_SEAM))
             .rounded_full()
             .overflow_hidden()
             .bg(theme::paint::LINE)
@@ -407,6 +422,7 @@ pub fn context_usage(
                     .flex_shrink_0()
                     .h_full()
                     .w(relative(share.clamp(0., 1.)))
+                    .rounded_full()
                     .bg(rgb(ink))
             }))
     });
@@ -719,6 +735,16 @@ pub fn usage_ink(fraction: f32) -> u32 {
         ATTENTION
     } else {
         INK_STRONG
+    }
+}
+
+/// A plan window's bar: Claude's accent blue (`theme::USAGE_POP_BAR`) until
+/// the window runs tight (`USAGE_TIGHT`), then `ATTENTION`.
+fn usage_bar_ink(fraction: f32) -> u32 {
+    if fraction >= theme::USAGE_TIGHT {
+        ATTENTION
+    } else {
+        theme::USAGE_POP_BAR
     }
 }
 

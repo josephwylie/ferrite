@@ -139,6 +139,11 @@ pub enum Provider {
     Codex,
 }
 
+impl Provider {
+    /// Every provider, in the order surfaces list them.
+    pub const ALL: [Provider; 2] = [Provider::Claude, Provider::Codex];
+}
+
 impl std::fmt::Display for Provider {
     /// The provider's name as a Notice says it.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1296,6 +1301,10 @@ impl Record {
             SessionEvent::Queue(_) => return None,
             SessionEvent::RateLimits { .. } => return None,
             SessionEvent::McpAuthorization { .. } => return None,
+            // An estimate for the live line; the turn's usage is its record.
+            SessionEvent::ThinkingTokens { .. } => return None,
+            // Every Session says it again at its handshake.
+            SessionEvent::AccountPlan { .. } => return None,
             SessionEvent::ScheduledWork { .. } => return None,
         })
     }

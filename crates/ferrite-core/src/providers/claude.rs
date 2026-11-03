@@ -213,6 +213,9 @@ pub struct ClaudeCapabilities {
     /// are missing here — their servers have not connected this early —
     /// and join by a later `Commands` once they have (see `menu`).
     pub commands: Vec<crate::SessionCommand>,
+    /// The account's plan (`account.subscriptionType`, `Claude Max` read
+    /// as `Max`), for the usage popover's head.
+    pub plan: Option<String>,
 }
 
 type SettingReply = Arc<Mutex<Option<(String, SyncSender<io::Result<()>>)>>>;
@@ -981,6 +984,12 @@ fn read_stdout(
                             models: capabilities.models.clone(),
                         };
                         if sender.send(announced).is_err() {
+                            return;
+                        }
+                    }
+                    // And the plan, for the usage popover's head.
+                    if let Some(name) = capabilities.plan.clone() {
+                        if sender.send(SessionEvent::AccountPlan { name }).is_err() {
                             return;
                         }
                     }

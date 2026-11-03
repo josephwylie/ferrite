@@ -1132,9 +1132,15 @@ pub const MENU_ROW_GAP: f32 = SPACE_3;
 /// A heading that opens a float puts its word's cap 12 under the float's
 /// top, Claude's 11 (claude/permission-menu.png `Mode`; 28 drew it 16).
 pub const FLOAT_SECTION_H: f32 = 24.0;
-/// 8px — what splits one group of rows from the next inside any floating
-/// surface. Space, never a rule.
+/// 8px — what splits one group of rows from the next inside a floating
+/// surface. Space, never a rule — but a context menu's groups take
+/// Claude's hairline (`menu::rule`).
 pub const MENU_GROUP_GAP: f32 = SPACE_2;
+/// 4px — the air either side of a context menu's group rule
+/// (`menu::rule`), Claude's.
+pub const MENU_RULE_GAP: f32 = SPACE_1;
+/// 4px — a row's `⋯` menu hangs this far under the button (Claude's).
+pub const MENU_UNDER_GAP: f32 = SPACE_1;
 /// 16px — a row's leading mark (a menu item's icon, a dragged Pane's file
 /// mark), Claude's: as big as the name beside it, in the name's ink.
 pub const ROW_ICON: f32 = 16.0;
@@ -2067,6 +2073,9 @@ pub const MENTION_INK: u32 = LINK_INK;
 /// (4, Claude's), and the gap above the turn's usage under the legend.
 pub const USAGE_CARD_GAP: f32 = SPACE_3;
 pub const USAGE_CARD_BAR_H: f32 = 4.0;
+/// 1px of track between two categories' runs in the context bar
+/// (claude/side-panel.png).
+pub const USAGE_CARD_BAR_SEAM: f32 = 1.0;
 /// Where a usage reading turns from neutral to ATTENTION (80%, rule
 /// 2.6.6) — a fraction of the window, not a count — on the status line's
 /// account windows and the card alike.
@@ -2144,6 +2153,9 @@ pub const ATTACH_ROW_GAP: f32 = SPACE_2;
 /// right edge on the chip's (claude/model-menu.png: menu foot y1011, chip
 /// top y1018; both right edges x1295).
 pub const MODEL_PICKER_GAP: f32 = 7.0;
+/// The `+` menu's foot over the Composer box: set 2 to draw Claude's 3-4pt (claude/plus-menu.png;
+/// 7 drew about 9 at true size, CP4 #9).
+pub const PLUS_MENU_GAP: f32 = 2.0;
 /// The Solo Composer's box stands `COMPOSER_OUTSET` past the reading
 /// column's text at each side (Claude's: the box frames the column), so at
 /// most `COMPOSER_MAX_W` wide and `COMPOSER_INSET` in from the card's sides
@@ -2231,6 +2243,8 @@ pub const USAGE_POP_GAP: f32 = SPACE_3;
 pub const USAGE_POP_BAR_GAP: f32 = 3.0;
 pub const USAGE_POP_BAR_H: f32 = 3.0;
 pub const USAGE_POP_TRACK: u32 = 0x454545;
+/// A window's fill: Claude's accent blue (measured, claude/usage-popover.png).
+pub const USAGE_POP_BAR: u32 = 0x237ddb;
 pub const USAGE_POP_OFFSET: f32 = SPACE_2;
 pub const CONTEXT_RING: f32 = 14.0;
 pub const CONTEXT_RING_STROKE: f32 = 1.75;

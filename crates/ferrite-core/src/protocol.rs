@@ -1520,6 +1520,12 @@ pub enum Live {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         url: Option<String>,
     },
+    ThinkingTokens {
+        estimated: u64,
+    },
+    AccountPlan {
+        name: String,
+    },
     /// Tool clocks a replay restores, in milliseconds by call id.
     RestoreTimings {
         subject: WireSubject,
@@ -1937,6 +1943,12 @@ fn main_outgoing(input: &Input, duration: Option<Duration>) -> Outgoing {
             server: server.clone(),
             url: url.clone(),
         },
+        Input::Event(SessionEvent::ThinkingTokens { estimated }) => Live::ThinkingTokens {
+            estimated: *estimated,
+        },
+        Input::Event(SessionEvent::AccountPlan { name }) => {
+            Live::AccountPlan { name: name.clone() }
+        }
         // Queue acknowledgements and scheduled work are the Thread's state,
         // not its Activity's; the highlighter is each side's own; `Answered`
         // is Activity's.
@@ -2089,6 +2101,12 @@ pub fn incoming(
                     server: server.clone(),
                     url: url.clone(),
                 }),
+                Live::ThinkingTokens { estimated } => main(SessionEvent::ThinkingTokens {
+                    estimated: *estimated,
+                }),
+                Live::AccountPlan { name } => {
+                    main(SessionEvent::AccountPlan { name: name.clone() })
+                }
                 Live::RestoreTimings { subject, timings } => ActivityInput::RestoreTimings {
                     subject: subject.try_into().ok()?,
                     timings: timings

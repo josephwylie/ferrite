@@ -974,3 +974,22 @@ fn deleting_a_parking_thread_lets_go_of_its_log() {
     );
     assert!(!dir.join(id.to_string()).exists());
 }
+
+/// The thinking estimate is the live line's alone: the log never keeps
+/// it, so a reopened Thread's tokens are its usage reports.
+#[test]
+fn a_thinking_estimate_is_never_logged() {
+    let dir = scratch("thinking-estimate");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = store.create(Provider::Claude, None, main()).unwrap();
+    writer.record_prompt("think").unwrap();
+    let thinking = SessionEvent::ThinkingTokens { estimated: 1_400 };
+    assert_eq!(LogRecord::of(&Input::Event(thinking.clone()), None), None);
+    writer.record_event(&thinking, None).unwrap();
+    writer.record_event(&turn_end(), None).unwrap();
+    writer.flush_fully().unwrap();
+    drop(writer);
+    let log = lines(&dir.join(id.to_string()).join("log.jsonl"));
+    assert!(log.iter().all(|line| !line.contains("1400")), "{log:?}");
+    assert_eq!(store.load(id).unwrap().prompt_texts(), vec!["think"]);
+}

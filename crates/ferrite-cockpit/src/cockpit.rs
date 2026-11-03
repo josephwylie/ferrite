@@ -1062,6 +1062,9 @@ fn rename_field(editor: Entity<ferrite_pane::composer::Composer>) -> Div {
 struct ContextMenu {
     target: MenuTarget,
     at: Point<Pixels>,
+    /// The menu's corner at `at`: its top left at the pointer, its top
+    /// right under the `⋯` it opened from (`open_context_menu_under`).
+    corner: gpui::Anchor,
     rows: Vec<Option<(menu::Item, MenuVerb)>>,
     /// The destructive row pressed once, waiting for its confirmation.
     armed: Option<usize>,
@@ -3426,6 +3429,31 @@ impl CockpitView {
     /// was up (a popover, a card, a rename) closes: one floating thing at a
     /// time.
     fn open_context_menu(&mut self, target: MenuTarget, at: Point<Pixels>, cx: &mut Context<Self>) {
+        self.open_context_menu_at(target, at, gpui::Anchor::TopLeft, cx);
+    }
+
+    /// The menu a row's `⋯` opens, as Claude's: under the button, its right
+    /// edge on the button's, `MENU_UNDER_GAP` below it.
+    fn open_context_menu_under(
+        &mut self,
+        target: MenuTarget,
+        button: gpui::Bounds<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let at = gpui::point(
+            button.right(),
+            button.bottom() + px(ferrite_ui::theme::MENU_UNDER_GAP),
+        );
+        self.open_context_menu_at(target, at, gpui::Anchor::TopRight, cx);
+    }
+
+    fn open_context_menu_at(
+        &mut self,
+        target: MenuTarget,
+        at: Point<Pixels>,
+        corner: gpui::Anchor,
+        cx: &mut Context<Self>,
+    ) {
         self.popover = None;
         self.context_checks = None;
         if self.rename.is_some() {
@@ -3435,6 +3463,7 @@ impl CockpitView {
         self.context_menu = Some(ContextMenu {
             target,
             at,
+            corner,
             rows,
             armed: None,
         });
@@ -3450,78 +3479,56 @@ impl CockpitView {
             // The nav row: where a Thread lives in the roster — open it,
             // park it, move it between Groups, delete it.
             MenuTarget::Thread(thread) => {
+                // Claude's row menu: every row a one-letter key, pressed
+                // while the menu is up (`menu_mnemonic`).
+                let key = |label: &'static str, letter: &'static str| {
+                    menu::Item::new(label).shortcut(letter)
+                };
                 let shown = self.pane_for(thread).is_some();
                 let live = self.cockpit.thread(thread).is_some();
                 let grouped = self.cockpit.groups().of(thread).is_some();
                 // Claude's row menu leads with its pin; a Group member's
                 // place is its Group.
                 if self.prefs.settings.pinned_threads.contains(&thread) {
-                    rows.push(Some((menu::Item::new("Unpin"), MenuVerb::Unpin)));
+                    rows.push(Some((key("Unpin", "P"), MenuVerb::Unpin)));
                 } else if !grouped {
-                    rows.push(Some((menu::Item::new("Pin"), MenuVerb::Pin)));
+                    rows.push(Some((key("Pin", "P"), MenuVerb::Pin)));
                 }
-                rows.push(Some((menu::Item::new("Rename"), MenuVerb::Rename)));
+                rows.push(Some((key("Rename", "R"), MenuVerb::Rename)));
                 if self.cockpit.roster().focused_thread() != Some(thread) {
                     rows.push(Some((
-                        menu::Item::new(if live { "Open" } else { "Resume" }),
+                        key(if live { "Open" } else { "Resume" }, "O"),
                         MenuVerb::Focus,
                     )));
                 }
                 if shown {
-                    rows.push(Some((
-                        menu::Item::new("Toggle fullscreen").shortcut(fullscreen.clone()),
-                        MenuVerb::Fullscreen,
-                    )));
+                    rows.push(Some((key("Toggle fullscreen", "F"), MenuVerb::Fullscreen)));
                 }
                 rows.push(None);
-                // ⌘T starts one beside the focused Thread: its chord is
-                // this row's only on that Thread's menu, as ⌘W's is Park's.
-                let focused = self.cockpit.roster().focused_thread() == Some(thread);
                 rows.push(Some((
-                    menu::Item::new("New thread in this project").shortcut(if focused {
-                        "cmd-T"
-                    } else {
-                        ""
-                    }),
+                    key("New thread in this project", "N"),
                     MenuVerb::NewThread,
                 )));
                 // A machine's path is not in this computer's Finder.
                 if !self.on_machine() {
-                    rows.push(Some((
-                        menu::Item::new("Reveal in Finder"),
-                        MenuVerb::Reveal,
-                    )));
+                    rows.push(Some((key("Reveal in Finder", "E"), MenuVerb::Reveal)));
                 }
-                rows.push(Some((menu::Item::new("Copy path"), MenuVerb::CopyPath)));
+                rows.push(Some((key("Copy path", "C"), MenuVerb::CopyPath)));
                 rows.push(None);
-                rows.push(Some((
-                    menu::Item::new("Refresh PR status").shortcut(
-                        ferrite_ui::components::bound_chord("cockpit::RefreshPrStatus")
-                            .unwrap_or_default(),
-                    ),
-                    MenuVerb::RefreshPr,
-                )));
+                rows.push(Some((key("Refresh PR status", "S"), MenuVerb::RefreshPr)));
                 if self.facts.pr(thread).is_some_and(|pr| pr.url.is_some()) {
-                    rows.push(Some((
-                        menu::Item::new("Open PR in browser").shortcut(
-                            ferrite_ui::components::bound_chord("cockpit::OpenPrInBrowser")
-                                .unwrap_or_default(),
-                        ),
-                        MenuVerb::OpenPr,
-                    )));
+                    rows.push(Some((key("Open PR in browser", "B"), MenuVerb::OpenPr)));
                 }
                 rows.push(None);
+                // Park is Ferrite's archive: Claude's `A`.
                 if live {
-                    rows.push(Some((
-                        menu::Item::new("Park thread").shortcut(if shown { "cmd-W" } else { "" }),
-                        MenuVerb::Park,
-                    )));
+                    rows.push(Some((key("Park thread", "A"), MenuVerb::Park)));
                 }
                 if grouped {
-                    rows.push(Some((menu::Item::new("Leave group"), MenuVerb::LeaveGroup)));
+                    rows.push(Some((key("Leave group", "L"), MenuVerb::LeaveGroup)));
                 }
                 rows.push(Some((
-                    menu::Item::new("Delete thread").destructive(),
+                    key("Delete thread", "D").destructive(),
                     MenuVerb::Delete,
                 )));
             }
@@ -3738,6 +3745,24 @@ impl CockpitView {
             meta.workspace.as_ref(),
         )
         .map(std::path::Path::to_path_buf)
+    }
+
+    /// The row of the open menu whose one-letter key `keystroke` is
+    /// (Claude's row menu: `P` pins), unmodified and case-blind.
+    fn menu_mnemonic(&self, keystroke: &gpui::Keystroke) -> Option<usize> {
+        let open = self.context_menu.as_ref()?;
+        if keystroke.modifiers.modified() || keystroke.key.chars().count() != 1 {
+            return None;
+        }
+        open.rows.iter().position(|row| {
+            row.as_ref().is_some_and(|(item, _)| {
+                !item.disabled
+                    && item
+                        .shortcut
+                        .as_deref()
+                        .is_some_and(|key| key.eq_ignore_ascii_case(&keystroke.key))
+            })
+        })
     }
 
     /// A row's press: a destructive row arms on the first press and runs
@@ -3977,7 +4002,7 @@ impl CockpitView {
         );
         for (index, row) in open.rows.iter().enumerate() {
             shell = match row {
-                None => shell.child(menu::gap()),
+                None => shell.child(menu::rule()),
                 Some((item, _)) => shell.child(
                     menu::row(index, item, open.armed == Some(index)).on_mouse_down(
                         MouseButton::Left,
@@ -3992,6 +4017,7 @@ impl CockpitView {
         Some(
             deferred(
                 anchored()
+                    .anchor(open.corner)
                     .position(open.at)
                     .snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD))
                     .child(ferrite_ui::motion::menu_in(
@@ -4518,7 +4544,7 @@ impl CockpitView {
             let results = cx
                 .background_executor()
                 .spawn(async {
-                    [Provider::Claude, Provider::Codex].map(|provider| {
+                    Provider::ALL.map(|provider| {
                         (provider, ferrite_core::providers::update::check(provider))
                     })
                 })
@@ -4740,7 +4766,7 @@ impl CockpitView {
                 LimitWindow::FiveHour => "5-hour",
                 LimitWindow::Weekly => "weekly",
             };
-            let provider = provider_title(warning.provider);
+            let provider = ferrite_ui::provider::title(warning.provider);
             window.push_notification(
                 Notification::new()
                     .title(format!(
@@ -4827,10 +4853,7 @@ impl CockpitView {
             self.prefs.settings.auto_update_clis,
             self.cockpit.live_sessions(provider),
         );
-        let title = match provider {
-            Provider::Claude => "Claude CLI",
-            Provider::Codex => "Codex CLI",
-        };
+        let title = ferrite_ui::provider::cli(provider);
         let view = cx.entity().downgrade();
         settings::action(id, title, detail, version, button, move |cx| {
             view.update(cx, |view, cx| view.update_cli(provider, cx))
@@ -4924,11 +4947,11 @@ impl CockpitView {
             "settings-provider",
             "Provider",
             "What a new thread starts on",
-            [Provider::Claude, Provider::Codex]
+            Provider::ALL
                 .into_iter()
                 .map(|provider| {
                     (
-                        provider_title(provider).into(),
+                        ferrite_ui::provider::title(provider).into(),
                         settings.default_provider == provider,
                         provider,
                     )
@@ -4939,7 +4962,7 @@ impl CockpitView {
             }),
         )];
         let mut new_thread_groups = vec![settings::Group::new(None).rows(defaults)];
-        for provider in [Provider::Claude, Provider::Codex] {
+        for provider in Provider::ALL {
             let chosen = settings.model_for(provider).map(str::to_string);
             let model = settings::chooser(
                 if provider == Provider::Claude {
@@ -5122,7 +5145,7 @@ impl CockpitView {
             )
             .nested(),
         ];
-        let provider_sounds = [Provider::Claude, Provider::Codex].map(|provider| {
+        let provider_sounds = Provider::ALL.map(|provider| {
             let (id, title) = match provider {
                 Provider::Claude => ("settings-claude-sounds", "Sounds for Claude threads"),
                 Provider::Codex => ("settings-codex-sounds", "Sounds for Codex threads"),
@@ -5933,7 +5956,7 @@ impl CockpitView {
                             .cockpit
                             .thread(thread)
                             .map(|open| open.provider())
-                            .unwrap_or(Provider::Claude),
+                            .unwrap_or(self.prefs.settings.default_provider),
                         model,
                     },
                     cx,
@@ -7267,7 +7290,7 @@ impl CockpitView {
     ) -> (Vec<Row>, usize) {
         let mut rows: Vec<Row> = Vec::new();
         let mut selected = None;
-        for provider in [Provider::Claude, Provider::Codex] {
+        for provider in Provider::ALL {
             // After the first prompt the other Provider is a handover, not
             // a swap: its rows stay live and its section says what a pick
             // does — a fresh conversation there, the earlier one carried
@@ -7277,7 +7300,7 @@ impl CockpitView {
             rows.push(Row {
                 row: pane::MenuRow {
                     insert: SharedString::default(),
-                    name: SharedString::from(provider_title(provider)),
+                    name: SharedString::from(ferrite_ui::provider::title(provider)),
                     matched: Vec::new(),
                     detail: SharedString::from(if handover { "handover" } else { "" }),
                     prose_detail: true,
@@ -7477,7 +7500,8 @@ impl CockpitView {
                 None => {
                     let open = pane.thread().and_then(|thread| self.cockpit.thread(thread));
                     ProviderChoice {
-                        provider: open.map_or(Provider::Claude, |open| open.provider()),
+                        provider: open
+                            .map_or(self.prefs.settings.default_provider, |open| open.provider()),
                         model: open.and_then(|open| open.model()).map(str::to_string),
                     }
                 }
@@ -8553,6 +8577,7 @@ impl CockpitView {
                     pane::plan_usage_ring(
                         ("plan-usage-ring", thread.get() as usize),
                         self.cockpit.account_limits(open.provider()),
+                        open.transcript().plan().map(SharedString::from),
                         self.usage_popover_held,
                         cx,
                     )
@@ -10146,14 +10171,6 @@ fn band_row(label: SharedString, detail: SharedString, active: bool, choice: Ban
     }
 }
 
-/// The provider's lowercase name — the store's own serialized spelling.
-fn provider_label(provider: Provider) -> &'static str {
-    match provider {
-        Provider::Claude => "claude",
-        Provider::Codex => "codex",
-    }
-}
-
 /// The Provider's name as a person says it — the picker's section titles
 /// and the chip before any model is known.
 /// The plugins a Session's commands come from, in their first command's
@@ -10170,24 +10187,11 @@ fn plugin_names(commands: &[ferrite_core::SessionCommand]) -> Vec<String> {
     names
 }
 
-fn provider_title(provider: Provider) -> &'static str {
-    match provider {
-        Provider::Claude => "Claude",
-        Provider::Codex => "Codex",
-    }
-}
-
 /// A Settings group for one Provider: its name, led by its logomark in
 /// brand colour.
 fn provider_group(provider: Provider) -> settings::Group {
-    let (mark, ink) = match provider {
-        Provider::Claude => (
-            ferrite_ui::icons::CLAUDE,
-            ferrite_ui::theme::PROVIDER_CLAUDE,
-        ),
-        Provider::Codex => (ferrite_ui::icons::CODEX, ferrite_ui::theme::PROVIDER_CODEX),
-    };
-    settings::Group::new(Some(provider_title(provider))).mark(mark, ink)
+    let (mark, ink) = ferrite_ui::provider::mark(provider);
+    settings::Group::new(Some(ferrite_ui::provider::title(provider))).mark(mark, ink)
 }
 
 /// An effort level as a person says it: `xhigh` is "Extra high", the
@@ -11082,6 +11086,14 @@ impl CockpitView {
                     }
                 }),
             )
+            // An open menu's one-letter keys run their rows before any
+            // field under it reads the letter.
+            .capture_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, window, cx| {
+                if let Some(index) = view.menu_mnemonic(&event.keystroke) {
+                    cx.stop_propagation();
+                    view.press_menu_row(index, window, cx);
+                }
+            }))
             .on_action(cx.listener(Self::open_settings))
             .map(|root| self.register_board_actions(root, cx))
             .child(
@@ -12064,13 +12076,7 @@ impl CockpitView {
         // The mode new Threads start in, from Settings: the menu's
         // `Default` tag.
         let settings = &self.prefs.settings;
-        let configured = match open.provider() {
-            Provider::Claude => settings
-                .claude_permission_mode
-                .clone()
-                .unwrap_or_else(|| "default".into()),
-            Provider::Codex => settings.codex_approval_policy.clone(),
-        };
+        let configured = settings.permission_mode_for(open.provider()).to_string();
         let key = thread.get() as usize;
         let trigger = pane::toolbar_chip(("mode-picker", key), cx)
             .debug_selector(move || format!("mode-picker-{key}"))
@@ -13024,15 +13030,7 @@ impl CockpitView {
                         Some(hold) => Some(SharedString::from(hold)),
                         None => detail.filter(|_| !section),
                     },
-                    icon: provider.map(|provider| match provider {
-                        Provider::Claude => (
-                            ferrite_ui::icons::CLAUDE,
-                            ferrite_ui::theme::PROVIDER_CLAUDE,
-                        ),
-                        Provider::Codex => {
-                            (ferrite_ui::icons::CODEX, ferrite_ui::theme::PROVIDER_CODEX)
-                        }
-                    }),
+                    icon: provider.map(ferrite_ui::provider::mark),
                     ..Default::default()
                 }
             })
@@ -14612,14 +14610,27 @@ impl CockpitView {
             group.map_or(0, GroupId::get),
             thread.get()
         );
+        // Where the button drew, so its menu opens under it.
+        let drawn = std::rc::Rc::new(std::cell::Cell::new(None::<gpui::Bounds<Pixels>>));
         let action = Some(
             nav::row_action(more, ferrite_ui::icons::ELLIPSIS)
+                .relative()
                 .tooltip(ferrite_ui::menu::tooltip("More"))
+                .child({
+                    let drawn = drawn.clone();
+                    gpui::canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                        .absolute()
+                        .size_full()
+                })
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
-                        view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
+                        let target = MenuTarget::Thread(thread);
+                        match drawn.get() {
+                            Some(button) => view.open_context_menu_under(target, button, cx),
+                            None => view.open_context_menu(target, event.position, cx),
+                        }
                     }),
                 )
                 .on_click(|_, _, cx| cx.stop_propagation())

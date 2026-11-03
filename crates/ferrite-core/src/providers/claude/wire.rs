@@ -163,6 +163,13 @@ pub(in crate::providers) fn parse_capabilities(
             .and_then(Value::as_array)
             .map(|commands| commands.iter().filter_map(command_entry).collect())
             .unwrap_or_default(),
+        // `Claude Max`: the popover's head names the plan alone, as
+        // Claude's does (`Plan usage limits · Max`).
+        plan: body["account"]["subscriptionType"]
+            .as_str()
+            .map(|plan| plan.trim().trim_start_matches("Claude ").trim())
+            .filter(|plan| !plan.is_empty())
+            .map(str::to_owned),
     })
 }
 
@@ -390,7 +397,12 @@ pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
                 }),
             },
             Some("compact_boundary") => Some(phase(Phase::Working, "Context compacted".into())),
-            Some("thinking_tokens") => Some(phase(Phase::Thinking, String::new())),
+            Some("thinking_tokens") => {
+                if let Some(estimated) = value["estimated_tokens"].as_u64() {
+                    events.push(SessionEvent::ThinkingTokens { estimated });
+                }
+                Some(phase(Phase::Thinking, String::new()))
+            }
             Some("task_started" | "task_progress" | "task_notification" | "task_updated") => {
                 // `task_updated` carries only what changed, in its `patch`;
                 // a field it leaves out is no news, so it stays empty here
@@ -1621,6 +1633,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_thinking_estimate_rides_beside_the_thinking_phase() {
+        let line = FIXTURES
+            .iter()
+            .flat_map(|(_, text)| text.lines())
+            .find(|line| line.contains(r#""subtype":"thinking_tokens""#))
+            .expect("a captured thinking_tokens frame");
+        let value: Value = serde_json::from_str(line).unwrap();
+        let events = parse_events_value(&value);
+        assert_eq!(
+            events[0],
+            SessionEvent::ThinkingTokens {
+                estimated: value["estimated_tokens"].as_u64().unwrap()
+            }
+        );
+        assert!(matches!(
+            events[1],
+            SessionEvent::Progress {
+                event: ProgressEvent::Phase {
+                    phase: Phase::Thinking,
+                    ..
+                }
+            }
+        ));
+        assert_eq!(events.len(), 2);
+    }
+
     fn events_of(name: &str) -> Vec<SessionEvent> {
         let (_, text) = FIXTURES
             .iter()
@@ -1681,6 +1720,12 @@ mod tests {
             SessionEvent::TokenUsage { .. } => return None,
             // Parsed alongside the ordinary event path by the reader.
             SessionEvent::RateLimits { .. } => return None,
+            // Rides beside the Thinking phase (`parse_events_value`), proved by
+            // `a_thinking_estimate_rides_beside_the_thinking_phase`.
+            SessionEvent::ThinkingTokens { .. } => return None,
+            // Rides the initialize handshake, read by the reader like the
+            // model menu; proved by `the_handshake_names_the_plan`.
+            SessionEvent::AccountPlan { .. } => return None,
             // A stateful stream read by the activity decoder (`drafts`),
             // proved by the show-visual capture in tests/claude_session.rs.
             SessionEvent::ToolDraft { .. } => return None,
@@ -2023,6 +2068,17 @@ mod tests {
         assert_eq!(haiku.detail, "Fastest for quick answers");
         assert!(haiku.is("claude-haiku-4-5-20251001"));
         assert!(haiku.efforts.is_empty(), "Haiku announces no effort levels");
+    }
+
+    /// The handshake names the account's plan, for the usage popover.
+    #[test]
+    fn the_handshake_names_the_plan() {
+        let capabilities = parse_capabilities(
+            include_str!("../../../tests/fixtures/claude-initialize-2.1.259.jsonl").trim_end(),
+            "req_1",
+        )
+        .expect("the capture answers req_1");
+        assert_eq!(capabilities.plan.as_deref(), Some("Max"));
     }
 
     /// The 2.1.259 handshake: every row's effort ladder rides

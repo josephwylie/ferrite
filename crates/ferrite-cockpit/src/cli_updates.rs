@@ -22,10 +22,7 @@ pub const TICK: Duration = Duration::from_secs(5 * 60);
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 
 pub fn name(provider: Provider) -> &'static str {
-    match provider {
-        Provider::Claude => "Claude CLI",
-        Provider::Codex => "Codex CLI",
-    }
+    ferrite_ui::provider::cli(provider)
 }
 
 /// Where one provider's CLI stands.
@@ -102,14 +99,12 @@ impl CliUpdates {
     /// Whether the registry is due to be asked again. Starts the check
     /// when it is: both providers read as checking until it answers.
     pub fn begin_check(&mut self, now: Instant) -> bool {
-        let busy = [Provider::Claude, Provider::Codex]
-            .into_iter()
-            .any(|provider| {
-                matches!(
-                    self.state(provider),
-                    State::Checking | State::Updating { .. }
-                )
-            });
+        let busy = Provider::ALL.into_iter().any(|provider| {
+            matches!(
+                self.state(provider),
+                State::Checking | State::Updating { .. }
+            )
+        });
         let due = self
             .checked
             .is_none_or(|checked| now.duration_since(checked) >= CHECK_EVERY);
@@ -170,7 +165,7 @@ impl CliUpdates {
 
     /// Providers with an upgrade ready that automatic updating may run.
     pub fn ready(&self) -> Vec<Provider> {
-        [Provider::Claude, Provider::Codex]
+        Provider::ALL
             .into_iter()
             .filter(|provider| {
                 matches!(
@@ -190,7 +185,7 @@ impl CliUpdates {
     pub fn badge(&self) -> Option<Badge> {
         let mut ready = Vec::new();
         let mut installing = Vec::new();
-        for provider in [Provider::Claude, Provider::Codex] {
+        for provider in Provider::ALL {
             match self.state(provider) {
                 State::Current(Status::Available {
                     latest,
@@ -275,7 +270,7 @@ pub fn describe(
             let when = if auto && live > 0 {
                 format!(
                     " Installs by itself once no {} Thread is running ({live} open now).",
-                    provider_word(provider)
+                    ferrite_ui::provider::title(provider)
                 )
             } else {
                 String::new()
@@ -293,13 +288,6 @@ pub fn describe(
         State::Failed { detail } => (format!("The update failed: {detail}"), None),
     };
     (text.into(), button.map(SharedString::from))
-}
-
-fn provider_word(provider: Provider) -> &'static str {
-    match provider {
-        Provider::Claude => "Claude",
-        Provider::Codex => "Codex",
-    }
 }
 
 #[cfg(test)]

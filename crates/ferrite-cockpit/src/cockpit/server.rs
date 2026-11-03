@@ -456,8 +456,10 @@ impl CockpitView {
         };
         let mut status = self.server_standing();
         if let ServerState::Attached { server, .. } = state {
-            let live = self.cockpit.live_sessions(Provider::Claude)
-                + self.cockpit.live_sessions(Provider::Codex);
+            let live: usize = Provider::ALL
+                .into_iter()
+                .map(|provider| self.cockpit.live_sessions(provider))
+                .sum();
             status.push_str(&match live {
                 1 => " · 1 live session".to_string(),
                 n => format!(" · {n} live sessions"),

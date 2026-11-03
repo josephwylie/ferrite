@@ -1190,7 +1190,9 @@ impl Cards {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.thread.hash(&mut hasher);
-        self.provider.map(decision::provider_word).hash(&mut hasher);
+        self.provider
+            .map(ferrite_ui::provider::word)
+            .hash(&mut hasher);
         self.context.as_deref().hash(&mut hasher);
         self.switch.hash(&mut hasher);
         self.reading.hash(&mut hasher);
@@ -1312,7 +1314,7 @@ impl Cards {
         decision::head_detail([
             tool.unwrap_or_default(),
             self.provider
-                .map(decision::provider_word)
+                .map(ferrite_ui::provider::word)
                 .unwrap_or_default(),
             if context {
                 self.context.as_deref().unwrap_or_default()

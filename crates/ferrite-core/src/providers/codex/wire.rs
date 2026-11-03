@@ -26,7 +26,7 @@ use crate::{
 /// wraps in an item — user messages, agent messages, reasoning — either
 /// arrives as deltas already or is not modelled; parsing those items too
 /// would double what the deltas said.
-const TOOL_ITEM_TYPES: [&str; 10] = [
+const TOOL_ITEM_TYPES: [&str; 11] = [
     "commandExecution",
     "fileChange",
     "mcpToolCall",
@@ -37,7 +37,41 @@ const TOOL_ITEM_TYPES: [&str; 10] = [
     "sleep",
     "collabAgentToolCall",
     "collabToolCall",
+    "subAgentActivity",
 ];
+
+/// Whether an item is the call that started a subagent: a `spawnAgent`
+/// collaboration call, or (0.153) the `subAgentActivity` that says one
+/// started — its id is the spawning call's. The agent's later activity
+/// items (`completed`, `interacted`) are not calls.
+pub(super) fn spawns_agent(item: &Value) -> bool {
+    match item["type"].as_str() {
+        Some("collabAgentToolCall") => {
+            matches!(item["tool"].as_str(), Some("spawnAgent" | "spawn"))
+        }
+        Some("subAgentActivity") => item["kind"] == "started",
+        _ => false,
+    }
+}
+
+/// A spawn's input in the shape every bridge gives an agent call: the item,
+/// with the task as its `description` — the prompt's first line, else the
+/// agent's name from its path (`/root/alpha` → `alpha`; display only).
+fn agent_input(item: &Value) -> Value {
+    let task = item["prompt"]
+        .as_str()
+        .and_then(|prompt| prompt.lines().map(str::trim).find(|line| !line.is_empty()))
+        .or_else(|| {
+            item["agentPath"]
+                .as_str()
+                .and_then(|path| path.rsplit('/').find(|part| !part.is_empty()))
+        });
+    let mut input = item.clone();
+    if let (Some(task), Some(fields)) = (task, input.as_object_mut()) {
+        fields.insert("description".into(), task.into());
+    }
+    input
+}
 
 /// Offer `show_visual` on a thread/start (`start`) or thread/resume.
 ///
@@ -490,7 +524,7 @@ fn parse_rate_limits(params: &Value) -> Option<SessionEvent> {
 pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent> {
     let item = params.get("item")?;
     let kind = item.get("type")?.as_str()?;
-    if !TOOL_ITEM_TYPES.contains(&kind) {
+    if !TOOL_ITEM_TYPES.contains(&kind) || (kind == "subAgentActivity" && !spawns_agent(item)) {
         return None;
     }
     let id = item.get("id")?.as_str()?.to_string();
@@ -499,6 +533,13 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
         && item["tool"] == crate::visual::TOOL
     {
         return Some(visual_item(id, item, completed));
+    }
+    if !completed && spawns_agent(item) {
+        return Some(SessionEvent::ToolStarted {
+            id,
+            name: crate::transcript::tools::AGENT.into(),
+            input: agent_input(item),
+        });
     }
     if !completed {
         return Some(SessionEvent::ToolStarted {
@@ -1338,6 +1379,10 @@ mod tests {
             SessionEvent::ContextDetails { .. } => return None,
             SessionEvent::FileChanges { .. } | SessionEvent::TurnDiff { .. } => return None,
             SessionEvent::McpServers { .. } | SessionEvent::McpAuthorization { .. } => return None,
+            // Claude's concept: Codex reports no thinking estimate.
+            SessionEvent::ThinkingTokens { .. } => return None,
+            // Claude's handshake names the plan; Codex's is not read for one.
+            SessionEvent::AccountPlan { .. } => return None,
             // The resume capture clears its goal.
             SessionEvent::ScheduledWork { .. } => "ScheduledWork",
             SessionEvent::ContextUsage { .. } | SessionEvent::UsageDetails { .. } => return None,

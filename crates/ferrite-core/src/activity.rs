@@ -2662,6 +2662,8 @@ fn reports(input: &Input) -> bool {
                 | SessionEvent::ContextUsage { .. }
                 | SessionEvent::ContextDetails { .. }
                 | SessionEvent::RateLimits { .. }
+                | SessionEvent::ThinkingTokens { .. }
+                | SessionEvent::AccountPlan { .. }
         )
     )
 }
