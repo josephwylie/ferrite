@@ -36,6 +36,7 @@
 //! | bubble pop | [`BUBBLE_IN`] 450ms overshoot | the operator's prompt bubble appended at the tail: opacity, scale 0.92 → 1 from its right edge, a 6px rise ([`bubble_face`]) |
 //! | approval promote | [`PROMOTE_IN`] 220ms ease-out cubic | the approval card: from 0.75, 6px above, scale 0.97 from its top ([`promote_in`]) |
 //! | label roll | [`MORPH`] 180ms | the working line's words when they change ([`morph`]) |
+//! | count roll | [`COUNT`] 300ms quart | the working line's token count eases to each new value, its changing digits rolling up as an odometer's, tabular so nothing shifts; drawn by the loops overlay, so only the count redraws (`odometer::rolling_count`) |
 //! | message actions | [`ACTIONS_IN`] 120ms after 100ms / [`ACTIONS_OUT`] 60ms, ease-snap | a message's actions under the pointer ([`hover_listener_with`]) |
 //! | jump to latest | [`JUMP_FADE`] 200ms | the transcript's jump button fades in and out, answering no pointer while it goes |
 //! | usage ring | [`USAGE_ARC`] 300ms / [`USAGE_INK`] 200ms, quart | the footer's plan-usage ring moving to a new reading ([`settle`]); first paint lands |
@@ -289,6 +290,9 @@ pub const TOOLTIP_IN: MotionSpec = spec(theme::MOTION_TOOLTIP_IN_MS, EASE_SNAP);
 pub const PROMOTE_IN: MotionSpec = spec(theme::MOTION_PROMOTE_MS, EASE_OUT_CUBIC);
 /// The working line's label roll (`morph`).
 pub const MORPH: MotionSpec = spec(theme::MOTION_MORPH_MS, EASE_MORPH);
+/// The working line's token count easing to its next value
+/// (`odometer::rolling_count`).
+pub const COUNT: MotionSpec = spec(theme::MOTION_COUNT_MS, EASE_OUT_QUART);
 /// The image viewer's zoom, tweened on the scale's logarithm so every
 /// step of it reads as the same zoom.
 pub const IMAGE_ZOOM: MotionSpec = spec(theme::MOTION_IMAGE_ZOOM_MS, EASE_OUT_EXPO);
@@ -1406,7 +1410,7 @@ pub fn quietly<R>(f: impl FnOnce() -> R) -> R {
     result
 }
 
-fn quiet() -> bool {
+pub(crate) fn quiet() -> bool {
     QUIET.with(|quiet| quiet.get() > 0)
 }
 

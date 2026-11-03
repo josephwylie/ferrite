@@ -326,6 +326,46 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // typed into text is just a character.
         ("?".into(), "shortcuts::Toggle", Some("ComposerEmpty")),
         ("?".into(), "shortcuts::Toggle", Some(NO_TEXT_FIELD)),
+        // A page of the transcript up and down, and its ends, wherever no
+        // text needs the keys: an empty Composer line (bound after its
+        // own home and end, so the empty line's context wins the tie) or
+        // no text field at all.
+        (
+            "pageup".into(),
+            "cockpit::TranscriptPageUp",
+            Some("ComposerEmpty"),
+        ),
+        (
+            "pageup".into(),
+            "cockpit::TranscriptPageUp",
+            Some(NO_TEXT_FIELD),
+        ),
+        (
+            "pagedown".into(),
+            "cockpit::TranscriptPageDown",
+            Some("ComposerEmpty"),
+        ),
+        (
+            "pagedown".into(),
+            "cockpit::TranscriptPageDown",
+            Some(NO_TEXT_FIELD),
+        ),
+        (
+            "home".into(),
+            "cockpit::TranscriptTop",
+            Some("ComposerEmpty"),
+        ),
+        ("home".into(), "cockpit::TranscriptTop", Some(NO_TEXT_FIELD)),
+        (
+            "end".into(),
+            "cockpit::TranscriptBottom",
+            Some("ComposerEmpty"),
+        ),
+        (
+            "end".into(),
+            "cockpit::TranscriptBottom",
+            Some(NO_TEXT_FIELD),
+        ),
         // ⌘/ anywhere, a text field's too: the desktop apps' shortcuts key,
         // and the Help menu's chord.
         (with_primary("/"), "shortcuts::Toggle", None),

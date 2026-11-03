@@ -20,6 +20,9 @@ pub(crate) enum RowId {
     Group(BlockId),
     /// The working row while a turn runs (`pane::working_tail`).
     Working,
+    /// A long thread's date divider, before the first prompt of a new day,
+    /// named by that prompt's block.
+    Divider(BlockId),
     /// What a package appends after the last row (the pending Decision).
     Tail,
 }
@@ -58,6 +61,9 @@ pub(crate) enum RowKind {
     Working,
     /// The tail row (the Decision), a line under the row before it.
     Tail,
+    /// A date divider between turns on different days: a turn's gap above
+    /// it, a line between it and its day's first prompt.
+    Divider,
     /// A fallback prose or code block.
     Other,
 }
@@ -108,6 +114,8 @@ pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32)
     let work = |kind| call(kind) || matches!(kind, Working | Answer { narration: true });
     match (previous, kind) {
         (_, TurnEnd { hangs: true } | Meta) => 0.,
+        (Divider, _) => line,
+        (previous, Divider) => gap_before(Some(previous), Prompt, reading),
         (Prompt, _) => (theme::tx_after_prompt(line) - theme::MESSAGE_ACTION).max(0.),
         (Answer { narration: false }, Prompt) => {
             theme::tx_turn_gap(line) - theme::MESSAGE_ACTIONS_GAP - theme::MESSAGE_ACTION
@@ -134,6 +142,9 @@ pub(crate) struct RowShape {
     pub pending_call: Option<String>,
     /// The model's thinking drawn as `∴` rows; off, it draws nothing.
     pub thinking: bool,
+    /// The running call the working line carries (`carried_call`): set by
+    /// the projection itself.
+    pub carried: Option<String>,
 }
 
 /// One renderable transcript unit. Its blocks are owned so a list callback
@@ -336,7 +347,11 @@ fn draws_nothing(block: &Block, shape: &RowShape) -> bool {
         Body::Thinking(text) => text.trim().is_empty() || !shape.thinking,
         Body::Meta(text) => ferrite_core::transcript::is_decision_record(text),
         Body::Notice(text) => ferrite_core::transcript::is_opened_notice(text),
-        Body::Tool(tool) => is_gated(tool, shape) || !tool.draws_row(),
+        Body::Tool(tool) => {
+            is_gated(tool, shape)
+                || !tool.draws_row()
+                || shape.carried.as_deref() == Some(tool.call.as_str())
+        }
         Body::TurnEnd(end) => crate::pane::turn_stamp(end).is_none(),
         _ => false,
     }
@@ -350,6 +365,44 @@ fn is_gated(tool: &ToolBlock, shape: &RowShape) -> bool {
             .pending_call
             .as_deref()
             .is_some_and(|pending| gated(&tool.call, pending))
+}
+
+/// The call the working line carries while the turn runs: the routine
+/// call it names (`pane::running_call`), until the call has something of
+/// its own to show (output, a test count). Its row appears once it
+/// finishes, as Claude's does, so nothing says it twice.
+fn carried_call(blocks: &[Block], shape: &RowShape) -> Option<String> {
+    shape.working?;
+    let tool = crate::pane::running_call(blocks)?;
+    (tools::policy(&tool.name).grouping == tools::Grouping::RollsUp
+        && tool.output.is_none()
+        && tool.progress.is_none())
+    .then(|| tool.call.clone())
+}
+
+/// The failed turn end the failure strip speaks for: the last turn's,
+/// when it failed and the strip stands at the tail, so the failure shows
+/// once (`CockpitView::failure_tail`). An earlier failed turn keeps its
+/// stamp.
+fn struck_failure(blocks: &[Block], shape: &RowShape) -> Option<usize> {
+    shape.tail?;
+    let at = blocks
+        .iter()
+        .rposition(|block| matches!(block.body, Body::TurnEnd(_) | Body::Prompt(_)))?;
+    matches!(
+        &blocks[at].body,
+        Body::TurnEnd(end) if matches!(end.outcome, ferrite_core::TurnOutcome::Error(_))
+    )
+    .then_some(at)
+}
+
+/// The day a prompt was sent, when its stamp says (`clock::parse_local`).
+fn sent_day(block: &Block) -> Option<impl PartialEq + Copy> {
+    block
+        .sent_at
+        .as_deref()
+        .and_then(ferrite_core::clock::parse_local)
+        .map(|at| at.date_naive())
 }
 
 /// The calls that fold with the one at `blocks[start]`: it and every call
@@ -381,6 +434,10 @@ fn group_at(blocks: &[Block], start: usize, shape: &RowShape) -> (Vec<usize>, us
 }
 
 fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<TranscriptRow>> {
+    let shape = &RowShape {
+        carried: carried_call(blocks, shape),
+        ..shape.clone()
+    };
     let mut rows = Vec::new();
     let row = |id, blocks: &[Block], source: Option<Rc<str>>, kind| TranscriptRow {
         id,
@@ -390,6 +447,8 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
         gap: 0.,
         tail_key: None,
     };
+    let struck = struck_failure(blocks, shape);
+    let mut day = None;
     let mut index = 0;
     while index < blocks.len() {
         let block = &blocks[index];
@@ -420,6 +479,19 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
         index += 1;
         match &block.body {
             Body::Prompt(_) => {
+                // A turn on another day than the one before it opens
+                // under its date.
+                if let Some(sent) = sent_day(block) {
+                    if day.is_some_and(|day| day != sent) {
+                        rows.push(row(
+                            RowId::Divider(block.id),
+                            std::slice::from_ref(block),
+                            None,
+                            RowKind::Divider,
+                        ));
+                    }
+                    day = Some(sent);
+                }
                 rows.push(row(
                     RowId::Block(block.id),
                     std::slice::from_ref(block),
@@ -452,7 +524,7 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
             // Bash`), whose call's own row is its account, as the approved
             // transcript draws it; where the Thread works, which the head
             // and the Panel say; and a quick turn's end.
-            _ if draws_nothing(block, shape) => {}
+            _ if draws_nothing(block, shape) || struck == Some(index - 1) => {}
             _ => rows.push(row(
                 RowId::Block(block.id),
                 std::slice::from_ref(block),
@@ -617,6 +689,127 @@ mod tests {
             name: "Bash".into(),
             input: serde_json::json!({ "command": "cargo test" }),
         }));
+    }
+
+    fn kinds(transcript: &Transcript, shape: &RowShape) -> Vec<RowKind> {
+        TranscriptRows::new(transcript.blocks(), shape, READING)
+            .rows()
+            .iter()
+            .map(|row| row.kind())
+            .collect()
+    }
+
+    /// While the turn runs, its working line carries the running call: its
+    /// row appears once it finishes, and an agent keeps its own.
+    #[test]
+    fn a_running_call_waits_for_its_end_while_the_working_line_carries_it() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        bash(&mut transcript, "run");
+        let working = RowShape {
+            working: Some(1),
+            ..shape()
+        };
+        assert_eq!(
+            kinds(&transcript, &working),
+            [RowKind::Prompt, RowKind::Working]
+        );
+        // With no working line (a Decision at the tail), the row shows.
+        assert_eq!(
+            kinds(&transcript, &shape()),
+            [RowKind::Prompt, RowKind::Activity]
+        );
+        settle(&mut transcript, "run", false);
+        assert_eq!(
+            kinds(&transcript, &working),
+            [RowKind::Prompt, RowKind::Activity, RowKind::Working]
+        );
+        call(&mut transcript, "agent", "Agent");
+        assert_eq!(
+            kinds(&transcript, &working),
+            [
+                RowKind::Prompt,
+                RowKind::Activity,
+                RowKind::Activity,
+                RowKind::Working
+            ]
+        );
+        // Only the call the line names: one started before it shows.
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        bash(&mut transcript, "first");
+        bash(&mut transcript, "second");
+        assert_eq!(
+            carried_call(transcript.blocks(), &working).as_deref(),
+            Some("second")
+        );
+        // And once the named call streams output, its row shows it.
+        transcript.apply(Input::Event(SessionEvent::ToolOutputDelta {
+            id: "second".into(),
+            text: "compiling\n".into(),
+        }));
+        assert_eq!(carried_call(transcript.blocks(), &working), None);
+    }
+
+    /// A failed last turn says so once, in the failure strip at the tail;
+    /// an earlier failed turn keeps its stamp.
+    #[test]
+    fn a_failure_shows_once_under_its_strip() {
+        let mut transcript = Transcript::default();
+        let fail = |transcript: &mut Transcript| {
+            transcript.apply(Input::Event(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Error("API Error: 529 overloaded".into()),
+                cost_usd: None,
+            }));
+        };
+        prompt(&mut transcript, "one");
+        text(&mut transcript, "Trying.");
+        fail(&mut transcript);
+        let strip = RowShape {
+            tail: Some(1),
+            ..shape()
+        };
+        let failed = RowKind::TurnEnd { hangs: true };
+        assert!(!kinds(&transcript, &strip).contains(&failed));
+        assert!(kinds(&transcript, &shape()).contains(&failed));
+        prompt(&mut transcript, "two");
+        text(&mut transcript, "Trying again.");
+        fail(&mut transcript);
+        assert_eq!(
+            kinds(&transcript, &strip)
+                .iter()
+                .filter(|kind| **kind == failed)
+                .count(),
+            1
+        );
+    }
+
+    /// A turn sent on another day than the one before it opens under its
+    /// date; prompts with no stamp (an older log) never divide.
+    #[test]
+    fn a_new_day_opens_under_its_date() {
+        let mut transcript = Transcript::default();
+        let sent = |transcript: &mut Transcript, text: &str, stamp: &str| {
+            prompt(transcript, text);
+            transcript.apply(Input::PromptObservation {
+                sent_at: stamp.into(),
+                prompt_id: None,
+            });
+        };
+        sent(&mut transcript, "one", "2026-11-03T10:00:00+00:00");
+        sent(&mut transcript, "two", "2026-11-03T10:30:00+00:00");
+        sent(&mut transcript, "three", "2026-11-05T10:00:00+00:00");
+        sent(&mut transcript, "four", "7:18 pm");
+        assert_eq!(
+            kinds(&transcript, &shape()),
+            [
+                RowKind::Prompt,
+                RowKind::Prompt,
+                RowKind::Divider,
+                RowKind::Prompt,
+                RowKind::Prompt
+            ]
+        );
     }
 
     /// The model's thinking, an answered request's record and the

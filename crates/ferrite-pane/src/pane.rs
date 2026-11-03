@@ -45,13 +45,14 @@ pub use usage::{
     compact_count, context_meter_segments, context_segments, context_usage, ctx_meter_ink,
     plan_usage_fraction, plan_usage_ring, usage_ink,
 };
+pub(crate) use working::running_call;
 pub use working::{working_tail, WorkingFacts};
 #[cfg(test)]
 use {
     composer::{composer_fixed_height, composer_queue_height, queued_preview},
     output::{changed_words, result_highlights},
     usage::{category_ink, reset_label},
-    working::{starting_line, tokens_label, working_line_for, working_row},
+    working::{starting_line, working_line_for, working_row},
 };
 
 use ferrite_core::activity::{AgentStatus, Subject};
@@ -4548,12 +4549,6 @@ mod tests {
     use super::*;
     use ferrite_core::docview::Instruments;
     use ferrite_core::transcript::Class;
-    #[test]
-    fn progress_token_counts_stay_compact() {
-        assert_eq!(tokens_label(340), "340");
-        assert_eq!(tokens_label(8_040), "8.0k");
-        assert_eq!(tokens_label(12_400), "12k");
-    }
     /// A multi-line queued prompt reads as one line in its one-line row.
     #[test]
     fn a_queued_prompt_previews_on_one_line() {
@@ -4652,7 +4647,8 @@ mod tests {
             let line = |selector: &'static str, line: Div| {
                 div().debug_selector(move || selector.into()).child(line)
             };
-            let working = |solo| working_line_for(&self.0, false, solo, false, false, true, 0);
+            let working =
+                |solo| working_line_for(&self.0, false, solo, false, false, true, 0, None);
             div()
                 .w_full()
                 .flex()

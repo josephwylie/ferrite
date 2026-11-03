@@ -43,17 +43,17 @@ These are kept as they are:
 
 ## Lane W — the working line and transcript rows
 
-- [ ] The working line uses the tool's description, not the raw command.
-- [ ] Muted ink for the working line; the orbs stay white.
-- [ ] The token count is live for the whole turn, thinking included, with an arrow icon and rolling, eased numbers.
-- [ ] While the model is thinking, the working line says so and shows the thread's effort.
-- [ ] No duplicate running row above the working line.
-- [ ] "Running …" rows use the UI font; only code is mono.
-- [ ] The placeholder leaves a gap before the "↵".
-- [ ] Errors show once: no `failed ·` stamp over the failure strip.
-- [ ] Relative message times ("52 minutes ago"), with the exact time on hover.
-- [ ] Date dividers in long threads.
-- [ ] PageUp and PageDown scroll the transcript.
+- [x] The working line uses the tool's description, not the raw command.
+- [x] Muted ink for the working line; the orbs stay white.
+- [x] The token count is live for the whole turn, thinking included, with an arrow icon and rolling, eased numbers.
+- [x] While the model is thinking, the working line says so and shows the thread's effort.
+- [x] No duplicate running row above the working line.
+- [x] "Running …" rows use the UI font; only code is mono.
+- [x] The placeholder leaves a gap before the "↵".
+- [x] Errors show once: no `failed ·` stamp over the failure strip.
+- [x] Relative message times ("52 minutes ago"), with the exact time on hover.
+- [x] Date dividers in long threads.
+- [x] PageUp and PageDown scroll the transcript.
 
 ## Lane C — the composer and picker
 

@@ -518,6 +518,15 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
             input: serde_json::json!({ "file_path": "/workspace/pending" }),
         })
         .unwrap();
+    // A later call for the working line to carry, so the pending one
+    // above keeps its row.
+    stream[0]
+        .send(SessionEvent::ToolStarted {
+            id: "toolu_11".into(),
+            name: "Read".into(),
+            input: serde_json::json!({ "file_path": "/workspace/later" }),
+        })
+        .unwrap();
     drop(stream);
     tick(cx);
 

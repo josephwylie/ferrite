@@ -180,6 +180,12 @@ actions!(
         FocusThread9,
         RefreshPrStatus,
         OpenPrInBrowser,
+        // PageUp, PageDown, Home, End: the focused Pane's transcript, when
+        // no text needs the keys.
+        TranscriptPageUp,
+        TranscriptPageDown,
+        TranscriptTop,
+        TranscriptBottom,
     ]
 );
 
@@ -345,6 +351,9 @@ pub struct CockpitView {
     /// When free disk was last asked for, on the executor's clock: at
     /// launch, then by the sweep once a minute (`read_free_disk`).
     free_disk_asked: Option<std::time::Instant>,
+    /// The wall-clock minute the transcripts' message times (`52 minutes
+    /// ago`) were last drawn in: the sweep redraws them as it turns over.
+    message_minute: i64,
     /// One checkout-label refresh at a time, always off the UI thread.
     branch_refreshing: bool,
     /// A moment that must not be skipped (a turn ended) asked for a
@@ -1526,6 +1535,7 @@ impl CockpitView {
             frame_turn_at: None,
             free_disk: None,
             free_disk_asked: None,
+            message_minute: ferrite_core::clock::now().timestamp().div_euclid(60),
             branch_refreshing: false,
             branch_refresh_queued: false,
             selection: TranscriptText::default(),
@@ -1901,6 +1911,7 @@ impl CockpitView {
                 focused,
                 reduce_motion: cx.reduce_motion(),
                 reasoning_visible,
+                effort: self.thread_effort(&open),
             })
         });
         let working = working.flatten();
@@ -2036,6 +2047,17 @@ impl CockpitView {
             if let Some(transcript) = self.panes[index].release_transcript(&subject) {
                 self.transcript_entities.remove(&transcript.entity_id());
             }
+        }
+    }
+
+    /// PageUp, PageDown, Home or End on the focused Pane's transcript.
+    fn page_transcript(&mut self, page: ferrite_pane::transcript::Page, cx: &mut Context<Self>) {
+        if let Some(transcript) = self
+            .panes
+            .get(self.focused())
+            .and_then(|pane| pane.transcript())
+        {
+            transcript.update(cx, |transcript, cx| transcript.page(page, cx));
         }
     }
 
@@ -2355,6 +2377,15 @@ impl CockpitView {
             {
                 self.free_disk_asked = Some(now);
                 self.read_free_disk(cx);
+            }
+            // Message times turn over with the minute, on this one timer:
+            // each transcript redraws then, and no row arms a wake.
+            let minute = ferrite_core::clock::now().timestamp().div_euclid(60);
+            if minute != self.message_minute {
+                self.message_minute = minute;
+                for transcript in self.panes.iter().filter_map(|pane| pane.transcript()) {
+                    transcript.update(cx, |_, cx| cx.notify());
+                }
             }
         } else if self.cockpit.wants_worktree_listing() {
             // A Main just finished making a worktree: ask git now, not in
@@ -10933,6 +10964,18 @@ impl CockpitView {
                         view.answer_chorded(Answer::Always, window, cx)
                     }))
                     .on_action(cx.listener(Self::close_thread))
+                    .on_action(cx.listener(|view, _: &TranscriptPageUp, _, cx| {
+                        view.page_transcript(ferrite_pane::transcript::Page::Up, cx)
+                    }))
+                    .on_action(cx.listener(|view, _: &TranscriptPageDown, _, cx| {
+                        view.page_transcript(ferrite_pane::transcript::Page::Down, cx)
+                    }))
+                    .on_action(cx.listener(|view, _: &TranscriptTop, _, cx| {
+                        view.page_transcript(ferrite_pane::transcript::Page::Top, cx)
+                    }))
+                    .on_action(cx.listener(|view, _: &TranscriptBottom, _, cx| {
+                        view.page_transcript(ferrite_pane::transcript::Page::Bottom, cx)
+                    }))
                     .on_action(cx.listener(Self::reopen_thread))
                     .on_action(cx.listener(Self::paste_into_composer))
                     .on_action(cx.listener(|view, _: &PickOption1, window, cx| {
@@ -12754,6 +12797,26 @@ impl CockpitView {
     /// current choice stays visible and availability follows the Thread's
     /// busy state, said in the tooltip. It reads the cached answers, so it
     /// works with no Session.
+    /// The effort in force on an open Thread (`medium`): its own choice,
+    /// else the operator's default, else its model's (`effort_in_force`);
+    /// `None` for a model that takes none.
+    fn thread_effort(&self, open: &ThreadView) -> Option<SharedString> {
+        let provider = open.provider();
+        let ladder =
+            ferrite_core::providers::models::efforts_for(provider, open.model(), open.models());
+        (!ladder.is_empty())
+            .then(|| {
+                effort_in_force(
+                    open.effort(),
+                    self.prefs.settings.effort_for(provider),
+                    provider,
+                    open.model(),
+                    open.models(),
+                )
+            })
+            .flatten()
+    }
+
     fn model_chip(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes[index].thread()?;
         let open = self.cockpit.thread(thread)?;
@@ -12767,19 +12830,7 @@ impl CockpitView {
             open.model().or(open.transcript().model()),
             open.models(),
         ));
-        let ladder =
-            ferrite_core::providers::models::efforts_for(provider, open.model(), open.models());
-        let effort = (!ladder.is_empty())
-            .then(|| {
-                effort_in_force(
-                    open.effort(),
-                    self.prefs.settings.effort_for(provider),
-                    provider,
-                    open.model(),
-                    open.models(),
-                )
-            })
-            .flatten();
+        let effort = self.thread_effort(&open);
         let key = thread.get() as usize;
         let face = pane::model_effort_chip(
             label,

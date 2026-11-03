@@ -1310,6 +1310,14 @@ fn a_live_appended_row_fades_in_and_then_rests(cx: &mut TestAppContext) {
             input: serde_json::json!({"command": "cargo test"}),
         })
         .unwrap();
+    // Its first output gives it a row of its own (until then the working
+    // line carries it).
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolOutputDelta {
+            id: "arrival-run".into(),
+            text: "Compiling\n".into(),
+        })
+        .unwrap();
     tick(cx);
     assert_eq!(arrivals(cx), 1, "the appended row is stamped");
     assert!(display_frames(cx) > 0, "and fades in");

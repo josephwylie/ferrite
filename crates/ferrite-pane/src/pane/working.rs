@@ -15,6 +15,9 @@ pub struct WorkingFacts<'a> {
     pub reduce_motion: bool,
     /// The live reasoning caption's own row is in view.
     pub reasoning_visible: bool,
+    /// The Thread's effort in force (`medium`), for the line's `thinking
+    /// with medium effort` while the model thinks.
+    pub effort: Option<SharedString>,
 }
 
 /// The working row's shape: the live line, or the starting shape.
@@ -43,6 +46,7 @@ pub fn working_tail(facts: WorkingFacts) -> Option<crate::transcript::Transcript
             facts.reasoning_visible,
             facts.reduce_motion,
             facts.thread.get(),
+            facts.effort.as_deref(),
         ))
     } else if facts.starting {
         Working::Starting {
@@ -185,14 +189,17 @@ pub(super) fn working_row(
         received_reasoning_is_visible,
         reduce_motion,
         0,
+        None,
     )
 }
 
-/// The working line (SPEC §5.4), the Claude app's one line: the working
-/// mark, then what the turn is doing, read off its
-/// execution state (`caption_of`), then `1m04s · ↑ 4.1k tokens` in
-/// `INK_SUBTLE`. Every line's spinner turns on the one shared clock; only the
-/// focused Pane's caption shimmers. The seconds are whole
+/// The working line (SPEC §5.4), the Claude app's one line, all in
+/// `INK_SUBTLE` but its white orbs: the working mark, then what the turn
+/// is doing, read off its execution state (`caption_of`), then `1m04s ·
+/// ↓ 639 tokens` (the arrow an icon, the count live and rolling:
+/// `odometer::rolling_count`) and, while the model thinks, `· thinking with
+/// medium effort`. Every line's spinner turns on the one shared clock;
+/// only the focused Pane's caption shimmers. The seconds are whole
 /// (`progress::live_seconds`), tabular, so the text changes once a second.
 /// The caption is what truncates; the facts keep their room. L2
 /// (`compact`) draws the same row without the token count.
@@ -205,6 +212,7 @@ pub(super) fn working_line_for(
     received_reasoning_is_visible: bool,
     reduce_motion: bool,
     thread: u64,
+    effort: Option<&str>,
 ) -> Div {
     WorkingLine::of(
         transcript,
@@ -214,6 +222,7 @@ pub(super) fn working_line_for(
         received_reasoning_is_visible,
         reduce_motion,
         thread,
+        effort,
     )
     .render()
 }
@@ -233,8 +242,11 @@ pub(crate) struct WorkingLine {
     /// The seconds as words, kept only under reduced motion, where no loop
     /// counts them and the line is drawn again as they turn.
     seconds: Option<String>,
-    /// The turn's output tokens (`↑ 4.1k tokens`), when it has any.
-    tokens: Option<String>,
+    /// The turn's output tokens as counted live
+    /// (`Transcript::turn_output_live`), when it has any.
+    tokens: Option<u64>,
+    /// While the model thinks: `thinking with medium effort`.
+    thinking: Option<String>,
     /// The caption's selector and its words.
     caption: Option<(String, String)>,
     /// The Thread whose line this is: the key its words roll under.
@@ -262,6 +274,7 @@ impl WorkingLine {
         received_reasoning_is_visible: bool,
         reduce_motion: bool,
         thread: u64,
+        effort: Option<&str>,
     ) -> Self {
         let live = focused && !reduce_motion;
         let spinning = !reduce_motion;
@@ -270,13 +283,14 @@ impl WorkingLine {
             .turn_elapsed()
             .filter(|_| reduce_motion)
             .map(ferrite_core::progress::live_seconds);
-        // While the model thinks, its estimate runs ahead of the usage.
-        let tokens = transcript
-            .turn_output_tokens()
-            .max(transcript.thinking_estimate());
-        let tokens =
-            (tokens > 0 && !compact).then(|| format!("\u{2191} {} tokens", tokens_label(tokens)));
+        let tokens = transcript.turn_output_live();
+        let tokens = (tokens > 0 && !compact).then_some(tokens);
         let progress = transcript.progress();
+        let thinking =
+            (progress.phase == Some(Phase::Thinking) && !compact).then(|| match effort {
+                Some(effort) => format!("thinking with {effort} effort"),
+                None => "thinking".to_owned(),
+            });
         let plan = if progress.has_plan {
             progress
                 .plan
@@ -306,6 +320,7 @@ impl WorkingLine {
             started,
             seconds,
             tokens,
+            thinking,
             caption,
             plan,
             thread,
@@ -320,6 +335,7 @@ impl WorkingLine {
             started,
             seconds: _,
             tokens,
+            thinking,
             caption,
             plan,
             thread,
@@ -336,20 +352,17 @@ impl WorkingLine {
             .h(px(grid.line))
             .font_family(theme::FONT_UI)
             .text_size(px(grid.activity().size))
-            .line_height(px(grid.line));
+            .line_height(px(grid.line))
+            .text_color(rgb(INK_SUBTLE));
         if let Some((selector, caption)) = caption {
-            // The caption reads in the body's ink. New words roll in over
-            // the old (Claude's `cds-morph`, `motion::morph`).
+            // The caption reads in the muted ink, as Claude's does. New
+            // words roll in over the old (Claude's `cds-morph`,
+            // `motion::morph`).
             let face = move |caption: SharedString| {
                 if live {
-                    components::shimmer(caption, INK_STRONG)
+                    components::shimmer(caption, INK_SUBTLE)
                 } else {
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(rgb(INK_STRONG))
-                        .child(caption)
-                        .into_any_element()
+                    div().min_w_0().truncate().child(caption).into_any_element()
                 }
             };
             let text = ferrite_ui::motion::morph(
@@ -358,13 +371,34 @@ impl WorkingLine {
                 face,
             );
             // The facts after the caption: the turn's clock, counting on its
-            // own, then its tokens.
-            let rest = tokens.map(|tokens| {
-                let text = SharedString::from(format!(" \u{b7} {tokens}"));
+            // own, then its tokens, rolling as they climb, then whether it
+            // thinks.
+            let seam = |words: &str| {
+                let text = SharedString::from(format!(" \u{b7} {words}"));
                 let highlights = separators(&text);
                 StyledText::new(text).with_highlights(highlights)
+            };
+            let count = tokens.map(|tokens| {
+                div()
+                    .debug_selector(|| "progress-tokens".into())
+                    .flex()
+                    .items_center()
+                    .child(seam(""))
+                    .child(icon(icons::ARROW_DOWN, theme::WORKING_ARROW, INK_SUBTLE))
+                    .child(div().ml(px(theme::SPACE_0_5)).child(
+                        ferrite_ui::odometer::rolling_count(
+                            format!("working-tokens-{thread}"),
+                            tokens,
+                        ),
+                    ))
+                    .child(" tokens")
             });
-            let has_facts = started.is_some() || rest.is_some();
+            let thinking = thinking.map(|thinking| {
+                div()
+                    .debug_selector(|| "progress-thinking".into())
+                    .child(seam(&thinking))
+            });
+            let has_facts = started.is_some() || count.is_some() || thinking.is_some();
             row = row
                 .debug_selector(move || selector.clone())
                 .child(
@@ -391,10 +425,11 @@ impl WorkingLine {
                             .flex()
                             .flex_shrink_0()
                             .whitespace_nowrap()
-                            .text_color(rgb(INK_SUBTLE))
+                            .items_center()
                             .child("\u{a0}")
                             .children(started.map(live_clock))
-                            .children(rest),
+                            .children(count)
+                            .children(thinking),
                     ))
                 });
         }
@@ -418,9 +453,10 @@ impl WorkingLine {
 ///
 /// - a phase that is not the model's own work — retrying, compacting,
 ///   waiting — by name (`Retrying · Server busy`);
-/// - else the call running now, in its call line's words (`Running cargo
-///   test`): the step itself, as the Claude app's line reads, so the call
-///   row and the line never say different things;
+/// - else the call running now (its row waits until it finishes: the line
+///   carries it), in the provider's description of it where it wrote one
+///   (`Waiting 15 seconds then printing done`), else a verb and a short
+///   target (`Running cargo test`, `text::working_words`);
 /// - else, while the model thinks or writes, the provider's own heading
 ///   (`Checking build progress`), unless its reasoning row is in view
 ///   (`heading_shown`);
@@ -438,12 +474,8 @@ fn caption_of(
     let generic = Phase::Working.label();
     let working = progress.phase.is_none_or(|phase| phase.label() == generic);
     if working {
-        if let Some(call) = running_call(transcript) {
-            let line = text::call_line(call);
-            return Some((
-                "progress-call".into(),
-                format!("{}{}", line.verb, line.argument),
-            ));
+        if let Some(call) = running_call(transcript.blocks()) {
+            return Some(("progress-call".into(), text::working_words(call)));
         }
     }
     let caption = progress.caption()?;
@@ -466,9 +498,10 @@ fn caption_of(
 /// The call the turn runs now: its newest running call, looked for in the
 /// current turn only (back to its prompt). Not an agent: its own row in
 /// the agents' card runs with it, and the line never says a row twice.
-fn running_call(transcript: &Transcript) -> Option<&ToolBlock> {
-    transcript
-        .blocks()
+/// The call the working line names: the turn's latest still running,
+/// its agents aside (they have their own rows).
+pub(crate) fn running_call(blocks: &[Block]) -> Option<&ToolBlock> {
+    blocks
         .iter()
         .rev()
         .take_while(|block| !matches!(block.body, Body::Prompt(_)))
@@ -539,12 +572,6 @@ fn task_list(plan: &[(String, TaskState)], grid: Grid) -> Div {
         }))
 }
 
-/// `8.0k`, `12k`, `340` — the token count the way Claude Code prints it
-/// (`progress::token_label`, which the turn's stamp reads too).
-pub(super) fn tokens_label(tokens: u64) -> String {
-    ferrite_core::progress::token_label(tokens)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,7 +591,7 @@ mod tests {
             summary_index: 0,
         }));
         let line = |transcript: &Transcript, heading_shown| {
-            WorkingLine::of(transcript, false, true, false, heading_shown, true, 7)
+            WorkingLine::of(transcript, false, true, false, heading_shown, true, 7, None)
                 .caption
                 .map(|(selector, _)| selector)
         };
@@ -585,25 +612,45 @@ mod tests {
         assert_eq!(line(&transcript, true).as_deref(), Some("progress-call"));
     }
 
-    /// While the model thinks, the count rises with the provider's
-    /// estimate, stands on what the turn reported before the next message
-    /// thinks, and gives way to the turn's own usage once it reports.
+    /// The count climbs with the thinking estimate, snaps up to the usage,
+    /// counts on from there as the next message thinks, and never falls
+    /// back when the turn's own (smaller) figure lands; while the model
+    /// thinks, the line says so, with the Thread's effort.
     #[test]
-    fn the_token_count_rises_while_the_model_thinks() {
+    fn the_token_count_climbs_and_says_the_model_thinks() {
         let (lexer, _) = Lexer::new();
         let mut transcript = Transcript::new(Arc::new(lexer));
         transcript.apply(Input::Prompt("Plan it".into()));
-        let tokens = |transcript: &Transcript| {
-            WorkingLine::of(transcript, false, true, true, false, false, 7).tokens
+        let line = |transcript: &Transcript| {
+            WorkingLine::of(
+                transcript,
+                false,
+                true,
+                true,
+                false,
+                false,
+                7,
+                Some("medium"),
+            )
         };
-        assert_eq!(tokens(&transcript), None);
+        assert_eq!(line(&transcript).tokens, None);
         let think = |transcript: &mut Transcript, estimated| {
             transcript.apply(Input::Event(SessionEvent::ThinkingTokens { estimated }));
+            transcript.apply(Input::Event(SessionEvent::Progress {
+                event: ferrite_core::progress::ProgressEvent::Phase {
+                    phase: Phase::Thinking,
+                    detail: String::new(),
+                },
+            }));
         };
         think(&mut transcript, 5);
-        assert_eq!(tokens(&transcript).as_deref(), Some("\u{2191} 5 tokens"));
+        assert_eq!(line(&transcript).tokens, Some(5));
+        assert_eq!(
+            line(&transcript).thinking.as_deref(),
+            Some("thinking with medium effort")
+        );
         think(&mut transcript, 1400);
-        assert_eq!(tokens(&transcript).as_deref(), Some("\u{2191} 1.4k tokens"));
+        assert_eq!(line(&transcript).tokens, Some(1400));
         transcript.apply(Input::Event(SessionEvent::TokenUsage {
             total_tokens: 2000,
             input_tokens: 0,
@@ -612,10 +659,10 @@ mod tests {
             reasoning_output_tokens: 0,
             context_window: None,
         }));
-        assert_eq!(tokens(&transcript).as_deref(), Some("\u{2191} 1.5k tokens"));
+        assert_eq!(line(&transcript).tokens, Some(1500));
         // The next message thinks on top of the first's report.
         think(&mut transcript, 600);
-        assert_eq!(tokens(&transcript).as_deref(), Some("\u{2191} 2.1k tokens"));
+        assert_eq!(line(&transcript).tokens, Some(2100));
         transcript.apply(Input::Event(SessionEvent::UsageDetails {
             details: ferrite_core::UsageDetails {
                 scope: ferrite_core::UsageScope::Turn,
@@ -625,6 +672,31 @@ mod tests {
                 reasoning_output_tokens: 0,
             },
         }));
-        assert_eq!(tokens(&transcript).as_deref(), Some("\u{2191} 1.8k tokens"));
+        assert_eq!(line(&transcript).tokens, Some(2100));
+        // Writing, the model no longer thinks.
+        transcript.apply(Input::Event(SessionEvent::TextDelta {
+            text: "Done.".into(),
+        }));
+        assert_eq!(line(&transcript).thinking, None);
+    }
+
+    /// While a call runs the line carries it in its description.
+    #[test]
+    fn the_line_carries_the_running_call_in_its_own_words() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Prompt("Wait".into()));
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: "sleep".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({"command": "sleep 15 && echo done", "description": "Waiting 15 seconds then printing done"}),
+        }));
+        let line = WorkingLine::of(&transcript, false, true, false, false, true, 7, None);
+        assert_eq!(
+            line.caption,
+            Some((
+                "progress-call".to_owned(),
+                "Waiting 15 seconds then printing done".to_owned()
+            ))
+        );
     }
 }

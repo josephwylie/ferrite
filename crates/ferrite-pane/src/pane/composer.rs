@@ -493,7 +493,8 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         .child(view.composer.clone());
     if empty {
         let ghost = placeholder(decision.is_some(), draft, transcript, suggestion);
-        line = line.child(ghost_row(ghost, 0.));
+        // Clear of the caret's bar, so it never touches `↵ to send`.
+        line = line.child(ghost_row(ghost, theme::PLACEHOLDER_GAP));
     }
     // One row, as Claude's: the `+`, the line that grows, the send circle,
     // the buttons standing at the row's foot as the line grows over them.
@@ -883,7 +884,7 @@ pub fn flat_facts_text(files: usize, queued: usize) -> String {
 }
 
 /// The placeholder drawn on a clipped row one line high, `left` in (Solo's
-/// box: at the text's start; a board's band: two cells, after the caret's
+/// box: `PLACEHOLDER_GAP` past the caret; a board's band: two cells, after the caret's
 /// cell and a space). A prediction lets its own words
 /// truncate before the accept hint, which never goes.
 pub(super) fn ghost_row(ghost: Ghost, left: f32) -> Div {

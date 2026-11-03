@@ -62,6 +62,15 @@ impl std::fmt::Debug for TranscriptTail {
     }
 }
 
+/// A keyboard step through the transcript (`TranscriptView::page`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Page {
+    Up,
+    Down,
+    Top,
+    Bottom,
+}
+
 /// Where a scene (or a command) asks a transcript to scroll.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
@@ -207,6 +216,7 @@ impl TranscriptInput {
             tail: self.tail.as_ref().map(|tail| tail.key),
             pending_call: self.pending_call.clone(),
             thinking: self.thinking,
+            carried: None,
         }
     }
 }
@@ -814,9 +824,23 @@ impl TranscriptView {
         cx.notify();
     }
 
+    /// PageUp and PageDown (a page, a line of the last kept in view), Home
+    /// and End (the top, the live tail).
+    pub fn page(&mut self, page: Page, cx: &mut Context<Self>) {
+        match page {
+            Page::Up | Page::Down => {
+                self.runway.set(Runway::default());
+                self.scroll
+                    .scroll_page(page == Page::Down, px(self.grid().line));
+                cx.notify();
+            }
+            Page::Top => self.scroll_to(ScrollTarget::Top, cx),
+            Page::Bottom => self.scroll_to_bottom(cx),
+        }
+    }
+
     /// Scroll to `target` (a scene's Solo views): the top,
     /// the live tail, or a turn's band with its output scrolled under it.
-    #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
     pub fn scroll_to(&mut self, target: ScrollTarget, cx: &mut Context<Self>) {
         match target {
             ScrollTarget::Top => {
@@ -926,7 +950,10 @@ impl TranscriptView {
     }
 
     fn collect_row_text(&self, row: &TranscriptRow, selection: &TextRuns) {
-        if matches!(row.kind(), RowKind::Tail | RowKind::Working) {
+        if matches!(
+            row.kind(),
+            RowKind::Tail | RowKind::Working | RowKind::Divider
+        ) {
             return;
         }
         if let Some(source) = row.source() {
@@ -1016,6 +1043,9 @@ impl TranscriptView {
             };
         }
         let blocks = row.blocks();
+        if row.kind() == RowKind::Divider {
+            return date_divider(&blocks[0]).into_any_element();
+        }
         if let Some(source) = row.source() {
             let first = blocks
                 .first()
@@ -1037,6 +1067,12 @@ impl TranscriptView {
             let landing = self.answer_landing(cx).filter(|_| newest);
             let id = SharedString::from(format!("answer-{}-{first:?}", self.input.namespace));
             let shown = self.actions_shown(&id);
+            let time = blocks
+                .iter()
+                .find_map(|block| self.answer_times.get(&block.id))
+                .map(|at| {
+                    message_time(SharedString::from(format!("{id}-time")), "answer-time", at)
+                });
             let actions = (!narration && !streaming).then(|| {
                 message_actions(shown)
                     .debug_selector(|| "answer-actions".into())
@@ -1046,12 +1082,7 @@ impl TranscriptView {
                         -(theme::MESSAGE_ACTION - theme::MESSAGE_ACTION_GLYPH) / 2.
                     ))
                     .child(self.copy_action(row.id(), source.to_owned()))
-                    .children(
-                        blocks
-                            .iter()
-                            .find_map(|block| self.answer_times.get(&block.id))
-                            .map(|at| message_time("answer-time", at.clone())),
-                    )
+                    .children(time)
             });
             return div()
                 .id(id.clone())
@@ -1112,13 +1143,15 @@ impl TranscriptView {
                 .zip(self.input.rewind.as_ref())
                 .zip(view.as_ref());
             let id = SharedString::from(format!("prompt-{}-{:?}", self.input.namespace, block.id));
-            let actions = message_actions(self.actions_shown(&id))
-                .children(
-                    block
-                        .sent_at
-                        .clone()
-                        .map(|at| message_time("prompt-sent-at", at)),
+            let time = block.sent_at.as_deref().map(|at| {
+                message_time(
+                    SharedString::from(format!("{id}-time")),
+                    "prompt-sent-at",
+                    at,
                 )
+            });
+            let actions = message_actions(self.actions_shown(&id))
+                .children(time)
                 .children(cuts.into_iter().flat_map(|((_, allowed), view)| {
                     [PromptAction::Edit, PromptAction::Rewind, PromptAction::Fork].map(|action| {
                         self.prompt_action(row.id(), block.id, action, allowed, view.clone())
@@ -1753,16 +1786,70 @@ fn actions_listener(message: &SharedString) -> impl Fn(&bool, &mut Window, &mut 
     )
 }
 
-/// A message's time among its actions (`7:31 pm`, as core stamps it): meta
-/// type in `INK_SUBTLE`.
-fn message_time(selector: &'static str, at: String) -> gpui::Div {
-    div()
+/// A message's time among its actions, as Claude's reads (`52 minutes ago`,
+/// `yesterday`: `clock::relative_label`), its exact time in a tooltip;
+/// meta type in `INK_SUBTLE`. Read as the row draws; the transcript is
+/// drawn again as each minute turns, on the pulse clock's one timer, so it
+/// never goes stale and costs nothing in between. A log from before
+/// stamps were kept shows the time it printed (`7:31 pm`).
+fn message_time(
+    id: SharedString,
+    selector: &'static str,
+    stamp: &str,
+) -> gpui::Stateful<gpui::Div> {
+    let time = div()
+        .id(id)
         .debug_selector(move || selector.into())
         .px(px(theme::SPACE_1))
         .text_size(px(theme::FS_META))
         .line_height(px(theme::LH_META))
+        .text_color(gpui::rgb(theme::INK_SUBTLE));
+    let Some(at) = ferrite_core::clock::parse_local(stamp) else {
+        // A log from before stamps were kept: the time it printed.
+        return time.child(SharedString::from(stamp.to_owned()));
+    };
+    // The Cockpit's sweep redraws the transcript as the minute turns over
+    // (`CockpitView::message_minute`), the only time the label can change.
+    let now = ferrite_core::clock::now();
+    time.child(SharedString::from(ferrite_core::clock::relative_label(
+        at, now,
+    )))
+    .tooltip(ferrite_ui::menu::tooltip(ferrite_core::clock::exact_label(
+        at,
+    )))
+}
+
+/// A long thread's date divider (`RowKind::Divider`) over the first prompt
+/// of a new day: the day, centred and quiet in `INK_SUBTLE` at the meta
+/// size, between `LINE` hairlines.
+fn date_divider(prompt: &Block) -> gpui::Div {
+    let day = prompt
+        .sent_at
+        .as_deref()
+        .and_then(ferrite_core::clock::parse_local)
+        .map(|at| ferrite_core::clock::day_heading(at, ferrite_core::clock::now()))
+        .unwrap_or_default();
+    let rule = || {
+        div()
+            .flex_1()
+            .h(px(theme::HAIRLINE_W))
+            .bg(gpui::rgb(theme::LINE))
+    };
+    div()
+        .debug_selector(|| "date-divider".into())
+        .flex()
+        .items_center()
+        .gap(px(theme::DATE_DIVIDER_GAP))
+        .w_full()
+        .min_w_0()
+        .h(px(theme::LH_META))
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_META))
+        .line_height(px(theme::LH_META))
         .text_color(gpui::rgb(theme::INK_SUBTLE))
-        .child(SharedString::from(at))
+        .child(rule())
+        .child(div().flex_shrink_0().child(SharedString::from(day)))
+        .child(rule())
 }
 
 /// The top fade (`EDGE_FADE`): the card's fill fading to nothing, over

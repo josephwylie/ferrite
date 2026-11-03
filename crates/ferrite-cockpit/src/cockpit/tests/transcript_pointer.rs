@@ -655,3 +655,48 @@ fn a_selections_reply_goes_with_its_selection_and_on_a_scroll(cx: &mut TestAppCo
     assert!(!offered(&view, cx), "a scroll dismisses it");
     assert!(cx.debug_bounds("selection-reply").is_none());
 }
+
+/// PageUp and PageDown step the transcript a page from an empty Composer
+/// line; Home and End reach its top and its live tail.
+#[gpui::test]
+fn page_keys_scroll_the_transcript_from_an_empty_line(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("page-keys", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: (0..80)
+                .map(|line| format!("history line {line:03}\n\n"))
+                .collect(),
+        })
+        .unwrap();
+    tick(cx);
+    let scroll = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            let transcript = view.panes[0].transcript().unwrap().read(cx);
+            (
+                transcript.scroll().offset().y,
+                transcript.scroll().is_following_tail(),
+            )
+        })
+    };
+    let (tail, following) = scroll(cx);
+    assert!(
+        following && tail < px(0.),
+        "at the tail of a long transcript"
+    );
+    cx.simulate_keystrokes("pageup");
+    cx.run_until_parked();
+    let (up, following) = scroll(cx);
+    assert!(up > tail && !following, "a page up: {tail:?} → {up:?}");
+    cx.simulate_keystrokes("pagedown");
+    cx.run_until_parked();
+    assert_eq!(scroll(cx).0, tail, "and a page back down");
+    cx.simulate_keystrokes("home");
+    cx.run_until_parked();
+    assert_eq!(scroll(cx).0, px(0.));
+    cx.simulate_keystrokes("end");
+    cx.run_until_parked();
+    assert!(scroll(cx).1, "End follows the tail again");
+}

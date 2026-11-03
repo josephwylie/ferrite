@@ -33,7 +33,8 @@ pub struct Block {
     /// Original identity of adjacent Markdown sections. Carried by every
     /// section so history eviction cannot remount a streaming document.
     pub markdown_run: Option<BlockId>,
-    /// When the operator sent a prompt, as its band prints it (`7:31 pm`):
+    /// When the operator sent a prompt, a stamp (`clock::now_stamp`; a log
+    /// from before stamps were kept holds the time it printed, `7:31 pm`):
     /// stamped by the `Input::PromptObservation` that follows the prompt,
     /// live and on replay alike. `None` for every other Block and for a
     /// prompt from a log written before the time was kept.
@@ -594,13 +595,61 @@ impl Highlighter for Unhighlighted {
     fn request(&self, _request: HighlightRequest) {}
 }
 
-/// The provider's thinking estimate for the running turn
-/// (`SessionEvent::ThinkingTokens`): the estimate of the message the model
-/// thinks in, on the output the turn had reported when that message began.
+/// The running turn's output as the working line counts it while it
+/// streams, the way Claude Code's spinner does: about a token for every
+/// `CHARS_PER_TOKEN` characters streamed (answer text, tool input and
+/// thinking), the provider's thinking estimate (`SessionEvent::
+/// ThinkingTokens`) standing in for thinking it does not stream, snapped
+/// up to the provider's usage whenever that reports more. It never goes
+/// backwards within a turn. Only a count for the line: never usage or cost.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct ThinkingEstimate {
-    base: u64,
-    tokens: u64,
+pub(crate) struct LiveOutput {
+    /// Characters of answer text and tool input streamed this turn.
+    chars: u64,
+    /// Characters of thinking streamed this turn.
+    thinking_chars: u64,
+    /// The provider's thinking estimates of the turn's earlier messages.
+    thought_before: u64,
+    /// Its estimate of the message the model thinks in now.
+    thinking: u64,
+    /// The last usage snapped to, and the estimate when it was.
+    snap: u64,
+    snapped_at: u64,
+}
+
+impl LiveOutput {
+    /// Claude Code's own rule of thumb for streamed text.
+    const CHARS_PER_TOKEN: u64 = 4;
+
+    /// What the streamed characters and the thinking estimate come to.
+    fn estimate(&self) -> u64 {
+        let thought =
+            (self.thinking_chars / Self::CHARS_PER_TOKEN).max(self.thought_before + self.thinking);
+        self.chars / Self::CHARS_PER_TOKEN + thought
+    }
+
+    /// The count now: the last usage snapped to, and what streamed since.
+    fn tokens(&self) -> u64 {
+        self.snap + self.estimate().saturating_sub(self.snapped_at)
+    }
+
+    /// The provider's estimate of the message it thinks in: a smaller one
+    /// is the next message's, the last one's then counted as thought.
+    fn think(&mut self, estimated: u64) {
+        if estimated < self.thinking {
+            self.thought_before += self.thinking;
+        }
+        self.thinking = estimated;
+    }
+
+    /// The provider reported the turn's output: the count snaps up to it,
+    /// and never down.
+    fn report(&mut self, reported: u64) {
+        if reported > self.tokens() {
+            self.snap = reported;
+            self.snapped_at = self.estimate();
+        }
+    }
 }
 
 /// What a Transcript folds: provider events, and answers to its own requests.
@@ -744,9 +793,8 @@ pub struct Transcript {
     /// total; the smaller-report fallback supports older stored events.
     turn_output_tokens: u64,
     last_report: u64,
-    /// The provider's estimate of the message the model thinks in, for the
-    /// working line while no usage has reported it (`thinking_estimate`).
-    thinking: ThinkingEstimate,
+    /// The running turn's output as counted live (`turn_output_live`).
+    live: LiveOutput,
     /// Input tokens the running (or last) turn consumed, summed the same way
     /// as `turn_output_tokens` (a running total grows; a smaller report is a
     /// new message's own count).
@@ -1006,7 +1054,7 @@ pub(crate) struct Runtime {
     turn_started: Option<std::time::Instant>,
     turn_output_tokens: u64,
     last_report: u64,
-    thinking: ThinkingEstimate,
+    live: LiveOutput,
     turn_input_tokens: u64,
     last_input_report: u64,
     settled_at: std::collections::BTreeMap<String, std::time::SystemTime>,
@@ -1063,7 +1111,7 @@ impl Transcript {
             turn_started: None,
             turn_output_tokens: 0,
             last_report: 0,
-            thinking: ThinkingEstimate::default(),
+            live: LiveOutput::default(),
             turn_input_tokens: 0,
             last_input_report: 0,
             settled_at: Default::default(),
@@ -1136,7 +1184,7 @@ impl Transcript {
             turn_started: self.turn_started,
             turn_output_tokens: self.turn_output_tokens,
             last_report: self.last_report,
-            thinking: self.thinking,
+            live: self.live,
             turn_input_tokens: self.turn_input_tokens,
             last_input_report: self.last_input_report,
             settled_at: self.settled_at.clone(),
@@ -1176,7 +1224,7 @@ impl Transcript {
         self.turn_started = runtime.turn_started;
         self.turn_output_tokens = runtime.turn_output_tokens;
         self.last_report = runtime.last_report;
-        self.thinking = runtime.thinking;
+        self.live = runtime.live;
         self.turn_input_tokens = runtime.turn_input_tokens;
         self.last_input_report = runtime.last_input_report;
         // An edit's time is a live observation the rebuilt content cannot
@@ -1267,12 +1315,11 @@ impl Transcript {
         self.turn_output_tokens
     }
 
-    /// The running turn's output as estimated while the model thinks: what
-    /// the turn reported before the message it thinks in, and the provider's
-    /// estimate of that message so far. Zero once the turn's own usage has
-    /// reported, and between turns.
-    pub fn thinking_estimate(&self) -> u64 {
-        self.thinking.base + self.thinking.tokens
+    /// The running turn's output as the working line counts it, live
+    /// ([`LiveOutput`]): from what has streamed, snapped up to the usage
+    /// reported, never going backwards. The last turn's, between turns.
+    pub fn turn_output_live(&self) -> u64 {
+        self.live.tokens()
     }
 
     /// Input tokens the running (or last) turn consumed.
@@ -1756,6 +1803,7 @@ impl Transcript {
             // into Main by accidentally replaying an attributed observation.
             Input::Event(SessionEvent::Activity(_)) => Update::default(),
             Input::Event(SessionEvent::TextDelta { text }) => {
+                self.live.chars += text.chars().count() as u64;
                 self.progress.phase(Phase::Answering);
                 self.status = Status::Streaming;
                 Update {
@@ -1764,6 +1812,7 @@ impl Transcript {
                 }
             }
             Input::Event(SessionEvent::ThinkingDelta { text }) => {
+                self.live.thinking_chars += text.chars().count() as u64;
                 self.progress.phase(Phase::Thinking);
                 self.status = Status::Streaming;
                 self.summary_index = None;
@@ -1821,6 +1870,7 @@ impl Transcript {
                     self.turn_output_tokens += output_tokens;
                 }
                 self.last_report = output_tokens;
+                self.live.report(self.turn_output_tokens);
                 // Input the same way: Claude's per-turn usage and Codex's
                 // cumulative counters both land as the turn's own total.
                 if input_tokens >= self.last_input_report {
@@ -1845,10 +1895,10 @@ impl Transcript {
                 // A turn's own report (Claude's `result`) is the turn's
                 // count, whatever the running reports summed to.
                 if details.scope == crate::UsageScope::Turn {
-                    self.thinking = ThinkingEstimate::default();
                     self.turn_input_tokens = details.input_tokens;
                     if details.output_tokens > 0 {
                         self.turn_output_tokens = details.output_tokens;
+                        self.live.report(details.output_tokens);
                     }
                 }
                 self.usage_details = Some(details);
@@ -1863,13 +1913,7 @@ impl Transcript {
                 Update::default()
             }
             Input::Event(SessionEvent::ThinkingTokens { estimated }) => {
-                // A smaller estimate is the next message's: it stands on
-                // what the turn reported by then.
-                if estimated < self.thinking.tokens || self.thinking == ThinkingEstimate::default()
-                {
-                    self.thinking.base = self.turn_output_tokens;
-                }
-                self.thinking.tokens = estimated;
+                self.live.think(estimated);
                 Update::default()
             }
             Input::Event(SessionEvent::ContextDetails { details }) => {
@@ -1933,7 +1977,7 @@ impl Transcript {
                     self.turn_started = Some(crate::clock::instant());
                     self.turn_output_tokens = 0;
                     self.last_report = 0;
-                    self.thinking = ThinkingEstimate::default();
+                    self.live = LiveOutput::default();
                     // The last input report carries over: Codex's counter
                     // is cumulative, so the turn's input is what it grows
                     // by from here.
@@ -2071,6 +2115,8 @@ impl Transcript {
                 {
                     return Update::default();
                 }
+                // The model wrote the call's input: it counts as output.
+                self.live.chars += input.to_string().chars().count() as u64;
                 self.status = Status::Streaming;
                 self.progress.phase(Phase::Working);
                 // Codex's patch item names its edit up front: its row (and
@@ -2642,6 +2688,63 @@ mod tests {
     use super::*;
 
     use crate::Decision;
+
+    /// The live count climbs with what streams, about four characters a
+    /// token (text, tool input, thinking), with the provider's thinking
+    /// estimate; a stale small report leaves it be, a bigger one snaps it
+    /// up, and nothing takes it back down until the next turn.
+    #[test]
+    fn the_live_count_climbs_with_the_stream_and_never_falls() {
+        let mut t = Transcript::default();
+        t.apply(Input::Prompt("go".into()));
+        let usage = |output_tokens| {
+            Input::Event(SessionEvent::TokenUsage {
+                total_tokens: 0,
+                input_tokens: 0,
+                cached_input_tokens: 0,
+                output_tokens,
+                reasoning_output_tokens: 0,
+                context_window: None,
+            })
+        };
+        let turn = |output_tokens| {
+            Input::Event(SessionEvent::UsageDetails {
+                details: crate::UsageDetails {
+                    scope: crate::UsageScope::Turn,
+                    input_tokens: 0,
+                    cached_input_tokens: 0,
+                    output_tokens,
+                    reasoning_output_tokens: 0,
+                },
+            })
+        };
+        t.apply(Input::Event(SessionEvent::TextDelta {
+            text: "a".repeat(400),
+        }));
+        assert_eq!(t.turn_output_live(), 100);
+        t.apply(Input::Event(SessionEvent::ThinkingTokens { estimated: 50 }));
+        assert_eq!(t.turn_output_live(), 150);
+        // `{"command":"…"}`: 404 characters of input.
+        t.apply(Input::Event(SessionEvent::ToolStarted {
+            id: "c".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "x".repeat(390) }),
+        }));
+        assert_eq!(t.turn_output_live(), 251);
+        // Mid-stream usage is the message's start: it says less.
+        t.apply(usage(5));
+        assert_eq!(t.turn_output_live(), 251);
+        t.apply(turn(900));
+        assert_eq!(t.turn_output_live(), 900);
+        t.apply(Input::Event(SessionEvent::TextDelta {
+            text: "b".repeat(40),
+        }));
+        assert_eq!(t.turn_output_live(), 910);
+        t.apply(turn(600));
+        assert_eq!(t.turn_output_live(), 910);
+        // The stamp keeps the provider's own figure.
+        assert_eq!(t.turn_output_tokens(), 600);
+    }
 
     /// A command's output tail reads its latest line, however long the
     /// output, keeping the last 2 KB of a line with no end yet.

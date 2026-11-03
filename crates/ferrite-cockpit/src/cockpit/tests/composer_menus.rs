@@ -3,7 +3,7 @@
 use super::*;
 
 #[gpui::test]
-fn focused_placeholder_starts_immediately_after_the_caret(cx: &mut TestAppContext) {
+fn focused_placeholder_starts_just_clear_of_the_caret(cx: &mut TestAppContext) {
     let fake = Fake::default();
     let store = Store::open(scratch("placeholder-caret-gap")).unwrap();
     let core = Cockpit::new(store, Box::new(fake));
@@ -13,11 +13,13 @@ fn focused_placeholder_starts_immediately_after_the_caret(cx: &mut TestAppContex
 
     let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
     let placeholder = cx.debug_bounds("prompt-placeholder").unwrap();
-    // SPEC §5.5: Solo's box has no `❯` and its caret is a bar, so the
-    // placeholder starts where typed text would.
+    // SPEC §5.5: Solo's box has no `❯` and its caret is a bar; the
+    // placeholder starts a caret and a hair past where typed text would,
+    // so the blinking bar never sits on its first glyph (`↵`).
+    let gap = placeholder.left() - editor.left();
     assert!(
-        (placeholder.left() - editor.left()).abs() <= px(0.5),
-        "the placeholder starts at the text's start"
+        (gap - px(ferrite_ui::theme::PLACEHOLDER_GAP)).abs() <= px(0.5),
+        "the placeholder starts clear of the caret: {gap:?}"
     );
 }
 

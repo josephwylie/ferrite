@@ -1063,6 +1063,12 @@ pub const BODY_PAD_B: f32 = LH_UI / 2.0;
 /// mockup's `padding-bottom: 14px`), so a Decision or failure strip at the
 /// tail sits where it is drawn.
 pub const BODY_PAD_B_GROUP: f32 = 14.0;
+/// The working line's down arrow before its token count: Lucide's
+/// `arrow-down` in the line's ink, a step under its text (`pane::working`).
+pub const WORKING_ARROW: f32 = 12.0;
+/// A long thread's date divider: the date's hairlines stand this far from
+/// its words (`transcript::date_divider`).
+pub const DATE_DIVIDER_GAP: f32 = SPACE_3;
 
 /// The Pane body's bottom padding: Solo's `BODY_PAD_B`, a Group Pane's
 /// `BODY_PAD_B_GROUP`.
@@ -2091,6 +2097,9 @@ pub const SHELF_GAP: f32 = SPACE_1;
 /// The caret's bar: 2px wide (off the space scale: a caret is a hairline
 /// you can find), the row high.
 pub const CARET_W: f32 = 2.0;
+/// The placeholder stands this far in from the caret's cell, so the bar
+/// never touches its first glyph (`↵ to send`).
+pub const PLACEHOLDER_GAP: f32 = CARET_W + SPACE_1;
 /// One selection colour app-wide: the Composer paints the transcript's
 /// native selection wash under its selected runs.
 pub const COMPOSER_SELECTION: u32 = TEXT_SELECTION_WASH;
@@ -2937,6 +2946,10 @@ pub const MOTION_PROMOTE_FROM_SCALE: f32 = 0.97;
 /// from as far below, each over 180ms on `MOTION_EASE_MORPH`.
 pub const MOTION_MORPH_MS: u64 = 180;
 pub const MOTION_MORPH_SHIFT: f32 = 3.0;
+/// The working line's token count eases to each new value over
+/// `MOTION_DUR_SHEET_MS` on the quart, its changing digits rolling up as
+/// an odometer's do (`odometer::rolling_count`).
+pub const MOTION_COUNT_MS: u64 = MOTION_DUR_SHEET_MS;
 /// `fade-quick`: 150ms, opacity only.
 pub const MOTION_FADE_QUICK_MS: u64 = 150;
 /// The send circle's glyph swap (send ⇄ stop, `fade-quick`): the leaving

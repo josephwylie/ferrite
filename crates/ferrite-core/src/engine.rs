@@ -3266,7 +3266,7 @@ impl Engine {
                             );
                         } else {
                             thread.invalidate_suggestion();
-                            let sent_at = crate::clock::now_label();
+                            let sent_at = crate::clock::now_stamp();
                             let prompt_id = change.client_id.clone();
                             if let Err(error) = thread
                                 .writer
@@ -5442,7 +5442,7 @@ fn deliver(state: &mut Thread, text: String, suggestions_enabled: bool) -> io::R
     // And the Thread's first locks its provider for good (#25, #29).
     state.first_prompt_sent = true;
     // When it went out, kept beside it so replay draws the same `7:31 pm`.
-    let sent_at = crate::clock::now_label();
+    let sent_at = crate::clock::now_stamp();
     if let Err(error) = state.writer.record_prompt(&text) {
         state.report_store_error(error);
     }
@@ -5721,7 +5721,7 @@ fn completion_observation(
         subject,
         crate::store::CompletionFacts {
             elapsed_ms: elapsed.as_millis().min(u64::MAX as u128) as u64,
-            completed_at: crate::clock::now_label(),
+            completed_at: crate::clock::now_stamp(),
             input_tokens: reported.then_some(input),
             output_tokens: reported.then_some(output),
         },

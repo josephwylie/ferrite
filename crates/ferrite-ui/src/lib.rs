@@ -8,6 +8,7 @@ pub mod keymap;
 pub mod loops_overlay;
 pub mod menu;
 pub mod motion;
+pub mod odometer;
 pub mod platform_text;
 pub mod pointer;
 pub mod provider;

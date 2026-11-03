@@ -447,6 +447,10 @@ const STATES: &[(&str, &[&str])] = &[
     ("toolgroups", &["app", "narrow"]),
     ("toolgroups-open", &["app", "narrow"]),
     // ---- WP-A states (append above the end line)
+    // Claude's running turn and its answer (claude/running.png,
+    // claude/answer-done.png), a day after the turn before it.
+    ("running", &["app"]),
+    ("answer", &["app"]),
     // (end WP-A)
 
     // ---- WP-B states (append above the end line)
@@ -519,6 +523,8 @@ const STATES: &[(&str, &[&str])] = &[
 /// pair compares like for like. `panel-context` is the one pair with it open.
 const PANEL_CLOSED: &[&str] = &[
     "conversation",
+    "running",
+    "answer",
     "approval",
     "live",
     "composer",
@@ -743,6 +749,8 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         state if mockup_scenes::handles(state) => mockup_scenes::build(state),
         state if feature_scenes::handles(state) => feature_scenes::build(state),
         "conversation" => (conversation(label), none),
+        "running" => (running_turn(false), none),
+        "answer" => (running_turn(true), none),
         "toolgroups" => (tool_groups(label), none),
         "toolgroups-open" => {
             let scene = tool_groups(label);
@@ -1418,6 +1426,106 @@ fn legacy(state: &str) -> (Scene, Setup) {
         Box::new(|_, _, _| {})
     };
     (scene, setup)
+}
+
+/// Claude's running turn (`claude/running.png`) and, `done`, its answer
+/// (`claude/answer-done.png`): a three-step plan, a failed `ls`, then
+/// `sleep 15 && echo done` running 27s in, the working line saying what it
+/// is for and counting the turn's tokens. The turn before it was sent
+/// yesterday, so today's opens under its date.
+fn running_turn(done: bool) -> Scene {
+    use crate::demo::world;
+    use std::time::Duration;
+    let midnight = world::midnight();
+    let at = |secs: i64| {
+        if secs < 0 {
+            midnight - Duration::from_secs(secs.unsigned_abs())
+        } else {
+            midnight + Duration::from_secs(secs as u64)
+        }
+    };
+    let now = world::hms(19, 13, 0);
+    // Yesterday afternoon.
+    let clock = world::Fixture::install(at(world::hms(16, 40, 0) - world::DAY));
+    let mut scene = Scene::new(if done { "answer" } else { "running" });
+    let ferrite = scene.project("ferrite");
+    let (thread, feed) = scene.open(
+        Provider::Claude,
+        &ferrite,
+        "UI test: color tokens and shell commands",
+    );
+    scene.core.send(
+        thread,
+        "Launch 2 parallel subagents: one counts .rs files under crates/ferrite-ui, the other counts .md files under docs. Report both numbers.".into(),
+    );
+    feed.boot(Provider::Claude, 64_000)
+        .text("Both subagents finished, counting recursively with `find`:\n\n- `.rs` files under `crates/ferrite-ui`: 15\n- `.md` files under `docs`: 77. This includes the untracked `docs/research/` files.")
+        .end(0.21);
+    scene.core.pump();
+    clock.set(at(now) - Duration::from_secs(27));
+    scene.core.send(
+        thread,
+        "Use a 3-step todo list. Run `ls /definitely-missing-dir`, then run `sleep 15 && echo done` in the foreground, then reply in two short paragraphs with a 2-row table.".into(),
+    );
+    {
+        use ferrite_core::progress::{PlanStep, ProgressEvent, StepStatus};
+        let step = |text: &str, status| PlanStep {
+            text: text.into(),
+            status,
+        };
+        let sleep = if done {
+            StepStatus::Completed
+        } else {
+            StepStatus::InProgress
+        };
+        let reply = if done {
+            StepStatus::Completed
+        } else {
+            StepStatus::Pending
+        };
+        feed.ev(SessionEvent::ThinkingTokens { estimated: 512 })
+            .ev(SessionEvent::Progress {
+                event: ProgressEvent::Plan {
+                    steps: vec![
+                        step("Run ls on missing dir", StepStatus::Completed),
+                        step("Run sleep 15 then echo done", sleep),
+                        step("Reply with paragraphs and table", reply),
+                    ],
+                    explanation: String::new(),
+                },
+            });
+    }
+    feed.claude_bash(
+        "ls",
+        "List a directory that doesn't exist",
+        "ls /definitely-missing-dir",
+        "ls: /definitely-missing-dir: No such file or directory",
+        1,
+        12,
+    )
+    .tool(
+        "sleep",
+        "Bash",
+        serde_json::json!({"command": "sleep 15 && echo done", "description": "Waiting 15 seconds then printing done"}),
+    );
+    if done {
+        feed.done(
+            "sleep",
+            "done",
+            false,
+            ToolResult::Command {
+                stdout: "done".into(),
+                stderr: String::new(),
+                exit_code: Some(0),
+                duration_ms: Some(15_020),
+            },
+        )
+        .text("Both commands ran. `ls /definitely-missing-dir` failed as expected, and `sleep 15 && echo done` ran in the foreground this time.\n\n| Command | Result |\n| --- | --- |\n| `ls /definitely-missing-dir` | Exit 1: `No such file or directory` |\n| `sleep 15 && echo done` | Exit 0: printed `done` after 15s |")
+        .end(0.08);
+    }
+    clock.set(at(now));
+    scene.hold.push(Box::new(clock));
+    scene
 }
 
 fn questions(id: &str, tool_use_id: &str) -> SessionEvent {
@@ -3100,5 +3208,133 @@ pub fn motion_preview(output: String) {
             cx.advance_clock(frame);
             cx.run_until_parked();
         }
+    }
+}
+
+/// The working line's token count rolling (`docs/research/craft/
+/// token-roll.mp4`): the real working line (`pane::working_tail`) over a
+/// turn fed as a provider streams it — thinking, its estimate climbing,
+/// then text and a tool call, a usage report snapping the count up past
+/// 1.0k — drawn on the executor's clock at each 60fps instant, one PNG a
+/// frame (`roll-0000.png` …) for ffmpeg to join.
+pub fn token_roll(output: String) {
+    use ferrite_core::transcript::{Input, Transcript};
+    use gpui::{div, px, IntoElement, ParentElement, Styled};
+    use std::time::Duration;
+
+    struct Line {
+        transcript: Transcript,
+    }
+    impl gpui::Render for Line {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let tail = ferrite_pane::pane::working_tail(ferrite_pane::pane::WorkingFacts {
+                transcript: &self.transcript,
+                thread: ThreadId::new(1),
+                starting: false,
+                solo: true,
+                focused: true,
+                reduce_motion: false,
+                reasoning_visible: false,
+                effort: Some("medium".into()),
+            })
+            .expect("a streaming turn has a working line");
+            div()
+                .size_full()
+                .flex()
+                .items_center()
+                .px(px(48.))
+                .bg(ferrite_ui::theme::paint::CARD)
+                .font_family(ferrite_ui::theme::FONT_UI)
+                .child((tail.render)(window, cx))
+        }
+    }
+
+    let output = PathBuf::from(output);
+    std::fs::create_dir_all(&output).expect("create artifact directory");
+    let start = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_791_400_000);
+    let clock = crate::demo::world::Fixture::install(start);
+    let platform = gpui::platform::current_platform(true);
+    let mut cx = HeadlessAppContext::with_platform(
+        platform.text_system(),
+        std::sync::Arc::new(ferrite_ui::icons::Assets),
+        gpui::platform::current_headless_renderer,
+    );
+    cx.update(|cx| {
+        ferrite_pane::pane::init_components(cx);
+        ferrite_ui::register_fonts(cx);
+    });
+    let window = cx
+        .open_window(gpui::size(px(720.), px(96.)), |_, cx| {
+            let mut transcript = Transcript::default();
+            transcript.apply(Input::Prompt("Plan the refactor".into()));
+            cx.new(|_| Line { transcript })
+        })
+        .unwrap();
+    cx.run_until_parked();
+    // What the provider says, by frame: thinking first, its estimate
+    // climbing every few frames; then the answer streaming and a call; a
+    // usage report that says more than the estimate.
+    let thinking = |estimated| {
+        vec![
+            SessionEvent::ThinkingTokens { estimated },
+            SessionEvent::Progress {
+                event: ferrite_core::progress::ProgressEvent::Phase {
+                    phase: ferrite_core::progress::Phase::Thinking,
+                    detail: String::new(),
+                },
+            },
+        ]
+    };
+    let script = |frame: u64| -> Vec<SessionEvent> {
+        match frame {
+            frame if frame < 90 && frame % 9 == 0 => thinking(40 + frame * 7),
+            frame if (96..150).contains(&frame) && frame % 6 == 0 => {
+                vec![SessionEvent::TextDelta {
+                    text: "The working line counts the turn as it streams. ".repeat(3),
+                }]
+            }
+            156 => vec![SessionEvent::ToolStarted {
+                id: "build".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({"command": "cargo build", "description": "Building the workspace"}),
+            }],
+            186 => vec![SessionEvent::TokenUsage {
+                total_tokens: 0,
+                input_tokens: 0,
+                cached_input_tokens: 0,
+                output_tokens: 1_480,
+                reasoning_output_tokens: 0,
+                context_window: None,
+            }],
+            _ => Vec::new(),
+        }
+    };
+    let frame = Duration::from_micros(1_000_000 / 60);
+    for at in 0..240u64 {
+        let events = script(at);
+        if !events.is_empty() {
+            cx.update(|cx| {
+                window
+                    .update(cx, |line, _, cx| {
+                        for event in events {
+                            line.transcript.apply(Input::Event(event));
+                        }
+                        cx.notify();
+                    })
+                    .unwrap();
+            });
+        }
+        cx.update_window(window.into(), |_, window, cx| {
+            window.refresh();
+            let _ = window.draw(cx);
+        })
+        .unwrap();
+        cx.capture_screenshot(window.into())
+            .unwrap()
+            .save(output.join(format!("roll-{at:04}.png")))
+            .unwrap();
+        cx.advance_clock(frame);
+        clock.set(start + frame * (at as u32 + 1));
+        cx.run_until_parked();
     }
 }

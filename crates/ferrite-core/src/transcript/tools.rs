@@ -114,6 +114,22 @@ pub fn is_command_run(name: &str) -> bool {
     matches!(name, "Bash" | "commandExecution")
 }
 
+/// A call's subject cut to what a one-line status has room for (the
+/// working line's `Reading main.rs`): a path to its file name, a command to
+/// its head (`cargo build --release` → `cargo build`); anything else whole.
+pub fn short_subject<'a>(kind: ToolKind, subject: &'a str) -> &'a str {
+    match kind {
+        ToolKind::Command => super::command_head(subject),
+        ToolKind::Read | ToolKind::Edit | ToolKind::Write | ToolKind::List => subject
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or(subject),
+        _ => subject,
+    }
+}
+
 /// `1 line` / `412 lines`.
 fn counted(count: u64, one: &str, many: &str) -> String {
     format!("{count} {}", if count == 1 { one } else { many })
@@ -254,6 +270,21 @@ fn tool_subject(input: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_short_subject_keeps_what_a_status_line_needs() {
+        use ToolKind::*;
+        assert_eq!(
+            short_subject(Read, "/repo/crates/ui/src/main.rs"),
+            "main.rs"
+        );
+        assert_eq!(short_subject(List, "crates/ui/"), "ui");
+        assert_eq!(
+            short_subject(Command, "cargo build --release"),
+            "cargo build"
+        );
+        assert_eq!(short_subject(Search, "fn main, src"), "fn main, src");
+    }
 
     #[test]
     fn every_tool_has_one_policy() {

@@ -73,6 +73,13 @@ impl TranscriptScroll {
         });
     }
 
+    /// Scroll a page up or down (`by` a viewport less the line kept in
+    /// view of the page before): reaching the end resumes following it.
+    pub(crate) fn scroll_page(&self, down: bool, keep: Pixels) {
+        let page = (self.list.viewport_bounds().size.height - keep).max(keep);
+        self.list.scroll_by(if down { page } else { -page });
+    }
+
     pub fn is_following_tail(&self) -> bool {
         self.list.is_following_tail()
     }

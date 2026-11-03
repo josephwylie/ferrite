@@ -277,6 +277,33 @@ pub(crate) fn call_line(tool: &ToolBlock) -> CallLine {
     }
 }
 
+/// What the working line says of the call it carries (`working::caption_of`),
+/// as Claude's reads: the provider's description of the call where it
+/// wrote one (Claude's Bash `description`: `Waiting 15 seconds then
+/// printing done`), else the verb and a short target (`Reading main.rs`,
+/// `Running cargo build`: `tools::short_subject`).
+pub(crate) fn working_words(tool: &ToolBlock) -> String {
+    if let Some(description) = tool.title.as_deref().map(str::trim) {
+        if !description.is_empty() {
+            return description.to_owned();
+        }
+    }
+    let work = Work::of(tool);
+    let argument = tool.argument();
+    let argument: &str = if work.kind == ToolKind::Command {
+        without_cd(&argument)
+    } else {
+        &argument
+    };
+    let target = tools::short_subject(work.kind, argument);
+    let verb = work.verb(tool.state == ToolState::Running);
+    if target.is_empty() {
+        verb.to_owned()
+    } else {
+        format!("{verb} {target}")
+    }
+}
+
 /// A command less a leading `cd <dir> &&`: where it ran is the thread's
 /// business, not the row's (`cd crates/x && cargo test` → `cargo test`).
 fn without_cd(command: &str) -> &str {
@@ -780,6 +807,73 @@ mod tests {
             is_error,
             result: ferrite_core::ToolResult::Opaque,
         }));
+    }
+
+    /// A call row reads in the UI face: only its literal argument is a
+    /// code span (mono); a description is words.
+    #[test]
+    fn a_call_row_is_words_but_its_command() {
+        let mut transcript = Transcript::default();
+        for (id, input) in [
+            ("bare", serde_json::json!({"command": "cargo test"})),
+            (
+                "described",
+                serde_json::json!({"command": "sleep 15", "description": "Wait a while"}),
+            ),
+        ] {
+            transcript.apply(Input::Event(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: "Bash".into(),
+                input,
+            }));
+        }
+        let rows: Vec<String> = group_tools(transcript.blocks())
+            .map(call_markdown)
+            .collect();
+        assert_eq!(rows, ["Running `cargo test`", "Wait a while"]);
+    }
+
+    /// The working line carries a call in its description where the
+    /// provider wrote one, else a verb and a short target.
+    #[test]
+    fn the_working_line_reads_a_description_or_a_short_target() {
+        let mut transcript = Transcript::default();
+        let start = |transcript: &mut Transcript, id: &str, name: &str, input| {
+            transcript.apply(Input::Event(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: name.into(),
+                input,
+            }));
+        };
+        start(
+            &mut transcript,
+            "sleep",
+            "Bash",
+            serde_json::json!({"command": "sleep 15 && echo done", "description": "Waiting 15 seconds then printing done"}),
+        );
+        start(
+            &mut transcript,
+            "build",
+            "commandExecution",
+            serde_json::json!({"command": "cd crates/ui && cargo build --release"}),
+        );
+        start(
+            &mut transcript,
+            "read",
+            "Read",
+            serde_json::json!({"file_path": "/repo/crates/ui/src/main.rs"}),
+        );
+        let words: Vec<String> = group_tools(transcript.blocks())
+            .map(working_words)
+            .collect();
+        assert_eq!(
+            words,
+            [
+                "Waiting 15 seconds then printing done",
+                "Running cargo build",
+                "Reading main.rs"
+            ]
+        );
     }
 
     /// The provider's caption on a group's newest call stands for Ferrite's
