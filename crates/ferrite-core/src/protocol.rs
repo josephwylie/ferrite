@@ -166,6 +166,12 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         item: Option<String>,
     },
+    /// Send the queued prompt `item` names next (`QueueItem::id`):
+    /// `Engine::send_queued_now`.
+    SendQueuedNow {
+        thread: ThreadId,
+        item: String,
+    },
     /// Hand a prompt the provider gave back to the Composer
     /// (`ThreadState::recovered`): it leaves the Thread.
     TakeRecovered {
@@ -419,6 +425,7 @@ impl Op {
             | Op::Queue { thread, .. }
             | Op::Unqueue { thread, .. }
             | Op::CancelQueued { thread, .. }
+            | Op::SendQueuedNow { thread, .. }
             | Op::TakeRecovered { thread, .. }
             | Op::Rewind { thread, .. }
             | Op::Fork { thread, .. }
@@ -1304,6 +1311,10 @@ pub struct WireCommand {
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Where it comes from; its words are the wire's own (`kind`, snake
+    /// case), an unknown one decoding as `unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::CommandSource>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2509,6 +2520,7 @@ impl From<&crate::SessionCommand> for WireCommand {
             name: command.name.clone(),
             description: command.description.clone(),
             path: command.path.clone(),
+            source: command.source.clone(),
         }
     }
 }
@@ -2519,6 +2531,7 @@ impl From<&WireCommand> for crate::SessionCommand {
             name: command.name.clone(),
             description: command.description.clone(),
             path: command.path.clone(),
+            source: command.source.clone(),
         }
     }
 }

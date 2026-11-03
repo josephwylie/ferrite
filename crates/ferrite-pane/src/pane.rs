@@ -30,8 +30,8 @@ pub use composer::model_label;
 pub use composer::{
     attach_button, composer_footer, composer_row_limit, env_strip, env_word, flat_facts_text,
     mode_chip, model_effort_chip, offers_import, permission_mode_label, queued_close, queued_count,
-    queued_edit, queued_send_now, queued_takes_back, send_button, send_is_stop, toolbar_chip,
-    ComposerControls,
+    queued_edit, queued_send_now, queued_sends_now, queued_takes_back, send_button, send_is_stop,
+    toolbar_chip, ComposerControls,
 };
 use composer::{
     composer_region, composer_stack, env_face, ghost_row, placeholder, queue_card, ComposerStack,
@@ -3523,12 +3523,11 @@ pub(crate) fn prompt_chip(
     (gpui::size(px(width), line), element.into_any_element())
 }
 
-/// A sent image over its prompt's bubble (Claude's): the picture
-/// at its own proportions, no larger than `THUMB_MAX_W` × `THUMB_MAX_H`
-/// nor its own size (covering that box when its header cannot be read), at
-/// `R_CARD` in a 1px `LINE`; its caption (`name · W×H · 41 KB`) is
-/// its tooltip. A click opens it in the Pane's preview, among its
-/// prompt's `gallery`.
+/// A sent image over its prompt's bubble (Claude's): its card
+/// (`attachments::thumbnail`) at the picture's own proportions, no larger
+/// than `THUMB_MAX_W` × `THUMB_MAX_H` nor its own size (covering that box
+/// when its header cannot be read). A click opens it in the lightbox,
+/// among its prompt's `gallery`.
 fn inline_image(
     block: BlockId,
     index: usize,
@@ -3536,14 +3535,8 @@ fn inline_image(
     gallery: &std::sync::Arc<[std::path::PathBuf]>,
     preview: &crate::preview::Preview,
 ) -> AnyElement {
-    let name = path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let facts = image_facts(path);
     // Whole pixels, so the ring sits on the pixel grid.
-    let (width, height) = match facts {
+    let size = match image_facts(path) {
         Some(ImageFacts {
             width: w,
             height: h,
@@ -3559,32 +3552,21 @@ fn inline_image(
         }
         _ => (theme::THUMB_MAX_W, theme::THUMB_MAX_H),
     };
-    let caption = image_caption(&name, facts);
     let host = preview.clone();
     let gallery = gallery.clone();
     let open = path.to_path_buf();
-    div()
-        .id(SharedString::from(format!("sent-image-{block:?}-{index}")))
-        .debug_selector(|| "sent-image".into())
-        .flex_shrink_0()
-        .rounded(px(theme::R_CARD))
-        .border_1()
-        .border_color(theme::paint::LINE)
-        .overflow_hidden()
-        .cursor_pointer()
-        .tooltip(ferrite_ui::menu::tooltip(caption))
-        .on_click(move |_, window, cx| {
-            cx.stop_propagation();
-            open_file(&open, &gallery, &host, window, cx);
-        })
-        .child(
-            gpui::img(path.to_path_buf())
-                .w(px(width))
-                .h(px(height))
-                .rounded(px(theme::R_CARD - theme::HAIRLINE_W))
-                .object_fit(gpui::ObjectFit::Cover),
-        )
-        .into_any_element()
+    crate::attachments::thumbnail(
+        SharedString::from(format!("sent-image-{block:?}-{index}")),
+        path,
+        size,
+    )
+    .debug_selector(|| "sent-image".into())
+    .cursor_pointer()
+    .on_click(move |_, window, cx| {
+        cx.stop_propagation();
+        open_file(&open, &gallery, &host, window, cx);
+    })
+    .into_any_element()
 }
 
 /// An image's caption: `nav-jitter.png · 580×320 · 41 KB` (its name alone
@@ -4924,6 +4906,7 @@ mod tests {
             detail: "adopt a CLI session".into(),
             prose_detail: true,
             inert: false,
+            tag: None,
         };
         assert_eq!(
             cursor(menu_row(("r", 0usize), &offer, false, None)),
@@ -4941,11 +4924,24 @@ mod tests {
             detail: offer.detail.clone(),
             prose_detail: true,
             inert: true,
+            tag: None,
         };
         assert_eq!(cursor(menu_row(("r", 1usize), &inert, false, None)), None);
         assert_eq!(cursor(menu_row(("r", 1usize), &inert, true, None)), None);
         // No ↵, not even on the cursor row (Claude's).
         assert_eq!(menu_item(&offer, None).shortcut, None);
+        // A command's source rides as its tag.
+        let tagged = MenuRow {
+            insert: offer.insert.clone(),
+            name: offer.name.clone(),
+            matched: vec![],
+            detail: offer.detail.clone(),
+            prose_detail: true,
+            inert: false,
+            tag: Some("Skill".into()),
+        };
+        assert_eq!(menu_item(&tagged, None).tag.as_deref(), Some("Skill"));
+        assert_eq!(menu_item(&offer, None).tag, None);
         // A long directory keeps its tail.
         let deep = MenuRow {
             detail: "crates/ferrite/src/some/very/deeply/nested/module/tree/of/files".into(),
@@ -6625,12 +6621,21 @@ mod tests {
                     <= 300. * theme::COMPOSER_MAX_PANE_FRACTION
             );
         }
-        // Solo's queue is one 44px strip and its 8 gap, however many wait;
-        // the compact box counts none (its Pane says `2 queued` unfocused).
+        // Solo's queue is a 44px row per message and its 8 gap; the
+        // compact box counts none (its Pane says `2 queued` unfocused).
         assert_eq!(composer_queue_height(900., false, 0), 0.);
+        // A row per message, up to the rows it shows; more scroll.
         assert_eq!(
-            composer_queue_height(900., false, 3),
+            composer_queue_height(900., false, 1),
             theme::QUEUE_CARD_H + theme::QUEUE_CARD_GAP
+        );
+        assert_eq!(
+            composer_queue_height(900., false, 2),
+            2. * theme::QUEUE_CARD_H + theme::QUEUE_CARD_GAP
+        );
+        assert_eq!(
+            composer_queue_height(900., false, 9),
+            theme::QUEUE_ROWS_SHOWN as f32 * theme::QUEUE_CARD_H + theme::QUEUE_CARD_GAP
         );
         assert_eq!(composer_queue_height(900., true, 3), 0.);
     }

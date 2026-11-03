@@ -397,6 +397,51 @@ pub struct SessionCommand {
     /// Codex only: the SKILL.md a typed `{"type":"skill"}` input item must
     /// carry. Claude commands have none — the CLI dispatches on the text.
     pub path: Option<String>,
+    /// Where the command comes from, as far as the provider says: the `/`
+    /// menu's tag on its row. `None` when the provider does not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<CommandSource>,
+}
+
+/// Where a `/` command comes from.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum CommandSource {
+    /// Shipped with the provider's CLI (its commands and bundled skills).
+    BuiltIn,
+    /// A skill the operator or the project installed.
+    Skill,
+    /// A command or skill a plugin brings, named `plugin:name`.
+    Plugin { plugin: String },
+    /// A prompt an MCP server publishes.
+    Mcp,
+    /// A command the provider lists without saying more.
+    Command,
+    /// A source this build does not know.
+    #[serde(other)]
+    Unknown,
+}
+
+impl CommandSource {
+    /// The `/` menu's tag for it (Claude's picker's words).
+    pub fn tag(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::BuiltIn => "Built-in",
+            Self::Skill => "Skill",
+            Self::Plugin { .. } => "Plugin",
+            Self::Mcp => "MCP",
+            Self::Command => "Command",
+            Self::Unknown => return None,
+        })
+    }
+
+    /// The plugin it comes from, if one.
+    pub fn plugin(&self) -> Option<&str> {
+        match self {
+            Self::Plugin { plugin } => Some(plugin),
+            _ => None,
+        }
+    }
 }
 
 /// The structured half of a tool result. Every shape here was read off a

@@ -297,6 +297,9 @@ impl Session for SessionWithDefaults {
     fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
         self.inner.cancel_queued(id)
     }
+    fn steers(&self) -> bool {
+        self.inner.steers()
+    }
 
     fn set_suggestions_enabled(&mut self, enabled: bool) -> io::Result<()> {
         self.inner.set_suggestions_enabled(enabled)

@@ -2029,6 +2029,22 @@ impl Cockpit {
         self.take_back_queued(thread, id, restore, false);
     }
 
+    /// Send the queued prompt `id` names next (`Engine::send_queued_now`).
+    pub fn send_queued_now(&mut self, thread: ThreadId, id: &str) {
+        self.act(
+            |engine| engine.send_queued_now(thread, id),
+            |server| {
+                said(
+                    server,
+                    Op::SendQueuedNow {
+                        thread,
+                        item: id.to_string(),
+                    },
+                )
+            },
+        );
+    }
+
     /// Edit the queued prompt `id` names, ahead of the current draft.
     pub fn edit_queued_item(&mut self, thread: ThreadId, id: &str) {
         self.take_back_queued(thread, id, true, true);

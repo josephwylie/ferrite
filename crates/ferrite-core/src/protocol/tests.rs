@@ -264,6 +264,7 @@ fn state() -> ThreadState {
             name: "review".into(),
             description: "Review the diff".into(),
             path: None,
+            source: None,
         }],
         models: vec![model("sonnet")],
         permission_mode: Some("default".into()),
@@ -465,6 +466,16 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     restore: true,
                     edit: false,
                     item: Some("0000beef-0003-4000-8001-000000000001".into()),
+                },
+            ),
+        ),
+        (
+            "command_send_queued_now",
+            command(
+                54,
+                Op::SendQueuedNow {
+                    thread,
+                    item: "0000beef-0003-4000-8001-000000000001".into(),
                 },
             ),
         ),
@@ -1776,6 +1787,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         name: "skill".into(),
                         description: "A skill".into(),
                         path: Some("/skills/a/SKILL.md".into()),
+                        source: None,
                     }],
                 },
             ),
@@ -2058,6 +2070,7 @@ fn applied_inputs_survive_the_wire() {
                 name: "review".into(),
                 description: "Review".into(),
                 path: None,
+                source: None,
             }],
         }),
         main(SessionEvent::PermissionMode {

@@ -39,9 +39,14 @@ struct Scripted {
     native_suggestion: Rc<RefCell<Option<String>>>,
     rewinds: Rc<RefCell<Vec<crate::providers::RewindRequest>>>,
     rewindable: Rc<RefCell<bool>>,
+    steers: Rc<RefCell<bool>>,
+    interrupts: Rc<RefCell<usize>>,
 }
 
 impl crate::providers::Session for Scripted {
+    fn steers(&self) -> bool {
+        *self.steers.borrow()
+    }
     fn supports_control(&self, kind: crate::ControlKind) -> bool {
         kind == crate::ControlKind::Rewind && *self.rewindable.borrow()
     }
@@ -131,6 +136,7 @@ impl crate::providers::Session for Scripted {
     }
 
     fn interrupt(&mut self) -> std::io::Result<()> {
+        *self.interrupts.borrow_mut() += 1;
         Ok(())
     }
 
@@ -188,6 +194,11 @@ struct Fake {
     /// While set, Sessions offer rewind (`ControlKind::Rewind`): off, the
     /// controls they announce stay what other tests pin.
     rewindable: Rc<RefCell<bool>>,
+    /// While set, Sessions steer a running turn with what is enqueued
+    /// (`Session::steers`), as Codex does.
+    steers: Rc<RefCell<bool>>,
+    /// How many interrupts the Sessions were sent.
+    interrupts: Rc<RefCell<usize>>,
 }
 
 impl Fake {
@@ -261,6 +272,8 @@ impl Spawner for Fake {
             native_suggestion: self.native_suggestion.clone(),
             rewinds: self.rewinds.clone(),
             rewindable: self.rewindable.clone(),
+            steers: self.steers.clone(),
+            interrupts: self.interrupts.clone(),
         }))
     }
 }
@@ -3376,6 +3389,70 @@ fn a_queued_prompt_is_removed_by_its_own_id() {
     );
 }
 
+/// Send now on one queued prompt of several, while a turn runs: a
+/// provider that steers takes it into that turn — taken back and handed
+/// over again, no interrupt — and the others wait as they were.
+#[test]
+fn send_now_steers_a_queued_prompt_into_the_running_turn() {
+    let (mut cockpit, fake) = cockpit("send-now-steers");
+    *fake.steers.borrow_mut() = true;
+    let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
+    cockpit.send(thread, "start".into());
+    fake.streams.borrow()[0].send(text("working")).unwrap();
+    cockpit.pump();
+    for text in ["first", "second", "third"] {
+        assert!(cockpit.queue(thread, text.into()));
+    }
+    cockpit.pump();
+    let queue = cockpit.thread(thread).unwrap().queue().to_vec();
+    let second = queue
+        .iter()
+        .find(|item| item.text == "second")
+        .expect("queued")
+        .id
+        .clone();
+
+    cockpit.send_queued_now(thread, &second);
+    cockpit.pump();
+    cockpit.pump();
+
+    assert_eq!(*fake.interrupts.borrow(), 0, "nothing was stopped");
+    let native = fake.native.borrow().clone();
+    assert_eq!(native.len(), 4, "handed over once more");
+    assert_eq!(native[3].1, "second");
+    assert_ne!(native[3].0, second, "under a fresh id");
+    let left: Vec<_> = cockpit
+        .thread(thread)
+        .unwrap()
+        .queue()
+        .iter()
+        .filter(|item| item.id != native[3].0)
+        .map(|item| item.text.clone())
+        .collect();
+    assert_eq!(left, ["third", "first"], "the others wait as they were");
+}
+
+/// On a provider that cannot steer, send now stops the running turn, as
+/// Escape does, and takes nothing back itself.
+#[test]
+fn send_now_interrupts_a_provider_that_cannot_steer() {
+    let (mut cockpit, fake) = cockpit("send-now-interrupts");
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "start".into());
+    fake.streams.borrow()[0].send(text("working")).unwrap();
+    cockpit.pump();
+    assert!(cockpit.queue(thread, "then this".into()));
+    cockpit.pump();
+    let id = cockpit.thread(thread).unwrap().queue()[0].id.clone();
+
+    cockpit.send_queued_now(thread, &id);
+    cockpit.pump();
+
+    assert_eq!(*fake.interrupts.borrow(), 1);
+    assert_eq!(fake.native.borrow().len(), 1, "nothing handed over again");
+    assert_eq!(cockpit.thread(thread).unwrap().queue().len(), 1);
+}
+
 /// Two prompts held at once both show, the latest on top; Escape on a
 /// Codex turn stops it and sends everything held as one prompt, oldest
 /// first — a late start notice for a resent id inserts nothing twice.
@@ -3552,6 +3629,7 @@ fn a_commands_event_becomes_the_thread_menu_and_never_the_history() {
         name: "compact".into(),
         description: "summarize context".into(),
         path: None,
+        source: None,
     }];
     fake.streams.borrow()[0]
         .send(SessionEvent::Commands {

@@ -3286,6 +3286,13 @@ impl Engine {
                             .dirty
                             .extend(thread.apply(Input::Notice(notice)).dirty);
                     }
+                    // Taken back to be sent now: it waits at the front of
+                    // what Ferrite holds, handed over on this frame's
+                    // release, as a turn or into the running one.
+                    for text in std::mem::take(&mut thread.native_queue.resend) {
+                        let id = client_id(thread.generation);
+                        thread.awaiting.prompts.push_front(queue::Held { id, text });
+                    }
                     update.activity_changed = true;
                     continue;
                 }
@@ -3740,22 +3747,54 @@ impl Engine {
     /// Take back the queued prompt `target` names (`QueueItem::id`), else
     /// the latest.
     pub fn cancel_queued(&mut self, thread: ThreadId, target: Option<&str>, restore: bool) {
-        self.cancel_queue(thread, target, restore, false);
+        let then = if restore {
+            queue::Then::Restore { prepend: false }
+        } else {
+            queue::Then::Drop
+        };
+        self.cancel_queue(thread, target, then);
     }
 
     /// Up edits a queued prompt — `target`'s, else the latest — ahead of
     /// the current draft.
     pub fn edit_queued(&mut self, thread: ThreadId, target: Option<&str>) {
-        self.cancel_queue(thread, target, true, true);
+        self.cancel_queue(thread, target, queue::Then::Restore { prepend: true });
     }
 
-    fn cancel_queue(
-        &mut self,
-        thread: ThreadId,
-        target: Option<&str>,
-        restore: bool,
-        prepend: bool,
-    ) {
+    /// Send the queued prompt `target` names next, ahead of the rest.
+    /// Ferrite still holding it, it moves to the front of what it holds.
+    /// In the provider's queue: with no turn running, or with one running
+    /// on a provider that steers (`Session::steers`), it is taken back and
+    /// handed over again at once — joining the running turn without
+    /// stopping it. Otherwise the turn is interrupted, Escape's "stop, and
+    /// do what I queued now", as is a prompt already steering one.
+    pub fn send_queued_now(&mut self, thread: ThreadId, target: &str) {
+        let Some(state) = self.threads.get(&thread) else {
+            return;
+        };
+        let delivery = state
+            .native_queue
+            .listing(&state.awaiting.prompts)
+            .into_iter()
+            .find(|item| item.id == target)
+            .map(|item| item.delivery);
+        let running = state.busy() || state.activity.view().main_operator_turn();
+        let steers = state
+            .session
+            .as_ref()
+            .and_then(SessionLifecycle::session)
+            .is_some_and(|session| session.steers());
+        match delivery {
+            Some(Delivery::Holding) => self.cancel_queue(thread, Some(target), queue::Then::Resend),
+            Some(Delivery::Queued) if !running || steers => {
+                self.cancel_queue(thread, Some(target), queue::Then::Resend);
+            }
+            Some(Delivery::Queued | Delivery::Steering) if running => self.interrupt(thread),
+            _ => {}
+        }
+    }
+
+    fn cancel_queue(&mut self, thread: ThreadId, target: Option<&str>, then: queue::Then) {
         let Some(state) = self.threads.get_mut(&thread) else {
             return;
         };
@@ -3772,12 +3811,17 @@ impl Engine {
             None => state.awaiting.prompts.pop_back(),
         };
         if let Some(held) = held {
-            if restore {
-                state.native_queue.recovered.push((held.text, prepend));
+            match then {
+                queue::Then::Drop => {}
+                queue::Then::Restore { prepend } => {
+                    state.native_queue.recovered.push((held.text, prepend));
+                }
+                // The first of what it holds goes first.
+                queue::Then::Resend => state.awaiting.prompts.push_front(held),
             }
             return;
         }
-        let Some(id) = state.native_queue.cancellation(target, restore, prepend) else {
+        let Some(id) = state.native_queue.cancellation(target, then) else {
             return;
         };
         let result = state

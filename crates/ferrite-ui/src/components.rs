@@ -1282,6 +1282,10 @@ pub struct MenuItem {
     pub note: Option<SharedString>,
     /// A small outlined tag after the label (`Recommended`, `Default`).
     pub badge: Option<SharedString>,
+    /// The same outlined tag at the row's right edge, after its detail:
+    /// where a `/` command comes from (`Skill`, `Plugin`), so an aligned
+    /// description column stays aligned.
+    pub tag: Option<SharedString>,
     pub checked: bool,
     /// Arms before it runs: at rest it reads like any row; armed, its label
     /// turns `BLOCKED` and asks for the second press.
@@ -1332,6 +1336,10 @@ impl MenuItem {
     }
     pub fn badge(mut self, text: impl Into<SharedString>) -> Self {
         self.badge = Some(text.into());
+        self
+    }
+    pub fn tag(mut self, text: impl Into<SharedString>) -> Self {
+        self.tag = Some(text.into());
         self
     }
     pub fn destructive(mut self) -> Self {

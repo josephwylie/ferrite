@@ -258,23 +258,50 @@ fn the_model_menu_leads_with_the_model_in_force(cx: &mut TestAppContext) {
 }
 
 /// The `+` menu's `Plugins ›` lists the plugins a Session's commands come
-/// from: the CLI names a plugin's commands `plugin:name`.
+/// from, as the provider says, each with its own commands.
 #[test]
-fn plugins_are_read_off_their_commands_namespaces() {
-    let command = |name: &str| ferrite_core::SessionCommand {
+fn plugins_are_read_off_their_commands_sources() {
+    let command = |name: &str, plugin: Option<&str>| ferrite_core::SessionCommand {
         name: name.into(),
         description: String::new(),
         path: None,
+        source: Some(match plugin {
+            Some(plugin) => ferrite_core::CommandSource::Plugin {
+                plugin: plugin.into(),
+            },
+            None => ferrite_core::CommandSource::Skill,
+        }),
     };
     let commands = [
-        command("review"),
-        command("superpowers:brainstorm"),
-        command("mcp__github__issue"),
-        command("superpowers:plan"),
-        command("figma:inspect"),
-        command(":odd"),
+        command("review", None),
+        command("superpowers:brainstorm", Some("superpowers")),
+        command("odd:name", None),
+        command("superpowers:plan", Some("superpowers")),
+        command("figma:inspect", Some("figma")),
     ];
-    assert_eq!(plugin_names(&commands), ["superpowers", "figma"]);
+    let plugins = plugins(&commands);
+    let listed: Vec<(&str, Vec<&str>)> = plugins
+        .iter()
+        .map(|(plugin, commands)| {
+            (
+                plugin.as_str(),
+                commands
+                    .iter()
+                    .map(|command| command.name.as_str())
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (
+                "superpowers",
+                vec!["superpowers:brainstorm", "superpowers:plan"]
+            ),
+            ("figma", vec!["figma:inspect"]),
+        ]
+    );
 }
 
 /// The `+` menu hangs from the `+`'s left edge, and its `Connectors ›`
@@ -337,5 +364,125 @@ fn the_plus_menu_reaches_the_connectors(cx: &mut TestAppContext) {
     view.read_with(cx, |view, _| {
         assert!(view.attach_menu.is_none(), "a pick closes the menu");
         assert!(view.prefs.settings.panel_shown, "the panel shows");
+    });
+}
+
+/// `Plugins ›` opens a list of the Session's plugins, each its own
+/// submenu of its commands (Claude's); a pick starts the command on the
+/// line as a chip, sent as the plain `/plugin:command` it reads.
+#[gpui::test]
+fn the_plus_menu_opens_each_plugins_commands(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("plus-plugins", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+    let command = |name: &str| ferrite_core::SessionCommand {
+        name: name.into(),
+        description: "A plugin's command".into(),
+        path: None,
+        source: Some(ferrite_core::CommandSource::Plugin {
+            plugin: "tdd".into(),
+        }),
+    };
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Commands {
+            commands: vec![command("tdd:red"), command("tdd:green")],
+        })
+        .unwrap();
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.attach_menu = Some(view.panes[0].identity);
+        cx.notify();
+    });
+    tick(cx);
+    let plugins = cx
+        .debug_bounds("choice-submenu-row-0")
+        .expect("Plugins rides the + menu");
+    cx.simulate_mouse_move(plugins.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    let plugin = cx
+        .debug_bounds("choice-sub-submenu-0")
+        .expect("the plugin's own row, a submenu");
+    cx.simulate_mouse_move(plugin.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("choice-deep-1").is_some(), "both commands");
+    let green = cx.debug_bounds("choice-deep-1").unwrap();
+    cx.simulate_click(green.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "/tdd:green ");
+    view.read_with(cx, |view, cx| {
+        assert!(view.attach_menu.is_none(), "a pick closes the menu");
+        assert_eq!(
+            view.panes[0].composer.read(cx).chips(),
+            [SharedString::from("/tdd:green")]
+        );
+    });
+}
+
+/// An image in the tray is its picture, a `COMPOSER_THUMB` card (Claude's),
+/// not a chip: a click opens it in the lightbox among the tray's images,
+/// and its corner `×` removes it alone. Any other file keeps its chip.
+#[gpui::test]
+fn a_tray_image_is_a_thumbnail_card(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("tray-thumbnail", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+    let files = [
+        std::path::PathBuf::from("/tmp/tray-a.png"),
+        std::path::PathBuf::from("/tmp/notes.md"),
+        std::path::PathBuf::from("/tmp/tray-b.jpg"),
+    ];
+    view.update(cx, |view, cx| {
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.add_files(&files, cx));
+    });
+    tick(cx);
+    let card = cx
+        .debug_bounds("tray-image-0")
+        .expect("the first image's card");
+    let thumb = px(ferrite_ui::theme::COMPOSER_THUMB);
+    assert_eq!((card.size.width, card.size.height), (thumb, thumb));
+    assert!(cx.debug_bounds("tray-image-2").is_some(), "the second's");
+    assert!(
+        cx.debug_bounds("tray-image-1").is_none(),
+        "a file is no card"
+    );
+    let tray = cx
+        .debug_bounds("pending-attachment-tray")
+        .expect("the tray");
+    assert!(
+        tray.size.height > thumb,
+        "the file's chip rides under the cards"
+    );
+
+    cx.simulate_click(card.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        cx.debug_bounds("image-viewer").is_some(),
+        "a click opens the lightbox"
+    );
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+
+    cx.simulate_mouse_move(card.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    let remove = cx
+        .debug_bounds("tray-image-0-remove")
+        .expect("the card's ×, under the pointer");
+    assert!(
+        remove.right() <= card.right() && remove.top() >= card.top(),
+        "in the corner: {remove:?} / {card:?}"
+    );
+    cx.simulate_click(remove.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        let prompt = view.panes[0].composer.read(cx).prompt();
+        assert_eq!(
+            ferrite_core::prompt_files::paths(&prompt, None),
+            [files[1].clone(), files[2].clone()],
+            "the × removes that image alone"
+        );
     });
 }

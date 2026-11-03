@@ -25,6 +25,9 @@ pub struct MenuRow {
     /// A row kept visible but dead (#25's locked provider door): muted ink,
     /// no match highlights, and its pick does nothing but dismiss.
     pub inert: bool,
+    /// Where a `/` command comes from (`Skill`, `Plugin`, `Built-in`): an
+    /// outlined tag at the row's right end, as Claude's picker shows it.
+    pub tag: Option<SharedString>,
 }
 
 /// The Composer menus' popover: the float, as wide as its slot (at most
@@ -70,6 +73,9 @@ pub fn menu_item(row: &MenuRow, label_w: Option<f32>) -> components::MenuItem {
             head_truncated(&row.detail, theme::MENU_PATH_TAIL)
         };
         item = item.detail(detail).mono(!row.prose_detail);
+    }
+    if let Some(tag) = &row.tag {
+        item = item.tag(tag.clone());
     }
     item
 }

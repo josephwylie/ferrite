@@ -1105,8 +1105,38 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
+        // With a Session that reports MCP servers and plugins: Claude's
+        // `Connectors ›` and `Plugins ›` under the three rows.
         "plusmenu" => {
             let scene = conversation(label);
+            {
+                let feeds = scene.feeds.borrow();
+                let plugin = |name: &str, plugin: &str| SessionCommand {
+                    name: name.into(),
+                    description: String::new(),
+                    path: None,
+                    source: Some(ferrite_core::CommandSource::Plugin {
+                        plugin: plugin.into(),
+                    }),
+                };
+                for event in [
+                    SessionEvent::McpServers {
+                        servers: vec![McpServer {
+                            name: "github".into(),
+                            status: McpStatus::Connected,
+                            error: None,
+                        }],
+                    },
+                    SessionEvent::Commands {
+                        commands: vec![
+                            plugin("tdd:red-green", "tdd"),
+                            plugin("impeccable:polish", "impeccable"),
+                        ],
+                    },
+                ] {
+                    feeds[0].send(event).expect("fixture Session is listening");
+                }
+            }
             let setup: Setup = Box::new(|view, _, _| {
                 view.attach_menu = Some(view.panes[0].identity);
             });
@@ -2326,13 +2356,26 @@ fn subagents() -> (Scene, Setup) {
 
 /// Mid-turn with two prompts held for the next turn, a third being typed,
 /// and two files attached to it.
+/// The Composer carrying an image and a file, two prompts queued, under a
+/// sent prompt that carried an image too: the picture over its bubble,
+/// the tray's thumbnail card over the line (Claude's).
 fn composer() -> (Scene, Setup) {
     let mut scene = Scene::new("composer");
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Composer queue polish");
-    scene
-        .core
-        .send(thread, "Tighten the queued prompt rows.".into());
+    let shot = scene.root.join("queued-rows.png");
+    let _ = std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/research/ferrite-transcript-implementation-2026-09-06/wide.png"),
+        &shot,
+    );
+    scene.core.send(
+        thread,
+        ferrite_core::prompt_files::compose(
+            "Tighten the queued prompt rows; this is how they stack now.",
+            &[shot.clone()],
+        ),
+    );
     feed.boot(Provider::Claude, 104_000)
         .tool(
             "read",
@@ -2349,12 +2392,6 @@ fn composer() -> (Scene, Setup) {
     );
     let notes = scene.root.join("queue-notes.md");
     std::fs::write(&notes, "# Queue notes\n").expect("write fixture attachment");
-    let shot = scene.root.join("queued-rows.png");
-    let _ = std::fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../docs/research/ferrite-transcript-implementation-2026-09-06/wide.png"),
-        &shot,
-    );
     let setup: Setup = Box::new(move |view, _, cx| {
         let files: Vec<PathBuf> = [shot, notes].into_iter().filter(|p| p.exists()).collect();
         view.panes[0].composer.update(cx, |composer, cx| {
@@ -2384,12 +2421,21 @@ fn menu() -> (Scene, Setup) {
                 "simplify",
                 "Review changed code for reuse and simplification",
             ),
+            ("tdd:red-green", "Write the failing test first"),
         ]
         .into_iter()
         .map(|(name, description)| SessionCommand {
             name: name.into(),
             description: description.into(),
             path: None,
+            // Where each comes from, as the CLI marks it.
+            source: Some(match name {
+                "code-review" | "commit" | "simplify" => ferrite_core::CommandSource::Skill,
+                "tdd:red-green" => ferrite_core::CommandSource::Plugin {
+                    plugin: "tdd".into(),
+                },
+                _ => ferrite_core::CommandSource::BuiltIn,
+            }),
         })
         .collect(),
     });

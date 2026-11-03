@@ -261,7 +261,7 @@ fn turn_running(open: &ThreadView) -> bool {
 }
 
 /// The id of the latest queued prompt while it can still be taken back:
-/// what ↑, ⌫ and the queue strip's edit and remove act on.
+/// what ↑ and ⌫ act on (the strip's rows each act on their own).
 fn queued_to_take_back(open: &ThreadView) -> Option<String> {
     open.queue()
         .first()
@@ -6748,6 +6748,7 @@ impl CockpitView {
                             matched: Vec::new(),
                             prose_detail: true,
                             inert: true,
+                            tag: None,
                         },
                         active: false,
                         consequence: Consequence::Inert,
@@ -6901,6 +6902,7 @@ impl CockpitView {
                             detail: SharedString::default(),
                             prose_detail: true,
                             inert: true,
+                            tag: None,
                         },
                         active: false,
                         consequence: Consequence::Inert,
@@ -7141,7 +7143,11 @@ impl CockpitView {
                     if text[end..].starts_with(' ') {
                         end += 1;
                     }
-                    composer.splice(start..end, &format!("/{name} "), cx);
+                    // The pick is a chip, as a mention is; it sends as
+                    // the plain `/name` it reads.
+                    let token = format!("/{name}");
+                    composer.splice(start..end, &format!("{token} "), cx);
+                    composer.stage_chip(SharedString::from(token), cx);
                 });
             }
             Consequence::Inert => {}
@@ -7172,7 +7178,7 @@ impl CockpitView {
                 composer.update(cx, |composer, cx| {
                     let cursor = composer.cursor();
                     composer.splice(start..cursor, &format!("{token} "), cx);
-                    composer.stage_mention(SharedString::from(token), cx);
+                    composer.stage_chip(SharedString::from(token), cx);
                 });
             }
             Consequence::Provision(choice) => {
@@ -7359,6 +7365,7 @@ impl CockpitView {
                     detail: SharedString::from(if handover { "handover" } else { "" }),
                     prose_detail: true,
                     inert: true,
+                    tag: None,
                 },
                 active: false,
                 consequence: Consequence::Inert,
@@ -7412,6 +7419,7 @@ impl CockpitView {
                         )),
                         prose_detail: true,
                         inert: fixed,
+                        tag: None,
                     },
                     active,
                     consequence: if fixed {
@@ -8603,43 +8611,53 @@ impl CockpitView {
         if !pane.is_main() {
             return None;
         }
-        // The queue strip's acts, each a key's: send now is Escape's "stop,
-        // and do what I queued now" (offered only while a turn runs, which
-        // is what it stops); edit is ↑'s and remove ⌫'s, aimed at the
-        // latest by its id and gone while Codex steers it.
-        let queue: Vec<AnyElement> = pane.thread().map_or_else(Vec::new, |thread| {
-            let open = self.cockpit.thread(thread);
-            let running = open.as_ref().is_some_and(turn_running);
-            let take_back = open.as_ref().and_then(queued_to_take_back);
+        // The queue strip's acts, each row's own, aimed at its message by
+        // its id: send now sends it next (`send_queued_now`), edit is ↑'s
+        // act and remove ⌫'s — neither while Codex steers it.
+        let queue: Vec<Vec<AnyElement>> = pane.thread().map_or_else(Vec::new, |thread| {
+            let Some(open) = self.cockpit.thread(thread) else {
+                return Vec::new();
+            };
+            let running = turn_running(&open);
             type Act = fn(&mut Cockpit, ThreadId, &str);
-            let acts: [(Option<gpui::component::button::Button>, Act); 3] = [
-                (
-                    running.then(|| pane::queued_send_now(cx)),
-                    |cockpit, thread, _| cockpit.interrupt(thread),
-                ),
-                (
-                    take_back.is_some().then(|| pane::queued_edit(cx)),
-                    |cockpit, thread, id| cockpit.edit_queued_item(thread, id),
-                ),
-                (
-                    take_back.is_some().then(|| pane::queued_close(cx)),
-                    |cockpit, thread, id| cockpit.remove_queued_item(thread, id, false),
-                ),
-            ];
-            acts.into_iter()
-                .filter_map(|(button, act)| {
-                    let id = take_back.clone().unwrap_or_default();
-                    let button =
-                        button?.on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-                            cx.stop_propagation();
-                            view.focus_pane(index);
-                            let focus = view.panes[index].composer.read(cx).focus_handle(cx);
-                            window.focus(&focus, cx);
-                            act(&mut view.cockpit, thread, &id);
-                            view.facts.acted(&view.cockpit, thread);
-                            cx.notify();
-                        }));
-                    Some(button.into_any_element())
+            open.queue()
+                .iter()
+                .enumerate()
+                .map(|(at, item)| {
+                    let takes_back = pane::queued_takes_back(item);
+                    let acts: [(Option<gpui::component::button::Button>, Act); 3] = [
+                        (
+                            pane::queued_sends_now(item, running)
+                                .then(|| pane::queued_send_now(at, cx)),
+                            |cockpit, thread, id| cockpit.send_queued_now(thread, id),
+                        ),
+                        (
+                            takes_back.then(|| pane::queued_edit(at, cx)),
+                            |cockpit, thread, id| cockpit.edit_queued_item(thread, id),
+                        ),
+                        (
+                            takes_back.then(|| pane::queued_close(at, cx)),
+                            |cockpit, thread, id| cockpit.remove_queued_item(thread, id, false),
+                        ),
+                    ];
+                    acts.into_iter()
+                        .filter_map(|(button, act)| {
+                            let id = item.id.clone();
+                            let button = button?.on_click(cx.listener(
+                                move |view, _: &ClickEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    view.focus_pane(index);
+                                    let focus =
+                                        view.panes[index].composer.read(cx).focus_handle(cx);
+                                    window.focus(&focus, cx);
+                                    act(&mut view.cockpit, thread, &id);
+                                    view.facts.acted(&view.cockpit, thread);
+                                    cx.notify();
+                                },
+                            ));
+                            Some(button.into_any_element())
+                        })
+                        .collect()
                 })
                 .collect()
         });
@@ -8836,9 +8854,12 @@ impl CockpitView {
     ///   as its tag; a pick signs in to one that waits on it, reconnects a
     ///   failed one, else opens the panel, where Connectors live — as
     ///   `Manage connectors` does.
-    /// - `Plugins ›`: the plugins the Session's commands come from (the CLI
-    ///   names a plugin's commands and skills `plugin:name`); a pick starts
-    ///   `/plugin:` on the line, the slash menu showing that plugin's.
+    /// - `Plugins ›`: the plugins the Session's commands come from, as the
+    ///   provider says (`CommandSource::Plugin`), each opening its own
+    ///   commands; a pick starts `/plugin:command ` on the line as a chip.
+    ///
+    /// Claude's `+` menu reaches nothing else Ferrite could back: a
+    /// plugin the CLI loads with no commands has nothing to pick.
     fn attach_submenus(
         &self,
         index: usize,
@@ -8898,6 +8919,7 @@ impl CockpitView {
                 label: "Connectors".into(),
                 value: SharedString::default(),
                 choices,
+                submenus: Vec::new(),
                 width: ferrite_ui::theme::ATTACH_MENU_W,
                 on_pick: std::rc::Rc::new(move |at, _, cx| {
                     let act = acts.get(at).cloned().flatten();
@@ -8912,36 +8934,71 @@ impl CockpitView {
                 }),
             });
         }
-        let plugins = plugin_names(open.commands());
+        let plugins = plugins(open.commands());
         if !plugins.is_empty() {
-            let choices = plugins
-                .iter()
-                .map(|name| ferrite_ui::components::Choice {
-                    label: name.clone().into(),
-                    ..Default::default()
+            let view = cx.entity().downgrade();
+            let submenus_per_plugin = plugins
+                .into_iter()
+                .map(|(plugin, commands)| {
+                    let names: Vec<String> = commands
+                        .iter()
+                        .map(|command| command.name.clone())
+                        .collect();
+                    let choices = commands
+                        .iter()
+                        .map(|command| ferrite_ui::components::Choice {
+                            // The command as the plugin names it: the
+                            // submenu already says whose it is.
+                            label: command
+                                .name
+                                .strip_prefix(&format!("{plugin}:"))
+                                .unwrap_or(&command.name)
+                                .to_string()
+                                .into(),
+                            why: (!command.description.is_empty())
+                                .then(|| command.description.clone().into()),
+                            ..Default::default()
+                        })
+                        .collect();
+                    let view = view.clone();
+                    ferrite_ui::menu::Submenu {
+                        icon: None,
+                        label: plugin.into(),
+                        value: SharedString::default(),
+                        choices,
+                        submenus: Vec::new(),
+                        width: ferrite_ui::theme::ATTACH_MENU_W,
+                        // A pick starts the command on the line, a chip
+                        // as the `/` menu's pick is.
+                        on_pick: std::rc::Rc::new(move |at, _, cx| {
+                            let Some(name) = names.get(at) else {
+                                return;
+                            };
+                            let token = format!("/{name}");
+                            let _ = view.update(cx, |view, cx| {
+                                view.attach_menu = None;
+                                view.panes[index]
+                                    .composer
+                                    .clone()
+                                    .update(cx, |composer, cx| {
+                                        composer.insert(&format!("{token} "), cx);
+                                        composer.stage_chip(SharedString::from(token), cx);
+                                    });
+                                cx.notify();
+                            });
+                        }),
+                    }
                 })
                 .collect();
-            let view = cx.entity().downgrade();
             submenus.push(ferrite_ui::menu::Submenu {
                 icon: Some((ferrite_ui::icons::PLUG, ferrite_ui::theme::INK_STRONG)),
                 label: "Plugins".into(),
                 value: SharedString::default(),
-                choices,
+                choices: Vec::new(),
+                submenus: submenus_per_plugin,
                 width: ferrite_ui::theme::ATTACH_MENU_W,
-                on_pick: std::rc::Rc::new(move |at, _, cx| {
-                    let Some(name) = plugins.get(at) else {
-                        return;
-                    };
-                    let line = format!("/{name}:");
-                    let _ = view.update(cx, |view, cx| {
-                        view.attach_menu = None;
-                        view.panes[index]
-                            .composer
-                            .clone()
-                            .update(cx, |composer, cx| composer.insert(&line, cx));
-                        cx.notify();
-                    });
-                }),
+                // Its rows are the plugins' submenus: nothing to pick here.
+                on_pick: std::rc::Rc::new(|_: usize, _: &mut Window, _: &mut gpui::App| {}),
             });
         }
         submenus
@@ -10104,7 +10161,8 @@ fn mention_token(text: &str, cursor: usize) -> Option<(usize, &str)> {
 }
 
 /// The `/` menu's rows: the Session's own commands through the fuzzy
-/// filter, best first (ties keep the provider's order), capped.
+/// filter, best first (ties keep the provider's order), capped, each
+/// tagged with where it comes from.
 fn command_rows(commands: &[ferrite_core::SessionCommand], filter: &str) -> Vec<pane::MenuRow> {
     let mut scored: Vec<(i64, pane::MenuRow)> = commands
         .iter()
@@ -10121,6 +10179,12 @@ fn command_rows(commands: &[ferrite_core::SessionCommand], filter: &str) -> Vec<
                     detail: SharedString::from(command.description.clone()),
                     prose_detail: true,
                     inert: false,
+                    // Where it comes from, as the provider says.
+                    tag: command
+                        .source
+                        .as_ref()
+                        .and_then(ferrite_core::CommandSource::tag)
+                        .map(SharedString::from),
                 },
             ))
         })
@@ -10166,6 +10230,7 @@ fn mention_rows(files: &[String], filter: &str) -> Vec<pane::MenuRow> {
                     }),
                     prose_detail: false,
                     inert: false,
+                    tag: None,
                 },
             ))
         })
@@ -10221,6 +10286,7 @@ fn native_mention_rows(files: &[ferrite_core::providers::FileSuggestion]) -> Vec
                 },
                 prose_detail: false,
                 inert: false,
+                tag: None,
             }
         })
         .collect()
@@ -10248,6 +10314,7 @@ fn local_row(
         detail: SharedString::from(detail),
         prose_detail: true,
         inert,
+        tag: None,
     })
 }
 
@@ -10261,6 +10328,7 @@ fn band_row(label: SharedString, detail: SharedString, active: bool, choice: Ban
             detail,
             prose_detail: false,
             inert: false,
+            tag: None,
         },
         active,
         consequence: Consequence::Band(choice),
@@ -10269,18 +10337,23 @@ fn band_row(label: SharedString, detail: SharedString, active: bool, choice: Ban
 
 /// The Provider's name as a person says it — the picker's section titles
 /// and the chip before any model is known.
-/// The plugins a Session's commands come from, in their first command's
-/// order: the CLI names a plugin's commands and skills `plugin:name`.
-fn plugin_names(commands: &[ferrite_core::SessionCommand]) -> Vec<String> {
-    let mut names: Vec<String> = Vec::new();
+/// The plugins a Session's commands come from, each with its commands,
+/// in their first command's order: what the provider says is a plugin's
+/// (`CommandSource::Plugin`).
+fn plugins(
+    commands: &[ferrite_core::SessionCommand],
+) -> Vec<(String, Vec<&ferrite_core::SessionCommand>)> {
+    let mut plugins: Vec<(String, Vec<&ferrite_core::SessionCommand>)> = Vec::new();
     for command in commands {
-        if let Some((plugin, _)) = command.name.split_once(':') {
-            if !plugin.is_empty() && !names.iter().any(|name| name == plugin) {
-                names.push(plugin.to_string());
-            }
+        let Some(plugin) = command.source.as_ref().and_then(|source| source.plugin()) else {
+            continue;
+        };
+        match plugins.iter_mut().find(|(name, _)| name == plugin) {
+            Some((_, listed)) => listed.push(command),
+            None => plugins.push((plugin.to_string(), vec![command])),
         }
     }
-    names
+    plugins
 }
 
 /// A Settings group for one Provider: its name, led by its logomark in
@@ -12950,6 +13023,7 @@ impl CockpitView {
                     label: "More models".into(),
                     value: SharedString::default(),
                     choices,
+                    submenus: Vec::new(),
                     width: ferrite_ui::theme::MODEL_PICKER_W,
                     on_pick: std::rc::Rc::new(move |at, window, cx| {
                         let Some(&row) = rows.get(at) else {
@@ -13191,6 +13265,7 @@ impl CockpitView {
             label: "Effort".into(),
             value,
             choices,
+            submenus: Vec::new(),
             width: ferrite_ui::theme::EFFORT_MENU_W,
             on_pick: std::rc::Rc::new(move |at, _, cx| {
                 let Some(level) = steps.get(at).cloned() else {
@@ -13275,6 +13350,7 @@ impl CockpitView {
                 }),
                 prose_detail: true,
                 inert: false,
+                tag: None,
             },
             active: chosen.is_none(),
             consequence: Consequence::Effort(None),
@@ -13288,6 +13364,7 @@ impl CockpitView {
                     detail: SharedString::from(effort_detail(&effort)),
                     prose_detail: true,
                     inert: false,
+                    tag: None,
                 },
                 active: chosen.as_deref() == Some(effort.as_str()),
                 consequence: Consequence::Effort(Some(effort)),

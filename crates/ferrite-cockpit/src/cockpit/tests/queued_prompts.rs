@@ -3,10 +3,10 @@
 use super::*;
 
 /// Two prompts sent while the turn runs: Solo's queue strip counts them
-/// (`2 messages queued`) and shows the top of the pile — the latest, what
-/// ↑ takes back and ⌫ drops (Claude's strip).
+/// (`2 messages queued`) and shows a row each, in the order they go; the
+/// latest is what ↑ takes back and ⌫ drops.
 #[gpui::test]
-fn queued_prompts_pile_up_with_the_latest_on_top(cx: &mut TestAppContext) {
+fn queued_prompts_pile_up_a_row_each(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("queued-pile", 1);
     cx.update(|cx| {
         cx.bind_keys([KeyBinding::new("enter", Submit, None)]);
@@ -40,14 +40,20 @@ fn queued_prompts_pile_up_with_the_latest_on_top(cx: &mut TestAppContext) {
             Some("second thing")
         );
     });
-    let top = cx
+    let first = cx
+        .debug_bounds("queued-1")
+        .expect("the first prompt is drawn");
+    let latest = cx
         .debug_bounds("queued-0")
         .expect("the latest prompt is drawn");
     let count = cx
         .debug_bounds("queued-count-2")
         .expect("the strip counts both");
-    assert!(top.left() >= count.right(), "{top:?} follows {count:?}");
-    assert!(cx.debug_bounds("queued-1").is_none(), "one row, not a pile");
+    assert!(first.left() >= count.right(), "{first:?} follows {count:?}");
+    assert!(
+        latest.top() >= first.bottom(),
+        "a row each, in the order they go: {first:?} / {latest:?}"
+    );
 }
 
 /// The queued row's `⌫ unqueue` hint is a real key: Backspace on an
@@ -251,11 +257,11 @@ fn a_steering_prompt_offers_no_edit_or_remove(cx: &mut TestAppContext) {
         cx.debug_bounds("queued-count-1").is_some(),
         "the strip is up"
     );
-    assert!(cx.debug_bounds("queued-steering").is_some(), "it says so");
-    assert!(cx.debug_bounds("queued-edit").is_none(), "no edit");
-    assert!(cx.debug_bounds("queued-close").is_none(), "no remove");
+    assert!(cx.debug_bounds("queued-steering-0").is_some(), "it says so");
+    assert!(cx.debug_bounds("queued-edit-0").is_none(), "no edit");
+    assert!(cx.debug_bounds("queued-close-0").is_none(), "no remove");
     assert!(
-        cx.debug_bounds("queued-send-now").is_some(),
+        cx.debug_bounds("queued-send-now-0").is_some(),
         "send now stays"
     );
     cx.simulate_keystrokes("backspace");

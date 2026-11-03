@@ -757,9 +757,14 @@ fn the_queued_row_drops_and_the_send_circle_sends_or_stops(cx: &mut TestAppConte
         cx.debug_bounds("queued-count-2").is_some(),
         "the strip counts both"
     );
+    // A row each, the one to go first on top; each row's close drops its
+    // own message, not the latest.
+    let first = cx.debug_bounds("queued-1").expect("the first queued");
+    let second = cx.debug_bounds("queued-0").expect("the latest");
+    assert!(first.bottom() <= second.top(), "in the order they go");
     let close = cx
-        .debug_bounds("queued-close")
-        .expect("the row's close button");
+        .debug_bounds("queued-close-1")
+        .expect("the first row's close button");
     cx.simulate_click(close.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {
@@ -771,8 +776,8 @@ fn the_queued_row_drops_and_the_send_circle_sends_or_stops(cx: &mut TestAppConte
                 .iter()
                 .map(|item| item.text.as_str())
                 .collect::<Vec<_>>(),
-            ["First follow-up"],
-            "the close button drops the top of the pile"
+            ["Second follow-up"],
+            "its own row's close drops the first, and only it"
         );
     });
     assert!(cx.debug_bounds("queued-count-1").is_some());
@@ -834,13 +839,13 @@ fn the_queue_strip_edits_and_sends_now(cx: &mut TestAppContext) {
     );
 
     let send_now = cx
-        .debug_bounds("queued-send-now")
+        .debug_bounds("queued-send-now-0")
         .expect("send now while the turn runs");
     cx.simulate_click(send_now.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(*fake.interrupts.borrow(), 1, "send now is Escape's act");
 
-    let edit = cx.debug_bounds("queued-edit").expect("edit");
+    let edit = cx.debug_bounds("queued-edit-0").expect("edit");
     cx.simulate_click(edit.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
@@ -905,7 +910,10 @@ fn the_focused_group_pane_shows_its_queue_and_backspace_drops_it(cx: &mut TestAp
         px(0.),
         "the box grows upward, the input stays put"
     );
-    assert!(cx.debug_bounds("queued-close").is_some(), "with its close");
+    assert!(
+        cx.debug_bounds("queued-close-0").is_some(),
+        "with its close"
+    );
 
     // Unfocused, the Pane counts it in its placeholder; focused again, the
     // row is back.

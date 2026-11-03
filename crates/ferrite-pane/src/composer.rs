@@ -147,13 +147,14 @@ pub struct Composer {
     /// Review comments gathered from the Review beside this Pane (ADR
     /// 0021): one attachment on the shelf, sent after the line's text.
     review: CommentStore,
-    /// Mention tokens (`@rel/path`) the operator picked from the `@` menu:
-    /// any occurrence still standing in the text paints as the comp's
-    /// @-pill, whichever provider serves the Thread. Display only — the
-    /// wire reads the text itself (Claude's CLI attaches the file, Codex's
-    /// send derives its mention items), so a token edited away simply
-    /// stops being one.
-    mentions: Vec<SharedString>,
+    /// Tokens the operator picked from a menu — an `@` mention's
+    /// `@rel/path`, a `/` command's `/name`: any occurrence still standing
+    /// whole in the text paints as a chip, whichever provider serves the
+    /// Thread. Display only — the wire reads the text itself (Claude's CLI
+    /// attaches the file and dispatches the command, Codex's send derives
+    /// its mention and skill items), so a token edited away simply stops
+    /// being one.
+    chips: Vec<SharedString>,
     /// A `/` or `@` popover is open over this line (#23). The cockpit owns
     /// the menu; this flag only widens the line's own key context to
     /// `ComposerMenu` — on the FOCUSED node, where gpui's same-depth
@@ -215,7 +216,7 @@ impl Composer {
             files: Vec::new(),
             quotes: Vec::new(),
             review: CommentStore::new(),
-            mentions: Vec::new(),
+            chips: Vec::new(),
             menu_open: false,
             history_available: false,
             last_layout: None,
@@ -423,7 +424,7 @@ impl Composer {
         self.files.clear();
         self.quotes.clear();
         self.review.take_all();
-        self.mentions.clear();
+        self.chips.clear();
         self.edited(cx);
         text
     }
@@ -534,17 +535,18 @@ impl Composer {
         &self.quotes
     }
 
-    /// Remember a picked `@` token so its occurrences paint as pills.
-    pub fn stage_mention(&mut self, token: SharedString, cx: &mut Context<Self>) {
-        if !self.mentions.contains(&token) {
-            self.mentions.push(token);
+    /// Remember a picked token (`@path`, `/name`) so its occurrences paint
+    /// as chips.
+    pub fn stage_chip(&mut self, token: SharedString, cx: &mut Context<Self>) {
+        if !self.chips.contains(&token) {
+            self.chips.push(token);
         }
         cx.notify();
     }
 
-    /// The staged pill tokens, as picked — display state only.
-    pub fn mentions(&self) -> &[SharedString] {
-        &self.mentions
+    /// The staged chip tokens, as picked — display state only.
+    pub fn chips(&self) -> &[SharedString] {
+        &self.chips
     }
 
     /// How many visual rows the text last painted as — the box's height in
@@ -975,13 +977,13 @@ impl Render for Composer {
     }
 }
 
-/// Where staged mention tokens still stand whole in the text — start-of-line
+/// Where staged chip tokens still stand whole in the text — start-of-line
 /// or whitespace on both sides, exactly the boundaries the wire's own
-/// `@`-token rule reads — sorted, overlaps dropped. These byte ranges paint
-/// as the comp's @-pill.
-fn pill_ranges(text: &str, mentions: &[SharedString]) -> Vec<Range<usize>> {
+/// `@`-token and `/`-command rules read — sorted, overlaps dropped. These
+/// byte ranges paint as chips.
+fn pill_ranges(text: &str, chips: &[SharedString]) -> Vec<Range<usize>> {
     let mut ranges: Vec<Range<usize>> = Vec::new();
-    for token in mentions {
+    for token in chips {
         let mut from = 0;
         while let Some(found) = text[from..].find(token.as_ref()) {
             let start = from + found;
@@ -1001,7 +1003,7 @@ fn pill_ranges(text: &str, mentions: &[SharedString]) -> Vec<Range<usize>> {
     ranges
 }
 
-/// The line's text runs: the base style, a picked mention in `MENTION_INK`
+/// The line's text runs: the base style, a picked chip in `MENTION_INK`
 /// over `pills`, the selection's own `INK_STRONG` ink over `selected` —
 /// the selection quad is the app's one translucent selection wash, painted
 /// under the shaped line — and the IME underline (`INK_SUBTLE`, 1px) over
@@ -1101,7 +1103,7 @@ impl Layout {
     ) -> Self {
         let content = SharedString::from(composer.line.text().to_string());
         let selected = composer.line.selection();
-        let pills = pill_ranges(&content, composer.mentions());
+        let pills = pill_ranges(&content, composer.chips());
         let run = TextRun {
             len: content.len(),
             font: style.font(),
@@ -1791,6 +1793,16 @@ mod tests {
         assert_eq!(pill_ranges("@docs/notes.txt", &mentions), [0..15]);
         // Gone from the text, gone from the paint.
         assert!(pill_ranges("plain prose", &mentions).is_empty());
+    }
+
+    /// A picked `/` command chips by the same rule as a mention, beside
+    /// one: `/tdd` whole, never inside `/tdd-loop` or a path.
+    #[test]
+    fn a_picked_command_chips_as_a_mention_does() {
+        let chips = shared(&["/tdd", "@src/lib.rs"]);
+        assert_eq!(pill_ranges("/tdd fix @src/lib.rs", &chips), [0..4, 9..20]);
+        assert!(pill_ranges("/tdd-loop", &chips).is_empty());
+        assert!(pill_ranges("see a/tdd", &chips).is_empty());
     }
 
     #[test]

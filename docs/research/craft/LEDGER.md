@@ -57,12 +57,12 @@ These are kept as they are:
 
 ## Lane C — the composer and picker
 
-- [ ] Image attachments show as thumbnail cards in the composer tray.
-- [ ] Add an image message to a render scene.
-- [ ] `/skill` picks become chips, as `@` mentions do.
-- [ ] Slash-picker rows carry a source tag (Skill, Plugin, built-in).
-- [ ] The + menu matches Claude, with Connectors › and Plugins ›, and a submenu for each plugin.
-- [ ] Each queued message can be edited and removed, and sent now.
+- [x] Image attachments show as thumbnail cards in the composer tray (`6733a514`): the picture on an 88px card, × on hover or keyboard focus, a click opens the lightbox. The card is the sent image's frame too.
+- [x] Add an image message to a render scene (`6733a514`): the `composer` scene sends one and has one in the tray.
+- [x] `/skill` picks become chips, as `@` mentions do (`7a300afe`), sent as plain `/name`.
+- [x] Slash-picker rows carry a source tag (Skill, Plugin, built-in) (`7a300afe`). Claude's come from its initialize list (`builtin`, `plugin:` names, the `(user)`/`(project)` suffixes, MCP prompts). Codex's skills give theirs from their scope; Codex reports nothing for its built-ins or prompts, so those rows are untagged.
+- [x] The + menu matches Claude, with Connectors › and Plugins ›, and a submenu for each plugin (`7a300afe`). Plugins lists the plugins that bring commands, each a submenu of them. A plugin with no commands has nothing to pick, so it is left out, and Codex reports no plugins. Claude's other plugin and connector actions have no data behind them in Ferrite, so they are left out.
+- [x] Each queued message can be edited and removed, and sent now (`73efd684`): a row each, with its own actions. Send now sends that message next. It steers into the running turn where the provider steers (Codex) and stops the turn where it cannot (Claude).
 
 ## Lane A — actions and menus
 
