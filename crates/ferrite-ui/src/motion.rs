@@ -1327,6 +1327,14 @@ pub fn hover_frame_start(cx: &App) {
     HOVER_NOW.with(|cell| cell.set(Some(now)));
 }
 
+/// Forget every hover blend and the frame's clock: the blends live on the
+/// thread, not the window, so a new window on the same thread (each
+/// visual-reference scene's) starts with nothing under the pointer.
+pub fn hover_reset() {
+    HOVER_FADES.with(|fades| *fades.borrow_mut() = HoverFades::default());
+    HOVER_NOW.with(|now| now.set(None));
+}
+
 /// Hover progress (0..1) for `key` this frame.
 pub fn hover_t(key: &str) -> f32 {
     let now = hover_now();

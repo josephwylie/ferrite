@@ -151,18 +151,14 @@ fn plan_usage_card(limits: RateLimits, plan: Option<SharedString>, now: SystemTi
         .children(plan_windows(limits).map(window))
 }
 
-/// A usage ring: a `CONTEXT_RING` circle, its track a hairline, `fraction`
-/// drawn round it from the top in `INK_SUBTLE`, `ATTENTION` once the
-/// window runs tight (`USAGE_TIGHT`). `fraction` is clamped.
+/// A usage ring (Claude's, measured on claude/answer-done.png): a
+/// `CONTEXT_RING` circle, its track `USAGE_POP_TRACK`, `fraction` drawn
+/// round it from the top in the popover bar's ink (`usage_bar_ink`: accent
+/// blue, `ATTENTION` once the window runs tight). `fraction` is clamped.
 fn usage_ring(fraction: f32) -> Div {
     let fraction = fraction.clamp(0., 1.);
-    let ink: gpui::Hsla = rgb(if fraction < theme::USAGE_TIGHT {
-        INK_SUBTLE
-    } else {
-        ATTENTION
-    })
-    .into();
-    let track: gpui::Hsla = theme::paint::LINE.into();
+    let ink: gpui::Hsla = rgb(usage_bar_ink(fraction)).into();
+    let track: gpui::Hsla = rgb(theme::USAGE_POP_TRACK).into();
     div().flex_shrink_0().size(px(theme::CONTEXT_RING)).child(
         gpui::canvas(
             |_, _, _| {},
@@ -231,10 +227,9 @@ pub fn compact_count(count: u64) -> String {
 }
 
 /// A context category's ink in the card's stacked bar and in its legend
-/// (`CTX_*`: the palette's own quiet hues). The categories a provider
-/// usually reports keep one ink each; any other name takes the next from a
-/// fixed cycle, so a new category still reads as distinct.
-pub(super) fn category_ink(name: &str, index: usize) -> u32 {
+/// (`CTX_*`, Claude's): the categories with a hue of their own keep it;
+/// every other name, as in Claude's legend, is `CTX_OTHER`.
+pub(super) fn category_ink(name: &str) -> u32 {
     let name = name.to_ascii_lowercase();
     if name.contains("deferred") {
         theme::CTX_DEFERRED
@@ -248,14 +243,10 @@ pub(super) fn category_ink(name: &str, index: usize) -> u32 {
         theme::CTX_MCP
     } else if name.contains("tool") {
         theme::CTX_TOOLS
-    } else if name.contains("skill") {
-        theme::CTX_SKILLS
     } else if name.contains("prompt") {
         theme::CTX_PROMPT
-    } else if name.contains("memory") {
-        theme::CTX_MEMORY
     } else {
-        theme::CTX_CYCLE[index % theme::CTX_CYCLE.len()]
+        theme::CTX_OTHER
     }
 }
 
@@ -277,11 +268,10 @@ pub fn context_segments(
     }
     categories
         .iter()
-        .enumerate()
-        .filter(|(_, category)| category_in_window(&category.name) && category.tokens > 0)
-        .map(|(index, category)| {
+        .filter(|category| category_in_window(&category.name) && category.tokens > 0)
+        .map(|category| {
             (
-                category_ink(&category.name, index),
+                category_ink(&category.name),
                 category.tokens as f32 / denominator as f32,
             )
         })
@@ -290,7 +280,7 @@ pub fn context_segments(
 
 /// A context meter with no legend to keep: one segment per category in
 /// the window, in its `CTX_*` ink and at its share of `window`, or one
-/// `CTX_CYCLE[0]` segment when the provider names none; past
+/// `CTX_MESSAGES` segment when the provider names none; past
 /// `CTX_METER_WARN` every segment wears the state's ink (`ctx_meter_ink`).
 /// The Context section's bar uses it only when the provider names no
 /// categories; with them it keeps each category's ink to match its legend
@@ -305,7 +295,7 @@ pub fn context_meter_segments(
         .map(|details| context_segments(&details.categories, window))
         .unwrap_or_default();
     if segments.is_empty() {
-        segments.push((theme::CTX_CYCLE[0], fraction));
+        segments.push((theme::CTX_MESSAGES, fraction));
     }
     if fraction >= theme::CTX_METER_WARN {
         let ink = ctx_meter_ink(fraction);
@@ -441,7 +431,7 @@ pub fn context_usage(
         let row = |share: String| {
             legend_row(
                 format!("context-category-{index}-{tokens}"),
-                category_ink(&category.name, index),
+                category_ink(&category.name),
                 sentence_case(&category.name),
                 tokens,
                 share,

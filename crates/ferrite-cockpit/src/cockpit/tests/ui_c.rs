@@ -737,11 +737,12 @@ fn a_nav_title_takes_what_its_mark_leaves(cx: &mut TestAppContext) {
 
 /// Fix 2: a Thread whose turn ended in an error reads `failed` in the nav,
 /// and its dot is `BLOCKED` there, in the rail and in the Group head — never
-/// the idle grey beside a red word.
+/// the idle grey beside a red word. The failure is a finish: once seen it
+/// says nothing and wears no dot, as a seen `done` does.
 #[gpui::test]
-fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAppContext) {
+fn a_failed_threads_dot_is_blocked_until_the_failure_is_seen(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("failed-dot", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_unfocused_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     for event in [
         SessionEvent::TextDelta {
@@ -758,16 +759,34 @@ fn a_failed_threads_dot_is_blocked_wherever_its_word_says_failed(cx: &mut TestAp
     view.read_with(cx, |view, _| {
         let thread = view.cockpit.threads()[0];
         let row = view.thread_row(thread);
-        assert_eq!(row.tail, nav::NavTail::Failed, "the tail says failed");
+        assert_eq!(
+            row.tail,
+            nav::NavTail::Failed,
+            "unseen, the tail says failed"
+        );
         assert_eq!(
             row.status.ink(),
             ferrite_ui::theme::BLOCKED,
             "and the nav and rail mark say it too"
         );
         assert_eq!(
-            pane::thread_word(view.cockpit.thread(thread).unwrap(), None, false),
+            pane::thread_word(view.cockpit.thread(thread).unwrap(), None, true),
             Some(pane::HeadSlot::Failed),
             "the Pane's word agrees"
+        );
+    });
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        let thread = view.cockpit.threads()[0];
+        assert!(!view.cockpit.notifications().attention(thread), "seen");
+        let row = view.thread_row(thread);
+        assert_ne!(row.tail, nav::NavTail::Failed, "seen, it says nothing");
+        assert_eq!(row.status, nav::RowStatus::Idle, "and wears no dot");
+        assert_eq!(
+            pane::thread_word(view.cockpit.thread(thread).unwrap(), None, false),
+            None,
+            "nor does the Pane"
         );
     });
 }

@@ -149,10 +149,13 @@ impl Feed {
             output_tokens: 0,
             reasoning_output_tokens: 0,
             context_window: Some(200_000),
-        });
-        // The account as Claude's capture reports it (claude/usage-popover):
-        // a plan, and one window, so the footer ends with its ring as it
-        // does in real use.
+        })
+        .account(provider)
+    }
+    /// The account as Claude's capture reports it (claude/usage-popover): a
+    /// plan, and one window, so the footer ends with its ring as it does in
+    /// real use. Every Session reports it, whatever its mode.
+    fn account(&self, provider: Provider) -> &Self {
         if provider == Provider::Claude {
             self.ev(SessionEvent::AccountPlan { name: "Max".into() });
         }
@@ -511,6 +514,26 @@ const STATES: &[(&str, &[&str])] = &[
     ("refresh-palette", &["refresh"]),
 ];
 
+/// The states paired with a Claude capture whose side panel is closed
+/// (CP4-REVIEW.md's pairs): they render with the panel closed too, so each
+/// pair compares like for like. `panel-context` is the one pair with it open.
+const PANEL_CLOSED: &[&str] = &[
+    "conversation",
+    "approval",
+    "live",
+    "composer",
+    "subagents",
+    "toolgroups-open",
+    "modelpicker",
+    "modemenu",
+    "plusmenu",
+    "usagepopover",
+    "empty-transcript",
+    "nav",
+    "contextmenu",
+    "palettefilter",
+];
+
 /// Every state: the table's, then the feature scenes' at the app size.
 fn all_states() -> impl Iterator<Item = (&'static str, &'static [&'static str])> {
     STATES.iter().copied().chain(
@@ -582,6 +605,8 @@ fn render(
     width: f32,
     height: f32,
 ) {
+    // No scene inherits the last one's pointer (navhover's rows).
+    ferrite_ui::motion::hover_reset();
     let (mut scene, setup) = build(state, label);
     scene.core.pump();
     let Scene {
@@ -620,7 +645,12 @@ fn render(
     cx.update_window(window.into(), |_, window, cx| {
         // A frame first, so anything a setup anchors to has been laid out.
         let _ = window.draw(cx);
-        view.update(cx, |view, cx| setup(view, window, cx));
+        view.update(cx, |view, cx| {
+            if PANEL_CLOSED.contains(&state) {
+                view.prefs.settings.panel_shown = false;
+            }
+            setup(view, window, cx)
+        });
     })
     .unwrap();
     cx.run_until_parked();
@@ -777,15 +807,17 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
+        // The focused row's `⋯` pressed, as on claude/row-menu.png: the
+        // pointer on the row stands its button, and the menu opens under
+        // it once a frame has drawn it.
         "contextmenu" => {
             let (scene, _) = nav();
-            let setup: Setup = Box::new(|view, _, cx| {
+            let setup: Setup = Box::new(|view, window, cx| {
                 let thread = view.cockpit.roster().focused_thread().expect("focus");
-                view.open_context_menu(
-                    MenuTarget::Thread(thread),
-                    gpui::point(gpui::px(180.), gpui::px(150.)),
-                    cx,
+                ferrite_ui::motion::hover_listener(format!("nav-thread-0-{}", thread.get()).into())(
+                    &true, window, cx,
                 );
+                press_more_when_drawn(thread, 8, window, cx);
             });
             (scene, setup)
         }
@@ -838,7 +870,8 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "empty-transcript" => {
             let mut scene = Scene::new("empty-transcript");
             let ferrite = scene.project("ferrite");
-            let _ = scene.open(Provider::Claude, &ferrite, "");
+            let (_, feed) = scene.open(Provider::Claude, &ferrite, "");
+            feed.account(Provider::Claude);
             (scene, none)
         }
         "large-pinned-prompt" => {
@@ -1249,11 +1282,29 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
     }
 }
 
+/// Open `thread`'s row menu from its `⋯` as a press does, on the first
+/// frame (of `frames`) that has drawn the button.
+fn press_more_when_drawn(
+    thread: ThreadId,
+    frames: usize,
+    window: &mut Window,
+    cx: &mut Context<CockpitView>,
+) {
+    cx.on_next_frame(window, move |view, window, cx| {
+        match window.debug_bounds(&format!("nav-more-0-{}", thread.get())) {
+            Some(button) => view.open_context_menu_under(MenuTarget::Thread(thread), button, cx),
+            None if frames > 0 => press_more_when_drawn(thread, frames - 1, window, cx),
+            None => eprintln!("ferrite: contextmenu: the row's `⋯` never drew"),
+        }
+    });
+}
+
 /// The original transcript references: one Solo Thread per state.
 fn legacy(state: &str) -> (Scene, Setup) {
     let mut scene = Scene::new(state);
     let checkout = std::env::current_dir().unwrap();
     let (thread, sender) = scene.open(Provider::Claude, &checkout, "");
+    sender.account(Provider::Claude);
     let core = &mut scene.core;
     core.send(
         thread,

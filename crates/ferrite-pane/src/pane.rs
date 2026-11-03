@@ -1863,7 +1863,10 @@ impl HeadSlot {
 /// `needs you` > `failing` > `failed` > `working` > `done` >
 /// `interrupted` > `parked`; idle is nothing. A finish is `done` only while
 /// `unread` (not yet seen), as the nav row's mark is
-/// (`mark::RowStatus::of`); seen, it is idle.
+/// (`mark::RowStatus::of`); seen, it is idle. A turn that ended in an error
+/// is a finish too: `failed` until seen, then idle (its failure line stays
+/// in the transcript). A Session that closed under its Thread stays
+/// `failed`: that is a standing state, not a finish.
 fn state_word(
     state: WallState,
     kind: Option<&'static str>,
@@ -1888,7 +1891,7 @@ fn state_word(
         ),
         WallState::Parked => HeadSlot::Parked,
         WallState::Done | WallState::Idle => match turn.and_then(|turn| turn.outcome.as_ref()) {
-            Some(TurnOutcome::Error(_)) => HeadSlot::Failed,
+            Some(TurnOutcome::Error(_)) if unread => HeadSlot::Failed,
             _ if unread => HeadSlot::Done,
             Some(TurnOutcome::Interrupted) => HeadSlot::Interrupted,
             _ => return None,
@@ -1898,7 +1901,8 @@ fn state_word(
 
 /// The state a Thread's dot shows: its wall state, squared with the state
 /// word beside it so the two can never disagree. A turn that ended in an
-/// error reads `failed`, so its dot is `BLOCKED` like a closed Session's;
+/// error reads `failed` until seen, so its dot is `BLOCKED` like a closed
+/// Session's until then;
 /// a `failing` word is always a `BLOCKED` dot. Every surface that draws a
 /// Thread's dot — the nav, the rail, the Group head — reads
 /// it through here.
@@ -6655,8 +6659,8 @@ mod tests {
         let foot = context_meter_segments(130_000, 200_000, Some(&details));
         assert!(foot.iter().all(|(ink, _)| *ink == ctx_meter_ink(0.65)));
         let tab = context_segments(&details.categories, 200_000);
-        assert_eq!(tab[0].0, category_ink("System prompt", 0));
-        assert_eq!(tab[1].0, category_ink("Messages", 1));
+        assert_eq!(tab[0].0, category_ink("System prompt"));
+        assert_eq!(tab[1].0, category_ink("Messages"));
     }
 
     // (end WP-D)

@@ -2096,18 +2096,19 @@ pub const USAGE_LEGEND_TEXT_X: f32 = SPACE_6;
 pub const USAGE_SHARE_W: f32 = 44.0;
 pub const USAGE_LEGEND_GROUP_GAP: f32 = SPACE_1_5;
 /// What fills the context window, one ink per category in the stacked bar
-/// and its legend: the terminal palette, the operator's own words first
-/// (blue, as the retired accent had them: a category, not a state).
-pub const CTX_MESSAGES: u32 = BLUE;
-pub const CTX_TOOLS: u32 = ORANGE;
-pub const CTX_MCP: u32 = GREEN;
-pub const CTX_SKILLS: u32 = YELLOW;
-pub const CTX_PROMPT: u32 = MAGENTA;
-pub const CTX_MEMORY: u32 = CYAN;
-pub const CTX_BUFFER: u32 = INK_SUBTLE;
-pub const CTX_FREE: u32 = LINE;
-pub const CTX_DEFERRED: u32 = TEXT_FAINT;
-pub const CTX_CYCLE: [u32; 4] = [BLUE, RED, 0x8fb2b8, 0xb5b48e];
+/// and its legend: Claude's saturated category hues (sampled on
+/// claude/side-panel.png) — blue messages, orange-red system tools, teal
+/// MCP tools, amber system prompt — and its light grey for every other
+/// category (skills, memory files, any it names anew), a dark grey for the
+/// autocompact buffer and the deferred tools, the track's for free space.
+pub const CTX_MESSAGES: u32 = 0x318ce8;
+pub const CTX_TOOLS: u32 = 0xe96535;
+pub const CTX_MCP: u32 = 0x00a989;
+pub const CTX_PROMPT: u32 = 0xd38e2c;
+pub const CTX_OTHER: u32 = 0x959595;
+pub const CTX_BUFFER: u32 = 0x5e5e5e;
+pub const CTX_FREE: u32 = 0x2b2b2b;
+pub const CTX_DEFERRED: u32 = CTX_BUFFER;
 /// 28px — the air a fitted image keeps from its preview card's edges (the
 /// image viewer): a Solo transcript's text inset. Zoomed past the card,
 /// the picture pans right to them.
@@ -2222,7 +2223,8 @@ pub const COMPOSER_TEXT_PAD_Y: f32 = (COMPOSER_ATTACH - COMPOSER_ROW_H) / 2.0;
 /// `FS_META` (`FOOTER_CHIP_H` high, `FOOTER_CHIP_PAD_X` each side, a fill
 /// only under the pointer, `FOOTER_CHIP_GAP` between chips: 18 from word to
 /// word) and the plan-usage ring (`CONTEXT_RING` round, its stroke
-/// `CONTEXT_RING_STROKE`), centred on the `COMPOSER_FOOTER_H` row that is
+/// `CONTEXT_RING_STROKE`: Claude's 14 and 2, on claude/answer-done.png),
+/// centred on the `COMPOSER_FOOTER_H` row that is
 /// all there is between the box and the card's foot (41, Claude's).
 pub const COMPOSER_FOOTER_H: f32 = 41.0;
 pub const FOOTER_CHIP_H: f32 = 24.0;
@@ -2247,7 +2249,7 @@ pub const USAGE_POP_TRACK: u32 = 0x454545;
 pub const USAGE_POP_BAR: u32 = 0x237ddb;
 pub const USAGE_POP_OFFSET: f32 = SPACE_2;
 pub const CONTEXT_RING: f32 = 14.0;
-pub const CONTEXT_RING_STROKE: f32 = 1.75;
+pub const CONTEXT_RING_STROKE: f32 = 2.0;
 // (end WP-D) — append above this line only
 
 // ======================================== WP-E · menus, popovers, sheets, notifications

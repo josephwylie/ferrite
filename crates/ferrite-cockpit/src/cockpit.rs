@@ -1065,6 +1065,11 @@ struct ContextMenu {
     /// The menu's corner at `at`: its top left at the pointer, its top
     /// right under the `⋯` it opened from (`open_context_menu_under`).
     corner: gpui::Anchor,
+    /// Opened from a `⋯`: `at` is `MENU_UNDER_GAP` over the button and
+    /// this drops the menu to the same gap under it. Where the window has
+    /// no room below, the menu flips to hang over the button instead
+    /// (gpui's `SwitchAnchor` flips about `at`). None at the pointer.
+    drop: Option<Pixels>,
     rows: Vec<Option<(menu::Item, MenuVerb)>>,
     /// The destructive row pressed once, waiting for its confirmation.
     armed: Option<usize>,
@@ -3429,22 +3434,22 @@ impl CockpitView {
     /// was up (a popover, a card, a rename) closes: one floating thing at a
     /// time.
     fn open_context_menu(&mut self, target: MenuTarget, at: Point<Pixels>, cx: &mut Context<Self>) {
-        self.open_context_menu_at(target, at, gpui::Anchor::TopLeft, cx);
+        self.open_context_menu_at(target, at, gpui::Anchor::TopLeft, None, cx);
     }
 
     /// The menu a row's `⋯` opens, as Claude's: under the button, its right
-    /// edge on the button's, `MENU_UNDER_GAP` below it.
+    /// edge on the button's, `MENU_UNDER_GAP` below it — over it, the same
+    /// gap above, only where the window has no room below.
     fn open_context_menu_under(
         &mut self,
         target: MenuTarget,
         button: gpui::Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let at = gpui::point(
-            button.right(),
-            button.bottom() + px(ferrite_ui::theme::MENU_UNDER_GAP),
-        );
-        self.open_context_menu_at(target, at, gpui::Anchor::TopRight, cx);
+        let gap = px(ferrite_ui::theme::MENU_UNDER_GAP);
+        let at = gpui::point(button.right(), button.top() - gap);
+        let drop = button.size.height + gap * 2.;
+        self.open_context_menu_at(target, at, gpui::Anchor::TopRight, Some(drop), cx);
     }
 
     fn open_context_menu_at(
@@ -3452,6 +3457,7 @@ impl CockpitView {
         target: MenuTarget,
         at: Point<Pixels>,
         corner: gpui::Anchor,
+        drop: Option<Pixels>,
         cx: &mut Context<Self>,
     ) {
         self.popover = None;
@@ -3464,6 +3470,7 @@ impl CockpitView {
             target,
             at,
             corner,
+            drop,
             rows,
             armed: None,
         });
@@ -4014,18 +4021,17 @@ impl CockpitView {
                 ),
             };
         }
+        let placed = anchored().anchor(open.corner).position(open.at);
+        let placed = match open.drop {
+            Some(drop) => placed.offset(gpui::point(px(0.), drop)),
+            None => placed.snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD)),
+        };
         Some(
-            deferred(
-                anchored()
-                    .anchor(open.corner)
-                    .position(open.at)
-                    .snap_to_window_with_margin(px(ferrite_ui::theme::GRID_PAD))
-                    .child(ferrite_ui::motion::menu_in(
-                        "context-menu-in",
-                        shell,
-                        ferrite_ui::motion::Opens::Down,
-                    )),
-            )
+            deferred(placed.child(ferrite_ui::motion::menu_in(
+                "context-menu-in",
+                shell,
+                ferrite_ui::motion::Opens::Down,
+            )))
             .with_priority(2)
             .into_any_element(),
         )
@@ -14613,7 +14619,8 @@ impl CockpitView {
         // Where the button drew, so its menu opens under it.
         let drawn = std::rc::Rc::new(std::cell::Cell::new(None::<gpui::Bounds<Pixels>>));
         let action = Some(
-            nav::row_action(more, ferrite_ui::icons::ELLIPSIS)
+            nav::row_action(more.clone(), ferrite_ui::icons::ELLIPSIS)
+                .debug_selector(move || more.clone())
                 .relative()
                 .tooltip(ferrite_ui::menu::tooltip("More"))
                 .child({
