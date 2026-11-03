@@ -753,6 +753,7 @@ fn menu_commands() -> Vec<ferrite_core::SessionCommand> {
         name: name.into(),
         description: description.into(),
         path: None,
+        source: None,
     })
     .collect()
 }

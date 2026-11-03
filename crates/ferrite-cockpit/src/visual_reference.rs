@@ -1097,8 +1097,38 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
+        // With a Session that reports MCP servers and plugins: Claude's
+        // `Connectors ›` and `Plugins ›` under the three rows.
         "plusmenu" => {
             let scene = conversation(label);
+            {
+                let feeds = scene.feeds.borrow();
+                let plugin = |name: &str, plugin: &str| SessionCommand {
+                    name: name.into(),
+                    description: String::new(),
+                    path: None,
+                    source: Some(ferrite_core::CommandSource::Plugin {
+                        plugin: plugin.into(),
+                    }),
+                };
+                for event in [
+                    SessionEvent::McpServers {
+                        servers: vec![McpServer {
+                            name: "github".into(),
+                            status: McpStatus::Connected,
+                            error: None,
+                        }],
+                    },
+                    SessionEvent::Commands {
+                        commands: vec![
+                            plugin("tdd:red-green", "tdd"),
+                            plugin("impeccable:polish", "impeccable"),
+                        ],
+                    },
+                ] {
+                    feeds[0].send(event).expect("fixture Session is listening");
+                }
+            }
             let setup: Setup = Box::new(|view, _, _| {
                 view.attach_menu = Some(view.panes[0].identity);
             });
@@ -2276,12 +2306,21 @@ fn menu() -> (Scene, Setup) {
                 "simplify",
                 "Review changed code for reuse and simplification",
             ),
+            ("tdd:red-green", "Write the failing test first"),
         ]
         .into_iter()
         .map(|(name, description)| SessionCommand {
             name: name.into(),
             description: description.into(),
             path: None,
+            // Where each comes from, as the CLI marks it.
+            source: Some(match name {
+                "commit" | "simplify" => ferrite_core::CommandSource::Skill,
+                "tdd:red-green" => ferrite_core::CommandSource::Plugin {
+                    plugin: "tdd".into(),
+                },
+                _ => ferrite_core::CommandSource::BuiltIn,
+            }),
         })
         .collect(),
     });

@@ -4925,6 +4925,7 @@ mod tests {
             detail: "adopt a CLI session".into(),
             prose_detail: true,
             inert: false,
+            tag: None,
         };
         assert_eq!(
             cursor(menu_row(("r", 0usize), &offer, false, None)),
@@ -4942,11 +4943,24 @@ mod tests {
             detail: offer.detail.clone(),
             prose_detail: true,
             inert: true,
+            tag: None,
         };
         assert_eq!(cursor(menu_row(("r", 1usize), &inert, false, None)), None);
         assert_eq!(cursor(menu_row(("r", 1usize), &inert, true, None)), None);
         // No ↵, not even on the cursor row (Claude's).
         assert_eq!(menu_item(&offer, None).shortcut, None);
+        // A command's source rides as its tag.
+        let tagged = MenuRow {
+            insert: offer.insert.clone(),
+            name: offer.name.clone(),
+            matched: vec![],
+            detail: offer.detail.clone(),
+            prose_detail: true,
+            inert: false,
+            tag: Some("Skill".into()),
+        };
+        assert_eq!(menu_item(&tagged, None).tag.as_deref(), Some("Skill"));
+        assert_eq!(menu_item(&offer, None).tag, None);
         // A long directory keeps its tail.
         let deep = MenuRow {
             detail: "crates/ferrite/src/some/very/deeply/nested/module/tree/of/files".into(),

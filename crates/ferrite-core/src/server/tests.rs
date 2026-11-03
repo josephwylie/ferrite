@@ -2077,6 +2077,7 @@ fn announcements() -> Vec<SessionEvent> {
                 name: "review".into(),
                 description: "Review the change".into(),
                 path: None,
+                source: None,
             }],
         },
         SessionEvent::Models {

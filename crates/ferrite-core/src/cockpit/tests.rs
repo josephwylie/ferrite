@@ -3552,6 +3552,7 @@ fn a_commands_event_becomes_the_thread_menu_and_never_the_history() {
         name: "compact".into(),
         description: "summarize context".into(),
         path: None,
+        source: None,
     }];
     fake.streams.borrow()[0]
         .send(SessionEvent::Commands {

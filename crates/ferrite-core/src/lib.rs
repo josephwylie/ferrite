@@ -51,9 +51,9 @@ mod session_event;
 mod thread;
 pub use attention::Attention;
 pub use session_event::{
-    validate_form, ContextCategory, ContextDetails, ContextItem, ControlKind, Decision,
-    DecisionAnswer, DecisionChoice, DecisionDelivery, DecisionKind, DecisionPolicy, FileEdit,
-    FormChoice, FormField, FormFieldKind, Hunk, McpServer, McpStatus, ModelInfo,
+    validate_form, CommandSource, ContextCategory, ContextDetails, ContextItem, ControlKind,
+    Decision, DecisionAnswer, DecisionChoice, DecisionDelivery, DecisionKind, DecisionPolicy,
+    FileEdit, FormChoice, FormField, FormFieldKind, Hunk, McpServer, McpStatus, ModelInfo,
     PermissionModeChoice, QueueEvent, QueuedPrompt, RateLimitWindow, RunState, SessionCommand,
     SessionControl, SessionEvent, ToolResult, TurnOutcome, UsageDetails, UsageScope,
 };

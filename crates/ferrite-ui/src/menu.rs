@@ -232,6 +232,7 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
             }
             None => row.child(div().flex_1()),
         })
+        .when_some(item.tag.clone(), |row, tag| row.child(badge_face(tag)))
         .when(item.checked, |row| {
             row.child(
                 div()
@@ -502,6 +503,9 @@ pub type Picked = Rc<dyn Fn(usize, &mut gpui::Window, &mut gpui::App)>;
 /// its label, the choice in force at its right, the list it opens, that
 /// list's width, and what a pick there does. Submenu rows sit under the
 /// menu's rows, each past an inset hairline — or, marked, as rows of it.
+/// A submenu's own `submenus` stand under its choices and open one list
+/// further out (the `+` menu's `Plugins ›` › each plugin); theirs are
+/// not drawn.
 #[derive(Clone)]
 pub struct Submenu {
     /// A row's own mark: the row then stands among the menu's rows, no
@@ -510,6 +514,7 @@ pub struct Submenu {
     pub label: SharedString,
     pub value: SharedString,
     pub choices: Vec<components::Choice>,
+    pub submenus: Vec<Submenu>,
     pub width: f32,
     pub on_pick: Picked,
 }
@@ -591,9 +596,13 @@ struct ChoiceState {
     /// The cursor row (an index into the choices, or `choices.len() + k`
     /// for the `k`th submenu row); `None` while closed.
     cursor: Option<usize>,
-    /// The open submenu's cursor (an index into its choices); `None` while
-    /// it is shut. The open submenu is the one whose row the cursor is on.
+    /// The open submenu's cursor (an index into its choices, then its own
+    /// submenu rows); `None` while it is shut. The open submenu is the one
+    /// whose row the cursor is on.
     sub: Option<usize>,
+    /// The cursor in the list the open submenu's row under `sub` opens, one
+    /// further out; `None` while that is shut.
+    deep: Option<usize>,
     /// The keyboard has moved a cursor since the menu opened: only then is
     /// the cursor row filled. At rest no row is (Claude's menus): the ✓
     /// says what stands, and the pointer's hover fill says where it is.
@@ -628,6 +637,32 @@ fn start(choices: &[components::Choice]) -> Option<usize> {
         .or_else(|| choices.iter().position(live))
 }
 
+/// Where the arrows start in a list of `choices` then `submenus` rows:
+/// as `start`, else on the first submenu row.
+fn start_in(choices: &[components::Choice], submenus: &[Submenu]) -> Option<usize> {
+    start(choices).or_else(|| (!submenus.is_empty()).then_some(choices.len()))
+}
+
+/// The submenu whose row `cursor` is on, with its index, in a list of
+/// `choices` then `submenus` rows.
+fn submenu_in<'a>(
+    choices: &[components::Choice],
+    submenus: &'a [Submenu],
+    cursor: Option<usize>,
+) -> Option<(usize, &'a Submenu)> {
+    let k = cursor?.checked_sub(choices.len())?;
+    submenus.get(k).map(|submenu| (k, submenu))
+}
+
+/// The rows ↑/↓ visit in such a list: the live choices, then the submenu
+/// rows.
+fn lives_in(choices: &[components::Choice], submenus: usize) -> Vec<usize> {
+    (0..choices.len())
+        .filter(|at| live(&choices[*at]))
+        .chain((0..submenus).map(|k| choices.len() + k))
+        .collect()
+}
+
 struct ChoiceContent {
     choices: Vec<components::Choice>,
     submenus: Vec<Submenu>,
@@ -653,8 +688,7 @@ impl ChoiceContent {
 
     /// The submenu whose row `cursor` is on, with its index.
     fn submenu_at(&self, cursor: Option<usize>) -> Option<(usize, &Submenu)> {
-        let k = cursor?.checked_sub(self.choices.len())?;
-        self.submenus.get(k).map(|submenu| (k, submenu))
+        submenu_in(&self.choices, &self.submenus, cursor)
     }
 
     /// The submenu open now: the one under the cursor, while one is open.
@@ -663,12 +697,17 @@ impl ChoiceContent {
         self.submenu_at(state.cursor).map(|(_, submenu)| submenu)
     }
 
+    /// The list open one further out: the open submenu's own submenu under
+    /// its cursor, while it is open.
+    fn open_deep(&self, state: &ChoiceState) -> Option<&Submenu> {
+        state.deep?;
+        let submenu = self.open_submenu(state)?;
+        submenu_in(&submenu.choices, &submenu.submenus, state.sub).map(|(_, deep)| deep)
+    }
+
     /// The rows ↑/↓ visit: the live choices, then the submenu rows.
     fn lives(&self) -> Vec<usize> {
-        (0..self.choices.len())
-            .filter(|at| live(&self.choices[*at]))
-            .chain((0..self.submenus.len()).map(|k| self.sub_row(k)))
-            .collect()
+        lives_in(&self.choices, self.submenus.len())
     }
 
     fn update(self: &Rc<Self>, cx: &mut gpui::App, change: impl FnOnce(&Self, &mut ChoiceState)) {
@@ -697,6 +736,19 @@ impl ChoiceContent {
         self.close(window, cx);
     }
 
+    /// Pick the row at `at` in the list open furthest out, hand the
+    /// keyboard back, close.
+    fn pick_deep(self: &Rc<Self>, at: usize, window: &mut gpui::Window, cx: &mut gpui::App) {
+        let Some(deep) = self.open_deep(self.state.read(cx)) else {
+            return;
+        };
+        if !deep.choices.get(at).is_some_and(live) {
+            return;
+        }
+        (deep.on_pick)(at, window, cx);
+        self.close(window, cx);
+    }
+
     fn close(self: &Rc<Self>, window: &mut gpui::Window, cx: &mut gpui::App) {
         self.return_focus.focus(window, cx);
         (self.on_open)(false, window, cx);
@@ -708,60 +760,112 @@ impl ChoiceContent {
         let Some(submenu) = self.submenus.get(k) else {
             return;
         };
-        let first = start(&submenu.choices);
+        let first = start_in(&submenu.choices, &submenu.submenus);
         self.update(cx, |menu, state| {
             state.cursor = Some(menu.sub_row(k));
             state.sub = first;
+            state.deep = None;
         });
     }
 
     fn close_sub(self: &Rc<Self>, cx: &mut gpui::App) {
         if self.state.read(cx).sub.is_some() {
-            self.update(cx, |_, state| state.sub = None);
+            self.update(cx, |_, state| {
+                state.sub = None;
+                state.deep = None;
+            });
         }
+    }
+
+    /// Open the open submenu's own `j`th submenu, the cursor on its row.
+    fn open_deep_at(self: &Rc<Self>, j: usize, cx: &mut gpui::App) {
+        self.update(cx, |menu, state| {
+            let Some(submenu) = menu.open_submenu(state) else {
+                return;
+            };
+            let Some(deep) = submenu.submenus.get(j) else {
+                return;
+            };
+            state.sub = Some(submenu.choices.len() + j);
+            state.deep = start(&deep.choices);
+        });
+    }
+
+    fn close_deep(self: &Rc<Self>, cx: &mut gpui::App) {
+        if self.state.read(cx).deep.is_some() {
+            self.update(cx, |_, state| state.deep = None);
+        }
+    }
+
+    /// The open submenu's own submenu under its cursor, by index.
+    fn deep_at_cursor(&self, state: &ChoiceState) -> Option<usize> {
+        let submenu = self.open_submenu(state)?;
+        submenu_in(&submenu.choices, &submenu.submenus, state.sub).map(|(j, _)| j)
     }
 
     fn step(self: &Rc<Self>, delta: isize, cx: &mut gpui::App) {
         self.update(cx, |menu, state| {
-            match (menu.open_submenu(state), state.sub) {
-                (Some(submenu), Some(sub)) => {
-                    let lives: Vec<usize> = (0..submenu.choices.len())
-                        .filter(|at| live(&submenu.choices[*at]))
-                        .collect();
-                    state.sub = step_in(&lives, Some(sub), delta);
-                }
-                _ => state.cursor = step_in(&menu.lives(), state.cursor, delta),
+            if let (Some(deep), Some(at)) = (menu.open_deep(state), state.deep) {
+                state.deep = step_in(&lives_in(&deep.choices, 0), Some(at), delta);
+            } else if let (Some(submenu), Some(sub)) = (menu.open_submenu(state), state.sub) {
+                let lives = lives_in(&submenu.choices, submenu.submenus.len());
+                state.sub = step_in(&lives, Some(sub), delta);
+            } else {
+                state.cursor = step_in(&menu.lives(), state.cursor, delta);
             }
             state.moved = true;
         });
     }
 
     fn confirm(self: &Rc<Self>, window: &mut gpui::Window, cx: &mut gpui::App) {
-        let (cursor, sub) = {
+        let (cursor, sub, deep, deep_row) = {
             let state = self.state.read(cx);
-            (state.cursor, state.sub)
+            (
+                state.cursor,
+                state.sub,
+                state.deep,
+                self.deep_at_cursor(state),
+            )
         };
-        match (sub, cursor, self.submenu_at(cursor)) {
-            (Some(sub), _, _) => self.pick_sub(sub, window, cx),
-            (None, _, Some((k, _))) => {
+        match (deep, sub, deep_row, cursor, self.submenu_at(cursor)) {
+            (Some(at), ..) => self.pick_deep(at, window, cx),
+            (None, Some(_), Some(j), ..) => {
+                self.update(cx, |_, state| state.moved = true);
+                self.open_deep_at(j, cx);
+            }
+            (None, Some(sub), None, ..) => self.pick_sub(sub, window, cx),
+            (None, None, _, _, Some((k, _))) => {
                 self.update(cx, |_, state| state.moved = true);
                 self.open_sub(k, cx);
             }
-            (None, Some(at), None) => self.pick(at, window, cx),
-            (None, None, None) => {}
+            (None, None, _, Some(at), None) => self.pick(at, window, cx),
+            (None, None, _, None, None) => {}
         }
     }
 
     fn build(self: &Rc<Self>, cx: &gpui::App) -> AnyElement {
         use gpui::base::actions::{Cancel, Confirm, SelectDown, SelectLeft, SelectRight, SelectUp};
-        let (cursor, sub, trigger, moved) = {
+        let (cursor, sub, deep, trigger, moved) = {
             let state = self.state.read(cx);
-            (state.cursor, state.sub, state.trigger, state.moved)
+            (
+                state.cursor,
+                state.sub,
+                state.deep,
+                state.trigger,
+                state.moved,
+            )
         };
         // The rows the keyboard's cursors fill: none at rest.
         let lit = cursor.filter(|_| moved);
         #[cfg(any(test, feature = "test-support"))]
-        testing::DRAWN.with(|drawn| drawn.set(testing::Drawn { cursor, sub, lit }));
+        testing::DRAWN.with(|drawn| {
+            drawn.set(testing::Drawn {
+                cursor,
+                sub,
+                deep,
+                lit,
+            })
+        });
         let mut surface = float()
             .debug_selector(|| "choice-menu".into())
             .key_context("PopupMenu")
@@ -782,15 +886,34 @@ impl ChoiceContent {
                 let menu = self.clone();
                 move |_: &SelectRight, _, cx| {
                     let state = menu.state.read(cx);
-                    if let (None, Some((k, _))) = (state.sub, menu.submenu_at(state.cursor)) {
-                        menu.update(cx, |_, state| state.moved = true);
-                        menu.open_sub(k, cx);
+                    let deep_row = menu.deep_at_cursor(state);
+                    match (
+                        state.sub,
+                        state.deep,
+                        deep_row,
+                        menu.submenu_at(state.cursor),
+                    ) {
+                        (None, _, _, Some((k, _))) => {
+                            menu.update(cx, |_, state| state.moved = true);
+                            menu.open_sub(k, cx);
+                        }
+                        (Some(_), None, Some(j), _) => {
+                            menu.update(cx, |_, state| state.moved = true);
+                            menu.open_deep_at(j, cx);
+                        }
+                        _ => {}
                     }
                 }
             })
             .on_action({
                 let menu = self.clone();
-                move |_: &SelectLeft, _, cx| menu.close_sub(cx)
+                move |_: &SelectLeft, _, cx| {
+                    if menu.state.read(cx).deep.is_some() {
+                        menu.close_deep(cx);
+                    } else {
+                        menu.close_sub(cx);
+                    }
+                }
             })
             .on_action({
                 let menu = self.clone();
@@ -799,7 +922,9 @@ impl ChoiceContent {
             .on_action({
                 let menu = self.clone();
                 move |_: &Cancel, window, cx| {
-                    if menu.state.read(cx).sub.is_some() {
+                    if menu.state.read(cx).deep.is_some() {
+                        menu.close_deep(cx);
+                    } else if menu.state.read(cx).sub.is_some() {
                         menu.close_sub(cx);
                     } else {
                         menu.close(window, cx);
@@ -863,6 +988,7 @@ impl ChoiceContent {
         // A marked submenu row is one of the rows; a bare one stands under
         // them past its divider.
         let mut side = None;
+        let mut further = None;
         let mut under = Vec::new();
         for (k, submenu) in self.submenus.iter().enumerate() {
             let open = sub.is_some() && cursor == Some(self.sub_row(k));
@@ -873,7 +999,18 @@ impl ChoiceContent {
                 under.push(face);
             }
             if open {
-                side = Some(self.sub_surface(submenu, sub.filter(|_| moved)));
+                // The submenu's own submenu open under its cursor.
+                let deep_open = deep
+                    .is_some()
+                    .then(|| submenu_in(&submenu.choices, &submenu.submenus, sub))
+                    .flatten();
+                side = Some(self.sub_surface(
+                    submenu,
+                    sub.filter(|_| moved),
+                    deep_open.map(|(j, _)| j),
+                ));
+                further = deep_open
+                    .map(|(_, deep_menu)| self.deep_surface(deep_menu, deep.filter(|_| moved)));
             }
         }
         surface = surface.child(rows).children(under);
@@ -899,7 +1036,8 @@ impl ChoiceContent {
                 move |_, window, cx| (menu.on_open)(false, window, cx)
             })
             .child(surface)
-            .children(side);
+            .children(side)
+            .children(further);
         let Some(place) = self.place else {
             return menus.into_any_element();
         };
@@ -970,18 +1108,7 @@ impl ChoiceContent {
         row.child(
             item_row(("choice-submenu-row", k), &item, lit, false)
                 .debug_selector(move || format!("choice-submenu-row-{k}"))
-                .child(
-                    div()
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap(px(SPACE_1))
-                        .text_color(rgb(if lit { INK_STRONG } else { INK_SUBTLE }))
-                        .when(!submenu.value.is_empty(), |cell| {
-                            cell.child(submenu.value.clone())
-                        })
-                        .child(icons::icon(icons::CHEVRON_RIGHT, ICON_CHEVRON, INK_SUBTLE)),
-                )
+                .child(chevron_cell(&submenu.value, lit))
                 .on_mouse_move(move |_, _, cx| {
                     if !open {
                         hover.open_sub(k, cx);
@@ -999,15 +1126,25 @@ impl ChoiceContent {
     }
 
     /// The open submenu: its own float, `submenu.width` wide, a `✓` on the
-    /// choice in force, `sub` the cursor row the keyboard fills.
-    fn sub_surface(self: &Rc<Self>, submenu: &Submenu, sub: Option<usize>) -> Div {
+    /// choice in force, `sub` the cursor row the keyboard fills; then its
+    /// own submenu rows, each with its `›`, the one at `open` open beside
+    /// it. Resting on one opens it; resting on a choice shuts it.
+    fn sub_surface(
+        self: &Rc<Self>,
+        submenu: &Submenu,
+        sub: Option<usize>,
+        open: Option<usize>,
+    ) -> Div {
         let mut rows = div()
+            .id("choice-sub-rows")
             .flex()
             .flex_col()
             .py(px(FLOAT_PAD))
-            .max_h(px(MENU_MAX_H));
+            .max_h(px(MENU_MAX_H))
+            .overflow_y_scroll();
         for (index, choice) in submenu.choices.iter().enumerate() {
             let pick = self.clone();
+            let shut = self.clone();
             rows = rows.child(
                 item_row(
                     ("choice-sub", index),
@@ -1017,9 +1154,40 @@ impl ChoiceContent {
                 )
                 .debug_selector(move || format!("choice-sub-{index}"))
                 .when_some(choice.why.clone(), |row, why| row.tooltip(tooltip(why)))
+                .on_mouse_move(move |_, _, cx| shut.close_deep(cx))
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
                     pick.pick_sub(index, window, cx);
+                }),
+            );
+        }
+        for (j, deep) in submenu.submenus.iter().enumerate() {
+            let row = submenu.choices.len() + j;
+            let lit = sub == Some(row) || open == Some(j);
+            let is_open = open == Some(j);
+            let hover = self.clone();
+            let toggle = self.clone();
+            rows = rows.child(
+                item_row(
+                    ("choice-sub-submenu", j),
+                    &MenuItem::new(deep.label.clone()),
+                    lit,
+                    false,
+                )
+                .debug_selector(move || format!("choice-sub-submenu-{j}"))
+                .child(chevron_cell(&deep.value, lit))
+                .on_mouse_move(move |_, _, cx| {
+                    if !is_open {
+                        hover.open_deep_at(j, cx);
+                    }
+                })
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    if is_open {
+                        toggle.close_deep(cx);
+                    } else {
+                        toggle.open_deep_at(j, cx);
+                    }
                 }),
             );
         }
@@ -1028,6 +1196,51 @@ impl ChoiceContent {
             .w(px(submenu.width))
             .child(rows)
     }
+
+    /// The list open furthest out (a plugin's commands): its own float,
+    /// `deep.width` wide, `at` the cursor row the keyboard fills.
+    fn deep_surface(self: &Rc<Self>, deep: &Submenu, at: Option<usize>) -> Div {
+        let mut rows = div()
+            .id("choice-deep-rows")
+            .flex()
+            .flex_col()
+            .py(px(FLOAT_PAD))
+            .max_h(px(MENU_MAX_H))
+            .overflow_y_scroll();
+        for (index, choice) in deep.choices.iter().enumerate() {
+            let pick = self.clone();
+            rows = rows.child(
+                item_row(
+                    ("choice-deep", index),
+                    &choice.item(false),
+                    at == Some(index),
+                    false,
+                )
+                .debug_selector(move || format!("choice-deep-{index}"))
+                .when_some(choice.why.clone(), |row, why| row.tooltip(tooltip(why)))
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    pick.pick_deep(index, window, cx);
+                }),
+            );
+        }
+        float()
+            .debug_selector(|| "choice-deep-menu".into())
+            .w(px(deep.width))
+            .child(rows)
+    }
+}
+
+/// A submenu row's right end: the choice in force, then its `›`.
+fn chevron_cell(value: &SharedString, lit: bool) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(SPACE_1))
+        .text_color(rgb(if lit { INK_STRONG } else { INK_SUBTLE }))
+        .when(!value.is_empty(), |cell| cell.child(value.clone()))
+        .child(icons::icon(icons::CHEVRON_RIGHT, ICON_CHEVRON, INK_SUBTLE))
 }
 
 impl RenderOnce for ChoiceMenu {
@@ -1041,6 +1254,7 @@ impl RenderOnce for ChoiceMenu {
             state.update(cx, |state, _| {
                 state.cursor = None;
                 state.sub = None;
+                state.deep = None;
                 state.moved = false;
                 state.initialized = false;
             });
@@ -1102,6 +1316,8 @@ pub mod testing {
         pub cursor: Option<usize>,
         /// The open submenu's cursor; `None` while it is shut.
         pub sub: Option<usize>,
+        /// The cursor one list further out; `None` while that is shut.
+        pub deep: Option<usize>,
         /// The row the cursor fills: none until the keyboard moves it.
         pub lit: Option<usize>,
     }

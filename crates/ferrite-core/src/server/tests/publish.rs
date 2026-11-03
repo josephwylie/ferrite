@@ -85,6 +85,7 @@ fn what_an_agent_says_of_itself_is_published_once() {
                 name: "review".into(),
                 description: "Review the change".into(),
                 path: None,
+                source: None,
             }],
         })
         .unwrap();

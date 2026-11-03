@@ -183,12 +183,15 @@ pub(in crate::providers) fn parse_capabilities(
 /// available". The row is therefore named the typeable way, and the
 /// display name leads its description so the menu still reads as the
 /// CLI's does.
+///
+/// Where it comes from (`command_source`) is read off the same entry.
 fn command_entry(command: &Value) -> Option<crate::SessionCommand> {
     let display = command.get("name")?.as_str()?;
     let description = command
         .get("description")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let builtin = command.get("builtin").and_then(Value::as_bool) == Some(true);
     Some(match mcp_prompt_command(display) {
         Some(name) => crate::SessionCommand {
             name,
@@ -198,13 +201,53 @@ fn command_entry(command: &Value) -> Option<crate::SessionCommand> {
                 format!("{display} · {description}")
             },
             path: None,
+            source: Some(crate::CommandSource::Mcp),
         },
-        None => crate::SessionCommand {
-            name: display.to_string(),
-            description: description.to_string(),
-            path: None,
-        },
+        None => {
+            let source = command_source(display, description, builtin);
+            // A plugin's entry leads its description with the plugin's
+            // name in brackets: its tag says so now.
+            let description = source
+                .plugin()
+                .and_then(|plugin| description.strip_prefix(&format!("({plugin}) ")))
+                .unwrap_or(description);
+            crate::SessionCommand {
+                name: display.to_string(),
+                description: description.to_string(),
+                path: None,
+                source: Some(source),
+            }
+        }
     })
+}
+
+/// Where a command the CLI lists comes from, as its entry says (capture,
+/// 2.1.317): `builtin: true` on what ships with the CLI, its bundled
+/// skills too; a plugin's entries named `plugin:name`, their description
+/// led by `(plugin)`; an installed skill's description ending `(user)`,
+/// `(project)` or `(claude.ai sync)`. Anything else is a command the CLI
+/// says no more about — a CLI older than the `builtin` flag lists its own
+/// commands so.
+fn command_source(name: &str, description: &str, builtin: bool) -> crate::CommandSource {
+    use crate::CommandSource;
+    if builtin {
+        return CommandSource::BuiltIn;
+    }
+    if let Some((plugin, _)) = name.split_once(':') {
+        if description.starts_with(&format!("({plugin})")) {
+            return CommandSource::Plugin {
+                plugin: plugin.to_string(),
+            };
+        }
+    }
+    let marked = ["(user)", "(project)", "(claude.ai sync)"]
+        .iter()
+        .any(|mark| description.trim_end().ends_with(mark));
+    if marked {
+        CommandSource::Skill
+    } else {
+        CommandSource::Command
+    }
 }
 
 /// `server:prompt (MCP)` → `mcp__server__prompt`, the server's name
@@ -2146,6 +2189,51 @@ mod tests {
         // Claude commands are invoked as plain `/name args` text — there is
         // no path for a typed item to carry.
         assert!(capabilities.commands.iter().all(|c| c.path.is_none()));
+    }
+
+    /// Each entry says where it comes from as the CLI marks it (2.1.317's
+    /// shapes): `builtin`, a plugin's `plugin:name` led by `(plugin)` —
+    /// which its tag then says instead — an installed skill's `(user)`,
+    /// an MCP prompt, and an unmarked entry.
+    #[test]
+    fn each_command_carries_its_source() {
+        use crate::CommandSource;
+        let line = serde_json::json!({
+            "type": "control_response",
+            "response": {"subtype": "success", "request_id": "req_1", "response": {
+                "commands": [
+                    {"name": "compact", "description": "Free up context", "builtin": true},
+                    {"name": "tdd:red", "description": "(tdd) Write a failing test"},
+                    {"name": "anthropic-skills:pdf", "description": "PDFs. (claude.ai sync)"},
+                    {"name": "retro", "description": "Run a retro. (user)"},
+                    {"name": "reui:improve (MCP)", "description": "Refine"},
+                    {"name": "clear", "description": "Start over"},
+                ],
+            }},
+        })
+        .to_string();
+        let commands = parse_capabilities(&line, "req_1")
+            .expect("answered")
+            .commands;
+        let sources: Vec<_> = commands
+            .iter()
+            .map(|command| command.source.clone().expect("every entry says"))
+            .collect();
+        assert_eq!(
+            sources,
+            [
+                CommandSource::BuiltIn,
+                CommandSource::Plugin {
+                    plugin: "tdd".into()
+                },
+                CommandSource::Skill,
+                CommandSource::Skill,
+                CommandSource::Mcp,
+                CommandSource::Command,
+            ]
+        );
+        assert_eq!(commands[1].description, "Write a failing test");
+        assert_eq!(sources[1].tag(), Some("Plugin"));
     }
 
     /// An MCP prompt is listed by its display name but typed by its

@@ -357,8 +357,13 @@ fn typing_slash_opens_the_command_menu_and_enter_inserts_the_pick(cx: &mut TestA
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     assert_eq!(composer_text(&view, cx), "/commit ");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert!(view.popover.is_none(), "the pick closed the menu");
+        assert_eq!(
+            view.panes[0].composer.read(cx).chips(),
+            [SharedString::from("/commit")],
+            "the pick is a chip, as an `@` mention is"
+        );
     });
 }
 
@@ -564,7 +569,7 @@ fn typing_at_completes_files_from_the_workspace_binding(cx: &mut TestAppContext)
         // The pill is provider-agnostic: a Claude pick paints it too —
         // the wire stays plain `@path` text the CLI itself reads.
         assert_eq!(
-            view.panes[0].composer.read(cx).mentions(),
+            view.panes[0].composer.read(cx).chips(),
             [SharedString::from("@src/lib.rs")],
             "the picked token is staged as the comp's pill"
         );
@@ -1035,7 +1040,7 @@ fn picking_a_mention_on_a_codex_thread_stages_the_pill(cx: &mut TestAppContext) 
     assert_eq!(composer_text(&view, cx), "@src/lib.rs ");
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.panes[0].composer.read(cx).mentions(),
+            view.panes[0].composer.read(cx).chips(),
             [SharedString::from("@src/lib.rs")],
             "the pill token is staged for the paint"
         );

@@ -264,6 +264,7 @@ fn state() -> ThreadState {
             name: "review".into(),
             description: "Review the diff".into(),
             path: None,
+            source: None,
         }],
         models: vec![model("sonnet")],
         permission_mode: Some("default".into()),
@@ -1776,6 +1777,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         name: "skill".into(),
                         description: "A skill".into(),
                         path: Some("/skills/a/SKILL.md".into()),
+                        source: None,
                     }],
                 },
             ),
@@ -2058,6 +2060,7 @@ fn applied_inputs_survive_the_wire() {
                 name: "review".into(),
                 description: "Review".into(),
                 path: None,
+                source: None,
             }],
         }),
         main(SessionEvent::PermissionMode {

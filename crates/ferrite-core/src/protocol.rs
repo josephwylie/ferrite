@@ -1304,6 +1304,10 @@ pub struct WireCommand {
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Where it comes from; its words are the wire's own (`kind`, snake
+    /// case), an unknown one decoding as `unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::CommandSource>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2509,6 +2513,7 @@ impl From<&crate::SessionCommand> for WireCommand {
             name: command.name.clone(),
             description: command.description.clone(),
             path: command.path.clone(),
+            source: command.source.clone(),
         }
     }
 }
@@ -2519,6 +2524,7 @@ impl From<&WireCommand> for crate::SessionCommand {
             name: command.name.clone(),
             description: command.description.clone(),
             path: command.path.clone(),
+            source: command.source.clone(),
         }
     }
 }

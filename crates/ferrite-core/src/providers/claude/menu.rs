@@ -194,6 +194,7 @@ mod tests {
             name: name.into(),
             description: String::new(),
             path: None,
+            source: None,
         }
     }
 

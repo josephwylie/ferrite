@@ -977,10 +977,21 @@ pub(in crate::providers) fn parse_skills(result: &Value) -> Vec<SessionCommand> 
                     .unwrap_or_default()
                     .to_string(),
                 path: Some(path.to_string()),
+                source: Some(skill_source(skill)),
             });
         }
     }
     commands
+}
+
+/// Where a listed skill comes from, by its `scope`: `system` ships with
+/// Codex; `user`, `repo` and `admin` are installed skills. Codex names no
+/// plugins here.
+fn skill_source(skill: &Value) -> crate::CommandSource {
+    match skill.get("scope").and_then(Value::as_str) {
+        Some("system") => crate::CommandSource::BuiltIn,
+        _ => crate::CommandSource::Skill,
+    }
 }
 
 /// The model/list result as picker rows (#25): `{data: [{id, model,
@@ -2037,6 +2048,17 @@ mod tests {
             commands[0].path.as_deref(),
             Some("/workspace/.codex/skills/probe-codex-skill/SKILL.md"),
             "the path is what the typed skill item carries"
+        );
+        // Its scope says where it comes from: the repo's skills are
+        // skills, a system one ships with Codex.
+        let sources: Vec<_> = commands.iter().map(|c| c.source.clone()).collect();
+        assert_eq!(
+            sources,
+            [
+                Some(crate::CommandSource::Skill),
+                Some(crate::CommandSource::Skill),
+                Some(crate::CommandSource::BuiltIn),
+            ]
         );
     }
 

@@ -64,6 +64,7 @@ fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut 
             name: "code-codex".into(),
             description: "Codex skill".into(),
             path: Some("/global/SKILL.md".into()),
+            source: None,
         }]))
         .unwrap();
     tick(cx);
@@ -727,6 +728,7 @@ fn ferrites_effort_row_replaces_the_providers_and_a_typed_level_is_honoured(
                 name: "effort".into(),
                 description: "Set effort level for model usage".into(),
                 path: None,
+                source: None,
             }],
         })
         .unwrap();

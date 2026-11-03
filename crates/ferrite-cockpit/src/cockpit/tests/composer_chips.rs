@@ -258,23 +258,50 @@ fn the_model_menu_leads_with_the_model_in_force(cx: &mut TestAppContext) {
 }
 
 /// The `+` menu's `Plugins ›` lists the plugins a Session's commands come
-/// from: the CLI names a plugin's commands `plugin:name`.
+/// from, as the provider says, each with its own commands.
 #[test]
-fn plugins_are_read_off_their_commands_namespaces() {
-    let command = |name: &str| ferrite_core::SessionCommand {
+fn plugins_are_read_off_their_commands_sources() {
+    let command = |name: &str, plugin: Option<&str>| ferrite_core::SessionCommand {
         name: name.into(),
         description: String::new(),
         path: None,
+        source: Some(match plugin {
+            Some(plugin) => ferrite_core::CommandSource::Plugin {
+                plugin: plugin.into(),
+            },
+            None => ferrite_core::CommandSource::Skill,
+        }),
     };
     let commands = [
-        command("review"),
-        command("superpowers:brainstorm"),
-        command("mcp__github__issue"),
-        command("superpowers:plan"),
-        command("figma:inspect"),
-        command(":odd"),
+        command("review", None),
+        command("superpowers:brainstorm", Some("superpowers")),
+        command("odd:name", None),
+        command("superpowers:plan", Some("superpowers")),
+        command("figma:inspect", Some("figma")),
     ];
-    assert_eq!(plugin_names(&commands), ["superpowers", "figma"]);
+    let plugins = plugins(&commands);
+    let listed: Vec<(&str, Vec<&str>)> = plugins
+        .iter()
+        .map(|(plugin, commands)| {
+            (
+                plugin.as_str(),
+                commands
+                    .iter()
+                    .map(|command| command.name.as_str())
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (
+                "superpowers",
+                vec!["superpowers:brainstorm", "superpowers:plan"]
+            ),
+            ("figma", vec!["figma:inspect"]),
+        ]
+    );
 }
 
 /// The `+` menu hangs from the `+`'s left edge, and its `Connectors ›`
@@ -337,5 +364,57 @@ fn the_plus_menu_reaches_the_connectors(cx: &mut TestAppContext) {
     view.read_with(cx, |view, _| {
         assert!(view.attach_menu.is_none(), "a pick closes the menu");
         assert!(view.prefs.settings.panel_shown, "the panel shows");
+    });
+}
+
+/// `Plugins ›` opens a list of the Session's plugins, each its own
+/// submenu of its commands (Claude's); a pick starts the command on the
+/// line as a chip, sent as the plain `/plugin:command` it reads.
+#[gpui::test]
+fn the_plus_menu_opens_each_plugins_commands(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("plus-plugins", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+    let command = |name: &str| ferrite_core::SessionCommand {
+        name: name.into(),
+        description: "A plugin's command".into(),
+        path: None,
+        source: Some(ferrite_core::CommandSource::Plugin {
+            plugin: "tdd".into(),
+        }),
+    };
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Commands {
+            commands: vec![command("tdd:red"), command("tdd:green")],
+        })
+        .unwrap();
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.attach_menu = Some(view.panes[0].identity);
+        cx.notify();
+    });
+    tick(cx);
+    let plugins = cx
+        .debug_bounds("choice-submenu-row-0")
+        .expect("Plugins rides the + menu");
+    cx.simulate_mouse_move(plugins.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    let plugin = cx
+        .debug_bounds("choice-sub-submenu-0")
+        .expect("the plugin's own row, a submenu");
+    cx.simulate_mouse_move(plugin.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("choice-deep-1").is_some(), "both commands");
+    let green = cx.debug_bounds("choice-deep-1").unwrap();
+    cx.simulate_click(green.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "/tdd:green ");
+    view.read_with(cx, |view, cx| {
+        assert!(view.attach_menu.is_none(), "a pick closes the menu");
+        assert_eq!(
+            view.panes[0].composer.read(cx).chips(),
+            [SharedString::from("/tdd:green")]
+        );
     });
 }
