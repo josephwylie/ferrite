@@ -98,7 +98,7 @@ pub fn sheet_close(id: &'static str, label: &'static str, cx: &App) -> Button {
         .h(px(ICON_BUTTON))
         .p_0()
         .accessibility_label(label)
-        .child(icon(icons::CLOSE, ICON_BUTTON_GLYPH, TEXT_DIM))
+        .child(icon(icons::CLOSE, ICON_BUTTON_GLYPH, ICON_INK))
 }
 
 /// The pinned footer under a `FLOAT_RULE`: secondary actions left, the

@@ -195,8 +195,8 @@ fn toggle_panel_flips_the_saved_setting(cx: &mut TestAppContext) {
     assert!(!saved(&view, cx), "and saves that");
     assert_eq!(
         card_right(&view, cx),
-        1600. - ferrite_ui::theme::BOARD_PAD,
-        "the Pane takes its width"
+        1600.,
+        "the Pane takes its width, flush to the window's edge"
     );
     cx.simulate_keystrokes("cmd-alt-b");
     tick(cx);

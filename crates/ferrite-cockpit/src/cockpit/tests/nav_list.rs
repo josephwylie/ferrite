@@ -574,14 +574,13 @@ fn sort_recent_holds_still_under_the_pointer(cx: &mut TestAppContext) {
 /// plus its hysteresis. cmd-B overrides it.
 #[gpui::test]
 fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{
-        BOARD_PAD, NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS, NAV_WIDTH,
-    };
+    use ferrite_ui::theme::{NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS, NAV_WIDTH};
     let (core, _fake) = cockpit("nav-auto-rail", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     let saved = view.read_with(cx, |view, _| view.prefs.settings.nav_collapsed);
-    let threshold = NAV_WIDTH + BOARD_PAD + NAV_AUTO_RAIL_BOARD_W;
+    // A Solo Pane leaves no gutter at the window's edge (theme rule 2).
+    let threshold = NAV_WIDTH + NAV_AUTO_RAIL_BOARD_W;
     cx.simulate_resize(gpui::size(px(720.), px(900.)));
     tick(cx);
     assert!(

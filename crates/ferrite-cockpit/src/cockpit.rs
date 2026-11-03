@@ -2744,9 +2744,9 @@ impl CockpitView {
     /// cmd-B override (`nav_forced_open`) outranks it either way. The board
     /// beside the 264px column is the window less the column and what the
     /// board leaves at its right once the panel's ride ends
-    /// (`board_right_rest`: the panel, or `BOARD_PAD`), so with the panel
-    /// hidden the nav folds under 832px (the card keeps
-    /// 560px, as it did beside the 36ch column).
+    /// (`board_right_rest`: the panel, or the board's gutter), so with the
+    /// panel hidden a Solo nav folds under 824px (the Pane keeps 560px, as
+    /// it did beside the 36ch column).
     fn update_auto_rail(&mut self, window: &Window) {
         use ferrite_core::docview::TILE_FLOOR_WIDTH;
         use ferrite_ui::theme::{NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS};
@@ -2831,11 +2831,11 @@ impl CockpitView {
 
     /// The board the cards lay out in, in window coordinates (theme WP-C):
     /// flush right of the nav, from under the head row
-    /// (`frame::board_top`) to `BOARD_PAD` short of the bottom bar and
+    /// (`frame::board_top`) to `board_pad` short of the bottom bar and
     /// `board_right` short of the window's right edge (the panel, or the
     /// gutter).
     fn board_bounds(&self, window: &Window) -> layout::Rect {
-        use ferrite_ui::theme::{BOARD_PAD, STATUS_BAR_H};
+        use ferrite_ui::theme::STATUS_BAR_H;
         let viewport = window.viewport_size();
         let top = ferrite_ui::frame::board_top();
         let left = self.board_left();
@@ -2843,10 +2843,22 @@ impl CockpitView {
             x: left,
             y: top,
             w: (f32::from(viewport.width) - left - self.board_right()).max(0.0),
-            h: (f32::from(viewport.height) - top - STATUS_BAR_H - BOARD_PAD).max(0.0),
+            h: (f32::from(viewport.height) - top - STATUS_BAR_H - self.board_pad()).max(0.0),
         };
         self.board.set(bounds);
         bounds
+    }
+
+    /// The gutter a board leaves under and right of its cards: a Group's
+    /// cells stand `BOARD_PAD` in from the bar and the window's edge, as
+    /// they stand apart; a Solo Pane is the plane itself, flush to the
+    /// seams (theme rule 2).
+    pub(super) fn board_pad(&self) -> f32 {
+        if self.grid_board() {
+            ferrite_ui::theme::BOARD_PAD
+        } else {
+            0.0
+        }
     }
 
     /// Where the board's left edge sits: the nav's width this frame (no
@@ -3999,11 +4011,9 @@ impl CockpitView {
             .iter()
             .map(|(leaf, rect)| (*leaf, (rect.w, rect.h)))
             .collect();
-        // The column's frame, over the cards' corners and under the seams.
         let cards: Vec<gpui::Bounds<Pixels>> =
             rects.iter().map(|(_, rect)| window_bounds(*rect)).collect();
         let veil = self.board_veil(&cards, window, cx);
-        let frame = ferrite_ui::components::frame_around(cards);
         for (leaf, rect) in rects {
             let cell = match leaf_slot(leaf) {
                 Slot::Pane(identity) => {
@@ -4045,7 +4055,7 @@ impl CockpitView {
                     .h(px(rect.h)),
             );
         }
-        board = board.child(frame).children(veil);
+        board = board.children(veil);
         // The seams (F-18): one line per linked set down the gutter's
         // centre — a default grid's aligned column seams are one line from
         // the board's top to its foot — and a 9px grab band over each seam.
@@ -5784,6 +5794,36 @@ impl CockpitView {
         self.cockpit.roster().focused_thread()
     }
 
+    /// The one plane's seams (theme rule 2): a `BORDER` hairline the
+    /// window's width under the head row, and from it down to the bottom
+    /// bar's rule, one at the nav's edge and one at the panel's. They paint
+    /// over the regions and take no pointer, so a region needs no edge of
+    /// its own.
+    fn plane_seams(&self, panel_w: f32) -> gpui::Div {
+        use ferrite_ui::theme::{paint, HAIRLINE_W, STATUS_BAR_H, WIN_CHROME_H};
+        let line = || div().absolute().bg(paint::HAIRLINE);
+        let column = |at: gpui::Div| {
+            at.top(px(WIN_CHROME_H))
+                .bottom(px(STATUS_BAR_H + HAIRLINE_W))
+                .w(px(HAIRLINE_W))
+        };
+        div()
+            .debug_selector(|| "plane-seams".into())
+            .absolute()
+            .inset_0()
+            .child(
+                line()
+                    .left_0()
+                    .right_0()
+                    .top(px(WIN_CHROME_H - HAIRLINE_W))
+                    .h(px(HAIRLINE_W)),
+            )
+            .child(column(line().left(px(self.board_left() - HAIRLINE_W))))
+            .when(panel_w > 0.0, |seams| {
+                seams.child(column(line().right(px(panel_w))))
+            })
+    }
+
     /// The board's settle when it swaps what it shows — Solo's Thread or
     /// the view — over `cards` (window coordinates): a veil of the card's
     /// grey lifting off the new content (`motion::Swap`). `None` at rest.
@@ -5799,7 +5839,13 @@ impl CockpitView {
             View::Group(_) => None,
         };
         let veil = self.board_swap.veil((view, thread), window, cx);
-        (veil > 0.0).then(|| ferrite_ui::components::card_veil(cards.to_vec(), veil))
+        // A Group's cells are rounded; a Solo Pane is the square plane.
+        let radius = if self.grid_board() {
+            ferrite_ui::theme::R_PANE
+        } else {
+            0.0
+        };
+        (veil > 0.0).then(|| ferrite_ui::components::card_veil(cards.to_vec(), radius, veil))
     }
 
     /// The focused Pane's draft, to change — None on a Thread.
@@ -10479,12 +10525,12 @@ impl CockpitView {
         }
 
         // The cards start under the head row (`frame::board_top`), with
-        // `BOARD_PAD` of frame under them and right of them — none at the
-        // right beside the panel, whose column is the frame there
-        // (`board_bounds`), riding or at rest.
+        // `board_pad` of plane under them and right of them — none at the
+        // right beside the panel (`board_bounds`), riding or at rest.
         let board_top = ferrite_ui::frame::board_top();
         let panel_w = self.panel_column_w();
         let frame_right = self.board_right() - panel_w;
+        let board_pad = self.board_pad();
         let frame = || {
             div()
                 .flex_1()
@@ -10492,7 +10538,7 @@ impl CockpitView {
                 .min_h_0()
                 .pt(px(board_top))
                 .pr(px(frame_right))
-                .pb(px(ferrite_ui::theme::BOARD_PAD))
+                .pb(px(board_pad))
         };
         let visible = self.visible_indices();
         // The empty board names the provider CLIs it found: ask once.
@@ -10558,8 +10604,7 @@ impl CockpitView {
             }
             grid
         };
-        // The board column's frame, over its cards' corners (a tree board
-        // lays its own, under its seams).
+        // The board's settle over its cards (a tree board lays its own).
         let grid = if cards.is_empty() {
             grid
         } else {
@@ -10571,7 +10616,6 @@ impl CockpitView {
                 .flex_1()
                 .min_w_0()
                 .child(grid)
-                .child(ferrite_ui::components::frame_around(cards))
                 .children(veil)
         };
 
@@ -10847,6 +10891,7 @@ impl CockpitView {
             // their presses, the gaps between them still drag. Its toggle
             // over both heads, in one place.
             .children(self.panel_element(window, cx))
+            .child(self.plane_seams(panel_w))
             .children(self.panel_toggle_element(cx))
             .children(self.plan_card_element(window, cx))
             .children(self.context_menu_element(cx))
@@ -11800,12 +11845,12 @@ impl CockpitView {
     /// (ADR 0014): its foot over the bar's top, its right edge inside the
     /// window's margin.
     fn bar_place(&self) -> ferrite_ui::components::FloatPlace {
-        use ferrite_ui::theme::{BOARD_PAD, GRID_PAD};
-        // The board stops `BOARD_PAD` short of the bar and `board_right`
+        use ferrite_ui::theme::GRID_PAD;
+        // The board stops `board_pad` short of the bar and `board_right`
         // short of the window's right edge.
         let board = self.board.get();
         ferrite_ui::components::FloatPlace {
-            floor: board.y + board.h + BOARD_PAD,
+            floor: board.y + board.h + self.board_pad(),
             limit_right: board.x + board.w + self.board_right() - GRID_PAD,
         }
     }
@@ -13374,11 +13419,10 @@ impl CockpitView {
         rows.push(
             nav::view_row(
                 key,
-                nav::view_icon(icons::PLUS, key, false, false),
+                nav::view_icon(icons::PLUS),
                 "New thread",
                 ferrite_ui::components::bound_chord("cockpit::NewThread")
                     .map_or(Trailing::None, Trailing::Chord),
-                false,
                 false,
             )
             .on_click(cx.listener(|_, _: &ClickEvent, window, cx| {
@@ -13390,11 +13434,10 @@ impl CockpitView {
         rows.push(
             nav::view_row(
                 key,
-                nav::view_icon(icons::SEARCH, key, false, false),
+                nav::view_icon(icons::SEARCH),
                 "Search",
                 ferrite_ui::components::bound_chord("palette::Toggle")
                     .map_or(Trailing::None, Trailing::Chord),
-                false,
                 false,
             )
             .on_click(cx.listener(|_, _: &ClickEvent, window, cx| {
@@ -13408,11 +13451,10 @@ impl CockpitView {
         rows.push(
             nav::view_row(
                 key,
-                nav::view_icon(icons::INBOX, key, active, waiting > 0),
+                nav::view_icon(icons::INBOX),
                 "Inbox",
                 Trailing::Pill(waiting),
                 active,
-                waiting > 0,
             )
             .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
                 view.toggle_notifications(&ToggleNotifications, window, cx);
@@ -13424,11 +13466,10 @@ impl CockpitView {
         rows.push(
             nav::view_row(
                 key,
-                nav::view_icon(icons::ARCHIVE, key, active, false),
+                nav::view_icon(icons::ARCHIVE),
                 "Parked",
                 Trailing::Count(state.parked.len()),
                 active,
-                false,
             )
             .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
                 view.toggle_nav_view(NavView::Parked, Some(window), cx);

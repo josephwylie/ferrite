@@ -916,7 +916,7 @@ pub fn render_pane(
     let framed = focused && show_focus;
     let edge = PaneEdge::of(framed, attention_pending, !show_focus);
     let key = view.thread().map_or(0, ThreadId::get);
-    let shell = record_card(pane_shell(), view);
+    let shell = record_card(pane_shell(edge), view);
     let frame = |pane: Div| pane_frame(pane, edge, key);
     // What a pending request asks, as the lexicon names it: the tile's
     // state word and the question door at the Pane's foot read it.
@@ -1294,12 +1294,17 @@ fn record_card(shell: Div, view: &PaneView) -> Div {
     })
 }
 
-/// The Pane card (theme WP-C, SPEC §5.3): `paint::CARD` at `R_PANE`, its
+/// The Pane on the plane (theme rule 2, SPEC §5.3): `paint::CARD`, its
 /// content flush to its own edges — the ring is an overlay (`pane_frame`),
-/// never a border in layout. `overflow: hidden` clips the children to the
-/// card's box; the frame laid over the board (`components::frame_around`)
-/// covers its rounded corners.
-fn pane_shell() -> Div {
+/// never a border in layout. A Group's Pane is a cell at `R_PANE`; a Solo
+/// Pane (`PaneEdge::Flush`) is the plane itself, square. `overflow:
+/// hidden` clips the children to the box.
+fn pane_shell(edge: PaneEdge) -> Div {
+    let radius = if edge == PaneEdge::Flush {
+        0.0
+    } else {
+        theme::R_PANE
+    };
     div()
         .relative()
         .flex()
@@ -1307,7 +1312,7 @@ fn pane_shell() -> Div {
         .size_full()
         .min_h_0()
         .min_w_0()
-        .rounded(px(theme::R_PANE))
+        .rounded(px(radius))
         .bg(theme::paint::CARD)
         .font_family(theme::FONT_UI)
         .overflow_hidden()
@@ -1315,18 +1320,22 @@ fn pane_shell() -> Div {
 
 /// What a Pane card's 1px ring says (F-2, SPEC §5.9): a waiting Pane
 /// (`WAIT_RING`, focused or not) beats focus (`FOCUS_RING`), and a Pane
-/// with neither rests on `CARD_RING`. Solo never recolours the ring (rule
-/// 2.2.5): the Decision carries the signal.
+/// with neither rests on `CARD_RING`. A Solo Pane has no ring: it is the
+/// plane itself, flush with the chrome's hairlines (theme rule 2), and its
+/// Decision carries the signal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PaneEdge {
     Attention,
     Focused,
     Rest,
+    Flush,
 }
 
 impl PaneEdge {
     pub(crate) fn of(focused: bool, attention: bool, solo: bool) -> Self {
-        if attention && !solo {
+        if solo {
+            PaneEdge::Flush
+        } else if attention {
             PaneEdge::Attention
         } else if focused {
             PaneEdge::Focused
@@ -1340,6 +1349,7 @@ impl PaneEdge {
             PaneEdge::Attention => rgba(WAIT_RING).into(),
             PaneEdge::Focused => rgba(FOCUS_RING).into(),
             PaneEdge::Rest => rgba(CARD_RING).into(),
+            PaneEdge::Flush => rgba(theme::TRANSPARENT).into(),
         }
     }
 }
@@ -1348,11 +1358,15 @@ impl PaneEdge {
 /// takes no layout and no pointer, so the content starts at the card's own
 /// edges and a state change moves nothing. Every Pane root is `PANE_GROUP`.
 fn pane_frame(pane: Div, edge: PaneEdge, key: u64) -> Stateful<Div> {
-    let overlay = card_ring(edge.ink());
     let overlay = match edge {
-        PaneEdge::Focused => overlay.debug_selector(move || format!("pane-focus-edge-{key}")),
-        PaneEdge::Attention => overlay.debug_selector(move || format!("pane-waiting-edge-{key}")),
-        PaneEdge::Rest => overlay,
+        PaneEdge::Focused => Some(
+            card_ring(edge.ink()).debug_selector(move || format!("pane-focus-edge-{key}")),
+        ),
+        PaneEdge::Attention => Some(
+            card_ring(edge.ink()).debug_selector(move || format!("pane-waiting-edge-{key}")),
+        ),
+        PaneEdge::Rest => Some(card_ring(edge.ink())),
+        PaneEdge::Flush => None,
     };
     div()
         .id(gpui::ElementId::Name(SharedString::from(format!(
@@ -1366,19 +1380,16 @@ fn pane_frame(pane: Div, edge: PaneEdge, key: u64) -> Stateful<Div> {
         .min_h_0()
         .min_w_0()
         .child(pane)
-        .child(overlay)
+        .children(overlay)
 }
 
 /// A card's 1px ring in `ink`, just outside its box
-/// (`components::outer_ring`), in the band the board's frame leaves around
-/// the card (`components::frame_around`). The band is frame, so the ring lays
-/// `paint::FRAME` under its ink there: the hairline reads over the frame,
-/// as drawn. The cockpit rings a reader's card with it.
+/// (`components::outer_ring`), in the gutter between a Group's cells. The
+/// cockpit rings a reader's card with it.
 pub fn card_ring(ink: impl Into<gpui::Hsla>) -> Div {
     div()
         .absolute()
         .inset_0()
-        .child(components::outer_ring(theme::R_PANE, theme::paint::FRAME))
         .child(components::outer_ring(theme::R_PANE, ink))
 }
 
@@ -1436,7 +1447,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
     let framed = focused && show_focus;
     let edge = PaneEdge::of(framed, false, !show_focus);
     let key = view.identity.draft().map_or(0, DraftId::get);
-    let mut shell = record_card(pane_shell(), view);
+    let mut shell = record_card(pane_shell(edge), view);
     if show_focus {
         shell = shell.child(group_head(GroupHead {
             key,
@@ -1516,7 +1527,7 @@ pub fn draft_close_button(draft: DraftId) -> gpui::component::button::Button {
         .h(px(theme::ICON_BUTTON))
         .p_0()
         .accessibility_label("Discard draft")
-        .child(icon(icons::CLOSE, theme::ICON_BUTTON_GLYPH, TEXT_DIM))
+        .child(icon(icons::CLOSE, theme::ICON_BUTTON_GLYPH, ICON_INK))
 }
 
 /// The × with its tooltip: `Discard draft`, and the key after it only where
@@ -2302,7 +2313,7 @@ pub fn fill_button(key: u64) -> Stateful<Div> {
             "Fill the board",
             "cockpit::ToggleFullscreen",
         ))
-        .child(icon(icons::MAXIMIZE, theme::PANE_HEAD_FILL_GLYPH, TEXT_DIM))
+        .child(icon(icons::MAXIMIZE, theme::PANE_HEAD_FILL_GLYPH, ICON_INK))
 }
 
 /// The failure strip (SPEC §5.9 item 4), the transcript's tail row under
@@ -2817,7 +2828,7 @@ pub fn attach_button(cx: &gpui::App) -> gpui::component::button::Button {
         .flex_shrink_0()
         .rounded(px(theme::R_CHIP))
         .tip("Attach files")
-        .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, TEXT_DIM))
+        .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, ICON_INK))
 }
 
 /// Whether the send circle shows stop: Solo's (not `compact`), while the
@@ -3851,7 +3862,7 @@ pub fn queued_close(cx: &gpui::App) -> gpui::component::button::Button {
         .flex_shrink_0()
         .rounded(px(theme::R_TAB))
         .tip("Remove queued message")
-        .child(icon(icons::CLOSE, theme::QUEUED_CLOSE_ICON, TEXT_DIM))
+        .child(icon(icons::CLOSE, theme::QUEUED_CLOSE_ICON, ICON_INK))
 }
 
 /// A quiet control's button: no ground at rest, `paint::HOVER` under the
@@ -10111,7 +10122,8 @@ mod tests {
     /// F-2: one attention edge. A waiting Pane draws `WAIT_RING` on a
     /// board whether it holds focus or not — no inner ring, no full-ink
     /// answer target, no red blocked edge; a calm focused Pane draws the
-    /// focus ring; at rest the card's own ring. Solo never recolours it.
+    /// focus ring; at rest the card's own ring. Solo draws none: it is the
+    /// plane itself.
     #[test]
     fn pane_edge_ranks_state_over_focus() {
         assert_eq!(PaneEdge::of(true, true, false), PaneEdge::Attention);
@@ -10124,10 +10136,7 @@ mod tests {
         for focused in [false, true] {
             for attention in [false, true] {
                 let edge = PaneEdge::of(focused, attention, true);
-                assert!(
-                    matches!(edge, PaneEdge::Rest | PaneEdge::Focused),
-                    "solo {focused} {attention}: {edge:?}"
-                );
+                assert_eq!(edge, PaneEdge::Flush, "solo {focused} {attention}");
             }
         }
     }

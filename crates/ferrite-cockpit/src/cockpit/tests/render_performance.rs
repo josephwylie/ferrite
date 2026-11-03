@@ -1555,7 +1555,7 @@ fn the_panel_rides_in_and_out_and_settles_without_frames(cx: &mut TestAppContext
         .advance_clock(Duration::from_millis(ferrite_ui::theme::MOTION_RESIZE_MS));
     display_frames(cx);
     assert_eq!(panel_width(cx), None, "gone once it has ridden out");
-    assert_eq!(solo_card_right(&view, cx), 1600. - BOARD_PAD);
+    assert_eq!(solo_card_right(&view, cx), 1600., "flush to the window's edge");
     assert_eq!(cx.debug_bounds("panel-toggle"), Some(toggle), "still there");
     assert_eq!(display_frames(cx), 0);
 }

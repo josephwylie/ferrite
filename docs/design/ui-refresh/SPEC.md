@@ -428,7 +428,9 @@ lives in its Pane and the panel, not the list.
 - **Right:** one mark when a state is worth saying, small (§6): the
   `ATTENTION` dot with its halo when it needs you, the `BLOCKED` dot when
   failed, the `RUNNING` ring for background work, the spinner while
-  working or failing. Idle, unseen-done and parked rows say nothing.
+  working or failing, and for a finish not yet seen a 5px dot in the
+  default ink (`NAV_UNREAD_DOT`), cleared once seen. Idle and parked rows
+  say nothing.
 - **Selected** (the focused Pane's Thread): `SELECTED` fill, inset 1px
   `ROW_RING`, title `TEXT_STRONG` 500.
 - **Hover:** `RAISED` fill, at today's 80ms blend, and a 20px `ellipsis`

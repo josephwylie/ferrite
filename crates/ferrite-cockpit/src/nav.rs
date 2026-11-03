@@ -925,26 +925,18 @@ pub fn views(rows: Vec<AnyElement>) -> Div {
         .children(rows)
 }
 
-/// One view row: its 15px icon, its label and its trailing item. At rest
-/// `TEXT_MUTED` (`TEXT` while it holds something for the operator), under
-/// the pointer `paint::RAISED` and `TEXT`, the active view `SELECTED` and
-/// `TEXT_STRONG`.
+/// One view row: its 15px icon in `ICON_INK`, its label in primary ink
+/// (`TEXT_STRONG`, as the reference app's rows) and its trailing item;
+/// under the pointer `paint::RAISED`, the active view `SELECTED`. What a
+/// view holds for the operator its trailing item says (the pill).
 pub fn view_row(
     key: &'static str,
     glyph: AnyElement,
     label: &'static str,
     tail: Trailing,
     active: bool,
-    lit: bool,
 ) -> Stateful<Div> {
     let blend = SharedString::from(key);
-    let t = motion::hover_t(&blend);
-    let rest = if lit { TEXT } else { TEXT_MUTED };
-    let ink: gpui::Hsla = if active {
-        rgb(TEXT_STRONG).into()
-    } else {
-        motion::mix(rgb(rest).into(), rgb(TEXT).into(), t)
-    };
     let end: Option<AnyElement> = match tail {
         Trailing::None => None,
         Trailing::Chord(keys) => Some(
@@ -963,7 +955,7 @@ pub fn view_row(
     line_frame(key, blend, active)
         .debug_selector(move || key.into())
         .gap(px(NAV_ICON_GAP))
-        .text_color(ink)
+        .text_color(rgb(TEXT_STRONG))
         .child(div().flex().flex_shrink_0().size(px(NAV_ICON)).child(glyph))
         .child(
             div()
@@ -976,19 +968,9 @@ pub fn view_row(
         .children(end)
 }
 
-/// A view row's icon, in the ink its label takes (an `svg` paints from its
-/// own style, never the ambient text colour).
-pub fn view_icon(path: &'static str, key: &'static str, active: bool, lit: bool) -> AnyElement {
-    let t = motion::hover_t(key);
-    let rest = if lit { TEXT } else { TEXT_MUTED };
-    let ink: gpui::Hsla = if active {
-        rgb(TEXT_STRONG).into()
-    } else {
-        motion::mix(rgb(rest).into(), rgb(TEXT).into(), t)
-    };
-    icon(path, NAV_ICON, rest)
-        .text_color(ink)
-        .into_any_element()
+/// A view row's icon, in `ICON_INK` beside its primary label.
+pub fn view_icon(path: &'static str) -> AnyElement {
+    icon(path, NAV_ICON, ICON_INK).into_any_element()
 }
 
 /// The needs-you pill: the count in `ATTENTION` 11/600 on `ATTENTION` at
@@ -1145,7 +1127,7 @@ fn project_row(
     let (ink, weight) = if folded {
         (TEXT_MUTED, W_BODY)
     } else {
-        (TEXT, W_LABEL)
+        (TEXT_STRONG, W_LABEL)
     };
     let blend = SharedString::from(format!("{key}-{index}"));
     let action = action.filter(|_| hovered(&blend));
@@ -1160,7 +1142,7 @@ fn project_row(
     line_frame((key, index), blend, false)
         .debug_selector(move || format!("{key}-{index}"))
         .gap(px(NAV_ICON_GAP))
-        .child(icon(icons::FOLDER, NAV_ICON, TEXT_DIM))
+        .child(icon(icons::FOLDER, NAV_ICON, ICON_INK))
         .child(fitted(title_w, FS_UI, ink, weight, label))
         .children(right.map(|(right, right_ink)| {
             div()
@@ -1338,7 +1320,7 @@ pub fn group_row_with_title(
     let (ink, weight) = if row.selected {
         (TEXT_STRONG, W_LABEL)
     } else {
-        (TEXT, W_BODY)
+        (TEXT_STRONG, W_BODY)
     };
     let cover = if row.selected {
         1.0
@@ -1473,18 +1455,17 @@ pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
     )
 }
 
-/// A title's ink and weight (§5.1.5): `TEXT`, `TEXT_STRONG` 500 on the
-/// selected row, `TEXT_STRONG` while a finish is unseen (the unread rule),
-/// and a parked Thread's a step down so what is running reads first.
+/// A title's ink and weight (§5.1.5): primary ink (`TEXT_STRONG`), as
+/// the reference app's rows; 500 on the selected row and while a finish is
+/// unseen (the unread rule, said in weight now that every title is
+/// primary); a parked Thread's a step down so what is running reads first.
 fn title_face(row: &ThreadRow) -> (u32, FontWeight) {
-    if row.selected {
+    if row.selected || row.status == RowStatus::Done {
         (TEXT_STRONG, W_LABEL)
-    } else if row.status == RowStatus::Done {
-        (TEXT_STRONG, W_BODY)
     } else if row.status == RowStatus::Parked {
         (TEXT_MUTED, W_BODY)
     } else {
-        (TEXT, W_BODY)
+        (TEXT_STRONG, W_BODY)
     }
 }
 
@@ -1569,28 +1550,34 @@ pub fn thread_row_with_title(
 
 /// What a row says at its right, where its `⋯` stands under the pointer:
 /// the needs-you dot (the one orange on the list), a failure's red dot,
-/// background work's dot, or the working spinner (the one thing that
-/// moves). Idle, unseen-done (its title says so, `title_face`) and parked
-/// rows say nothing.
+/// background work's dot, the working spinner (the one thing that moves),
+/// or for a finish not yet seen a smaller dot in the default ink
+/// (`NAV_UNREAD_DOT`), cleared once seen. Idle and parked rows say nothing.
 pub(crate) fn state_mark(status: RowStatus) -> Option<Div> {
-    matches!(
-        status,
+    let face = match status {
         RowStatus::NeedsYou
-            | RowStatus::Failed
-            | RowStatus::Background
-            | RowStatus::Working
-            | RowStatus::Failing
-    )
-    .then(|| {
-        // The `⋯` glyph's box, so the two centre on one spot.
+        | RowStatus::Failed
+        | RowStatus::Background
+        | RowStatus::Working
+        | RowStatus::Failing => mark(status, true),
+        RowStatus::Done => div()
+            .debug_selector(|| "nav-unread-dot".into())
+            .size(px(NAV_UNREAD_DOT))
+            .rounded_full()
+            .bg(rgb(TEXT))
+            .into_any_element(),
+        RowStatus::Idle | RowStatus::Parked => return None,
+    };
+    // The `⋯` glyph's box, so the two centre on one spot.
+    Some(
         div()
             .flex()
             .flex_shrink_0()
             .items_center()
             .justify_center()
             .size(px(NAV_HEADING_GLYPH))
-            .child(mark(status, true))
-    })
+            .child(face),
+    )
 }
 
 /// What a row's title gives up while its right holds a mark or its `⋯`
@@ -1661,11 +1648,8 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
     let age_w = age
         .as_ref()
         .map_or(0.0, |age| measure.ui(age, FS_META, W_BODY) + NAV_WORD_GAP);
-    let title_ink = if cursor || !row.read {
-        TEXT_STRONG
-    } else {
-        TEXT
-    };
+    // Primary ink, as every nav title; unread says so in weight.
+    let title_weight = if cursor || !row.read { W_LABEL } else { W_BODY };
     row_frame(("notice-row", index), key, cursor)
         .debug_selector(move || format!("notice-row-{index}"))
         .flex_col()
@@ -1682,8 +1666,8 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
                 .child(fitted(
                     text_w - age_w,
                     FS_UI,
-                    title_ink,
-                    W_BODY,
+                    TEXT_STRONG,
+                    title_weight,
                     row.title.clone(),
                 ))
                 .children(age.map(|age| {
@@ -2259,13 +2243,13 @@ mod tests {
     /// `TEXT_STRONG` while its finish is unseen, a step down when parked.
     #[test]
     fn titles_follow_selection_unread_and_parked() {
-        assert_eq!(title_face(&thread()), (TEXT, W_BODY));
+        assert_eq!(title_face(&thread()), (TEXT_STRONG, W_BODY));
         assert_eq!(title_face(&selected_thread(true)), (TEXT_STRONG, W_LABEL));
         let done = ThreadRow {
             status: RowStatus::Done,
             ..thread()
         };
-        assert_eq!(title_face(&done), (TEXT_STRONG, W_BODY));
+        assert_eq!(title_face(&done), (TEXT_STRONG, W_LABEL), "unread in weight");
         let parked = ThreadRow {
             status: RowStatus::Parked,
             ..thread()
@@ -2396,8 +2380,8 @@ mod tests {
     }
 
     /// A row's right says one thing (§5.1.5): the needs-you dot, a
-    /// failure's, the working spinner; idle, unseen-done and parked rows
-    /// say nothing there.
+    /// failure's, the working spinner, an unseen finish's small grey dot;
+    /// idle and parked rows say nothing there.
     #[test]
     fn only_a_state_worth_saying_marks_the_right() {
         for status in [
@@ -2406,12 +2390,17 @@ mod tests {
             RowStatus::Background,
             RowStatus::Working,
             RowStatus::Failing,
+            RowStatus::Done,
         ] {
             assert!(state_mark(status).is_some(), "{status:?}");
         }
-        for status in [RowStatus::Idle, RowStatus::Done, RowStatus::Parked] {
+        for status in [RowStatus::Idle, RowStatus::Parked] {
             assert!(state_mark(status).is_none(), "{status:?}");
         }
+        assert!(
+            NAV_UNREAD_DOT < NAV_DOT_SMALL,
+            "the unread dot is a step under the needs-you dot"
+        );
     }
 
     /// A Group's roll-up (§5.1.6): how many need the operator, else how

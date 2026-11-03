@@ -170,7 +170,7 @@ impl CockpitView {
 
     fn rest_w(&self, rest: Rest) -> f32 {
         match rest {
-            Rest::Hidden => ferrite_ui::theme::BOARD_PAD,
+            Rest::Hidden => self.board_pad(),
             Rest::Shown => ferrite_ui::theme::PANEL_W,
             Rest::Wide => self.wide_w(),
         }

@@ -10,7 +10,7 @@
 //!
 //! The head is an overlay laid after the titlebar's drag strip
 //! (the frame's titlebar), over the frame the board column already paints
-//! (`components::frame_around`): it paints nothing and adds no layout. Only
+//! (the plane): it paints nothing and adds no layout. Only
 //! its controls occlude, so a press anywhere else in the row still lands on
 //! the strip beneath and drags the window (on Windows, the controls take
 //! their region out of the strip's `Drag` hit test the same way).

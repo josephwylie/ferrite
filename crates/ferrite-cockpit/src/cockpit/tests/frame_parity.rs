@@ -699,14 +699,13 @@ fn dragging_the_vertical_seam_moves_both_rows(cx: &mut TestAppContext) {
     );
 }
 
-/// SPEC §4: Solo's card sits on the frame flush right of the nav, under
-/// the 46px head row, `BOARD_PAD` short of the 30px bar and flush with the
-/// panel's column (§5.6), which runs from the window's top to the bar's
-/// hairline —
-/// the mockups' frame at their 1600×960.
+/// Theme rule 2: the Solo Pane is the plane itself, flush right of the
+/// nav, under the 46px head row, down to the 30px bar and to the panel's
+/// column (§5.6), which runs from the window's top to the bar's hairline —
+/// at the mockups' 1600×960.
 #[gpui::test]
 fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{BOARD_PAD, HAIRLINE_W, PANEL_W, STATUS_BAR_H, WIN_CHROME_H};
+    use ferrite_ui::theme::{HAIRLINE_W, PANEL_W, STATUS_BAR_H, WIN_CHROME_H};
     let (core, _fake) = cockpit("frame-solo-card", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
@@ -716,8 +715,8 @@ fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
     let card = rects[0].1;
     assert_eq!((card.x, card.y), (nav::WIDTH, WIN_CHROME_H));
     assert_eq!(card.x + card.w, 1600. - PANEL_W);
-    assert_eq!(card.y + card.h, 960. - STATUS_BAR_H - BOARD_PAD);
-    assert_eq!((card.x, card.y, card.w, card.h), (264., 46., 1032., 876.));
+    assert_eq!(card.y + card.h, 960. - STATUS_BAR_H, "no gutter under it");
+    assert_eq!((card.x, card.y, card.w, card.h), (264., 46., 1032., 884.));
     let panel = cx.debug_bounds("panel").expect("the panel");
     assert_eq!(
         panel,

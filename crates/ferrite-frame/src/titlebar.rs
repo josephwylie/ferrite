@@ -45,7 +45,7 @@ use ferrite_ui::theme::*;
 /// The head row's drag strip over the board, as an overlay: the cards
 /// start at `board_top`, so this adds no layout and paints nothing — it
 /// claims what the window already left empty, from `board_left`, whose
-/// frame the board column paints (`components::frame_around`). Over the
+/// plane the board column lies on. Over the
 /// nav, the nav's own head drags the window (`nav::head`, its stretch
 /// `head_drag`) around its sidebar toggle.
 ///

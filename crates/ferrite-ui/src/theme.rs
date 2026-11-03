@@ -35,59 +35,54 @@
 //!    for what is read, Medium (500, `W_LABEL`, `W_STRONG`) for titles,
 //!    tabs, buttons, labels, headings and `**strong**`. Nothing heavier.
 //!    Never reach a weight by family name.
-//! 2. **Cards on a frame** (supersedes "square and flat inside"). The
-//!    main surface is `CARD` #1a1a1a: a Pane is a card, radius `R_PANE`, a
-//!    1px `CARD_RING`, on the window's frame, `FRAME` #141414 a quiet step
-//!    darker (the nav, the heads, the right panel, a Group's gutter), as a
-//!    dark desktop app's sidebar recedes. Only the bottom bar (`paint::BAR`, the frame's grey
-//!    under a `BAR_TOP` hairline) is full-bleed. Radii run by role
-//!    (`R_INLINE` 4 … `R_PALETTE` 12; dots, pills and the send circle
-//!    round). **One border**, `BORDER` (white at 6%): every hairline, ring
-//!    and edge that is not a state's is it (`HAIRLINE`, `CARD_RING`,
+//! 2. **One plane, divided by hairlines** (supersedes "cards on a
+//!    frame"). The window is one flat grey, `CARD` #1a1a1a: the nav, the
+//!    head row, the main area, the right panel and the bottom bar are all
+//!    it (`FRAME` is `CARD`). Regions part by `BORDER` hairlines alone —
+//!    one the window's width under the head row, one at the nav's edge, one
+//!    at the panel's (`plane_seams` in the Cockpit), the bar's `BAR_TOP` —
+//!    never by a second grey, an inset or a gap that reads. A Solo Pane is
+//!    the plane itself, flush and unringed (`PaneEdge::Flush`); a Group's
+//!    Panes keep a `CARD_RING` hairline round their cells, at `R_PANE`.
+//!    Radii run by role (`R_INLINE` 4 … `R_PALETTE` 12; dots, pills and the
+//!    send circle round). **One border**, `BORDER` #242424: every hairline,
+//!    ring and edge that is not a state's is it (`HAIRLINE`, `CARD_RING`,
 //!    `FIELD_RING`, … name where it lies), or a fill step separates: no
-//!    grey borders, no keycap boxes, no boxed section labels. Only a floating
-//!    surface casts, one shadow (`components::float_shadow`); a modal adds
-//!    `VEIL`.
-//! 3. **Neutral greys.** The opaque surfaces, darkest first: `FRAME` (the
-//!    chrome) < `SUNKEN` (a command well) < `CARD` < `BLOCK` (diff and fence
-//!    blocks) < `DECISION` < `FIELD_COMPACT` < `FIELD` (the Solo Composer,
-//!    the prompt band) < `TAB_ACTIVE` < `RAISED` (chips, inline
-//!    code, secondary buttons) < `SELECTED` (the
-//!    selected row, tab, option, cursor) < `SELECTION_HOVER` (every press)
-//!    < `SEND`. **One selected fill**, `SELECTED`. `FLOAT` grounds menus and
-//!    popovers. `PRIMARY` (the
-//!    strongest ink, with `ON_PRIMARY`) is the primary button. Hover is
-//!    not a grey but a white overlay (`HOVER_WASH`, `paint::HOVER`): one
-//!    equal step (+8) on whatever ground the control rests on, the card,
-//!    the frame, a block or a sheet alike.
-//! 4. **An opaque frame, the terminal in a card.** The window is opaque on
+//!    keycap boxes, no boxed section labels. Only a floating surface casts,
+//!    one shadow (`components::float_shadow`); a modal adds `VEIL`.
+//! 3. **Neutral greys, small steps over the plane.** Darkest first:
+//!    `SUNKEN` (a command well) < `CARD` = `FRAME` (the plane) < `BLOCK`
+//!    (diff and fence blocks) < `DECISION` < `FIELD_COMPACT` < `FIELD`
+//!    #212121 (the Composer, the prompt band, a search field) =
+//!    `SELECTED` (**the one selected fill**: the selected row, tab, option,
+//!    cursor) < `TAB_ACTIVE` = `RAISED` #242424 (an active tab or chip,
+//!    inline code, secondary buttons) < `SELECTION_HOVER` (every press)
+//!    < `SEND`. `FLOAT` grounds menus and popovers a step over the plane.
+//!    `PRIMARY` (the strongest ink, with `ON_PRIMARY`) is the primary
+//!    button. Hover is not a grey but a white overlay (`HOVER_WASH`,
+//!    `paint::HOVER`): one equal small step (#1a1a1a → #1e1e1e) on
+//!    whatever ground the control rests on, under the selected fill.
+//! 4. **Opaque, flat, terminal in the plane.** The window is opaque on
 //!    every platform (`WindowBackgroundAppearance::Opaque`): nothing of the
-//!    desktop reads through, so the hierarchy is carried by small value
-//!    steps of rule 3 and by hairlines alone. The root paints the card's
-//!    grey (`paint::WINDOW`); each region paints its own fill once, from
-//!    `paint::*`: the shell is one plane, the frame (`FRAME`: the nav, the
-//!    heads, a Group's gutter, the right panel, the bottom bar), the darkest
-//!    plane, one quiet step under the card (`CARD`), so the chrome recedes
-//!    and the reading surface holds the eye, the way a dark desktop app's
-//!    sidebar does. Only hairlines divide the shell (the bar's
-//!    `BAR_TOP`), never a second grey band. Inside a region, fields, raised and
+//!    desktop reads through, so the hierarchy is carried by the hairlines
+//!    of rule 2 and the small steps of rule 3. The root paints the plane
+//!    (`paint::WINDOW`); each region paints its own fill once, from
+//!    `paint::*`, the same grey. Inside a region, fields, raised and
 //!    selected fills are the next opaque steps. gpui blurs no element, so
 //!    no surface is frosted: a float paints opaque (`paint::FLOAT`), and a
 //!    surface that must occlude what scrolls under it (the sticky prompt, a
 //!    Decision docked over the tail) paints a solid fill. Fills and lines
 //!    go through `theme::paint` (typed `Paint`, so `rgb()` cannot swallow
 //!    an `0xRRGGBBAA` by mistake); the bare consts are the `0xRRGGBB`
-//!    values, for contrast math. **Never stack two region fills**: the
-//!    frame and the card are separate regions, and what sits inside a
-//!    region paints its own step or nothing.
+//!    values, for contrast math. **Never stack two region fills**: what
+//!    sits inside a region paints its own step or nothing.
 //! 5. **Three text tiers.** Every word is strong, default or subtle:
-//!    `INK_STRONG` #ececec (what is read — prose, titles, selected and
-//!    unread rows, the prompt, `**strong**`, `❯`, the caret, focus, links
-//!    and paths in prose), `INK` #b5b5b5 (the chrome's body — nav rows at
-//!    rest, tabs, buttons, chips, tool output), `INK_SUBTLE` #7f7f7f
-//!    (metadata, times, icons, section headings, tool arguments, hints,
-//!    placeholders; **the floor for readable text**: 4:1 on `CARD`, 3.5:1
-//!    on `FRAME`). The ladder's older names (`TEXT_STRONG`, `TEXT_PROSE`,
+//!    `INK_STRONG` #f5f5f5 (what is read — prose, titles, the nav's rows,
+//!    selected rows, the prompt, `**strong**`, `❯`, the caret, focus),
+//!    `INK` #cfcfcf (secondary — descriptions, tabs, buttons, chips, tool
+//!    output — and every icon, `ICON_INK`), `INK_SUBTLE` #919191
+//!    (metadata, times, section headings, tool arguments, hints,
+//!    placeholders; **the floor for readable text**: 4.5:1 on the plane). The ladder's older names (`TEXT_STRONG`, `TEXT_PROSE`,
 //!    `TEXT`, `TEXT_BAR`, `TEXT_MUTED`, `TEXT_DIM`) each sit on a tier.
 //!    `TEXT_FAINT` is structure only (`└`, rails, diff line numbers):
 //!    **`TEXT_FAINT` is never text.** A row spends at
@@ -230,46 +225,48 @@ impl From<Paint> for gpui::Fill {
 // (rule 3). Paint a region with `paint::*`; the bare consts are the
 // `0xRRGGBB` values, for contrast math.
 
-/// `#141414` — the frame around the cards, the darkest plane: the nav,
-/// the heads, the right panel, a Group's gutter, the bottom bar. The
-/// chrome recedes and the main surface, a step lighter, holds the eye.
-pub const FRAME: u32 = 0x141414;
-/// `#171717` — sunk below the card: a Decision's command well, the
+/// `#1a1a1a` — **the one plane**: the main surface, a Pane's body, the
+/// transcript's ground, and the chrome around it (`FRAME`) alike. Regions
+/// are divided by `BORDER` hairlines, never by a second grey.
+pub const CARD: u32 = 0x1a1a1a;
+/// The frame — the nav, the heads, the right panel, a Group's gutter, the
+/// bottom bar: the plane itself (rule 2).
+pub const FRAME: u32 = CARD;
+/// `#171717` — sunk below the plane: a Decision's command well, the
 /// palette scrim's base.
 pub const SUNKEN: u32 = 0x171717;
-/// `#1a1a1a` — the main surface: a Pane's body, the transcript's ground.
-pub const CARD: u32 = 0x1a1a1a;
-/// `#202020` — diff and code-fence blocks.
-pub const BLOCK: u32 = 0x202020;
-/// `#212121` — the Decision box.
-pub const DECISION: u32 = 0x212121;
-/// `#222222` — the compact Composer in a Group Pane.
-pub const FIELD_COMPACT: u32 = 0x222222;
-/// `#242424` — a field on the card: the Solo Composer's box, the prompt
-/// band, a step over the card.
-pub const FIELD: u32 = 0x242424;
-/// `#282828` — the active tab inside a card.
-pub const TAB_ACTIVE: u32 = 0x282828;
-/// `#2a2a2a` — raised a step: chips, inline code, secondary buttons, the
-/// panel's file block.
-pub const RAISED: u32 = 0x2a2a2a;
-/// `#252527` — the floating ground: menus, pickers, the palette, popovers,
-/// tooltips, toasts, sheets.
-pub const FLOAT: u32 = 0x252527;
-/// `#2a2a2c` · `#323235` — a float's hover and cursor fills, opaque steps
+/// `#1d1d1d` — diff and code-fence blocks.
+pub const BLOCK: u32 = 0x1d1d1d;
+/// `#1e1e1e` — the Decision box.
+pub const DECISION: u32 = 0x1e1e1e;
+/// `#1f1f1f` — the compact Composer in a Group Pane.
+pub const FIELD_COMPACT: u32 = 0x1f1f1f;
+/// `#212121` — a field on the plane: the Solo Composer's box, the prompt
+/// band, a search field.
+pub const FIELD: u32 = 0x212121;
+/// `#242424` — an active tab or chip inside the plane.
+pub const TAB_ACTIVE: u32 = 0x242424;
+/// `#242424` — raised a step: chips, inline code, secondary buttons, the
+/// panel's file block — an active tab's fill.
+pub const RAISED: u32 = TAB_ACTIVE;
+/// `#202020` — the floating ground: menus, pickers, the palette, popovers,
+/// tooltips, toasts, sheets, a step over the plane under its `BORDER`
+/// edge and its one shadow.
+pub const FLOAT: u32 = 0x202020;
+/// `#262626` · `#2c2c2c` — a float's hover and cursor fills, opaque steps
 /// over its own ground. The cursor is the clear step; the hover stays
 /// faint, and the cursor row lifts its subtle words to the default ink
 /// (`menu::row_face`), as the nav's selected row lifts its line 2.
-pub const FLOAT_RAISED: u32 = 0x2a2a2c;
-pub const FLOAT_SELECTED: u32 = 0x323235;
-/// `#303030` — **the one selected fill**: the selected nav row, the active
+pub const FLOAT_RAISED: u32 = 0x262626;
+pub const FLOAT_SELECTED: u32 = 0x2c2c2c;
+/// `#212121` — **the one selected fill**: the selected nav row, the active
 /// view and panel tab, the cursor row of a menu, a Decision option and the
-/// palette.
-pub const SELECTED: u32 = 0x303030;
-/// `#373737` — a selected row under the pointer, and every press.
-pub const SELECTION_HOVER: u32 = 0x373737;
-/// `#3d3d3d` — the send button's circle (and a comment's avatar).
-pub const SEND: u32 = 0x3d3d3d;
+/// palette — a field's grey.
+pub const SELECTED: u32 = FIELD;
+/// `#282828` — a selected row under the pointer, and every press.
+pub const SELECTION_HOVER: u32 = 0x282828;
+/// `#2e2e2e` — the send button's circle (and a comment's avatar).
+pub const SEND: u32 = 0x2e2e2e;
 /// `#f2f2f2` / `#161616` — the primary button (`primary_button`, dialogs
 /// and settings) and its ink. No hue: the primary is the strongest ink.
 pub const PRIMARY: u32 = TEXT_STRONG;
@@ -277,15 +274,16 @@ pub const ON_PRIMARY: u32 = 0x161616;
 
 // -------------------------------------------------------------- hairlines
 //
-// White at an opacity over whatever is below (SPEC §3.2), so one hairline
-// reads the same on every grey: `0xRRGGBBAA`, painted with `rgba()` or
-// `paint::*`.
+// One solid hairline grey on the one plane (rule 2): `0xRRGGBBAA`, painted
+// with `rgba()` or `paint::*`. The state rings and washes below are
+// overlays.
 
 /// 1px — every hairline's width (rule 2).
 pub const HAIRLINE_W: f32 = 1.0;
-/// White at 6% — **the one border**: every hairline, ring and edge that is
-/// not a state's. The names below say where it lies.
-pub const BORDER: u32 = 0xffffff0f;
+/// `#242424` — **the one border**: every hairline, ring and edge that is
+/// not a state's, the plane's region seams included. The names below say
+/// where it lies.
+pub const BORDER: u32 = 0x242424ff;
 /// Dividers in cards and panels: a tab strip's foot, the queued row's
 /// foot, panel sections.
 pub const HAIRLINE: u32 = BORDER;
@@ -301,10 +299,10 @@ pub const ROW_RING: u32 = BORDER;
 pub const BAR_TOP: u32 = BORDER;
 /// 3.5% — the hover face of a control or row with no ground of its own
 /// (rule 3): over its parent's ground it lands the same step everywhere,
-/// `#1a1a1a` → `#222222` on the card, `#141414` → `#1c1c1c` on the frame,
-/// where one opaque grey would step twice as far on one ground as on
-/// another and vanish on a float.
-pub const HOVER_WASH: u32 = 0xffffff09;
+/// `#1a1a1a` → `#1e1e1e` on the plane, under the selected row's
+/// `#212121`, where one opaque grey would step twice as far on one ground
+/// as on another and vanish on a float.
+pub const HOVER_WASH: u32 = 0xffffff04;
 /// 22% — the focused Pane on a Group (more than one Pane shows), a drop
 /// target's edge.
 pub const FOCUS_RING: u32 = 0xffffff38;
@@ -329,9 +327,9 @@ pub const FAILURE_WASH: u32 = 0xef8a8012;
 
 /// `#262626` — a rule: a seam, a table's row rules, a break.
 pub const LINE: u32 = 0x262626;
-/// `#333333` — a strong rule: a table's head rule, a code block's
+/// `#303030` — a strong rule: a table's head rule, a code block's
 /// rail, an image's frame.
-pub const LINE2: u32 = 0x333333;
+pub const LINE2: u32 = 0x303030;
 /// Fully transparent — an edge that is always in layout and only changes
 /// colour, so nothing reflows when a Decision or a blocker arrives.
 pub const TRANSPARENT: u32 = 0x00000000;
@@ -386,10 +384,10 @@ pub mod paint {
 /// least 3:1 on the card, the frame, a float and a field, so an unchecked
 /// control never vanishes.
 pub const INPUT_EDGE: u32 = 0x7c7c7c;
-/// `#383838` / `#505050` — the scrollbar thumb, at rest and under the
+/// `#333333` / `#4a4a4a` — the scrollbar thumb, at rest and under the
 /// pointer.
-pub const SCROLLBAR: u32 = 0x383838;
-pub const SCROLLBAR_HOVER: u32 = 0x505050;
+pub const SCROLLBAR: u32 = 0x333333;
+pub const SCROLLBAR_HOVER: u32 = 0x4a4a4a;
 /// `#ffffff1a` — an unlit meter segment and the usage lines' tracks.
 pub const METER_OFF: u32 = 0xffffff1a;
 /// Black at 35% — the veil behind a modal sheet.
@@ -398,16 +396,19 @@ pub const VEIL: u32 = 0x00000059;
 // -------------------------------------------------------------------- ink
 
 /// **The three text tiers** (rule 5): every word is one of these.
-/// `#ececec` — strong: primary text — what is read (prose), titles,
-/// selected and unread rows, the prompt, `**strong**`, the caret, focus.
-pub const INK_STRONG: u32 = 0xececec;
-/// `#b5b5b5` — default: the chrome's body — nav rows at rest, tabs,
-/// buttons, chips, tool output.
-pub const INK: u32 = 0xb5b5b5;
-/// `#7f7f7f` — subtle: metadata, times, icons, section headings, tool
-/// arguments, hints, placeholders. **The floor for readable text**: 4:1
-/// on the card, 3.5:1 on the frame.
-pub const INK_SUBTLE: u32 = 0x7f7f7f;
+/// `#f5f5f5` — strong: primary text — what is read (prose), titles, the
+/// nav's rows, selected rows, the prompt, `**strong**`, the caret, focus.
+pub const INK_STRONG: u32 = 0xf5f5f5;
+/// `#cfcfcf` — default: secondary text — descriptions, tabs, buttons,
+/// chips, tool output — and every icon (`ICON_INK`).
+pub const INK: u32 = 0xcfcfcf;
+/// `#919191` — subtle: metadata, times, section headings, tool arguments,
+/// hints, placeholders. **The floor for readable text**: 4.5:1 on the
+/// plane.
+pub const INK_SUBTLE: u32 = 0x919191;
+/// An icon's ink: the default tier (`#cfcfcf`), as the reference app draws
+/// its line icons beside primary words.
+pub const ICON_INK: u32 = INK;
 
 /// The ladder's names, each on its tier, so a render site keeps reading
 /// the role it meant.
@@ -1757,16 +1758,14 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // Owner: WP-C (the pane shell, head, wall tiles, board, seams, titlebar.)
 // Edit values and append tokens only inside this section.
 //
-// **Cards on a frame** (theme rule 2, SPEC §4). The window is two rows: the
-// nav and the board column over the head row (`WIN_CHROME_H`), and the
-// full-width bottom bar (`STATUS_BAR_H`). The board column starts at the
-// nav's right edge (no seam: the card's edge separates) and leaves
-// `BOARD_PAD` of frame right of and under its cards; its left edge rides
-// the nav's width every frame while cmd-B folds it (`motion::RESIZE`). The
-// column paints the frame itself (`components::frame_around`): `paint::
-// FRAME` over the head row and the gutters, with a rounded hole per card,
-// so the frame and the cards are separate regions (rule 4) and whatever a
-// card's children paint past its rounded corners is covered. Cards on a
+// **One plane** (theme rule 2, SPEC §4). The window is two rows: the nav
+// and the board column over the head row (`WIN_CHROME_H`), and the
+// full-width bottom bar (`STATUS_BAR_H`), all the plane's grey, parted by
+// the Cockpit's seams (`plane_seams`). The board column starts at the
+// nav's seam; its left edge rides the nav's width every frame while cmd-B
+// folds it (`motion::RESIZE`). A Solo Pane fills it flush, square and
+// unringed; a Group's cells stand `BOARD_PAD` in from the bar and the
+// window's edge (`board_pad`), each at `R_PANE` with its ring. Cells on a
 // board are `BOARD_SEAM` apart; a seam is the gutter's centre line and its
 // 9px grab band (`SEAM_GRAB` in the cockpit) that resizes its two sides,
 // clamped to 22–78% of the board. A default grid's aligned seams are one
@@ -1774,12 +1773,12 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // line draws `SEAM_LINE_W` of `SEAM_HOVER` in the gutter, fading in over
 // `MOTION_SEAM_FADE_MS`.
 //
-// **The Pane card.** `paint::CARD`, radius `R_PANE`, its content starting at
-// its own edges; its 1px ring is an overlay just outside them (the mockups'
-// `box-shadow: 0 0 0 1px`), so a state change reflows nothing. By
-// precedence (`pane::PaneEdge`): a waiting Pane `WAIT_RING`, focused or
-// not > focused `FOCUS_RING` (only while more than one Pane is on the
-// board) > at rest `CARD_RING`. Every Pane root is the `pane::PANE_GROUP`
+// **The Pane.** `paint::CARD`, its content starting at its own edges. On a
+// Group board it is a cell at `R_PANE` whose 1px ring is an overlay just
+// outside it (the mockups' `box-shadow: 0 0 0 1px`), so a state change
+// reflows nothing. By precedence (`pane::PaneEdge`): a waiting Pane
+// `WAIT_RING`, focused or not > focused `FOCUS_RING` > at rest
+// `CARD_RING`; a Solo Pane is `Flush`: no ring, no radius. Every Pane root is the `pane::PANE_GROUP`
 // hover group.
 //
 // **Solo has no head**: the nav's selected row names the Thread and the
@@ -2751,6 +2750,9 @@ pub const NAV_CHEVRON_X: f32 = 11.0;
 pub const NAV_HEADING_CARET: f32 = 10.0;
 /// 6px — between a row's title and the mark (or `⋯`) at its right.
 pub const NAV_MARK_GAP: f32 = SPACE_1_5;
+/// 5px — an unseen finish's dot at a row's right, in the default ink: a
+/// step under the needs-you dot (`NAV_DOT_SMALL`), never orange.
+pub const NAV_UNREAD_DOT: f32 = 5.0;
 /// 18px — the foot's account disc, its initial at `FS_AVATAR` 500.
 pub const NAV_AVATAR: f32 = 18.0;
 pub const FS_AVATAR: f32 = 10.0;
@@ -3091,18 +3093,16 @@ mod tests {
         ];
         floor(readable, GROUNDS, 4.5);
         floor(readable, RAISED_GROUNDS, 4.5);
-        // The subtle tier is the floor (the owner's #7f7f7f): 4:1 on the
-        // card, 3.5:1 on the frame and the grounds rows sit on, and only
-        // ever meta beside default words on a raised ground (2.8:1).
-        assert!(contrast(INK_SUBTLE, CARD) >= 4.0);
-        floor(&[("TEXT_DIM", TEXT_DIM)], GROUNDS, 3.5);
-        floor(&[("TEXT_DIM", TEXT_DIM)], RAISED_GROUNDS, 2.8);
+        // The subtle tier is the floor: AA on the plane, the grounds rows
+        // sit on and the raised ones.
+        floor(&[("TEXT_DIM", TEXT_DIM)], GROUNDS, 4.5);
+        floor(&[("TEXT_DIM", TEXT_DIM)], RAISED_GROUNDS, 4.5);
         // A float's rows: its subtle words under the pointer, and lifted to
         // the default tier on the cursor row.
         floor(
             &[("TEXT_DIM", TEXT_DIM)],
             &[("FLOAT_RAISED", FLOAT_RAISED)],
-            2.8,
+            4.5,
         );
         floor(
             &[("TEXT_MUTED", TEXT_MUTED)],
@@ -3111,7 +3111,7 @@ mod tests {
         );
         // Each step reads over the one under it.
         const { assert!(FLOAT_RAISED > FLOAT && FLOAT_SELECTED > FLOAT_RAISED) };
-        assert!(contrast(TEXT_DIM, FRAME) >= 3.5 && contrast(TEXT_DIM, CARD) >= 4.0);
+        assert!(contrast(TEXT_DIM, CARD) >= 4.5);
         // Comments are the dim ink, under its floor.
         assert_eq!(SYN_COMMENT, TEXT_DIM);
         // Structure only, never text: a visible glyph on its grounds.
@@ -3215,8 +3215,9 @@ mod tests {
     fn the_ink_ladder_is_three_tiers() {
         assert_eq!(
             [INK_STRONG, INK, INK_SUBTLE],
-            [0xececec, 0xb5b5b5, 0x7f7f7f]
+            [0xf5f5f5, 0xcfcfcf, 0x919191]
         );
+        assert_eq!(ICON_INK, INK, "icons read at the default tier");
         assert_eq!((TEXT_STRONG, TEXT_PROSE), (INK_STRONG, INK_STRONG));
         assert_eq!([TEXT, TEXT_BAR, TEXT_MUTED], [INK; 3]);
         assert_eq!(TEXT_DIM, INK_SUBTLE);
@@ -3231,19 +3232,19 @@ mod tests {
     #[test]
     fn the_surface_ladder_is_ordered_and_grey() {
         let ladder = [
-            ("FRAME", FRAME),
             ("SUNKEN", SUNKEN),
             ("CARD", CARD),
             ("BLOCK", BLOCK),
             ("DECISION", DECISION),
             ("FIELD_COMPACT", FIELD_COMPACT),
             ("FIELD", FIELD),
-            ("TAB_ACTIVE", TAB_ACTIVE),
             ("RAISED", RAISED),
-            ("SELECTED", SELECTED),
             ("SELECTION_HOVER", SELECTION_HOVER),
             ("SEND", SEND),
         ];
+        // One plane; the selection is a field's grey; an active tab is a
+        // raised one.
+        assert_eq!((FRAME, SELECTED, TAB_ACTIVE), (CARD, FIELD, RAISED));
         for pair in ladder.windows(2) {
             assert!(
                 luminance(pair[0].1) < luminance(pair[1].1),
@@ -3258,18 +3259,19 @@ mod tests {
             assert!(r == g && g == b, "{name} #{face:06x} is not a neutral grey");
         }
         assert_eq!(
-            [FRAME, CARD, BLOCK, FIELD, RAISED, SELECTED],
-            [0x141414, 0x1a1a1a, 0x202020, 0x242424, 0x2a2a2a, 0x303030]
+            [CARD, BLOCK, FIELD, RAISED, FLOAT],
+            [0x1a1a1a, 0x1d1d1d, 0x212121, 0x242424, 0x202020]
         );
         assert_eq!((PRIMARY, ON_PRIMARY), (TEXT_STRONG, 0x161616));
-        // The hairlines are white at their stated opacities.
-        let alpha = |rgba: u32| (rgba & 0xff) as f32 / 255.;
-        // One border: every hairline, ring and edge that is no state's.
+        // One border, solid #242424: every hairline, ring and edge that is
+        // no state's.
         for line in [HAIRLINE, CARD_RING, FIELD_RING, HAIRLINE_STRONG, ROW_RING, BAR_TOP] {
             assert_eq!(line, BORDER);
         }
+        assert_eq!(BORDER, solid(0x242424));
+        // The state rings and washes are white at their stated opacities.
+        let alpha = |rgba: u32| (rgba & 0xff) as f32 / 255.;
         for (line, opacity) in [
-            (BORDER, 0.06),
             (FOCUS_RING, 0.22),
             (DROP_EDGE, 0.22),
             (DROP_WASH, 0.06),
@@ -3339,20 +3341,20 @@ mod tests {
         assert_eq!(paint::WINDOW, paint::CARD);
         assert_eq!(paint::PANEL, paint::FRAME);
         assert_eq!(paint::BAR, paint::FRAME, "the shell is one plane");
-        assert!(luminance(FRAME) < luminance(CARD), "the chrome recedes");
-        // The hairlines are white overlays.
+        assert_eq!(FRAME, CARD, "one plane");
+        // The hairlines are the one solid border.
         assert_eq!(paint::HAIRLINE.rgba(), HAIRLINE);
         assert_eq!(paint::HAIRLINE_STRONG.rgba(), HAIRLINE_STRONG);
-        assert!(!paint::HAIRLINE.is_opaque());
+        assert!(paint::HAIRLINE.is_opaque());
         assert_eq!(paint::PRESS, paint::SELECTION_HOVER);
         // Hover is one equal step on every ground (rule 3).
         for ground in [CARD, FRAME, BLOCK, FLOAT] {
             let step = (over(HOVER_WASH, ground) & 0xff) - (ground & 0xff);
-            assert!((7..=8).contains(&step), "{ground:06x} steps {step}");
+            assert!((3..=4).contains(&step), "{ground:06x} steps {step}");
         }
-        // A hovered row stays under a raised control and the selection.
-        assert!(luminance(over(HOVER_WASH, CARD)) < luminance(RAISED));
-        assert!(luminance(over(HOVER_WASH, FRAME)) < luminance(SELECTED));
+        // A hovered row stays under the selection.
+        assert_eq!(over(HOVER_WASH, CARD), 0x1e1e1e);
+        assert!(luminance(over(HOVER_WASH, CARD)) < luminance(SELECTED));
         // A paint converts the way `rgba()` does, never the way `rgb()` would.
         let fill: gpui::Fill = paint::CARD.into();
         assert_eq!(fill, gpui::Fill::from(gpui::rgba(paint::CARD.0)));

@@ -375,13 +375,13 @@ impl CockpitView {
             .child(if fetching {
                 spinning_refresh()
             } else {
-                icon(icons::REFRESH, ICON_PR_BUTTON_GLYPH, TEXT_DIM).into_any_element()
+                icon(icons::REFRESH, ICON_PR_BUTTON_GLYPH, ICON_INK).into_any_element()
             })
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 view.refresh_pr_tab(thread, cx);
             }));
         let external = pr_icon_button("pr-external", "Open on GitHub", "cockpit::OpenPrInBrowser")
-            .child(icon(icons::EXTERNAL, ICON_PR_BUTTON_GLYPH, TEXT_DIM))
+            .child(icon(icons::EXTERNAL, ICON_PR_BUTTON_GLYPH, ICON_INK))
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 view.open_pr(thread, cx);
             }));
@@ -427,7 +427,7 @@ impl CockpitView {
                     .min_w_0()
                     .text_size(px(FS_META))
                     .text_color(rgb(TEXT_DIM))
-                    .child(icon(icons::BRANCH, 13., TEXT_DIM))
+                    .child(icon(icons::BRANCH, 13., ICON_INK))
                     .child(
                         div()
                             .min_w_0()
@@ -887,7 +887,7 @@ struct RefreshSpin;
 impl RenderOnce for RefreshSpin {
     fn render(self, window: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
         use ferrite_ui::theme::*;
-        let glyph = icon(icons::REFRESH, ICON_PR_BUTTON_GLYPH, TEXT_DIM);
+        let glyph = icon(icons::REFRESH, ICON_PR_BUTTON_GLYPH, ICON_INK);
         let glyph = if ferrite_ui::motion::reduced_motion(cx) {
             glyph.opacity(0.5)
         } else {

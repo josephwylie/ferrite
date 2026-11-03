@@ -541,7 +541,7 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
                             .truncate()
                             .child(components::form_label(selected.clone(), TEXT)),
                     )
-                    .child(icon(icons::CHEVRON_DOWN, ICON_CHEVRON, TEXT_DIM).flex_shrink_0()),
+                    .child(icon(icons::CHEVRON_DOWN, ICON_CHEVRON, ICON_INK).flex_shrink_0()),
             )
             .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu, _, _| {
                 options.iter().enumerate().fold(
