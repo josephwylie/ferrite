@@ -34,7 +34,7 @@ These are kept as they are:
 
 ## Lane M — motion, from Claude's source (`motion-claude-source.md`)
 
-- [ ] All 14 gaps, the ⌘B snap, the row-hover snap, and the preview MP4.
+- [x] All 14 gaps, the ⌘B snap, the row-hover snap, and the preview MP4 (`2735a69f`).
 - [ ] Composer height eases instead of jumping.
 - [ ] Crossfade on thread and view switch, if Claude has one; check the source doc.
 - [ ] The working-line shimmer leaves the ~30 fps clock.
