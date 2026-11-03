@@ -8,6 +8,7 @@ pub(crate) mod decisions;
 pub(crate) mod empty_board;
 mod history;
 mod leaving;
+mod lightbox;
 mod machines;
 mod nav_keys;
 mod palette;
@@ -42,6 +43,7 @@ use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
 use ferrite_core::settings::ThreadListOrder;
 use ferrite_core::sound::Sound;
+use ferrite_pane::page::PageSource;
 
 /// The loose rows the nav last drew, in order, and under `sort: attention`
 /// the state each row was ranked by (C8, "never re-sort under the
@@ -720,11 +722,17 @@ pub struct Preferences {
 }
 
 impl Preferences {
-    /// Defaults saved nowhere — the test constructor's and the demo's.
+    /// Defaults saved nowhere — the test constructor's and the demo's —
+    /// with the right panel shown: the suites and scenes measure the
+    /// window with it, and close it where they mean to (`hide_panel`,
+    /// `PANEL_CLOSED`). A launch reads the closed default.
     #[cfg_attr(not(any(test, feature = "visual-reference")), allow(dead_code))]
     fn ephemeral() -> Self {
         Self {
-            settings: ferrite_core::settings::Settings::default(),
+            settings: ferrite_core::settings::Settings {
+                panel_shown: true,
+                ..Default::default()
+            },
             dir: std::env::temp_dir().join(format!("ferrite-prefs-{}", std::process::id())),
             defaults: std::sync::Arc::new(std::sync::Mutex::new(
                 ferrite_core::spawner::SessionDefaults::default(),
@@ -975,6 +983,8 @@ enum MenuTarget {
         thread: ThreadId,
         block: ferrite_core::transcript::BlockId,
     },
+    /// The page a Pane's preview shows: its title's menu.
+    Page(PaneIdentity),
 }
 
 /// One thing a context-menu row does.
@@ -1015,6 +1025,9 @@ enum MenuVerb {
     /// alone, or its files too.
     Rewind,
     RewindCode,
+    /// A page's own verbs: read its file again, open it in the browser.
+    Reload,
+    OpenInBrowser,
 }
 
 #[derive(Clone, Copy)]
@@ -1097,9 +1110,13 @@ impl NavChip {
                 None,
                 false,
             ),
-            NavChip::Group(group) => {
-                nav::group_row_with_title(group, group.title.clone(), nav::group_fold(group), 0)
-            }
+            NavChip::Group(group) => nav::group_row_with_title(
+                group,
+                group.title.clone(),
+                nav::group_fold(group),
+                0,
+                false,
+            ),
         })
     }
 }
@@ -3666,6 +3683,22 @@ impl CockpitView {
                     MenuVerb::RewindCode,
                 )));
             }
+            MenuTarget::Page(owner) => {
+                let address = self
+                    .page_source(owner)
+                    .is_some_and(|page| matches!(page, PageSource::Address(_)));
+                if !address {
+                    rows.push(Some((menu::Item::new("Reload"), MenuVerb::Reload)));
+                }
+                rows.push(Some((
+                    menu::Item::new("Open in browser"),
+                    MenuVerb::OpenInBrowser,
+                )));
+                rows.push(Some((
+                    menu::Item::new(if address { "Copy address" } else { "Copy path" }),
+                    MenuVerb::CopyPath,
+                )));
+            }
         }
         rows
     }
@@ -3737,7 +3770,8 @@ impl CockpitView {
             MenuTarget::Group(_)
             | MenuTarget::Parked
             | MenuTarget::Review { .. }
-            | MenuTarget::Prompt { .. } => None,
+            | MenuTarget::Prompt { .. }
+            | MenuTarget::Page(_) => None,
         }
     }
 
@@ -3847,6 +3881,7 @@ impl CockpitView {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                 }
             }
+            (MenuTarget::Page(owner), verb) => self.run_page_verb(owner, verb, cx),
             (MenuTarget::Prompt { thread, block }, MenuVerb::Rewind | MenuVerb::RewindCode) => {
                 self.cut_at_prompt(
                     thread,
@@ -3932,9 +3967,10 @@ impl CockpitView {
                         .and_then(|group| group.members.first().copied())
                         .and_then(|thread| self.cockpit.project_id(thread)),
                     MenuTarget::Project(project) => Some(project),
-                    MenuTarget::Parked | MenuTarget::Review { .. } | MenuTarget::Prompt { .. } => {
-                        None
-                    }
+                    MenuTarget::Parked
+                    | MenuTarget::Review { .. }
+                    | MenuTarget::Prompt { .. }
+                    | MenuTarget::Page(_) => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);
                 if let (Some(project), Some(draft)) = (project, self.focused_draft_mut()) {
@@ -9316,7 +9352,6 @@ impl CockpitView {
                 mixed: true,
                 label: SharedString::from("groups"),
                 branch: None,
-                drift: None,
                 folded: self.nav_folds.contains(&NavFold::Groups),
                 roll_up: nav::RollUp::of(rows.iter().copied()),
                 count: rows.len(),
@@ -9376,10 +9411,7 @@ impl CockpitView {
                 .collect();
             // A heading names its rows' shared checkout; `Other` names no
             // Project, so no checkout either.
-            let (branch, drift) = match key {
-                Some(_) => self.section_checkout(&own),
-                None => (None, None),
-            };
+            let branch = key.and_then(|_| self.section_branch(&own));
             let rows: Vec<&nav::ThreadRow> = section_solos
                 .iter()
                 .map(|index| &solos[*index])
@@ -9397,7 +9429,6 @@ impl CockpitView {
                 mixed: false,
                 label,
                 branch,
-                drift: drift.and_then(|(ahead, behind)| nav::drift_text(ahead, behind)),
                 roll_up,
                 count,
                 folded: key.is_some_and(|project| self.nav_folded(NavFold::Project(project))),
@@ -9630,27 +9661,18 @@ impl CockpitView {
     }
 
     /// What a Project heading says of its rows' checkouts (§5.1.4): the
-    /// branch every one of them is on, whether that is the Project's
-    /// default, and that branch's drift when every row shares it too. Cache
-    /// reads only; the checkouts that say no branch (a parked row may not)
+    /// branch every one of them is on and whether that is the Project's
+    /// default. Cache reads only; the checkouts that say no branch (a parked row may not)
     /// say nothing either way.
-    fn section_checkout(&self, rows: &[ThreadId]) -> SectionCheckout {
-        let read: Vec<(SharedString, (u32, u32))> = rows
+    fn section_branch(&self, rows: &[ThreadId]) -> Option<(SharedString, bool)> {
+        let read: Vec<SharedString> = rows
             .iter()
             .filter_map(|thread| self.facts.get(*thread))
-            .filter_map(|facts| {
-                let drift = facts
-                    .status
-                    .as_ref()
-                    .map_or((0, 0), |status| (status.ahead, status.behind));
-                Some((Self::checkout_branch(facts)?, drift))
-            })
+            .filter_map(Self::checkout_branch)
             .collect();
-        let Some((first, drift)) = read.first().cloned() else {
-            return (None, None);
-        };
-        if !read.iter().all(|(branch, _)| *branch == first) {
-            return (None, None);
+        let first = read.first().cloned()?;
+        if !read.iter().all(|branch| *branch == first) {
+            return None;
         }
         let default = rows
             .iter()
@@ -9663,8 +9685,7 @@ impl CockpitView {
                 || matches!(first.as_ref(), "main" | "master"),
                 |default| default == first,
             );
-        let shared = read.iter().all(|(_, each)| *each == drift);
-        (Some((first, default)), shared.then_some(drift))
+        Some((first, default))
     }
 
     /// Land on a Thread from the nav's other doors — an Activity or rail
@@ -9851,8 +9872,12 @@ impl CockpitView {
     /// Close the focused Pane — cmd-w. The core decides what that means
     /// (park, leave, defer onto a draft, discard); the mirror follows.
     fn close_thread(&mut self, _: &CloseThread, window: &mut Window, cx: &mut Context<Self>) {
-        // ⌘W in the focused Pane's preview or Review closes that, not the
-        // Pane (F-14).
+        // ⌘W over the lightbox closes it; in the focused Pane's preview or
+        // Review it closes that, not the Pane (F-14).
+        if let Some((index, _)) = self.lightbox() {
+            self.close_lightbox(index, cx);
+            return;
+        }
         let index = self.focused();
         if let Some(pane) = self.panes.get(index) {
             if self.preview_shown(index) && pane.preview.focused(window, cx) {
@@ -10709,17 +10734,18 @@ impl CockpitView {
             .map(|(_, editor)| editor.focus_handle(cx))
             // An open Decision note (⇥) holds the keyboard until it closes.
             .or_else(|| self.decision_note_focus(cx))
-            // A review beside the focused Pane, or an image in its preview
-            // while the Panel shows it, keeps the keyboard it took, from its
+            // The lightbox, over everything, keeps the keyboard its image
+            // took; a review beside the focused Pane keeps its own, from its
             // first frame (a review's comment field's too).
             .or_else(|| {
-                let index = self.focused();
-                let pane = self.panes.get(index)?;
-                pane.review.held_focus(window, cx).or_else(|| {
-                    self.preview_shown(index)
-                        .then(|| pane.preview.held_focus(window, cx))
-                        .flatten()
-                })
+                let (index, _) = self.lightbox()?;
+                self.panes[index].preview.held_focus(window, cx)
+            })
+            .or_else(|| {
+                self.panes
+                    .get(self.focused())?
+                    .review
+                    .held_focus(window, cx)
             })
             .or_else(|| {
                 self.panes.get(self.focused()).and_then(|pane| match level {
@@ -11218,6 +11244,7 @@ impl CockpitView {
             .children(self.project_editor_element(window, cx))
             .children(self.toast_float(window, cx))
             .children(self.sheet_floats(window, cx))
+            .children(self.lightbox_element(cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
             .children(gpui::component::Root::render_notification_layer(window, cx))
     }
@@ -14066,6 +14093,7 @@ impl CockpitView {
                         group.title.clone(),
                         self.group_fold(group, cx),
                         0,
+                        false,
                     )
                     .on_mouse_down(
                         MouseButton::Left,
@@ -14519,7 +14547,9 @@ impl CockpitView {
         let folded = group.folded;
         let fold = self.group_fold(group, cx);
         let title = self.editable_group_title(id, group.title.clone(), cx);
-        let head = nav::group_row_with_title(group, title, fold, 0)
+        let editing =
+            matches!(&self.rename, Some((RenameTarget::Group(editing), _)) if *editing == id);
+        let head = nav::group_row_with_title(group, title, fold, 0, editing)
             .children(self.cursor_reveal(nav::NavItem::Group(id)));
         let chip = NavChip::Group(group.clone());
         let lifted = self.nav_dragging == Some(Drag::Group(id));
@@ -14742,11 +14772,6 @@ impl CockpitView {
             .into_any_element()
     }
 }
-
-/// What a Project heading says of its rows' checkouts
-/// (`CockpitView::section_checkout`): the shared branch and whether it is
-/// the default, and its drift (ahead, behind) when that is shared too.
-type SectionCheckout = (Option<(SharedString, bool)>, Option<(u32, u32)>);
 
 /// A typed path with `~` spelled out — the type-a-path row accepts what an
 /// operator would type at a shell.

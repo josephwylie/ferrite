@@ -426,6 +426,8 @@ pub const SCROLLBAR: u32 = 0x5e5e5e;
 pub const SCROLLBAR_HOVER: u32 = 0x6d6d6d;
 /// Black at 35% — the veil behind a modal sheet.
 pub const VEIL: u32 = 0x00000059;
+/// Black at 85% — the lightbox's dim, under which the window all but goes.
+pub const LIGHTBOX_VEIL: u32 = 0x000000d9;
 
 // -------------------------------------------------------------------- ink
 
@@ -1041,8 +1043,8 @@ pub const CHECK_MARK: f32 = 15.0;
 pub const CHECK_MARK_RING: f32 = 11.0;
 pub const CHECK_SKIP_DASH: f32 = 5.0;
 
-/// A toast's widest: over the right panel it takes the panel's content
-/// column instead, when that is narrower (`cockpit::toast_float`).
+/// A toast's widest, less where the board is narrower
+/// (`cockpit::toast_float`).
 pub const TOAST_W: f32 = 320.0;
 /// The gap the kit fans a stack out by under the pointer. The stack holds
 /// one toast (`max_items`), so this is only ever the kit's own spacing.
@@ -1649,6 +1651,39 @@ pub const COPIED_HOLD_MS: u64 = 1_500;
 /// (`components::edge_fade`).
 pub const EDGE_FADE: f32 = SPACE_6;
 pub const EDGE_FADE_KNEE: f32 = 0.85;
+/// **A turn's cards** (Claude's file and preview cards): under a finished
+/// turn's answer, one card for each page it wrote or named and each other
+/// file it wrote, `OUTPUT_CARD_GAP` apart, each at most `OUTPUT_CARD_W`
+/// wide and `OUTPUT_CARD_H` tall at `R_CARD` on `paint::RAISED` in a 1px
+/// `paint::LINE` ring, `OUTPUT_CARD_PAD` in. A page's leads with its
+/// thumbnail (`OUTPUT_THUMB_W` by the card's inner height, the globe in
+/// `INK_SUBTLE` on `CARD`), a file's with its mark in an
+/// `OUTPUT_ICON_TILE` square; then the name in `INK_STRONG` at `W_LABEL`
+/// over what it is in `INK_SUBTLE` meta type, and at the right a page's
+/// `Open` and `⋯`, a file's `Open in ›`. Its menu is a context menu's.
+pub const OUTPUT_CARD_W: f32 = 400.0;
+pub const OUTPUT_CARD_H: f32 = 56.0;
+pub const OUTPUT_CARD_PAD: f32 = SPACE_2;
+pub const OUTPUT_CARD_GAP: f32 = SPACE_2;
+pub const OUTPUT_ICON_TILE: f32 = 40.0;
+pub const OUTPUT_THUMB_W: f32 = 64.0;
+/// **The lightbox** (Claude's): an image over the whole window on
+/// `LIGHTBOX_VEIL`, darkening in over `FADE_QUICK`. A bar
+/// `LIGHTBOX_BAR_H` tall along its top holds the file's name at the left
+/// and its doors at the right — zoom, save, open in its app, × —
+/// `ICON_BUTTON` squares in `INK_STRONG`. With more than one image, ← →
+/// stand `LIGHTBOX_ARROW` round in `LIGHTBOX_SIDE` gutters, and `1 of N`
+/// in `INK_SUBTLE` meta type in a `LIGHTBOX_FOOT_H` foot. The stage is
+/// what the bar, the gutters and the foot leave; a press on the dim
+/// around it closes the lightbox.
+pub const LIGHTBOX_BAR_H: f32 = SPACE_6 * 2.;
+pub const LIGHTBOX_SIDE: f32 = SPACE_6 * 2. + SPACE_4;
+pub const LIGHTBOX_FOOT_H: f32 = SPACE_6 + SPACE_4;
+pub const LIGHTBOX_ARROW: f32 = SPACE_6 + SPACE_3;
+/// **The line-end fade** (Claude's sidebar titles): a line too long for its
+/// box fades into the ground over its last `LINE_FADE`, where it would
+/// otherwise end in "…" (`components::line_fade`).
+pub const LINE_FADE: f32 = SPACE_6;
 /// The pinned prompt keeps at most this many of its lines, its plane
 /// `PINNED_PROMPT_PAD_Y` above and below the bubble.
 pub const PINNED_PROMPT_LINES: usize = 2;
@@ -2353,14 +2388,12 @@ pub const FORM_BUTTON_PAD_X: f32 = CH;
 pub const TOOLTIP_PAD_X: f32 = SPACE_2;
 pub const TOOLTIP_PAD_Y: f32 = SPACE_1;
 pub const TOOLTIP_MAX_W: f32 = 320.0;
-/// **A toast** hangs top right, `TOAST_TOP` under what it clears, and
-/// never over the Composer the operator types in. With the right panel
-/// shown it stands in the panel's content column (its pads in, at most
-/// `TOAST_W`), under the window's head: the panel is reference, the board
-/// is what is being read. With no panel it is `TOAST_W` wide, its right
-/// edge `TOAST_BOX_RIGHT` in, under a Pane's head or tab strip
-/// (`PANE_HEAD_H`), so it covers no head's controls (the kit's toast stack
-/// stands there too).
+/// **A toast** hangs top right of the transcript's column, `TOAST_TOP`
+/// under what it clears, never over the Composer the operator types in nor
+/// the right panel: `TOAST_W` wide (less where the board is narrower), its
+/// right edge `TOAST_BOX_RIGHT` in from the board's (the panel's left while
+/// it shows), under a Pane's head or tab strip (`PANE_HEAD_H`), so it
+/// covers no head's controls (the kit's toast stack stands there too).
 /// One row of head (`◆ needs you · <title>`), one body line, then
 /// the quick answers: `TOKEN_H` buttons (`Allow 1`, `Deny 3`, `Open ⏎`),
 /// `TOAST_QUICK_GAP` over the float's edge.

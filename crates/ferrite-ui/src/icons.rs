@@ -129,6 +129,12 @@ icons![
     "blocks",
     // Reply to a selection (Claude's bent-back arrow).
     "reply",
+    // The lightbox's save, its zoom; a page's card and the preview's
+    // expand turned back.
+    "download",
+    "zoom-in",
+    "globe",
+    "minimize",
     // (end UI refresh)
 ];
 
@@ -272,6 +278,14 @@ pub const PAPERCLIP: &str = "icons/paperclip.svg";
 pub const SQUARE_SLASH: &str = "icons/square-slash.svg";
 /// The `+` menu's `Connectors ›`: Lucide's blocks.
 pub const BLOCKS: &str = "icons/blocks.svg";
+/// Save a copy (the lightbox's download).
+pub const DOWNLOAD: &str = "icons/download.svg";
+/// Zoom an image between fit and its own size.
+pub const ZOOM_IN: &str = "icons/zoom-in.svg";
+/// A page: its card's mark until a picture of it is drawn.
+pub const GLOBE: &str = "icons/globe.svg";
+/// Turn an expanded preview back to its width (`MAXIMIZE`'s undo).
+pub const MINIMIZE: &str = "icons/minimize.svg";
 // (end UI refresh)
 
 pub struct Assets;
@@ -457,7 +471,7 @@ mod tests {
     const TITLE_BAR_ICONS: [&str; 3] = [BACK, FORWARD, DIFF];
 
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
-    const REFRESH_ICONS: [&str; 28] = [
+    const REFRESH_ICONS: [&str; 32] = [
         PANEL_RIGHT,
         SEARCH,
         INBOX,
@@ -486,6 +500,10 @@ mod tests {
         SQUARE_SLASH,
         BLOCKS,
         REPLY,
+        DOWNLOAD,
+        ZOOM_IN,
+        GLOBE,
+        MINIMIZE,
     ];
 
     /// `stroke-width × 16 / viewBox` — the stroke an icon draws at 16px.

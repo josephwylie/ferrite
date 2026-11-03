@@ -232,8 +232,10 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "review::CloseSearch"
         | "review::ChooseBase"
         | "review::CloseBases" => Hidden,
-        // And the image viewer's: the zoom keys every viewer has, ← → and esc.
-        "image_viewer::ZoomIn"
+        // And the image viewer's: the zoom keys every viewer has, ← → and
+        // the lightbox's esc.
+        "lightbox::Close"
+        | "image_viewer::ZoomIn"
         | "image_viewer::ZoomOut"
         | "image_viewer::Fit"
         | "image_viewer::Next"

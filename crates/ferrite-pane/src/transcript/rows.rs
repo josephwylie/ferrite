@@ -6,6 +6,7 @@
 
 use std::{collections::HashMap, hash::Hash, ops::Range, rc::Rc};
 
+use ferrite_core::transcript::outputs::{self, Output};
 use ferrite_core::transcript::{tools, Block, BlockId, Body, ToolBlock, ToolState};
 
 /// A stable semantic-row identity.
@@ -18,6 +19,9 @@ pub(crate) enum RowId {
     /// A run of routine calls folded under one summary, named by its first
     /// call's block: the run grows at its tail, so the name holds.
     Group(BlockId),
+    /// What a finished turn left to open (`outputs::of_turn`): its cards,
+    /// named by the turn's end.
+    Outputs(BlockId),
     /// The working row while a turn runs (`pane::working_tail`).
     Working,
     /// A long thread's date divider, before the first prompt of a new day,
@@ -56,6 +60,9 @@ pub(crate) enum RowKind {
     /// diffed call does: a line above and below it, so the page never sits
     /// flush against the calls around it.
     Visual,
+    /// A finished turn's page and file cards, under its answer: half a
+    /// line off whatever it follows.
+    Outputs,
     /// The working line, under the newest row while a turn runs: it spaces
     /// as the work does.
     Working,
@@ -116,6 +123,7 @@ pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32)
         (_, TurnEnd { hangs: true } | Meta) => 0.,
         (Divider, _) => line,
         (previous, Divider) => gap_before(Some(previous), Prompt, reading),
+        (_, Outputs) => theme::tx_half(line),
         (Prompt, _) => (theme::tx_after_prompt(line) - theme::MESSAGE_ACTION).max(0.),
         (Answer { narration: false }, Prompt) => {
             theme::tx_turn_gap(line) - theme::MESSAGE_ACTIONS_GAP - theme::MESSAGE_ACTION
@@ -161,6 +169,8 @@ pub(crate) struct TranscriptRow {
     gap: f32,
     /// The tail row's key: a change re-renders it.
     tail_key: Option<u64>,
+    /// An outputs row's cards.
+    outputs: Rc<[Output]>,
 }
 
 impl TranscriptRow {
@@ -187,6 +197,11 @@ impl TranscriptRow {
     /// The space above this row (`gap_before`).
     pub(crate) fn gap(&self) -> f32 {
         self.gap
+    }
+
+    /// What an outputs row's cards open; empty for any other row.
+    pub(crate) fn outputs(&self) -> &[Output] {
+        &self.outputs
     }
 
     #[cfg(test)]
@@ -446,12 +461,25 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
         kind,
         gap: 0.,
         tail_key: None,
+        outputs: Rc::from([]),
     };
     let struck = struck_failure(blocks, shape);
     let mut day = None;
     let mut index = 0;
+    // Where the turn being read began: after its prompt (or the window's
+    // first block, its prompt evicted).
+    let mut turn_start = 0;
     while index < blocks.len() {
         let block = &blocks[index];
+        // A turn's end: its cards first, under its answer.
+        if let Body::TurnEnd(_) = &block.body {
+            let left = outputs::of_turn(&blocks[turn_start..index]);
+            if !left.is_empty() {
+                let mut cards = row(RowId::Outputs(block.id), &[], None, RowKind::Outputs);
+                cards.outputs = left.into();
+                rows.push(cards);
+            }
+        }
         if block.markdown.is_some() {
             let first = block.markdown_run.unwrap_or(block.id);
             let start = index;
@@ -492,6 +520,7 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                     }
                     day = Some(sent);
                 }
+                turn_start = index;
                 rows.push(row(
                     RowId::Block(block.id),
                     std::slice::from_ref(block),

@@ -2,9 +2,9 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// The image viewer's head opens the original with the OS by its
-/// canonical file URL, leaving the viewer open and sending nothing;
-/// esc then closes the slot.
+/// The lightbox's bar opens the original with the OS by its canonical
+/// file URL, leaving the lightbox open and sending nothing; esc then
+/// closes it.
 #[gpui::test]
 fn an_image_opens_its_canonical_original_without_sending_or_closing(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("open-original-image", 1);
@@ -27,8 +27,8 @@ fn an_image_opens_its_canonical_original_without_sending_or_closing(cx: &mut Tes
     });
     tick(cx);
     let open = cx
-        .debug_bounds("open-original-image")
-        .expect("the viewer's head offers the original");
+        .debug_bounds("lightbox-original")
+        .expect("the lightbox's bar offers the original");
     cx.simulate_click(open.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     let opened = url::Url::parse(&cx.opened_url().expect("the OS received a file URL")).unwrap();
@@ -46,7 +46,7 @@ fn an_image_opens_its_canonical_original_without_sending_or_closing(cx: &mut Tes
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert!(cx.debug_bounds("image-viewer").is_none());
-    assert!(view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()));
+    assert!(view.read_with(cx, |view, _| view.panes[0].preview.lightbox().is_none()));
     assert_eq!(
         *fake.interrupts.borrow(),
         0,
@@ -143,18 +143,12 @@ fn native_file_drops_follow_the_pointer_across_panes_and_groups(cx: &mut TestApp
             gpui::Modifiers::none(),
         );
         tick(cx);
-        let viewer = cx.debug_bounds("image-viewer").unwrap();
-        let owner = cx.update(|window, cx| {
-            let view = view.read(cx);
-            view.pane_rects(window)
-                .into_iter()
-                .find(|(index, _)| *index == view.focused())
-                .unwrap()
-                .1
-        });
-        assert!(
-            viewer.left() >= px(owner.x + owner.w),
-            "the image opens in the Panel beside its Pane: {viewer:?} / {owner:?}"
+        assert!(cx.debug_bounds("image-viewer").is_some());
+        let lightbox = cx.debug_bounds("lightbox").unwrap();
+        let window = cx.update(|window, _| window.viewport_size());
+        assert_eq!(
+            lightbox.size, window,
+            "the image opens in the lightbox, over the window"
         );
         cx.simulate_keystrokes("escape");
         tick(cx);
@@ -201,7 +195,7 @@ fn native_file_drops_follow_the_pointer_across_panes_and_groups(cx: &mut TestApp
         let smaller = cx.debug_bounds("image-viewer").unwrap();
         assert!(
             smaller.size.height < viewer.size.height,
-            "the image's slot resizes with the board: {viewer:?} -> {smaller:?}"
+            "the lightbox's stage resizes with the window: {viewer:?} -> {smaller:?}"
         );
         cx.simulate_keystrokes("escape");
         tick(cx);

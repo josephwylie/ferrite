@@ -9,6 +9,7 @@ pub mod hover_card;
 pub mod image_viewer;
 mod line;
 pub mod mark;
+pub mod page;
 pub mod pane;
 pub mod preview;
 pub mod prompt_drop;

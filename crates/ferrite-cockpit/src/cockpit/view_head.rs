@@ -10,7 +10,9 @@
 //!
 //! Solo names the focused Thread — its title (a double-click renames it),
 //! taking the row's free width, and its ▾ (the Thread's menu, as Claude's
-//! title carries one); the Project is the nav's and the branch the panel's. A Group names itself — its title, `<project> · N
+//! title carries one); the Project is the nav's and the branch the panel's,
+//! so while the panel is hidden the branch follows the ▾ in the quiet ink
+//! (`head_branch`). A Group names itself — its title, `<project> · N
 //! threads`, and `New thread`. There is no layout switch and no PR button.
 //! While the panel is hidden and there is a focused Thread for it, the
 //! head ends in the panel toggle's room (the frame lays the one toggle over
@@ -235,16 +237,37 @@ impl CockpitView {
         .into_any_element()
     }
 
-    /// Solo: the focused Thread's title and its ▾, as Claude's, then a
-    /// spacer. Nothing beside it: the Project is the nav's, the branch the
-    /// panel's.
+    /// Solo: the focused Thread's title and its ▾, as Claude's, then the
+    /// branch while the panel that says it is hidden, then a spacer. The
+    /// Project is the nav's.
     fn solo_head(&self, cx: &mut Context<Self>) -> Option<Vec<AnyElement>> {
         let thread = self.focused_thread()?;
-        Some(vec![
-            self.view_title(thread, cx),
-            title_menu(thread, cx),
-            div().flex_1().into_any_element(),
-        ])
+        let branch = self
+            .panel_pane()
+            .is_none()
+            .then(|| self.head_branch(thread))
+            .flatten();
+        let mut parts = vec![self.view_title(thread, cx), title_menu(thread, cx)];
+        parts.extend(branch);
+        parts.push(div().flex_1().into_any_element());
+        Some(parts)
+    }
+
+    /// The Thread's branch in the quiet ink, for a head whose panel is
+    /// hidden. None while its checkout says no branch.
+    fn head_branch(&self, thread: ThreadId) -> Option<AnyElement> {
+        let branch = Self::checkout_branch(self.facts.get(thread)?)?;
+        Some(
+            div()
+                .debug_selector(|| "view-branch".into())
+                .min_w_0()
+                .truncate()
+                .text_size(px(theme::FS_TITLE))
+                .font_weight(theme::W_BODY)
+                .text_color(rgb(theme::INK_SUBTLE))
+                .child(branch)
+                .into_any_element(),
+        )
     }
 
     /// The Thread's title at the view's weight: double-click renames it,

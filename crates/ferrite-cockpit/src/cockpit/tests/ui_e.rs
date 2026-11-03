@@ -4,9 +4,9 @@ use super::*;
 
 /// FL-18 and C8: a request from a Thread off the focused Pane rings, but
 /// with the nav open its row is the queue and no toast draws; with the nav
-/// folded it toasts as one float top right — in the panel's content column
-/// under the window's head, or with no panel `TOAST_W` wide under the Pane
-/// heads — never over a Composer.
+/// folded it toasts as one float top right of the transcript's column,
+/// `TOAST_W` wide under the Pane heads — never over a Composer or the
+/// right panel.
 #[gpui::test]
 fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("toast-side", 2);
@@ -43,29 +43,17 @@ fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContex
     let toast = cx
         .debug_bounds(selector)
         .expect("the nav folded: it toasts");
-    use ferrite_ui::theme::{
-        PANEL_PAD_L, PANEL_PAD_R, PANE_HEAD_H, TOAST_BOX_RIGHT, TOAST_TOP, TOAST_W, WIN_CHROME_H,
-    };
+    use ferrite_ui::theme::{PANE_HEAD_H, TOAST_BOX_RIGHT, TOAST_TOP, TOAST_W, WIN_CHROME_H};
     let window = cx.update(|window, _| window.viewport_size());
     let panel = view.read_with(cx, |view, _| view.panel_column_w());
-    // Over the panel's content column under the window's head, or with no
-    // panel `TOAST_W` wide under the Pane heads.
-    let (width, right, top) = if panel > 0. {
-        (
-            TOAST_W.min(panel - PANEL_PAD_L - PANEL_PAD_R),
-            PANEL_PAD_R,
-            WIN_CHROME_H + TOAST_TOP,
-        )
-    } else {
-        (
-            TOAST_W,
-            TOAST_BOX_RIGHT,
-            WIN_CHROME_H + PANE_HEAD_H + TOAST_TOP,
-        )
-    };
+    assert!(panel > 0., "the premise: the panel shows");
+    // On the transcript's column, under the Pane heads, `TOAST_BOX_RIGHT`
+    // in from the panel's left: the panel is never covered.
+    let right = panel + TOAST_BOX_RIGHT;
+    let top = WIN_CHROME_H + PANE_HEAD_H + TOAST_TOP;
     assert!(
-        (toast.size.width - px(width)).abs() <= px(1.),
-        "{width} wide: {toast:?}"
+        (toast.size.width - px(TOAST_W)).abs() <= px(1.),
+        "{TOAST_W} wide: {toast:?}"
     );
     assert!(
         (toast.right() - (window.width - px(right))).abs() <= px(1.),
@@ -74,6 +62,19 @@ fn a_request_toast_stands_top_right_clear_of_the_composer(cx: &mut TestAppContex
     assert!(
         (toast.top() - px(top)).abs() <= px(1.),
         "{top} from the window's top: {toast:?}"
+    );
+    let shown = cx.debug_bounds("panel").expect("the panel");
+    assert!(
+        !shown.intersects(&toast),
+        "{toast:?} covers the panel {shown:?}"
+    );
+    assert_eq!(
+        cx.update(|_, cx| gpui::component::Theme::global(cx)
+            .notification
+            .margins
+            .right),
+        px(right),
+        "the kit's toasts keep to the same column"
     );
 }
 

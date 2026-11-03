@@ -1,16 +1,20 @@
-//! A Pane's preview: the file, image or command output opened from
-//! anywhere in the Pane, shown in the Panel's Preview tab
-//! (`cockpit/panel/preview.rs` draws it; SPEC §5.6.3). Its document is a
-//! text file (numbered lines with the target line marked, or Markdown
-//! rendered), an image (`image_viewer.rs`), or a file it cannot show (a
-//! binary file, one that could not be read), the original a click away.
+//! A Pane's preview: the file or command output opened from anywhere in
+//! the Pane, shown in the Panel's Preview tab (`cockpit/panel/preview.rs`
+//! draws it; SPEC §5.6.3), and the image it opened in the lightbox. Its
+//! document is a text file (numbered lines with the target line marked, or
+//! Markdown rendered), a page drawn live (`page.rs`: an `.html` file or a
+//! local address, opened from its transcript card by
+//! [`Preview::open_page`]), or a file it cannot show (a binary file, one
+//! that could not be read), the original a click away. An image is no document:
+//! it opens over the whole window in the lightbox (`cockpit/lightbox.rs`
+//! draws it, `image_viewer.rs` its stage), leaving the document as it was.
 //!
 //! The Pane's transcript, Composer and rendered documents share it, so a
-//! file or an image opened from any of them replaces whatever it holds:
-//! [`Preview::open`] is the one way a file opens, and the cockpit routes
-//! its own entry points (a file link, a ⌘-clicked path, a changed file, a
-//! review's line) there too. The cockpit sees what opened on its next
-//! frame and shows the Panel on it.
+//! file opened from any of them replaces whatever it holds, and an image
+//! the lightbox's: [`Preview::open`] is the one way a file opens, and the
+//! cockpit routes its own entry points (a file link, a ⌘-clicked path, a
+//! changed file, a review's line) there too. The cockpit sees what opened
+//! on its next frame and shows the Panel or the lightbox on it.
 //!
 //! The Review is no preview: it reads beside its Pane on the board, in the
 //! reader slot (`cockpit/beside.rs`, ADR 0021). This module also holds the
@@ -28,6 +32,7 @@ use gpui::{
 };
 
 use crate::image_viewer::ImageViewer;
+use crate::page::{PageSource, PageView};
 
 #[derive(Clone)]
 pub struct Document {
@@ -45,15 +50,27 @@ pub enum Body {
     /// opened at `line` (1-based): marked and scrolled into view (F-14).
     /// `None` opens at the top.
     Text { text: Arc<Text>, line: Option<u32> },
-    /// An image, `gallery[at]`: ← → step among `gallery`, the images it was
-    /// opened among (a prompt's), itself alone when opened on its own.
-    Image {
-        viewer: Entity<ImageViewer>,
-        gallery: Arc<[PathBuf]>,
-        at: usize,
-    },
+    /// A page, drawn live where the engine can.
+    Page(Arc<PageView>),
     /// A file the preview cannot show, and why.
     Unshown(Unshown),
+}
+
+/// An image open in the lightbox, `gallery[at]`: ← → step among `gallery`,
+/// the images it was opened among (a prompt's), itself alone when opened
+/// on its own. One viewer shows them all, crossfading one into the next.
+#[derive(Clone)]
+pub struct Lightbox {
+    pub viewer: Entity<ImageViewer>,
+    pub gallery: Arc<[PathBuf]>,
+    pub at: usize,
+}
+
+impl Lightbox {
+    /// The image shown.
+    pub fn path(&self) -> &Path {
+        &self.gallery[self.at]
+    }
 }
 
 /// Why a file is not shown.
@@ -122,6 +139,7 @@ struct State {
     document: Option<Document>,
     /// Counts every open, so the cockpit tells a new one from the last.
     opened: u64,
+    lightbox: Option<Lightbox>,
 }
 
 #[derive(Clone)]
@@ -142,11 +160,12 @@ impl Preview {
     }
 
     /// Open `path` (F-14): the one way a file opens in the preview. An
-    /// image opens in the image viewer, ← → stepping among `gallery` when
-    /// it holds `path` (a prompt's images); any other file as text, at
-    /// `line` when there is one — marked, and scrolled into view — or, when
-    /// it is no text or cannot be read, as a note saying so with its
-    /// original a click away. Whatever was open gives way.
+    /// image opens in the lightbox, ← → stepping among `gallery` when it
+    /// holds `path` (a prompt's images), and the document stays as it was;
+    /// any other file as text, at `line` when there is one — marked, and
+    /// scrolled into view — or, when it is no text or cannot be read, as a
+    /// note saying so with its original a click away, the document open
+    /// before giving way.
     pub fn open(
         &self,
         path: PathBuf,
@@ -177,6 +196,22 @@ impl Preview {
         window.refresh();
     }
 
+    /// Open a page beside the transcript (its card's `Open`): a file under
+    /// its path, an address under its own name. Whatever was open gives
+    /// way.
+    pub fn open_page(&self, source: PageSource, window: &mut Window) {
+        let (path, name) = match &source {
+            PageSource::File(path) => (path.clone(), None),
+            PageSource::Address(address) => (PathBuf::from(address), Some(address.clone())),
+        };
+        self.set(Document {
+            path,
+            name,
+            body: Body::Page(PageView::new(source)),
+        });
+        window.refresh();
+    }
+
     /// Show text no file holds (a command's output) as if read from
     /// `path`, under `name`: the path picks its highlighting.
     pub fn open_source(&self, path: PathBuf, name: String, source: String) {
@@ -190,8 +225,8 @@ impl Preview {
         });
     }
 
-    /// An image: one already open swaps in place, in the same viewer, which
-    /// takes the keyboard, so esc closes it again.
+    /// An image, in the lightbox: one already open there swaps in place, in
+    /// the same viewer, which takes the keyboard, so esc closes it again.
     fn open_image(&self, path: PathBuf, gallery: &[PathBuf], window: &mut Window, cx: &mut App) {
         let gallery: Arc<[PathBuf]> = if gallery.contains(&path) {
             gallery.into()
@@ -199,7 +234,7 @@ impl Preview {
             Arc::from([path.clone()])
         };
         let at = gallery.iter().position(|image| *image == path).unwrap_or(0);
-        let viewer = match self.image() {
+        let viewer = match self.lightbox().map(|lightbox| lightbox.viewer) {
             Some(viewer) => viewer,
             None => cx.new(|cx| ImageViewer::new(path, cx)),
         };
@@ -207,14 +242,14 @@ impl Preview {
         self.show_image(viewer, gallery, at, cx);
     }
 
-    /// ← → in an image: the image `by` steps along its gallery, if there is
-    /// one there.
+    /// ← → in the lightbox: the image `by` steps along its gallery, if
+    /// there is one there.
     pub fn step_image(&self, by: isize, cx: &mut App) -> bool {
-        let Some(Body::Image {
+        let Some(Lightbox {
             viewer,
             gallery,
             at,
-        }) = self.document().map(|document| document.body)
+        }) = self.lightbox()
         else {
             return false;
         };
@@ -234,16 +269,22 @@ impl Preview {
         cx: &mut App,
     ) {
         let path = gallery[at].clone();
-        viewer.update(cx, |viewer, cx| viewer.show(path.clone(), cx));
-        self.set(Document {
-            path,
-            name: None,
-            body: Body::Image {
-                viewer,
-                gallery,
-                at,
-            },
+        viewer.update(cx, |viewer, cx| viewer.show(path, cx));
+        self.state.lock().unwrap().lightbox = Some(Lightbox {
+            viewer,
+            gallery,
+            at,
         });
+    }
+
+    /// The image open in the lightbox, if one is.
+    pub fn lightbox(&self) -> Option<Lightbox> {
+        self.state.lock().unwrap().lightbox.clone()
+    }
+
+    /// Close the lightbox (esc, its ×, a press on the dim around it).
+    pub fn close_lightbox(&self) {
+        self.state.lock().unwrap().lightbox = None;
     }
 
     fn set(&self, document: Document) {
@@ -274,14 +315,6 @@ impl Preview {
         Some((state.opened, swap_key(document)))
     }
 
-    /// The image viewer, when that is what is open.
-    fn image(&self) -> Option<Entity<ImageViewer>> {
-        match &self.state.lock().unwrap().document.as_ref()?.body {
-            Body::Image { viewer, .. } => Some(viewer.clone()),
-            _ => None,
-        }
-    }
-
     /// The focus the Preview tab's card tracks.
     pub fn focus_handle(&self) -> &FocusHandle {
         &self.focus
@@ -295,32 +328,22 @@ impl Preview {
 
     /// Whether text inside the open preview holds focus — Markdown, code or
     /// plain text being selected in. The card itself taking focus on a
-    /// click is not text, and nor is the image viewer, which holds the
-    /// keyboard of its own (`held_focus`).
+    /// click is not text.
     pub fn text_focused(&self, window: &Window, cx: &App) -> bool {
-        self.focused(window, cx)
-            && !self.focus.is_focused(window)
-            && self
-                .image()
-                .is_none_or(|viewer| !viewer.focus_handle(cx).contains_focused(window, cx))
+        self.focused(window, cx) && !self.focus.is_focused(window)
     }
 
-    /// The keyboard focus the open document holds, kept from its first
-    /// frame: the image viewer's.
+    /// The keyboard focus the lightbox holds, kept from its first frame:
+    /// its viewer's.
     pub fn held_focus(&self, window: &Window, cx: &App) -> Option<FocusHandle> {
-        self.image()?.read(cx).held_focus(window)
+        self.lightbox()?.viewer.read(cx).held_focus(window)
     }
 }
 
 /// Which document a preview shows, for telling one opening over another:
-/// its path and line. Every image is one document here: the viewer
-/// crossfades one image into the next itself, so its body does not fade
-/// again.
+/// its path and line.
 fn swap_key(document: &Document) -> u64 {
     use std::hash::{Hash, Hasher};
-    if matches!(document.body, Body::Image { .. }) {
-        return 0;
-    }
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     document.path.hash(&mut hash);
     document.line().hash(&mut hash);
@@ -343,7 +366,15 @@ impl Document {
         matches!(self.body, Body::Text { line: None, .. }) && self.is_markdown()
     }
 
-    /// A text document's text; nothing for an image or a file not shown.
+    /// The page it shows, if it is one.
+    pub fn page(&self) -> Option<&Arc<PageView>> {
+        match &self.body {
+            Body::Page(page) => Some(page),
+            _ => None,
+        }
+    }
+
+    /// A text document's text; nothing for a page or a file not shown.
     pub fn text(&self) -> Option<&Arc<Text>> {
         match &self.body {
             Body::Text { text, .. } => Some(text),

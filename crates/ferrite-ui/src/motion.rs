@@ -670,6 +670,16 @@ where
     entrance(id, spec, element, |el, t| el.bg(veil_at(t)))
 }
 
+/// `veil_in` to a dim of the caller's (`theme::LIGHTBOX_VEIL`), over `VEIL`.
+pub fn dim_in<E>(id: impl Into<ElementId>, element: E, dim: u32) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    entrance(id, VEIL, element, move |el, t| {
+        el.bg(mix(gpui::transparent_black(), gpui::rgba(dim).into(), t))
+    })
+}
+
 /// The veil of a sheet that went at `left`, lifting over `spec`: a ground
 /// alone, answering no pointer, laid where the veil stood.
 pub fn veil_out(left: Instant, spec: MotionSpec, element: gpui::Div) -> impl IntoElement {

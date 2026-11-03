@@ -1455,11 +1455,12 @@ impl CockpitView {
         vec![veil, float::hang(view, anchor, place, window, cx)]
     }
 
-    /// The newest standing toast (FL-18), top right where it covers the
-    /// least (theme `TOAST_*`): in the right panel's content column under
-    /// the window's head, or with no panel under the Pane heads, clear of
-    /// every Composer. It drops in when it comes, over the face of the one
-    /// before it while that fades away (`notifications::ToastStage`).
+    /// The newest standing toast (FL-18), top right of the transcript's
+    /// column where it covers the least (theme `TOAST_*`): under the Pane
+    /// heads, clear of every Composer, and never over the right panel. It
+    /// drops in when it comes, over the face of the one before it while
+    /// that fades away (`notifications::ToastStage`). The kit's toasts keep
+    /// to the same column (`toast_margins`).
     pub(super) fn toast_float(
         &self,
         window: &mut Window,
@@ -1483,23 +1484,16 @@ impl CockpitView {
             cx.background_executor().now(),
             ferrite_ui::motion::reduced_motion(cx),
         );
-        use ferrite_ui::theme::{
-            PANEL_PAD_L, PANEL_PAD_R, PANE_HEAD_H, TOAST_BOX_RIGHT, TOAST_W, WIN_CHROME_H,
-        };
+        use ferrite_ui::theme::{PANE_HEAD_H, TOAST_BOX_RIGHT, TOAST_W, WIN_CHROME_H};
         let viewport = window.viewport_size();
+        self.toast_margins(cx);
         // What it hangs under, at its width and right edge: the window's
-        // head over the panel's content column, or the head and a Pane's
-        // head row over the board.
-        let panel = self.panel_column_w();
-        let (width, right, over) = if panel > 0. {
-            (
-                TOAST_W.min(panel - PANEL_PAD_L - PANEL_PAD_R),
-                PANEL_PAD_R,
-                WIN_CHROME_H,
-            )
-        } else {
-            (TOAST_W, TOAST_BOX_RIGHT, WIN_CHROME_H + PANE_HEAD_H)
-        };
+        // head and a Pane's head row, `TOAST_BOX_RIGHT` in from the board's
+        // right edge (the panel's left while it shows).
+        let right = self.panel_column_w() + TOAST_BOX_RIGHT;
+        let room = f32::from(viewport.width) - self.board_left() - right - TOAST_BOX_RIGHT;
+        let width = TOAST_W.min(room.max(0.));
+        let over = WIN_CHROME_H + PANE_HEAD_H;
         let anchor = gpui::Bounds::new(
             gpui::point(viewport.width - px(right + width), px(0.)),
             gpui::size(px(width), px(over)),
@@ -1527,5 +1521,23 @@ impl CockpitView {
             )
         });
         leaving.into_iter().chain(standing).collect()
+    }
+
+    /// Keep the kit's toast stack (`theme.notification`) on the
+    /// transcript's column: its right margin follows the panel, written
+    /// only when it moves.
+    fn toast_margins(&self, cx: &mut gpui::App) {
+        let right = px(self.panel_column_w() + ferrite_ui::theme::TOAST_BOX_RIGHT);
+        if gpui::component::Theme::global(cx)
+            .notification
+            .margins
+            .right
+            != right
+        {
+            gpui::component::Theme::global_mut(cx)
+                .notification
+                .margins
+                .right = right;
+        }
     }
 }

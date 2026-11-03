@@ -1505,6 +1505,35 @@ fn a_project_fold_is_saved(cx: &mut TestAppContext) {
     });
 }
 
+/// An open Project heading says nothing at its right, as Claude's: a
+/// checkout far ahead of its upstream draws no `↑N`.
+#[gpui::test]
+fn a_project_heading_has_no_drift_count(cx: &mut TestAppContext) {
+    let (core, _) = cockpit("nav-no-drift", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    view.update(cx, |view, cx| {
+        let thread = view.panes[0].thread().unwrap();
+        view.facts.set_branches(vec![(
+            thread,
+            Some(ferrite_core::workspace::BranchStatus {
+                branch: Some("main".into()),
+                upstream: Some("origin/main".into()),
+                ahead: 715,
+                behind: 5,
+                ..Default::default()
+            }),
+        )]);
+        cx.notify();
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("nav-project-section-0").is_some());
+    assert!(
+        cx.debug_bounds("nav-project-summary-0").is_none(),
+        "no ahead/behind count"
+    );
+}
+
 /// Codex's header: search beside the bell, opening the palette; the
 /// views no longer list `Search` or `Inbox`.
 #[gpui::test]

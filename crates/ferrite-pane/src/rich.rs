@@ -2041,11 +2041,11 @@ let count = 2;
         assert!(chip.size.width >= name, "{chip:?} holds {name:?}");
     }
 
-    /// A file link to an image opens it in the Pane's preview, as every
+    /// A file link to an image opens it in the Pane's lightbox, as every
     /// image does (`Preview::open`), the viewer holding the keyboard;
     /// the OS is never asked.
     #[gpui::test]
-    fn an_image_link_opens_in_the_panes_preview(cx: &mut TestAppContext) {
+    fn an_image_link_opens_in_the_panes_lightbox(cx: &mut TestAppContext) {
         let path = std::env::temp_dir().join("ferrite-link-image.svg");
         std::fs::write(
             &path,
@@ -2055,11 +2055,11 @@ let count = 2;
         let (view, cx) = fixture(cx, "[image](ferrite-link-image.svg)");
         let target = card(cx, "ferrite-link-image.svg").center();
         cx.simulate_click(target, Modifiers::default());
-        let document = view
-            .read_with(cx, |view, _| view.preview.document())
+        let lightbox = view
+            .read_with(cx, |view, _| view.preview.lightbox())
             .expect("the image opened");
-        assert!(matches!(document.body, crate::preview::Body::Image { .. }));
-        assert_eq!(document.path, path);
+        assert_eq!(lightbox.path(), path);
+        assert!(view.read_with(cx, |view, _| view.preview.document().is_none()));
         assert!(cx.update(|window, cx| view.read(cx).preview.held_focus(window, cx).is_some()));
         assert_eq!(cx.opened_url(), None);
     }
