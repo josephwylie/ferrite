@@ -299,13 +299,20 @@ impl Drop for TurnSource {
 }
 
 /// Find each agent's checkout and tell every checkout's turn host what the agents are now, each
-/// named by its source too, so two sources' threads never share a name.
+/// named by its source too, so two sources' threads never share a name. A checkout is looked up
+/// when its source reports it: a resolved root is kept; outside and unknown are asked again at
+/// that source's next sighting.
 fn track_turns(news: &mpsc::Receiver<Sighting>) {
     let mut sources: HashMap<u64, Vec<Agent>> = HashMap::new();
     // A resolved root never moves, so it is kept; outside and unknown are asked again.
     let mut roots: HashMap<PathBuf, PathBuf> = HashMap::new();
     let mut hosts: HashMap<PathBuf, mpsc::Sender<Shared>> = HashMap::new();
     for (source, agents, at) in news {
+        // Only the sender's checkouts are asked about: every other source's were asked when it
+        // last spoke. Asking again for every source's on every sighting spawned a git per agent
+        // per sighting across the whole process, one at a time on this thread, so one busy
+        // Engine (a test suite's hundreds) held every other Engine's turns back for a minute.
+        let asked: Vec<PathBuf> = agents.iter().map(|agent| agent.cwd.clone()).collect();
         if agents.is_empty() {
             sources.remove(&source);
         } else {
@@ -320,12 +327,12 @@ fn track_turns(news: &mpsc::Receiver<Sighting>) {
                 })
             })
             .collect();
-        for agent in &agents {
-            if roots.contains_key(&agent.cwd) || !agent.cwd.is_absolute() {
+        for cwd in &asked {
+            if roots.contains_key(cwd) || !cwd.is_absolute() {
                 continue;
             }
-            if let git::Worktree::Root(root) = git::worktree_of(&agent.cwd) {
-                roots.insert(agent.cwd.clone(), root);
+            if let git::Worktree::Root(root) = git::worktree_of(cwd) {
+                roots.insert(cwd.clone(), root);
             }
         }
         for agent in &agents {

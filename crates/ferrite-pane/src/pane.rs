@@ -3069,6 +3069,40 @@ fn working_mark(ink: u32, live: bool) -> AnyElement {
         .into_any_element()
 }
 
+/// The turn's clock (`1m04s`), counting from `started` on its own: a
+/// loop the overlay draws (`loops_overlay::hosted`), woken each whole second
+/// by the pulse clock, so the seconds turning redraw nothing of the
+/// transcript around it. Under reduced motion it is drawn in place and the
+/// line is drawn again as the seconds turn (`WorkingLine::seconds`).
+fn live_clock(started: std::time::Instant) -> AnyElement {
+    let clock = LiveClock { started };
+    ferrite_ui::loops_overlay::hosted(move || clock.into_any_element()).into_any_element()
+}
+
+#[derive(IntoElement, Clone, Copy)]
+struct LiveClock {
+    started: std::time::Instant,
+}
+
+impl RenderOnce for LiveClock {
+    fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        // Woken when the next whole second comes round.
+        let _ = ferrite_ui::motion::loop_phase_from(
+            self.started,
+            Duration::from_secs(1),
+            ferrite_ui::motion::Motion::Frames(1),
+            window.current_view(),
+            cx,
+        );
+        let elapsed = ferrite_core::clock::instant().saturating_duration_since(self.started);
+        div()
+            .debug_selector(|| "progress-clock".into())
+            .child(SharedString::from(ferrite_core::progress::live_seconds(
+                elapsed,
+            )))
+    }
+}
+
 /// The working line with no provider known: the spinner and caption in
 /// `TEXT_DIM` (the L2 cell's, retired with it; kept for the tests).
 #[cfg(test)]
@@ -3143,7 +3177,14 @@ pub(crate) struct WorkingLine {
     spinning: bool,
     interrupt: bool,
     solo: bool,
-    facts: Vec<String>,
+    /// When the turn began: its clock counts on its own (`LiveClock`), so
+    /// the seconds never change this line's key while the clock is hosted.
+    started: Option<std::time::Instant>,
+    /// The seconds as words, kept only under reduced motion, where no loop
+    /// counts them and the line is drawn again as they turn.
+    seconds: Option<String>,
+    /// The turn's output tokens (`↑ 4.1k tokens`), when it has any.
+    tokens: Option<String>,
     /// The caption's selector and its words.
     caption: Option<(String, String)>,
     /// The plan the turn works to, its steps' words and states, drawn as
@@ -3175,14 +3216,14 @@ impl WorkingLine {
         let ink = provider_ink(provider);
         let live = focused && !reduce_motion;
         let spinning = !reduce_motion;
-        let mut facts: Vec<String> = Vec::new();
-        if let Some(elapsed) = transcript.turn_elapsed() {
-            facts.push(ferrite_core::progress::live_seconds(elapsed));
-        }
+        let started = transcript.turn_started();
+        let seconds = transcript
+            .turn_elapsed()
+            .filter(|_| reduce_motion)
+            .map(ferrite_core::progress::live_seconds);
         let tokens = transcript.turn_output_tokens();
-        if tokens > 0 && !compact {
-            facts.push(format!("\u{2191} {} tokens", tokens_label(tokens)));
-        }
+        let tokens = (tokens > 0 && !compact)
+            .then(|| format!("\u{2191} {} tokens", tokens_label(tokens)));
         let progress = transcript.progress();
         let plan = if progress.has_plan {
             progress
@@ -3238,7 +3279,9 @@ impl WorkingLine {
             spinning,
             interrupt,
             solo,
-            facts,
+            started,
+            seconds,
+            tokens,
             caption,
             plan,
         }
@@ -3251,7 +3294,9 @@ impl WorkingLine {
             spinning,
             interrupt,
             solo,
-            facts,
+            started,
+            seconds: _,
+            tokens,
             caption,
             plan,
         } = self.clone();
@@ -3282,8 +3327,14 @@ impl WorkingLine {
                     .child(caption)
                     .into_any_element()
             };
-            let metadata = SharedString::from(format!(" {}", facts.join(" \u{b7} ")));
-            let highlights = separators(&metadata);
+            // The facts after the caption: the turn's clock, counting on its
+            // own, then its tokens.
+            let rest = tokens.map(|tokens| {
+                let text = SharedString::from(format!(" \u{b7} {tokens}"));
+                let highlights = separators(&text);
+                StyledText::new(text).with_highlights(highlights)
+            });
+            let has_facts = started.is_some() || rest.is_some();
             row = row
                 .debug_selector(move || selector.clone())
                 .child(
@@ -3303,14 +3354,17 @@ impl WorkingLine {
                         .flex_shrink(1.)
                         .child(text),
                 )
-                .when(!facts.is_empty(), |row| {
+                .when(has_facts, |row| {
                     row.child(components::tabular(
                         div()
                             .debug_selector(|| "progress-metadata".into())
+                            .flex()
                             .flex_shrink_0()
                             .whitespace_nowrap()
                             .text_color(rgb(TEXT_DIM))
-                            .child(StyledText::new(metadata).with_highlights(highlights)),
+                            .child("\u{a0}")
+                            .children(started.map(live_clock))
+                            .children(rest),
                     ))
                 })
                 // Where no stop button stands for the key, the focused line

@@ -32,9 +32,8 @@
 //! inks (`hover_float`, `float_cursor`, `press_float`: `FLOAT_HOVER`,
 //! `FLOAT_SEL`, steps over `FLOAT`); its cursor row keeps `FLOAT_SEL`
 //! under the pointer, so the row the arrows hold and the row the pointer
-//! is on read apart. The palette, a float on the frame's grey
-//! (`PALETTE_GROUND`), takes the frame's steps instead (`hover_palette`,
-//! `palette_cursor`).
+//! is on read apart. The palette (`hover_palette`, `palette_cursor`)
+//! wears the same float inks under its own names.
 
 use gpui::component::button::ButtonCustomVariant;
 use gpui::prelude::*;
