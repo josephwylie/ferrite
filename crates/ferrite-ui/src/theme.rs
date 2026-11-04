@@ -1758,6 +1758,13 @@ pub const TERMINAL_PILL_LIFT: f32 = 28.0;
 /// `FILES_INDENT` in, a git status marked by a `FILES_STATUS_DOT` dot at
 /// the row's end.
 pub const FILES_TREE_W: f32 = 240.0;
+/// How the dock shares the room right of the nav (`files-code.png`: the
+/// dock 1000 of 1666, the thread 666): Files and Changes take
+/// `FILES_SHARE` of it, never under `FILES_MIN_W`, and the thread keeps at
+/// least `DOCK_THREAD_MIN_W`.
+pub const FILES_SHARE: f32 = 0.6;
+pub const FILES_MIN_W: f32 = 420.0;
+pub const DOCK_THREAD_MIN_W: f32 = 480.0;
 pub const FILES_ROW_H: f32 = 28.0;
 pub const FILES_INDENT: f32 = 12.0;
 pub const FILES_STATUS_DOT: f32 = 6.0;

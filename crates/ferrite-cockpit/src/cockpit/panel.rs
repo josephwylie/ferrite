@@ -86,20 +86,21 @@ fn preview_w(width: f32, expanded: bool) -> f32 {
 }
 
 /// How wide the dock is in a window `window` wide beside a rail `rail`
-/// wide: the Files and Changes column at the preview's reading width
-/// (`preview_w`'s share), the Terminal's column its own `TERMINAL_W`,
-/// together no more than the board can give (`PANEL_PREVIEW_BOARD_MIN`).
-/// Expanded, the Files column takes all of that the Terminal leaves.
+/// wide. Opening it shrinks the thread, as Claude's does: Files and Changes
+/// take `FILES_SHARE` of the room right of the nav (Claude's capture,
+/// `files-code.png`: 1000 of 1666), the Terminal its own `TERMINAL_W`, and
+/// together they leave the thread no less than `DOCK_THREAD_MIN_W` (the
+/// rail first). Expanded, the Files column takes all of that the Terminal
+/// leaves.
 fn dock_widths(window: f32, rail: f32, files: bool, terminal: bool, expanded: bool) -> f32 {
     use ferrite_ui::theme::*;
-    let most = (window - NAV_WIDTH - PANEL_PREVIEW_BOARD_MIN - rail).max(0.);
+    let room = (window - NAV_WIDTH).max(0.);
+    let most = (room - rail - DOCK_THREAD_MIN_W).max(0.);
     let terminal_w = if terminal { TERMINAL_W } else { 0. };
     let files_w = match (files, expanded) {
         (false, _) => 0.,
         (true, true) => most,
-        (true, false) => {
-            (window * PANEL_PREVIEW_SHARE).clamp(PANEL_PREVIEW_MIN_W, PANEL_PREVIEW_MAX_W)
-        }
+        (true, false) => (room * FILES_SHARE).max(FILES_MIN_W),
     };
     (files_w + terminal_w).min(most)
 }
@@ -487,27 +488,36 @@ mod tests {
     use ferrite_ui::theme::*;
 
     #[test]
-    fn the_dock_takes_a_reading_width_and_the_terminals_own() {
+    fn the_dock_takes_most_of_the_room_and_the_terminals_own() {
+        let room = 2600. - NAV_WIDTH;
         assert_eq!(dock_widths(2600., 0., false, false, false), 0.);
-        let files = dock_widths(2600., PANEL_W, true, false, false);
-        assert_eq!(files, (2600. * PANEL_PREVIEW_SHARE).clamp(PANEL_PREVIEW_MIN_W, PANEL_PREVIEW_MAX_W));
+        let files = dock_widths(2600., 0., true, false, false);
+        assert_eq!(files, room * FILES_SHARE);
         assert_eq!(dock_widths(2600., PANEL_W, false, true, false), TERMINAL_W);
-        assert_eq!(dock_widths(2600., PANEL_W, true, true, false), files + TERMINAL_W);
+        assert_eq!(dock_widths(2600., 0., true, true, false), files + TERMINAL_W);
+    }
+
+    /// Claude's own window (1920): Files 1000 beside a 666 thread, no rail.
+    #[test]
+    fn files_in_claudes_window_leaves_claudes_thread() {
+        let dock = dock_widths(1920., 0., true, false, false);
+        assert!((dock - 1000.).abs() < 5., "{dock}");
+        assert!(1920. - NAV_WIDTH - dock >= DOCK_THREAD_MIN_W);
     }
 
     #[test]
-    fn the_dock_leaves_the_board_its_least() {
-        let window = 1400.;
-        let most = window - NAV_WIDTH - PANEL_PREVIEW_BOARD_MIN - PANEL_W;
+    fn the_thread_keeps_its_least() {
+        let window = 1440.;
+        let most = window - NAV_WIDTH - PANEL_W - DOCK_THREAD_MIN_W;
         assert_eq!(dock_widths(window, PANEL_W, true, true, false), most);
         assert_eq!(dock_widths(window, PANEL_W, true, true, true), most);
-        assert_eq!(dock_widths(300., PANEL_W, true, false, false), 0.);
+        assert_eq!(dock_widths(600., PANEL_W, true, false, false), 0.);
     }
 
     #[test]
     fn expanded_gives_files_all_the_terminal_leaves() {
-        let most = 1900. - NAV_WIDTH - PANEL_PREVIEW_BOARD_MIN - PANEL_W;
-        assert_eq!(dock_widths(1900., PANEL_W, true, false, true), most);
-        assert_eq!(dock_widths(1900., PANEL_W, true, true, true), most);
+        let most = 2600. - NAV_WIDTH - PANEL_W - DOCK_THREAD_MIN_W;
+        assert_eq!(dock_widths(2600., PANEL_W, true, false, true), most);
+        assert_eq!(dock_widths(2600., PANEL_W, true, true, true), most);
     }
 }

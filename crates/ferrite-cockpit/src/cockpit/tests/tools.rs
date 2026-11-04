@@ -85,3 +85,42 @@ fn the_dock_shows_with_the_rail_hidden(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("panel").is_some(), "the dock brings the column");
     assert!(cx.debug_bounds("panel-sections").is_none(), "without the rail");
 }
+
+/// Opening the dock shrinks the thread, as Claude's does (the thread there
+/// 666 of 1666), but never under its least.
+#[gpui::test]
+fn the_dock_narrows_the_thread_to_its_least_at_most(cx: &mut TestAppContext) {
+    let (view, cx) = solo("tools-thread-narrows", cx);
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    tick(cx);
+    let width = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        let rects = cx.update(|window, cx| view.read(cx).pane_rects(window));
+        rects[0].1.w
+    };
+    let before = width(&view, cx);
+    press(&view, Tool::Files, cx);
+    let after = width(&view, cx);
+    assert!(after < before, "{after} narrower than {before}");
+    assert!(after >= ferrite_ui::theme::DOCK_THREAD_MIN_W - 1., "{after}");
+    let dock = cx.debug_bounds("panel").unwrap().size.width;
+    assert!(f32::from(dock) > 0.5 * after, "the dock gets the room: {dock:?}");
+}
+
+/// The shell follows its grid: widening the column resizes the PTY.
+#[gpui::test]
+fn the_shell_is_resized_with_its_column(cx: &mut TestAppContext) {
+    let (view, cx) = solo("tools-terminal-resize", cx);
+    press(&view, Tool::Terminal, cx);
+    let shell = view.read_with(cx, |view, _| view.terminal_view(view.focused_thread().unwrap())).unwrap();
+    let narrow = shell.read_with(cx, |shell, _| shell.grid_size().0);
+    press(&view, Tool::Files, cx);
+    view.update(cx, |view, cx| {
+        view.panel.expanded = true;
+        cx.notify();
+    });
+    tick(cx);
+    let wide = shell.read_with(cx, |shell, _| shell.grid_size().0);
+    assert_eq!(wide, narrow, "the terminal's own column keeps its width");
+    view.update(cx, |view, cx| view.press_tool(Tool::Terminal, cx));
+    tick(cx);
+}

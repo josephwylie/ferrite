@@ -216,6 +216,7 @@ impl CockpitView {
     fn terminal_column(&self, thread: ThreadId, cx: &mut Context<Self>) -> Div {
         dock_column("dock-terminal", false)
             .w(px(theme::TERMINAL_W))
+            .max_w_full()
             .child(self.terminal_pane(thread, cx))
     }
 }

@@ -178,6 +178,11 @@ impl TerminalView {
         cx.notify();
     }
 
+    /// The grid's size in cells, as the shell was last told it.
+    pub fn grid_size(&self) -> (u16, u16) {
+        self.terminal.size()
+    }
+
     /// Whether the shell has ended.
     pub fn has_exited(&self) -> bool {
         self.exited
