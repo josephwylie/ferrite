@@ -775,6 +775,10 @@ mod tests {
             .create(Provider::Codex, Some(project), binding.clone())
             .unwrap();
         writer.record_prompt("Tidy the release notes").unwrap();
+        // A real prompt is dated: that is the time a parked row reads.
+        writer
+            .record_prompt_observation(&ferrite_core::clock::now().to_rfc3339(), None)
+            .unwrap();
         store
             .set_title(titled, "Release notes".into(), Some(&mut writer))
             .unwrap();

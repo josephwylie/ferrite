@@ -297,11 +297,11 @@ pub(crate) const FIXTURES: &[(&str, &str, usize, u64)] = &[
     // Repinned for HD64: a tool row carries its background work (`None`).
     // Repinned for image reads: a tool row carries `image` (`false`).
     // Repinned for update_plan: progress carries `before_wrap_up` (`None`).
-    ("v1", V1, 5, 16897151429960525007),
+    ("v1", V1, 5, 10134963862029226844),
     // Repinned for HD64: a tool row carries its background work (`None`).
     // Repinned for image reads: a tool row carries `image` (`false`).
     // Repinned for update_plan: progress carries `before_wrap_up` (`None`).
-    ("v8-handover", V8_HANDOVER, 13, 15946503212639180565),
+    ("v8-handover", V8_HANDOVER, 13, 16138578039988594846),
     // Repinned when `ContextDetails` dropped `usable_window` and
     // `auto_compact_threshold`: the record still loads, without them.
     // Repinned for HD64: a tool row carries its background work (`None`
@@ -309,10 +309,15 @@ pub(crate) const FIXTURES: &[(&str, &str, usize, u64)] = &[
     // `N background agents completed` notice.
     // Repinned for image reads: a tool row carries `image` (`false` here).
     // Repinned for update_plan: progress carries `before_wrap_up` (`None`).
-    ("v11-activity", V11_ACTIVITY, 31, 5563687887485615094),
+    ("v11-activity", V11_ACTIVITY, 31, 2427071937003775127),
     // Repinned at schema 15: its observation now reads `prompt_id: None`.
     // Repinned for update_plan: progress carries `before_wrap_up` (`None`).
-    ("v12-torn", V12_TORN, 10, 4877578810818087266),
+    // All four fixtures repinned for 39785ffd (a turn that ends in its answer
+    // takes its plan with it): `Progress` gained `plan_touched`, which loading
+    // shows. Found by running the pinned value across the commits since
+    // 68ed21a6: it held through 4c680c57 and moved at 39785ffd, unchanged
+    // since. Nothing a log holds changed, only what loading it shows.
+    ("v12-torn", V12_TORN, 10, 2402536873348441209),
 ];
 
 /// Old logs load to exactly what they always showed — and still do after a

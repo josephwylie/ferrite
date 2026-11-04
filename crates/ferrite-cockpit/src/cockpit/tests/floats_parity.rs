@@ -146,6 +146,9 @@ fn par_keeps_two_commands_and_the_parked_thread(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("palette-par", 3);
     let threads = core.threads();
     core.rename_thread(threads[2], "Release notes").unwrap();
+    // Used today, as a Thread parked within the day is: a log of Ferrite's
+    // own marks alone has no known time (`Store::last_activity`).
+    core.send(threads[2], "tidy the release notes".into());
     core.park(threads[2]).unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
