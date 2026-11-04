@@ -1395,6 +1395,15 @@ impl Decoder {
             self.link(Alias::Invocation(id.to_owned()), &key, events);
         }
         let mut info = self.info(&key);
+        // A task names the task that started it (`parent_task_id`, HD8): the
+        // agent nests under it. A parent not seen yet leaves the child
+        // visible on its own; a later frame names it again and places it.
+        if info.parent.is_none() {
+            let parent = string(value, "parent_task_id")
+                .and_then(|id| self.aliases.get(&Alias::Task(id.to_owned())).cloned())
+                .filter(|parent| *parent != key);
+            info.parent = parent.map(Subject::Subagent);
+        }
         info.kind = string(value, "subagent_type")
             .map(str::to_owned)
             .or(info.kind);
@@ -2003,6 +2012,30 @@ mod tests {
         assert!(events
             .iter()
             .all(|event| matches!(event, SessionEvent::Activity(_))));
+    }
+
+    /// A task that names its parent task nests under it (HD8); one whose
+    /// parent is not known yet stays top level, then is placed when a later
+    /// frame names the parent again.
+    #[test]
+    fn a_task_nests_under_the_task_that_started_it() {
+        let discovered = |events: &[SessionEvent]| {
+            events
+                .iter()
+                .filter_map(|event| match event {
+                    SessionEvent::Activity(ActivityEvent::Discovered(info)) => Some(info.clone()),
+                    _ => None,
+                })
+                .last()
+        };
+        let mut decoder = Decoder::default();
+        decoder.decode(r#"{"type":"system","subtype":"init","session_id":"root","model":"model"}"#);
+        let early = decoder.decode(r#"{"type":"system","subtype":"task_started","task_id":"child","parent_task_id":"parent","task_type":"local_agent","description":"child"}"#);
+        assert_eq!(discovered(&early).unwrap().parent, None, "its parent is unknown");
+        let parent = decoder.decode(r#"{"type":"system","subtype":"task_started","task_id":"parent","task_type":"local_agent","description":"parent"}"#);
+        let parent_key = discovered(&parent).unwrap().key;
+        let later = decoder.decode(r#"{"type":"system","subtype":"task_progress","task_id":"child","parent_task_id":"parent","task_type":"local_agent","description":"child"}"#);
+        assert_eq!(discovered(&later).unwrap().parent, Some(Subject::Subagent(parent_key)));
     }
 
     /// `system/init` names the CLI's own version (2.1.318's captures all do).
