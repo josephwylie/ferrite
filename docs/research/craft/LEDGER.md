@@ -40,7 +40,7 @@ Decided 2026-11-04:
 - [x] Thinner text: no CoreGraphics glyph dilation (`e64ce45f`).
 - [x] Dev builds use `debug = "line-tables-only"`.
 
-- [ ] **Task list, partly working (owner, 2026-11-04 19:46):** a Claude turn made a 4-step plan (`68ed21a6`, `update_plan`), but the agent never advanced it, and after the turn ended the card stayed under the answer with step 1 still spinning (`ferrite-plan-stale.png`). Being fixed per handoff §12 "Transcript replay and completion".
+- [ ] **Task list, partly working (owner, 2026-11-04 19:46):** a Claude turn made a 4-step plan (`68ed21a6`, `update_plan`), but the agent never advanced it, and after the turn ended the card stayed under the answer with step 1 still spinning (`ferrite-plan-stale.png`). Fixed, not yet seen by the owner: `39785ffd` (the card goes with its turn; it stays only when a turn is stopped or fails, with that step blocked) and `08cf929f` (Claude Desktop's planning guidance). Captures: `claude/parity/plan-*.png`.
 - [x] **Seen by the owner, 2026-11-04:** the terminal takes clicks and typing (`b8a13756`), and Restart server restarts in place (`81e2bf97`).
 
 ## Lane M — motion, from Claude's source (`motion-claude-source.md`)
