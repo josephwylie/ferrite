@@ -3508,6 +3508,8 @@ impl CockpitView {
                 .project(project)
                 .map(|project| project.root.clone()),
             MenuTarget::File(thread) => self.files_pressed(thread),
+            MenuTarget::FilesMore(_) | MenuTarget::ChangesScope(_) | MenuTarget::ChangesMore(_) => None,
+            MenuTarget::File(thread) => self.files_pressed(thread),
             MenuTarget::FilesMore(_) => None,
             MenuTarget::Group(_)
             | MenuTarget::Parked

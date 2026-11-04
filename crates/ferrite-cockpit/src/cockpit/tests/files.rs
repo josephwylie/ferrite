@@ -62,6 +62,10 @@ fn a_press_previews_and_the_next_replaces_it_until_kept(cx: &mut TestAppContext)
         "the preview tab is replaced, the kept one stays"
     );
     assert!(cx.debug_bounds("files-breadcrumb").is_some());
+    let close = cx.debug_bounds("files-tab-close-1").expect("the preview tab's x");
+    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(tab_names(&view, thread, cx), [("lib.rs".to_string(), false)], "closed");
 }
 
 #[gpui::test]

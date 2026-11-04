@@ -495,12 +495,26 @@ impl CockpitView {
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| view.select_tab(thread, at, cx)))
                 .child(div().min_w_0().truncate().child(SharedString::from(name)))
                 .child(
-                    head_door(
-                        "files-tab-close",
-                        format!("files-tab-close-{at}"),
-                        if dirty { icons::CIRCLE_DASHED } else { icons::CLOSE },
-                    )
-                    .size(px(PANEL_TAB_H - SPACE_1))
+                    {
+                        // This tab's own close: its key names the tab.
+                        let key = SharedString::from(format!("files-tab-close-{at}"));
+                        let selector = key.to_string();
+                        div()
+                            .id(key.clone())
+                            .debug_selector(move || selector.clone())
+                            .flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .justify_center()
+                            .size(px(PANEL_TAB_H - SPACE_1))
+                            .rounded(px(R_CONTROL))
+                            .hover_control(key)
+                            .child(icon(
+                                if dirty { icons::CIRCLE_DASHED } else { icons::CLOSE },
+                                ICON_BUTTON_GLYPH,
+                                INK_SUBTLE,
+                            ))
+                    }
                     .tooltip(ferrite_ui::menu::tooltip("Close"))
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();

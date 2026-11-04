@@ -136,7 +136,17 @@ impl FileSides {
 
 /// `read`'s files in `repo`, each with its sides, in path order — or why it cannot be read.
 pub fn review(repo: &Path, read: &Read) -> Result<Vec<FileSides>, String> {
-    let changeset = changed(repo, read, None).map_err(|error| format!("{error:#}"))?;
+    review_against(repo, read, None)
+}
+
+/// [`review`] with the branch base named (`base`, as `changed` takes it): what
+/// `Compare against` reads.
+pub fn review_against(
+    repo: &Path,
+    read: &Read,
+    base: Option<&str>,
+) -> Result<Vec<FileSides>, String> {
+    let changeset = changed(repo, read, base).map_err(|error| format!("{error:#}"))?;
     let Some(ends) = changeset.ends else {
         return Err(match read {
             Read::LastTurn => "waiting for the first turn",

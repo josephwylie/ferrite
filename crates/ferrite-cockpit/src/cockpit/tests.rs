@@ -1,5 +1,6 @@
 mod attention_alerts;
 mod boards;
+mod changes;
 mod checks;
 mod completion_checks;
 mod composer_chips;

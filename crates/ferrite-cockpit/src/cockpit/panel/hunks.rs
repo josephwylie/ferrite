@@ -241,12 +241,12 @@ impl CockpitView {
         unfolded
             .then(|| self.panel.hunks.shown(&(thread, path.to_string())))
             .flatten()
-            .map(|shown| hunks_element(index, shown))
+            .map(|shown| hunks_element(index, shown, false))
     }
 }
 
 /// A file's sides as the panel shows them: its hunks, or why there are none.
-fn shown(sides: Option<&FileSides>) -> Shown {
+pub(crate) fn shown(sides: Option<&FileSides>) -> Shown {
     let Some(sides) = sides else {
         return Shown::Note("No uncommitted changes".into());
     };
@@ -332,14 +332,16 @@ fn flatten(rows: &[Row], out: &mut Vec<Line>) {
 /// The hunk area (`BLOCK`, the panel's diff face): each line on a 2.5ch sign
 /// column inset 1ch, changed lines on their wash in body ink, context in
 /// `INK_SUBTLE`; a hairline between hunks.
-fn hunks_element(index: usize, shown: &Shown) -> Div {
+pub(crate) fn hunks_element(index: usize, shown: &Shown, wrap: bool) -> Div {
     use ferrite_ui::theme::*;
     let cell = FS_PANEL_DIFF * CODE_ADVANCE;
+    // A wrapped line grows by rows; an unwrapped one is cut at the edge.
     let row = || {
         div()
             .flex()
             .flex_shrink_0()
-            .h(px(LH_PANEL_DIFF))
+            .when(wrap, |row| row.min_h(px(LH_PANEL_DIFF)))
+            .when(!wrap, |row| row.h(px(LH_PANEL_DIFF)))
             .pl(px(PANEL_HUNK_INSET_CELLS * cell))
             .overflow_hidden()
     };
@@ -353,7 +355,7 @@ fn hunks_element(index: usize, shown: &Shown) -> Div {
         .font_family(FONT_CODE)
         .text_size(px(FS_PANEL_DIFF))
         .line_height(px(LH_PANEL_DIFF))
-        .whitespace_nowrap();
+        .when(!wrap, |area| area.whitespace_nowrap());
     let hunks = match shown {
         Shown::Hunks(hunks) => hunks,
         Shown::Note(note) => {

@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 
+mod changes;
 mod editor;
 mod files;
 mod tree;
@@ -54,6 +55,7 @@ impl Dock {
 pub(crate) struct Tools {
     docks: HashMap<ThreadId, Dock>,
     files: HashMap<ThreadId, files::Files>,
+    changes: HashMap<ThreadId, changes::Changes>,
 }
 
 impl Tools {
@@ -64,7 +66,9 @@ impl Tools {
 
 gpui::actions!(cockpit, [ToggleTerminal, ToggleChanges, ToggleFiles, ToggleFileTree, GoToFile]);
 
+#[cfg(test)]
 pub(crate) use editor::AUTO_SAVE_AFTER;
+pub(crate) use changes::{Sub as ChangesSub, Verb as ChangesVerb};
 pub(crate) use files::{Sub as FilesSub, Verb as FilesVerb};
 
 impl CockpitView {
@@ -124,8 +128,12 @@ impl CockpitView {
         }
         if opened {
             self.give_column_to_tools(thread, cx);
-            if tool == Tool::Files {
-                self.ensure_files(thread, cx);
+            match tool {
+                Tool::Files => {
+                    self.ensure_files(thread, cx);
+                }
+                Tool::Changes => self.ensure_changes(thread, cx),
+                _ => {}
             }
         }
         cx.notify();
@@ -187,7 +195,7 @@ impl CockpitView {
             column = column.child(self.files_pane(thread, cx));
         }
         if dock.changes {
-            column = column.child(dock_head("Changes", "dock-changes-close", Tool::Changes, cx));
+            column = column.child(self.changes_pane(thread, cx));
         }
         column
     }
