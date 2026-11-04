@@ -603,6 +603,8 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
                     .collect(),
             })
             .unwrap_or(ToolResult::Opaque)
+    } else if kind == "imageView" {
+        ToolResult::Image
     } else if kind == "mcpToolCall" {
         item.get("result")
             .filter(|result| !result.is_null())

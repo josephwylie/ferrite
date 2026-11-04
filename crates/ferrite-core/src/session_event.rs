@@ -480,6 +480,11 @@ pub enum ToolResult {
     /// provider's id for that work (what a stop names); the outcome comes
     /// later, as another `ToolCompleted` for the same call (HD64).
     Background { task: String },
+    /// The call read an image (Claude's `Read` of a PNG, Codex's
+    /// `imageView`): the picture itself came back, which the row draws from
+    /// the file its call names. The bytes are never kept: they are base64
+    /// the transcript and the log have no use for.
+    Image,
     /// A file was written. `hunks` is empty when the file was created, which
     /// has nothing to diff against.
     FileEdit { path: String, hunks: Vec<Hunk> },

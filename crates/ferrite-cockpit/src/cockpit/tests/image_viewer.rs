@@ -477,3 +477,42 @@ fn an_unreadable_image_says_so(cx: &mut TestAppContext) {
     assert!(viewer.read_with(cx, |viewer, _| viewer.picture()).is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A `Read` of a picture draws the picture under its row (Claude's), never
+/// the base64 it came back as; a click opens it in the lightbox.
+#[gpui::test]
+fn a_read_picture_draws_under_its_row_and_opens(cx: &mut TestAppContext) {
+    let dir = scratch("viewer-read-files");
+    let file = dir.join("icon.png");
+    png(&file, 256, 256);
+    let (mut core, fake) = cockpit("viewer-read", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "look at the icon".into());
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolStarted {
+            id: "read-icon".into(),
+            name: "Read".into(),
+            input: serde_json::json!({"file_path": file.display().to_string()}),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolCompleted {
+            id: "read-icon".into(),
+            output: "[image]".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Image,
+        })
+        .unwrap();
+    tick(cx);
+    let row = cx.debug_bounds("tool-row-read-icon").expect("the Read row");
+    let picture = cx.debug_bounds("sent-image").expect("its picture");
+    assert!(picture.top() >= row.bottom(), "under the row, not beside it");
+    cx.simulate_click(picture.center(), gpui::Modifiers::none());
+    tick(cx);
+    let (path, _) = shown(&view, cx).expect("the lightbox opened");
+    assert_eq!(path, file);
+}

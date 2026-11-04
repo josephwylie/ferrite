@@ -162,6 +162,7 @@ mod tests {
                 progress: None,
                 caption: None,
                 background: None,
+                image: false,
             }),
             None,
         )

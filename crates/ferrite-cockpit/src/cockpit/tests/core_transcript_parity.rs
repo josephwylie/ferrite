@@ -9,6 +9,7 @@ fn call(name: &str, summary: &str, state: ToolState, output: &str) -> ToolBlock 
     ToolBlock {
         caption: None,
         background: None,
+        image: false,
         call: "c".into(),
         name: name.into(),
         title: None,

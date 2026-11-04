@@ -855,6 +855,11 @@ pub(super) fn parse_tool_result(value: Option<&Value>) -> ToolResult {
     if let Some(task) = background_launch(value) {
         return ToolResult::Background { task };
     }
+    // `Read` of a picture (`claude-read-image-2.1.317`): `{type: image,
+    // file: {base64, type, dimensions…}}`. The bytes stay out.
+    if value["type"] == "image" && value["file"]["base64"].is_string() {
+        return ToolResult::Image;
+    }
     if let Some(patch) = value.get("structuredPatch").and_then(Value::as_array) {
         let Some(path) = value.get("filePath").and_then(Value::as_str) else {
             return ToolResult::Opaque;
@@ -1980,6 +1985,26 @@ mod tests {
         assert_eq!(hunks[0].lines, ["+alpha", "+bravo"]);
         assert_eq!((hunks[0].old_start, hunks[0].old_lines), (0, 0));
         assert_eq!((hunks[0].new_start, hunks[0].new_lines), (1, 2));
+    }
+
+    /// A `Read` of a picture, as Claude Desktop's own log records it
+    /// (2.1.317; the base64 shortened): the result is the picture, which
+    /// Ferrite draws from the file the call names, never as text.
+    #[test]
+    fn a_read_picture_is_an_image_result_without_its_bytes() {
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":[{"type":"image","source":{"type":"base64","data":"iVBORw0KGgo","media_type":"image/png"}}]}]},"tool_use_result":{"type":"image","file":{"base64":"iVBORw0KGgo","type":"image/png","originalSize":100508,"dimensions":{"originalWidth":1920,"originalHeight":1050,"displayWidth":1920,"displayHeight":1050}}}}"#;
+        let Some(SessionEvent::ToolCompleted {
+            output,
+            is_error,
+            result,
+            ..
+        }) = parse_line(line)
+        else {
+            panic!("a tool result");
+        };
+        assert_eq!(result, ToolResult::Image);
+        assert_eq!(output, "[image]");
+        assert!(!is_error);
     }
 
     /// The `create` in the permission fixture is a real one, straight off

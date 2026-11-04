@@ -101,7 +101,10 @@ mod rewind_tests;
 /// - **16** — a `background` tool result: the call launched work that runs
 ///   on, whose outcome a later result for the same call brings (HD64). A
 ///   v1–v15 log has none, so its background launches read as settled.
-const SCHEMA_VERSION: u32 = 16;
+/// - **17** — an `image` tool result: the call read a picture (the bytes
+///   are not kept; the row draws the file its call names). A v1–v16 log
+///   has none, so its image reads stay plain rows.
+const SCHEMA_VERSION: u32 = 17;
 
 /// How far apart the store's marks sit, at least: what a peek or a reopen
 /// reads back from the end of a log to find its facts.
@@ -747,6 +750,8 @@ enum PersistedToolResult {
     Background {
         task: String,
     },
+    /// Schema 17.
+    Image,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -791,6 +796,7 @@ impl PersistedToolResult {
             crate::ToolResult::Background { task } => {
                 PersistedToolResult::Background { task: task.clone() }
             }
+            crate::ToolResult::Image => PersistedToolResult::Image,
             // An Activity's own record, never a provider's event.
             crate::ToolResult::Preview { .. } => {
                 debug_assert!(false, "a row's preview is never logged");
@@ -856,6 +862,7 @@ impl PersistedToolResult {
             PersistedToolResult::Background { task } => {
                 crate::ToolResult::Background { task: task.clone() }
             }
+            PersistedToolResult::Image => crate::ToolResult::Image,
             PersistedToolResult::FileEdit { path, hunks } => crate::ToolResult::FileEdit {
                 path: path.clone(),
                 hunks: hunks

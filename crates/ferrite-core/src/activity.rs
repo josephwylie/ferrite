@@ -2743,7 +2743,7 @@ pub(crate) fn input_bytes(input: &Input) -> usize {
                             })
                             .sum(),
                         ToolResult::Background { task } => task.len(),
-                        ToolResult::Opaque => 0,
+                        ToolResult::Opaque | ToolResult::Image => 0,
                     }
             }
             _ => 64,

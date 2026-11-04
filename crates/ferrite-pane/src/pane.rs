@@ -4218,6 +4218,20 @@ pub(crate) fn render_tool(
     if let Some(progress) = tool.progress.filter(|_| tool.state == ToolState::Running) {
         card = card.child(running_tests(&tool.call, progress, grid));
     }
+    if let Some(path) = shown_image(tool) {
+        // The picture the call read, under its row whether the row is open
+        // or shut (Claude's); a click opens it in the lightbox.
+        let gallery: std::sync::Arc<[std::path::PathBuf]> = [path.clone()].into();
+        let picture = inline_image(block, 0, &path, &gallery, row_cx.preview);
+        card = card.child(if grouped {
+            div()
+                .px(px(theme::TOOL_CARD_INSET))
+                .py(px(theme::SPACE_3))
+                .child(picture)
+        } else {
+            div().mt(px(theme::PROMPT_IMAGE_GAP)).child(picture)
+        });
+    }
     if expanded {
         if let Some(body) = call_body(block, tool, grid, selection) {
             card = card.child(if grouped {
@@ -4245,6 +4259,13 @@ pub(crate) fn render_tool(
         .flex_shrink_0()
         .child(card)
         .into_any_element()
+}
+
+/// The file a call that read a picture shows: the one its summary names,
+/// when it names one whole (the provider's own paths are absolute).
+fn shown_image(tool: &ToolBlock) -> Option<std::path::PathBuf> {
+    let path = std::path::Path::new(&tool.summary);
+    (tool.image && path.is_absolute()).then(|| path.to_path_buf())
 }
 
 /// A group's disclosure state: the keyboard's target and the pointer's
@@ -6085,6 +6106,7 @@ mod tests {
         let tool = |name: &str, summary: &str, state: ToolState| ToolBlock {
             caption: None,
             background: None,
+            image: false,
             call: "c".into(),
             name: name.into(),
             title: None,
@@ -6132,6 +6154,7 @@ mod tests {
         let printed = ToolBlock {
             caption: None,
             background: None,
+            image: false,
             result_line: Some("16:HOLD={".into()),
             ..tool("Bash", "python3 prep.py --hold", ToolState::Ok)
         };
@@ -6151,6 +6174,7 @@ mod tests {
         let described = ToolBlock {
             caption: None,
             background: None,
+            image: false,
             title: Some("List a directory that doesn't exist".into()),
             ..tool("Bash", "ls /definitely-missing-dir", ToolState::Ok)
         };
@@ -6202,6 +6226,7 @@ mod tests {
         let tool = |state: ToolState, output: Option<&str>| ToolBlock {
             caption: None,
             background: None,
+            image: false,
             call: "c".into(),
             name: "Bash".into(),
             title: None,

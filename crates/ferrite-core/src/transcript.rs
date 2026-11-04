@@ -190,6 +190,10 @@ pub struct ToolBlock {
     /// line where it completed. A Session that ends first takes the work
     /// with it. `None` for a call that ran in the foreground.
     pub background: Option<Background>,
+    /// The call read a picture (`ToolResult::Image`): the row draws the
+    /// file its `summary` names under its line, as the provider's own
+    /// transcript does. Only a settled success sets it.
+    pub image: bool,
 }
 
 /// Work a call launched into the background.
@@ -2229,6 +2233,7 @@ impl Transcript {
                 } else {
                     ToolState::Ok
                 };
+                let shows_image = !is_error && result == ToolResult::Image;
                 self.output_tails.remove(&id);
                 self.test_counts.remove(&id);
                 let name = self.tool(&id).map(|tool| tool.name.clone());
@@ -2271,13 +2276,25 @@ impl Transcript {
                             .and_then(|text| retained_output(&text)),
                         row_line(Some(&value)),
                     ),
+                    ToolResult::Image => (Vec::new(), None, None),
                     _ => (Vec::new(), None, row_line(None)),
                 };
-                let output = retained_output(&output);
+                // The picture is the result: its `[image]` stand-in is no
+                // output to disclose.
+                let output = if shows_image {
+                    None
+                } else {
+                    retained_output(&output)
+                };
                 let mut dirty: Vec<BlockId> = self
                     .settle_tool(&id, state, diffs, structured_preview, result_line, output)
                     .into_iter()
                     .collect();
+                if let Some(block) = shows_image.then(|| self.mark_image(&id)).flatten() {
+                    if !dirty.contains(&block) {
+                        dirty.push(block);
+                    }
+                }
                 if handback
                     || self
                         .tool(&id)
@@ -2398,6 +2415,7 @@ impl Transcript {
                     progress: None,
                     caption: None,
                     background: None,
+                    image: false,
                 }));
                 Update {
                     dirty: vec![block],
@@ -2663,6 +2681,7 @@ impl Transcript {
             progress: None,
             caption: None,
             background: None,
+            image: false,
         })))
     }
 
@@ -2753,6 +2772,18 @@ impl Transcript {
             tool.output = output;
         }
         Some(block.id)
+    }
+
+    /// A settled call's row shows the picture it read.
+    fn mark_image(&mut self, call: &str) -> Option<BlockId> {
+        let block = self
+            .blocks
+            .iter_mut()
+            .find(|block| matches!(&block.body, Body::Tool(tool) if tool.call == call))?;
+        let Body::Tool(tool) = &mut block.body else {
+            return None;
+        };
+        (!std::mem::replace(&mut tool.image, true)).then_some(block.id)
     }
 
     /// The row of call `call`, newest first.
@@ -5355,6 +5386,47 @@ mod tests {
                     _ => None,
                 })
                 .collect()
+        }
+
+        #[test]
+        fn a_read_picture_marks_its_row_and_keeps_no_output() {
+            let mut t = Transcript::default();
+            t.apply(Input::Prompt("look".into()));
+            t.apply(Input::Event(SessionEvent::ToolStarted {
+                id: "r1".into(),
+                name: "Read".into(),
+                input: json!({"file_path": "/work/icon.png"}),
+            }));
+            let update = t.apply(Input::Event(SessionEvent::ToolCompleted {
+                id: "r1".into(),
+                output: "[image]".into(),
+                is_error: false,
+                result: ToolResult::Image,
+            }));
+            let tool = t.tool("r1").unwrap();
+            assert!(tool.image);
+            assert_eq!(tool.state, ToolState::Ok);
+            assert_eq!(tool.output, None);
+            assert_eq!(tool.result_line, None);
+            assert_eq!(update.dirty.len(), 1, "one row, once");
+        }
+
+        #[test]
+        fn a_failed_read_draws_no_picture() {
+            let mut t = Transcript::default();
+            t.apply(Input::Prompt("look".into()));
+            t.apply(Input::Event(SessionEvent::ToolStarted {
+                id: "r1".into(),
+                name: "Read".into(),
+                input: json!({"file_path": "/work/gone.png"}),
+            }));
+            t.apply(Input::Event(SessionEvent::ToolCompleted {
+                id: "r1".into(),
+                output: "File does not exist.".into(),
+                is_error: true,
+                result: ToolResult::Image,
+            }));
+            assert!(!t.tool("r1").unwrap().image);
         }
 
         #[test]
