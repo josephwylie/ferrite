@@ -131,3 +131,19 @@ fn the_menus_hold_what_the_spec_names_and_a_scope_rereads(cx: &mut TestAppContex
         Some("All changes")
     );
 }
+
+#[gpui::test]
+fn an_empty_uncommitted_scope_offers_the_branch_diff(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("changes-empty", cx);
+    let repo = std::env::temp_dir().join(format!("ferrite-view-{}-changes-empty", std::process::id())).join("repo");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "all"]);
+    opened(&view, thread, cx);
+    assert_eq!(view.read_with(cx, |view, _| view.changes_read(thread)), Some(0));
+    let link = cx.debug_bounds("changes-view-branch").expect("the link is drawn");
+    cx.simulate_click(link.center(), gpui::Modifiers::none());
+    assert_eq!(
+        view.read_with(cx, |view, _| view.changes_scope_label(thread)).as_deref(),
+        Some("All changes")
+    );
+}

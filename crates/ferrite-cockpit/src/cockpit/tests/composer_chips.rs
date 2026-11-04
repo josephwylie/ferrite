@@ -185,6 +185,23 @@ fn the_model_picker_opens_its_effort_as_a_submenu(cx: &mut TestAppContext) {
     });
 }
 
+/// Claude's effort menu tags its middle rung `Recommended`.
+#[gpui::test]
+fn the_effort_menu_tags_medium_recommended(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("effort-recommended", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let tags = view.update(cx, |view, cx| {
+        let menu = view.effort_submenu(0, cx).expect("the default model takes an effort");
+        menu.choices
+            .iter()
+            .map(|choice| (choice.label.to_string(), choice.badge.as_ref().map(ToString::to_string)))
+            .collect::<Vec<_>>()
+    });
+    assert!(tags.contains(&("Medium".into(), Some("Recommended".into()))), "{tags:?}");
+    assert_eq!(tags.iter().filter(|(_, badge)| badge.is_some()).count(), 1);
+}
+
 /// A Group Pane's Composer carries no chips (SPEC §5.9): the mode,
 /// model and effort are Solo's.
 #[gpui::test]

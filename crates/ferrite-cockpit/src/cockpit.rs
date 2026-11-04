@@ -12833,6 +12833,8 @@ impl CockpitView {
             .map(|(at, step)| ferrite_ui::components::Choice {
                 label: effort_title(step).into(),
                 checked: chosen == Some(at),
+                // Claude's menu tags its middle rung.
+                badge: (step == "medium").then(|| "Recommended".into()),
                 disabled: hold.is_some(),
                 why: hold.map(SharedString::from),
                 ..Default::default()

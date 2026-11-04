@@ -325,7 +325,7 @@ impl CockpitView {
             Load::Reading => self.changes_note("Reading changes\u{2026}").into_any_element(),
             Load::Failed(why) => self.changes_note(why.clone()).into_any_element(),
             Load::Read(files) if files.is_empty() => {
-                self.changes_note("No changes").into_any_element()
+                self.changes_empty(thread, &changes.scope, cx).into_any_element()
             }
             Load::Read(files) => div()
                 .id("changes-scroll")
@@ -350,6 +350,26 @@ impl CockpitView {
             })
             .child(self.changes_head(thread, changes, cx))
             .child(body)
+    }
+
+    /// Nothing changed in the scope: its note, and for the uncommitted scope
+    /// a link to the whole branch's diff.
+    fn changes_empty(&self, thread: ThreadId, scope: &Scope, cx: &mut Context<Self>) -> Div {
+        let note = self.changes_note("No changes");
+        if *scope != Scope::Uncommitted {
+            return note;
+        }
+        note.flex_col().gap(px(theme::SPACE_1)).child(
+            div()
+                .id("changes-view-branch")
+                .debug_selector(|| "changes-view-branch".into())
+                .cursor_pointer()
+                .text_color(rgb(theme::LINK_INK))
+                .child("View branch diff")
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    view.run_changes_verb(thread, Verb::All, cx)
+                })),
+        )
     }
 
     fn changes_note(&self, note: impl Into<SharedString>) -> Div {

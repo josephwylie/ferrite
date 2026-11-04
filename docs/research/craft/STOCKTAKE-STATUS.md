@@ -71,7 +71,7 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 33 | XD5 | A new turn scrolls the prompt to the top, leaving room below | BUILT | **SCENE-ONLY:** the code exists but only reference scenes reach it. A real send scrolls to the bottom. **Audit 11-04:** a8ae6b24: a real send scrolls its prompt to the top | `transcript.rs:855` Runway; `transcript_glue.rs:398` `allow(dead_code)` without `visual-reference` |
 | 34 | US1 | Usage ring fed by real plan limits (both providers) | PARTIAL | Claude is complete. Codex is never asked up front (empty until its first update) and sends no plan name. | Claude `claude/wire.rs:759`; Codex `codex/wire.rs:225,492`; `engine.rs:3299`; `pane/usage.rs:18` |
 | 35 | US2 | Context usage from real data (both providers) | PARTIAL | Codex has no category breakdown. | Claude `claude.rs:523,1050-1068`; Codex `codex/wire.rs:896`; `panel/sections.rs:41-60` |
-| 36 | CO8 | Effort submenu: explanatory line, Recommended tag, usage-warning pill, Ultracode toggle | PARTIAL | A bare ladder with ✓. None of the explanations, tags or pills. | `cockpit.rs:12690` `effort_submenu` (9e42e44e) |
+| 36 | CO8 | Effort submenu: explanatory line, Recommended tag, usage-warning pill, Ultracode toggle | PARTIAL | A bare ladder with ✓. None of the explanations, tags or pills. **Audit 11-04:** Recommended tag on Medium built; explanation line, Max usage pill and Ultracode need data Ferrite lacks | `cockpit.rs:12690` `effort_submenu` (9e42e44e) |
 | 37 | AT11 | Non-image attachment as a pill above the bubble; click opens the default app | PARTIAL | A chip inside the bubble. A click opens Ferrite's preview. | `pane.rs:3219-3240` |
 | 38 | AT5 | Text file in the composer as a card with a first-page preview | PARTIAL | A small chip with an icon and name. | `attachments.rs:134` |
 | 39 | AT9 | Failed attachment state (red tile, "Failed") | MISSING |  | — |
@@ -81,7 +81,7 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 43 | RP16 | Changes scope menu (last turn, uncommitted, unstaged, staged, committed, branch) | PARTIAL | Scope tokens rather than a dropdown. No unstaged/staged split. **Audit 11-04:** 49170fa6: scope dropdown (All changes, Uncommitted, Compare against a branch); no staged/unstaged split | `review.rs:2351-2380` (3c2de915) |
 | 44 | RP17 | Changes toolbar (word diffs, whitespace, wrap, collapse all, jump to file) | PARTIAL | Keyboard only. No toggles, no jump-to-file. **Audit 11-04:** 49170fa6: ⋯ has Collapse/Expand all, Word wrap, Hide whitespace, Refresh; no word diffs or jump to file | `review.rs:500-530`; `panel/changes.rs:88` |
 | 45 | RP18 | Changes file tree with filter, +N counts and stage buttons | PARTIAL | Per-file blocks with +N −N. No filter, no staging. **Audit 11-04:** 49170fa6: files with hunks, reviewed marks; no filter or staging | `panel/changes.rs:142` |
-| 46 | RP20 | Changes empty state with "View branch diff" | PARTIAL | "No uncommitted changes" text only. | `review.rs:2340-2345` |
+| 46 | RP20 | Changes empty state with "View branch diff" | BUILT | "No uncommitted changes" text only. **Audit 11-04:** Changes empty state links to View branch diff (BUILT, not ticked) | `review.rs:2340-2345` |
 | 47 | SA2 | An agent opens in the right panel (←, title, maximise, ×) | PARTIAL | It drills in in place of the Pane's transcript. No maximise or ×. **Audit 11-04:** Lane G1 (subagent drill-in) | `transcript_glue.rs:203`, `subagents.rs:467-520` (3b33960c, 64baa4c6) |
 | 48 | SA3 | Agent view: prompt, model badge, own rows, result | PARTIAL | No model badge (`AgentInfo` has no model). **Audit 11-04:** Lane G1 (subagent drill-in) | `subagents.rs:467-520`; `core activity.rs:70` |
 | 49 | SA4 | Subagents list (Active · N / Done · N) | MISSING | **Audit 11-04:** Lane G1 (subagent drill-in) | — |
@@ -116,7 +116,7 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 78 | SK4 | Skill detail (rendered SKILL.md, enable, uninstall, Try now) | MISSING |  | — |
 | 79 | SK6 | Skill templates carousel | MISSING |  | — |
 | 80 | CO5 | + menu: Connectors ▸ (Browse, Manage, Claude in Chrome toggle) | PARTIAL | MCP servers with their state plus "Manage connectors". No Browse and no Chrome toggle (LEDGER: "left out"). Hidden unless the session reports servers. | `cockpit.rs:8324` `attach_submenus` (3b33960c) |
-| 81 | CO7 | Model menu: "Model · this session" header, number keys 1–4 | PARTIAL | No header. | `cockpit.rs:12637` digits 1–9 (d6275d4b) |
+| 81 | CO7 | Model menu: "Model · this session" header, number keys 1–4 | DIFFERENT BY DESIGN | No header. **Audit 11-04:** Claude's own model-menu capture (claude/model-menu.png) has no header | `cockpit.rs:12637` digits 1–9 (d6275d4b) |
 | 82 | CO9 | More models ▸ | PARTIAL | Holds the other provider's models (a handover), not more of the same provider's. | `cockpit.rs:12474` (d6275d4b) |
 | 83 | XSQ1 | Codex queue strip: ↪ Steer, delete, ⋯ (Edit, Open in side chat, Turn off queueing) | PARTIAL | Three buttons. No ⋯, no "Open in side chat", no "Turn off queueing". **Audit 11-04:** Still three buttons | `cockpit.rs:8090` |
 | 84 | XCO1 | Codex environment tray above the box ("Choose project · This computer") | PARTIAL | Project plus branch/workspace. No machine. | `pane/composer.rs:216` `env_strip` (3b33960c) |
@@ -160,8 +160,8 @@ ID prefixes: NS new session, CO/XCO composer (Claude/Codex), XD Codex deeper pas
 | CO4 | + menu: Slash commands | BUILT | `cockpit.rs:8243` (6c3825e4) |  |
 | CO5 | + menu: Connectors ▸ (Browse, Manage, Claude in Chrome toggle) | PARTIAL | `cockpit.rs:8324` `attach_submenus` (3b33960c) | MCP servers with their state plus "Manage connectors". No Browse and no Chrome toggle (LEDGER: "left out"). Hidden unless the session reports servers. |
 | CO6 | + menu: Plugins ▸ with a submenu per plugin | BUILT | `cockpit.rs:8411` (7a300afe) | Only plugins that bring commands. Claude only, since Codex reports no plugins. |
-| CO7 | Model menu: "Model · this session" header, number keys 1–4 | PARTIAL | `cockpit.rs:12637` digits 1–9 (d6275d4b) | No header. |
-| CO8 | Effort submenu: explanatory line, Recommended tag, usage-warning pill, Ultracode toggle | PARTIAL | `cockpit.rs:12690` `effort_submenu` (9e42e44e) | A bare ladder with ✓. None of the explanations, tags or pills. |
+| CO7 | Model menu: "Model · this session" header, number keys 1–4 | DIFFERENT BY DESIGN | `cockpit.rs:12637` digits 1–9 (d6275d4b) | No header. **Audit 11-04:** Claude's own model-menu capture (claude/model-menu.png) has no header |
+| CO8 | Effort submenu: explanatory line, Recommended tag, usage-warning pill, Ultracode toggle | PARTIAL | `cockpit.rs:12690` `effort_submenu` (9e42e44e) | A bare ladder with ✓. None of the explanations, tags or pills. **Audit 11-04:** Recommended tag on Medium built; explanation line, Max usage pill and Ultracode need data Ferrite lacks |
 | CO9 | More models ▸ | PARTIAL | `cockpit.rs:12474` (d6275d4b) | Holds the other provider's models (a handover), not more of the same provider's. |
 | CO10 | Fast mode section | MISSING | — |  |
 | CO11 | Permission menu: header, two-line rows (name + consequence) | BUILT | `cockpit.rs:11735`, `theme.rs:521`, `menu.rs:165` (1c1e5980, 6c3825e4) |  |
@@ -312,7 +312,7 @@ ID prefixes: NS new session, CO/XCO composer (Claude/Codex), XD Codex deeper pas
 | RP17 | Changes toolbar (word diffs, whitespace, wrap, collapse all, jump to file) | PARTIAL | `review.rs:500-530`; `panel/changes.rs:88` | Keyboard only. No toggles, no jump-to-file. **Audit 11-04:** 49170fa6: ⋯ has Collapse/Expand all, Word wrap, Hide whitespace, Refresh; no word diffs or jump to file |
 | RP18 | Changes file tree with filter, +N counts and stage buttons | PARTIAL | `panel/changes.rs:142` | Per-file blocks with +N −N. No filter, no staging. **Audit 11-04:** 49170fa6: files with hunks, reviewed marks; no filter or staging |
 | RP19 | One continuous highlighted diff; a tree click scrolls to the file | PARTIAL | `review.rs:1406-1445,877-904` (3c2de915) | A tree click opens the whole file instead of scrolling to it. **Audit 11-04:** 49170fa6: one list of files with hunks |
-| RP20 | Changes empty state with "View branch diff" | PARTIAL | `review.rs:2340-2345` | "No uncommitted changes" text only. |
+| RP20 | Changes empty state with "View branch diff" | BUILT | `review.rs:2340-2345` | "No uncommitted changes" text only. **Audit 11-04:** Changes empty state links to View branch diff (BUILT, not ticked) |
 | RP21 | Files: inline "Show changes"; "Open ⌄" split | MISSING | — |  |
 | RP22 | Right panel as browser-like tabs (+, ×) | PARTIAL | `panel.rs:1-6,23-26` | One scroll of sections, plus a preview tab. |
 | RP23 | Maximise panel with a docked compact composer | PARTIAL | `panel.rs:62-73` (fa36929a) | Expand widens a preview only. |
