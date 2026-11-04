@@ -76,6 +76,11 @@ pub(crate) enum RowKind {
     /// A date divider between turns on different days: a turn's gap above
     /// it, a line between it and its day's first prompt.
     Divider,
+    /// A turn's wrap-up box. `spent`: a later prompt (or wrap-up) follows
+    /// it, so its steps are no longer offered.
+    WrapUp {
+        spent: bool,
+    },
     /// A fallback prose or code block.
     Other,
 }
@@ -86,7 +91,7 @@ impl RowKind {
             Body::Prompt(_) => Self::Prompt,
             Body::Tool(_) => Self::Activity,
             Body::Visual(_) => Self::Visual,
-            Body::WrapUp(_) => Self::Other,
+            Body::WrapUp(_) => Self::WrapUp { spent: false },
             Body::Thinking(_) => Self::Reasoning,
             Body::Notice(_) => Self::Notice,
             Body::Meta(_) => Self::Meta,
@@ -379,6 +384,8 @@ fn draws_nothing(block: &Block, shape: &RowShape) -> bool {
                 || shape.carried.as_deref() == Some(tool.call.as_str())
         }
         Body::TurnEnd(end) => crate::pane::turn_stamp(end).is_none(),
+        // A recap alone only updates the Thread's status.
+        Body::WrapUp(wrap) => !wrap.shows_box(),
         _ => false,
     }
 }
@@ -598,10 +605,20 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
     }
     // Prose with more work after it in its turn is narration.
     let mut work_after = false;
+    // Whether a later prompt or wrap-up has taken the operator past a box.
+    let mut moved_on = false;
     for row in rows.iter_mut().rev() {
         match row.kind {
+            RowKind::WrapUp { .. } => {
+                row.kind = RowKind::WrapUp { spent: moved_on };
+                moved_on = true;
+            }
             RowKind::Activity | RowKind::Group | RowKind::Visual => work_after = true,
-            RowKind::Prompt | RowKind::TurnEnd { .. } => work_after = false,
+            RowKind::Prompt => {
+                work_after = false;
+                moved_on = true;
+            }
+            RowKind::TurnEnd { .. } => work_after = false,
             RowKind::Answer { .. } => {
                 row.kind = RowKind::Answer {
                     narration: work_after,

@@ -477,3 +477,98 @@ fn a_wrap_up_step_sends_its_words(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(fake.sent.borrow().as_slice(), ["Commit these changes"]);
 }
+
+/// A wrap-up box is used once: a double-click sends once, and the used box
+/// keeps its words and the step sent, with no buttons left to press.
+#[gpui::test]
+fn a_used_wrap_up_sends_once_and_keeps_no_buttons(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("wrap-up-spent", 1);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+    let send = |event: SessionEvent| fake.streams.borrow()[0].send(event).unwrap();
+    send(SessionEvent::ToolStarted {
+        id: "w".into(),
+        name: ferrite_core::wrap_up::CLAUDE_NAME.into(),
+        input: serde_json::json!({
+            "recap": "Fixed the parser.",
+            "ask": "Commit the change?",
+            "next": ["Commit it", "Leave it"],
+        }),
+    });
+    send(SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Completed,
+        cost_usd: None,
+    });
+    tick(cx);
+    let step = cx.debug_bounds("wrap-up-step-w-0").unwrap().center();
+    // Two presses before the sent prompt reaches the transcript.
+    cx.simulate_click(step, gpui::Modifiers::none());
+    cx.simulate_click(step, gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(fake.sent.borrow().as_slice(), ["Commit it"]);
+    assert!(cx.debug_bounds("wrap-up-spent").is_some());
+    assert!(cx.debug_bounds("wrap-up").is_none());
+    assert!(cx.debug_bounds("wrap-up-step-w-0").is_none());
+    assert!(cx.debug_bounds("wrap-up-step-w-1").is_none());
+    assert!(
+        cx.debug_bounds("wrap-up-chosen").is_some(),
+        "the step that was sent stays under the question"
+    );
+}
+
+/// A box from an earlier turn is never actionable, whatever the operator
+/// sent since.
+#[gpui::test]
+fn a_wrap_up_is_spent_once_the_thread_moves_on(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("wrap-up-moved-on", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let send = |event: SessionEvent| fake.streams.borrow()[0].send(event).unwrap();
+    send(SessionEvent::ToolStarted {
+        id: "w".into(),
+        name: ferrite_core::wrap_up::CLAUDE_NAME.into(),
+        input: serde_json::json!({"recap": "Done.", "next": ["Commit it"]}),
+    });
+    send(SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Completed,
+        cost_usd: None,
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("wrap-up-step-w-0").is_some());
+    view.update(cx, |view, cx| {
+        view.cockpit.send(thread, "something else".into());
+        cx.notify();
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("wrap-up-step-w-0").is_none());
+    assert!(cx.debug_bounds("wrap-up-spent").is_some());
+}
+
+/// A recap alone draws no box (§13); a blocked turn does, though it has
+/// nothing to press.
+#[gpui::test]
+fn a_recap_alone_draws_no_box_and_a_blocked_turn_does(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("wrap-up-recap-only", 1);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+    let send = |event: SessionEvent| fake.streams.borrow()[0].send(event).unwrap();
+    send(SessionEvent::ToolStarted {
+        id: "w".into(),
+        name: ferrite_core::wrap_up::CLAUDE_NAME.into(),
+        input: serde_json::json!({"recap": "Appended the line."}),
+    });
+    send(SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Completed,
+        cost_usd: None,
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("wrap-up").is_none());
+    send(SessionEvent::ToolStarted {
+        id: "b".into(),
+        name: ferrite_core::wrap_up::CLAUDE_NAME.into(),
+        input: serde_json::json!({"recap": "Stuck on a credential.", "blocked": true}),
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("wrap-up").is_some());
+}

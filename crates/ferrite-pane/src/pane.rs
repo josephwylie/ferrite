@@ -25,7 +25,7 @@ mod usage;
 mod working;
 mod wrap_up;
 pub(crate) use agents::{is_agent, render_agent};
-pub(crate) use wrap_up::render_wrap_up;
+pub(crate) use wrap_up::{render_wrap_up, Face as WrapUpFace};
 pub use agents::{AgentFace, AgentFaces, AgentRun};
 #[cfg(any(test, feature = "test-support"))]
 pub use composer::model_label;
@@ -3020,7 +3020,9 @@ pub(crate) fn render_block(
         Body::Visual(_) => row.into_any_element(),
         // A wrap-up's steps are presses the transcript wires
         // (`TranscriptView::render_row`); drawn bare, it has none.
-        Body::WrapUp(wrap) => wrap_up::render_wrap_up(block.id, wrap, row_cx, Vec::new()),
+        Body::WrapUp(wrap) => {
+            wrap_up::render_wrap_up(block.id, wrap, row_cx, WrapUpFace::Steps(Vec::new()))
+        }
         Body::Prompt(line) => prompt_row(block, line, row_cx, None),
         // Fallback prose (a block with no Markdown source) reads as the
         // answer does, on the content column.

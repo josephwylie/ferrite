@@ -31,6 +31,9 @@ pub struct WrapUp {
     pub recap: String,
     /// The question the turn waits on.
     pub ask: Option<String>,
+    /// The turn is waiting on the operator, not finished: its box says so
+    /// even with no question or step (§13: distinct from completion).
+    pub blocked: bool,
     /// What the operator can send next, recommended first; never more than
     /// `MAX_NEXT`, never empty words.
     pub next: Vec<String>,
@@ -51,14 +54,24 @@ impl WrapUp {
             call,
             recap: text(&input["recap"]).unwrap_or_default(),
             ask: text(&input["ask"]),
+            blocked: input["blocked"].as_bool().unwrap_or(false),
             next: input["next"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .filter_map(text)
+                // A label is sent back as the next prompt: one that would
+                // run a command or a `!` shell line is not a next step.
+                .filter(|step| !step.starts_with(['/', '!']))
                 .take(MAX_NEXT)
                 .collect(),
         }
+    }
+
+    /// Whether the turn gets a box: a recap alone (nothing asked, nothing
+    /// to send, not blocked) only updates the Thread's status, as in Claude.
+    pub fn shows_box(&self) -> bool {
+        self.ask.is_some() || self.blocked || !self.next.is_empty()
     }
 
     /// Its words for copy and search: the recap, the ask, each step.
@@ -94,6 +107,10 @@ pub fn input_schema() -> Value {
                 "type": "string",
                 "description": "The question you need answered before going on, if any."
             },
+            "blocked": {
+                "type": "boolean",
+                "description": "True when you cannot go on until the operator answers or acts."
+            },
             "next": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -123,5 +140,18 @@ mod tests {
         assert_eq!(wrap.ask, None);
         assert_eq!(wrap.next, ["Commit", "Push"]);
         assert_eq!(wrap.text(), "Fixed the parser.\nCommit\nPush");
+    }
+
+    /// A recap alone draws no box; a question, a step or a block does. A
+    /// step that would run a command is not a step.
+    #[test]
+    fn only_more_than_a_recap_makes_a_box() {
+        let wrap = |input: Value| WrapUp::from_input("c".into(), &input);
+        assert!(!wrap(json!({"recap": "Done."})).shows_box());
+        assert!(wrap(json!({"recap": "Done.", "ask": "Commit?"})).shows_box());
+        assert!(wrap(json!({"recap": "Done.", "next": ["Commit"]})).shows_box());
+        assert!(wrap(json!({"recap": "Stuck.", "blocked": true})).shows_box());
+        let slashed = wrap(json!({"recap": "Done.", "next": ["/clear", "!rm x"]}));
+        assert!(slashed.next.is_empty() && !slashed.shows_box());
     }
 }

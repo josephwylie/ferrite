@@ -360,7 +360,8 @@ fn background_opener(tool: &ferrite_core::transcript::ToolBlock, view: Option<&E
 }
 
 /// A wrap-up's next steps as buttons, the recommended one first and
-/// raised: a press sends its words (`TranscriptEvent::Send`).
+/// primary (Claude's): a press sends its words once
+/// (`TranscriptView::use_step`).
 fn wrap_up_steps(
     wrap: &ferrite_core::wrap_up::WrapUp,
     view: &Entity<TranscriptView>,
@@ -372,17 +373,21 @@ fn wrap_up_steps(
         .map(|(index, step)| {
             let id = SharedString::from(format!("wrap-up-step-{}-{index}", wrap.call));
             let button = if index == 0 {
-                ferrite_ui::components::secondary_button(id.clone(), None, step.clone(), cx)
+                crate::decision::primary_action(id.clone(), step.clone(), cx)
             } else {
-                ferrite_ui::components::ghost_button(id.clone(), step.clone(), cx)
+                crate::decision::secondary_action(id.clone(), step.clone(), false, false, cx)
             };
             let view = view.clone();
-            let words = step.clone();
+            let (call, words) = (wrap.call.clone(), step.clone());
             div()
                 .debug_selector(move || id.to_string())
                 .child(button.on_click(move |_, _, cx| {
-                    let words = words.clone();
-                    view.update(cx, |_, cx| cx.emit(TranscriptEvent::Send(words)));
+                    view.update(cx, |view, cx| {
+                        if view.use_step(&call, &words) {
+                            cx.emit(TranscriptEvent::Send(words.clone()));
+                            cx.notify();
+                        }
+                    });
                 }))
                 .into_any_element()
         })
@@ -426,6 +431,10 @@ pub struct TranscriptView {
     heights: Rc<std::cell::RefCell<HashMap<RowId, f32>>>,
     /// Where each disclosure control was last laid out, which the tests
     /// aim at.
+    /// The wrap-up step each box has had pressed, by the box's call, so a
+    /// second press (a double-click) sends nothing before the sent prompt
+    /// reaches the transcript and spends the box.
+    used_steps: HashMap<String, String>,
     #[cfg(any(test, feature = "test-support"))]
     disclosure_bounds: Rc<std::cell::RefCell<HashMap<DisclosureId, gpui::Bounds<gpui::Pixels>>>>,
     /// What prose path targets resolve against: the checkout and the paths
@@ -567,6 +576,7 @@ impl TranscriptView {
             pinned_drawn: Rc::new(Cell::new(None)),
             pinned_asked: Rc::new(Cell::new(None)),
             heights: Default::default(),
+            used_steps: HashMap::new(),
             #[cfg(any(test, feature = "test-support"))]
             disclosure_bounds: Default::default(),
             targets,
@@ -1178,6 +1188,59 @@ impl TranscriptView {
         }
     }
 
+    /// Take a wrap-up step as sent: false when the box is spent already (a
+    /// step of it was pressed, or a later prompt followed it), so a repeat
+    /// press sends nothing.
+    fn use_step(&mut self, call: &str, words: &str) -> bool {
+        if self.used_steps.contains_key(call) || self.wrap_up_moved_on(call) {
+            return false;
+        }
+        self.used_steps.insert(call.to_owned(), words.to_owned());
+        true
+    }
+
+    /// The blocks after the wrap-up of `call`.
+    fn after_wrap_up(&self, call: &str) -> &[ferrite_core::transcript::Block] {
+        let at = self.input.blocks.iter().rposition(
+            |block| matches!(&block.body, Body::WrapUp(wrap) if wrap.call == call),
+        );
+        at.map_or(&[], |at| &self.input.blocks[at + 1..])
+    }
+
+    /// Whether the Thread has gone past the wrap-up of `call`: a prompt
+    /// or another wrap-up came after it.
+    fn wrap_up_moved_on(&self, call: &str) -> bool {
+        self.after_wrap_up(call)
+            .iter()
+            .any(|block| matches!(block.body, Body::Prompt(_) | Body::WrapUp(_)))
+    }
+
+    /// What a wrap-up offers: its steps while it is live, else (spent) the
+    /// step that was sent, when one of them was.
+    fn wrap_up_face(
+        &self,
+        wrap: &ferrite_core::wrap_up::WrapUp,
+        spent: bool,
+        view: Option<&Entity<Self>>,
+        cx: &App,
+    ) -> pane::WrapUpFace {
+        let used = self.used_steps.get(&wrap.call);
+        if !spent && used.is_none() {
+            return pane::WrapUpFace::Steps(
+                view.map_or_else(Vec::new, |view| wrap_up_steps(wrap, view, cx)),
+            );
+        }
+        let sent_after = || {
+            self.after_wrap_up(&wrap.call)
+                .iter()
+                .find_map(|block| match &block.body {
+                    Body::Prompt(words) => wrap.next.iter().find(|step| *step == words).cloned(),
+                    _ => None,
+                })
+        };
+        pane::WrapUpFace::Spent(used.cloned().or_else(sent_after))
+    }
+
     /// The chevron on the working line, when the line carries a call.
     fn line_disclosure(&self, view: Entity<Self>) -> Option<LineDisclosure> {
         let call = DisclosureId::Tool(carried_tool(&self.input.blocks)?.call.clone());
@@ -1424,10 +1487,9 @@ impl TranscriptView {
         match &block.body {
             Body::Tool(tool) => self.render_call(block.id, tool, &row_cx, view.as_ref(), false),
             Body::WrapUp(wrap) => {
-                let steps = view.as_ref().map_or_else(Vec::new, |view| {
-                    wrap_up_steps(wrap, view, cx)
-                });
-                pane::render_wrap_up(block.id, wrap, &row_cx, steps)
+                let spent = matches!(row.kind(), RowKind::WrapUp { spent: true });
+                let face = self.wrap_up_face(wrap, spent, view.as_ref(), cx);
+                pane::render_wrap_up(block.id, wrap, &row_cx, face)
             }
             _ => {
                 let call = match &block.body {

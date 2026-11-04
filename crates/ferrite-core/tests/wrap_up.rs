@@ -42,6 +42,7 @@ fn a_wrap_up_call_is_the_turns_box_not_a_tool_row() {
             call: "w".into(),
             recap: "Fixed the parser; tests pass.".into(),
             ask: Some("Should I also bump the version?".into()),
+            blocked: false,
             next: vec!["Commit these changes".into(), "Open a PR".into()],
         }]
     );

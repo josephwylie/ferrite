@@ -1774,6 +1774,9 @@ pub const FILES_STATUS_DOT: f32 = 6.0;
 /// done `check-circle` dimmed, the current step's working mark, a step
 /// to do a dashed ring.
 pub const TASK_CARD_PAD: f32 = SPACE_3;
+/// 480px — the widest a spent wrap-up box stands (its words wrap there),
+/// as Claude's measured (`claude/parity/wrapup-used.png`).
+pub const WRAP_UP_SPENT_MAX_W: f32 = 480.0;
 /// 16px — the card's clearance in the flow, above it and down to the
 /// working line, so it reads as its own block (Claude's), never as the body
 /// of the tool group over it.

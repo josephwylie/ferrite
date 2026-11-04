@@ -1265,10 +1265,11 @@ fn labelled(label: SharedString, keys: Vec<SharedString>, primary: bool) -> Div 
         .children(caps)
 }
 
-/// `Deny` (Claude's): a secondary on `paint::SECONDARY`, a clear step over
-/// the plane, `INK_STRONG`. Full width when the actions stack.
-pub fn deny_button(
+/// A secondary action (Claude's `Deny`): on `paint::SECONDARY`, a clear step
+/// over the plane, `INK_STRONG`. Full width when the actions stack.
+pub fn secondary_action(
     id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
     stacked: bool,
     disabled: bool,
     cx: &App,
@@ -1288,7 +1289,31 @@ pub fn deny_button(
     .px(px(theme::CONTROL_PAD_X))
     .rounded(px(theme::R_CONTROL))
     .when(stacked, |button| button.w_full())
-    .child(labelled("Deny".into(), Vec::new(), false).text_color(rgb(theme::INK_STRONG)))
+    .child(labelled(label.into(), Vec::new(), false).text_color(rgb(theme::INK_STRONG)))
+}
+
+/// A primary action with no chord: `PRIMARY` with its dark ink, as `Allow
+/// once` wears it.
+pub fn primary_action(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    cx: &App,
+) -> gpui::component::button::Button {
+    components::primary_button(id, false, cx)
+        .h(px(theme::CONTROL_H))
+        .px(px(theme::CONTROL_PAD_X))
+        .rounded(px(theme::R_CONTROL))
+        .child(labelled(label.into(), Vec::new(), true))
+}
+
+/// `Deny` (Claude's).
+pub fn deny_button(
+    id: impl Into<ElementId>,
+    stacked: bool,
+    disabled: bool,
+    cx: &App,
+) -> gpui::component::button::Button {
+    secondary_action(id, "Deny", stacked, disabled, cx)
 }
 
 /// The split primary's face: `Allow once` and its chord (`⌘⏎`) on
