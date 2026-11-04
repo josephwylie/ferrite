@@ -199,14 +199,25 @@ impl Queue {
         let items = std::mem::take(&mut self.items);
         for item in &items {
             self.metadata.pending.remove(&item.client_id);
-            self.metadata.consumed.push(item.client_id.clone());
+            self.consume(&item.client_id);
             self.dropped.insert(item.id.clone());
-        }
-        while self.metadata.consumed.len() > 4096 {
-            self.metadata.consumed.remove(0);
         }
         let _ = self.save();
         items
+    }
+    /// A prompt sent as a turn of its own under `client_id`, already
+    /// drawn: the provider's start notice for it (Codex keeps the id on
+    /// its `userMessage`) is that same prompt, not a queued one starting.
+    pub fn sent(&mut self, client_id: &str) {
+        self.consume(client_id);
+    }
+    /// Remember `client_id` as picked up, so no start notice for it
+    /// inserts its prompt again; only the newest are kept.
+    fn consume(&mut self, client_id: &str) {
+        self.metadata.consumed.push(client_id.into());
+        while self.metadata.consumed.len() > 4096 {
+            self.metadata.consumed.remove(0);
+        }
     }
     pub fn disconnect(&mut self, durable: bool) -> Option<String> {
         self.cancel = None;
@@ -281,10 +292,7 @@ impl Queue {
                                 .map(|item| item.text.clone())
                         })
                         .or(text);
-                    self.metadata.consumed.push(client_id.clone());
-                    if self.metadata.consumed.len() > 4096 {
-                        self.metadata.consumed.remove(0);
-                    }
+                    self.consume(&client_id);
                 }
                 self.items.retain(|item| item.client_id != client_id);
             }

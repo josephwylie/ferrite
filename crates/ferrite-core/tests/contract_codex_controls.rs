@@ -2,7 +2,7 @@
 #[allow(dead_code)]
 #[path = "support/provider_contract.rs"]
 mod support;
-use ferrite_core::{ControlKind, McpStatus, SessionControl, SessionEvent};
+use ferrite_core::{ControlKind, McpStatus, QueueEvent, SessionControl, SessionEvent};
 use support::*;
 
 #[test]
@@ -215,4 +215,37 @@ fn codex_rewinds_by_the_prompts_client_id_and_never_restores_files() {
         .unwrap();
     let fork = r.wait_host(|v| v["method"] == "thread/fork");
     assert_eq!(fork["params"]["threadId"], "root");
+}
+
+/// A prompt Ferrite sends as its own turn comes back on the `userMessage`
+/// item under the id it went as (live 0.166 shape: the item's `clientId`
+/// is the turn/start's `clientUserMessageId`). The bridge reports it as a
+/// start notice for that id — the same notice a queued prompt's start
+/// is — so the engine must know the id as already drawn.
+#[test]
+fn codex_echoes_a_sent_prompt_under_its_client_id() {
+    let item = serde_json::json!({"type":"userMessage","id":"01a1a41a-b08a-7000-8000-000000000001",
+        "clientId":"p1","content":[{"type":"text","text":"hello","text_elements":[]}]});
+    let mut r = Replay::new(
+        "codex",
+        vec![
+            serde_json::json!({"method":"item/started","params":{"item":item,"threadId":"root","turnId":"t1","startedAtMs":1}}),
+            serde_json::json!({"method":"item/completed","params":{"item":item,"threadId":"root","turnId":"t1","completedAtMs":1}}),
+        ],
+    );
+    r.session.send_as("p1", "hello").unwrap();
+    let starts: Vec<_> = r
+        .drain()
+        .into_iter()
+        .filter_map(|event| match event {
+            SessionEvent::Queue(QueueEvent::Started {
+                client_id, text, ..
+            }) => Some((client_id, text)),
+            _ => None,
+        })
+        .collect();
+    assert!(!starts.is_empty(), "the echo is reported");
+    assert!(starts
+        .iter()
+        .all(|(id, text)| id == "p1" && text.as_deref() == Some("hello")));
 }

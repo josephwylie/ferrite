@@ -5479,6 +5479,7 @@ fn deliver(state: &mut Thread, text: String, suggestions_enabled: bool) -> io::R
     // The id it goes under: what a rewind or a fork names it by.
     let prompt_id = client_id(state.generation);
     session.send_as(&prompt_id, &wire)?;
+    state.native_queue.sent(&prompt_id);
     // An in-place resume point is taken by the first prompt after it: the
     // conversation branches there for good.
     if state.resume_at.as_ref().is_some_and(|point| !point.fork) {

@@ -2581,6 +2581,61 @@ fn native_queue_history_records_consumption_once() {
     );
 }
 
+/// Codex keeps a sent prompt's id on its `userMessage` item, which its
+/// bridge reports as a queue start: for a prompt Ferrite itself sent and
+/// drew, that echo is not a second prompt — after an interrupt or not.
+#[test]
+fn a_sent_prompts_own_echo_is_not_drawn_again() {
+    let (mut cockpit, fake) = cockpit("sent-echo");
+    let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
+    cockpit.send(thread, "first".into());
+    cockpit.interrupt(thread);
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Interrupted,
+            cost_usd: None,
+        })
+        .unwrap();
+    cockpit.pump();
+
+    cockpit.send(thread, "again".into());
+    let id = cockpit
+        .thread(thread)
+        .unwrap()
+        .transcript()
+        .blocks()
+        .iter()
+        .rev()
+        .find(|block| matches!(&block.body, Body::Prompt(text) if text == "again"))
+        .and_then(|block| block.prompt_id.clone())
+        .expect("the prompt is drawn under the id it was sent as");
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Queue(crate::QueueEvent::Started {
+            historical: false,
+            client_id: id,
+            text: Some("again".into()),
+        }))
+        .unwrap();
+    cockpit.pump();
+
+    assert_eq!(fake.sent.borrow().as_slice(), ["first", "again"]);
+    let drawn = cockpit
+        .thread(thread)
+        .unwrap()
+        .transcript()
+        .blocks()
+        .iter()
+        .filter(|block| matches!(&block.body, Body::Prompt(text) if text == "again"))
+        .count();
+    assert_eq!(drawn, 1, "one bubble per prompt sent");
+    cockpit.park(thread).unwrap();
+    assert_eq!(
+        cockpit.engine().store.load(thread).unwrap().prompt_texts(),
+        ["first", "again"],
+        "and one record, so a replay draws it once too"
+    );
+}
+
 #[test]
 fn a_new_cockpit_recovers_prompt_history_from_the_store() {
     let dir = scratch("prompt-history-relaunch");
