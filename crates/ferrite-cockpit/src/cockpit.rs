@@ -8141,6 +8141,7 @@ impl CockpitView {
         let face = pane::model_effort_chip(
             model_label,
             effort.map(|effort| pane::sentence_case(&effort).into()),
+            false,
         );
         let control = pane::draft_picker(
             "draft-model-picker",
@@ -12455,6 +12456,7 @@ impl CockpitView {
         let face = pane::model_effort_chip(
             label,
             effort.map(|effort| pane::sentence_case(&effort).into()),
+            open.starting(),
         );
         Some(
             self.choice_menu(

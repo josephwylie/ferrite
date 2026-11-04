@@ -18,8 +18,20 @@ pub fn model_label(model: &str) -> SharedString {
 /// Medium`): the model in `INK_STRONG` at `W_LABEL`, a step above the
 /// body, cut first in a narrow Pane, then the effort in `INK_SUBTLE` at
 /// `W_BODY`, `FOOTER_WORD_GAP` after it and never cut. A model that takes
-/// no effort shows its name alone.
-pub fn model_effort_chip(model: SharedString, effort: Option<SharedString>) -> Div {
+/// no effort shows its name alone. While the Thread's Session starts
+/// (`loading`) the model's name shimmers, as the working line's does: it is
+/// the provider's default until the Session says which model serves
+/// (Codex's skeleton chip).
+pub fn model_effort_chip(
+    model: SharedString,
+    effort: Option<SharedString>,
+    loading: bool,
+) -> Div {
+    let model = if loading {
+        components::shimmer(model, INK_STRONG)
+    } else {
+        model.into_any_element()
+    };
     chip_face(model, INK_STRONG)
         .font_weight(theme::W_LABEL)
         .gap(px(theme::FOOTER_WORD_GAP))
@@ -47,7 +59,7 @@ pub fn mode_chip(label: SharedString, mode: &str) -> Div {
 /// A footer word's face: the label, cut at its end in a narrow Pane. No
 /// chevron and no mark: the words are the controls (Claude's footer); the
 /// pointer's fill says they press.
-pub(super) fn chip_face(label: SharedString, ink: u32) -> Div {
+pub(super) fn chip_face(label: impl IntoElement, ink: u32) -> Div {
     div()
         .flex()
         .flex_shrink(1.)

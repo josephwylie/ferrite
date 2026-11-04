@@ -4845,6 +4845,40 @@ mod tests {
         }
     }
 
+    /// While a Thread's Session starts its model chip shimmers (Codex's
+    /// skeleton chip); once it is up the name is plain again.
+    #[gpui::test]
+    fn the_model_chip_shimmers_while_the_session_starts(cx: &mut TestAppContext) {
+        struct Chips;
+        impl Render for Chips {
+            fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+                let chip = |selector: &'static str, loading| {
+                    div()
+                        .debug_selector(move || selector.into())
+                        .child(model_effort_chip("Sonnet 4.5".into(), None, loading))
+                };
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(chip("starting-chip", true))
+                    .child(chip("ready-chip", false))
+            }
+        }
+        let (_, cx) = cx.add_window_view(|_, cx| {
+            gpui::component::init(cx);
+            Chips
+        });
+        cx.simulate_resize(size(px(640.), px(400.)));
+        cx.run_until_parked();
+        let shimmering = |chip: &'static str, cx: &mut gpui::VisualTestContext| {
+            let chip = cx.debug_bounds(chip).unwrap();
+            cx.debug_bounds("shimmer")
+                .is_some_and(|shimmer| chip.contains(&shimmer.origin))
+        };
+        assert!(shimmering("starting-chip", cx), "the starting chip shimmers");
+        assert!(!shimmering("ready-chip", cx), "a ready one is plain");
+    }
+
     /// A transcript holding one of every Block kind the Pane can draw.
     fn every_kind() -> Transcript {
         let (lexer, answers) = Lexer::new();
