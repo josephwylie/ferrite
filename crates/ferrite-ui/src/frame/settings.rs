@@ -121,12 +121,13 @@ pub enum Control {
     /// A read-only value.
     Fact { value: SharedString },
     /// The one button that does something about the row, or its value as a
-    /// fact reads when there is nothing to do.
+    /// fact reads when there is nothing to do. Its act has the window it was
+    /// pressed in, as `Entry`'s does, never reaching for it by a handle.
     Action {
         id: &'static str,
         value: SharedString,
         button: Option<SharedString>,
-        act: Act,
+        act: Rc<dyn Fn(&mut Window, &mut App)>,
     },
     /// A path shown from `~`, copied whole on a click.
     PathFact {
@@ -449,7 +450,7 @@ pub fn action(
     detail: impl Into<SharedString>,
     value: SharedString,
     button: Option<SharedString>,
-    act: impl Fn(&mut App) + 'static,
+    act: impl Fn(&mut Window, &mut App) + 'static,
 ) -> Row {
     let words = std::iter::once(value.clone())
         .chain(button.iter().cloned())

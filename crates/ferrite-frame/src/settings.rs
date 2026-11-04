@@ -735,9 +735,9 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
         } => match button {
             Some(label) => quiet_button(id, label, cx)
                 .debug_selector(move || id.into())
-                .on_click(move |_, _, cx| {
+                .on_click(move |_, window, cx| {
                     cx.stop_propagation();
-                    act(cx);
+                    act(window, cx);
                 })
                 .into_any_element(),
             None => fact_value(&title, value).into_any_element(),

@@ -150,18 +150,13 @@ impl CockpitView {
     /// Settings › About's rows for Ferrite's own update: where it stands,
     /// with the one button that moves it on, and the automatic checks.
     /// None in a build that does not update itself.
-    pub(super) fn ferrite_update_rows(
-        &self,
-        window: &Window,
-        cx: &Context<Self>,
-    ) -> Vec<settings::Row> {
+    pub(super) fn ferrite_update_rows(&self, cx: &Context<Self>) -> Vec<settings::Row> {
         if !self.prefs.ferrite_updates {
             return Vec::new();
         }
         let busy = self.in_flight();
         let (detail, button) = self.ferrite_update.describe(busy.as_deref());
         let view = cx.entity().downgrade();
-        let handle = window.window_handle();
         vec![
             settings::action(
                 "settings-update-ferrite",
@@ -169,11 +164,8 @@ impl CockpitView {
                 detail,
                 SharedString::default(),
                 button,
-                move |cx| {
-                    let view = view.clone();
-                    let _ = handle.update(cx, |_, window, cx| {
-                        view.update(cx, |view, cx| view.press_ferrite_update(window, cx))
-                    });
+                move |window, cx| {
+                    let _ = view.update(cx, |view, cx| view.press_ferrite_update(window, cx));
                 },
             ),
             settings::toggle(

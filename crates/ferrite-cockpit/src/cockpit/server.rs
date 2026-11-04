@@ -441,7 +441,7 @@ impl CockpitView {
     }
 
     /// Settings › Server, for a window attached to one.
-    pub(super) fn server_rows(&self, window: &Window, cx: &Context<Self>) -> Vec<settings::Row> {
+    pub(super) fn server_rows(&self, cx: &Context<Self>) -> Vec<settings::Row> {
         let Some(state) = self.cockpit.server() else {
             // A sentence, so the row's words (as About says it), not a
             // fact's machine-text value.
@@ -451,7 +451,7 @@ impl CockpitView {
                 self.server_standing(),
                 SharedString::default(),
                 None,
-                |_| {},
+                |_, _| {},
             )];
         };
         let mut status = self.server_standing();
@@ -469,14 +469,10 @@ impl CockpitView {
             }
         }
         let status: SharedString = status.into();
-        let handle = window.window_handle();
         let act = |view: gpui::WeakEntity<Self>,
                    run: fn(&mut Self, &mut Window, &mut Context<Self>)| {
-            move |cx: &mut gpui::App| {
-                let view = view.clone();
-                let _ = handle.update(cx, |_, window, cx| {
-                    view.update(cx, |view, cx| run(view, window, cx))
-                });
+            move |window: &mut Window, cx: &mut gpui::App| {
+                let _ = view.update(cx, |view, cx| run(view, window, cx));
             }
         };
         let view = cx.entity().downgrade();
