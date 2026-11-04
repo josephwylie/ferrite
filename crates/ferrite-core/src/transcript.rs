@@ -2165,6 +2165,13 @@ impl Transcript {
                     ..Update::default()
                 }
             }
+            // The same notice again, nothing between, says nothing new: a
+            // start that fails the same way on every send shows it once.
+            Input::Notice(line)
+                if matches!(self.blocks.last(), Some(Block { body: Body::Notice(last), .. }) if *last == line) =>
+            {
+                Update::default()
+            }
             Input::Notice(line) => Update {
                 dirty: vec![self.push(Body::Notice(line))],
                 ..Update::default()
@@ -4368,6 +4375,24 @@ mod tests {
         assert_eq!(update.dirty, vec![last.id]);
         assert!(matches!(last.body, Body::Notice(_)));
         assert_eq!(body_text(last), "send failed: broken pipe");
+    }
+
+    #[test]
+    fn a_notice_repeated_back_to_back_shows_once() {
+        let mut transcript = Transcript::default();
+        let failed = || Input::Notice("could not start: the CLI exited".into());
+
+        transcript.apply(failed());
+        let repeat = transcript.apply(failed());
+
+        assert!(repeat.dirty.is_empty());
+        let notices = |transcript: &Transcript| {
+            transcript.blocks().iter().filter(|block| matches!(block.body, Body::Notice(_))).count()
+        };
+        assert_eq!(notices(&transcript), 1);
+        transcript.apply(Input::Notice("send failed: broken pipe".into()));
+        transcript.apply(failed());
+        assert_eq!(notices(&transcript), 3, "a notice after another says something new");
     }
 
     fn reasoning(text: &str, summary_index: u64) -> Input {

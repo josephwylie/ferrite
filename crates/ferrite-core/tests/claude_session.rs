@@ -759,6 +759,52 @@ fn a_cli_that_exits_at_start_explains_itself_with_stderr() {
     );
 }
 
+/// A CLI slowed by a busy machine answers the start's effort late; past
+/// the old five-second limit, the start still succeeds rather than failing
+/// every turn the operator sends while the machine is loaded.
+#[test]
+fn a_late_effort_answer_still_starts_the_session() {
+    let program = stub(
+        "claude-slow-effort",
+        &format!(
+            r#"{PRELUDE}
+take
+take
+sleep 6
+echo '{{"type":"control_response","response":{{"subtype":"success","request_id":"req_2","response":{{}}}}}}'
+cat >/dev/null"#
+        ),
+    );
+    let started = ClaudeSession::spawn(ClaudeConfig {
+        effort: Some("medium".into()),
+        ..config(program)
+    });
+    assert!(started.is_ok(), "{:?}", started.err().map(|e| e.to_string()));
+}
+
+/// A CLI that refuses the start's effort fails the start with its reason.
+#[test]
+fn a_refused_effort_at_start_fails_with_the_reason() {
+    let program = stub(
+        "claude-refuses-effort",
+        &format!(
+            r#"{PRELUDE}
+take
+take
+echo '{{"type":"control_response","response":{{"subtype":"error","request_id":"req_2","error":"unsupported effort"}}}}'
+cat >/dev/null"#
+        ),
+    );
+    let refused = ClaudeSession::spawn(ClaudeConfig {
+        effort: Some("medium".into()),
+        ..config(program)
+    });
+    let Err(error) = refused else {
+        panic!("expected the start to fail")
+    };
+    assert!(error.to_string().contains("unsupported effort"), "{error}");
+}
+
 /// A rewind resumed at an entry names the turn it means to drop, so the
 /// CLI refuses a cut that would take anything else with it (HD79).
 #[test]

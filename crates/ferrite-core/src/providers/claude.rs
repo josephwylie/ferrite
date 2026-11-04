@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -63,6 +63,11 @@ const STDERR_TAIL_LINES: usize = 20;
 /// the budget is generous because overrunning it costs only unknown
 /// capabilities, never a failed spawn.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long spawn waits for the CLI to accept the Thread's effort. Generous:
+/// a busy machine slows the answer past a second, and waiting out the limit
+/// costs only a later first turn, never a failed start.
+const EFFORT_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The request id spawn uses for the handshake, before any operator traffic.
 const HANDSHAKE_REQUEST_ID: &str = "req_1";
@@ -454,14 +459,19 @@ impl ClaudeSession {
             .unwrap_or_default();
         // Use the same override layer at startup and later: a CLI --effort
         // flag would survive clearing effortLevel back to Default. Startup
-        // is off the UI thread, so it waits for the CLI to accept it.
+        // is off the UI thread, so it waits for the CLI to accept it. Only a
+        // refusal or an exit fails the start: the CLI reads its input in
+        // order, so effort it has yet to answer still lands before the first
+        // turn, and a CLI slow under load is not a dead one.
         if config.effort.is_some() {
             session
                 .set_effort(config.effort.as_deref())
-                .and_then(|ack| {
-                    ack.recv_timeout(HANDSHAKE_TIMEOUT).map_err(|e| {
-                        io::Error::other(format!("effort change was not acknowledged: {e}"))
-                    })?
+                .and_then(|ack| match ack.recv_timeout(EFFORT_ACK_TIMEOUT) {
+                    Ok(answer) => answer,
+                    Err(RecvTimeoutError::Timeout) => Ok(()),
+                    Err(RecvTimeoutError::Disconnected) => {
+                        Err(io::Error::other("the CLI closed before accepting the effort"))
+                    }
                 })
                 .map_err(|error| exited_at_start(&session.child, &stderr_tail, error))?;
         }
@@ -1037,6 +1047,8 @@ fn read_stdout(
         shells.stop_all();
         lock(&file_search).disconnect();
         lock(&control_replies).clear();
+        // A setting still waiting on its answer learns the CLI is gone.
+        lock(&setting_reply).take();
         let _ = sender.send(closed_event(&child, &stderr_tail));
     });
     capabilities
