@@ -140,6 +140,10 @@ pub struct Progress {
     pub plan: Vec<PlanStep>,
     pub explanation: String,
     pub has_plan: bool,
+    /// The running turn (or, once it ends, the last one) made or moved the
+    /// plan. A plan the turn never touched is an earlier turn's, which no
+    /// card shows (§12's `planTouchedThisTurn`).
+    pub plan_touched: bool,
     /// The plan as the agent left it before a wrap-up settled it.
     before_wrap_up: Option<Vec<PlanStep>>,
     summary: String,
@@ -176,6 +180,7 @@ impl Progress {
             }
             ProgressEvent::Plan { steps, explanation } => {
                 self.has_plan = true;
+                self.plan_touched = true;
                 self.before_wrap_up = None;
                 self.task_ids.clear();
                 self.plan = steps
@@ -193,6 +198,7 @@ impl Progress {
                 if !self.task_ids.is_empty() {
                     return;
                 }
+                self.plan_touched = true;
                 if let Some(before) = self.before_wrap_up.take() {
                     self.plan = before;
                 }
@@ -221,6 +227,7 @@ impl Progress {
                 deleted,
             } => {
                 self.has_plan = true;
+                self.plan_touched = true;
                 self.before_wrap_up = None;
                 if let Some(at) = self.task_ids.iter().position(|key| key == id) {
                     if *deleted {
@@ -248,6 +255,7 @@ impl Progress {
             }
             ProgressEvent::TasksSnapshot { tasks } => {
                 self.has_plan = true;
+                self.plan_touched = true;
                 self.before_wrap_up = None;
                 self.task_ids = tasks
                     .iter()
@@ -403,6 +411,12 @@ impl Progress {
         self.latest_tool = None;
         // Background work may outlive Main. Only explicit native task facts
         // or losing the owning Session retires its live indication.
+    }
+    /// A new turn (not a steer folded into the running one): the last
+    /// turn's live state ends, and its plan is no longer this turn's.
+    pub fn begin_turn(&mut self) {
+        self.end_turn();
+        self.plan_touched = false;
     }
     pub fn disconnected(&mut self) {
         self.end_turn();

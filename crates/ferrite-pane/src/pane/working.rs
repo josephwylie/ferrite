@@ -26,8 +26,8 @@ pub struct WorkingFacts<'a> {
 enum Working {
     Line(WorkingLine),
     Starting { still: bool, solo: bool },
-    /// No turn runs, but the last one's plan stays under its rows, where
-    /// the turn left it (a step it stopped on reads blocked).
+    /// No turn runs, but the last one was cut short: its plan stays under
+    /// its rows, where the turn left it, the step it stopped on blocked.
     Plan {
         plan: Vec<(String, TaskState)>,
         solo: bool,
@@ -313,31 +313,37 @@ pub(crate) struct WorkingLine {
 enum TaskState {
     Done,
     Current,
-    /// The step the turn stopped on (denied, or stopped by the operator).
+    /// The step the turn stopped on (stopped by the operator, or failed).
     Blocked,
     ToDo,
 }
 
-/// The plan the turn works to, as the task list draws it. Once the turn
-/// has ended on a stop, the step it was on reads blocked.
+/// The plan the turn works to, as the task list draws it, as Claude
+/// Desktop's turn box shows it (§12; `craft/claude/parity/plan-*.png`):
+/// only a plan this turn made or moved, and once the turn has ended only
+/// one it was cut short in (stopped, or failed), the step it stopped on
+/// reading blocked. A turn that ends in its answer takes its plan with it,
+/// finished or not: nothing is left to look live.
 fn plan_of(transcript: &Transcript) -> Vec<(String, TaskState)> {
+    use ferrite_core::progress::StepStatus;
+    use ferrite_core::TurnOutcome;
     let progress = transcript.progress();
-    if !progress.has_plan {
+    if !progress.has_plan || !progress.plan_touched {
         return Vec::new();
     }
-    let stopped = transcript.status() != Status::Streaming
-        && matches!(
-            transcript.turn_outcome(),
-            Some(ferrite_core::TurnOutcome::Interrupted)
-        );
+    let running = matches!(transcript.status(), Status::Streaming | Status::Blocked);
+    let cut_short = match transcript.turn_outcome() {
+        None if running => false,
+        Some(TurnOutcome::Interrupted | TurnOutcome::Error(_)) => true,
+        None | Some(TurnOutcome::Completed) => return Vec::new(),
+    };
     progress
         .plan
         .iter()
         .map(|step| {
-            use ferrite_core::progress::StepStatus;
             let state = match step.status {
                 StepStatus::Completed => TaskState::Done,
-                StepStatus::InProgress if stopped => TaskState::Blocked,
+                StepStatus::InProgress if cut_short => TaskState::Blocked,
                 StepStatus::InProgress => TaskState::Current,
                 StepStatus::Pending => TaskState::ToDo,
             };
@@ -809,50 +815,103 @@ mod tests {
         }));
     }
 
-    /// The plan is the turn's: it stays under the turn's rows once the turn
-    /// is over, and the step a stop landed on reads blocked.
-    #[test]
-    fn the_plan_stays_after_the_turn_and_blocks_where_it_stopped() {
-        let mut transcript = Transcript::default();
-        transcript.apply(Input::Prompt("Clean up".into()));
-        planned(&mut transcript);
-        let states = |transcript: &Transcript| {
-            plan_of(transcript)
-                .into_iter()
-                .map(|(_, state)| state)
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            states(&transcript),
-            [TaskState::Done, TaskState::Current, TaskState::ToDo]
-        );
+    fn states(transcript: &Transcript) -> Vec<TaskState> {
+        plan_of(transcript)
+            .into_iter()
+            .map(|(_, state)| state)
+            .collect()
+    }
+
+    fn ended(transcript: &mut Transcript, outcome: ferrite_core::TurnOutcome) {
         transcript.apply(Input::Event(SessionEvent::TurnEnded {
-            outcome: ferrite_core::TurnOutcome::Interrupted,
+            outcome,
             cost_usd: None,
         }));
-        assert_eq!(
-            states(&transcript),
-            [TaskState::Done, TaskState::Blocked, TaskState::ToDo]
-        );
-        let facts = || WorkingFacts {
+    }
+
+    /// A turn cut short keeps its plan under its rows, where the turn left
+    /// it, the step it stopped on blocked — never live
+    /// (`craft/claude/parity/plan-interrupted.png`).
+    #[test]
+    fn a_plan_cut_short_stays_with_the_step_it_stopped_on_blocked() {
+        for outcome in [
+            ferrite_core::TurnOutcome::Interrupted,
+            ferrite_core::TurnOutcome::Error("overloaded".into()),
+        ] {
+            let mut transcript = Transcript::default();
+            transcript.apply(Input::Prompt("Clean up".into()));
+            planned(&mut transcript);
+            assert_eq!(
+                states(&transcript),
+                [TaskState::Done, TaskState::Current, TaskState::ToDo]
+            );
+            ended(&mut transcript, outcome);
+            assert_eq!(
+                states(&transcript),
+                [TaskState::Done, TaskState::Blocked, TaskState::ToDo]
+            );
+            let facts = WorkingFacts {
+                transcript: &transcript,
+                thread: ThreadId::new(1),
+                starting: false,
+                solo: true,
+                focused: true,
+                reduce_motion: false,
+                reasoning_visible: false,
+                effort: None,
+            };
+            assert!(
+                working_tail(facts).is_some(),
+                "the idle thread still draws its plan"
+            );
+        }
+    }
+
+    /// A turn that ends in its answer takes its plan with it, finished or
+    /// not, as Claude Desktop's does (`plan-ended-unfinished.png`,
+    /// `plan-finished.png`, `plan-wrapped-up.png`): no step is left to
+    /// spin under an answer that is done. The owner's InvoiceMate thread
+    /// planned four searches, ran them, answered, and its first step spun on.
+    #[test]
+    fn a_turn_that_ends_in_its_answer_takes_its_plan_with_it() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Prompt("Search the forums".into()));
+        planned(&mut transcript);
+        ended(&mut transcript, ferrite_core::TurnOutcome::Completed);
+        assert!(states(&transcript).is_empty());
+        let facts = WorkingFacts {
             transcript: &transcript,
             thread: ThreadId::new(1),
             starting: false,
             solo: true,
-            focused: false,
-            reduce_motion: true,
+            focused: true,
+            reduce_motion: false,
             reasoning_visible: false,
             effort: None,
         };
+        assert!(working_tail(facts).is_none(), "nothing under the answer");
+    }
+
+    /// The plan is the turn's that made it: the next turn shows none until
+    /// it plans itself (`plan-next-turn.png`), and a steer folded into the
+    /// running turn keeps it.
+    #[test]
+    fn a_later_turn_shows_no_earlier_plan() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Prompt("Clean up".into()));
+        planned(&mut transcript);
+        transcript.apply(Input::Prompt("and the cache too".into()));
+        assert_eq!(states(&transcript).len(), 3, "a steer keeps the plan");
+        ended(&mut transcript, ferrite_core::TurnOutcome::Interrupted);
+        transcript.apply(Input::Prompt("Say hi".into()));
         assert!(
-            working_tail(facts()).is_some(),
-            "the idle thread still draws its plan"
+            states(&transcript).is_empty(),
+            "the stopped plan is not this turn's"
         );
-        let finished = Transcript::default();
-        assert!(working_tail(WorkingFacts {
-            transcript: &finished,
-            ..facts()
-        })
-        .is_none());
+        planned(&mut transcript);
+        assert_eq!(
+            states(&transcript),
+            [TaskState::Done, TaskState::Current, TaskState::ToDo]
+        );
     }
 }

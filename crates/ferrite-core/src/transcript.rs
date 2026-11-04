@@ -2185,7 +2185,7 @@ impl Transcript {
             Input::Prompt(line) => {
                 self.turn_diff = None;
                 self.turn_outcome = None;
-                self.progress.end_turn();
+                self.progress.begin_turn();
                 self.latest_reasoning_part = None;
                 self.progress.phase(Phase::Working);
                 // A Closed session stays closed and a Blocked one stays
