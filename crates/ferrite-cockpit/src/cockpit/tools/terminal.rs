@@ -195,16 +195,32 @@ impl CockpitView {
         Some(terminals.tabs.get(terminals.active)?.view.clone())
     }
 
-    /// Every frame: the shown shell takes the keyboard it was opened for.
+    /// Whether the shown shell has the keyboard. The focus pump
+    /// (`render`'s) leaves it alone, else it would hand the keyboard back to
+    /// the Composer every frame.
+    pub(in crate::cockpit) fn terminal_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
+        self.focused_thread()
+            .and_then(|thread| self.active_terminal(thread))
+            .is_some_and(|view| view.focus_handle(cx).is_focused(window))
+    }
+
+    /// Every frame: the shown shell takes the keyboard it was opened for,
+    /// once it has been drawn. A handle not yet in the window's tree cannot
+    /// be focused; the wish waits a frame for it.
     pub(in crate::cockpit) fn tend_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread) = self.focused_thread() else {
+        if !self.tools.terminal_focus_wanted {
+            return;
+        }
+        let Some(view) = self.focused_thread().and_then(|thread| self.active_terminal(thread)) else {
+            self.tools.terminal_focus_wanted = false;
             return;
         };
-        if std::mem::take(&mut self.tools.terminal_focus_wanted) {
-            if let Some(view) = self.active_terminal(thread) {
-                let focus = view.focus_handle(cx);
-                window.focus(&focus, cx);
-            }
+        if view.read(cx).is_drawn() {
+            self.tools.terminal_focus_wanted = false;
+            let focus = view.focus_handle(cx);
+            window.focus(&focus, cx);
+        } else {
+            cx.notify();
         }
     }
 

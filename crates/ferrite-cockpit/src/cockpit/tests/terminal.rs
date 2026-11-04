@@ -184,3 +184,64 @@ fn with_no_selection_the_menu_has_no_attach_row_and_copy_is_greyed(cx: &mut Test
         ]
     );
 }
+
+/// Keys typed in the window reach the shell through the window's own
+/// dispatch (the production keymap, the focus the door and a click give),
+/// not by calling the terminal: plain letters, Backspace, Enter, and ⌃C.
+fn typed_reaches(
+    shell: &Entity<ferrite_terminal::TerminalView>,
+    needle: &str,
+    cx: &mut gpui::VisualTestContext,
+) -> bool {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < until {
+        tick(cx);
+        shell.update(cx, |shell, cx| shell.select_all(cx));
+        if shell.read_with(cx, |shell, _| shell.selection().is_some_and(|text| text.contains(needle))) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
+}
+
+#[gpui::test]
+fn keys_typed_after_the_door_opens_reach_the_shell(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("terminal-keys", cx);
+    opened(&view, cx);
+    let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
+    tick(cx);
+    // The `x` is deleted by Backspace; Enter runs the line.
+    cx.simulate_keystrokes("e c h o space k e y 4 x backspace 2 enter");
+    assert!(typed_reaches(&shell, "\nkey42", cx), "the typed line ran");
+    // ⌃C leaves a half-typed line unrun.
+    cx.simulate_keystrokes("n o p e ctrl-c");
+    cx.simulate_keystrokes("e c h o space d o n e 7 enter");
+    assert!(typed_reaches(&shell, "\ndone7", cx), "the shell took more after ⌃C");
+    // ⌘V pastes into the shell, not the Composer; ← then a letter edits the line.
+    cx.update(|_, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("pasted9".into())));
+    cx.simulate_keystrokes("e c h o space cmd-v enter");
+    assert!(typed_reaches(&shell, "\npasted9", cx), "⌘V reached the shell");
+    cx.simulate_keystrokes("e c h o space o k 1 x x left backspace enter");
+    assert!(typed_reaches(&shell, "\nok1x\n", cx), "arrows and Backspace edit the line");
+    assert!(
+        view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).is_empty()),
+        "none of it went to the Composer"
+    );
+}
+
+#[gpui::test]
+fn a_click_in_the_shell_takes_the_keyboard_back_from_the_composer(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("terminal-click-focus", cx);
+    opened(&view, cx);
+    let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
+    // The Composer takes the keyboard.
+    let composer = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&composer, cx));
+    tick(cx);
+    let grid = cx.debug_bounds("terminal").unwrap();
+    cx.simulate_click(grid.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_keystrokes("e c h o space c l i c k 5 enter");
+    assert!(typed_reaches(&shell, "\nclick5", cx), "the click gave the shell the keyboard");
+}

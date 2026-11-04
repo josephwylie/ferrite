@@ -188,6 +188,12 @@ impl TerminalView {
         self.exited
     }
 
+    /// Whether the grid has been drawn: only then is its focus handle in the
+    /// window's dispatch tree, and focusing it takes.
+    pub fn is_drawn(&self) -> bool {
+        self.bounds.is_some()
+    }
+
     /// The selected text, if any.
     pub fn selection(&self) -> Option<String> {
         self.terminal.selected_text()

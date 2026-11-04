@@ -4413,7 +4413,7 @@ impl CockpitView {
         );
         let title = ferrite_ui::provider::cli(provider);
         let view = cx.entity().downgrade();
-        settings::action(id, title, detail, version, button, move |cx| {
+        settings::action(id, title, detail, version, button, move |_, cx| {
             view.update(cx, |view, cx| view.update_cli(provider, cx))
                 .ok();
         })
@@ -4800,15 +4800,15 @@ impl CockpitView {
                 ),
                 {
                     let view = cx.entity().downgrade();
-                    move |cx| {
+                    move |_, cx| {
                         let _ = view.update(cx, |view, cx| view.copy_diagnostics(cx));
                     }
                 },
             ),
         ];
-        about.splice(1..1, self.ferrite_update_rows(window, cx));
+        about.splice(1..1, self.ferrite_update_rows(cx));
         let mut about = vec![settings::Group::new(None).rows(about)];
-        let server = self.server_rows(window, cx);
+        let server = self.server_rows(cx);
         about.extend(machines);
         about.push(settings::Group::new(Some("Provider CLIs")).rows(clis));
         let pages = vec![
@@ -10499,6 +10499,7 @@ impl CockpitView {
             || reader_text_focused
             || find_focused
             || self.side_chat_holds_focus(window, cx)
+            || self.terminal_holds_focus(window, cx)
             || pane_control_focused
         {
             // Native text, dialogs, and the Inbox keep their own keyboard focus.
