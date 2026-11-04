@@ -279,7 +279,7 @@ impl Facts {
         let ordered = cockpit.parked_in_order().unwrap_or_default();
         let mut lookups = Lookups::default();
         for thread in &ordered {
-            let last_used = cockpit.last_used(*thread);
+            let last_used = cockpit.last_activity(*thread);
             let facts = self.threads.entry(*thread).or_default();
             facts.last_used = last_used;
             facts.name = display_name(cockpit, *thread, self.auto_title);
@@ -367,7 +367,7 @@ impl Facts {
             Err(_) => (None, None),
         };
         let name = display_name(cockpit, thread, self.auto_title);
-        let last_used = cockpit.last_used(thread);
+        let last_used = cockpit.last_activity(thread);
         let facts = self.threads.entry(thread).or_default();
         let changed = facts.last_used != last_used
             || facts.project != project
@@ -421,7 +421,7 @@ impl Facts {
     /// digest, wherever its transcript can change.
     fn refresh_wall(&mut self, cockpit: &Cockpit, thread: ThreadId) {
         let open = cockpit.thread(thread);
-        let last_used = cockpit.last_used(thread);
+        let last_used = cockpit.last_activity(thread);
         let facts = self.threads.entry(thread).or_default();
         if let Some(open) = open {
             let digest = open.digest();

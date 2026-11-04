@@ -1912,6 +1912,18 @@ impl Cockpit {
         }
     }
 
+    /// When an open Thread last had a prompt sent or a turn end
+    /// (`Store::last_activity`): what the bell groups by, not the log's
+    /// write time. It reads an idle Thread's log tail, so callers cache it.
+    pub fn last_activity(&self, thread: ThreadId) -> Option<std::time::SystemTime> {
+        // A running Thread's writes are its activity: no tail to read.
+        let working = self.thread(thread).is_some_and(|open| open.busy());
+        match self.open_log(thread) {
+            Some(logs) if !working => logs.last_activity(thread),
+            _ => self.last_used(thread),
+        }
+    }
+
     /// The open Threads.
     pub fn threads(&self) -> Vec<ThreadId> {
         self.mirrors.threads()

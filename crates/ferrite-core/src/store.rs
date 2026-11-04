@@ -115,6 +115,10 @@ const MARK_SPACING: u64 = 1024 * 1024;
 /// this much preamble is named by its number instead.
 const FIRST_PROMPT_SCAN: usize = 64 * 1024;
 
+/// How far back from a log's end `Store::last_activity` looks for a turn's
+/// time before it settles for the file's modification time.
+const ACTIVITY_SCAN: u64 = 4 * 1024 * 1024;
+
 /// Presence means the Thread had an open Pane when Ferrite last ran. Session
 /// processes are deliberately not durable, but the operator's open/parked
 /// choice is.
@@ -2851,6 +2855,34 @@ impl Store {
         fs::metadata(self.log_path(id))
             .and_then(|meta| meta.modified())
             .ok()
+    }
+
+    /// When the Thread last did something its operator would care about: the
+    /// newest prompt sent or turn completed, read off the log's tail by the
+    /// ISO times those records carry. The log's modification time is no
+    /// answer: a mark or an amendment appended to every open Thread when
+    /// Ferrite starts moves it for Threads nobody touched. Where the tail
+    /// holds no such time (an old log, which kept `4:22 pm`), the
+    /// modification time stands, as `last_used`.
+    pub fn last_activity(&self, id: ThreadId) -> Option<SystemTime> {
+        let touched = self.last_used(id)?;
+        let Ok(lines) = self.backwards(id, 0) else {
+            return Some(touched);
+        };
+        let end = fs::metadata(self.log_path(id)).map_or(0, |meta| meta.len());
+        let stamped = lines
+            .take_while(|(at, _)| end.saturating_sub(*at) <= ACTIVITY_SCAN)
+            .filter_map(|(_, line)| {
+                let record: serde_json::Value = serde_json::from_slice(&line).ok()?;
+                let stamp = match record.get("type")?.as_str()? {
+                    "prompt_observation" => record.get("sent_at")?,
+                    "completion_observation" => record.get("completed_at")?,
+                    _ => return None,
+                };
+                crate::clock::parse_local(stamp.as_str()?)
+            })
+            .next();
+        Some(stamped.map_or(touched, |at| SystemTime::from(at).min(touched)))
     }
 
     pub fn peek(&self, id: ThreadId) -> Result<ThreadMeta, LoadError> {
@@ -5951,6 +5983,36 @@ mod tests {
     /// first new record onto the fragment — one unreadable line where the
     /// loader stops, hiding every turn after the crash. Reopening for write
     /// clears the tear first.
+    /// A mark appended to a log nobody has touched moves its modification
+    /// time, not the Thread's last activity: that is the newest prompt or
+    /// completion time the log holds.
+    #[test]
+    fn last_activity_is_the_newest_turn_not_the_newest_write() {
+        let dir = scratch("last-activity");
+        plant_log(
+            &dir,
+            "5",
+            concat!(
+                r#"{"schema":2,"provider":"codex"}"#,
+                "\n",
+                r#"{"type":"prompt_observation","sent_at":"2026-01-02T09:00:00+00:00","prompt_id":"a"}"#,
+                "\n",
+                r#"{"type":"completion_observation","elapsed_ms":10,"completed_at":"2026-01-02T09:05:00+00:00"}"#,
+                "\n",
+                r#"{"type":"run_state","state":"idle"}"#,
+                "\n",
+            ),
+        );
+        let store = Store::open(&dir).unwrap();
+        let wrote = store.last_used(ThreadId::new(5)).unwrap();
+        let did = store.last_activity(ThreadId::new(5)).unwrap();
+        let turn_ended = SystemTime::from(
+            crate::clock::parse_local("2026-01-02T09:05:00+00:00").unwrap(),
+        );
+        assert_eq!(did, turn_ended, "the completion's time, not the file's");
+        assert!(wrote > did, "the file was written long after");
+    }
+
     #[test]
     fn appending_after_a_crash_never_hides_the_new_turn() {
         let dir = scratch("torn-append");
