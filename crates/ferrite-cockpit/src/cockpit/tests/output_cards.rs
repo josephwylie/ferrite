@@ -282,3 +282,38 @@ fn a_settled_findings_call_draws_its_findings_by_file(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("findings").is_some(), "the card is drawn");
 }
+
+/// A foreground command still running shows what it has printed so far when
+/// its row is opened (TR10), and keeps filling as more arrives.
+#[gpui::test]
+fn a_running_command_opens_onto_its_output_so_far(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("live-output", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let stream = fake.streams.borrow()[0].clone();
+    stream
+        .send(SessionEvent::ToolStarted {
+            id: "build".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "cargo build" }),
+        })
+        .unwrap();
+    stream
+        .send(SessionEvent::ToolOutputDelta { id: "build".into(), text: "Compiling a\n".into() })
+        .unwrap();
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("build".into()));
+        cx.notify();
+    });
+    tick(cx);
+    let before = cx.debug_bounds("tool-output").expect("the output so far").size.height;
+    stream
+        .send(SessionEvent::ToolOutputDelta { id: "build".into(), text: "Compiling b\nCompiling c\n".into() })
+        .unwrap();
+    tick(cx);
+    let after = cx.debug_bounds("tool-output").expect("still shown").size.height;
+    assert!(after > before, "it fills as output arrives: {before:?} -> {after:?}");
+}
