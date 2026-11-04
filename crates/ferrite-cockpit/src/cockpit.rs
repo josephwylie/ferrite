@@ -8156,6 +8156,28 @@ impl CockpitView {
         )
     }
 
+    /// A draft's permission word, where a Thread's mode chip stands: the mode
+    /// a new Thread starts in (Settings, `permission_mode_for`), read-only
+    /// until the Session exists to change it.
+    fn draft_mode_chip(&self, index: usize) -> Option<AnyElement> {
+        let draft = self.panes[index].draft()?;
+        let mode = self
+            .prefs
+            .settings
+            .permission_mode_for(draft.binding.provider().provider)
+            .to_string();
+        let label = pane::permission_mode_label(&mode, &[]);
+        Some(
+            div()
+                .id(("draft-mode", index))
+                .debug_selector(move || format!("draft-mode-{index}"))
+                .flex_shrink_0()
+                .tooltip(ferrite_ui::menu::tooltip("Permission mode"))
+                .child(pane::mode_chip(label, &mode))
+                .into_any_element(),
+        )
+    }
+
     /// The Solo Composer's controls (SPEC §5.5, Claude's): the `+` that
     /// attaches files and the send circle on the box's row; under the box,
     /// where the work runs at the left (a draft's Project and Workspace
@@ -8234,14 +8256,29 @@ impl CockpitView {
         }
         let attach = self.attach_menu(index, cx);
         let (env, mut words, mode, ring) = match pane.thread() {
-            None => (
-                Some(self.draft_band_chips(index, cx)),
-                self.draft_model_chip(index, cx)
-                    .into_iter()
-                    .collect::<Vec<_>>(),
-                None,
-                None,
-            ),
+            None => {
+                // A draft has no Session to ask: its mode is the one a new
+                // Thread starts in (Settings), and its ring the provider's
+                // account limits, as the Thread it becomes will read them.
+                let ring = self.panes[index].draft().and_then(|draft| {
+                    pane::plan_usage_ring(
+                        ("draft-usage-ring", index),
+                        self.cockpit
+                            .account_limits(draft.binding.provider().provider),
+                        None,
+                        self.usage_popover_held,
+                        cx,
+                    )
+                });
+                (
+                    Some(self.draft_band_chips(index, cx)),
+                    self.draft_model_chip(index, cx)
+                        .into_iter()
+                        .collect::<Vec<_>>(),
+                    self.draft_mode_chip(index),
+                    ring.map(IntoElement::into_any_element),
+                )
+            }
             Some(thread) => {
                 let open = self.cockpit.thread(thread);
                 // An empty Thread says where its work runs, as a draft
@@ -9105,11 +9142,12 @@ impl CockpitView {
 
     /// The Activity view's list (`nav::Activity`, the bell's) from the
     /// tree's rows (`state`), so it lists what the Project filter admits and
-    /// reads nothing new: under `Priority` every open Thread that needs the
-    /// operator, in ⌘D's order (oldest request first), then every one at
-    /// work, in creation order; under `Today` every other one written to
-    /// since local midnight, newest first. A finish moves a Thread from the
-    /// one to the other, so it never leaves from under the operator.
+    /// reads nothing new: under `Priority` every open Thread that asks for
+    /// the operator (a request, oldest first; a failure; a finish unseen),
+    /// then every one at work; below it every other one by the day of its
+    /// last turn (`Store::last_activity`, not the log's write time), newest
+    /// first, six days back. A state change moves a Thread between them, so
+    /// it never leaves from under the operator.
     pub(crate) fn activity(&self, state: &nav::NavState) -> nav::Activity {
         let roster = self.cockpit.roster();
         let focused = roster.focused_thread();
@@ -9135,18 +9173,10 @@ impl CockpitView {
             .collect();
         rows.sort_by_key(|row| row.thread);
         rows.dedup_by_key(|row| row.thread);
-        let midnight = {
-            let now = ferrite_core::clock::now();
-            let since = now
-                .date_naive()
-                .and_hms_opt(0, 0, 0)
-                .map_or(0, |midnight| (now.naive_local() - midnight).num_seconds());
-            std::time::SystemTime::from(now)
-                .checked_sub(std::time::Duration::from_secs(since.max(0) as u64))
-                .unwrap_or(std::time::UNIX_EPOCH)
-        };
         let queue = self.cockpit.needs_you();
-        let (mut blocked, mut working, mut today) = (Vec::new(), Vec::new(), Vec::new());
+        let now = std::time::SystemTime::from(ferrite_core::clock::now());
+        let mut priority: Vec<(usize, usize, nav::ActivityRow)> = Vec::new();
+        let mut days: Vec<(u32, SharedString, Vec<nav::ActivityRow>)> = Vec::new();
         for row in rows {
             let thread = row.thread;
             let entry = nav::ActivityRow {
@@ -9156,25 +9186,39 @@ impl CockpitView {
                 },
                 preview: self.last_message(thread),
             };
-            match row.status.attention() {
-                Attention::Blocked => blocked.push(entry),
-                Attention::Working => working.push(entry),
-                _ if self.last_used(thread) >= midnight => today.push(entry),
-                _ => {}
+            // What asks for the operator, in the order it asks: a request
+            // (oldest first), a failure, a finish unseen, work in flight.
+            let rank = match (row.status, row.status.attention()) {
+                (_, Attention::Blocked) => Some(0),
+                (nav::RowStatus::Failed, _) => Some(1),
+                (_, Attention::Done) => Some(2),
+                (_, Attention::Working) => Some(3),
+                _ => None,
+            };
+            if let Some(rank) = rank {
+                let asked = queue
+                    .iter()
+                    .position(|thread| *thread == entry.row.thread)
+                    .unwrap_or(usize::MAX);
+                priority.push((rank, asked, entry));
+            } else if let Some((ago, label)) =
+                ferrite_core::clock::recent_day(self.last_used(thread), now)
+            {
+                match days.iter_mut().find(|(at, _, _)| *at == ago) {
+                    Some((_, _, rows)) => rows.push(entry),
+                    None => days.push((ago, label.into(), vec![entry])),
+                }
             }
         }
         // Stable: creation order among equals.
-        blocked.sort_by_key(|entry| {
-            queue
-                .iter()
-                .position(|thread| *thread == entry.row.thread)
-                .unwrap_or(usize::MAX)
-        });
-        today.sort_by_key(|entry| std::cmp::Reverse(self.last_used(entry.row.thread)));
-        blocked.extend(working);
+        priority.sort_by_key(|(rank, asked, _)| (*rank, *asked));
+        days.sort_by_key(|(ago, _, _)| *ago);
+        for (_, _, rows) in &mut days {
+            rows.sort_by_key(|entry| std::cmp::Reverse(self.last_used(entry.row.thread)));
+        }
         nav::Activity {
-            priority: blocked,
-            today,
+            priority: priority.into_iter().map(|(_, _, entry)| entry).collect(),
+            days: days.into_iter().map(|(_, label, rows)| (label, rows)).collect(),
         }
     }
 
@@ -13468,11 +13512,15 @@ impl CockpitView {
                 .into_any_element()
         };
         let priority = activity.priority.iter().map(&row).collect();
-        let today = activity.today.iter().map(&row).collect();
+        let days = activity
+            .days
+            .iter()
+            .map(|(label, rows)| (label.clone(), rows.iter().map(&row).collect()))
+            .collect();
         nav::nav_tree(&self.nav_scroll)
             .track_focus(&self.nav_view_focus)
             .key_context("NavView")
-            .child(nav::activity_list(priority, today))
+            .child(nav::activity_list(priority, days))
     }
 
     /// The sidebar toggle (§5.1.1): in the head, or at the rail's top.

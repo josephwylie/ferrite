@@ -765,6 +765,23 @@ fn ferrites_effort_row_replaces_the_providers_and_a_typed_level_is_honoured(
     );
 }
 
+/// A new thread's footer says its permission mode, as a live Thread's does:
+/// the mode a new Thread starts in, beside the model, with no menu yet.
+#[gpui::test]
+fn a_draft_says_its_permission_mode(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("draft-mode", 0);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+    tick(cx);
+    let index = view.read_with(cx, |view, _| view.focused());
+    let mode = cx
+        .debug_bounds(Box::leak(format!("draft-mode-{index}").into_boxed_str()))
+        .expect("the draft's permission word");
+    let model = cx.debug_bounds("draft-model-picker").expect("the model chip");
+    assert!(mode.left() > model.right(), "it follows the model: {mode:?} {model:?}");
+}
+
 /// A draft's model chip is the live Thread's (Claude's new-session `Opus
 /// 5.5 Medium`): one chip, the effort in force beside the model, opening
 /// the model menu with its effort a submenu there. A pick in the submenu

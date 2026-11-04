@@ -376,15 +376,16 @@ impl RollUp {
 }
 
 /// The Activity view's list (the bell, Codex's), from the tree's rows:
-/// `Priority` — what needs the operator, in ⌘D's order, then what is at
-/// work, in creation order — and `Today`, every other open Thread written
-/// to since midnight, newest first. A Thread moves between the two as its
-/// state does and never leaves while it was touched today, so a finish
-/// stays in view. An empty section is gone.
+/// `Priority` — what asks for the operator: a request waiting (in ⌘D's
+/// order), a failure, a finish not yet seen, then what is at work — and
+/// below it every other open Thread by the day of its last turn, `Today`,
+/// `Yesterday`, then weekdays, newest first. A Thread moves between them as
+/// its state does, so a finish stays in view. An empty section is gone.
 #[derive(Clone, Default)]
 pub struct Activity {
     pub priority: Vec<ActivityRow>,
-    pub today: Vec<ActivityRow>,
+    /// Each day's heading and rows, most recent day first.
+    pub days: Vec<(SharedString, Vec<ActivityRow>)>,
 }
 
 /// One Activity row: the Thread's tree row (its title, Project, mark and
@@ -1032,10 +1033,10 @@ fn chord_glyphs(keys: &str) -> String {
 /// A section heading (§5.1.3): `Projects`, `Groups`, `Recent`, small and
 /// quiet — 12/400 `INK_SUBTLE` — with its button (`heading_button`) at the
 /// right.
-pub fn heading(key: &'static str, label: &'static str) -> Div {
+pub fn heading(key: &'static str, label: impl Into<SharedString>) -> Div {
     heading_frame(key)
         .text_color(rgb(INK_SUBTLE))
-        .child(div().flex_1().child(label))
+        .child(div().flex_1().child(label.into()))
 }
 
 /// A heading with an action at its right (`Projects`' `+`) that stands only
@@ -1615,15 +1616,20 @@ pub fn title_w(place: RowPlace, marked: bool) -> f32 {
 /// The Activity view's list (the bell's): `Priority` and `Today`, each a
 /// plain heading (§5.1.3's grammar) over its rows, flush, a section gap
 /// between them. The rows are the caller's (`activity_row`, wired).
-pub fn activity_list(priority: Vec<AnyElement>, today: Vec<AnyElement>) -> Div {
+pub fn activity_list(priority: Vec<AnyElement>, days: Vec<(SharedString, Vec<AnyElement>)>) -> Div {
     let mut list = view_list("nav-activity-list");
-    if priority.is_empty() && today.is_empty() {
-        return list.child(note("nav-activity-empty", "No activity today"));
+    if priority.is_empty() && days.is_empty() {
+        return list.child(note("nav-activity-empty", "Nothing needs attention"));
     }
-    let sections = [
-        ("nav-activity-priority", "Priority", priority),
-        ("nav-activity-today", "Today", today),
-    ];
+    let mut sections = vec![("nav-activity-priority", SharedString::from("Priority"), priority)];
+    sections.extend(days.into_iter().map(|(label, rows)| {
+        let key = match &*label {
+            "Today" => "nav-activity-today",
+            "Yesterday" => "nav-activity-yesterday",
+            _ => "nav-activity-day",
+        };
+        (key, label, rows)
+    }));
     let mut first = true;
     for (key, label, rows) in sections {
         if rows.is_empty() {

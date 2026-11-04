@@ -158,6 +158,23 @@ pub fn exact_label(at: DateTime<Local>) -> String {
     format!("{}, {}", at.format("%A %-d %B %Y"), label(at))
 }
 
+/// The day `at` fell on, for a list grouped by day (the bell's): how many
+/// days before `now` it was and its heading, `Today`, `Yesterday`, else the
+/// weekday. A time after `now` (clocks disagree) counts as today. `None`
+/// past the last six days, which no heading names.
+pub fn recent_day(at: SystemTime, now: SystemTime) -> Option<(u32, String)> {
+    let at = DateTime::<Local>::from(at).date_naive();
+    let ago = (DateTime::<Local>::from(now).date_naive() - at).num_days();
+    let ago = ago.max(0);
+    let heading = match ago {
+        0 => "Today".to_string(),
+        1 => "Yesterday".to_string(),
+        2..=6 => at.format("%A").to_string(),
+        _ => return None,
+    };
+    Some((ago as u32, heading))
+}
+
 /// A wall time within the week ahead of `now`, as a reset reads one: the
 /// stamp alone on the same day (`3:30 pm`), after its weekday otherwise
 /// (`Tue 3:30 pm`).
@@ -255,6 +272,20 @@ impl Drop for ThreadFixture {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn recent_days_are_named_for_six_days_and_no_further() {
+        let at = |day: u32| {
+            SystemTime::from(Local.with_ymd_and_hms(2026, 11, day, 9, 0, 0).unwrap())
+        };
+        let now = at(11);
+        assert_eq!(recent_day(at(11), now), Some((0, "Today".into())));
+        assert_eq!(recent_day(at(12), now), Some((0, "Today".into())), "a clock ahead");
+        assert_eq!(recent_day(at(10), now), Some((1, "Yesterday".into())));
+        assert_eq!(recent_day(at(9), now), Some((2, "Monday".into())));
+        assert_eq!(recent_day(at(5), now), Some((6, "Thursday".into())));
+        assert_eq!(recent_day(at(4), now), None);
+    }
 
     #[test]
     fn a_fixture_freezes_and_steps_every_reading() {

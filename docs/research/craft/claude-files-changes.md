@@ -179,3 +179,25 @@ The menu:
 - **Attach as context:** a selection also shows a small dark `Attach as context` pill floating directly above the selection, centred on it, label only (no icon, no shortcut, no tooltip). Pill and menu row do the same thing: they attach the selection only (not the visible output) as a tile in the composer tray: the attachment tile (about 120 pt square, rounded, bordered) with the selected text in small grey type behind a thin vertical quote bar, newlines read as spaces, an outlined `Excerpt` badge at its bottom-left, and the corner x on hover.
 - **`⋯` menu:** `Cursor style ›` (Block), `Blink cursor` ✓, `Copy on select`, `Scrollback ›` (10,000 lines).
 - **Not captured:** tooltips for `+`, `⋯`, expand and close; the Cursor style and Scrollback submenus.
+
+## The notification bell (Codex side of the ChatGPT desktop app)
+
+Captured 2026-11-04 from the live app by computer use, and read out of the app's own webview code (`app.asar`, read-only). No PNGs are kept: a screen capture taken from the shell caught the owner's Terminal, not the app, and was deleted. The app showed no unread or waiting thread while captured, so the unread, approval and badge states below come from its code, not from a sight of them.
+
+**What it is.** The bell in the sidebar head (left of search) toggles an Activity view in the tree's place. Its tooltip is `View activity`, and `View activity, needs attention` while anything needs attention, when the bell also wears a blue dot. Opening it highlights the bell.
+
+**What needs attention.** Each thread has one attention state: `awaiting-approval` (the `Needs approval` chip), `awaiting-response` (a question or input waiting), `error` (the last turn failed), `working`, `unread` (finished while unseen) or `idle`. The bell's dot is on for approval, input, error, waiting or unread.
+
+**Sections.**
+- `Priority` first, with a `⋯` menu at its right. Rank inside it: approval, input, error and waiting; then unread; then working. An idle thread is in it only when its latest finished turn is unseen. Empty, it says `Nothing needs attention` (`Some unread chats aren't available yet` while saved unread chats cannot be found yet).
+- Then every other thread grouped by the day of its last activity: `Today`, `Yesterday`, then weekday names. Newest first.
+
+**Rows.** The title, the project muted after it, then two lines of the last message. Under the pointer: pin and archive icons and a tooltip with the full title and the age (`2h`). A click opens the thread in the main area and the list stays; opening it is what marks it read.
+
+**The `⋯` menu.** `Show`: `Priority section` (checked), `Pinned`, `Scheduled`; then `Mark all as read` (for every unread Priority chat; greyed when none) and `Archive chats`.
+
+**No count.** No numeric badge was seen; the only badge is the bell's blue dot. There is no clear-all other than `Mark all as read`.
+
+### What Ferrite does with it
+
+Built: the bell's dot (yellow for a request, blue for a finish unseen; the former wins); `Priority` ranked request, failure, finish unseen, work; day sections `Today`, `Yesterday`, weekdays for six days; `Nothing needs attention`; and the day taken from the last real turn (`Store::last_activity`), not the log's write time, which every open Thread's startup marks had moved to now. Not built: the `⋯` menu (`Show`, `Mark all as read`, `Archive chats`), pin and archive icons on a row, the age tooltip, a tooltip change on the bell.

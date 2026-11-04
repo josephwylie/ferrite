@@ -1997,9 +1997,12 @@ fn the_activity_view_at_rest_asks_for_no_frames(cx: &mut TestAppContext) {
         view.show_nav_view(nav::NavView::Activity, None, cx)
     });
     tick(cx);
-    let listed = view.read_with(cx, |view, _| view.activity(&view.nav_state()).today.len());
+    let listed = view.read_with(cx, |view, _| {
+        let activity = view.activity(&view.nav_state());
+        activity.priority.len() + activity.days.iter().map(|(_, rows)| rows.len()).sum::<usize>()
+    });
     // The untouched first Thread was opened today too.
-    assert_eq!(listed, 3, "the premise: every Thread under Today");
+    assert_eq!(listed, 3, "the premise: every Thread is listed");
     // Their toasts come and go.
     outlast_toasts(cx);
     settle(cx);

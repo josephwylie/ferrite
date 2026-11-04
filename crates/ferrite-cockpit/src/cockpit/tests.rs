@@ -362,7 +362,7 @@ fn cockpit(name: &str, panes: usize) -> (Cockpit, Fake) {
 }
 
 /// The Activity view's rows, as `activity` builds them: `Priority`'s,
-/// then `Today`'s.
+/// then those of every day.
 fn activity(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
@@ -370,7 +370,8 @@ fn activity(
     view.read_with(cx, |view, _| {
         let activity = view.activity(&view.nav_state());
         let ids = |rows: &[nav::ActivityRow]| rows.iter().map(|entry| entry.row.thread).collect();
-        (ids(&activity.priority), ids(&activity.today))
+        let days = activity.days.iter().flat_map(|(_, rows)| ids(rows)).collect();
+        (ids(&activity.priority), days)
     })
 }
 

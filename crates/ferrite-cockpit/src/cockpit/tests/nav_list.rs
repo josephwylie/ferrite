@@ -263,8 +263,8 @@ fn the_bell_wears_a_dot_for_a_request_and_for_an_unseen_finish(cx: &mut TestAppC
 }
 
 /// The Activity view (the bell, Codex's): `Priority` holds what needs the
-/// operator, oldest request first, then what works, in creation order; a
-/// finish moves a Thread on to `Today`. The bell shows it in the tree's
+/// operator, oldest request first, then a finish not yet seen, then what
+/// works, in creation order; every other Thread is under its day. The bell shows it in the tree's
 /// place, filled, and again gives the tree back; a row says its title and
 /// its mark, and a press lands on its Thread. The tree carries no status
 /// sections of its own.
@@ -301,8 +301,12 @@ fn the_activity_view_lists_priority_then_today(cx: &mut TestAppContext) {
     send(1, decision("perm-b"));
     tick(cx);
     let (priority, today) = activity(&view, cx);
-    assert_eq!(priority, vec![threads[3], threads[1], threads[4]]);
-    assert!(today.contains(&threads[2]), "a finish moves on to Today");
+    assert_eq!(
+        priority,
+        vec![threads[3], threads[1], threads[2], threads[4]],
+        "the requests, then the finish not yet seen, then the work"
+    );
+    assert!(!today.contains(&threads[2]), "an unseen finish waits in Priority");
     assert!(today.iter().all(|thread| !priority.contains(thread)));
 
     // The tree says no section of status; the bell swaps it for the view.
