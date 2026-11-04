@@ -21,6 +21,8 @@ use ferrite_reviewr::ferrite::{review_against, Read};
 use ferrite_ui::icons;
 use ferrite_ui::theme::{self, paint};
 
+use ferrite_pane::composer::{Composer, Role};
+
 use super::*;
 use crate::cockpit::view_head::Column;
 use crate::cockpit::context_menu::Submenu;
@@ -81,6 +83,8 @@ struct File {
     added: u32,
     removed: u32,
     hunks: Shown,
+    /// The file's change is in git's index (`git add`).
+    staged: bool,
 }
 
 enum Load {
@@ -102,10 +106,12 @@ pub(crate) struct Changes {
     branches: Vec<String>,
     /// Bumped by every read, so a late answer for an old scope is dropped.
     generation: u64,
+    /// The filter field over the files: only names it matches are listed.
+    filter: Entity<Composer>,
 }
 
 impl Changes {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(filter: Entity<Composer>) -> Self {
         Self {
             scope: Scope::Uncommitted,
             load: Load::Reading,
@@ -116,8 +122,19 @@ impl Changes {
             scroll: ScrollHandle::new(),
             branches: Vec::new(),
             generation: 0,
+            filter,
         }
     }
+}
+
+/// The paths whose change is staged, as git's index holds them.
+fn staged_paths(root: &std::path::Path) -> HashSet<String> {
+    std::process::Command::new("git")
+        .args(["diff", "--cached", "--name-only"])
+        .current_dir(root)
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).lines().map(str::to_owned).collect())
+        .unwrap_or_default()
 }
 
 /// `hunks` without the changes that are only whitespace: a changed line
@@ -142,7 +159,14 @@ impl CockpitView {
     /// The Changes state for `thread`, read for the first time it is made.
     pub(in crate::cockpit) fn ensure_changes(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         if !self.tools.changes.contains_key(&thread) {
-            self.tools.changes.insert(thread, Changes::new());
+            let filter = cx.new(|cx| {
+                let mut field = Composer::new(cx);
+                field.set_role(Role::Field(None), cx);
+                field
+            });
+            cx.subscribe(&filter, |_, _, _: &ferrite_pane::composer::Edited, cx| cx.notify())
+                .detach();
+            self.tools.changes.insert(thread, Changes::new(filter));
             self.refresh_changes(thread, cx);
         }
     }
@@ -175,6 +199,30 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// A file's stage button: its change goes into git's index, or comes
+    /// out of it, and the list is read again.
+    fn stage_file(&mut self, thread: ThreadId, path: String, stage: bool, cx: &mut Context<Self>) {
+        let Some(root) = self.thread_path(thread) else {
+            return;
+        };
+        cx.spawn(async move |view, cx| {
+            cx.background_executor()
+                .spawn(async move {
+                    let mut git = std::process::Command::new("git");
+                    git.current_dir(&root);
+                    if stage {
+                        git.args(["add", "--"]);
+                    } else {
+                        git.args(["restore", "--staged", "--"]);
+                    }
+                    let _ = git.arg(path).output();
+                })
+                .await;
+            view.update(cx, |view, cx| view.refresh_changes(thread, cx)).ok();
+        })
+        .detach();
+    }
+
     /// Read the diff again, for the current scope.
     fn refresh_changes(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         let Some(root) = self.thread_path(thread) else {
@@ -197,6 +245,7 @@ impl CockpitView {
             let files = cx
                 .background_executor()
                 .spawn(async move {
+                    let staged = staged_paths(&root);
                     review_against(&root, &read, base.as_deref()).map(|files| {
                         files
                             .iter()
@@ -205,6 +254,7 @@ impl CockpitView {
                                 added: sides.file.additions,
                                 removed: sides.file.deletions,
                                 hunks: shown(Some(sides)),
+                                staged: staged.contains(&sides.file.path),
                             })
                             .collect::<Vec<_>>()
                     })
@@ -355,17 +405,69 @@ impl CockpitView {
             Load::Read(files) if files.is_empty() => {
                 self.changes_empty(thread, &changes.scope, cx).into_any_element()
             }
-            Load::Read(files) => div()
-                .id("changes-scroll")
-                .debug_selector(|| "changes-scroll".into())
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .track_scroll(&changes.scroll)
-                .children(files.iter().enumerate().map(|(at, file)| self.changes_file(thread, changes, at, file, cx)))
-                .into_any_element(),
+            Load::Read(files) => {
+                let wanted = changes.filter.read(cx).text().trim().to_lowercase();
+                let listed: Vec<_> = files
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, file)| wanted.is_empty() || file.path.to_lowercase().contains(&wanted))
+                    .collect();
+                let list = if listed.is_empty() {
+                    self.changes_note("No files match").into_any_element()
+                } else {
+                    div()
+                        .id("changes-scroll")
+                        .debug_selector(|| "changes-scroll".into())
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .track_scroll(&changes.scroll)
+                        .children(listed.into_iter().map(|(at, file)| self.changes_file(thread, changes, at, file, cx)))
+                        .into_any_element()
+                };
+                let empty = wanted.is_empty();
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .debug_selector(|| "changes-filter".into())
+                            .flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .gap(px(theme::SPACE_2))
+                            .h(px(theme::ICON_BUTTON))
+                            .mx(px(theme::SPACE_2))
+                            .px(px(theme::SPACE_2))
+                            .rounded(px(theme::R_CONTROL))
+                            .bg(paint::FIELD)
+                            .child(icons::icon(icons::SEARCH, theme::ICON_BUTTON_GLYPH, theme::INK_SUBTLE))
+                            .child(
+                                div()
+                                    .relative()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(theme::FS_LABEL))
+                                    .child(changes.filter.clone())
+                                    .when(empty, |line| {
+                                        line.child(
+                                            div()
+                                                .absolute()
+                                                .top_0()
+                                                .left_0()
+                                                .text_color(rgb(theme::INK_SUBTLE))
+                                                .child("Filter files"),
+                                        )
+                                    }),
+                            ),
+                    )
+                    .child(list)
+                    .into_any_element()
+            }
         };
         div()
             .debug_selector(|| "changes".into())
@@ -491,6 +593,7 @@ impl CockpitView {
             None => (file.path.clone(), String::new()),
         };
         let (fold_path, review_path, open_path) = (file.path.clone(), file.path.clone(), file.path.clone());
+        let (stage_path, staged) = (file.path.clone(), file.staged);
         let stat = div()
             .flex()
             .flex_shrink_0()
@@ -556,6 +659,18 @@ impl CockpitView {
             .child(stat)
             .child(
                 door(
+                    format!("changes-stage-{at}"),
+                    if file.staged { icons::CHECK } else { icons::PLUS },
+                    if file.staged { "Unstage" } else { "Stage" },
+                    if file.staged { GREEN } else { INK_SUBTLE },
+                )
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.stage_file(thread, stage_path.clone(), !staged, cx);
+                })),
+            )
+            .child(
+                door(
                     format!("changes-reviewed-{at}"),
                     if reviewed { icons::CHECK_CIRCLE } else { icons::CIRCLE_DASHED },
                     if reviewed { "Mark as not reviewed" } else { "Mark as reviewed" },
@@ -595,6 +710,10 @@ impl CockpitView {
             Load::Read(files) => Some(files.len()),
             _ => None,
         }
+    }
+
+    pub(in crate::cockpit) fn changes_filter(&self, thread: ThreadId) -> Option<Entity<Composer>> {
+        Some(self.tools.changes.get(&thread)?.filter.clone())
     }
 
     pub(in crate::cockpit) fn changes_scope_label(&self, thread: ThreadId) -> Option<String> {

@@ -147,3 +147,37 @@ fn an_empty_uncommitted_scope_offers_the_branch_diff(cx: &mut TestAppContext) {
         Some("All changes")
     );
 }
+
+#[gpui::test]
+fn the_filter_narrows_the_files_listed(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("changes-filter", cx);
+    opened(&view, thread, cx);
+    assert!(cx.debug_bounds("changes-file-0").is_some() && cx.debug_bounds("changes-file-1").is_some());
+    let field = view.read_with(cx, |view, _| view.changes_filter(thread).unwrap());
+    view.update(cx, |_, cx| field.update(cx, |field, cx| field.set("b.rs".to_string(), cx)));
+    tick(cx);
+    let shown = (0..2).filter(|at| cx.debug_bounds(Box::leak(format!("changes-file-{at}").into_boxed_str())).is_some()).count();
+    assert_eq!(shown, 1, "only b.rs matches");
+}
+
+#[gpui::test]
+fn the_stage_button_moves_a_file_into_and_out_of_the_index(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("changes-stage", cx);
+    let repo = std::env::temp_dir().join(format!("ferrite-view-{}-changes-stage", std::process::id())).join("repo");
+    opened(&view, thread, cx);
+    let staged = |repo: &std::path::Path| {
+        let out = std::process::Command::new("git").args(["diff", "--cached", "--name-only"]).current_dir(repo).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).lines().map(str::to_owned).collect::<Vec<_>>()
+    };
+    assert!(staged(&repo).is_empty());
+    let button = cx.debug_bounds("changes-stage-0").expect("a stage button on the first file");
+    cx.simulate_click(button.center(), gpui::Modifiers::none());
+    for _ in 0..400 {
+        tick(cx);
+        if !staged(&repo).is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(staged(&repo), ["a.rs"]);
+}
