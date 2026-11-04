@@ -173,7 +173,7 @@ impl Server {
             Ok(accepted) => {
                 plan.calls
                     .insert(call.to_owned(), Call::Plan(accepted.update));
-                let mut text = String::from(update_plan::ANSWER);
+                let mut text = accepted.answer;
                 for warning in accepted.warnings {
                     text.push(' ');
                     text.push_str(&warning);

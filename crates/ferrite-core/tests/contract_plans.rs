@@ -144,10 +144,11 @@ fn claude_plans_with_update_plan_and_the_steps_move_as_it_works() {
 
     let r = Replay::new("claude", frames);
     let events = r.drain();
-    // Every call was accepted, and its words are the plan's.
+    // Every call was accepted, its answer says where the plan stands, and
+    // its words are the plan's.
     let answers = r.wait_host(|line| {
         line["response"]["response"]["mcp_response"]["result"]["content"][0]["text"]
-            == ferrite_core::update_plan::ANSWER
+            == "Plan shown (4 steps)."
     });
     assert_eq!(
         answers["response"]["response"]["mcp_response"]["result"]["isError"],

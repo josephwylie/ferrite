@@ -26,37 +26,47 @@ pub const MAX_ITEMS: usize = 12;
 /// A step's words, at most (Claude's limit; the guidance asks for far fewer).
 pub const MAX_TEXT: usize = 160;
 
-/// What an accepted call is answered with, before any warnings: the plan
-/// is drawn from the call itself.
-pub const ANSWER: &str = "Plan updated; the operator sees it.";
-
 /// Whether a call (as the provider names it) is this tool.
 pub fn is_tool(name: &str) -> bool {
     name == CLAUDE_NAME
 }
 
-/// When and how to plan, as the agent reads it: §12's guidance (plan at the
-/// first meaningful action, with that action; short steps; keep it current;
-/// replan after steering). Shared by both providers, whose tools take
-/// different arguments, so it names none.
-pub const GUIDANCE: &str = "The operator watches your work in Ferrite, which shows your plan as a \
-checklist under the turn. For any task with more than one meaningful step, make a plan with \
-`update_plan` at your first meaningful action: call it together with that first piece of real work, \
-not on its own and not after the work is done. Keep it to 2-7 short steps of a few words each \
-(\"Read the parser\", \"Fix the off-by-one\", \"Run the tests\"). Keep exactly one step in progress \
-while you work, and update the plan as each step finishes. When the operator steers you or the \
-scope changes, update the plan to match. Skip the plan for a one-step task or a question you can \
-just answer.";
+/// When and how to plan, as the agent reads it: §12's guidance, as Claude
+/// Desktop gives it (a plan with the turn's very first tool call, in the
+/// same message; each step marked done as it finishes, with the call that
+/// starts the next; short steps; replan after steering). Shared by both
+/// providers, whose tools take different arguments, so it names none.
+/// "Keep it current" alone was not enough: a Claude turn planned four
+/// searches, ran them all, answered, and never moved the plan.
+pub const GUIDANCE: &str = "The operator follows your progress on the plan Ferrite shows under \
+your latest message, not by reading your messages, so keeping it is part of doing the task. Every \
+request that edits files or runs more than one command gets a plan; only a single-command answer \
+or pure conversation does not. Make it with `update_plan` in the same message as the turn's very \
+first tool call, even one that only reads or lists files: the whole plan in order, 2-7 short \
+imperative steps of a few words each (\"Read the parser\", \"Fix the off-by-one\", \"Run the \
+tests\"), the step you are starting in progress and the rest pending. If you must look around \
+first, make \"Look at how X is set up\" step one and refine the plan once you know. Never spend \
+a message on `update_plan` alone. As each step finishes, mark it completed and the next one in \
+progress, in the same message as the call that starts that next step; work you do in parallel \
+still moves the plan as it lands. Keep exactly one step in progress while you work. Before your \
+closing answer, the plan must say what you did: no step you finished is left in progress or \
+pending. When the operator steers you or the scope changes, send the new whole plan, so it never \
+shows an abandoned one. Do not also write the plan as a list in your message.";
 
 /// The tool's description: the guidance, then how this tool's fields work.
 pub fn description() -> String {
     format!(
-        "{GUIDANCE}\n\nTo set the plan, pass `scope` and `items` (each step `pending`, \
-`in_progress` or `completed`): `first_task` for the first plan of this conversation, \
-`continuation` when you replan the same work (including acting on the previous result), \
-`new_task` for genuinely separate work. To move through it, pass only step numbers (1-based): \
-`advance: true` completes the step in progress and starts the next one; `done` completes steps; \
-`start` starts one."
+        "{GUIDANCE}\n\n\
+- First call: `scope` and `items` (each step `pending`, `in_progress` or `completed`). `scope` \
+says what the request is to this conversation: `first_task` until you have finished a task here; \
+then `new_task` for unrelated work, or `continuation` for everything else (the next iteration, \
+acting on what you just found or suggested; when unsure, this one).\n\
+- Next step: `{{\"advance\": true}}` alongside the call that begins it: it completes the step in \
+progress and starts the next pending one. After the last step, advance alongside `wrap_up` \
+(a `wrap_up` that is not blocked also checks off what is left).\n\
+- Out of order: `{{\"done\": [2], \"start\": 4}}` (1-based step numbers).\n\
+- Plan changed: `items` again, the new whole plan.\n\
+The answer says where the plan now stands."
     )
 }
 
@@ -122,11 +132,13 @@ pub struct Steps {
     pub advance: bool,
 }
 
-/// A call as the server accepts it: the update, and what to tell the agent
-/// about the parts that were not applied as asked.
+/// A call as the server accepts it: the update, what to answer the agent
+/// (where the plan now stands, so a step left behind shows), and what to
+/// tell it about the parts that were not applied as asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Accepted {
     pub update: Update,
+    pub answer: String,
     pub warnings: Vec<String>,
 }
 
@@ -183,6 +195,7 @@ impl Update {
             let statuses: Vec<_> = steps.iter().map(|step| step.status).collect();
             warn_on_parallel(&statuses, &mut warnings);
             return Ok(Accepted {
+                answer: format!("Plan shown ({} steps).", steps.len()),
                 update: Update::Replace(steps),
                 warnings,
             });
@@ -220,13 +233,18 @@ impl Update {
             start,
             advance,
         };
-        if let Some(current) = current {
-            let mut after = current.to_vec();
-            steps.apply(&mut after);
-            warn_on_parallel(&after, &mut warnings);
-        }
+        let answer = match current {
+            Some(current) => {
+                let mut after = current.to_vec();
+                steps.apply(&mut after);
+                warn_on_parallel(&after, &mut warnings);
+                format!("Plan updated: {}.", standing(&after))
+            }
+            None => "Plan updated.".into(),
+        };
         Ok(Accepted {
             update: Update::Steps(steps),
+            answer,
             warnings,
         })
     }
@@ -266,6 +284,28 @@ impl Steps {
             if let Some(at) = next {
                 statuses[at] = StepStatus::InProgress;
             }
+        }
+    }
+}
+
+/// Where a plan stands, as the answer says it: the step in progress, or
+/// that every step is done, or how to go on when none is in progress.
+fn standing(statuses: &[StepStatus]) -> String {
+    let total = statuses.len();
+    let current: Vec<_> = (1..=total)
+        .filter(|n| statuses[n - 1] == StepStatus::InProgress)
+        .collect();
+    let done = statuses
+        .iter()
+        .filter(|status| **status == StepStatus::Completed)
+        .count();
+    match current[..] {
+        [step] => format!("step {step} of {total} is in progress"),
+        [] if done == total => "every step is done".into(),
+        [] => format!("no step is in progress ({done} of {total} done); `start` one, or `advance`"),
+        _ => {
+            let steps: Vec<_> = current.iter().map(ToString::to_string).collect();
+            format!("steps {} of {total} are in progress", steps.join(", "))
         }
     }
 }
@@ -323,6 +363,7 @@ mod tests {
                 },
             ])
         );
+        assert_eq!(accepted.answer, "Plan shown (2 steps).");
         assert!(accepted.warnings.is_empty());
         let unscoped = json!({"items": [{"content": "x", "status": "pending"}]});
         assert!(Update::parse(&unscoped, None)
@@ -384,6 +425,29 @@ mod tests {
         let mut plan = [Pending, InProgress];
         steps(json!({"advance": true}), Some(&plan)).apply(&mut plan);
         assert_eq!(plan, [InProgress, Completed]);
+    }
+
+    /// The answer says where the plan now stands, so a step left behind
+    /// is the agent's to see.
+    #[test]
+    fn the_answer_says_where_the_plan_stands() {
+        let answer = |input: Value, current: Option<&[StepStatus]>| {
+            Update::parse(&input, current).unwrap().answer
+        };
+        let advance = json!({"advance": true});
+        assert_eq!(
+            answer(advance.clone(), Some(&[InProgress, Pending, Pending])),
+            "Plan updated: step 2 of 3 is in progress."
+        );
+        assert_eq!(
+            answer(advance.clone(), Some(&[Completed, InProgress])),
+            "Plan updated: every step is done."
+        );
+        assert_eq!(
+            answer(json!({"done": [1]}), Some(&[InProgress, Pending])),
+            "Plan updated: no step is in progress (1 of 2 done); `start` one, or `advance`."
+        );
+        assert_eq!(answer(advance, None), "Plan updated.");
     }
 
     #[test]

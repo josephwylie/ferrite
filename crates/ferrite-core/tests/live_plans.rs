@@ -56,16 +56,23 @@ fn program(real: &str, capture: &str, dir: &Path) -> String {
     wrapper.display().to_string()
 }
 
-/// Run one turn, allowing every Decision, and return each distinct plan the
-/// transcript model held as the turn went.
-fn plans_through_a_turn(session: &mut dyn Session) -> Vec<Vec<PlanStep>> {
+/// Like the turn that left a plan behind in the owner's InvoiceMate thread
+/// (Sonnet planned four searches, fired them all at once, answered, and
+/// never moved the plan): independent lookups the agent may run together.
+const LOOKUPS: &str = "Look into the three notes in this directory (alpha.txt, beta.txt, \
+gamma.txt): find what each one says, count the words in each, work out which one is longest, and \
+tell me in two sentences what they have in common.";
+
+/// Run one turn of `task`, allowing every Decision, and return each
+/// distinct plan the transcript model held as the turn went.
+fn plans_through_a_turn(session: &mut dyn Session, task: &str) -> Vec<Vec<PlanStep>> {
     let mut activity = Activity::default();
     activity.apply(ActivityInput::Connect { generation: 1 });
     activity.apply(ActivityInput::Main {
-        input: Input::Prompt(TASK.into()),
+        input: Input::Prompt(task.into()),
         at: Instant::now(),
     });
-    session.send(TASK).unwrap();
+    session.send(task).unwrap();
     let deadline = Instant::now() + TURN_TIMEOUT;
     let mut plans: Vec<Vec<PlanStep>> = Vec::new();
     loop {
@@ -125,6 +132,16 @@ fn assert_planned_and_worked(plans: &[Vec<PlanStep>]) {
     );
 }
 
+/// The turn ended on a plan that says what was done: no step it finished
+/// is left in progress or pending.
+fn assert_plan_finished(plans: &[Vec<PlanStep>]) {
+    let last = plans.last().expect("the agent never planned");
+    assert!(
+        last.iter().all(|step| step.status == StepStatus::Completed),
+        "the turn ended with its plan behind: {plans:?}"
+    );
+}
+
 #[test]
 #[ignore = "spawns the real claude CLI"]
 fn claude_plans_a_multi_step_task() {
@@ -137,8 +154,41 @@ fn claude_plans_a_multi_step_task() {
         ..Default::default()
     })
     .unwrap();
-    let plans = plans_through_a_turn(&mut session);
+    let plans = plans_through_a_turn(&mut session, TASK);
     assert_planned_and_worked(&plans);
+}
+
+/// The InvoiceMate turn's shape, on its model (`FERRITE_CLAUDE_MODEL`,
+/// Sonnet 5.5 by default): independent lookups still move the plan, step
+/// by step, and the turn ends with it finished.
+#[test]
+#[ignore = "spawns the real claude CLI"]
+fn claude_moves_its_plan_through_independent_lookups() {
+    let dir = workspace("claude-lookups");
+    for (name, words) in [
+        ("alpha.txt", "Ferrite keeps every thread's log on disk."),
+        (
+            "beta.txt",
+            "Each thread's log is replayed when Ferrite starts again, line by line.",
+        ),
+        ("gamma.txt", "Logs on disk let a thread survive a restart."),
+    ] {
+        std::fs::write(dir.join(name), words).unwrap();
+    }
+    let real = std::env::var("FERRITE_CLAUDE_BIN").unwrap_or_else(|_| "claude".into());
+    let model =
+        std::env::var("FERRITE_CLAUDE_MODEL").unwrap_or_else(|_| "claude-sonnet-5-5".into());
+    let mut session = ClaudeSession::spawn(ClaudeConfig {
+        program: program(&real, "claude-lookups.jsonl", &dir),
+        cwd: Some(dir.clone()),
+        model: Some(model),
+        permission_mode: Some("acceptEdits".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    let plans = plans_through_a_turn(&mut session, LOOKUPS);
+    assert_planned_and_worked(&plans);
+    assert_plan_finished(&plans);
 }
 
 #[test]
@@ -154,6 +204,6 @@ fn codex_plans_a_multi_step_task() {
         ..Default::default()
     })
     .unwrap();
-    let plans = plans_through_a_turn(&mut session);
+    let plans = plans_through_a_turn(&mut session, TASK);
     assert_planned_and_worked(&plans);
 }
