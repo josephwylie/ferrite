@@ -6411,7 +6411,7 @@ mod tests {
         );
         assert_eq!(
             turn_stamp(&end(Interrupted, 100)).as_deref(),
-            Some("interrupted \u{b7} 0.1s")
+            Some("You stopped after 0.1s")
         );
         assert_eq!(
             turn_stamp(&end(Error("API Error: 529 overloaded".into()), 100)).as_deref(),

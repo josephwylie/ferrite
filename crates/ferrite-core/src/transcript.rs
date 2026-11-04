@@ -106,7 +106,7 @@ pub struct TurnEnd {
 impl TurnEnd {
     /// What the row says, and what copy and search see: `41s · 1.1k
     /// tokens` (whole seconds, `<1s` under one, `3m 12s` past a minute; the
-    /// tokens the turn wrote), `interrupted · 4.1s`, `failed · 4.1s · <the
+    /// tokens the turn wrote), `You stopped after 4.1s`, `failed · 4.1s · <the
     /// provider's message>`. State words are always lowercase, even leading
     /// a row (`INTERRUPTED`/`FAILED`: the app's lexicon, `theme::words`,
     /// asserts they agree). A time or a count that was never observed (an
@@ -125,10 +125,16 @@ impl TurnEnd {
                     parts.push("Done".into());
                 }
             }
-            TurnOutcome::Interrupted => {
-                parts.push(Self::INTERRUPTED.into());
-                parts.extend(elapsed.map(crate::progress::duration_label));
-            }
+            // The operator's stop, in Codex's words, once its time is
+            // known; a turn that only ended (a log that stopped, a
+            // crash) cannot say who stopped it.
+            TurnOutcome::Interrupted => match elapsed {
+                Some(elapsed) => parts.push(format!(
+                    "You stopped after {}",
+                    crate::progress::duration_label(elapsed)
+                )),
+                None => parts.push(Self::INTERRUPTED.into()),
+            },
             TurnOutcome::Error(message) => {
                 parts.push(Self::FAILED.into());
                 parts.extend(elapsed.map(crate::progress::duration_label));
@@ -556,6 +562,9 @@ pub enum ToolState {
     Ok,
     /// The stream ended before the provider reported this call’s result.
     Unavailable,
+    /// The operator stopped it: the call was denied, or the turn was
+    /// stopped while it ran. Not a failure, so never red.
+    Stopped,
     /// The provider handed the model a failure; the operator sees why.
     Failed(String),
 }
@@ -646,6 +655,9 @@ fn draft_diffs(name: &str, input: &serde_json::Value) -> Vec<Diff> {
 enum Retire {
     /// A turn ended: background work runs on.
     Foreground,
+    /// A turn the operator stopped: as `Foreground`, but the calls it cut
+    /// off read as stopped, not as lost.
+    Stopped,
     /// The Session (or its log) ended: nothing runs on.
     All,
 }
@@ -2098,8 +2110,25 @@ impl Transcript {
                 } else {
                     ANSWER_DENIED
                 };
+                // A denied call never ran: the call the request held is the
+                // newest one of its name still going.
+                let denied = (!allowed)
+                    .then(|| {
+                        self.blocks.iter_mut().rev().find_map(|block| match &mut block.body {
+                            Body::Tool(tool)
+                                if tool.name == tool_name && tool.state == ToolState::Running =>
+                            {
+                                tool.state = ToolState::Stopped;
+                                Some(block.id)
+                            }
+                            _ => None,
+                        })
+                    })
+                    .flatten();
+                let mut dirty = vec![self.push(Body::Meta(format!("{verb} {tool_name}")))];
+                dirty.extend(denied);
                 Update {
-                    dirty: vec![self.push(Body::Meta(format!("{verb} {tool_name}")))],
+                    dirty,
                     ..Update::default()
                 }
             }
@@ -2228,7 +2257,14 @@ impl Transcript {
                 }
                 let handback = self.running_in_background(&id);
                 let elapsed_ms = result.duration_ms();
-                let state = if is_error {
+                // A call the operator stopped stays stopped, whatever the
+                // provider says of it after (its refusal is no failure).
+                let stopped = self
+                    .tool(&id)
+                    .is_some_and(|tool| tool.state == ToolState::Stopped);
+                let state = if stopped {
+                    ToolState::Stopped
+                } else if is_error {
                     ToolState::Failed(trim(&output, ERROR_CHARS))
                 } else {
                     ToolState::Ok
@@ -2279,9 +2315,9 @@ impl Transcript {
                     ToolResult::Image => (Vec::new(), None, None),
                     _ => (Vec::new(), None, row_line(None)),
                 };
-                // The picture is the result: its `[image]` stand-in is no
-                // output to disclose.
-                let output = if shows_image {
+                // The picture is the result (its `[image]` stand-in is no
+                // output to disclose), and a refusal has nothing to show.
+                let output = if shows_image || stopped {
                     None
                 } else {
                     retained_output(&output)
@@ -2443,7 +2479,11 @@ impl Transcript {
                 self.status = Status::Idle;
                 self.last_cost = cost_usd;
                 self.turn_started = None;
-                let mut dirty = self.retire_tools(Retire::Foreground);
+                let mut dirty = self.retire_tools(if outcome == TurnOutcome::Interrupted {
+                    Retire::Stopped
+                } else {
+                    Retire::Foreground
+                });
                 match &outcome {
                     // The cost is kept (`last_cost`) but never rendered —
                     // no dollar value appears anywhere (#22 operator
@@ -2588,7 +2628,7 @@ impl Transcript {
     /// end does not.
     fn retire_tools(&mut self, retire: Retire) -> Vec<BlockId> {
         let background: std::collections::HashSet<String> = match retire {
-            Retire::Foreground => self
+            Retire::Foreground | Retire::Stopped => self
                 .background_calls()
                 .filter(|tool| tool.in_background())
                 .map(|tool| tool.call.clone())
@@ -2603,7 +2643,11 @@ impl Transcript {
                 Body::Tool(tool)
                     if tool.state == ToolState::Running && !background.contains(&tool.call) =>
                 {
-                    tool.state = ToolState::Unavailable;
+                    tool.state = if matches!(retire, Retire::Stopped) {
+                        ToolState::Stopped
+                    } else {
+                        ToolState::Unavailable
+                    };
                     Some(block.id)
                 }
                 Body::Visual(visual)
@@ -5194,7 +5238,7 @@ mod tests {
     #[test]
     fn an_observation_times_the_interrupted_or_failed_turn_it_follows() {
         for (outcome, said) in [
-            (crate::TurnOutcome::Interrupted, "interrupted · 4.1s"),
+            (crate::TurnOutcome::Interrupted, "You stopped after 4.1s"),
             (
                 crate::TurnOutcome::Error("model overloaded".into()),
                 "failed · 4.1s · model overloaded",
@@ -5409,6 +5453,47 @@ mod tests {
             assert_eq!(tool.output, None);
             assert_eq!(tool.result_line, None);
             assert_eq!(update.dirty.len(), 1, "one row, once");
+        }
+
+        #[test]
+        fn a_stopped_turn_marks_the_calls_it_cut_off_as_stopped() {
+            let mut t = Transcript::default();
+            t.apply(Input::Prompt("run it".into()));
+            t.apply(Input::Event(SessionEvent::ToolStarted {
+                id: "c1".into(),
+                name: "Bash".into(),
+                input: json!({"command": "sleep 30"}),
+            }));
+            t.apply(Input::Event(SessionEvent::TurnEnded {
+                outcome: TurnOutcome::Interrupted,
+                cost_usd: None,
+            }));
+            assert_eq!(t.tool("c1").unwrap().state, ToolState::Stopped);
+        }
+
+        #[test]
+        fn a_denied_call_stays_stopped_when_its_refusal_arrives() {
+            let mut t = Transcript::default();
+            t.apply(Input::Prompt("run it".into()));
+            t.apply(Input::Event(SessionEvent::ToolStarted {
+                id: "c1".into(),
+                name: "Bash".into(),
+                input: json!({"command": "rm -rf build"}),
+            }));
+            t.apply(Input::Answered {
+                allowed: false,
+                tool_name: "Bash".into(),
+            });
+            assert_eq!(t.tool("c1").unwrap().state, ToolState::Stopped);
+            t.apply(Input::Event(SessionEvent::ToolCompleted {
+                id: "c1".into(),
+                output: "denied".into(),
+                is_error: true,
+                result: ToolResult::Opaque,
+            }));
+            let tool = t.tool("c1").unwrap();
+            assert_eq!(tool.state, ToolState::Stopped);
+            assert_eq!(tool.output, None, "a refusal has nothing to show");
         }
 
         #[test]

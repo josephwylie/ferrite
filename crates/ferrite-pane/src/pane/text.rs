@@ -7,6 +7,8 @@ use ferrite_core::transcript::tools::{self, ToolKind};
 
 /// What a call whose result never came says after its call line.
 pub(super) const NO_RESULT: &str = "no result";
+/// What a call the operator stopped says (a denial, or the turn's stop).
+pub(super) const STOPPED: &str = "stopped";
 
 /// How a turn's end reads in the transcript, if it says anything: a
 /// completed turn `Worked for 5m 22s` once it took `TURN_STAMP_MIN_MS` (a
@@ -326,6 +328,7 @@ fn call_result(tool: &ToolBlock) -> Option<String> {
     match &tool.state {
         ToolState::Running => None,
         ToolState::Unavailable => Some(NO_RESULT.to_owned()),
+        ToolState::Stopped => Some(STOPPED.to_owned()),
         ToolState::Failed(_) | ToolState::Ok => {
             // A tally only: an early failure's elbow heads with the run's
             // first line, which is no verdict.
@@ -422,7 +425,14 @@ pub(crate) fn group_summary(members: &[Block]) -> GroupSummary {
         .iter()
         .filter(|tool| tool.state == ToolState::Unavailable)
         .count();
+    let stopped = tools
+        .iter()
+        .filter(|tool| tool.state == ToolState::Stopped)
+        .count();
     let mut wrong = Vec::new();
+    if stopped > 0 {
+        wrong.push(format!("{stopped} {STOPPED}"));
+    }
     if failed > 0 {
         wrong.push(format!("{failed} {}", theme::words::FAILED));
     }
@@ -903,5 +913,35 @@ mod tests {
             group_summary(transcript.blocks()).text,
             "Read 3 files (1 failed)"
         );
+    }
+
+    /// A denied call, and one cut off by a stopped turn, are stopped, not
+    /// failed: the group says so and the row's tag is no red `Failed`.
+    #[test]
+    fn a_group_counts_what_the_operator_stopped() {
+        let mut transcript = Transcript::default();
+        read(&mut transcript, "a", false);
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: "b".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({"command": "rm -rf build"}),
+        }));
+        transcript.apply(Input::Answered {
+            allowed: false,
+            tool_name: "Bash".into(),
+        });
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "b".into(),
+            output: "The user doesn't want to proceed".into(),
+            is_error: true,
+            result: ferrite_core::ToolResult::Opaque,
+        }));
+        let stopped = group_tools(transcript.blocks()).last().unwrap().clone();
+        assert_eq!(stopped.state, ToolState::Stopped);
+        assert_eq!(call_verdict(&stopped), None, "stopped is not failed");
+        assert_eq!(call_result(&stopped).as_deref(), Some("stopped"));
+        assert!(group_summary(transcript.blocks())
+            .text
+            .ends_with("(1 stopped)"));
     }
 }

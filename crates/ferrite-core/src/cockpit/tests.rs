@@ -1584,7 +1584,7 @@ fn text(s: &str) -> SessionEvent {
 /// of the exchange. Recorded rather than spawned: the suite must never
 /// shell out to a real CLI, let alone pay one.
 /// The completion observation now times every outcome, so an
-/// interrupted turn's row reads `interrupted · 4.1s`. Timing it must not
+/// interrupted turn's row reads `You stopped after 4.1s`. Timing it must not
 /// make it a completion: no completed stamp, no "finished" notice, no
 /// follow-up prediction, and the transcript still reads not-completed.
 #[test]
@@ -1615,7 +1615,7 @@ fn a_timed_interruption_is_never_read_as_a_completion() {
     assert_eq!(ends.len(), 1, "the observation times the row, adds none");
     assert_eq!(ends[0].outcome, crate::TurnOutcome::Interrupted);
     assert!(ends[0].elapsed_ms.is_some(), "the interruption is timed");
-    assert!(ends[0].text().starts_with("interrupted · "));
+    assert!(ends[0].text().starts_with("You stopped after "));
     assert!(!transcript.turn_completed());
     assert!(
         cockpit

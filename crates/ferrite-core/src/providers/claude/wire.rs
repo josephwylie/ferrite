@@ -1192,8 +1192,10 @@ fn approval_response(
         crate::DecisionAnswer::Allow { input } if allow => {
             Ok(serde_json::json!({"behavior":"allow","updatedInput":input}))
         }
+        // A denial ends the turn (Claude's: no more text, the group reads
+        // `(1 stopped)`): `interrupt` is the CLI's own word for it.
         crate::DecisionAnswer::Deny { message } if deny => {
-            Ok(serde_json::json!({"behavior":"deny","message":message}))
+            Ok(serde_json::json!({"behavior":"deny","message":message,"interrupt":true}))
         }
         crate::DecisionAnswer::AllowAlways { input, suggestion }
             if allow
@@ -1985,6 +1987,26 @@ mod tests {
         assert_eq!(hunks[0].lines, ["+alpha", "+bravo"]);
         assert_eq!((hunks[0].old_start, hunks[0].old_lines), (0, 0));
         assert_eq!((hunks[0].new_start, hunks[0].new_lines), (1, 2));
+    }
+
+    /// Denying a tool ends the turn: the response says `interrupt`, so the
+    /// model does not carry on with another try.
+    #[test]
+    fn a_denial_interrupts_the_turn() {
+        let response = approval_response(
+            true,
+            true,
+            &Value::Null,
+            &[],
+            &crate::DecisionAnswer::Deny {
+                message: "no".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            response,
+            serde_json::json!({"behavior":"deny","message":"no","interrupt":true})
+        );
     }
 
     /// A `Read` of a picture, as Claude Desktop's own log records it

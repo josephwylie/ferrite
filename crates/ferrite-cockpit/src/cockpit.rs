@@ -1874,26 +1874,23 @@ impl CockpitView {
         let solo = self.cockpit.roster().fullscreen().is_some()
             || matches!(self.cockpit.roster().view(), View::Solo);
         // While the turn runs, its working line is the transcript's last
-        // row (`pane::working_tail`), unless a Decision stands there.
+        // row (`pane::working_tail`), over a Decision that waits.
         let progress = subject_view.transcript().progress().caption();
         let reasoning_visible = progress.as_ref().is_some_and(|caption| {
             self.panes[index].transcript().is_some_and(|transcript| {
                 transcript.read(cx).received_reasoning_is_visible(caption)
             })
         });
-        let working = tail.is_none().then(|| {
-            pane::working_tail(pane::WorkingFacts {
-                transcript: subject_view.transcript(),
-                thread,
-                starting: open.starting(),
-                solo,
-                focused,
-                reduce_motion: cx.reduce_motion(),
-                reasoning_visible,
-                effort: self.thread_effort(&open),
-            })
+        let working = pane::working_tail(pane::WorkingFacts {
+            transcript: subject_view.transcript(),
+            thread,
+            starting: open.starting(),
+            solo,
+            focused,
+            reduce_motion: cx.reduce_motion(),
+            reasoning_visible,
+            effort: self.thread_effort(&open),
         });
-        let working = working.flatten();
         let agents = transcript_glue::agent_faces(open.activity());
         let rewind = transcript_glue::rewind_gate(&open);
         // A subagent's tab draws no Composer to quote into.

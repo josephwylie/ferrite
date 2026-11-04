@@ -25,6 +25,12 @@ pub struct WorkingFacts<'a> {
 enum Working {
     Line(WorkingLine),
     Starting { still: bool, solo: bool },
+    /// No turn runs, but the last one's plan stays under its rows, where
+    /// the turn left it (a step it stopped on reads blocked).
+    Plan {
+        plan: Vec<(String, TaskState)>,
+        solo: bool,
+    },
 }
 
 /// WP-A · the working row (the prototype's `.comp > .r`): the transcript's
@@ -37,7 +43,13 @@ enum Working {
 /// frame; the mark and the shimmer are loops (the loops overlay), so they
 /// redraw nothing of the transcript.
 pub fn working_tail(facts: WorkingFacts) -> Option<crate::transcript::TranscriptTail> {
-    let working = if facts.transcript.status() == Status::Streaming {
+    // The line stays over a Decision that waits: the turn goes on being a
+    // turn, its clock counting, while the operator decides. Alone in its
+    // window only: a Group Pane's Decision is an island over a small body,
+    // which keeps all its room.
+    let working = if facts.transcript.status() == Status::Streaming
+        || (facts.transcript.status() == Status::Blocked && facts.solo)
+    {
         Working::Line(WorkingLine::of(
             facts.transcript,
             false,
@@ -54,7 +66,14 @@ pub fn working_tail(facts: WorkingFacts) -> Option<crate::transcript::Transcript
             solo: facts.solo,
         }
     } else {
-        return None;
+        let plan = plan_of(facts.transcript);
+        if plan.is_empty() {
+            return None;
+        }
+        Working::Plan {
+            plan,
+            solo: facts.solo,
+        }
     };
     let key = {
         use std::hash::{Hash, Hasher};
@@ -68,6 +87,9 @@ pub fn working_tail(facts: WorkingFacts) -> Option<crate::transcript::Transcript
             let line = match &working {
                 Working::Line(line) => line.render(),
                 Working::Starting { still, solo } => starting_line(*still, *solo),
+                Working::Plan { plan, solo } => div()
+                    .pt(px(theme::TASK_CARD_GAP))
+                    .child(task_list(plan, Grid::pane(Default::default(), *solo))),
             };
             div()
                 .debug_selector(|| "transcript-progress".into())
@@ -290,7 +312,37 @@ pub(crate) struct WorkingLine {
 enum TaskState {
     Done,
     Current,
+    /// The step the turn stopped on (denied, or stopped by the operator).
+    Blocked,
     ToDo,
+}
+
+/// The plan the turn works to, as the task list draws it. Once the turn
+/// has ended on a stop, the step it was on reads blocked.
+fn plan_of(transcript: &Transcript) -> Vec<(String, TaskState)> {
+    let progress = transcript.progress();
+    if !progress.has_plan {
+        return Vec::new();
+    }
+    let stopped = transcript.status() != Status::Streaming
+        && matches!(
+            transcript.turn_outcome(),
+            Some(ferrite_core::TurnOutcome::Interrupted)
+        );
+    progress
+        .plan
+        .iter()
+        .map(|step| {
+            use ferrite_core::progress::StepStatus;
+            let state = match step.status {
+                StepStatus::Completed => TaskState::Done,
+                StepStatus::InProgress if stopped => TaskState::Blocked,
+                StepStatus::InProgress => TaskState::Current,
+                StepStatus::Pending => TaskState::ToDo,
+            };
+            (step.text.clone(), state)
+        })
+        .collect()
 }
 
 impl WorkingLine {
@@ -320,23 +372,7 @@ impl WorkingLine {
                 Some(effort) => format!("thinking with {effort} effort"),
                 None => "thinking".to_owned(),
             });
-        let plan = if progress.has_plan {
-            progress
-                .plan
-                .iter()
-                .map(|step| {
-                    use ferrite_core::progress::StepStatus;
-                    let state = match step.status {
-                        StepStatus::Completed => TaskState::Done,
-                        StepStatus::InProgress => TaskState::Current,
-                        StepStatus::Pending => TaskState::ToDo,
-                    };
-                    (step.text.clone(), state)
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let plan = plan_of(transcript);
         let caption = caption_of(
             transcript,
             !compact && received_reasoning_is_visible,
@@ -572,6 +608,10 @@ fn task_list(plan: &[(String, TaskState)], grid: Grid) -> Div {
                     components::working_mark(theme::TASK_ICON, INK_STRONG),
                     INK_STRONG,
                 ),
+                TaskState::Blocked => (
+                    icon(icons::CIRCLE_MINUS, theme::TASK_ICON, INK_SUBTLE).into_any_element(),
+                    INK_STRONG,
+                ),
                 TaskState::ToDo => (
                     icon(icons::CIRCLE_DASHED, theme::TASK_ICON, INK_SUBTLE).into_any_element(),
                     INK_STRONG,
@@ -727,5 +767,70 @@ mod tests {
                 "Waiting 15 seconds then printing done".to_owned()
             ))
         );
+    }
+
+    fn planned(transcript: &mut Transcript) {
+        use ferrite_core::progress::{PlanStep, ProgressEvent, StepStatus};
+        let step = |text: &str, status| PlanStep {
+            text: text.into(),
+            status,
+        };
+        transcript.apply(Input::Event(SessionEvent::Progress {
+            event: ProgressEvent::Plan {
+                steps: vec![
+                    step("Read the config", StepStatus::Completed),
+                    step("Delete the build", StepStatus::InProgress),
+                    step("Rebuild", StepStatus::Pending),
+                ],
+                explanation: String::new(),
+            },
+        }));
+    }
+
+    /// The plan is the turn's: it stays under the turn's rows once the turn
+    /// is over, and the step a stop landed on reads blocked.
+    #[test]
+    fn the_plan_stays_after_the_turn_and_blocks_where_it_stopped() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Prompt("Clean up".into()));
+        planned(&mut transcript);
+        let states = |transcript: &Transcript| {
+            plan_of(transcript)
+                .into_iter()
+                .map(|(_, state)| state)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            states(&transcript),
+            [TaskState::Done, TaskState::Current, TaskState::ToDo]
+        );
+        transcript.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Interrupted,
+            cost_usd: None,
+        }));
+        assert_eq!(
+            states(&transcript),
+            [TaskState::Done, TaskState::Blocked, TaskState::ToDo]
+        );
+        let facts = || WorkingFacts {
+            transcript: &transcript,
+            thread: ThreadId::new(1),
+            starting: false,
+            solo: true,
+            focused: false,
+            reduce_motion: true,
+            reasoning_visible: false,
+            effort: None,
+        };
+        assert!(
+            working_tail(facts()).is_some(),
+            "the idle thread still draws its plan"
+        );
+        let finished = Transcript::default();
+        assert!(working_tail(WorkingFacts {
+            transcript: &finished,
+            ..facts()
+        })
+        .is_none());
     }
 }

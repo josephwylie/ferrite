@@ -295,15 +295,18 @@ const V12_TORN: &str = concat!(
 /// after the header), and the fingerprint of what it shows.
 pub(crate) const FIXTURES: &[(&str, &str, usize, u64)] = &[
     // Repinned for HD64: a tool row carries its background work (`None`).
-    ("v1", V1, 5, 18232719497336752757),
+    // Repinned for image reads: a tool row carries `image` (`false`).
+    ("v1", V1, 5, 11008443106938394579),
     // Repinned for HD64: a tool row carries its background work (`None`).
-    ("v8-handover", V8_HANDOVER, 13, 5964385584595874083),
+    // Repinned for image reads: a tool row carries `image` (`false`).
+    ("v8-handover", V8_HANDOVER, 13, 6616395247906374593),
     // Repinned when `ContextDetails` dropped `usable_window` and
     // `auto_compact_threshold`: the record still loads, without them.
     // Repinned for HD64: a tool row carries its background work (`None`
     // here), and a background turn's end no longer leaves the generic
     // `N background agents completed` notice.
-    ("v11-activity", V11_ACTIVITY, 31, 10988458662494003408),
+    // Repinned for image reads: a tool row carries `image` (`false` here).
+    ("v11-activity", V11_ACTIVITY, 31, 5475841580472461714),
     // Repinned at schema 15: its observation now reads `prompt_id: None`.
     ("v12-torn", V12_TORN, 10, 2170776138345052278),
 ];

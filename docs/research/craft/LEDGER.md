@@ -143,11 +143,11 @@ Each item is ticked only after it's seen working in the real installed app.
 4. **Right-click menus.** Each matches its target: answer, prompt, link, file. BUILT, not ticked: answer, prompt and link (`tests/forks.rs`, `tests/link_clicks.rs`); not yet seen in the installed app. The file menu waits on the Files tree (item 5). Pin as chapter only marks the answer in its transcript (no chapter list, not saved). Open in Files opens the existing reader until Files exists.
 5. **Files, Changes, session rail and terminal.** Title-bar tools as Claude's (`claude-files-changes.md`). They replace Show in Finder. NOT BUILT: no terminal or PTY crate is in the workspace (a real terminal is a large job); the Files tree, editor and Changes split are unstarted.
 6. **Turn states:**
-   - Deny ends the turn, with "(1 stopped)";
-   - Stop says "You stopped after Ns";
-   - the todo card stays, with a blocked state;
-   - a live "Working for Ns";
-   - the working line stays during an approval.
+   - Deny ends the turn, with "(1 stopped)": BUILT, not ticked. `ToolState::Stopped` (a denied call, or a call a stopped turn cut off) never reads red; the group says `(1 stopped)`, the row `stopped`. The Claude deny response now sends `interrupt: true`, the SDK's own field: **not checked against a live capture**, so whether the CLI really ends the turn is unproven (`a_denial_interrupts_the_turn` only pins what Ferrite sends).
+   - Stop says "You stopped after Ns": BUILT, not ticked, once the turn's time is known; a turn that only ended (a revived log) still says `interrupted`.
+   - the todo card stays, with a blocked state: BUILT, not ticked. The last plan stays under the thread's rows when idle (until the next plan replaces it, or a thread has none), and the step a stop landed on shows a bar in a ring. It is not kept per turn: a later turn's plan replaces it.
+   - a live "Working for Ns" that expands: NOT BUILT. The live line still reads as before (`Cogitating 53s · ↓ …`); no turn header collapses or expands.
+   - the working line stays during an approval: BUILT, not ticked, in a Solo Pane only (a Group Pane's Decision island keeps all its small body, and showing the line there broke its form: `group_question_uses_measured_space_and_restores_inline_form`); the line shows over the waiting Decision and its clock keeps counting. Tests: core `transcript` and `claude/wire.rs`, pane `text.rs` and `working.rs`, cockpit `decision_cards.rs`.
 7. **Background work reports back to its row** (HD64). BUILT, not ticked: tests pass (`tests/background_handback.rs`, on the real `claude-background-2.1.318` capture). The launch row stays running past its turn, with `View live output ▸` opening the right-docked Background tasks pane, and settles with a muted `Background command completed · …` line where the work finished. The rail has a `Background tasks` section. There is no pill. Not built:
     - the pane's trash and expand, since the icon set has no trash;
     - an agent's nested child tasks;

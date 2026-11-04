@@ -298,3 +298,21 @@ fn the_answer_keys_are_letters_when_nothing_is_blocked(cx: &mut TestAppContext) 
     });
     assert_eq!(typed, "y");
 }
+
+/// The turn is still a turn while the operator decides: its working line
+/// (and its clock) stays, with the Decision under it.
+#[gpui::test]
+fn the_working_line_stays_over_a_waiting_decision(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("working-over-decision", 1);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    fake.streams.borrow()[0].send(decision("perm_01")).unwrap();
+    tick(cx);
+    let line = cx
+        .debug_bounds("transcript-progress")
+        .expect("the working line stays");
+    let card = cx
+        .debug_bounds("transcript-tail")
+        .expect("the Decision waits");
+    assert!(line.bottom() <= card.top() + px(1.), "the line is over it");
+}

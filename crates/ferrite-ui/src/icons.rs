@@ -124,6 +124,7 @@ icons![
     "maximize",
     // A plan's pending step (the transcript's task list).
     "circle-dashed",
+    "circle-minus",
     // A row's more menu (the nav's `⋯`).
     "ellipsis",
     // The Composer's `+` menu (Claude's marks).
@@ -252,6 +253,8 @@ pub const CHECK_CIRCLE: &str = "icons/check-circle.svg";
 pub const X_CIRCLE: &str = "icons/x-circle.svg";
 /// A plan's step still to do: a dashed ring (the task list).
 pub const CIRCLE_DASHED: &str = "icons/circle-dashed.svg";
+/// A plan's step the turn stopped on: a bar in a ring (the task list).
+pub const CIRCLE_MINUS: &str = "icons/circle-minus.svg";
 /// A row's more menu: `⋯`, under the pointer.
 pub const ELLIPSIS: &str = "icons/ellipsis.svg";
 /// The permission mode.
@@ -546,7 +549,7 @@ mod tests {
     const TITLE_BAR_ICONS: [&str; 3] = [BACK, FORWARD, DIFF];
 
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
-    const REFRESH_ICONS: [&str; 32] = [
+    const REFRESH_ICONS: [&str; 33] = [
         PANEL_RIGHT,
         SEARCH,
         INBOX,
@@ -568,6 +571,7 @@ mod tests {
         EXTERNAL,
         MAXIMIZE,
         CIRCLE_DASHED,
+        CIRCLE_MINUS,
         ELLIPSIS,
         LAPTOP,
         PLUG,
