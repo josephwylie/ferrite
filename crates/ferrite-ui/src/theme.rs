@@ -1701,15 +1701,18 @@ pub const SELECTION_REPLY_RADIUS: f32 = 8.0;
 /// inside its ring: the passage in `INK_SUBTLE`, cut at
 /// `REPLY_CARD_QUOTE_LINES` lines with an ellipsis, then a one-line field
 /// (`Reply to Claude`) `REPLY_CARD_GAP` under it and the send button at its
-/// right. Sent, it becomes a `REPLY_CHIP` square in the Composer's tray
-/// (`claude/reply-sent-chip.png`): the typed words behind a quote bar at
-/// its top, an outlined `Reply` badge at its foot, on the `SUNKEN` ground.
+/// right. Sent, it becomes a tile in the Composer's tray
+/// (`claude/reply-sent-chip.png`), an image card's size, ring and `×`: the
+/// typed words behind a quote bar at its top, cut at `REPLY_TILE_LINES`, a
+/// muted `Reply` at its foot, on the file chip's `RAISED` ground.
 pub const REPLY_CARD_W: f32 = 280.0;
 pub const REPLY_CARD_PAD: f32 = SPACE_3;
 pub const REPLY_CARD_GAP: f32 = SPACE_2;
 pub const REPLY_CARD_QUOTE_LINES: usize = 2;
-pub const REPLY_CHIP: f32 = 120.0;
-pub const REPLY_CHIP_LINES: usize = 4;
+/// The field wraps and grows a row at a time (the Composer's own ease) up to
+/// this many, the card growing upward from its foot; past it the field scrolls.
+pub const REPLY_CARD_FIELD_ROWS: usize = 4;
+pub const REPLY_TILE_LINES: usize = 3;
 /// **The side chat** (Claude's, `claude/sidechat-open.png`): the right
 /// pane's other body, `SIDE_CHAT_W` wide beside the thread, which reflows
 /// narrower. Its head is a tab strip (`Side chat ×`, `+`) in the row's

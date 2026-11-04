@@ -281,41 +281,14 @@ fn image_card(
         });
     let remove = on_remove.map(|remove| {
         let removed = path.to_path_buf();
-        div()
-            .debug_selector(move || format!("tray-image-{index}-remove"))
-            .absolute()
-            .top(px(theme::THUMB_REMOVE_INSET))
-            .right(px(theme::THUMB_REMOVE_INSET))
-            .child(
-                ferrite_ui::components::button(("remove-attachment", index))
-                    // Clear until the pointer is over the card or the
-                    // keyboard reaches it: a tab stop either way.
-                    .opacity(0.)
-                    .group_hover(group.clone(), |style| style.opacity(1.))
-                    .focus_visible(|style| ferrite_ui::components::control_focus(style).opacity(1.))
-                    .tab_stop(true)
-                    .p_0()
-                    .size(px(theme::THUMB_REMOVE))
-                    .rounded_full()
-                    .bg(theme::paint::FLOAT)
-                    .border_1()
-                    .border_color(theme::paint::LINE)
-                    .key_context("PromptAttachment")
-                    .accessibility_label(format!("Remove {name}"))
-                    .tooltip_builder(ferrite_ui::menu::tooltip(format!(
-                        "Remove {}",
-                        path.display()
-                    )))
-                    .child(ferrite_ui::icons::icon(
-                        ferrite_ui::icons::CLOSE,
-                        theme::ATTACH_REMOVE_ICON,
-                        theme::INK_STRONG,
-                    ))
-                    .on_click(move |_, window, cx| {
-                        cx.stop_propagation();
-                        remove(&removed, window, cx);
-                    }),
-            )
+        tile_remove(
+            format!("tray-image-{index}-remove"),
+            ("remove-attachment", index),
+            group.clone(),
+            format!("Remove {name}"),
+            format!("Remove {}", path.display()),
+            move |window, cx| remove(&removed, window, cx),
+        )
     });
     div()
         .id(("tray-image-card", index))
@@ -363,8 +336,9 @@ pub(crate) fn thumbnail(
 
 /// A quoted passage as Claude draws one over the sent prompt's bubble: the
 /// word Quote in `INK_SUBTLE`, then the passage cut at `QUOTE_ROW_LINES`
-/// lines, behind a `QUOTE_RULE_W` `LINE` rule (Markdown's quote rule).
-pub fn quote_row(index: usize, passage: String) -> gpui::Stateful<gpui::Div> {
+/// lines, behind a `QUOTE_RULE_W` `LINE` rule (Markdown's quote rule), and
+/// under it the words the operator replied with, when there are any.
+pub fn quote_row(index: usize, reply: Reply) -> gpui::Stateful<gpui::Div> {
     use ferrite_ui::theme;
     use gpui::{div, rgb, SharedString};
     div()
@@ -390,16 +364,26 @@ pub fn quote_row(index: usize, passage: String) -> gpui::Stateful<gpui::Div> {
                 .text_color(rgb(theme::INK_STRONG))
                 .line_clamp(theme::QUOTE_ROW_LINES)
                 .text_ellipsis()
-                .child(SharedString::from(passage)),
+                .child(SharedString::from(reply.quote)),
         )
+        .when(!reply.text.is_empty(), |row| {
+            row.child(
+                div()
+                    .debug_selector(move || format!("quote-row-{index}-words"))
+                    .text_color(rgb(theme::INK_STRONG))
+                    .line_clamp(theme::QUOTE_ROW_LINES)
+                    .text_ellipsis()
+                    .child(SharedString::from(reply.text)),
+            )
+        })
 }
 
-/// A reply waiting in the tray as Claude shows one (`claude/reply-sent-chip.png`):
-/// a `REPLY_CHIP` square at `R_CARD` on the `SUNKEN` ground in a `LINE`
-/// ring. Its top is a quote bar holding what the operator typed (the
-/// passage itself when they typed nothing), its foot an outlined `Reply`
-/// badge; its `×` — shown under the pointer or on keyboard focus — removes
-/// it, as an image card's does.
+/// A reply waiting in the tray (`claude/reply-sent-chip.png`), one of the
+/// tray's tiles: an image card's own `COMPOSER_THUMB` square at `R_CARD` in
+/// its `LINE` ring and `×` (`tile_remove`), on the file chip's `RAISED`
+/// ground. Its top is a quote bar holding what the operator typed (the
+/// passage itself when they typed nothing), cut at `REPLY_TILE_LINES`; its
+/// foot the muted `Reply` label, where a file's type would stand.
 fn reply_card(index: usize, reply: Reply, on_remove: Option<RemoveReply>) -> gpui::AnyElement {
     use ferrite_ui::theme;
     use gpui::{div, rgb};
@@ -410,36 +394,14 @@ fn reply_card(index: usize, reply: Reply, on_remove: Option<RemoveReply>) -> gpu
         reply.text
     };
     let remove = on_remove.map(|remove| {
-        div()
-            .debug_selector(move || format!("tray-reply-{index}-remove"))
-            .absolute()
-            .top(px(theme::THUMB_REMOVE_INSET))
-            .right(px(theme::THUMB_REMOVE_INSET))
-            .child(
-                ferrite_ui::components::button(("remove-reply", index))
-                    .opacity(0.)
-                    .group_hover(group.clone(), |style| style.opacity(1.))
-                    .focus_visible(|style| ferrite_ui::components::control_focus(style).opacity(1.))
-                    .tab_stop(true)
-                    .p_0()
-                    .size(px(theme::THUMB_REMOVE))
-                    .rounded_full()
-                    .bg(theme::paint::FLOAT)
-                    .border_1()
-                    .border_color(theme::paint::LINE)
-                    .key_context("PromptAttachment")
-                    .accessibility_label("Remove reply")
-                    .tooltip_builder(ferrite_ui::menu::tooltip("Remove reply"))
-                    .child(ferrite_ui::icons::icon(
-                        ferrite_ui::icons::CLOSE,
-                        theme::ATTACH_REMOVE_ICON,
-                        theme::INK_STRONG,
-                    ))
-                    .on_click(move |_, window, cx| {
-                        cx.stop_propagation();
-                        remove(index, window, cx);
-                    }),
-            )
+        tile_remove(
+            format!("tray-reply-{index}-remove"),
+            ("remove-reply", index),
+            group.clone(),
+            "Remove reply".into(),
+            "Remove reply".into(),
+            move |window, cx| remove(index, window, cx),
+        )
     });
     div()
         .id(("tray-reply-card", index))
@@ -450,15 +412,15 @@ fn reply_card(index: usize, reply: Reply, on_remove: Option<RemoveReply>) -> gpu
         .flex_col()
         .justify_between()
         .flex_shrink_0()
-        .size(px(theme::REPLY_CHIP))
-        .p(px(theme::SPACE_2))
+        .size(px(theme::COMPOSER_THUMB))
+        .p(px(theme::SPACE_1_5))
         .rounded(px(theme::R_CARD))
-        .bg(theme::paint::SUNKEN)
+        .bg(theme::paint::RAISED)
         .border_1()
         .border_color(theme::paint::LINE)
         .overflow_hidden()
         .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_BADGE))
+        .text_size(px(theme::FS_META))
         .line_height(px(theme::LH_META))
         .font_weight(theme::W_BODY)
         .text_color(rgb(theme::INK_SUBTLE))
@@ -477,7 +439,7 @@ fn reply_card(index: usize, reply: Reply, on_remove: Option<RemoveReply>) -> gpu
                     div()
                         .debug_selector(move || format!("tray-reply-{index}-words"))
                         .min_w_0()
-                        .line_clamp(theme::REPLY_CHIP_LINES)
+                        .line_clamp(theme::REPLY_TILE_LINES)
                         .text_ellipsis()
                         .child(SharedString::from(words)),
                 ),
@@ -485,17 +447,54 @@ fn reply_card(index: usize, reply: Reply, on_remove: Option<RemoveReply>) -> gpu
         .child(
             div()
                 .debug_selector(move || format!("tray-reply-{index}-badge"))
-                .flex()
-                .self_start()
-                .items_center()
-                .px(px(theme::SPACE_1_5))
-                .rounded_full()
-                .border_1()
-                .border_color(theme::paint::FLOAT_EDGE)
                 .child("Reply"),
         )
         .children(remove)
         .into_any_element()
+}
+
+/// A tile's `×` in its top corner (an image card's, a reply's): clear until
+/// the pointer is over the tile (`group`) or the keyboard reaches it — a
+/// tab stop either way, in the `PromptAttachment` context.
+fn tile_remove(
+    selector: String,
+    id: (&'static str, usize),
+    group: SharedString,
+    label: String,
+    tooltip: String,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> gpui::Div {
+    use ferrite_ui::theme;
+    gpui::div()
+        .debug_selector(move || selector.clone())
+        .absolute()
+        .top(px(theme::THUMB_REMOVE_INSET))
+        .right(px(theme::THUMB_REMOVE_INSET))
+        .child(
+            ferrite_ui::components::button(id)
+                .opacity(0.)
+                .group_hover(group, |style| style.opacity(1.))
+                .focus_visible(|style| ferrite_ui::components::control_focus(style).opacity(1.))
+                .tab_stop(true)
+                .p_0()
+                .size(px(theme::THUMB_REMOVE))
+                .rounded_full()
+                .bg(theme::paint::FLOAT)
+                .border_1()
+                .border_color(theme::paint::LINE)
+                .key_context("PromptAttachment")
+                .accessibility_label(label)
+                .tooltip_builder(ferrite_ui::menu::tooltip(tooltip))
+                .child(ferrite_ui::icons::icon(
+                    ferrite_ui::icons::CLOSE,
+                    theme::ATTACH_REMOVE_ICON,
+                    theme::INK_STRONG,
+                ))
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    on_click(window, cx);
+                }),
+        )
 }
 
 /// The draft's review comments as one `.att` chip: the pencil, `N review

@@ -603,9 +603,9 @@ fn a_selections_reply_opens_a_card_that_becomes_a_tray_card_and_sends(cx: &mut T
     });
     let chip = cx.debug_bounds("tray-reply-0").expect("a tray card");
     assert!(
-        (chip.size.width - px(ferrite_ui::theme::REPLY_CHIP)).abs() < px(1.)
-            && (chip.size.height - px(ferrite_ui::theme::REPLY_CHIP)).abs() < px(1.),
-        "a square: {chip:?}"
+        (chip.size.width - px(ferrite_ui::theme::COMPOSER_THUMB)).abs() < px(1.)
+            && (chip.size.height - px(ferrite_ui::theme::COMPOSER_THUMB)).abs() < px(1.),
+        "an attachment tile's square: {chip:?}"
     );
     assert!(cx.debug_bounds("tray-reply-0-words").is_some());
     assert!(cx.debug_bounds("tray-reply-0-badge").is_some());
@@ -648,7 +648,7 @@ fn a_selections_reply_opens_a_card_that_becomes_a_tray_card_and_sends(cx: &mut T
     tick(cx);
     assert_eq!(
         fake.sent.borrow().last().map(String::as_str),
-        Some("> vo\n> char\n\nand this?\n\nLook:")
+        Some("> vo\n> char\n\n\u{21a9} and this?\n\nLook:")
     );
     view.read_with(cx, |view, cx| {
         let composer = view.panes[0].composer.read(cx);
@@ -1055,4 +1055,113 @@ fn the_reply_pill_stands_clear_of_the_selection_not_at_the_pointer(cx: &mut Test
         pill.bottom() < from.y && (pill.center().y - to.y).abs() > px(40.),
         "by the selection's first line, not the pointer at {to:?}"
     );
+}
+
+/// Three Replies on one prompt each come back as their own Quote row with
+/// their own words, ahead of the main message, however the prompt is
+/// reached: sent now, or read back from its text.
+#[gpui::test]
+fn a_prompt_with_three_replies_draws_each_quote_with_its_words(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("three-replies", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    let replies = [
+        Reply::new("first passage", "why first?"),
+        Reply::new("second passage", ""),
+        Reply::new("third passage", "and third?"),
+    ];
+    view.update(cx, |view, cx| {
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.set(
+                ferrite_pane::quote::compose(&replies, "the main message"),
+                cx,
+            );
+        });
+    });
+    view.read_with(cx, |view, cx| {
+        let composer = view.panes[0].composer.read(cx);
+        assert_eq!(composer.replies(), replies, "recalled whole, in order");
+        assert_eq!(composer.text(), "the main message");
+    });
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    let rows = [
+        ("quote-row-0", "quote-row-0-words"),
+        ("quote-row-1", "quote-row-1-words"),
+        ("quote-row-2", "quote-row-2-words"),
+    ];
+    for (index, (reply, (row, words))) in replies.iter().zip(rows).enumerate() {
+        assert!(cx.debug_bounds(row).is_some(), "reply {index}'s Quote row");
+        assert_eq!(
+            cx.debug_bounds(words).is_some(),
+            !reply.text.is_empty(),
+            "reply {index}'s words"
+        );
+    }
+    let last = cx.debug_bounds("quote-row-2").unwrap();
+    let bubble = cx.debug_bounds("transcript-prompt").expect("the bubble");
+    assert!(last.bottom() <= bubble.top(), "the quotes stand over the bubble");
+    assert_eq!(
+        fake.sent.borrow().last().map(String::as_str),
+        Some(ferrite_pane::quote::compose(&replies, "the main message").as_str())
+    );
+}
+
+/// A reply longer than the field's line wraps and grows the card a row at a
+/// time, upward from its foot (the selection stays uncovered), up to
+/// `REPLY_CARD_FIELD_ROWS`, past which the field scrolls instead.
+#[gpui::test]
+fn a_long_reply_grows_the_card_upward_to_a_few_rows(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("reply-card-grows", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "zero\n\none\n\ntwo\n\nalpha\n\nbravo\n\ncharlie\n\n".into(),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    let (from, _) = drag(&view, cx, (3, 2), (3, 4));
+    let reply = cx.debug_bounds("selection-reply-quote").expect("Reply");
+    cx.simulate_click(reply.center(), gpui::Modifiers::none());
+    tick(cx);
+    let settle = |cx: &mut gpui::VisualTestContext| {
+        for _ in 0..3 {
+            cx.executor().advance_clock(Duration::from_millis(
+                ferrite_ui::theme::MOTION_COMPOSER_GROW_MS,
+            ));
+            cx.update(|window, cx| window.simulate_next_frame(cx));
+            cx.run_until_parked();
+        }
+    };
+    let one = cx.debug_bounds("reply-card").expect("the card");
+    cx.simulate_input("words that run on and on until the field has to wrap them onto a second line");
+    settle(cx);
+    let two = cx.debug_bounds("reply-card").unwrap();
+    assert!(two.size.height > one.size.height, "wrapped: {one:?} -> {two:?}");
+    assert!(
+        (two.bottom() - one.bottom()).abs() < px(1.),
+        "it grows upward, its foot where it was: {one:?} -> {two:?}"
+    );
+    assert!(two.bottom() <= from.y, "never over the selection: {two:?}");
+    cx.simulate_input(&"more words to wrap ".repeat(30));
+    settle(cx);
+    let many = cx.debug_bounds("reply-card").unwrap();
+    let most = one.size.height
+        + px((ferrite_ui::theme::REPLY_CARD_FIELD_ROWS - 1) as f32 * ferrite_ui::theme::COMPOSER_ROW_H);
+    assert!(
+        many.size.height <= most + px(1.),
+        "capped at {} rows: {many:?}",
+        ferrite_ui::theme::REPLY_CARD_FIELD_ROWS
+    );
+    assert!(many.top() >= px(0.), "on screen: {many:?}");
 }

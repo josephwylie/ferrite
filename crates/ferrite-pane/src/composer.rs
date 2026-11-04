@@ -442,13 +442,10 @@ impl Composer {
     /// review comments stay as they are: they are not part of the line.
     pub fn set(&mut self, text: String, cx: &mut Context<Self>) {
         let (text, files) = prompt_files::split(text);
-        let (quotes, text) = crate::quote::split(&text);
+        let (replies, text) = crate::quote::split(&text);
         self.files = files;
         self.line.set(text.to_string());
-        self.replies = quotes
-            .into_iter()
-            .map(|quote| Reply::new(quote, ""))
-            .collect();
+        self.replies = replies;
         self.edited(cx);
     }
 

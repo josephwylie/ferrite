@@ -150,7 +150,7 @@ impl TranscriptView {
         let field = cx.new(|cx| {
             let mut line = Composer::new(cx);
             line.set_role(Role::Field(Some(KEY_CONTEXT)), cx);
-            line.set_visible_row_limit(1, cx);
+            line.set_visible_row_limit(theme::REPLY_CARD_FIELD_ROWS, cx);
             line
         });
         self.reply = None;
@@ -486,9 +486,11 @@ impl TranscriptView {
     }
 }
 
-/// How tall the card can stand: its padding, its quote at its most lines,
-/// the gap, the field's row, its ring. The card's foot is hung on the
-/// selection, so only whether it fits above needs this.
+/// How tall the card stands to begin with: its padding, its quote at its
+/// most lines, the gap, the field's row, its ring. The card's foot is hung
+/// on the selection, so as the words wrap it grows upward from there (a
+/// card below the selection grows down); only whether it fits above needs
+/// this.
 fn card_max_h() -> f32 {
     2. * theme::REPLY_CARD_PAD
         + theme::REPLY_CARD_QUOTE_LINES as f32 * theme::LH_META

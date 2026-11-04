@@ -466,7 +466,15 @@ fn reply_card() -> (Scene, Setup) {
             composer.reply(
                 ferrite_pane::quote::Reply::new("Both commands ran.", "testing"),
                 cx,
-            )
+            );
+            // An image beside it: both are tiles of the one tray row.
+            composer.add_files(
+                &[std::path::PathBuf::from(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../docs/research/craft/claude/selection-pill.png"
+                ))],
+                cx,
+            );
         });
         if let Some(transcript) = view.panes[index].transcript() {
             let line = gpui::Bounds::new(
