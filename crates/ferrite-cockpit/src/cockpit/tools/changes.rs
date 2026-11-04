@@ -147,6 +147,34 @@ impl CockpitView {
         }
     }
 
+    /// Whether the last read of `thread`'s Changes lists the file at `path`
+    /// (relative to the checkout).
+    pub(in crate::cockpit) fn changes_list(&self, thread: ThreadId, path: &str) -> bool {
+        matches!(
+            self.tools.changes.get(&thread).map(|changes| &changes.load),
+            Some(Load::Read(files)) if files.iter().any(|file| file.path == path)
+        )
+    }
+
+    /// A Files tab's `Show changes`: the Changes column opens on that file,
+    /// its diff unfolded and in view.
+    pub(in crate::cockpit) fn show_changes_of(&mut self, thread: ThreadId, path: &str, cx: &mut Context<Self>) {
+        if !self.tools.dock(thread).changes {
+            self.press_tool(Tool::Changes, cx);
+        }
+        self.ensure_changes(thread, cx);
+        let Some(changes) = self.changes_of(thread) else {
+            return;
+        };
+        changes.folded.remove(path);
+        if let Load::Read(files) = &changes.load {
+            if let Some(at) = files.iter().position(|file| file.path == path) {
+                changes.scroll.scroll_to_item(at);
+            }
+        }
+        cx.notify();
+    }
+
     /// Read the diff again, for the current scope.
     fn refresh_changes(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         let Some(root) = self.thread_path(thread) else {

@@ -605,7 +605,7 @@ impl CockpitView {
             )
     }
 
-    fn files_editor(&self, _thread: ThreadId, files: &Files, _cx: &mut Context<Self>) -> Div {
+    fn files_editor(&self, thread: ThreadId, files: &Files, cx: &mut Context<Self>) -> Div {
         use theme::*;
         let column = div()
             .flex()
@@ -636,6 +636,20 @@ impl CockpitView {
             );
         };
         let relative = tab.path.strip_prefix(files.tree.root()).unwrap_or(&tab.path);
+        let relative_path = relative.to_string_lossy().into_owned();
+        let changed = self.changes_list(thread, &relative_path);
+        let text_action = |key: &'static str, label: &'static str| {
+            div()
+                .id(key)
+                .debug_selector(move || key.into())
+                .flex_shrink_0()
+                .px(px(SPACE_1))
+                .rounded(px(R_CONTROL))
+                .cursor_pointer()
+                .hover_control(key)
+                .text_color(rgb(INK_SUBTLE))
+                .child(label)
+        };
         let crumbs = relative
             .components()
             .map(|part| part.as_os_str().to_string_lossy().into_owned())
@@ -652,12 +666,37 @@ impl CockpitView {
             .text_color(rgb(INK_SUBTLE))
             .whitespace_nowrap()
             .overflow_hidden()
-            .children(crumbs.into_iter().enumerate().flat_map(|(at, part)| {
-                [
-                    (at > 0).then(|| div().child("/").into_any_element()),
-                    Some(div().child(SharedString::from(part)).into_any_element()),
-                ]
-            }).flatten());
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .items_center()
+                    .gap(px(SPACE_1))
+                    .overflow_hidden()
+                    .children(crumbs.into_iter().enumerate().flat_map(|(at, part)| {
+                        [
+                            (at > 0).then(|| div().child("/").into_any_element()),
+                            Some(div().child(SharedString::from(part)).into_any_element()),
+                        ]
+                    }).flatten()),
+            )
+            .children(changed.then(|| {
+                let path = relative_path.clone();
+                text_action("files-show-changes", "Show changes").on_click(cx.listener(
+                    move |view, _: &ClickEvent, _, cx| view.show_changes_of(thread, &path, cx),
+                ))
+            }))
+            .child({
+                let file = tab.path.clone();
+                text_action("files-open", "Open").on_click(cx.listener(
+                    move |_, _: &ClickEvent, _, cx| {
+                        if let Ok(url) = url::Url::from_file_path(&file) {
+                            cx.open_url(url.as_str());
+                        }
+                    },
+                ))
+            });
         let body = match &tab.body {
             TabBody::Code(editor) => div().flex_1().min_h_0().child(editor.clone()).into_any_element(),
             TabBody::Prose { document, rich, scroll } => div()

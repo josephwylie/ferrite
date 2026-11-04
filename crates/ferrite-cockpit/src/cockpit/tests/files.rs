@@ -179,3 +179,40 @@ fn the_more_menu_holds_only_its_five_settings_and_they_take_effect(cx: &mut Test
     tick(cx);
     assert!(cx.debug_bounds("files-tree-column").is_some());
 }
+
+/// A changed file's tab offers `Show changes`, which opens the Changes
+/// column on it; an unchanged file's tab has only `Open`.
+#[gpui::test]
+fn a_changed_files_tab_offers_show_changes(cx: &mut TestAppContext) {
+    let (view, thread, checkout, cx) = files_window("files-show-changes", cx);
+    for args in [
+        &["init", "-q"][..],
+        &["config", "user.email", "operator@example.invalid"],
+        &["config", "user.name", "operator"],
+        &["add", "-A"],
+        &["commit", "-q", "-m", "all"],
+    ] {
+        let out = std::process::Command::new("git").args(args).current_dir(&checkout).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+    std::fs::write(checkout.join("fresh.rs"), "new\n").unwrap();
+    view.update(cx, |view, cx| view.press_tool(Tool::Changes, cx));
+    for _ in 0..400 {
+        tick(cx);
+        if view.read_with(cx, |view, _| view.changes_read(thread).is_some()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    open(&view, thread, &checkout.join("src/lib.rs"), true, cx);
+    assert!(cx.debug_bounds("files-open").is_some());
+    assert!(cx.debug_bounds("files-show-changes").is_none(), "unchanged");
+    open(&view, thread, &checkout.join("fresh.rs"), true, cx);
+    let link = cx.debug_bounds("files-show-changes").expect("a changed file");
+    view.update(cx, |view, cx| view.press_tool(Tool::Changes, cx));
+    tick(cx);
+    assert!(cx.debug_bounds("changes").is_none(), "the column is shut");
+    cx.simulate_click(link.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("changes").is_some(), "Show changes opens it");
+}
