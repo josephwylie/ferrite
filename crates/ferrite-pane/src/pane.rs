@@ -4955,6 +4955,7 @@ mod tests {
                 reply_to: "Claude".into(),
                 skills: Default::default(),
             };
+                note: None,
             let selection = self.selection.clone();
             self.transcript.update(cx, |transcript, cx| {
                 transcript.sync(input, selection, cx);
@@ -4996,6 +4997,7 @@ mod tests {
                     reply_to: "Claude".into(),
                     skills: Default::default(),
                 },
+                    note: None,
                 crate::rich::TextCache::default(),
                 selection.clone(),
                 cx,

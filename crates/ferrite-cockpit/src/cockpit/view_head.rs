@@ -76,7 +76,7 @@ impl CockpitView {
             .when(!toggle_room, |head| {
                 // Beside a side chat the tools end the head: it leaves them room.
                 let tools = self
-                    .side_chat_pane_shown()
+                    .docked_pane_shown()
                     .then(|| self.title_tools().len())
                     .filter(|tools| *tools > 0)
                     .map_or(0., |tools| tools_width(tools) + theme::VIEW_HEAD_PAD_X);
@@ -181,12 +181,12 @@ impl CockpitView {
     /// goes; the view head leaves their room while the panel is hidden.
     pub(super) fn title_tools_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let tools = self.title_tools();
-        if tools.is_empty() || self.panel_candidate().is_none() || self.side_chat_covers() {
+        if tools.is_empty() || self.panel_candidate().is_none() || self.docked_pane_covers() {
             return None;
         }
         // Beside a side chat they end the thread's head, against the pane;
         // otherwise they sit before the panel toggle.
-        let right = if self.side_chat_pane_shown() {
+        let right = if self.docked_pane_shown() {
             self.panel_column_w() + theme::VIEW_HEAD_PAD_X
         } else {
             super::panel::panel_toggle_inset() + theme::ICON_BUTTON + theme::TITLE_TOOLS_GAP

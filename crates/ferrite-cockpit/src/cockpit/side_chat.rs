@@ -463,28 +463,48 @@ impl CockpitView {
     }
 
     /// Tell the shown tab's transcript what its fork holds after the
-    /// history it inherited — the compact, read-only twin of
-    /// `sync_transcript`: no Decision strip, subagents or rewinds, and
-    /// no Reply (the side chat has no Composer of a Pane's to reply into).
+    /// history it inherited.
     fn sync_side_transcript(&mut self, owner: ThreadId, cx: &mut Context<Self>) {
-        let Some(chat) = self.side_chats.chats.get(&owner) else {
-            return;
-        };
-        let Some(conversation) = chat
-            .tabs
-            .get(chat.active)
+        let Some(conversation) = self
+            .side_chats
+            .chats
+            .get(&owner)
+            .and_then(|chat| chat.tabs.get(chat.active))
             .and_then(|tab| tab.conversation.as_ref())
         else {
             return;
         };
-        let thread = conversation.thread;
+        self.sync_compact_transcript(
+            conversation.thread,
+            &Subject::Main,
+            &conversation.pane,
+            conversation.inherited,
+            None,
+            cx,
+        );
+    }
+
+    /// Tell `pane`'s transcript what `subject` of `thread` holds after its
+    /// first `skip` blocks, `note` standing under the first prompt — the
+    /// compact, read-only twin of `sync_transcript`, for the right pane's
+    /// bodies (the side chat's tabs, a subagent's drill-in): no Decision
+    /// strip, subagents or rewinds, and no Reply (they have no Composer of
+    /// a Pane's to reply into).
+    pub(super) fn sync_compact_transcript(
+        &self,
+        thread: ThreadId,
+        subject: &Subject,
+        pane: &PaneView,
+        skip: usize,
+        note: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(open) = self.cockpit.thread(thread) else {
             return;
         };
-        let Some(subject_view) = open.activity().subject(&Subject::Main) else {
+        let Some(subject_view) = open.activity().subject(subject) else {
             return;
         };
-        let pane = &conversation.pane;
         let namespace = pane.text_namespace();
         let revision = subject_view.presentation_revision();
         let status = pane::transcript_status(subject_view.status(), subject_view.fresh());
@@ -520,6 +540,7 @@ impl CockpitView {
             rewind: None,
             quotes: false,
             skills: open.commands().len(),
+            note: note.clone(),
         };
         let Some(entity) = pane.transcript() else {
             return;
@@ -529,12 +550,7 @@ impl CockpitView {
         }
         let mut blocks = pane::rendered_window(transcript.blocks(), Level::Transcript).to_vec();
         let first = transcript.blocks().len() - blocks.len();
-        blocks.drain(
-            ..conversation
-                .inherited
-                .saturating_sub(first)
-                .min(blocks.len()),
-        );
+        blocks.drain(..skip.saturating_sub(first).min(blocks.len()));
         let disclosure = pane.transcript_disclosure_snapshot();
         let input = ferrite_pane::transcript::TranscriptInput {
             thread,
@@ -562,6 +578,7 @@ impl CockpitView {
             quotes: false,
             reply_to: open.provider().to_string().into(),
             skills: open.commands().into(),
+            note,
         };
         let selection = self.selection.clone();
         entity.update(cx, |transcript, cx| transcript.sync(input, selection, cx));

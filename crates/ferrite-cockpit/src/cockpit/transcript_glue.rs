@@ -197,34 +197,6 @@ impl CockpitView {
         });
     }
 
-    /// A press on an agent call's row in Pane `index`: that agent's own
-    /// transcript takes the Pane (`select_subject`). The transcript's event
-    /// carries no window, so it opens on the next turn of the loop.
-    pub(super) fn open_agent_from(&mut self, index: usize, call: String, cx: &mut Context<Self>) {
-        let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
-            return;
-        };
-        let Some(subject) = self.cockpit.thread(thread).and_then(|open| {
-            open.activity()
-                .invocations()
-                .find(|(native, _)| *native == call)
-                .map(|(_, agent)| agent.subject())
-        }) else {
-            return;
-        };
-        let Some(window) = cx.active_window() else {
-            return;
-        };
-        let cockpit = cx.entity().downgrade();
-        cx.defer(move |cx| {
-            let _ = window.update(cx, |_, window, cx| {
-                let _ = cockpit.update(cx, |view, cx| {
-                    view.select_subject(thread, subject, window, cx);
-                });
-            });
-        });
-    }
-
     /// The prompt the operator is reading in Pane `index`: the pinned
     /// band's turn, else the latest prompt in view.
     fn reading_prompt(&self, index: usize, cx: &App) -> Option<String> {

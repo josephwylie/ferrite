@@ -246,8 +246,7 @@ fn an_opened_subagent_wears_one_head_row(cx: &mut TestAppContext) {
         cx.debug_bounds("pane-subagent-1").is_none(),
         "Main has no head"
     );
-    view.update(cx, |view, cx| view.open_agent_from(0, "Atlas".into(), cx));
-    cx.run_until_parked();
+    super::subagents::click_child(&view, cx, "Atlas");
     tick(cx);
     let strip = cx.debug_bounds("pane-subagent-1").expect("the head's row");
     let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);

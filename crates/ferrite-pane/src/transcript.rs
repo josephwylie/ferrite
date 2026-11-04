@@ -164,6 +164,9 @@ pub struct TranscriptInput {
     /// The Session's commands and skills: a sent prompt's `/name` that
     /// names one is drawn blue, its description on hover.
     pub skills: std::sync::Arc<[ferrite_core::SessionCommand]>,
+    /// A muted line standing under the first prompt, which no block says:
+    /// `Model Haiku 5.5` in a subagent's drill-in.
+    pub note: Option<SharedString>,
 }
 
 /// Everything a transcript's render depends on besides its blocks and its
@@ -187,6 +190,7 @@ pub struct TranscriptKey {
     pub quotes: bool,
     /// How many skills the prompts can name: a late catalogue redraws them.
     pub skills: usize,
+    pub note: Option<SharedString>,
 }
 
 impl TranscriptInput {
@@ -208,6 +212,7 @@ impl TranscriptInput {
             rewind: self.rewind.clone(),
             quotes: self.quotes,
             skills: self.skills.len(),
+            note: self.note.clone(),
         }
     }
 
@@ -224,6 +229,7 @@ impl TranscriptInput {
             pending_call: self.pending_call.clone(),
             thinking: self.thinking,
             carried: None,
+            note: self.note.clone(),
         }
     }
 }
@@ -466,6 +472,7 @@ impl TranscriptView {
             controls_end: cx.focus_handle().tab_stop(true),
             document: gpui::base::TextSelectionDocument::new(scope, cx),
             pinned_h: Rc::new(Cell::new(gpui::px(0.))),
+                note: None,
             pinned_drawn: Rc::new(Cell::new(None)),
             pinned_asked: Rc::new(Cell::new(None)),
             heights: Default::default(),
@@ -1138,6 +1145,9 @@ impl TranscriptView {
                                 ferrite_ui::icons::ELLIPSIS,
                                 answer::MORE_LABEL,
                             ),
+        if row.kind() == RowKind::Note {
+            return note_line(row.source().unwrap_or_default()).into_any_element();
+        }
                             &Ok(()),
                             view.clone(),
                             move |view, at, cx| view.open_answer_menu(last, text.clone(), at, cx),
@@ -1979,6 +1989,21 @@ fn answer_times(blocks: &[Block]) -> HashMap<BlockId, String> {
                 if let (Some(id), Some(at)) = (prose.take(), end.completed_at.clone()) {
                     times.insert(id, at);
                 }
+/// The owner's note under the first prompt (`TranscriptInput::note`): one
+/// quiet line.
+fn note_line(text: &str) -> gpui::Div {
+    div()
+        .debug_selector(|| "transcript-note".into())
+        .w_full()
+        .min_w_0()
+        .h(px(theme::LH_META))
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_META))
+        .line_height(px(theme::LH_META))
+        .text_color(gpui::rgb(theme::INK_SUBTLE))
+        .child(SharedString::from(text.to_string()))
+}
+
             }
             _ => {}
         }

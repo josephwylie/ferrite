@@ -83,6 +83,7 @@ impl CockpitView {
         let pane = &self.panes[index];
         (pane.preview.is_open()
             || self.side_chat_shown(index)
+            || self.agent_drill_shown(index)
             || self.prefs.settings.panel_shown && pane.thread().is_some())
         .then_some(index)
     }
@@ -126,7 +127,9 @@ impl CockpitView {
     /// frame: its own width, a preview's while one is shown, none hidden.
     pub(super) fn panel_column_w(&self) -> f32 {
         match self.panel_pane() {
-            Some(index) if self.side_chat_shown(index) => ferrite_ui::theme::SIDE_CHAT_W,
+            Some(index) if self.side_chat_shown(index) || self.agent_drill_shown(index) => {
+                ferrite_ui::theme::SIDE_CHAT_W
+            }
             Some(index) if self.preview_shown(index) => {
                 self.panel.wide.max(ferrite_ui::theme::PANEL_W)
             }
@@ -213,7 +216,7 @@ impl CockpitView {
     pub(super) fn panel_toggle_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.panel_candidate()?;
         // The side chat's head holds the row's right end: no toggle there.
-        if self.side_chat_pane_shown() {
+        if self.docked_pane_shown() {
             return None;
         }
         Some(
@@ -282,6 +285,9 @@ impl CockpitView {
         use ferrite_ui::theme::*;
         let index = self.panel_pane()?;
         let owner = self.panes[index].identity;
+        if let Some(thread) = owner.thread().filter(|_| self.agent_drill_shown(index)) {
+            return Some(self.agent_drill_column(thread, window, cx));
+        }
         if let Some(thread) = owner.thread().filter(|_| self.side_chat_shown(index)) {
             return Some(self.side_chat_column(thread, window, cx));
         }

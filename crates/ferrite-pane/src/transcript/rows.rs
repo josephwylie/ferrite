@@ -22,6 +22,8 @@ pub(crate) enum RowId {
     /// What a finished turn left to open (`outputs::of_turn`): its cards,
     /// named by the turn's end.
     Outputs(BlockId),
+    /// The `note` under the first prompt (`RowShape::note`).
+    Note,
     /// The working row while a turn runs (`pane::working_tail`).
     Working,
     /// A long thread's date divider, before the first prompt of a new day,
@@ -35,6 +37,9 @@ pub(crate) enum RowId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RowKind {
     Prompt,
+    /// A muted line a row's owner adds that no block says
+    /// (`RowShape::note`), standing a line under the prompt it follows.
+    Note,
     /// Agent prose. `narration`: more work follows it in its turn, so it
     /// is the agent talking while it works (muted, as the work is); the
     /// turn's last prose, with no work after it, is its answer.
@@ -154,6 +159,8 @@ pub(crate) struct RowShape {
     /// the projection itself.
     pub carried: Option<String>,
 }
+    /// A muted line under the first prompt (`TranscriptInput::note`).
+    pub note: Option<gpui::SharedString>,
 
 /// One renderable transcript unit. Its blocks are owned so a list callback
 /// does not borrow the transient slice passed to [`TranscriptRows::reconcile`].
@@ -529,6 +536,9 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                 ));
             }
             Body::Tool(tool) => {
+                if let Some(note) = shape.note.as_ref().filter(|_| first) {
+                    rows.push(row(RowId::Note, &[], Some(note.as_ref().into()), RowKind::Note));
+                }
                 if draws_nothing(block, shape) {
                     continue;
                 }

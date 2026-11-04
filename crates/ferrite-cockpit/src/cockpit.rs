@@ -16,6 +16,7 @@ mod palette;
 pub(crate) mod panel;
 mod parts;
 mod server;
+mod agent_pane;
 mod side_chat;
 pub(crate) mod subagents;
 mod transcript_glue;
@@ -391,6 +392,7 @@ pub struct CockpitView {
     selection: TranscriptText,
     /// Each Thread's side chat, the right pane's other body.
     side_chats: side_chat::SideChats,
+    agent_drills: agent_pane::AgentDrills,
     native_copy: Option<String>,
     /// cmd-b (#21): the nav folded to its rail by the operator. In memory
     /// only; the Settings preference is where a launch starts from.
@@ -1482,6 +1484,7 @@ impl CockpitView {
             native_copy: None,
             nav_filter: None,
             nav_folds: std::collections::HashSet::new(),
+            agent_drills: Default::default(),
             nav_fold_moves: std::collections::HashMap::new(),
             nav_more: std::collections::HashSet::new(),
             nav_scroll: ScrollHandle::new(),
@@ -1908,6 +1911,7 @@ impl CockpitView {
                 blocks
             },
             signal_status: Some(status),
+            note: None,
             focused,
             reading_size,
             selection_scope,
@@ -1961,6 +1965,7 @@ impl CockpitView {
 
     fn sync_visible_transcripts(&mut self, cx: &mut Context<Self>) {
         for index in self.visible_indices() {
+            note: None,
             self.sync_transcript(index, cx);
         }
     }
@@ -10205,6 +10210,7 @@ impl CockpitView {
         if self.popover.as_ref().is_some_and(|open| {
             let focused = self.panes.get(self.focused());
             level != Level::Transcript
+        self.tend_agent_drills(cx);
                 || focused.is_none_or(|pane| pane.identity != open.pane)
                 || match &open.kind {
                     // The model picker outlives the first prompt (the
