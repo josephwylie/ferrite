@@ -67,7 +67,7 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 29 | SN3 | ⌘K command palette | PARTIAL | KNOWN: Esc bug. Otherwise rich (threads, projects, about 40 commands). | `cockpit/palette.rs` |
 | 30 | SH15 | Row right-click menu | PARTIAL | KNOWN: right-click target mismatch. | `context_menu.rs:339`, `cockpit.rs:13401` |
 | 31 | CO20 | Picking a skill inserts `/name` as a chip | BUILT | KNOWN: skill chips. **Audit 11-04:** Superseded: a skill is blue ink, as Claude (102c2e76, db13e437) | (7a300afe) |
-| 32 | CO16 | Slash picker opens on "/" with a "Type to filter" hint | PARTIAL | KNOWN: mono slash picker. Also no "Type to filter" hint. | `cockpit.rs:6106` `derive_menu` |
+| 32 | CO16 | Slash picker opens on "/" with a "Type to filter" hint | PARTIAL | KNOWN: mono slash picker. Also no "Type to filter" hint. **Audit 11-04:** Not built: 'Type to filter' (claude/slash-picker.png) sits after the typed '/', which needs the caret's text width in the Pane's composer | `cockpit.rs:6106` `derive_menu` |
 | 33 | XD5 | A new turn scrolls the prompt to the top, leaving room below | BUILT | **SCENE-ONLY:** the code exists but only reference scenes reach it. A real send scrolls to the bottom. **Audit 11-04:** a8ae6b24: a real send scrolls its prompt to the top | `transcript.rs:855` Runway; `transcript_glue.rs:398` `allow(dead_code)` without `visual-reference` |
 | 34 | US1 | Usage ring fed by real plan limits (both providers) | PARTIAL | Claude is complete. Codex is never asked up front (empty until its first update) and sends no plan name. | Claude `claude/wire.rs:759`; Codex `codex/wire.rs:225,492`; `engine.rs:3299`; `pane/usage.rs:18` |
 | 35 | US2 | Context usage from real data (both providers) | PARTIAL | Codex has no category breakdown. | Claude `claude.rs:523,1050-1068`; Codex `codex/wire.rs:896`; `panel/sections.rs:41-60` |
@@ -91,7 +91,7 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 53 | SH18 | Search threads | PARTIAL | Titles only, not message content. | `palette.rs:1-27` |
 | 54 | XD6 | "Starting your chat…" shimmer; composer disabled while starting | BUILT | A "Starting" line with the mark. No shimmer text, and the composer stays enabled. **Audit 11-04:** 613e6bf9: the chip shimmers while the Session starts | `pane/working.rs:89` (2f77f419) |
 | 55 | MO5 | Thread switch snaps, skeleton chips until loaded | BUILT | The snap is built. No skeletons (same as XQ7). **Audit 11-04:** 613e6bf9 | (1c1e5980) |
-| 56 | CO18 | Highlighted row's description in a side tooltip | PARTIAL | An inline muted column, with a tooltip on mouse hover only. The keyboard-highlighted row gets none. | `pane/menus.rs:46` |
+| 56 | CO18 | Highlighted row's description in a side tooltip | PARTIAL | An inline muted column, with a tooltip on mouse hover only. The keyboard-highlighted row gets none. **Audit 11-04:** Not built: Claude's side tooltip for the highlighted row (claude/slash-picker.png); Ferrite shows the description inline plus a hover tooltip | `pane/menus.rs:46` |
 | 57 | TR3b | Edit a sent prompt in place (Codex full-width editor) | PARTIAL | Rewinds and refills the composer, as Claude does. No in-place editor. | `transcript_glue.rs:311` (rewind with edit) |
 | 58 | TR16 | File names in prose are links (Codex adds a file-type icon) | PARTIAL | Claude's form is built. No file-type icon. | `attachments.rs:500` (8b846be4) |
 | 59 | TR17 | Scroll-to-bottom: round, translucent ↓ | DIFFERENT BY DESIGN | Opaque fill. **Audit 11-04:** theme.rs JUMP_LATEST: a flat round button in the plane's fill and a LINE ring, Codex's own flat form | `transcript.rs:1699` (58720cf7) |
@@ -140,7 +140,7 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 102 | OP1 | Code Review page | MISSING | The Review-branch diff (⇧⌘D) is a different feature. | — |
 | 103 | RP10 | First-run coach mark | MISSING |  | — |
 | 104 | RP11 | Viewer ⋯ settings (wrap, indent guides, tab size) | MISSING |  | — |
-| 105 | MO6 | Lightbox image scales up from its spot | MISSING | Only the backdrop fades. | `cockpit/lightbox.rs:235` |
+| 105 | MO6 | Lightbox image scales up from its spot | MISSING | Only the backdrop fades. **Audit 11-04:** Not built: needs the clicked thumbnail's bounds plumbed through Preview::open_image to the lightbox; motion-only, Codex's | `cockpit/lightbox.rs:235` |
 
 ## Full table
 
@@ -169,9 +169,9 @@ ID prefixes: NS new session, CO/XCO composer (Claude/Codex), XD Codex deeper pas
 | CO13 | Permission chip tinted when Manual | BUILT | `pane/composer.rs:38`, `theme.rs:514` (d6275d4b) | Only Manual is amber. Bypass is not tinted. |
 | CO14 | Placeholder changes with state ("Type / for commands"; "↵ to send, ⌘↵ to queue") | BUILT | `pane/composer.rs:895-905` (1c1e5980) | **The running hint is false.** ↵ and ⌘↵ both bind `cockpit::Submit` (`keymap.rs:200,204`): on Claude both queue, on Codex both steer. **Audit 11-04:** a8ae6b24: the hint reads "↵ to steer this turn" |
 | CO15 | Send becomes ■ stop while running | BUILT | `pane/composer.rs:97,165` (58720cf7) | Stop shows only while the box is empty. |
-| CO16 | Slash picker opens on "/" with a "Type to filter" hint | PARTIAL | `cockpit.rs:6106` `derive_menu` | KNOWN: mono slash picker. Also no "Type to filter" hint. |
+| CO16 | Slash picker opens on "/" with a "Type to filter" hint | PARTIAL | `cockpit.rs:6106` `derive_menu` | KNOWN: mono slash picker. Also no "Type to filter" hint. **Audit 11-04:** Not built: 'Type to filter' (claude/slash-picker.png) sits after the typed '/', which needs the caret's text width in the Pane's composer |
 | CO17 | Slash picker fuzzy filter | BUILT | `cockpit.rs:9626` via `fuzzy.rs` (09f66c0f) |  |
-| CO18 | Highlighted row's description in a side tooltip | PARTIAL | `pane/menus.rs:46` | An inline muted column, with a tooltip on mouse hover only. The keyboard-highlighted row gets none. |
+| CO18 | Highlighted row's description in a side tooltip | PARTIAL | `pane/menus.rs:46` | An inline muted column, with a tooltip on mouse hover only. The keyboard-highlighted row gets none. **Audit 11-04:** Not built: Claude's side tooltip for the highlighted row (claude/slash-picker.png); Ferrite shows the description inline plus a hover tooltip |
 | CO19 | Skills and commands in one list, with a source label per row | BUILT | `cockpit.rs:9643`, `CommandSource::tag` (7a300afe) | Codex's built-ins and prompts are untagged, because Codex gives no data. |
 | CO20 | Picking a skill inserts `/name` as a chip | BUILT | (7a300afe) | KNOWN: skill chips. **Audit 11-04:** Superseded: a skill is blue ink, as Claude (102c2e76, db13e437) |
 | CO21 | Usage ring hover text | BUILT | `pane/usage.rs:28` (1c1e5980) | Live threads only, not drafts. |
@@ -337,7 +337,7 @@ ID prefixes: NS new session, CO/XCO composer (Claude/Codex), XD Codex deeper pas
 | MO1 | Menus snap open (Claude) vs Codex model popover blur-in | DIFFERENT BY DESIGN | `theme.rs:3018` `MOTION_MENU_IN_MS = 0` (21d4810e); motion-measured.md | gpui has no blur filter. |
 | MO3 | Shimmer and animated working glyph | BUILT | `pane/working.rs:363,127`, `components.rs:554` (401c7d8d, e60c7010) | KNOWN: motion not playing live. |
 | MO5 | Thread switch snaps, skeleton chips until loaded | BUILT | (1c1e5980) | The snap is built. No skeletons (same as XQ7). **Audit 11-04:** 613e6bf9 |
-| MO6 | Lightbox image scales up from its spot | MISSING | `cockpit/lightbox.rs:235` | Only the backdrop fades. |
+| MO6 | Lightbox image scales up from its spot | MISSING | `cockpit/lightbox.rs:235` | Only the backdrop fades. **Audit 11-04:** Not built: needs the clicked thumbnail's bounds plumbed through Preview::open_image to the lightbox; motion-only, Codex's |
 | MO7 | Composer height eases | BUILT | `composer.rs:570-581,1338` (401c7d8d) | KNOWN: motion. Claude snaps here; easing is a recorded choice. |
 | MO8 | Toast in/out motion | BUILT | `cockpit/palette.rs:1554-1561` (66727e5d); `theme.rs:1312` (401c7d8d) | KNOWN: motion. |
 | MO9 | Rolling token count | BUILT | `pane/working.rs:389` (bfbeb3e2) | KNOWN: motion. |
