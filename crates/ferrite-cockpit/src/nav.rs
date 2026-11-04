@@ -384,8 +384,28 @@ impl RollUp {
 #[derive(Clone, Default)]
 pub struct Activity {
     pub priority: Vec<ActivityRow>,
+    /// The pinned Threads, when the bell's `⋯` shows them: their own
+    /// section after `Priority`, and not again under a day.
+    pub pinned: Vec<ActivityRow>,
     /// Each day's heading and rows, most recent day first.
     pub days: Vec<(SharedString, Vec<ActivityRow>)>,
+}
+
+/// What the bell's `⋯` menu shows (`Show`): the `Priority` section, and a
+/// `Pinned` one. Ferrite has no scheduled tasks, so no `Scheduled`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActivityShows {
+    pub priority: bool,
+    pub pinned: bool,
+}
+
+impl Default for ActivityShows {
+    fn default() -> Self {
+        Self {
+            priority: true,
+            pinned: false,
+        }
+    }
 }
 
 /// One Activity row: the Thread's tree row (its title, Project, mark and
@@ -1616,12 +1636,20 @@ pub fn title_w(place: RowPlace, marked: bool) -> f32 {
 /// The Activity view's list (the bell's): `Priority` and `Today`, each a
 /// plain heading (§5.1.3's grammar) over its rows, flush, a section gap
 /// between them. The rows are the caller's (`activity_row`, wired).
-pub fn activity_list(priority: Vec<AnyElement>, days: Vec<(SharedString, Vec<AnyElement>)>) -> Div {
+pub fn activity_list(
+    priority: Option<Vec<AnyElement>>,
+    more: AnyElement,
+    pinned: Vec<AnyElement>,
+    days: Vec<(SharedString, Vec<AnyElement>)>,
+) -> Div {
     let mut list = view_list("nav-activity-list");
-    if priority.is_empty() && days.is_empty() {
-        return list.child(note("nav-activity-empty", "Nothing needs attention"));
+    let mut sections: Vec<(&'static str, SharedString, Vec<AnyElement>)> = Vec::new();
+    if let Some(rows) = priority {
+        sections.push(("nav-activity-priority", "Priority".into(), rows));
     }
-    let mut sections = vec![("nav-activity-priority", SharedString::from("Priority"), priority)];
+    if !pinned.is_empty() {
+        sections.push(("nav-activity-pinned", "Pinned".into(), pinned));
+    }
     sections.extend(days.into_iter().map(|(label, rows)| {
         let key = match &*label {
             "Today" => "nav-activity-today",
@@ -1630,13 +1658,37 @@ pub fn activity_list(priority: Vec<AnyElement>, days: Vec<(SharedString, Vec<Any
         };
         (key, label, rows)
     }));
+    // The `⋯` stands at the first heading's right, always shown (Codex's):
+    // the `Priority` one, or the first section's when `Priority` is hidden,
+    // so the menu that brings it back is never lost.
+    let mut more = Some(more);
     let mut first = true;
     for (key, label, rows) in sections {
-        if rows.is_empty() {
+        // `Priority` keeps its heading with no rows, and says why.
+        if rows.is_empty() && key != "nav-activity-priority" {
             continue;
         }
-        list = list.child(section(first).child(heading(key, label)).children(rows));
+        let head = heading_frame(key)
+            .text_color(rgb(INK_SUBTLE))
+            .child(div().flex_1().child(label))
+            .children(more.take());
+        let rows = if rows.is_empty() {
+            vec![note("nav-activity-empty", "Nothing needs attention").into_any_element()]
+        } else {
+            rows
+        };
+        list = list.child(section(first).child(head).children(rows));
         first = false;
+    }
+    if first {
+        // Nothing listed and `Priority` hidden: the menu stands alone.
+        list = list.child(
+            section(true).child(
+                heading_frame("nav-activity-priority")
+                    .child(div().flex_1())
+                    .children(more.take()),
+            ),
+        );
     }
     list
 }
@@ -1647,13 +1699,26 @@ pub fn activity_list(priority: Vec<AnyElement>, days: Vec<(SharedString, Vec<Any
 /// `NAV_ACTIVITY_PREVIEW_LINES` of the last message, wrapped and cut with
 /// an ellipsis, in `INK_SUBTLE` too. It washes and selects as a tree row
 /// does; the cockpit wires its press (`land_on_thread`).
-pub fn activity_row(activity: &ActivityRow, measure: &Measure) -> Stateful<Div> {
+pub fn activity_row(
+    activity: &ActivityRow,
+    actions: Option<AnyElement>,
+    measure: &Measure,
+) -> Stateful<Div> {
     let row = &activity.row;
     let thread = row.thread;
     let key = SharedString::from(format!("nav-activity-row-{}", thread.get()));
-    let mark = state_mark(row.status);
+    // Under the pointer the row's pin and archive stand where its mark does.
+    let actions = actions.filter(|_| hovered(&key));
+    let mark = actions.is_none().then(|| state_mark(row.status)).flatten();
     let text_w = INNER_W - 2.0 * NAV_ROW_PAD_X;
-    let title_w = text_w - if mark.is_some() { RIGHT_ROOM } else { 0.0 };
+    let title_w = text_w
+        - if actions.is_some() {
+            2.0 * NAV_HEADING_BUTTON + NAV_MARK_GAP
+        } else if mark.is_some() {
+            RIGHT_ROOM
+        } else {
+            0.0
+        };
     let (ink, weight) = title_face(row);
     let ground = row_ground(&key, row.selected);
     let title_ground = cut_ground(measure, &row.name, FS_NAV, weight, title_w, ground);
@@ -1692,7 +1757,8 @@ pub fn activity_row(activity: &ActivityRow, measure: &Measure) -> Stateful<Div> 
                     mark.debug_selector(move || format!("nav-activity-state-{}", thread.get()))
                         .into_any_element(),
                 )
-            })),
+            }))
+            .children(actions.map(at_right)),
     )
     .children(row.project.clone().map(|project| meta(project).truncate()))
     .children(activity.preview.clone().map(|preview| {
@@ -1702,6 +1768,13 @@ pub fn activity_row(activity: &ActivityRow, measure: &Measure) -> Stateful<Div> 
             .line_clamp(NAV_ACTIVITY_PREVIEW_LINES)
             .text_ellipsis()
     }))
+    .when_some(
+        match &row.tail {
+            NavTail::Age(age) => Some(age.clone()),
+            _ => None,
+        },
+        |row, age| row.tooltip(ferrite_ui::menu::tooltip(age)),
+    )
 }
 
 // ------------------------------------------------------------- the views' lists// ------------------------------------------------------------- the views' lists
@@ -2353,7 +2426,7 @@ mod tests {
             },
             preview: Some("Split the nav into its views".into()),
         };
-        let mut drawn = activity_row(&working, &Measure::Cells(7.0));
+        let mut drawn = activity_row(&working, None, &Measure::Cells(7.0));
         assert_eq!(drawn.style().padding.left, Some(px(NAV_ROW_PAD_X).into()));
         assert!(state_mark(RowStatus::Working).is_some(), "the spinner");
         assert_eq!(NAV_ACTIVITY_PREVIEW_LINES, 2);
@@ -2361,7 +2434,7 @@ mod tests {
             preview: None,
             ..working
         };
-        let _ = activity_row(&quiet, &Measure::Cells(7.0));
+        let _ = activity_row(&quiet, None, &Measure::Cells(7.0));
     }
 
     /// N-5, the selection rule: one selection, on the row of what the board

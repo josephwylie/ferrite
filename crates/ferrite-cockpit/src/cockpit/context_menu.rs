@@ -19,6 +19,8 @@ pub(super) enum MenuTarget {
     Project(ProjectId),
     /// The Parked section's header at the foot of the nav.
     Parked,
+    /// The bell's `Priority` heading's `⋯`.
+    ActivityMore,
     /// A diff line in the Review beside the Thread's Pane (ADR 0021).
     Review {
         thread: ThreadId,
@@ -105,6 +107,18 @@ pub(super) enum MenuVerb {
     CopyLink,
     /// Move the Thread into this Group (Claude's `Move to section ›`).
     JoinGroup(GroupId),
+    /// An Activity (bell) menu verb.
+    Activity(ActivityVerb),
+}
+
+/// What the bell's `⋯` menu does (Codex's): show or hide a section, mark
+/// every unseen finish read, park every Thread the day sections list.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ActivityVerb {
+    ShowPriority,
+    ShowPinned,
+    MarkAllRead,
+    ArchiveListed,
 }
 
 /// A parent row's submenu.
@@ -277,6 +291,7 @@ impl CockpitView {
                 }
                 rows.push(Some((menu::Item::new("Copy path"), MenuVerb::CopyPath)));
             }
+            MenuTarget::ActivityMore => rows = self.activity_more_rows(),
             // The Parked view's row: the view, and the one bulk act the
             // list exists for — clearing the parked history it holds.
             MenuTarget::Parked => {
@@ -702,6 +717,9 @@ impl CockpitView {
                 self.sync_panes(cx);
             }
             (MenuTarget::Group(group), MenuVerb::EnterGroup) => self.enter_group(group, cx),
+            (MenuTarget::ActivityMore, MenuVerb::Activity(verb)) => {
+                self.run_activity_verb(verb, cx)
+            }
             (MenuTarget::Parked, MenuVerb::ToggleParked) => {
                 self.toggle_nav_view(nav::NavView::Parked, None, cx);
             }
@@ -740,6 +758,7 @@ impl CockpitView {
                         .and_then(|thread| self.cockpit.project_id(thread)),
                     MenuTarget::Project(project) => Some(project),
                     MenuTarget::Parked
+                    | MenuTarget::ActivityMore
                     | MenuTarget::Review { .. }
                     | MenuTarget::Prompt { .. }
                     | MenuTarget::Tools(_)

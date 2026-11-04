@@ -219,6 +219,79 @@ fn a_thread_keeps_its_row_through_working_and_done(cx: &mut TestAppContext) {
     assert_eq!(order(&view, cx), before, "nor does finishing");
 }
 
+/// The bell's `⋯` stands at its first heading's right and opens Codex's menu:
+/// `Show` its sections, `Mark all as read` and `Archive chats`, the last two
+/// greyed while there is nothing to mark or park; hiding `Priority` keeps
+/// the `⋯` where it was.
+#[gpui::test]
+fn the_bells_menu_shows_sections_and_marks_read(cx: &mut TestAppContext) {
+    use crate::cockpit::context_menu::ActivityVerb;
+    let (core, fake) = cockpit("bell-menu", 3);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    view.update(cx, |view, cx| view.show_nav_view(nav::NavView::Activity, None, cx));
+    tick(cx);
+    let more = cx.debug_bounds("nav-activity-more").expect("the heading's ⋯");
+    cx.simulate_click(more.center(), gpui::Modifiers::none());
+    tick(cx);
+    let rows = view.read_with(cx, |view, _| {
+        view.context_menu
+            .as_ref()
+            .map(|menu| {
+                menu.rows
+                    .iter()
+                    .flatten()
+                    .map(|(item, _)| (item.label.to_string(), item.checked, item.disabled))
+                    .collect::<Vec<_>>()
+            })
+            .expect("the menu")
+    });
+    assert_eq!(
+        rows,
+        [
+            ("Show".to_string(), false, true),
+            ("Priority section".into(), true, false),
+            ("Pinned".into(), false, false),
+            ("Mark all as read".into(), false, true),
+            ("Archive chats".into(), false, false),
+        ],
+        "nothing unseen, but every Thread is listed under Today"
+    );
+    view.update(cx, |view, cx| view.run_activity_verb(ActivityVerb::ShowPriority, cx));
+    tick(cx);
+    assert!(cx.debug_bounds("nav-activity-priority").is_none(), "Priority hidden");
+    assert!(cx.debug_bounds("nav-activity-more").is_some(), "the ⋯ stays");
+
+    // A finish unseen on a Thread nobody looks at enables the bulk read.
+    view.update(cx, |view, cx| view.run_activity_verb(ActivityVerb::ShowPriority, cx));
+    let unfocused = (0..3)
+        .rev()
+        .find(|at| {
+            view.read_with(cx, |view, _| {
+                view.panes[0].thread() != Some(view.cockpit.threads()[*at])
+            })
+        })
+        .unwrap();
+    fake.streams.borrow()[unfocused]
+        .send(SessionEvent::TextDelta { text: "done".into() })
+        .unwrap();
+    fake.streams.borrow()[unfocused]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    let unseen = view.read_with(cx, |view, _| {
+        view.activity_more_rows()
+            .iter()
+            .flatten()
+            .any(|(item, _)| item.label == "Mark all as read" && !item.disabled)
+    });
+    assert!(unseen, "Mark all as read is live while a finish is unseen");
+}
+
 /// The bell wears a dot while something asks for the operator or has
 /// finished unseen, and none while the tree is quiet.
 #[gpui::test]

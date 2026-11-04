@@ -142,6 +142,7 @@ icons![
     "chevrons-down-up",
     "list",
     "code",
+    "pin",
     // (end UI refresh)
 ];
 
@@ -301,6 +302,8 @@ pub const COLLAPSE_ALL: &str = "icons/chevrons-down-up.svg";
 pub const LIST: &str = "icons/list.svg";
 /// A source file in the Files tree (Claude's `<>`).
 pub const CODE: &str = "icons/code.svg";
+/// A pinned Thread: the bell's row action.
+pub const PIN: &str = "icons/pin.svg";
 // (end UI refresh)
 
 pub struct Assets;
@@ -549,7 +552,7 @@ mod tests {
     const TITLE_BAR_ICONS: [&str; 3] = [BACK, FORWARD, DIFF];
 
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
-    const REFRESH_ICONS: [&str; 36] = [
+    const REFRESH_ICONS: [&str; 37] = [
         PANEL_RIGHT,
         SEARCH,
         INBOX,
@@ -586,6 +589,7 @@ mod tests {
         COLLAPSE_ALL,
         LIST,
         CODE,
+        PIN,
     ];
 
     fn attr(svg: &str, name: &str) -> String {

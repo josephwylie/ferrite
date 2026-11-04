@@ -30,7 +30,7 @@ mod view_head;
 type FloatTriggers =
     std::rc::Rc<std::cell::RefCell<std::collections::HashMap<SharedString, gpui::Bounds<Pixels>>>>;
 
-use self::context_menu::{ContextMenu, MenuTarget, MenuVerb};
+use self::context_menu::{ActivityVerb, ContextMenu, MenuTarget, MenuVerb};
 use ferrite_ui::components::home_relative;
 use ferrite_ui::components::Tip as _;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -443,6 +443,8 @@ pub struct CockpitView {
     /// What the nav shows under its views (§5.1.2): the tree, or a view's
     /// list in its place. The tree on every launch.
     pub(crate) nav_view: nav::NavView,
+    /// What the bell's `⋯` shows (`ActivityMore`).
+    pub(crate) activity_shows: nav::ActivityShows,
     /// The keyboard of the tree (⌘⇧E, `nav_keys`) or of a view's list
     /// other than the Inbox (whose keys are the Inbox's,
     /// `Floats::notice_focus`): Esc returns to the tree, or from the tree
@@ -1509,6 +1511,7 @@ impl CockpitView {
             nav_more: std::collections::HashSet::new(),
             nav_scroll: ScrollHandle::new(),
             nav_view: nav::NavView::Tree,
+            activity_shows: nav::ActivityShows::default(),
             nav_view_focus: cx.focus_handle(),
             nav_cursor: None,
             nav_keys_held: false,
@@ -3536,6 +3539,7 @@ impl CockpitView {
             | MenuTarget::TerminalMore(_) => None,
             MenuTarget::Group(_)
             | MenuTarget::Parked
+            | MenuTarget::ActivityMore
             | MenuTarget::Review { .. }
             | MenuTarget::Prompt { .. }
             | MenuTarget::Page(_) => None,
@@ -9175,6 +9179,8 @@ impl CockpitView {
         rows.dedup_by_key(|row| row.thread);
         let queue = self.cockpit.needs_you();
         let now = std::time::SystemTime::from(ferrite_core::clock::now());
+        let pinned_set = &self.prefs.settings.pinned_threads;
+        let mut pinned: Vec<(usize, nav::ActivityRow)> = Vec::new();
         let mut priority: Vec<(usize, usize, nav::ActivityRow)> = Vec::new();
         let mut days: Vec<(u32, SharedString, Vec<nav::ActivityRow>)> = Vec::new();
         for row in rows {
@@ -9195,7 +9201,10 @@ impl CockpitView {
                 (_, Attention::Working) => Some(3),
                 _ => None,
             };
-            if let Some(rank) = rank {
+            if self.activity_shows.pinned && pinned_set.contains(&thread) {
+                let at = pinned_set.iter().position(|pin| *pin == thread).unwrap_or(0);
+                pinned.push((at, entry));
+            } else if let (Some(rank), true) = (rank, self.activity_shows.priority) {
                 let asked = queue
                     .iter()
                     .position(|thread| *thread == entry.row.thread)
@@ -9212,12 +9221,14 @@ impl CockpitView {
         }
         // Stable: creation order among equals.
         priority.sort_by_key(|(rank, asked, _)| (*rank, *asked));
+        pinned.sort_by_key(|(at, _)| *at);
         days.sort_by_key(|(ago, _, _)| *ago);
         for (_, _, rows) in &mut days {
             rows.sort_by_key(|entry| std::cmp::Reverse(self.last_used(entry.row.thread)));
         }
         nav::Activity {
             priority: priority.into_iter().map(|(_, _, entry)| entry).collect(),
+            pinned: pinned.into_iter().map(|(_, entry)| entry).collect(),
             days: days.into_iter().map(|(_, label, rows)| (label, rows)).collect(),
         }
     }
@@ -13496,9 +13507,19 @@ impl CockpitView {
     /// (`land_on_thread`), a right press opens its menu.
     fn activity_list(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Stateful<Div> {
         let activity = self.activity(state);
-        let row = |entry: &nav::ActivityRow| -> AnyElement {
+        let more = nav::row_action("nav-activity-more", ferrite_ui::icons::ELLIPSIS)
+            .tooltip(ferrite_ui::menu::tooltip("More"))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.open_context_menu(MenuTarget::ActivityMore, event.position, cx);
+                }),
+            )
+            .into_any_element();
+        let mut row = |entry: &nav::ActivityRow| -> AnyElement {
             let thread = entry.row.thread;
-            nav::activity_row(entry, &nav::Measure::Text(cx))
+            nav::activity_row(entry, Some(self.activity_row_actions(thread, cx)), &nav::Measure::Text(cx))
                 .on_click(
                     cx.listener(move |view, _: &ClickEvent, _, cx| view.land_on_thread(thread, cx)),
                 )
@@ -13511,16 +13532,121 @@ impl CockpitView {
                 )
                 .into_any_element()
         };
-        let priority = activity.priority.iter().map(&row).collect();
+        let priority = self
+            .activity_shows
+            .priority
+            .then(|| activity.priority.iter().map(&mut row).collect());
+        let pinned = activity.pinned.iter().map(&mut row).collect();
         let days = activity
             .days
             .iter()
-            .map(|(label, rows)| (label.clone(), rows.iter().map(&row).collect()))
+            .map(|(label, rows)| (label.clone(), rows.iter().map(&mut row).collect()))
             .collect();
         nav::nav_tree(&self.nav_scroll)
             .track_focus(&self.nav_view_focus)
             .key_context("NavView")
-            .child(nav::activity_list(priority, days))
+            .child(nav::activity_list(priority, more, pinned, days))
+    }
+
+    /// The pin and archive a bell row shows under the pointer (Codex's):
+    /// pin or unpin the Thread, and park it.
+    fn activity_row_actions(&self, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
+        let pinned = self.prefs.settings.pinned_threads.contains(&thread);
+        let button = |key: String, glyph: &'static str, tip: &'static str| {
+            nav::row_action(key, glyph)
+                .mr(px(0.))
+                .tooltip(ferrite_ui::menu::tooltip(tip))
+        };
+        div()
+            .flex()
+            .items_center()
+            .child(
+                button(
+                    format!("nav-activity-pin-{}", thread.get()),
+                    ferrite_ui::icons::PIN,
+                    if pinned { "Unpin" } else { "Pin" },
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.set_pinned(thread, !pinned, cx);
+                    }),
+                ),
+            )
+            .child(
+                button(
+                    format!("nav-activity-archive-{}", thread.get()),
+                    ferrite_ui::icons::ARCHIVE,
+                    "Park",
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.park_listed(&[thread], cx);
+                    }),
+                ),
+            )
+            .into_any_element()
+    }
+
+    /// The bell's `⋯` menu: `Show` (`Priority`, `Pinned`), then `Mark all
+    /// as read` and `Archive chats` (parking what the day sections list).
+    pub(super) fn activity_more_rows(&self) -> Vec<Option<(menu::Item, MenuVerb)>> {
+        let activity = self.activity(&self.nav_state());
+        let unseen = activity
+            .priority
+            .iter()
+            .any(|entry| entry.row.status == nav::RowStatus::Done);
+        let listed = activity.days.iter().any(|(_, rows)| !rows.is_empty());
+        let shows = self.activity_shows;
+        let check = |label: &'static str, on: bool, verb: ActivityVerb| {
+            let mut item = menu::Item::new(label);
+            item.checked = on;
+            Some((item, MenuVerb::Activity(verb)))
+        };
+        vec![
+            Some((menu::Item::new("Show").disabled(true), MenuVerb::Activity(ActivityVerb::ShowPriority))),
+            check("Priority section", shows.priority, ActivityVerb::ShowPriority),
+            check("Pinned", shows.pinned, ActivityVerb::ShowPinned),
+            None,
+            Some((
+                menu::Item::new("Mark all as read").disabled(!unseen),
+                MenuVerb::Activity(ActivityVerb::MarkAllRead),
+            )),
+            Some((
+                menu::Item::new("Archive chats").disabled(!listed),
+                MenuVerb::Activity(ActivityVerb::ArchiveListed),
+            )),
+        ]
+    }
+
+    pub(super) fn run_activity_verb(&mut self, verb: ActivityVerb, cx: &mut Context<Self>) {
+        match verb {
+            ActivityVerb::ShowPriority => self.activity_shows.priority ^= true,
+            ActivityVerb::ShowPinned => self.activity_shows.pinned ^= true,
+            ActivityVerb::MarkAllRead => self.cockpit.mark_notices_read(),
+            ActivityVerb::ArchiveListed => {
+                let listed: Vec<ThreadId> = self
+                    .activity(&self.nav_state())
+                    .days
+                    .iter()
+                    .flat_map(|(_, rows)| rows.iter().map(|entry| entry.row.thread))
+                    .collect();
+                self.park_listed(&listed, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Park each of `threads` (reversible: the Parked view holds them).
+    fn park_listed(&mut self, threads: &[ThreadId], cx: &mut Context<Self>) {
+        for thread in threads {
+            let _ = self.cockpit.park_thread(*thread);
+        }
+        self.sync_panes(cx);
+        cx.notify();
     }
 
     /// The sidebar toggle (§5.1.1): in the head, or at the rail's top.
