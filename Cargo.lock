@@ -2282,6 +2282,7 @@ dependencies = [
  "alacritty_terminal",
  "ferrite-ui",
  "gpui-kit",
+ "libc",
 ]
 
 [[package]]

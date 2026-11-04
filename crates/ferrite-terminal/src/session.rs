@@ -7,10 +7,12 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io;
+use std::fs::File;
+use std::io::{self, Read};
 use std::path::Path;
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg, State};
@@ -38,8 +40,21 @@ pub struct Terminal {
     sender: EventLoopSender,
     events: Option<Receiver<Event>>,
     io: Option<JoinHandle<(EventLoop<tty::Pty, Listener>, State)>>,
+    /// The shell's process id.
+    shell: u32,
+    /// A second handle on the PTY's master end, to read what the shell
+    /// writes after the loop has stopped.
+    master: Option<File>,
     columns: u16,
     lines: u16,
+}
+
+/// The user's shell, run directly as a login shell. alacritty's macOS default
+/// wraps it in `/usr/bin/login`, which is setuid root: while it runs, the
+/// PTY's drop cannot signal it. The shell itself is ours to signal.
+fn login_shell() -> tty::Shell {
+    let program = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    tty::Shell::new(program, vec!["-l".to_string()])
 }
 
 impl Terminal {
@@ -60,6 +75,7 @@ impl Terminal {
             listener.clone(),
         )));
         let options = tty::Options {
+            shell: Some(login_shell()),
             working_directory: Some(directory.to_path_buf()),
             env: HashMap::from([
                 ("TERM".to_string(), "xterm-256color".to_string()),
@@ -74,6 +90,8 @@ impl Terminal {
             cell_height: 1,
         };
         let pty = tty::new(&options, size, 0)?;
+        let shell = pty.child().id();
+        let master = pty.file().try_clone()?;
         let event_loop = EventLoop::new(term.clone(), listener, pty, options.drain_on_exit, false)?;
         let sender = event_loop.channel();
         let io = event_loop.spawn();
@@ -82,6 +100,8 @@ impl Terminal {
             sender,
             events: Some(events),
             io: Some(io),
+            shell,
+            master: Some(master),
             columns,
             lines,
         })
@@ -206,16 +226,55 @@ impl Terminal {
 impl Drop for Terminal {
     fn drop(&mut self) {
         let _ = self.sender.send(Msg::Shutdown);
-        // The loop ends its thread on the message; the PTY's drop hangs the
-        // shell up.
-        drop(self.io.take());
+        // The PTY's own drop hangs the shell up and waits for it before it
+        // closes the PTY, but a shell cannot leave while output it wrote is
+        // unread, and an interactive one may ignore the hangup until the PTY
+        // closes. So the end is seen to elsewhere: the view never waits on a
+        // shell.
+        if let (Some(io), Some(master)) = (self.io.take(), self.master.take()) {
+            let shell = self.shell;
+            std::thread::spawn(move || end_shell(io, shell, master));
+        }
     }
+}
+
+/// How long a shell gets to leave on a hangup before it is killed.
+const HANGUP_GRACE: Duration = Duration::from_secs(2);
+
+/// Wait out the loop's end, then hang the shell up, reading what it still
+/// writes, and kill it if it stays; the PTY's drop then reaps it.
+fn end_shell(io: JoinHandle<(EventLoop<tty::Pty, Listener>, State)>, shell: u32, mut master: File) {
+    let Ok(ended) = io.join() else { return };
+    let pid = shell as libc::pid_t;
+    unsafe { libc::kill(pid, libc::SIGHUP) };
+    let until = Instant::now() + HANGUP_GRACE;
+    let mut killed = false;
+    let mut unread = [0u8; 4096];
+    while !has_exited(pid) {
+        if !killed && Instant::now() >= until {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+            killed = true;
+        }
+        // The PTY is non-blocking: nothing to read is an error, and a wait.
+        if !matches!(master.read(&mut unread), Ok(n) if n > 0) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    drop(ended);
+}
+
+/// Whether the child has exited, without reaping it: the PTY's drop does that.
+fn has_exited(pid: libc::pid_t) -> bool {
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let seen = unsafe {
+        libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT | libc::WNOHANG)
+    };
+    seen == 0 && info.si_signo == libc::SIGCHLD
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
 
     fn wait_for(terminal: &Terminal, needle: &str) -> String {
         let until = Instant::now() + Duration::from_secs(10);
@@ -267,6 +326,16 @@ mod tests {
         assert!(selected.contains("hello-selected"));
         terminal.clear_selection();
         assert_eq!(terminal.selected_text(), None);
+    }
+
+    #[test]
+    fn dropping_a_terminal_never_waits_on_its_shell() {
+        let dir = scratch("quick-drop");
+        let began = Instant::now();
+        for _ in 0..25 {
+            drop(Terminal::spawn(&dir, 1000, (80, 24)).unwrap());
+        }
+        assert!(began.elapsed() < HANGUP_GRACE, "a drop waited on its shell");
     }
 
     #[test]
