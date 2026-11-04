@@ -202,6 +202,30 @@ fn the_effort_menu_tags_medium_recommended(cx: &mut TestAppContext) {
     assert_eq!(tags.iter().filter(|(_, badge)| badge.is_some()).count(), 1);
 }
 
+/// A tray image that cannot be read is a red-ringed `Failed` tile; one that
+/// can is its picture.
+#[gpui::test]
+fn an_unreadable_tray_image_says_failed(cx: &mut TestAppContext) {
+    const PNG: [u8; 70] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99, 0x3d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82];
+    let (core, _fake) = cockpit("tray-failed", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+    let good = std::env::temp_dir().join(format!("ferrite-tray-failed-{}.png", std::process::id()));
+    std::fs::write(&good, PNG).unwrap();
+    let files = [good.clone(), std::path::PathBuf::from("/nonexistent/gone.png")];
+    view.update(cx, |view, cx| {
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.add_files(&files, cx));
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("tray-image-0").is_some() && cx.debug_bounds("tray-image-1").is_some());
+    let failed = cx.debug_bounds("attachment-failed").expect("the missing file fails");
+    let gone = cx.debug_bounds("tray-image-1").unwrap();
+    let picture = cx.debug_bounds("tray-image-0").unwrap();
+    assert!(gone.contains(&failed.center()) && !picture.contains(&failed.center()));
+}
+
 /// A Group Pane's Composer carries no chips (SPEC §5.9): the mode,
 /// model and effort are Solo's.
 #[gpui::test]

@@ -316,22 +316,41 @@ pub(crate) fn thumbnail(
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let caption = crate::pane::image_caption(&name, crate::pane::image_facts(path));
+    let facts = crate::pane::image_facts(path);
+    let caption = crate::pane::image_caption(&name, facts);
+    // A file that cannot be read as a picture is Codex's failed tile: a red
+    // hairline and `Failed`, not a blank card.
+    let failed = facts.is_none();
     gpui::div()
         .id(id)
         .flex_shrink_0()
         .rounded(px(theme::R_CARD))
         .border_1()
-        .border_color(theme::paint::LINE)
+        .border_color(if failed {
+            ferrite_ui::theme::Paint::solid(theme::RED)
+        } else {
+            theme::paint::LINE
+        })
         .overflow_hidden()
         .tooltip(ferrite_ui::menu::tooltip(caption))
-        .child(
+        .when(failed, |card| {
+            card.debug_selector(|| "attachment-failed".into())
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(width))
+                .h(px(height))
+                .text_size(px(theme::FS_LABEL))
+                .text_color(gpui::rgb(theme::RED))
+                .child("Failed")
+        })
+        .when(!failed, |card| card.child(
             gpui::img(path.to_path_buf())
                 .w(px(width))
                 .h(px(height))
                 .rounded(px(theme::R_CARD - theme::HAIRLINE_W))
                 .object_fit(gpui::ObjectFit::Cover),
-        )
+        ))
 }
 
 /// A quoted passage as Claude draws one over the sent prompt's bubble: the

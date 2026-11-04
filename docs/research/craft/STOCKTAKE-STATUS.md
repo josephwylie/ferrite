@@ -74,7 +74,7 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 36 | CO8 | Effort submenu: explanatory line, Recommended tag, usage-warning pill, Ultracode toggle | PARTIAL | A bare ladder with ✓. None of the explanations, tags or pills. **Audit 11-04:** Recommended tag on Medium built; explanation line, Max usage pill and Ultracode need data Ferrite lacks | `cockpit.rs:12690` `effort_submenu` (9e42e44e) |
 | 37 | AT11 | Non-image attachment as a pill above the bubble; click opens the default app | PARTIAL | A chip inside the bubble. A click opens Ferrite's preview. | `pane.rs:3219-3240` |
 | 38 | AT5 | Text file in the composer as a card with a first-page preview | PARTIAL | A small chip with an icon and name. | `attachments.rs:134` |
-| 39 | AT9 | Failed attachment state (red tile, "Failed") | MISSING |  | — |
+| 39 | AT9 | Failed attachment state (red tile, "Failed") | BUILT | **Audit 11-04:** An unreadable image is a red-ringed Failed tile in the tray and over a sent prompt (BUILT, not ticked; a failure is only 'cannot be read as a picture') | — |
 | 40 | IM4 | Lightbox: dim, scale from origin, title, zoom menu, download, ← →, "1 of N", Esc | PARTIAL | A fit/actual toggle instead of a zoom menu. No scale-from-origin. File name instead of alt-text title. | `cockpit/lightbox.rs:1-120,248` (bcef8604, cda2c1c5) |
 | 41 | RP9 | File tree with a fuzzy filter that reveals the current file; changed / all sections | BUILT | The Review's tree only. No filter field, no sections, no reveal. **Audit 11-04:** 804ba262: tree with filter and git colours | `review.rs:2070` `tree_body` (3c2de915) |
 | 42 | RP19 | One continuous highlighted diff; a tree click scrolls to the file | PARTIAL | A tree click opens the whole file instead of scrolling to it. **Audit 11-04:** 49170fa6: one list of files with hunks | `review.rs:1406-1445,877-904` (3c2de915) |
@@ -94,7 +94,7 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 56 | CO18 | Highlighted row's description in a side tooltip | PARTIAL | An inline muted column, with a tooltip on mouse hover only. The keyboard-highlighted row gets none. | `pane/menus.rs:46` |
 | 57 | TR3b | Edit a sent prompt in place (Codex full-width editor) | PARTIAL | Rewinds and refills the composer, as Claude does. No in-place editor. | `transcript_glue.rs:311` (rewind with edit) |
 | 58 | TR16 | File names in prose are links (Codex adds a file-type icon) | PARTIAL | Claude's form is built. No file-type icon. | `attachments.rs:500` (8b846be4) |
-| 59 | TR17 | Scroll-to-bottom: round, translucent ↓ | PARTIAL | Opaque fill. | `transcript.rs:1699` (58720cf7) |
+| 59 | TR17 | Scroll-to-bottom: round, translucent ↓ | DIFFERENT BY DESIGN | Opaque fill. **Audit 11-04:** theme.rs JUMP_LATEST: a flat round button in the plane's fill and a LINE ring, Codex's own flat form | `transcript.rs:1699` (58720cf7) |
 | 60 | AP3 | Approval card: question, intent, `$ command` well with syntax colours | PARTIAL | The command is one flat green, not syntax-coloured. | `decision.rs:131,351,896` (ed5541cf) |
 | 61 | SH10 | Fork › (Fork chat / Fork chat in new worktree) | DIFFERENT BY DESIGN | A single Fork row. **Audit 11-04:** Claude's menu has a single Fork row (claude/row-menu.png) | `context_menu.rs:373-380` |
 | 62 | SH11 | Copy › (deeplink, Markdown, working directory) | DIFFERENT BY DESIGN | Copy path and Copy link (a CLI command, since there is no URL scheme). No Copy as Markdown. **Audit 11-04:** Copy ›  is Codex's; Claude's row menu has none | `context_menu.rs:395-396` |
@@ -204,7 +204,7 @@ ID prefixes: NS new session, CO/XCO composer (Claude/Codex), XD Codex deeper pas
 | AT6 | Composer grows to fit the tray | BUILT | `pane/composer.rs:470` (58720cf7); ease (401c7d8d) |  |
 | AT7 | Sketch canvas | MISSING | — |  |
 | AT8 | Drag-and-drop or paste a file or image | BUILT | `pane/composer.rs:425` (8e90ac1d); `composer.rs:490,1771` (249a7be4) |  |
-| AT9 | Failed attachment state (red tile, "Failed") | MISSING | — |  |
+| AT9 | Failed attachment state (red tile, "Failed") | BUILT | — | **Audit 11-04:** An unreadable image is a red-ringed Failed tile in the tray and over a sent prompt (BUILT, not ticked; a failure is only 'cannot be read as a picture') |
 | AT10 | Sent image renders large and right-aligned above the bubble | BUILT | `pane.rs:3578-3620` `inline_image` (bc5a2473) | Up to 480×320. |
 | AT11 | Non-image attachment as a pill above the bubble; click opens the default app | PARTIAL | `pane.rs:3219-3240` | A chip inside the bubble. A click opens Ferrite's preview. |
 | XQ5 | Composer metrics (~98 pt tall, radius ~20, aligned with the column) | PARTIAL | `theme.rs:2276` (96), `R_FLOAT` 12, `COMPOSER_MAX_W` | Radius 12. 16 px wider than the column on each side on purpose (geometry.md:63). |
@@ -226,7 +226,7 @@ ID prefixes: NS new session, CO/XCO composer (Claude/Codex), XD Codex deeper pas
 | TR14 | Live status line: glyph, "9s · 87 tokens" / "Thinking" | BUILT | `pane/working.rs:330-440` (bfbeb3e2) |  |
 | TR15 | Markdown tables with mono chips and a header hairline | BUILT | `rich.rs:916-932` (ed5541cf) |  |
 | TR16 | File names in prose are links (Codex adds a file-type icon) | PARTIAL | `attachments.rs:500` (8b846be4) | Claude's form is built. No file-type icon. |
-| TR17 | Scroll-to-bottom: round, translucent ↓ | PARTIAL | `transcript.rs:1699` (58720cf7) | Opaque fill. |
+| TR17 | Scroll-to-bottom: round, translucent ↓ | DIFFERENT BY DESIGN | `transcript.rs:1699` (58720cf7) | Opaque fill. **Audit 11-04:** theme.rs JUMP_LATEST: a flat round button in the plane's fill and a LINE ring, Codex's own flat form |
 | TR18 | Thin overlay scrollbar on the transcript | BUILT | transcript list ~`transcript.rs:2470`; DETAIL-AUDIT B1 | No scrollbar. The minimap shows only on hover. **Audit 11-04:** a8ae6b24: thin overlay scrollbar |
 | XTR1 | "Working for Ns" turn header that collapses to "Worked for Ns ›" and expands to commentary, plan and commands | PARTIAL | `pane/text.rs:16` `turn_stamp` (8b846be4) | Only a "Worked for Ns" stamp at the end, and it does not expand. No live header. **Audit 11-04:** Live line has its ▸ (ad8c7239). Claude has no "Working for" header (Codex does); the end stamp still does not expand: needs a product call |
 | XTR2 | Plan inline as checkboxes, kept in the turn | BUILT | `pane/working.rs:520` (ed48e679) | Ticks live, then disappears at turn end. **Audit 11-04:** 39785ffd: the plan is kept with its turn |
