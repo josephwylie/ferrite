@@ -1228,3 +1228,49 @@ fn a_drag_in_a_scrolled_back_transcript_selects_the_rows_under_the_pointer(
 
     assert_eq!(clipboard(cx).as_deref(), Some(expected.join("\n").as_str()));
 }
+
+/// The working line carries the running call, with a chevron that opens it
+/// (as Claude's `▸` after the clock does): its row shows in the line's
+/// place, and shuts again.
+#[gpui::test]
+fn the_working_lines_chevron_opens_the_call_it_carries(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("working-line-disclosure", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolStarted {
+            id: "wait".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "sleep 15 && echo done" }),
+        })
+        .unwrap();
+    tick(cx);
+    let running_rows = |view: &CockpitView| {
+        view.selection
+            .registered(thread)
+            .iter()
+            .filter(|(_, _, _, text)| text.starts_with("Running "))
+            .count()
+    };
+    view.read_with(cx, |view, _| {
+        assert_eq!(running_rows(view), 0, "the line carries the call");
+    });
+    let chevron = cx
+        .debug_bounds("progress-disclosure")
+        .expect("the line carrying a call has a chevron")
+        .center();
+    cx.simulate_click(chevron, gpui::Modifiers::none());
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(view.panes[0].tool_expanded("wait"));
+        assert_eq!(running_rows(view), 1, "opened: the call's own row shows");
+    });
+    let chevron = cx.debug_bounds("progress-disclosure").unwrap().center();
+    cx.simulate_click(chevron, gpui::Modifiers::none());
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(!view.panes[0].tool_expanded("wait"));
+        assert_eq!(running_rows(view), 0);
+    });
+}

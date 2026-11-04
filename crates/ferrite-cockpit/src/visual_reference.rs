@@ -3336,7 +3336,7 @@ pub fn token_roll(output: String) {
                 .px(px(48.))
                 .bg(ferrite_ui::theme::paint::CARD)
                 .font_family(ferrite_ui::theme::FONT_UI)
-                .child((tail.render)(window, cx))
+                .child(tail.draw(window, cx))
         }
     }
 

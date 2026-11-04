@@ -1,6 +1,7 @@
 //! The working line under a running turn, and the task list over it.
 
 use super::*;
+use crate::transcript::LineDisclosure;
 
 /// What a Thread's working row reads besides its transcript (`working_tail`),
 /// gathered by the Cockpit when it syncs the transcript.
@@ -42,7 +43,7 @@ enum Working {
 /// how to stop. Its key changes with its words and whole seconds, never per
 /// frame; the mark and the shimmer are loops (the loops overlay), so they
 /// redraw nothing of the transcript.
-pub fn working_tail(facts: WorkingFacts) -> Option<crate::transcript::TranscriptTail> {
+pub fn working_tail(facts: WorkingFacts) -> Option<crate::transcript::WorkingTail> {
     // The line stays over a Decision that waits: the turn goes on being a
     // turn, its clock counting, while the operator decides. Alone in its
     // window only: a Group Pane's Decision is an island over a small body,
@@ -81,11 +82,11 @@ pub fn working_tail(facts: WorkingFacts) -> Option<crate::transcript::Transcript
         working.hash(&mut hasher);
         hasher.finish()
     };
-    Some(crate::transcript::TranscriptTail {
+    Some(crate::transcript::WorkingTail {
         key,
-        render: std::rc::Rc::new(move |_, _| {
+        render: std::rc::Rc::new(move |disclosure, _, _| {
             let line = match &working {
-                Working::Line(line) => line.render(),
+                Working::Line(line) => line.render(disclosure),
                 Working::Starting { still, solo } => starting_line(*still, *solo),
                 Working::Plan { plan, solo } => div()
                     .pt(px(theme::TASK_CARD_GAP))
@@ -275,7 +276,7 @@ pub(super) fn working_line_for(
         thread,
         effort,
     )
-    .render()
+    .render(None)
 }
 
 /// What a working line draws, read off its transcript once
@@ -392,7 +393,8 @@ impl WorkingLine {
         }
     }
 
-    fn render(&self) -> Div {
+    /// `disclosure`: the chevron that opens the call the line carries.
+    fn render(&self, disclosure: Option<LineDisclosure>) -> Div {
         let Self {
             live,
             spinning,
@@ -496,6 +498,26 @@ impl WorkingLine {
                             .children(count)
                             .children(thinking),
                     ))
+                })
+                .when_some(disclosure, |row, disclosure| {
+                    let toggle = disclosure.toggle;
+                    row.child(
+                        div()
+                            .debug_selector(|| "progress-disclosure".into())
+                            .flex_shrink_0()
+                            .ml(px(theme::SPACE_1))
+                            .child(ferrite_ui::motion::settled(
+                                ("working-chevron", thread as usize),
+                                disclosure.open,
+                                ferrite_ui::motion::CHEVRON,
+                                |turn| components::chevron_at(turn, theme::ICON_CHEVRON, INK_SUBTLE),
+                            )),
+                    )
+                    .cursor_pointer()
+                    .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                        cx.stop_propagation();
+                        toggle(window, cx);
+                    })
                 });
         }
         let planned = !plan.is_empty();

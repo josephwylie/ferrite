@@ -159,6 +159,9 @@ pub(crate) struct RowShape {
     /// The running call the working line carries (`carried_call`): set by
     /// the projection itself.
     pub carried: Option<String>,
+    /// The line's call is opened (`carried_tool`): its row shows in the
+    /// line's place.
+    pub carried_open: bool,
     /// A muted line under the first prompt (`TranscriptInput::note`).
     pub note: Option<gpui::SharedString>,
 }
@@ -393,14 +396,23 @@ fn is_gated(tool: &ToolBlock, shape: &RowShape) -> bool {
 /// The call the working line carries while the turn runs: the routine
 /// call it names (`pane::running_call`), until the call has something of
 /// its own to show (output, a test count). Its row appears once it
-/// finishes, as Claude's does, so nothing says it twice.
-fn carried_call(blocks: &[Block], shape: &RowShape) -> Option<String> {
-    shape.working?;
+/// finishes, as Claude's does, so nothing says it twice; the line's chevron
+/// opens it sooner.
+pub(crate) fn carried_tool(blocks: &[Block]) -> Option<&ToolBlock> {
     let tool = crate::pane::running_call(blocks)?;
     (tools::policy(&tool.name).grouping == tools::Grouping::RollsUp
         && tool.output.is_none()
         && tool.progress.is_none())
-    .then(|| tool.call.clone())
+    .then_some(tool)
+}
+
+/// The carried call whose row stays hidden: not one the line opened.
+fn carried_call(blocks: &[Block], shape: &RowShape) -> Option<String> {
+    shape.working?;
+    (!shape.carried_open)
+        .then(|| carried_tool(blocks))
+        .flatten()
+        .map(|tool| tool.call.clone())
 }
 
 /// The failed turn end the failure strip speaks for: the last turn's,

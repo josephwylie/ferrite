@@ -27,7 +27,7 @@ use gpui::{
 };
 
 use self::{
-    rows::{RowId, RowKind, RowShape, TranscriptRow, TranscriptRows},
+    rows::{carried_tool, RowId, RowKind, RowShape, TranscriptRow, TranscriptRows},
     scroll::TranscriptScroll,
 };
 use crate::{
@@ -58,6 +58,38 @@ pub struct TranscriptTail {
 impl std::fmt::Debug for TranscriptTail {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TranscriptTail")
+            .field("key", &self.key)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What the working line draws to open the call it carries: the chevron's
+/// state, and what a press does (the transcript toggles the call's
+/// disclosure). The transcript owns the state, so the line is handed it.
+#[derive(Clone)]
+pub(crate) struct LineDisclosure {
+    pub open: bool,
+    pub toggle: Rc<dyn Fn(&mut Window, &mut App)>,
+}
+
+/// The working row (`pane::working_tail`): like a `TranscriptTail`, but
+/// drawn with the disclosure of the call it carries, when it carries one.
+#[derive(Clone)]
+pub struct WorkingTail {
+    pub key: u64,
+    pub(crate) render: Rc<dyn Fn(Option<LineDisclosure>, &mut Window, &mut App) -> AnyElement>,
+}
+
+impl WorkingTail {
+    /// The line drawn alone, with no call to open.
+    pub fn draw(&self, window: &mut Window, cx: &mut App) -> AnyElement {
+        (self.render)(None, window, cx)
+    }
+}
+
+impl std::fmt::Debug for WorkingTail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkingTail")
             .field("key", &self.key)
             .finish_non_exhaustive()
     }
@@ -130,7 +162,7 @@ pub struct TranscriptInput {
     pub disclosure_focus: FocusHandle,
     /// The working row while a turn runs (`pane::working_tail`), after the
     /// last row.
-    pub working: Option<TranscriptTail>,
+    pub working: Option<WorkingTail>,
     /// The live reasoning caption the working line names, and whether the
     /// Cockpit took its own row for in view when it chose the line's words:
     /// once laid out, if that is wrong, the transcript says so
@@ -229,6 +261,8 @@ impl TranscriptInput {
             pending_call: self.pending_call.clone(),
             thinking: self.thinking,
             carried: None,
+            carried_open: carried_tool(&self.blocks)
+                .is_some_and(|tool| self.expanded.contains(&DisclosureId::Tool(tool.call.clone()))),
             note: self.note.clone(),
         }
     }
@@ -1144,6 +1178,19 @@ impl TranscriptView {
         }
     }
 
+    /// The chevron on the working line, when the line carries a call.
+    fn line_disclosure(&self, view: Entity<Self>) -> Option<LineDisclosure> {
+        let call = DisclosureId::Tool(carried_tool(&self.input.blocks)?.call.clone());
+        Some(LineDisclosure {
+            open: self.tool_state(&call) == DisclosureState::Expanded,
+            toggle: Rc::new(move |_, cx| {
+                view.update(cx, |_, cx| {
+                    cx.emit(TranscriptEvent::ToggleDisclosure(call.clone()));
+                })
+            }),
+        })
+    }
+
     fn render_row(
         &self,
         row: &TranscriptRow,
@@ -1154,7 +1201,10 @@ impl TranscriptView {
     ) -> AnyElement {
         if row.kind() == RowKind::Working {
             return match (&self.input.working, window) {
-                (Some(working), Some(window)) => (working.render)(window, cx),
+                (Some(working), Some(window)) => {
+                    let disclosure = view.and_then(|view| self.line_disclosure(view));
+                    (working.render)(disclosure, window, cx)
+                }
                 _ => div().into_any_element(),
             };
         }
