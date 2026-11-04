@@ -22,6 +22,13 @@ fn the_context_section_reads_the_window_and_the_ring_the_plan(cx: &mut TestAppCo
         reasoning_output_tokens: 0,
         context_window,
     };
+    // A window never named is not invented.
+    fake.streams.borrow()[0].send(usage(9_000, None)).unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("context-usage-maximum-unknown").is_some(),
+        "unknown limit is not invented"
+    );
     fake.streams.borrow()[0]
         .send(usage(64_000, Some(200_000)))
         .unwrap();
@@ -77,8 +84,8 @@ fn the_context_section_reads_the_window_and_the_ring_the_plan(cx: &mut TestAppCo
         "the section follows live usage"
     );
     assert!(
-        cx.debug_bounds("context-usage-maximum-unknown").is_some(),
-        "unknown limit is not invented"
+        cx.debug_bounds("context-usage-maximum-200000").is_some(),
+        "a report without a window keeps the one last named (e3543a31)"
     );
 }
 
