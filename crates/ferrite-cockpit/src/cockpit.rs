@@ -13564,6 +13564,8 @@ impl CockpitView {
                 .into_any_element()
         };
         let priority = self
+            .prefs
+            .settings
             .activity_shows
             .priority
             .then(|| activity.priority.iter().map(&mut row).collect());
@@ -13592,8 +13594,6 @@ impl CockpitView {
             .flex()
             .items_center()
             .child(
-            .prefs
-            .settings
                 button(
                     format!("nav-activity-pin-{}", thread.get()),
                     ferrite_ui::icons::PIN,
