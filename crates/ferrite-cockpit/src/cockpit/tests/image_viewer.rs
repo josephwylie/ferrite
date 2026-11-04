@@ -516,3 +516,52 @@ fn a_read_picture_draws_under_its_row_and_opens(cx: &mut TestAppContext) {
     let (path, _) = shown(&view, cx).expect("the lightbox opened");
     assert_eq!(path, file);
 }
+
+/// The lightbox grows from where the picture was pressed: its origin is
+/// that spot, as fractions of the window.
+#[gpui::test]
+fn the_lightbox_grows_from_the_pressed_picture(cx: &mut TestAppContext) {
+    let dir = scratch("viewer-origin-files");
+    let image = dir.join("one.png");
+    png(&image, 400, 300);
+    let (core, _fake) = cockpit("viewer-origin", 1);
+    let thread = core.threads()[0];
+    let mut core = core;
+    core.send(thread, ferrite_core::prompt_files::compose("look", &[image]));
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    let sent = cx.debug_bounds("sent-image").expect("a sent image");
+    cx.simulate_click(sent.center(), gpui::Modifiers::none());
+    tick(cx);
+    let from = view.read_with(cx, |view, _| view.panes[0].preview.lightbox().unwrap().from);
+    let window = cx.update(|window, _| window.viewport_size());
+    let want = (f32::from(sent.center().x / window.width), f32::from(sent.center().y / window.height));
+    assert!((from.0 - want.0).abs() < 0.01 && (from.1 - want.1).abs() < 0.01, "{from:?} vs {want:?}");
+}
+
+/// The bar's zoom door opens a menu of levels, Zoom to fit ticked; a level
+/// zooms the picture to it and shuts the menu.
+#[gpui::test]
+fn the_zoom_door_opens_a_menu_of_levels(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let dir = scratch("viewer-zoom-menu-files");
+    let image = dir.join("large.png");
+    png(&image, 2000, 1500);
+    let (view, _fake, _, cx) = board("viewer-zoom-menu", cx);
+    open_image(&view, &image, &[], cx);
+    settle(cx);
+    let (_, viewer) = shown(&view, cx).unwrap();
+    assert!(cx.debug_bounds("lightbox-zoom-menu").is_none());
+    let door = cx.debug_bounds("lightbox-zoom").unwrap();
+    cx.simulate_click(door.center(), gpui::Modifiers::none());
+    settle(cx);
+    assert!(cx.debug_bounds("lightbox-zoom-menu").is_some(), "the door opens the menu");
+    let hundred = cx.debug_bounds("lightbox-zoom-level-3").expect("100% is the fourth row");
+    cx.simulate_click(hundred.center(), gpui::Modifiers::none());
+    settle(cx);
+    assert!(cx.debug_bounds("lightbox-zoom-menu").is_none(), "a pick shuts it");
+    assert_eq!(viewer.read_with(cx, |viewer, _| viewer.zoom_target()), Some(1.0));
+}

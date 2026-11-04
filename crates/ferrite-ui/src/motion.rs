@@ -319,6 +319,9 @@ pub const SLOT_CLOSE: MotionSpec = spec(theme::MOTION_SLOT_CLOSE_MS, EASE_SNAP);
 // A slot's exit is quicker than its entrance.
 const _: () = assert!(theme::MOTION_SLOT_CLOSE_MS < theme::MOTION_SLOT_OPEN_MS);
 
+/// The lightbox's picture growing in from where it was opened.
+pub const LIGHTBOX_GROW: MotionSpec = spec(theme::MOTION_DUR_BASE_MS, EASE_OUT_QUART);
+
 /// The Composer's box easing to a new row count.
 pub const COMPOSER_GROW: MotionSpec = spec(theme::MOTION_COMPOSER_GROW_MS, EASE_OUT_QUART);
 
@@ -663,6 +666,22 @@ where
     E: Styled + IntoElement + 'static,
 {
     entrance(id, spec, element, |el, t| el.bg(veil_at(t)))
+}
+
+/// A lightbox's picture growing from the spot it was opened at (`from`, as
+/// fractions of the box), fading up as it grows: the lightbox's own entrance
+/// over the dim's (Codex's, from the thumbnail).
+pub fn grow_from<E>(id: impl Into<ElementId>, element: E, from: ScaleFrom) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    entrance(id, LIGHTBOX_GROW, element, move |el, t| {
+        scaled(
+            el.opacity(t),
+            lerp(theme::MOTION_LIGHTBOX_FROM_SCALE, 1.0, t),
+            from,
+        )
+    })
 }
 
 /// `veil_in` to a dim of the caller's (`theme::LIGHTBOX_VEIL`), over `VEIL`.

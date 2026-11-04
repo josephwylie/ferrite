@@ -257,6 +257,25 @@ impl ImageViewer {
         });
     }
 
+    /// The zoom menu's pick: the scale `to` (1 is actual size), or the fit,
+    /// around the stage's centre.
+    pub fn zoom_to(&mut self, to: Option<f32>, cx: &mut Context<Self>) {
+        self.zoom_with(cx, |zoom, frame, now, reduced| {
+            let to = to.map_or(Scale::Fit, Scale::Of);
+            if zoom.target != to {
+                zoom.ease_to(to, point(0., 0.), frame, now, reduced);
+            }
+        });
+    }
+
+    /// The scale the zoom settles on: `None` while it fits the stage.
+    pub fn zoom_target(&self) -> Option<f32> {
+        match self.zoom.target {
+            Scale::Fit => None,
+            Scale::Of(scale) => Some(scale),
+        }
+    }
+
     fn fit(&mut self, _: &Fit, _: &mut Window, cx: &mut Context<Self>) {
         self.zoom_with(cx, |zoom, frame, now, reduced| {
             if zoom.target != Scale::Fit {

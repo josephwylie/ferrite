@@ -75,7 +75,7 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 37 | AT11 | Non-image attachment as a pill above the bubble; click opens the default app | PARTIAL | A chip inside the bubble. A click opens Ferrite's preview. | `pane.rs:3219-3240` |
 | 38 | AT5 | Text file in the composer as a card with a first-page preview | PARTIAL | A small chip with an icon and name. | `attachments.rs:134` |
 | 39 | AT9 | Failed attachment state (red tile, "Failed") | BUILT | **Audit 11-04:** An unreadable image is a red-ringed Failed tile in the tray and over a sent prompt (BUILT, not ticked; a failure is only 'cannot be read as a picture') | — |
-| 40 | IM4 | Lightbox: dim, scale from origin, title, zoom menu, download, ← →, "1 of N", Esc | PARTIAL | A fit/actual toggle instead of a zoom menu. No scale-from-origin. File name instead of alt-text title. | `cockpit/lightbox.rs:1-120,248` (bcef8604, cda2c1c5) |
+| 40 | IM4 | Lightbox: dim, scale from origin, title, zoom menu, download, ← →, "1 of N", Esc | BUILT | A fit/actual toggle instead of a zoom menu. No scale-from-origin. File name instead of alt-text title. **Audit 11-04:** The zoom door opens a menu (Zoom to fit, 25/50/100/150/200%, current ticked); scale-from-origin built (MO6); the bar still names the file, not an alt-text title (no alt text is kept). BUILT, not ticked | `cockpit/lightbox.rs:1-120,248` (bcef8604, cda2c1c5) |
 | 41 | RP9 | File tree with a fuzzy filter that reveals the current file; changed / all sections | BUILT | The Review's tree only. No filter field, no sections, no reveal. **Audit 11-04:** 804ba262: tree with filter and git colours | `review.rs:2070` `tree_body` (3c2de915) |
 | 42 | RP19 | One continuous highlighted diff; a tree click scrolls to the file | PARTIAL | A tree click opens the whole file instead of scrolling to it. **Audit 11-04:** 49170fa6: one list of files with hunks | `review.rs:1406-1445,877-904` (3c2de915) |
 | 43 | RP16 | Changes scope menu (last turn, uncommitted, unstaged, staged, committed, branch) | BUILT | Scope tokens rather than a dropdown. No unstaged/staged split. **Audit 11-04:** Claude's menu (parity/changes-more-menu.png) is All changes, Uncommitted, Compare against; the staged/unstaged split is Codex's | `review.rs:2351-2380` (3c2de915) |
@@ -104,7 +104,7 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 66 | RP7 | File viewer tab strip, preview tabs in italic | BUILT | Overview plus one preview tab that is replaced in place. **Audit 11-04:** 804ba262: preview tabs in italic | `panel/preview.rs:1-36`, `panel.rs:23-26` (8ebbb97e) |
 | 67 | RP8 | File viewer: breadcrumb, line numbers, current line, soft wrap, loading skeleton | BUILT | Line numbers and the target line. The path is plain text. No wrap, no skeleton. **Audit 11-04:** 804ba262: breadcrumb, lines, wrap, current line | `panel/preview.rs:742-822,628` (8ebbb97e) |
 | 68 | RP22 | Right panel as browser-like tabs (+, ×) | DIFFERENT BY DESIGN | One scroll of sections, plus a preview tab. **Audit 11-04:** Claude's own layout (parity/files-code.png): Files, Changes and the Terminal are docked columns, built (804ba262, 49170fa6, c3464a0c) | `panel.rs:1-6,23-26` |
-| 69 | RP23 | Maximise panel with a docked compact composer | PARTIAL | Expand widens a preview only. **Audit 11-04:** Expand widens the docks; no docked compact composer | `panel.rs:62-73` (fa36929a) |
+| 69 | RP23 | Maximise panel with a docked compact composer | DIFFERENT BY DESIGN | Expand widens a preview only. **Audit 11-04:** Claude's own layout (parity/files-code.png): the docked Files column sits beside the thread, whose composer stays in view; Expand widens the dock (2b46ec47). A compact composer inside a maximised dock is Codex's, because there the thread is hidden | `panel.rs:62-73` (fa36929a) |
 | 70 | RP21 | Files: inline "Show changes"; "Open ⌄" split | BUILT | **Audit 11-04:** A Files tab's head row has Show changes (when the file is in Changes; opens that column on it, unfolded) and Open (default app). Codex's Open ⌄ split is a plain Open: Ferrite knows no editors (BUILT, not ticked) | — |
 | 71 | RP4 | Title-bar tool: Browser (+ launcher, URL bar, tools grid) | MISSING | The page pane loads no URLs. | `view_head.rs:23-25` |
 | 72 | XD1 | "Ran commands" group nesting shell cards (max height, scroll, fade) | BUILT | No bottom fade mask. **Audit 11-04:** Scrolling output fades into the ground at its foot while lines are out of view (BUILT, not ticked; not seen) | `pane/output.rs:499` (12 lines, "… +N lines") |
@@ -140,7 +140,7 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 102 | OP1 | Code Review page | MISSING | The Review-branch diff (⇧⌘D) is a different feature. | — |
 | 103 | RP10 | First-run coach mark | MISSING |  | — |
 | 104 | RP11 | Viewer ⋯ settings (wrap, indent guides, tab size) | MISSING |  | — |
-| 105 | MO6 | Lightbox image scales up from its spot | MISSING | Only the backdrop fades. **Audit 11-04:** Not built: needs the clicked thumbnail's bounds plumbed through Preview::open_image to the lightbox; motion-only, Codex's | `cockpit/lightbox.rs:235` |
+| 105 | MO6 | Lightbox image scales up from its spot | BUILT | Only the backdrop fades. **Audit 11-04:** The lightbox's picture grows from the spot it was pressed (Lightbox.from, motion::grow_from, 200 ms quart); pinned by the_lightbox_grows_from_the_pressed_picture. Motion not seen (BUILT, not ticked) | `cockpit/lightbox.rs:235` |
 
 ## Full table
 
@@ -315,7 +315,7 @@ ID prefixes: NS new session, CO/XCO composer (Claude/Codex), XD Codex deeper pas
 | RP20 | Changes empty state with "View branch diff" | BUILT | `review.rs:2340-2345` | "No uncommitted changes" text only. **Audit 11-04:** Changes empty state links to View branch diff (BUILT, not ticked) |
 | RP21 | Files: inline "Show changes"; "Open ⌄" split | BUILT | — | **Audit 11-04:** A Files tab's head row has Show changes (when the file is in Changes; opens that column on it, unfolded) and Open (default app). Codex's Open ⌄ split is a plain Open: Ferrite knows no editors (BUILT, not ticked) |
 | RP22 | Right panel as browser-like tabs (+, ×) | DIFFERENT BY DESIGN | `panel.rs:1-6,23-26` | One scroll of sections, plus a preview tab. **Audit 11-04:** Claude's own layout (parity/files-code.png): Files, Changes and the Terminal are docked columns, built (804ba262, 49170fa6, c3464a0c) |
-| RP23 | Maximise panel with a docked compact composer | PARTIAL | `panel.rs:62-73` (fa36929a) | Expand widens a preview only. **Audit 11-04:** Expand widens the docks; no docked compact composer |
+| RP23 | Maximise panel with a docked compact composer | DIFFERENT BY DESIGN | `panel.rs:62-73` (fa36929a) | Expand widens a preview only. **Audit 11-04:** Claude's own layout (parity/files-code.png): the docked Files column sits beside the thread, whose composer stays in view; Expand widens the dock (2b46ec47). A compact composer inside a maximised dock is Codex's, because there the thread is hidden |
 | SA1 | Subagents: "Ran 2 agents ▸" (Claude) / avatar line (Codex) | BUILT | `pane/agents.rs:1-80`, `pane/text.rs:76`, `transcript_glue.rs:55-78` (3b33960c) | Claude's form. The Codex avatar line is not drawn. |
 | SA2 | An agent opens in the right panel (←, title, maximise, ×) | PARTIAL | `transcript_glue.rs:203`, `subagents.rs:467-520` (3b33960c, 64baa4c6) | It drills in in place of the Pane's transcript. No maximise or ×. **Audit 11-04:** Lane G1 (subagent drill-in) |
 | SA3 | Agent view: prompt, model badge, own rows, result | PARTIAL | `subagents.rs:467-520`; `core activity.rs:70` | No model badge (`AgentInfo` has no model). **Audit 11-04:** Lane G1 (subagent drill-in) |
@@ -324,7 +324,7 @@ ID prefixes: NS new session, CO/XCO composer (Claude/Codex), XD Codex deeper pas
 | SA6 | Parent turn summarises the agents | BUILT | — (the model's own prose) |  |
 | IM1 | "Viewed N images" row with thumbnail tiles | MISSING | — | Tool results carry no images. |
 | IM2 | Images inline in the answer as rounded cards | BUILT | `rich.rs:865-871` (bc5a2473) | 1 px edge; no rounding set. |
-| IM4 | Lightbox: dim, scale from origin, title, zoom menu, download, ← →, "1 of N", Esc | PARTIAL | `cockpit/lightbox.rs:1-120,248` (bcef8604, cda2c1c5) | A fit/actual toggle instead of a zoom menu. No scale-from-origin. File name instead of alt-text title. |
+| IM4 | Lightbox: dim, scale from origin, title, zoom menu, download, ← →, "1 of N", Esc | BUILT | `cockpit/lightbox.rs:1-120,248` (bcef8604, cda2c1c5) | A fit/actual toggle instead of a zoom menu. No scale-from-origin. File name instead of alt-text title. **Audit 11-04:** The zoom door opens a menu (Zoom to fit, 25/50/100/150/200%, current ticked); scale-from-origin built (MO6); the bar still names the file, not an alt-text title (no alt text is kept). BUILT, not ticked |
 | IM5 | Tool rows with image thumbnails and a hover carousel | MISSING | — |  |
 | SK1 | Customize › Skills page (Yours/Discover, search, sort) | MISSING | — |  |
 | SK2 | Discover grids and install | MISSING | — |  |
@@ -337,7 +337,7 @@ ID prefixes: NS new session, CO/XCO composer (Claude/Codex), XD Codex deeper pas
 | MO1 | Menus snap open (Claude) vs Codex model popover blur-in | DIFFERENT BY DESIGN | `theme.rs:3018` `MOTION_MENU_IN_MS = 0` (21d4810e); motion-measured.md | gpui has no blur filter. |
 | MO3 | Shimmer and animated working glyph | BUILT | `pane/working.rs:363,127`, `components.rs:554` (401c7d8d, e60c7010) | KNOWN: motion not playing live. |
 | MO5 | Thread switch snaps, skeleton chips until loaded | BUILT | (1c1e5980) | The snap is built. No skeletons (same as XQ7). **Audit 11-04:** 613e6bf9 |
-| MO6 | Lightbox image scales up from its spot | MISSING | `cockpit/lightbox.rs:235` | Only the backdrop fades. **Audit 11-04:** Not built: needs the clicked thumbnail's bounds plumbed through Preview::open_image to the lightbox; motion-only, Codex's |
+| MO6 | Lightbox image scales up from its spot | BUILT | `cockpit/lightbox.rs:235` | Only the backdrop fades. **Audit 11-04:** The lightbox's picture grows from the spot it was pressed (Lightbox.from, motion::grow_from, 200 ms quart); pinned by the_lightbox_grows_from_the_pressed_picture. Motion not seen (BUILT, not ticked) |
 | MO7 | Composer height eases | BUILT | `composer.rs:570-581,1338` (401c7d8d) | KNOWN: motion. Claude snaps here; easing is a recorded choice. |
 | MO8 | Toast in/out motion | BUILT | `cockpit/palette.rs:1554-1561` (66727e5d); `theme.rs:1312` (401c7d8d) | KNOWN: motion. |
 | MO9 | Rolling token count | BUILT | `pane/working.rs:389` (bfbeb3e2) | KNOWN: motion. |

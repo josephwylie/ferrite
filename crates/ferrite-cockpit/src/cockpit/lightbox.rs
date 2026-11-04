@@ -5,7 +5,9 @@
 //! and its image viewer is the stage: fit and actual size, zoom, pinch and
 //! pan (`image_viewer.rs`).
 //!
-//! Its bar reads the file's name, with zoom, save a copy (a save panel,
+//! The picture grows in from the spot it was pressed (`Lightbox::from`,
+//! `motion::grow_from`). Its bar reads the file's name, with zoom (a menu:
+//! Zoom to fit, 25–200%), save a copy (a save panel,
 //! then the file copied there), open in its app and × at the right. With
 //! more than one image (a prompt's), ← → doors stand at its sides and the
 //! arrow keys step too, and `1 of N` says where it is. Esc, ⌘W, the × or
@@ -16,6 +18,7 @@
 use super::*;
 use ferrite_pane::preview::Lightbox;
 use ferrite_ui::icons::{self, icon};
+use ferrite_ui::menu;
 use ferrite_ui::theme::{self, paint};
 
 gpui::actions!(lightbox, [Close]);
@@ -62,7 +65,8 @@ impl CockpitView {
             || path.display().to_string(),
             |name| name.to_string_lossy().into_owned(),
         );
-        let viewer = lightbox.viewer.clone();
+        let zoom_open = lightbox.zoom_menu;
+        let stops = lightbox.viewer.read(cx).zoom_target();
         let bar = div()
             .debug_selector(|| "lightbox-bar".into())
             .absolute()
@@ -90,10 +94,13 @@ impl CockpitView {
                     icons::ZOOM_IN,
                     "Zoom \u{b7} click the image",
                 )
-                .on_click(move |_, _, cx| {
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
-                    viewer.update(cx, |viewer, cx| viewer.toggle_zoom(cx));
-                }),
+                    if let Some(pane) = view.panes.get(index) {
+                        pane.preview.set_zoom_menu(!zoom_open);
+                    }
+                    cx.notify();
+                })),
             )
             .child({
                 let path = path.clone();
@@ -161,6 +168,42 @@ impl CockpitView {
         let many = count > 1;
         let sides = if many { theme::LIGHTBOX_SIDE } else { 0. };
         let foot = if many { theme::LIGHTBOX_FOOT_H } else { 0. };
+        let zoom_menu = zoom_open.then(|| {
+            let level = |at: usize, label: String, to: Option<f32>| {
+                let checked = match (stops, to) {
+                    (None, None) => true,
+                    (Some(now), Some(to)) => (now - to).abs() < 0.001,
+                    _ => false,
+                };
+                let item = menu::Item::new(label).checked(checked);
+                let viewer = lightbox.viewer.clone();
+                menu::item_row(("lightbox-zoom-level", at), &item, false, false)
+                    .debug_selector(move || format!("lightbox-zoom-level-{at}"))
+                    .on_click(
+                    cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        viewer.update(cx, |viewer, cx| viewer.zoom_to(to, cx));
+                        if let Some(pane) = view.panes.get(index) {
+                            pane.preview.set_zoom_menu(false);
+                        }
+                        cx.notify();
+                    }),
+                )
+            };
+            menu::float()
+                .debug_selector(|| "lightbox-zoom-menu".into())
+                .absolute()
+                .top(px(theme::LIGHTBOX_BAR_H))
+                .right(px(theme::SPACE_4))
+                .w(px(theme::EFFORT_MENU_W))
+                .occlude()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(level(0, "Zoom to fit".into(), None))
+                .children([0.25, 0.5, 1.0, 1.5, 2.0].into_iter().enumerate().map(|(at, scale)| {
+                    level(at + 1, format!("{}%", (scale * 100.0) as u32), Some(scale))
+                }))
+        });
+        let from = lightbox.from;
         let stage = div()
             .debug_selector(|| "lightbox-stage".into())
             .absolute()
@@ -173,6 +216,7 @@ impl CockpitView {
             // dim around it closes.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(lightbox.viewer.clone());
+        let stage = ferrite_ui::motion::grow_from("lightbox-grow", stage, from);
         let lightbox_root = div()
             .id("lightbox")
             .debug_selector(|| "lightbox".into())
@@ -202,6 +246,7 @@ impl CockpitView {
             ))
             .child(stage)
             .child(bar)
+            .children(zoom_menu)
             .when(many, |root| {
                 root.child(stepper(
                     "lightbox-previous",

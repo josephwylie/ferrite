@@ -3135,6 +3135,8 @@ pub const MOTION_PALETTE_VEIL_MS: u64 = 50;
 /// The scale a sheet grows from and shrinks to (Claude's 0.98): a CSS
 /// `scale` on what it paints, its layout and hit area at rest.
 pub const MOTION_FLOAT_FROM_SCALE: f32 = 0.98;
+/// A lightbox's picture starts this small, about the spot it was opened at.
+pub const MOTION_LIGHTBOX_FROM_SCALE: f32 = 0.3;
 /// A tooltip fades and grows in from `MOTION_FLOAT_FROM_SCALE` over
 /// `MOTION_DUR_SNAP_MS` on `MOTION_EASE_SNAP`, after gpui's 300ms delay
 /// (Claude's grouped tooltips; the next one within 200ms shows at once).

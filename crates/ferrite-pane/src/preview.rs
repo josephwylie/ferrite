@@ -64,6 +64,11 @@ pub struct Lightbox {
     pub viewer: Entity<ImageViewer>,
     pub gallery: Arc<[PathBuf]>,
     pub at: usize,
+    /// Where in the window the picture was opened from, as fractions of it:
+    /// the lightbox grows from that spot (the pointer's at the open).
+    pub from: (f32, f32),
+    /// The zoom menu under the bar's zoom door is open.
+    pub zoom_menu: bool,
 }
 
 impl Lightbox {
@@ -244,12 +249,23 @@ impl Preview {
             Arc::from([path.clone()])
         };
         let at = gallery.iter().position(|image| *image == path).unwrap_or(0);
-        let viewer = match self.lightbox().map(|lightbox| lightbox.viewer) {
+        let open = self.lightbox();
+        let from = open.as_ref().map_or_else(
+            || {
+                let (at, size) = (window.mouse_position(), window.viewport_size());
+                (
+                    (f32::from(at.x) / f32::from(size.width)).clamp(0., 1.),
+                    (f32::from(at.y) / f32::from(size.height)).clamp(0., 1.),
+                )
+            },
+            |lightbox| lightbox.from,
+        );
+        let viewer = match open.map(|lightbox| lightbox.viewer) {
             Some(viewer) => viewer,
             None => cx.new(|cx| ImageViewer::new(path, cx)),
         };
         window.focus(&viewer.focus_handle(cx), cx);
-        self.show_image(viewer, gallery, at, cx);
+        self.show_image(viewer, gallery, at, from, cx);
     }
 
     /// ← → in the lightbox: the image `by` steps along its gallery, if
@@ -259,6 +275,8 @@ impl Preview {
             viewer,
             gallery,
             at,
+            from,
+            ..
         }) = self.lightbox()
         else {
             return false;
@@ -267,7 +285,7 @@ impl Preview {
         if to == at {
             return false;
         }
-        self.show_image(viewer, gallery, to, cx);
+        self.show_image(viewer, gallery, to, from, cx);
         true
     }
 
@@ -276,6 +294,7 @@ impl Preview {
         viewer: Entity<ImageViewer>,
         gallery: Arc<[PathBuf]>,
         at: usize,
+        from: (f32, f32),
         cx: &mut App,
     ) {
         let path = gallery[at].clone();
@@ -284,7 +303,16 @@ impl Preview {
             viewer,
             gallery,
             at,
+            from,
+            zoom_menu: false,
         });
+    }
+
+    /// Open or shut the lightbox's zoom menu.
+    pub fn set_zoom_menu(&self, open: bool) {
+        if let Some(lightbox) = self.state.lock().unwrap().lightbox.as_mut() {
+            lightbox.zoom_menu = open;
+        }
     }
 
     /// The image open in the lightbox, if one is.
