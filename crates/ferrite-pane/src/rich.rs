@@ -705,30 +705,36 @@ impl gpui::Render for CodeActions {
         if shown > 0. && shown < 1. {
             cx.notify();
         }
-        // The block's actions at its top right blend in under the pointer;
-        // nothing stands there at rest (no language tag: the code says what
-        // it is). The row stands on the code's first line — the block's
-        // padding down, the code's own inset in from the right.
+        // The block's header (Claude's): the language at the left at rest,
+        // the actions at the right blending in under the pointer. The row
+        // stands in the block's top padding, the code's own inset in from
+        // both sides.
         let code_size = window.text_style().font_size.to_pixels(window.rem_size());
-        let code_line = window.line_height();
+        let inset = px(theme::CODE_PAD_CELLS * theme::tx_cell(f32::from(code_size)));
         let mut actions = gpui::div()
             .key_context("TranscriptCodeActions")
             .track_focus(&self.focus)
             .debug_selector(|| "code-actions".into())
             .absolute()
             .top(px(theme::BLOCK_PAD_Y))
-            .right(px(
-                theme::CODE_PAD_CELLS * theme::tx_cell(f32::from(code_size))
-            ))
-            .h(code_line)
+            .left(inset)
+            .right(inset)
+            .h(px(theme::LH_UI))
             .flex()
             .items_center()
-            .justify_end()
+            .justify_between()
             .gap(px(theme::CH))
             .font_family(theme::FONT_UI)
             .text_size(px(theme::FS_UI))
             .line_height(px(theme::LH_UI))
-            .text_color(rgb(theme::INK_SUBTLE));
+            .text_color(rgb(theme::INK_SUBTLE))
+            .child(
+                gpui::div()
+                    .debug_selector(|| "code-language".into())
+                    .min_w_0()
+                    .truncate()
+                    .children(self.language.clone()),
+            );
         let mut hovered = gpui::div()
             .flex()
             .items_center()
@@ -895,12 +901,14 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
         })
         // A fence is the block box: `BLOCK`,
         // `R_CONTROL` corners, a 1px `BLOCK_RING`, `BLOCK_PAD_Y` above and
-        // below, the code `CODE_PAD_CELLS` in, a half step under the prose.
+        // below (over the code, the header's `CODE_HEADER_H`), the code
+        // `CODE_PAD_CELLS` in, a half step under the prose.
         .with_code_background(gpui::transparent_black())
         .with_code_block(
             gpui::StyleRefinement::default()
                 .px(px(theme::CODE_PAD_CELLS * code_cell))
-                .py(px(theme::BLOCK_PAD_Y))
+                .pt(px(theme::BLOCK_PAD_Y + theme::CODE_HEADER_H))
+                .pb(px(theme::BLOCK_PAD_Y))
                 // A fence holds to the measure too (`max-width: 108ch`).
                 .max_w(px(theme::MEASURE_CH * cell))
                 // Auto, not the vendor's full width, so the margin narrows
@@ -1642,12 +1650,15 @@ mod file_link_tests {
         }
     }
 
-    /// A fence is its code in the block box (SPEC §5.4): a line at the
-    /// block size, `BLOCK_PAD_Y` above and below, the 1px hairline round
-    /// it. The actions overlay takes no layout, and revealing the actions
-    /// from the keyboard moves nothing.
+    /// A fence is its header row and its code in the block box (SPEC §5.4):
+    /// `CODE_HEADER_H` for the header, a line at the block size, `BLOCK_PAD_Y`
+    /// above and below, the 1px hairline round it. The header overlay takes
+    /// no layout of its own, and revealing the actions from the keyboard
+    /// moves nothing.
     #[gpui::test]
-    fn a_fence_is_its_code_and_padding_and_its_actions_take_no_room(cx: &mut TestAppContext) {
+    fn a_fence_is_its_header_code_and_padding_and_its_actions_take_no_room(
+        cx: &mut TestAppContext,
+    ) {
         let (_, cx) = fixture(cx, "```rust\nfn main() {}\n```");
         cx.simulate_resize(gpui::size(px(420.), px(300.)));
         cx.run_until_parked();
@@ -1656,10 +1667,11 @@ mod file_link_tests {
             block.size.height,
             px(
                 theme::prose_line_height(theme::FS_PROSE - theme::TX_BLOCK_STEP)
+                    + theme::CODE_HEADER_H
                     + 2. * theme::BLOCK_PAD_Y
                     + 2.
             ),
-            "one line of code in its box"
+            "a header and one line of code in its box"
         );
         let actions = cx
             .debug_bounds("code-actions")
@@ -1875,12 +1887,13 @@ mod file_link_tests {
         );
     }
 
-    /// A fence's actions stand on its code's first line: the block's
-    /// padding down, the code's own inset in from the right, one code line
-    /// high. No language tag stands there at rest.
+    /// A fence's header stands in the block's top: the language at the
+    /// left, the code's inset in from the block's edge, and the actions the
+    /// same inset in from the right, on one `LH_UI` line. A fence with no
+    /// language says nothing at the left.
     #[gpui::test]
-    fn a_fences_actions_stand_on_its_first_line_with_no_language_tag(cx: &mut TestAppContext) {
-        let (_, cx) = fixture(
+    fn a_fences_header_holds_its_language_and_its_actions(cx: &mut TestAppContext) {
+        let (view, cx) = fixture(
             cx,
             "```rust
 let count = 2;
@@ -1891,18 +1904,33 @@ let count = 2;
         let block = cx
             .debug_bounds("code-overlay")
             .expect("the block's overlay");
-        let row = cx.debug_bounds("code-actions").expect("the actions row");
-        assert!(cx.debug_bounds("code-language").is_none(), "no `rust`");
+        let row = cx.debug_bounds("code-actions").expect("the header row");
+        let language = cx.debug_bounds("code-language").expect("the language");
         let code_size = theme::FS_PROSE - theme::TX_BLOCK_STEP;
+        let inset = px(theme::CODE_PAD_CELLS * theme::tx_cell(code_size));
         assert_eq!(row.top() - block.top(), px(theme::BLOCK_PAD_Y));
-        let inset = block.right() - row.right();
         // Within a pixel's snap: the block's edge stands a hang cell short
         // of the view's (`hung_style`), off the pixel grid.
         assert!(
-            (inset - px(theme::CODE_PAD_CELLS * theme::tx_cell(code_size))).abs() < px(0.5),
-            "the actions sit the code's inset from the block's edge: {inset:?}"
+            (row.left() - block.left() - inset).abs() < px(0.5),
+            "the language sits the code's inset in from the left"
         );
-        assert_eq!(row.size.height, px(theme::prose_line_height(code_size)));
+        assert!(
+            (block.right() - row.right() - inset).abs() < px(0.5),
+            "the actions sit the code's inset in from the right"
+        );
+        assert_eq!(row.size.height, px(theme::LH_UI));
+        assert_eq!(language.left(), row.left());
+        view.update(cx, |view, cx| {
+            view.source = "```\nplain\n```".into();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("code-language")
+                .is_none_or(|language| language.size.width == px(0.)),
+            "no language, nothing at the left"
+        );
     }
 
     #[gpui::test]

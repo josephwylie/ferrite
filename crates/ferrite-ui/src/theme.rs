@@ -1845,14 +1845,18 @@ pub const QUOTE_ROW_LINES: usize = 2;
 /// from its neighbours.
 pub const RULE_MARGIN_Y: f32 = SPACE_1;
 /// A fence's code sits this many cells (at the fence's size) in from the
-/// block's sides. Its actions overlay — the language id, html `Preview`,
-/// `Copy`/`Copied` — keeps the same inset at the right and stands on the
-/// code's first line (`BLOCK_PAD_Y` down, one code line high), the id set
-/// as the code is, on its baseline. The overlay is always laid out (so it
-/// never moves the block); the actions show only under the pointer (the
-/// 100ms hover blend), while their keys have focus, or while the caret or
-/// a selection is inside the block — those two instantly.
+/// block's sides. Its header — the language at the left, html `Preview` and
+/// `Copy`/`Copied` at the right — keeps the same inset on both sides and
+/// stands in the block's top (`CODE_HEADER_H` high, `BLOCK_PAD_Y` down). The
+/// header is an overlay over the whole block, always laid out; the language
+/// shows at rest, the actions only under the pointer (the 100ms hover
+/// blend), while their keys have focus, or while the caret or a selection is
+/// inside the block — those two instantly.
 pub const CODE_PAD_CELLS: f32 = 2.0;
+/// A fence's header row: one `LH_UI` line of its own over the code, with
+/// `SPACE_1` between it and the first line. The block's top padding makes
+/// room for it.
+pub const CODE_HEADER_H: f32 = LH_UI + SPACE_1;
 /// Code actions keep a stable target when Copy becomes Copied.
 pub const CODE_ACTION_MIN_W: f32 = 56.;
 /// A reading dialog (the html preview, What's New): the reading column's
