@@ -572,3 +572,31 @@ fn a_recap_alone_draws_no_box_and_a_blocked_turn_does(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("wrap-up").is_some());
 }
+
+/// A mode that stops asking is confirmed first; Cancel changes nothing.
+#[gpui::test]
+fn a_mode_that_stops_asking_waits_for_a_yes(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("mode-confirm", 1);
+    *fake.native_controls.borrow_mut() = true;
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let ask = |cx: &mut gpui::VisualTestContext, view: &Entity<CockpitView>| {
+        view.update_in(cx, |view, window, cx| {
+            let thread = view.panes[0].thread().unwrap();
+            let generation = view.cockpit.thread(thread).unwrap().generation();
+            view.request_mode(thread, generation, "bypassPermissions".into(), window, cx);
+        });
+    };
+    let bypass = ferrite_core::SessionControl::SetPermissionMode {
+        mode: "bypassPermissions".into(),
+    };
+    ask(cx, &view);
+    assert!(cx.has_pending_prompt());
+    cx.simulate_prompt_answer("Cancel");
+    cx.run_until_parked();
+    assert!(!fake.controls.borrow().contains(&bypass));
+    ask(cx, &view);
+    cx.simulate_prompt_answer("Turn on");
+    cx.run_until_parked();
+    assert!(fake.controls.borrow().contains(&bypass));
+}

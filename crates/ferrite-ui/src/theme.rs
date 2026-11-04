@@ -513,6 +513,12 @@ pub fn mode_is_manual(mode: &str) -> bool {
     matches!(mode, "" | "default")
 }
 
+/// Whether a mode runs without asking the operator: picking it is
+/// confirmed first.
+pub fn mode_stops_asking(mode: &str) -> bool {
+    matches!(mode, "bypassPermissions" | "never")
+}
+
 /// A permission mode's one-line description in the mode menu, by its id
 /// (Claude's and Codex's), as Claude's own menu words them; `None` for a
 /// mode Ferrite does not know.

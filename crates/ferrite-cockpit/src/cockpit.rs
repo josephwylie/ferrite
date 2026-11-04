@@ -11865,6 +11865,44 @@ impl CockpitView {
             .map(|error| (thread, generation, error.to_string()));
     }
 
+    /// A pick of permission mode `mode`. A mode that stops asking
+    /// (`theme::mode_stops_asking`) is confirmed first, as Codex confirms
+    /// Full access; any other goes at once.
+    pub(super) fn request_mode(
+        &mut self,
+        thread: ThreadId,
+        generation: u64,
+        mode: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let set = ferrite_core::SessionControl::SetPermissionMode { mode: mode.clone() };
+        let standing = self
+            .cockpit
+            .thread(thread)
+            .is_some_and(|open| open.permission_mode() == Some(mode.as_str()));
+        if standing || !ferrite_ui::theme::mode_stops_asking(&mode) {
+            self.run_session_control(thread, generation, set);
+            return;
+        }
+        let answer = window.prompt(
+            gpui::PromptLevel::Warning,
+            "Stop asking before changes?",
+            Some("The agent will run commands and edit files without asking you first. Only do this in a folder you trust."),
+            &["Turn on", "Cancel"],
+            cx,
+        );
+        cx.spawn_in(window, async move |view, cx| {
+            if answer.await == Ok(0) {
+                let _ = view.update(cx, |view, cx| {
+                    view.run_session_control(thread, generation, set);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
     /// The Composer's permission mode chip (SPEC §5.5, §D.7): the mode's
     /// label (`pane::permission_mode_label`), in `MODE_ATTENTION_INK` for
     /// `Manual` (`theme::mode_is_manual`). Always shown once the
@@ -11966,16 +12004,12 @@ impl CockpitView {
                         cx.notify();
                     });
                 }),
-                on_pick: std::rc::Rc::new(move |at, _, cx| {
+                on_pick: std::rc::Rc::new(move |at, window, cx| {
                     let Some(value) = values.get(at).cloned().flatten() else {
                         return;
                     };
                     let _ = picker.update(cx, |view, cx| {
-                        view.run_session_control(
-                            thread,
-                            generation,
-                            ferrite_core::SessionControl::SetPermissionMode { mode: value },
-                        );
+                        view.request_mode(thread, generation, value, window, cx);
                         view.mode_picker = None;
                         cx.notify();
                     });
@@ -12110,14 +12144,8 @@ impl CockpitView {
                             )
                         })),
                 )
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    view.run_session_control(
-                        thread,
-                        generation,
-                        ferrite_core::SessionControl::SetPermissionMode {
-                            mode: value.clone(),
-                        },
-                    );
+                .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                    view.request_mode(thread, generation, value.clone(), window, cx);
                     cx.notify();
                 })),
             );

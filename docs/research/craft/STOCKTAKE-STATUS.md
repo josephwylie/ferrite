@@ -124,7 +124,7 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 86 | NS3 | Empty-state suggestion list that drops items once they no longer apply (import CLI sessions, turn on Auto, choose a folder) | MISSING | Only the `/import` slash row exists. | LEDGER "home suggestions … deferred" |
 | 87 | NS2 | Environment card ("Default", "Choose environment") | MISSING | No environment card. The env strip (Project, Workspace) stands in; machines are picked only in the nav. | — |
 | 88 | TR1 | Transcript header "Started on this computer · folder · Save as environment" | MISSING | "Save on Environment?" waits on the owner. | — |
-| 89 | AP10 | Confirm dialog before turning on Full access / bypass | MISSING |  | DENSITY.md:101 |
+| 89 | AP10 | Confirm dialog before turning on Full access / bypass | BUILT | **Audit 11-04:** A mode that stops asking (bypassPermissions, never) is confirmed by a native prompt (BUILT, not ticked; Codex's richer capability list is not drawn) | DENSITY.md:101 |
 | 90 | IM5 | Tool rows with image thumbnails and a hover carousel | MISSING |  | — |
 | 91 | IM1 | "Viewed N images" row with thumbnail tiles | MISSING | Tool results carry no images. | — |
 | 92 | AT4 | Annotate in the lightbox (pen, shapes, text, colour, undo, Save) | MISSING |  | — |
@@ -264,7 +264,7 @@ ID prefixes: NS new session, CO/XCO composer (Claude/Codex), XD Codex deeper pas
 | AP7 | "Allow similar commands ⓘ" | DIFFERENT BY DESIGN | `decision.rs:1417` "Always allow <pattern>" plus a note line; components.md:23 | The same job, done in words. |
 | AP8 | Sidebar dot or "Needs approval" pill while waiting; a bell dot | BUILT | `nav.rs:1531` `state_mark`, `:2124` (folded rail) | Orange dot built. No bell or badge dot. **Audit 11-04:** 6b6072a5: bell dot |
 | AP9 | The turn clock keeps counting during an approval | BUILT | `pane/working.rs:40`, `cockpit.rs:1834` | The working line is hidden while a decision stands. **Audit 11-04:** 626bd327: the working line stays over a waiting Decision (Solo) |
-| AP10 | Confirm dialog before turning on Full access / bypass | MISSING | DENSITY.md:101 |  |
+| AP10 | Confirm dialog before turning on Full access / bypass | BUILT | DENSITY.md:101 | **Audit 11-04:** A mode that stops asking (bypassPermissions, never) is confirmed by a native prompt (BUILT, not ticked; Codex's richer capability list is not drawn) |
 | AP11 | Non-shell approvals (edits, fetch, MCP) and questions/forms | BUILT | `pane.rs:2631`, `decision.rs:139`, `subagents.rs:1654,1913,1992` (73ea2552, b320bd8e) | MCP and other tools fall back to pretty-printed JSON. |
 | SH1 | Left icon rail (Home, Scheduled, Plugins, …) | DIFFERENT BY DESIGN | geometry.md:71 "Ferrite has already chosen Claude's" | Views plus a folded 52 px rail (`nav.rs:2101`). |
 | SH2 | Sidebar header: bell with a dot when a turn finishes; search | BUILT | `nav.rs:881,895`; `cockpit.rs:13379,13347` (1c1e5980, 3b33960c) | The bell opens Activity, but it never gets a dot. Search is the ⌘K palette. **Audit 11-04:** 6b6072a5: the bell wears a dot; bell sections 8c514306, bca332a1 |
