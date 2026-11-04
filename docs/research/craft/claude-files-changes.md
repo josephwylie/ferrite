@@ -139,3 +139,17 @@ The menu:
 - A right-click on a link in the transcript.
 - What `Save` on Environment does.
 - A Markdown file and a `.txt` file in the Files editor, for the font and rendering.
+
+## Background tasks (`bg-tasks-panel.png`, captured 2026-11-04)
+
+**In the transcript:**
+- the launch row reads `Running sleep test command ▸`, in muted ink;
+- on completion, a muted single line appears at that point: `Background command completed · Sleep 30 seconds then echo agent-done`. For an agent, the format is `Background task completed · Agent "…" · took 22m 55s`.
+
+**In the session rail:** a `Background tasks` section listing each running task with its title, a live elapsed time and a white stop square, then `1 finished`.
+
+**The Background tasks pane** opens from the rail into the right-docked pane. Its head is `Background tasks`, with trash (clear finished), expand and close.
+- **`Running N`**: a card per task, with its title and `›`, the elapsed time and a stop button. Inside, a `▾ 1 task` tree; nested children are grouped under `▸ 1 finished`. Each child is `▾ <title>` with its duration, then its output block in mono: `$ command`, the output lines, and `[exited with code 0]`.
+- **`Finished N`**: collapsed rows, each a `▸ title` with the duration at the right (`Sleep 20s then print done  20s`).
+- **Owner note:** while a task runs, its transcript row is **live** (it animates and updates). When it finishes or stops, it turns back into plain muted text. The live look isn't captured yet; capture it on the next run.
+- There is no pill above the composer. Running work lives in the rail and the pane.

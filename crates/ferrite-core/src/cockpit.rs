@@ -2606,6 +2606,13 @@ impl Cockpit {
         Ok(())
     }
 
+    /// Take an open Thread out of the roster: it stays open and mirrored,
+    /// but has no Pane, no focus and no place in a view. A window's side
+    /// chat holds the fork it asked for this way.
+    pub fn set_aside(&mut self, thread: ThreadId) {
+        self.roster.remove_thread(thread);
+    }
+
     /// Revive one parked Thread into the view that shows it (#21): a Pane,
     /// focus, and the park order forgetting it — cmd-o must not revive it a
     /// second time. The shared tail of cmd-o and a parked nav row's click.

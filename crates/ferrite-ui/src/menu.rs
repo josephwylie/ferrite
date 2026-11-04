@@ -486,6 +486,48 @@ pub fn tooltip_with_key(
     }
 }
 
+/// A tooltip card of two parts: `title` in `INK_SUBTLE`, then `body` in
+/// `INK_STRONG`, wrapped at `width` (a skill's name, then its description).
+pub fn tooltip_card(
+    title: impl Into<SharedString>,
+    body: impl Into<SharedString>,
+    width: f32,
+) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
+    let (title, body) = (title.into(), body.into());
+    move |window, cx| {
+        let (title, body) = (title.clone(), body.clone());
+        let tip = gpui::component::tooltip::Tooltip::element(move |_, _| {
+            gpui::div()
+                .flex()
+                .flex_col()
+                .w(px(width - 2. * TOOLTIP_PAD_X))
+                .child(
+                    gpui::div()
+                        .debug_selector(|| "skill-tip-name".into())
+                        .text_color(rgb(INK_SUBTLE))
+                        .child(title.clone()),
+                )
+                .child(
+                    gpui::div()
+                        .debug_selector(|| "skill-tip-description".into())
+                        .text_color(rgb(INK_STRONG))
+                        .child(body.clone()),
+                )
+        })
+        .font_family(FONT_UI)
+        .text_size(px(FS_META))
+        .line_height(px(LH_META))
+        .px(px(TOOLTIP_PAD_X))
+        .py(px(TOOLTIP_PAD_Y))
+        .max_w(px(width))
+        .rounded(px(R_CONTROL))
+        .border_color(paint::FLOAT_EDGE)
+        .shadow(components::float_shadow())
+        .build(window, cx);
+        entering(tip, window, cx)
+    }
+}
+
 /// A tooltip `tip` as it comes in: fading and growing from its top left
 /// over `motion::TOOLTIP_IN` (Claude's 120ms), unless one was up within
 /// `gpui::TOOLTIP_HANDOFF` — then, as Claude's do once one has shown, it is

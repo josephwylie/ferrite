@@ -146,7 +146,7 @@ fn a_prompts_files_flow_inline_after_its_words() {
             std::path::PathBuf::from("/tmp/nav-notes.md"),
         ],
     );
-    let (text, files) = pane::prompt_text(&line);
+    let (text, files) = pane::prompt_text(&line, &[]);
     assert_eq!(files.len(), 2);
     let pane::PromptText::Markdown(source) = text else {
         panic!("a prompt with files is Markdown");
@@ -160,9 +160,9 @@ fn a_prompts_files_flow_inline_after_its_words() {
         &[std::path::PathBuf::from("/tmp/nav-jitter.png")],
     );
     assert!(
-        matches!(pane::prompt_text(&line).0, pane::PromptText::Literal(words) if words == "Look")
+        matches!(pane::prompt_text(&line, &[]).0, pane::PromptText::Literal(words) if words == "Look")
     );
-    let (plain, files) = pane::prompt_text("Just words");
+    let (plain, files) = pane::prompt_text("Just words", &[]);
     assert!(files.is_empty());
     assert!(matches!(plain, pane::PromptText::Literal(words) if words == "Just words"));
 }
@@ -171,8 +171,10 @@ fn a_prompts_files_flow_inline_after_its_words() {
 /// of its words stay escaped; a backtick never closed stays a backtick.
 #[test]
 fn a_prompts_code_is_drawn_as_code() {
-    let (text, files) =
-        pane::prompt_text("Run `ls /definitely-missing-dir`, then ``a ` b`` (once) and `open");
+    let (text, files) = pane::prompt_text(
+        "Run `ls /definitely-missing-dir`, then ``a ` b`` (once) and `open",
+        &[],
+    );
     assert!(files.is_empty());
     let pane::PromptText::Markdown(source) = text else {
         panic!("a prompt that quotes code is Markdown");
@@ -182,7 +184,7 @@ fn a_prompts_code_is_drawn_as_code() {
         "Run `ls /definitely-missing-dir`\\, then ``a ` b`` \\(once\\) and \\`open"
     );
     assert!(matches!(
-        pane::prompt_text("an `unclosed tick").0,
+        pane::prompt_text("an `unclosed tick", &[]).0,
         pane::PromptText::Literal(words) if words == "an `unclosed tick"
     ));
 }

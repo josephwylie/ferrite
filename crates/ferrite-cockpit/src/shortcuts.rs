@@ -188,7 +188,10 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "find::Previous" => Row(Transcript, "Find: previous"),
         "find::Close" => Row(Transcript, "Find: close"),
         // The floats' own keys live in their footers.
-        "palette::SelectNext"
+        "reply::Send"
+        | "reply::Close"
+        | "side_chat::Ask"
+        | "palette::SelectNext"
         | "palette::SelectPrevious"
         | "palette::Confirm"
         | "palette::Preview"

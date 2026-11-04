@@ -1,10 +1,11 @@
-//! Quotes a prompt carries: transcript passages the operator replied to
-//! (Claude's selection Reply). The draft holds them as Quote rows over its
-//! line; the prompt carries them as ordinary text, the same for every
-//! provider: each passage a Markdown block quote, ahead of the words, so
-//! the model reads what the reply refers to. The sent prompt's bubble reads
-//! them back off its head (`split`) and draws the same rows, and a prompt
-//! recalled into the Composer gets its rows back.
+//! Replies a prompt carries: transcript passages the operator replied to
+//! (Claude's selection Reply), each with the words they typed about it. The
+//! draft holds them as Reply cards in its tray; the prompt carries them as
+//! ordinary text, the same for every provider: each passage a Markdown
+//! block quote, then the reply's words, ahead of the prompt's own, so the
+//! model reads what the reply refers to. The sent prompt's bubble reads the
+//! quotes back off its head (`split`) and draws them as Quote rows, and a
+//! prompt recalled into the Composer gets its quotes back as Reply cards.
 
 /// Claude's bounds on a quotable passage, in characters, once trimmed: a
 /// selection shorter offers no Reply, one longer is not quoted.
@@ -38,9 +39,33 @@ fn block(passage: &str) -> String {
         .join("\n")
 }
 
-/// The prompt text: every quote's block, a blank line apart, then `text`.
-pub fn compose(quotes: &[String], text: &str) -> String {
-    let mut parts: Vec<String> = quotes.iter().map(|quote| block(quote)).collect();
+/// A passage the operator replied to, and what they said about it (empty
+/// for a bare quote).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Reply {
+    pub quote: String,
+    pub text: String,
+}
+
+impl Reply {
+    pub fn new(quote: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            quote: quote.into(),
+            text: text.into(),
+        }
+    }
+}
+
+/// The prompt text: each reply's quote block and its words, a blank line
+/// apart, then `text`.
+pub fn compose(replies: &[Reply], text: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for reply in replies {
+        parts.push(block(&reply.quote));
+        if !reply.text.is_empty() {
+            parts.push(reply.text.clone());
+        }
+    }
     if !text.is_empty() || parts.is_empty() {
         parts.push(text.to_string());
     }
@@ -93,20 +118,24 @@ mod tests {
     }
 
     #[test]
-    fn quotes_go_ahead_of_the_words_as_block_quotes() {
-        let quotes = vec!["The fix is in.\n\nRun the tests.".to_string(), "two".into()];
+    fn replies_go_ahead_of_the_words_as_a_block_quote_and_their_words() {
+        let replies = vec![
+            Reply::new("The fix is in.\n\nRun the tests.", "Which tests?"),
+            Reply::new("two", ""),
+        ];
         assert_eq!(
-            compose(&quotes, "Why?"),
-            "> The fix is in.\n>\n> Run the tests.\n\n> two\n\nWhy?"
+            compose(&replies, "Why?"),
+            "> The fix is in.\n>\n> Run the tests.\n\nWhich tests?\n\n> two\n\nWhy?"
         );
-        assert_eq!(compose(&quotes[1..], ""), "> two");
+        assert_eq!(compose(&replies[1..], ""), "> two");
         assert_eq!(compose(&[], "plain"), "plain");
     }
 
     #[test]
     fn a_prompt_splits_back_into_its_quotes_and_words() {
         let quotes = vec!["a\n\nb".to_string(), "c".into()];
-        let prompt = compose(&quotes, "words\n\n> not a lead quote");
+        let replies: Vec<Reply> = quotes.iter().map(|quote| Reply::new(quote, "")).collect();
+        let prompt = compose(&replies, "words\n\n> not a lead quote");
         assert_eq!(split(&prompt), (quotes, "words\n\n> not a lead quote"));
         assert_eq!(split("> only"), (vec!["only".to_string()], ""));
         assert_eq!(split("no quote"), (vec![], "no quote"));

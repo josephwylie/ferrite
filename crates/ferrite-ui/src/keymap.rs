@@ -576,6 +576,11 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("shift-enter".into(), "find::Previous", Some("Find")),
         (with_primary("shift-g"), "find::Previous", Some("Find")),
         ("escape".into(), "find::Close", Some("Find")),
+        // The Reply card's line: ⏎ sends the reply, esc closes the card.
+        ("enter".into(), "reply::Send", Some("ReplyCard")),
+        ("escape".into(), "reply::Close", Some("ReplyCard")),
+        // The side chat's line: ⏎ sends the question to its tab.
+        ("enter".into(), "side_chat::Ask", Some("SideChat")),
     ];
     if platform == Platform::Mac {
         table.extend([

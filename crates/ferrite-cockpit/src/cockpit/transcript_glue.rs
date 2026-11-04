@@ -361,13 +361,6 @@ impl CockpitView {
             .map(|shown| shown.id)
     }
 
-    /// A selection's `Start a side chat`: a new Thread holding the whole
-    /// conversation, the passage a Quote row over its Composer.
-    pub(super) fn side_chat(&mut self, thread: ThreadId, passage: String, cx: &mut Context<Self>) {
-        let draft = ferrite_pane::quote::compose(&[passage], "");
-        self.fork_thread(thread, None, Some(draft), cx);
-    }
-
     /// Send `prompt` to Pane `index`'s Thread again, queued behind a
     /// running turn.
     pub(super) fn send_again(

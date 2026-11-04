@@ -43,6 +43,7 @@ mod review;
 mod row_menu;
 mod session_import;
 mod settings_window;
+mod side_chat;
 mod stab;
 mod stale_chrome;
 mod startup;

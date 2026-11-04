@@ -159,6 +159,11 @@ pub struct TranscriptInput {
     /// Whether a selected passage can be quoted into a Composer: the Pane
     /// draws one (a subagent's tab does not), so a drag offers its Reply.
     pub quotes: bool,
+    /// Who a Reply is to (`Reply to Claude`): the provider's name.
+    pub reply_to: SharedString,
+    /// The Session's commands and skills: a sent prompt's `/name` that
+    /// names one is drawn blue, its description on hover.
+    pub skills: std::sync::Arc<[ferrite_core::SessionCommand]>,
 }
 
 /// Everything a transcript's render depends on besides its blocks and its
@@ -180,6 +185,8 @@ pub struct TranscriptKey {
     pub agents: pane::AgentFaces,
     pub rewind: Option<Result<(), SharedString>>,
     pub quotes: bool,
+    /// How many skills the prompts can name: a late catalogue redraws them.
+    pub skills: usize,
 }
 
 impl TranscriptInput {
@@ -200,6 +207,7 @@ impl TranscriptInput {
             agents: self.agents.clone(),
             rewind: self.rewind.clone(),
             quotes: self.quotes,
+            skills: self.skills.len(),
         }
     }
 
@@ -240,9 +248,9 @@ pub enum TranscriptEvent {
         action: PromptAction,
         at: gpui::Point<gpui::Pixels>,
     },
-    /// A press on a selection's Reply: quote this passage into the Pane's
-    /// Composer (`Composer::quote`) and give it the keyboard.
-    Quote(String),
+    /// A Reply sent from the Reply card (or an answer's Reply row, its
+    /// words empty): a Reply card in the Pane's tray (`Composer::reply`).
+    Reply(crate::quote::Reply),
     /// An answer's Fork: a new Thread holding the conversation through
     /// the answer whose last block is `after`.
     Fork {
@@ -347,6 +355,8 @@ pub struct TranscriptView {
     /// The Reply pill a finished selection offers (`reply`), and where
     /// the left press that may be selecting landed.
     reply: Option<reply::SelectionReply>,
+    /// The Reply card the pill's Reply opened (`reply`).
+    reply_card: Option<reply::ReplyCard>,
     pressed_at: Option<gpui::Point<gpui::Pixels>>,
     /// A turn card's menu, while open (`outputs`).
     output_menu: Option<outputs::OutputMenu>,
@@ -402,6 +412,8 @@ impl TranscriptView {
                 agents: Default::default(),
                 rewind: None,
                 quotes: false,
+                reply_to: SharedString::default(),
+                skills: Default::default(),
             },
             rich,
             TranscriptText::default(),
@@ -466,6 +478,7 @@ impl TranscriptView {
             texts: Vec::new(),
             find: None,
             reply: None,
+            reply_card: None,
             pressed_at: None,
             output_menu: None,
             answer_menu: None,
@@ -526,7 +539,8 @@ impl TranscriptView {
         // An agent's standing is its call's: it changes the blocks.
         let content_changed = namespace_changed
             || before.content_revision != after.content_revision
-            || before.agents != after.agents;
+            || before.agents != after.agents
+            || before.skills != after.skills;
         let disclosure_changed =
             self.input.expanded != input.expanded || self.input.target != input.target;
         let reading_changed = before.reading_size != after.reading_size;
@@ -997,7 +1011,7 @@ impl TranscriptView {
                 Body::Thinking(_) => self.tool_state(DisclosureId::Reasoning(block.id)),
                 _ => DisclosureState::Collapsed,
             } == DisclosureState::Expanded;
-            pane::collect_block_text(block, expanded, selection);
+            pane::collect_block_text(block, expanded, &self.input.skills, selection);
         }
     }
 
@@ -1035,6 +1049,7 @@ impl TranscriptView {
             preview: &self.input.preview,
             grid: self.grid(),
             scope: &self.input.namespace,
+            skills: &self.input.skills,
         }
     }
 
@@ -2548,6 +2563,7 @@ impl Render for TranscriptView {
             cx.notify();
         }
         let reply = self.reply_float(window, cx);
+        let reply_card = self.reply_card_float(cx);
         let output_menu = self.output_menu_float(cx);
         let answer_menu = self.answer_menu_float(cx);
         let find_bar = self.find_bar();
@@ -2592,6 +2608,7 @@ impl Render for TranscriptView {
             .children(latest)
             .children(minimap)
             .children(reply)
+            .children(reply_card)
             .children(output_menu)
             .children(answer_menu)
             .children(find_bar)
@@ -2600,6 +2617,8 @@ impl Render for TranscriptView {
                 cx.listener(|view, _: &crate::find::Previous, _, cx| view.find_step(false, cx)),
             )
             .on_action(cx.listener(|view, _: &crate::find::Close, _, cx| view.close_find(cx)))
+            .on_action(cx.listener(|view, _: &reply::Send, _, cx| view.send_reply(cx)))
+            .on_action(cx.listener(|view, _: &reply::Close, _, cx| view.close_reply_card(cx)))
     }
 }
 

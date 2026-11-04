@@ -2983,6 +2983,8 @@ pub(crate) struct RowCx<'a> {
     pub preview: &'a crate::preview::Preview,
     pub grid: Grid,
     pub scope: &'a SharedString,
+    /// The Session's skills: a prompt's `/name` that names one is blue.
+    pub skills: &'a [ferrite_core::SessionCommand],
 }
 
 impl RowCx<'_> {
@@ -3218,13 +3220,17 @@ pub enum PromptText {
 /// A prompt line as its bubble draws (and copies) it, and the files it
 /// carries: an image is its thumbnail, so only its other files chip. The
 /// quotes leading it are not its words: they draw as Quote rows over it.
-pub fn prompt_text(line: &str) -> (PromptText, Vec<std::path::PathBuf>) {
-    prompt_text_chipping(line, |path| !crate::image_viewer::is_image(path))
+pub fn prompt_text(
+    line: &str,
+    skills: &[ferrite_core::SessionCommand],
+) -> (PromptText, Vec<std::path::PathBuf>) {
+    prompt_text_chipping(line, skills, |path| !crate::image_viewer::is_image(path))
 }
 
 /// A prompt line with a chip for each of its files that `chips`.
 fn prompt_text_chipping(
     line: &str,
+    skills: &[ferrite_core::SessionCommand],
     chips: fn(&std::path::Path) -> bool,
 ) -> (PromptText, Vec<std::path::PathBuf>) {
     let words = crate::quote::split(line).1;
@@ -3233,11 +3239,14 @@ fn prompt_text_chipping(
     let quotes_code = text
         .split('\n')
         .any(|line| code_spans(line).iter().any(|(code, _)| *code));
-    if chipped.is_empty() && !quotes_code {
+    let names_skill = text
+        .split_whitespace()
+        .any(|word| skill_named(word, skills).is_some());
+    if chipped.is_empty() && !quotes_code && !names_skill {
         return (PromptText::Literal(text), files);
     }
     (
-        PromptText::Markdown(prompt_markdown(&text, &chipped)),
+        PromptText::Markdown(prompt_markdown(&text, &chipped, skills)),
         files,
     )
 }
@@ -3247,7 +3256,11 @@ fn prompt_text_chipping(
 /// (Claude draws them as chips); hard breaks where they broke the line,
 /// then one `ferrite-chip:` link per file, which the band renders as its
 /// chip (`prompt_chip`).
-fn prompt_markdown(text: &str, files: &[std::path::PathBuf]) -> String {
+fn prompt_markdown(
+    text: &str,
+    files: &[std::path::PathBuf],
+    skills: &[ferrite_core::SessionCommand],
+) -> String {
     let mut out = String::with_capacity(text.len() + 64);
     for (index, line) in text.split('\n').enumerate() {
         if index > 0 {
@@ -3258,11 +3271,19 @@ fn prompt_markdown(text: &str, files: &[std::path::PathBuf]) -> String {
                 out.push_str(span);
                 continue;
             }
-            for ch in span.chars() {
-                if ch.is_ascii_punctuation() {
-                    out.push('\\');
+            // Words and the space between them: a word that names a skill
+            // is its link (`skill_token`), the rest is escaped.
+            for (word, is_word) in words_of(span) {
+                match skill_named(word, skills).filter(|_| is_word) {
+                    Some(skill) => {
+                        out.push_str("[\\/");
+                        escape_into(&mut out, &skill.name);
+                        out.push_str("](<ferrite-skill:");
+                        out.push_str(&skill.name);
+                        out.push_str(">)");
+                    }
+                    None => escape_into(&mut out, word),
                 }
-                out.push(ch);
             }
         }
     }
@@ -3287,6 +3308,90 @@ fn prompt_markdown(text: &str, files: &[std::path::PathBuf]) -> String {
         out.push_str(">)");
     }
     out
+}
+
+/// `text` with every Markdown character escaped.
+fn escape_into(out: &mut String, text: &str) {
+    for ch in text.chars() {
+        if ch.is_ascii_punctuation() {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+}
+
+/// `text` cut into its words and the whitespace between them, in order,
+/// each with whether it is a word.
+fn words_of(text: &str) -> Vec<(&str, bool)> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut in_word = false;
+    for (at, ch) in text.char_indices() {
+        if ch.is_whitespace() == in_word {
+            if at > start {
+                parts.push((&text[start..at], in_word));
+            }
+            start = at;
+            in_word = !in_word;
+        }
+    }
+    if start < text.len() {
+        parts.push((&text[start..], in_word));
+    }
+    parts
+}
+
+/// The skill a word names: `/name` for one of the Session's `skills`.
+fn skill_named<'a>(
+    word: &str,
+    skills: &'a [ferrite_core::SessionCommand],
+) -> Option<&'a ferrite_core::SessionCommand> {
+    let name = word.strip_prefix('/')?;
+    skills.iter().find(|skill| skill.name == name)
+}
+
+/// A skill in a sent prompt (Claude's, `claude/parity/skill-sent-bubble.png`,
+/// `skill-hover.png`): `SKILL_INK` on no ground, in the prompt's face, a
+/// faint blue wash behind it under the pointer, and a card above it — the
+/// full name in `INK_SUBTLE`, then the catalogue's description, as the `/` picker reads it — wrapped at
+/// `SKILL_TIP_W`.
+pub(crate) fn skill_token(
+    label: &str,
+    skill: &ferrite_core::SessionCommand,
+    window: &mut gpui::Window,
+) -> (gpui::Size<gpui::Pixels>, AnyElement) {
+    let style = window.text_style();
+    let size = style.font_size.to_pixels(window.rem_size());
+    let shaped = window.text_system().shape_line(
+        SharedString::from(label.to_string()),
+        size,
+        &[style.to_run(label.len())],
+        None,
+    );
+    let width = shaped.width();
+    let line = window.line_height();
+    let name = skill.name.clone();
+    let description = skill.description.clone();
+    let element = div()
+        .id(SharedString::from(format!("prompt-skill-{name}")))
+        .debug_selector({
+            let name = name.clone();
+            move || format!("prompt-skill-{name}")
+        })
+        .w(width)
+        .h(line)
+        .rounded(px(theme::R_CONTROL))
+        .text_color(rgb(theme::SKILL_INK))
+        .whitespace_nowrap()
+        .hover(|style| style.bg(gpui::rgba(theme::SKILL_HOVER)))
+        .tooltip(ferrite_ui::menu::tooltip_card(
+            format!("/{name}"),
+            description,
+            theme::SKILL_TIP_W,
+        ))
+        .child(SharedString::from(label.to_string()))
+        .into_any_element();
+    (gpui::size(width, line), element)
 }
 
 /// A line cut into its code spans (`true`, backticks and all) and the
@@ -3363,6 +3468,7 @@ fn prompt_words(
             None => row_cx.selection.markdown(block.id, source),
         }
         .ink(INK_STRONG)
+        .skills(row_cx.skills.into())
         .chips(row_cx.preview.clone(), gallery.clone())
         .into_any_element(),
     })
@@ -3392,7 +3498,7 @@ pub(crate) fn prompt_row(
     row_cx: &RowCx,
     actions: Option<AnyElement>,
 ) -> AnyElement {
-    let (text, files) = prompt_text(line);
+    let (text, files) = prompt_text(line, row_cx.skills);
     let gallery = prompt_gallery(&files);
     // The passages it replied to, as their Quote rows (Claude's).
     let quotes: Vec<_> = crate::quote::split(line)
@@ -3403,7 +3509,7 @@ pub(crate) fn prompt_row(
             div()
                 .max_w(relative(theme::PROMPT_BUBBLE_MAX_W))
                 .min_w_0()
-                .child(crate::attachments::quote_row(index, passage, None))
+                .child(crate::attachments::quote_row(index, passage))
         })
         .collect();
     let bubble = prompt_words(block, text, &gallery, row_cx, None).map(|words| {
@@ -3457,7 +3563,7 @@ pub(crate) fn prompt_row(
 /// part of the selection; the transcript makes it the way back to its turn.
 pub(crate) fn pinned_prompt(block: &Block, line: &str, row_cx: &RowCx, lines: usize) -> Div {
     let grid = row_cx.grid();
-    let (text, files) = prompt_text_chipping(line, |_| true);
+    let (text, files) = prompt_text_chipping(line, row_cx.skills, |_| true);
     let gallery = prompt_gallery(&files);
     // The chips close the prompt; their line stands taller, as the
     // inline chip makes it.
@@ -4846,6 +4952,8 @@ mod tests {
                 agents: Default::default(),
                 rewind: None,
                 quotes: true,
+                reply_to: "Claude".into(),
+                skills: Default::default(),
             };
             let selection = self.selection.clone();
             self.transcript.update(cx, |transcript, cx| {
@@ -4885,6 +4993,8 @@ mod tests {
                     agents: Default::default(),
                     rewind: None,
                     quotes: true,
+                    reply_to: "Claude".into(),
+                    skills: Default::default(),
                 },
                 crate::rich::TextCache::default(),
                 selection.clone(),

@@ -1696,6 +1696,31 @@ pub const SELECTION_REPLY_PAD_X: f32 = SPACE_3;
 pub const SELECTION_REPLY_PAD_Y: f32 = SPACE_1_5;
 pub const SELECTION_REPLY_DIVIDER_H: f32 = 14.0;
 pub const SELECTION_REPLY_RADIUS: f32 = 8.0;
+/// **The Reply card** (Claude's, `claude/reply-popover.png`): what `Reply`
+/// opens over the selection. A float `REPLY_CARD_W` wide, `REPLY_CARD_PAD`
+/// inside its ring: the passage in `INK_SUBTLE`, cut at
+/// `REPLY_CARD_QUOTE_LINES` lines with an ellipsis, then a one-line field
+/// (`Reply to Claude`) `REPLY_CARD_GAP` under it and the send button at its
+/// right. Sent, it becomes a `REPLY_CHIP` square in the Composer's tray
+/// (`claude/reply-sent-chip.png`): the typed words behind a quote bar at
+/// its top, an outlined `Reply` badge at its foot, on the `SUNKEN` ground.
+pub const REPLY_CARD_W: f32 = 280.0;
+pub const REPLY_CARD_PAD: f32 = SPACE_3;
+pub const REPLY_CARD_GAP: f32 = SPACE_2;
+pub const REPLY_CARD_QUOTE_LINES: usize = 2;
+pub const REPLY_CHIP: f32 = 120.0;
+pub const REPLY_CHIP_LINES: usize = 4;
+/// **The side chat** (Claude's, `claude/sidechat-open.png`): the right
+/// pane's other body, `SIDE_CHAT_W` wide beside the thread, which reflows
+/// narrower. Its head is a tab strip (`Side chat ×`, `+`) in the row's
+/// height, with expand and close at the right; an empty tab says `No
+/// messages yet`, centred in `INK_SUBTLE`; its composer, `SIDE_CHAT_INSET`
+/// in from the pane's sides and foot, is a `FIELD` card at `R_FLOAT` with
+/// `Ask a quick question` for its placeholder and `↵` at its foot. Expanded,
+/// the pane covers the whole content area. Every change is one frame.
+pub const SIDE_CHAT_W: f32 = 420.0;
+pub const SIDE_CHAT_TAB_MAX_W: f32 = 180.0;
+pub const SIDE_CHAT_INSET: f32 = SPACE_2;
 /// **The task list** (a plan the provider works to, over the working line):
 /// a card at `R_CARD` on a `CARD_RING`, `TASK_CARD_PAD` inside,
 /// `TASK_ROW_GAP` between its steps, each a `TASK_ICON` mark and its words —
@@ -2143,6 +2168,14 @@ pub const MENTION_INK: u32 = LINK_INK;
 pub const MENTION_CHIP: u32 = 0x7aa8ee29;
 pub const MENTION_CHIP_PAD_X: f32 = 3.0;
 pub const MENTION_CHIP_INSET_Y: f32 = 1.0;
+/// A skill (`/name`) in the Composer's line and in a sent prompt (Claude's,
+/// `claude/parity/slash-picked.png`, `skill-sent-bubble.png`): blue ink and
+/// no ground. Under the pointer in a bubble it takes `SKILL_HOVER`, a faint
+/// blue wash behind the token alone (`skill-hover.png`).
+pub const SKILL_INK: u32 = 0x5ea1ea;
+pub const SKILL_HOVER: u32 = 0x5ea1ea26;
+/// The skill's card above it: the description wraps at this width.
+pub const SKILL_TIP_W: f32 = 260.0;
 /// The panel's Context section (`pane::context_usage`): its stacked bar
 /// (4, Claude's), and the gap above the turn's usage under the legend.
 pub const USAGE_CARD_GAP: f32 = SPACE_3;

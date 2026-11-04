@@ -133,8 +133,8 @@ Renders: `ferrite-cp8/` (`FERRITE_REF_SIZES=app`; answer, answer-hover, approval
 
 Each item is ticked only after it's seen working in the real installed app.
 
-1. **Reply.** A floating card over the selection that becomes a `Reply` card in the composer tray (`claude-sidechat-menus.md`).
-2. **Side chat.** A right-docked, tabbed pane (`claude-sidechat-menus.md`).
+1. **Reply.** A floating card over the selection that becomes a `Reply` card in the composer tray (`claude-sidechat-menus.md`). BUILT, not ticked: tests pass (`transcript_pointer.rs`); not yet seen in the installed app. The selection wash is drawn by the card (a press clears the real selection), so Esc does not bring the real selection back.
+2. **Side chat.** A right-docked, tabbed pane (`claude-sidechat-menus.md`). BUILT, not ticked: tests pass (`tests/side_chat.rs`); not yet seen in the installed app. Opening needs the agent to be able to fork (no turn running); a fork that was never closed (quit mid-chat) stays a normal thread.
 3. **Subagent drill-in.** In the same right pane.
 4. **Right-click menus.** Each matches its target: answer, prompt, link, file.
 5. **Files, Changes, session rail and terminal.** Title-bar tools as Claude's (`claude-files-changes.md`). They replace Show in Finder.

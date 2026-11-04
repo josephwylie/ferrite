@@ -2,7 +2,10 @@
 //! frame, right of the board and outside it, holding one scroll of
 //! sections with no tabs — Environment, Context, Connectors, Changes
 //! (`sections`, `changes`). The pull request is a row in Changes once one
-//! exists. The Review, which needs the board's width and takes line
+//! exists. The column is the one right pane: while a Thread has a side
+//! chat open the column holds that instead (`side_chat`), `SIDE_CHAT_W`
+//! wide, and the toggle stands down; closing the chat gives the column
+//! back to the sections or the preview. The Review, which needs the board's width and takes line
 //! comments, still opens beside its Pane inside the board (ADR 0021).
 //!
 //! When it shows (`panel_pane`): for the focused Pane, in every view —
@@ -78,8 +81,10 @@ impl CockpitView {
     pub(super) fn panel_pane(&self) -> Option<usize> {
         let index = self.panel_candidate_index()?;
         let pane = &self.panes[index];
-        (pane.preview.is_open() || self.prefs.settings.panel_shown && pane.thread().is_some())
-            .then_some(index)
+        (pane.preview.is_open()
+            || self.side_chat_shown(index)
+            || self.prefs.settings.panel_shown && pane.thread().is_some())
+        .then_some(index)
     }
 
     /// The Thread whose panel shows this frame, if it shows for one.
@@ -121,6 +126,7 @@ impl CockpitView {
     /// frame: its own width, a preview's while one is shown, none hidden.
     pub(super) fn panel_column_w(&self) -> f32 {
         match self.panel_pane() {
+            Some(index) if self.side_chat_shown(index) => ferrite_ui::theme::SIDE_CHAT_W,
             Some(index) if self.preview_shown(index) => {
                 self.panel.wide.max(ferrite_ui::theme::PANEL_W)
             }
@@ -206,6 +212,10 @@ impl CockpitView {
     /// The frame lays it after both heads, so it stays put, hover and all.
     pub(super) fn panel_toggle_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.panel_candidate()?;
+        // The side chat's head holds the row's right end: no toggle there.
+        if self.side_chat_pane_shown() {
+            return None;
+        }
         Some(
             div()
                 .absolute()
@@ -272,6 +282,9 @@ impl CockpitView {
         use ferrite_ui::theme::*;
         let index = self.panel_pane()?;
         let owner = self.panes[index].identity;
+        if let Some(thread) = owner.thread().filter(|_| self.side_chat_shown(index)) {
+            return Some(self.side_chat_column(thread, window, cx));
+        }
         let previewing = self.preview_shown(index);
         let content = div()
             .size_full()

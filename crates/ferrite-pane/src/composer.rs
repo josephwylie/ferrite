@@ -35,6 +35,7 @@ use gpui::{
 };
 
 use crate::line::Line;
+use crate::quote::Reply;
 use ferrite_ui::pointer::Pointer;
 
 actions!(
@@ -141,9 +142,9 @@ pub struct Composer {
     line: Line,
     files: Vec<PathBuf>,
     /// Transcript passages the operator is replying to (a selection's
-    /// Reply): Quote rows over the line, sent ahead of its words
-    /// (`crate::quote`).
-    quotes: Vec<String>,
+    /// Reply), each with what they said about it: Reply cards in the tray,
+    /// sent ahead of the line's words (`crate::quote`).
+    replies: Vec<Reply>,
     /// Review comments gathered from the Review beside this Pane (ADR
     /// 0021): one attachment on the shelf, sent after the line's text.
     review: CommentStore,
@@ -212,6 +213,9 @@ pub struct Composer {
     /// The chip grounds last drawn, in window coordinates, for the tests.
     #[cfg(any(test, feature = "test-support"))]
     last_chips: Vec<Bounds<Pixels>>,
+    /// The skill tokens last drawn in `SKILL_INK`, as byte ranges.
+    #[cfg(any(test, feature = "test-support"))]
+    last_skills: Vec<Range<usize>>,
 }
 
 impl EventEmitter<Edited> for Composer {}
@@ -224,7 +228,7 @@ impl Composer {
             files_focus: cx.focus_handle(),
             line: Line::default(),
             files: Vec::new(),
-            quotes: Vec::new(),
+            replies: Vec::new(),
             review: CommentStore::new(),
             chips: Vec::new(),
             commands: Default::default(),
@@ -248,7 +252,15 @@ impl Composer {
             caret_draws: Vec::new(),
             #[cfg(any(test, feature = "test-support"))]
             last_chips: Vec::new(),
+            #[cfg(any(test, feature = "test-support"))]
+            last_skills: Vec::new(),
         }
+    }
+
+    /// The skill tokens the line last drew in blue, with no ground.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn skill_ranges(&self) -> &[Range<usize>] {
+        &self.last_skills
     }
 
     /// The chip grounds the line last drew, in window coordinates.
@@ -294,7 +306,7 @@ impl Composer {
     /// How many attachments the draft holds: its files, and its review
     /// comments as one.
     pub fn attachment_count(&self) -> usize {
-        self.files.len() + self.quotes.len() + usize::from(!self.review.is_empty())
+        self.files.len() + self.replies.len() + usize::from(!self.review.is_empty())
     }
 
     /// The review comments waiting for the next send, each with an id
@@ -326,11 +338,11 @@ impl Composer {
             return None;
         }
         let files = composer.files.clone();
-        let quotes = composer.quotes.clone();
+        let replies = composer.replies.clone();
         let comments = composer.review.len();
         let focus = composer.files_focus.clone();
         let remove_file = entity.downgrade();
-        let remove_quote = entity.downgrade();
+        let remove_reply = entity.downgrade();
         let drop_review = entity.downgrade();
         Some(
             div()
@@ -341,12 +353,12 @@ impl Composer {
                 .child(
                     crate::attachments::Attachments::new("prompt-attachments", files, preview)
                         .review(comments)
-                        .quotes(quotes)
+                        .replies(replies)
                         .in_island()
-                        .on_remove_quote(move |index, window, cx| {
-                            let _ = remove_quote.update(cx, |composer, cx| {
-                                if index < composer.quotes.len() {
-                                    composer.quotes.remove(index);
+                        .on_remove_reply(move |index, window, cx| {
+                            let _ = remove_reply.update(cx, |composer, cx| {
+                                if index < composer.replies.len() {
+                                    composer.replies.remove(index);
                                 }
                                 composer.focus_handle.focus(window, cx);
                                 composer.edited(cx);
@@ -433,7 +445,10 @@ impl Composer {
         let (quotes, text) = crate::quote::split(&text);
         self.files = files;
         self.line.set(text.to_string());
-        self.quotes = quotes;
+        self.replies = quotes
+            .into_iter()
+            .map(|quote| Reply::new(quote, ""))
+            .collect();
         self.edited(cx);
     }
 
@@ -442,7 +457,7 @@ impl Composer {
         let text = self.prompt();
         self.line.take();
         self.files.clear();
-        self.quotes.clear();
+        self.replies.clear();
         self.review.take_all();
         self.chips.clear();
         self.edited(cx);
@@ -471,7 +486,7 @@ impl Composer {
 
     /// The line with its quotes ahead of it.
     fn quoted_line(&self) -> String {
-        crate::quote::compose(&self.quotes, self.line.text())
+        crate::quote::compose(&self.replies, self.line.text())
     }
 
     pub fn add_files(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
@@ -543,16 +558,16 @@ impl Composer {
         self.edited(cx);
     }
 
-    /// Add a transcript passage as a Quote row over the line, under any
-    /// already there; the line stays as typed.
-    pub fn quote(&mut self, passage: String, cx: &mut Context<Self>) {
-        self.quotes.push(passage);
+    /// Add a Reply card to the tray, after any already there; the line
+    /// stays as typed.
+    pub fn reply(&mut self, reply: Reply, cx: &mut Context<Self>) {
+        self.replies.push(reply);
         self.edited(cx);
     }
 
-    /// The passages quoted, in order.
-    pub fn quotes(&self) -> &[String] {
-        &self.quotes
+    /// The replies waiting for the next send, in order.
+    pub fn replies(&self) -> &[Reply] {
+        &self.replies
     }
 
     /// Remember a picked token (`@path`, `/name`) so its occurrences paint
@@ -1086,7 +1101,7 @@ fn pill_ranges(
     ranges
 }
 
-/// The line's text runs: the base style, a picked chip in `MENTION_INK`
+/// The line's text runs: the base style, a picked chip in `MENTION_INK` (a skill's, `skills`, in `SKILL_INK`)
 /// over `pills`, the selection's own `INK_STRONG` ink over `selected` —
 /// the selection quad is the app's one translucent selection wash, painted
 /// under the shaped line — and the IME underline (`INK_SUBTLE`, 1px) over
@@ -1096,6 +1111,7 @@ fn runs_for(
     len: usize,
     marked: Option<Range<usize>>,
     pills: &[Range<usize>],
+    skills: &[Range<usize>],
     selected: Option<Range<usize>>,
 ) -> Vec<TextRun> {
     let mut cuts = vec![0, len];
@@ -1124,7 +1140,15 @@ fn runs_for(
             .iter()
             .any(|pill| pill.start <= from && to <= pill.end)
         {
-            run.color = rgb(ferrite_ui::theme::MENTION_INK).into();
+            let skill = skills
+                .iter()
+                .any(|skill| skill.start <= from && to <= skill.end);
+            run.color = rgb(if skill {
+                ferrite_ui::theme::SKILL_INK
+            } else {
+                ferrite_ui::theme::MENTION_INK
+            })
+            .into();
         }
         if selected
             .as_ref()
@@ -1172,8 +1196,10 @@ pub(crate) struct Layout {
     lines: Vec<WrappedLine>,
     rows: Vec<Row>,
     line_height: Pixels,
-    /// The chips' byte ranges (`pill_ranges`).
-    pills: Vec<Range<usize>>,
+    /// The pills that stand on a ground; the rest, a skill or command
+    /// (`/name`), are blue ink alone, as Claude's is (`skills`).
+    grounded: Vec<Range<usize>>,
+    skills: Vec<Range<usize>>,
 }
 
 impl Layout {
@@ -1189,6 +1215,10 @@ impl Layout {
         let content = SharedString::from(composer.line.text().to_string());
         let selected = composer.line.selection();
         let pills = pill_ranges(&content, composer.chips(), &composer.commands);
+        let (skills, grounded): (Vec<_>, Vec<_>) = pills
+            .iter()
+            .cloned()
+            .partition(|pill| content[pill.start..pill.end].starts_with('/'));
         let run = TextRun {
             len: content.len(),
             font: style.font(),
@@ -1202,6 +1232,7 @@ impl Layout {
             content.len(),
             composer.line.marked(),
             &pills,
+            &skills,
             (!selected.is_empty()).then(|| selected.clone()),
         );
         let font_size = style.font_size.to_pixels(window.rem_size());
@@ -1236,7 +1267,8 @@ impl Layout {
             lines,
             rows,
             line_height,
-            pills,
+            grounded,
+            skills,
         }
     }
 
@@ -1254,7 +1286,7 @@ impl Layout {
         let pad = px(MENTION_CHIP_PAD_X);
         let inset = px(MENTION_CHIP_INSET_Y);
         let mut grounds = Vec::new();
-        for pill in &self.pills {
+        for pill in &self.grounded {
             for (index, row) in self.rows.iter().enumerate() {
                 if pill.end <= row.start || row.end <= pill.start {
                     continue;
@@ -1613,8 +1645,11 @@ impl Element for LineElement {
         #[cfg(any(test, feature = "test-support"))]
         {
             let grounds = layout.chip_grounds(bounds, scroll);
-            self.composer
-                .update(cx, |composer, _| composer.last_chips = grounds);
+            let skills = layout.skills.clone();
+            self.composer.update(cx, |composer, _| {
+                composer.last_chips = grounds;
+                composer.last_skills = skills;
+            });
         }
         PrepaintState {
             layout: Some(layout),
@@ -2019,7 +2054,7 @@ mod tests {
             strikethrough: None,
         };
         let text = "read @a now";
-        let runs = runs_for(&base, text.len(), Some(8..11), &[5..7], None);
+        let runs = runs_for(&base, text.len(), Some(8..11), &[5..7], &[], None);
         let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
         assert_eq!(lens.iter().sum::<usize>(), text.len());
         assert_eq!(lens, [5, 2, 1, 3]);
@@ -2033,7 +2068,12 @@ mod tests {
         assert!(runs[2].underline.is_none());
 
         // An empty line still hands the shaper one (empty) run.
-        assert_eq!(runs_for(&base, 0, None, &[], None).len(), 1);
+        assert_eq!(runs_for(&base, 0, None, &[], &[], None).len(), 1);
+
+        // A skill is `SKILL_INK` — Claude's own blue — never the mention's.
+        let runs = runs_for(&base, text.len(), None, &[5..7], &[5..7], None);
+        assert_eq!(runs[1].color, rgb(ferrite_ui::theme::SKILL_INK).into());
+        assert_ne!(ferrite_ui::theme::SKILL_INK, ferrite_ui::theme::MENTION_INK);
     }
 
     /// The caret's hard blink: shown from its start for half the turn,
@@ -2061,7 +2101,7 @@ mod tests {
             underline: None,
             strikethrough: None,
         };
-        let runs = runs_for(&base, 11, None, &[], Some(5..7));
+        let runs = runs_for(&base, 11, None, &[], &[], Some(5..7));
         let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
         assert_eq!(lens, [5, 2, 4]);
         assert_eq!(runs[1].color, rgb(ferrite_ui::theme::INK_STRONG).into());

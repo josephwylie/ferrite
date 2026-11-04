@@ -35,6 +35,8 @@ pub(super) const STATES: &[&str] = &[
     "review-notices",
     "review-error",
     "find",
+    "reply-card",
+    "side-chat",
     "nav-states",
     "mermaid",
     "toast-done",
@@ -67,6 +69,8 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "review-notices" => review(Staged::Notices),
         "review-error" => review(Staged::Error),
         "find" => find(),
+        "reply-card" => reply_card(),
+        "side-chat" => side_chat(),
         "nav-states" => nav_states(),
         "mermaid" => mermaid(),
         "toast-done" => toast_done(),
@@ -444,6 +448,59 @@ fn find() -> (Scene, Setup) {
         view.open_find(&ferrite_pane::find::Open, window, cx);
         if let Some(transcript) = view.panes[view.focused()].transcript() {
             transcript.update(cx, |transcript, cx| transcript.type_find("nav", cx));
+        }
+    });
+    (scene, setup)
+}
+
+// ---------------------------------------------------------------- reply card
+
+/// `Reply` pressed on a passage of the answer (`claude/reply-popover.png`):
+/// the card over the selection, and a sent reply waiting in the tray
+/// (`claude/reply-sent-chip.png`).
+fn reply_card() -> (Scene, Setup) {
+    let scene = conversation("reply-card");
+    let setup: Setup = Box::new(|view, _, cx| {
+        let index = view.focused();
+        view.panes[index].composer.update(cx, |composer, cx| {
+            composer.reply(
+                ferrite_pane::quote::Reply::new("Both commands ran.", "testing"),
+                cx,
+            )
+        });
+        if let Some(transcript) = view.panes[index].transcript() {
+            let line = gpui::Bounds::new(
+                gpui::point(gpui::px(560.), gpui::px(430.)),
+                gpui::size(gpui::px(320.), gpui::px(20.)),
+            );
+            transcript.update(cx, |transcript, cx| {
+                transcript.fixture_reply_card(
+                    "Both commands ran. ls /definitely-missing-dir failed as expected, and sleep 15 && echo done ran in the foreground this time.",
+                    vec![line],
+                    cx,
+                )
+            });
+        }
+    });
+    (scene, setup)
+}
+
+// ----------------------------------------------------------------- side chat
+
+/// `Start a side chat` over a selection (`claude/sidechat-open.png`): the
+/// right pane's empty first tab, the passage quoted in its composer.
+fn side_chat() -> (Scene, Setup) {
+    let scene = conversation("side-chat");
+    let setup: Setup = Box::new(|view, _, cx| {
+        if let Some(owner) = view.focused_thread() {
+            view.fixture_side_chat(
+                owner,
+                Some(
+                    "y-missing-dir failed as expected, and sleep 15 && echo done ran in the foreground this time."
+                        .into(),
+                ),
+                cx,
+            );
         }
     });
     (scene, setup)

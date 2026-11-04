@@ -3,7 +3,7 @@
 //! motion. Fork starts a new Thread holding the conversation through this
 //! answer (`TranscriptEvent::Fork`); `⋯` opens the answer's menu — what
 //! Claude's `Message actions` holds that Ferrite backs: Copy message, Reply
-//! (Claude's `Attach message as context`, a Quote row in the Composer) and
+//! (Claude's `Attach message as context`, a Reply card in the Composer's tray) and
 //! Fork from here. Claude's Pin and Read aloud have nothing behind them in
 //! Ferrite, so they are left out.
 
@@ -12,6 +12,7 @@ use gpui::prelude::*;
 use gpui::{AnyElement, ClipboardItem, Context, MouseButton, Pixels, Point, SharedString};
 
 use super::{TranscriptEvent, TranscriptView};
+use crate::quote::Reply;
 use ferrite_ui::menu;
 
 /// The answer's `⋯` menu while it is open: the answer it acts on and where
@@ -76,7 +77,7 @@ impl TranscriptView {
             AnswerVerb::Copy => cx.write_to_clipboard(ClipboardItem::new_string(menu.text.clone())),
             AnswerVerb::Reply => {
                 if let Some(passage) = crate::quote::passage(&menu.text) {
-                    cx.emit(TranscriptEvent::Quote(passage));
+                    cx.emit(TranscriptEvent::Reply(Reply::new(passage, "")));
                 }
             }
             AnswerVerb::Fork => cx.emit(TranscriptEvent::Fork { after: menu.block }),

@@ -87,14 +87,17 @@ fn an_answers_menu_copies_replies_and_forks(cx: &mut TestAppContext) {
         Some("alpha")
     );
 
-    // Reply quotes the whole answer over the Composer.
+    // Reply attaches the whole answer as a Reply card in the tray.
     cx.simulate_click(more.center(), gpui::Modifiers::none());
     tick(cx);
     let reply = cx.debug_bounds("answer-menu-row-1").unwrap();
     cx.simulate_click(reply.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.panes[0].composer.read(cx).quotes(), ["alpha"]);
+        assert_eq!(
+            view.panes[0].composer.read(cx).replies(),
+            [ferrite_pane::quote::Reply::new("alpha", "")]
+        );
     });
 
     // Fork from here, past the rule.

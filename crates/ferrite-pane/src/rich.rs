@@ -301,6 +301,8 @@ pub struct Markdown {
         crate::preview::Preview,
         std::sync::Arc<[std::path::PathBuf]>,
     )>,
+    /// The skills `ferrite-skill:` links name (`skills`).
+    skills: std::sync::Arc<[ferrite_core::SessionCommand]>,
     document: Option<gpui::base::TextSelectionDocument>,
     /// A find's occurrences to mark (`crate::find`).
     find: Option<gpui::base::text::TextFind>,
@@ -381,6 +383,13 @@ impl Markdown {
         self
     }
 
+    /// The skills a prompt's `ferrite-skill:` links name, with the
+    /// descriptions their tooltips read.
+    pub fn skills(mut self, skills: std::sync::Arc<[ferrite_core::SessionCommand]>) -> Self {
+        self.skills = skills;
+        self
+    }
+
     pub fn new(
         id: impl Into<SharedString>,
         source: impl Into<SharedString>,
@@ -395,6 +404,7 @@ impl Markdown {
             quiet: false,
             single_line: false,
             chips: None,
+            skills: Default::default(),
             document: None,
             find: None,
             streaming: false,
@@ -506,6 +516,7 @@ impl gpui::RenderOnce for Markdown {
         let (cwd, preview) = self.cache.1.borrow().clone();
         let scope = self.cache.path_scope();
         let chips = self.chips.clone();
+        let skills = self.skills.clone();
         let link_cwd = cwd.clone();
         let hang = theme::tx_cell(f32::from(base));
         // A ```mermaid fence draws as its diagram (`visual::diagram`); the
@@ -517,6 +528,10 @@ impl gpui::RenderOnce for Markdown {
         let view = TextView::new(&state)
             .link_renderer(move |url, label, window, cx| {
                 // A prompt's file, as its band's chip.
+                if let Some(name) = url.strip_prefix(SKILL_SCHEME) {
+                    let skill = skills.iter().find(|skill| skill.name == name)?;
+                    return Some(crate::pane::skill_token(label, skill, window));
+                }
                 if let Some(path) = url.strip_prefix(CHIP_SCHEME) {
                     let (preview, images) = chips.as_ref()?;
                     return Some(crate::pane::prompt_chip(
@@ -815,6 +830,8 @@ fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
 
 /// The scheme of a prompt's inline file chip link (`pane::prompt_text`).
 pub(crate) const CHIP_SCHEME: &str = "ferrite-chip:";
+/// A prompt's skill: `[/name](<ferrite-skill:name>)`, drawn in `SKILL_INK`.
+pub(crate) const SKILL_SCHEME: &str = "ferrite-skill:";
 /// The scheme `file_links::link_targets` gives an issue ref (`#212`).
 pub(crate) const ISSUE_SCHEME: &str = "issue:";
 /// The scheme of a path in an activity line (a call's argument, a

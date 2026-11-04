@@ -5,9 +5,10 @@
 //! too (`thumbnail`). This module owns presentation and
 //! opening (in the Pane's preview, the Panel's Preview tab: `Preview::open`); callers
 //! only supply paths and, for a draft, a removal callback. The prompt codec owns persistence. A draft's review comments
-//! (ADR 0021) ride the same shelf as one more chip. Its quotes (a
-//! selection's Reply, `crate::quote`) stand over the chips as Quote rows,
-//! the same row a sent prompt draws over its bubble (`quote_row`).
+//! (ADR 0021) ride the same shelf as one more chip. Its replies (a
+//! selection's Reply, `crate::quote`) are cards beside the images
+//! (`reply_card`); a sent prompt draws its quotes as Quote rows over its
+//! bubble (`quote_row`).
 
 use std::{
     path::{Path, PathBuf},
@@ -18,6 +19,7 @@ use std::{
 use gpui::{prelude::*, px, App, ElementId, IntoElement, SharedString, Window};
 
 use crate::preview::Preview;
+use crate::quote::Reply;
 
 /// Nothing to install now: delivered files draw in the float grammar rather
 /// than on the kit's stock attachment cards, so the kit's own tokens are no
@@ -26,7 +28,7 @@ pub fn init(_cx: &mut App) {}
 
 type Remove = Rc<dyn Fn(&PathBuf, &mut Window, &mut App)>;
 type DropReview = Rc<dyn Fn(&mut Window, &mut App)>;
-type RemoveQuote = Rc<dyn Fn(usize, &mut Window, &mut App)>;
+type RemoveReply = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 
 #[derive(IntoElement)]
 pub struct Attachments {
@@ -36,8 +38,8 @@ pub struct Attachments {
     on_remove: Option<Remove>,
     review: usize,
     on_drop_review: Option<DropReview>,
-    quotes: Vec<String>,
-    on_remove_quote: Option<RemoveQuote>,
+    replies: Vec<Reply>,
+    on_remove_reply: Option<RemoveReply>,
     island: bool,
 }
 
@@ -50,8 +52,8 @@ impl Attachments {
             on_remove: None,
             review: 0,
             on_drop_review: None,
-            quotes: Vec::new(),
-            on_remove_quote: None,
+            replies: Vec::new(),
+            on_remove_reply: None,
             island: false,
         }
     }
@@ -76,18 +78,18 @@ impl Attachments {
         self
     }
 
-    /// The passages the draft quotes, as Quote rows over the chips.
-    pub fn quotes(mut self, quotes: Vec<String>) -> Self {
-        self.quotes = quotes;
+    /// The replies the draft carries, as cards beside the images.
+    pub fn replies(mut self, replies: Vec<Reply>) -> Self {
+        self.replies = replies;
         self
     }
 
-    /// A Quote row's ×: that quote (by index) goes.
-    pub fn on_remove_quote(
+    /// A Reply card's ×: that reply (by index) goes.
+    pub fn on_remove_reply(
         mut self,
         callback: impl Fn(usize, &mut Window, &mut App) + 'static,
     ) -> Self {
-        self.on_remove_quote = Some(Rc::new(callback));
+        self.on_remove_reply = Some(Rc::new(callback));
         self
     }
 
@@ -117,8 +119,8 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         on_remove,
         review,
         on_drop_review,
-        quotes,
-        on_remove_quote,
+        replies,
+        on_remove_reply,
         island,
     } = attachments;
     let (images, others): (Vec<_>, Vec<_>) = files
@@ -199,16 +201,10 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             })
     });
     let review = (review > 0).then(|| review_chip(review, on_drop_review));
-    let quotes: Vec<_> = quotes
+    let replies: Vec<_> = replies
         .into_iter()
         .enumerate()
-        .map(|(index, passage)| {
-            let remove = on_remove_quote.clone().map(|remove| {
-                Rc::new(move |window: &mut Window, cx: &mut App| remove(index, window, cx))
-                    as Rc<dyn Fn(&mut Window, &mut App)>
-            });
-            quote_row(index, passage, remove)
-        })
+        .map(|(index, reply)| reply_card(index, reply, on_remove_reply.clone()))
         .collect();
     let has_chips = !others_empty || review.is_some();
     let chips = div()
@@ -220,13 +216,14 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         .max_w_full()
         .children(chips)
         .children(review);
-    let has_cards = !cards.is_empty();
+    let has_cards = !cards.is_empty() || !replies.is_empty();
     let cards = div()
         .flex()
         .flex_wrap()
         .gap(px(theme::SPACE_2))
         .min_w_0()
         .max_w_full()
+        .children(replies)
         .children(cards);
     div()
         .id(id)
@@ -238,7 +235,6 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         .gap(px(theme::CH))
         .min_w_0()
         .max_w_full()
-        .children(quotes)
         .when(has_cards, |shelf| shelf.child(cards))
         .when(has_chips, |shelf| shelf.child(chips))
         .into_any_element()
@@ -365,23 +361,17 @@ pub(crate) fn thumbnail(
         )
 }
 
-/// A quoted passage as Claude draws one, over a draft's line and over the
-/// sent prompt's bubble: the word Quote in `INK_SUBTLE`, then the passage
-/// cut at `QUOTE_ROW_LINES` lines, behind a `QUOTE_RULE_W` `LINE` rule
-/// (Markdown's quote rule); on a draft, the quiet `×` that removes it.
-pub fn quote_row(
-    index: usize,
-    passage: String,
-    on_remove: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
-) -> gpui::Stateful<gpui::Div> {
+/// A quoted passage as Claude draws one over the sent prompt's bubble: the
+/// word Quote in `INK_SUBTLE`, then the passage cut at `QUOTE_ROW_LINES`
+/// lines, behind a `QUOTE_RULE_W` `LINE` rule (Markdown's quote rule).
+pub fn quote_row(index: usize, passage: String) -> gpui::Stateful<gpui::Div> {
     use ferrite_ui::theme;
     use gpui::{div, rgb, SharedString};
     div()
         .id(("quote", index))
         .debug_selector(move || format!("quote-row-{index}"))
         .flex()
-        .items_start()
-        .gap(px(theme::CH))
+        .flex_col()
         .min_w_0()
         .border_l(px(theme::QUOTE_RULE_W))
         .border_color(theme::paint::LINE)
@@ -392,35 +382,120 @@ pub fn quote_row(
         .font_weight(theme::W_BODY)
         .child(
             div()
+                .text_color(rgb(theme::INK_SUBTLE))
+                .child(SharedString::from("Quote")),
+        )
+        .child(
+            div()
+                .text_color(rgb(theme::INK_STRONG))
+                .line_clamp(theme::QUOTE_ROW_LINES)
+                .text_ellipsis()
+                .child(SharedString::from(passage)),
+        )
+}
+
+/// A reply waiting in the tray as Claude shows one (`claude/reply-sent-chip.png`):
+/// a `REPLY_CHIP` square at `R_CARD` on the `SUNKEN` ground in a `LINE`
+/// ring. Its top is a quote bar holding what the operator typed (the
+/// passage itself when they typed nothing), its foot an outlined `Reply`
+/// badge; its `×` — shown under the pointer or on keyboard focus — removes
+/// it, as an image card's does.
+fn reply_card(index: usize, reply: Reply, on_remove: Option<RemoveReply>) -> gpui::AnyElement {
+    use ferrite_ui::theme;
+    use gpui::{div, rgb};
+    let group = SharedString::from(format!("tray-reply-{index}"));
+    let words = if reply.text.is_empty() {
+        reply.quote
+    } else {
+        reply.text
+    };
+    let remove = on_remove.map(|remove| {
+        div()
+            .debug_selector(move || format!("tray-reply-{index}-remove"))
+            .absolute()
+            .top(px(theme::THUMB_REMOVE_INSET))
+            .right(px(theme::THUMB_REMOVE_INSET))
+            .child(
+                ferrite_ui::components::button(("remove-reply", index))
+                    .opacity(0.)
+                    .group_hover(group.clone(), |style| style.opacity(1.))
+                    .focus_visible(|style| ferrite_ui::components::control_focus(style).opacity(1.))
+                    .tab_stop(true)
+                    .p_0()
+                    .size(px(theme::THUMB_REMOVE))
+                    .rounded_full()
+                    .bg(theme::paint::FLOAT)
+                    .border_1()
+                    .border_color(theme::paint::LINE)
+                    .key_context("PromptAttachment")
+                    .accessibility_label("Remove reply")
+                    .tooltip_builder(ferrite_ui::menu::tooltip("Remove reply"))
+                    .child(ferrite_ui::icons::icon(
+                        ferrite_ui::icons::CLOSE,
+                        theme::ATTACH_REMOVE_ICON,
+                        theme::INK_STRONG,
+                    ))
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        remove(index, window, cx);
+                    }),
+            )
+    });
+    div()
+        .id(("tray-reply-card", index))
+        .debug_selector(move || format!("tray-reply-{index}"))
+        .group(group)
+        .relative()
+        .flex()
+        .flex_col()
+        .justify_between()
+        .flex_shrink_0()
+        .size(px(theme::REPLY_CHIP))
+        .p(px(theme::SPACE_2))
+        .rounded(px(theme::R_CARD))
+        .bg(theme::paint::SUNKEN)
+        .border_1()
+        .border_color(theme::paint::LINE)
+        .overflow_hidden()
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_BADGE))
+        .line_height(px(theme::LH_META))
+        .font_weight(theme::W_BODY)
+        .text_color(rgb(theme::INK_SUBTLE))
+        .child(
+            div()
                 .flex()
-                .flex_col()
-                .flex_1()
-                .min_w_0()
+                .gap(px(theme::SPACE_1_5))
                 .child(
                     div()
-                        .text_color(rgb(theme::INK_SUBTLE))
-                        .child(SharedString::from("Quote")),
+                        .flex_shrink_0()
+                        .w(px(theme::QUOTE_RULE_W))
+                        .h(px(theme::LH_META))
+                        .bg(theme::paint::LINE),
                 )
                 .child(
                     div()
-                        .text_color(rgb(theme::INK_STRONG))
-                        .line_clamp(theme::QUOTE_ROW_LINES)
+                        .debug_selector(move || format!("tray-reply-{index}-words"))
+                        .min_w_0()
+                        .line_clamp(theme::REPLY_CHIP_LINES)
                         .text_ellipsis()
-                        .child(SharedString::from(passage)),
+                        .child(SharedString::from(words)),
                 ),
         )
-        .when_some(on_remove, |row, remove| {
-            row.child(
-                remove_button(("remove-quote", index))
-                    .debug_selector(move || format!("remove-quote-{index}"))
-                    .accessibility_label("Remove quote")
-                    .tooltip_builder(ferrite_ui::menu::tooltip("Remove quote"))
-                    .on_click(move |_, window, cx| {
-                        cx.stop_propagation();
-                        remove(window, cx);
-                    }),
-            )
-        })
+        .child(
+            div()
+                .debug_selector(move || format!("tray-reply-{index}-badge"))
+                .flex()
+                .self_start()
+                .items_center()
+                .px(px(theme::SPACE_1_5))
+                .rounded_full()
+                .border_1()
+                .border_color(theme::paint::FLOAT_EDGE)
+                .child("Reply"),
+        )
+        .children(remove)
+        .into_any_element()
 }
 
 /// The draft's review comments as one `.att` chip: the pencil, `N review

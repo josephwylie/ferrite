@@ -16,6 +16,7 @@ mod palette;
 pub(crate) mod panel;
 mod parts;
 mod server;
+mod side_chat;
 pub(crate) mod subagents;
 mod transcript_glue;
 mod updating;
@@ -388,6 +389,8 @@ pub struct CockpitView {
     )>,
     /// Stable text-run identities; selection itself belongs to GPUI.
     selection: TranscriptText,
+    /// Each Thread's side chat, the right pane's other body.
+    side_chats: side_chat::SideChats,
     native_copy: Option<String>,
     /// cmd-b (#21): the nav folded to its rail by the operator. In memory
     /// only; the Settings preference is where a launch starts from.
@@ -1475,6 +1478,7 @@ impl CockpitView {
             branch_refreshing: false,
             branch_refresh_queued: false,
             selection: TranscriptText::default(),
+            side_chats: Default::default(),
             native_copy: None,
             nav_filter: None,
             nav_folds: std::collections::HashSet::new(),
@@ -1871,6 +1875,7 @@ impl CockpitView {
             agents: agents.clone(),
             rewind: rewind.clone(),
             quotes,
+            skills: open.commands().len(),
         };
         let entity = self.panes[index]
             .ensure_transcript(cx)
@@ -1922,6 +1927,8 @@ impl CockpitView {
             agents,
             rewind,
             quotes,
+            reply_to: open.provider().to_string().into(),
+            skills: open.commands().into(),
         };
         let selection = self.selection.clone();
         entity.update(cx, |transcript, cx| transcript.sync(input, selection, cx));
@@ -2040,13 +2047,13 @@ impl CockpitView {
             ferrite_pane::transcript::TranscriptEvent::Prompt { block, action, at } => {
                 self.prompt_action(index, *block, *action, *at, cx);
             }
-            // The quote lands as a Quote row over the Pane's Composer; with the selection
-            // gone, the focus pump hands it the keyboard.
-            ferrite_pane::transcript::TranscriptEvent::Quote(passage) => {
+            // The reply waits in the Pane's tray as a Reply card; the
+            // focus pump hands the Composer the keyboard.
+            ferrite_pane::transcript::TranscriptEvent::Reply(reply) => {
                 self.focus_pane(index);
                 self.panes[index]
                     .composer
-                    .update(cx, |composer, cx| composer.quote(passage.clone(), cx));
+                    .update(cx, |composer, cx| composer.reply(reply.clone(), cx));
                 cx.notify();
             }
             ferrite_pane::transcript::TranscriptEvent::Fork { after } => {
@@ -2056,7 +2063,7 @@ impl CockpitView {
             }
             ferrite_pane::transcript::TranscriptEvent::SideChat(passage) => {
                 if let Some(thread) = self.panes[index].thread() {
-                    self.side_chat(thread, passage.clone(), cx);
+                    self.open_side_chat(thread, Some(passage.clone()), cx);
                 }
             }
         }
@@ -4192,7 +4199,12 @@ impl CockpitView {
         use gpui::component::notification::{Notification, NotificationType};
         use gpui::component::WindowExt as _;
         match asked {
-            Asked::Focus(thread) => self.land_on_thread(thread, cx),
+            // A fork the side chat asked for goes to its tab, not the board.
+            Asked::Focus(thread) => {
+                if !self.bind_side_thread(thread, cx) {
+                    self.land_on_thread(thread, cx);
+                }
+            }
             Asked::Notification {
                 title,
                 body,
@@ -10145,6 +10157,7 @@ impl CockpitView {
         // compares scalar keys first, so Composer edits repaint Cockpit chrome
         // without cloning or notifying any retained transcript entity.
         self.sync_visible_transcripts(cx);
+        self.tend_side_chat(window, cx);
 
         // The card belongs to the mark that opened it: leaving that Pane,
         // zooming below L1, or the refresh that drops the PR out of the
@@ -10371,15 +10384,17 @@ impl CockpitView {
             (self.preview_shown(self.focused()) && pane.preview.text_focused(window, cx))
                 || pane.review.inner_focused(window, cx)
         });
-        // The find bar's line keeps the keyboard while the operator types.
+        // The find bar's line and the Reply card's keep the keyboard while
+        // the operator types.
         let find_focused = self.panes.get(self.focused()).is_some_and(|pane| {
             pane.preview_tab
                 .find
                 .as_ref()
                 .is_some_and(|find| find.holds_focus(window, cx))
-                || pane
-                    .transcript()
-                    .is_some_and(|view| view.read(cx).find_holds_focus(window, cx))
+                || pane.transcript().is_some_and(|view| {
+                    let view = view.read(cx);
+                    view.find_holds_focus(window, cx) || view.reply_card_holds_focus(window, cx)
+                })
         });
         // A nav view's list keeps the keyboard it was handed until the
         // operator takes it elsewhere: the view stays shown either way.
@@ -10394,6 +10409,7 @@ impl CockpitView {
             || native_text_focused
             || reader_text_focused
             || find_focused
+            || self.side_chat_holds_focus(window, cx)
             || pane_control_focused
         {
             // Native text, dialogs, and the Inbox keep their own keyboard focus.

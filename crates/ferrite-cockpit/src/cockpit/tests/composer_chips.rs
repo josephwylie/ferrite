@@ -487,6 +487,16 @@ fn a_tray_image_is_a_thumbnail_card(cx: &mut TestAppContext) {
     });
 }
 
+/// The skill tokens the first Pane's line last drew in blue.
+fn skill_ranges(
+    view: &gpui::Entity<CockpitView>,
+    cx: &mut gpui::VisualTestContext,
+) -> Vec<std::ops::Range<usize>> {
+    view.read_with(cx, |view, cx| {
+        view.panes[0].composer.read(cx).skill_ranges().to_vec()
+    })
+}
+
 /// The chip grounds the first Pane's line last drew.
 fn chip_grounds(
     view: &gpui::Entity<CockpitView>,
@@ -498,8 +508,8 @@ fn chip_grounds(
 }
 
 /// The owner's first case: on a Codex Thread whose Session lists the
-/// `to-spec` skill, `/to-spec` typed out in full (no pick) draws as a
-/// chip, a ground behind its blue, and sends as the plain text it reads.
+/// `to-spec` skill, `/to-spec` typed out in full (no pick) draws in
+/// blue with no ground, and sends as the plain text it reads.
 #[gpui::test]
 fn a_typed_skill_on_a_codex_thread_draws_as_a_chip(cx: &mut TestAppContext) {
     let (core, fake, _checkout) = bound_cockpit("typed-skill-chip", Provider::Codex);
@@ -520,14 +530,12 @@ fn a_typed_skill_on_a_codex_thread_draws_as_a_chip(cx: &mut TestAppContext) {
 
     cx.simulate_input("/to-spec now");
     tick(cx);
-    let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-    let grounds = chip_grounds(&view, cx);
-    assert_eq!(grounds.len(), 1, "one chip, behind `/to-spec`: {grounds:?}");
-    let chip = grounds[0];
+    // Claude's skill is blue ink and no ground (`SKILL_INK`).
     assert!(
-        chip.left() < editor.left() + px(1.) && chip.size.width > px(30.),
-        "the chip stands behind the token at the line's start: {chip:?} in {editor:?}"
+        chip_grounds(&view, cx).is_empty(),
+        "no ground behind a skill"
     );
+    assert_eq!(skill_ranges(&view, cx), [0..8], "`/to-spec` is blue");
 
     // An edit that breaks the token unmakes the chip.
     cx.simulate_keystrokes("home right right right right right right right right");
@@ -535,7 +543,7 @@ fn a_typed_skill_on_a_codex_thread_draws_as_a_chip(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(composer_text(&view, cx), "/to-specs now");
     assert!(
-        chip_grounds(&view, cx).is_empty(),
+        skill_ranges(&view, cx).is_empty(),
         "`/to-specs` is no skill"
     );
 }
@@ -570,13 +578,10 @@ fn a_skill_picked_after_prose_draws_as_a_chip(cx: &mut TestAppContext) {
         composer_text(&view, cx),
         "details for their venue /mattpocock-skills:grill-with-docs "
     );
-    let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-    let grounds = chip_grounds(&view, cx);
-    assert_eq!(grounds.len(), 1, "the pick is a chip: {grounds:?}");
-    assert!(
-        grounds[0].left() > editor.left() + px(100.),
-        "after the prose: {grounds:?}"
-    );
+    assert!(chip_grounds(&view, cx).is_empty(), "blue ink, no ground");
+    let ranges = skill_ranges(&view, cx);
+    assert_eq!(ranges.len(), 1, "the pick is blue: {ranges:?}");
+    assert_eq!(ranges[0].start, "details for their venue ".len());
 }
 
 /// A draft restored, or pasted, keeps its chips: the line knows the
@@ -601,12 +606,84 @@ fn a_restored_draft_keeps_its_skill_chip_and_sends_plain_text(cx: &mut TestAppCo
         });
     });
     tick(cx);
-    assert_eq!(chip_grounds(&view, cx).len(), 2, "both commands chip");
+    assert_eq!(skill_ranges(&view, cx).len(), 2, "both commands are blue");
 
     cx.simulate_keystrokes("escape enter");
     tick(cx);
     assert_eq!(
         fake.sent.borrow().as_slice(),
         ["please /code-review then /commit"]
+    );
+}
+
+/// A skill in a sent prompt's bubble is blue text like the Composer's
+/// (`SKILL_INK`, no chip); under the pointer it takes a faint wash and a
+/// card above it reads the full name, then the catalogue's description as
+/// the `/` picker has it. A `/word` the Session does not list stays plain.
+#[gpui::test]
+fn a_skill_in_a_sent_bubble_is_blue_with_its_description_on_hover(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("skill-bubble", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Commands {
+            commands: vec![ferrite_core::SessionCommand {
+                name: "mattpocock-skills:grill-me".into(),
+                description:
+                    "(mattpocock-skills) A relentless interview to sharpen a plan or design."
+                        .into(),
+                path: None,
+                source: Some(ferrite_core::CommandSource::Plugin {
+                    plugin: "mattpocock-skills".into(),
+                }),
+            }],
+        })
+        .unwrap();
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.set(
+                "/mattpocock-skills:grill-me this is a test /nonesuch".into(),
+                cx,
+            )
+        });
+    });
+    tick(cx);
+    cx.simulate_keystrokes("escape enter");
+    tick(cx);
+    let skill = cx
+        .debug_bounds("prompt-skill-mattpocock-skills:grill-me")
+        .expect("the skill draws as its own inline token");
+    let bubble = cx.debug_bounds("transcript-prompt").expect("the bubble");
+    assert!(
+        bubble.contains(&skill.center()) && skill.size.width < bubble.size.width / 2.,
+        "inside the bubble, just the token: {skill:?} in {bubble:?}"
+    );
+    assert!(
+        cx.debug_bounds("prompt-skill-nonesuch").is_none(),
+        "an unknown /word is plain text"
+    );
+
+    cx.simulate_mouse_move(skill.center(), None, gpui::Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    tick(cx);
+    let name = cx.debug_bounds("skill-tip-name").expect("the card's name");
+    let description = cx
+        .debug_bounds("skill-tip-description")
+        .expect("and its description");
+    assert!(
+        name.bottom() <= description.top() + px(1.),
+        "name, then description"
+    );
+    assert!(
+        description.bottom() <= skill.top() || description.top() >= skill.bottom(),
+        "the card stands clear of the token"
+    );
+    assert!(
+        name.size.width <= px(ferrite_ui::theme::SKILL_TIP_W)
+            && description.size.height > px(ferrite_ui::theme::LH_META),
+        "wrapped at its width: {name:?} {description:?}"
     );
 }
