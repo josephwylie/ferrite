@@ -1,0 +1,76 @@
+# Claude Desktop: side chat, right-click menus, subagent drill-in
+
+Captured from the live Claude Desktop app (Code tab) on 2026-11-04. The
+captures are in `claude/`.
+
+## Side chat (`sidechat-open.png`, `sidechat-expanded.png`, `sidechat-motion.mp4`)
+
+- **Opening.** Select text in an answer. One dark rounded pill appears above the selection (`claude/selection-pill.png`): `Start a side chat` | `Reply`.
+  - A thin vertical divider separates the two.
+  - There is no ↩ glyph.
+  - The selection itself is opaque `#314B69` (`claude/selection.png`).
+  - Ferrite's pill today has no divider and shows `Reply ↩`.
+- The owner is happy with Ferrite's own selection colour; it stays. Drag-select without a double-click is broken in Ferrite and is being fixed.
+- **The panel.** `Start a side chat` opens a **right-docked pane** at about 420 pt beside the thread. The thread column reflows narrower; it is not a floating card over the thread.
+- **Pane head.** A tab strip with `Side chat ×`, then `+`. At the right: expand (⤢) and close (×).
+- **Body.** Empty, it reads `No messages yet`, centred, in muted ink.
+- **Composer.** At the pane's foot, pre-filled with the selection as a quote: `> …selected text…`. When empty, the placeholder is `Ask a quick question`, with ↵ at the bottom right.
+- **More tabs.** `+` opens a new tab, `Side chat 2`. Each tab is its own quick conversation about this thread.
+- **Expanded.** Expand (⤢) makes the pane fill the whole content area, so the thread is hidden. The same control collapses it.
+- **Motion.** Open, expand, collapse and close are all **instant** (one frame at 120 fps). Nothing slides or fades.
+
+## Right-click menus (`rc-answer-text.png`, `rc-prompt.png`)
+
+- **On an answer,** anywhere in it, including over a selection, which the right-click clears:
+  - `Copy message`
+  - `Copy message as Markdown`
+  - ─
+  - `Attach message as context`
+  - `Pin as chapter`
+  - ─
+  - `Fork from here`, with the subtitle `Starts a new session, keeps this one`
+- **On a user prompt:**
+  - `Copy message`
+  - `Copy message as Markdown`
+  - ─
+  - `Attach message as context`
+  - ─
+  - `Rewind to here`, with the subtitle `Takes this and what follows out of the conversation`
+  - `Fork from here`, with the subtitle `Starts a new session, keeps this one`
+- **Style.** All rows are the same size, and there are no shortcut glyphs. Subtitles are a smaller line in muted ink under the label. The menu appears in one frame.
+- **Not captured.** Right-clicking a link (the thread had no links). It needs a capture before being matched.
+
+## Answer actions on hover
+
+There are four icons under an answer, then the time:
+1. `Copy`
+2. `Fork from here`: a two-line tooltip, "Starts a new session from this point. This one stays as it is."
+3. `Pin as chapter`
+4. `Read aloud` (owner: not wanted in Ferrite)
+
+## Subagent drill-in (`agents-group-open.png`, `subagent-drillin.png`)
+
+- **The group.** `Ran 2 agents ▸` expands to rows: `Ran agent` in muted ink, then the agent's description, inside a faint rounded box.
+- **Opening one.** Clicking a row underlines it and opens the **same right-docked pane**. The head reads `‹ Count .rs files in ferrite-ui`, with expand and close.
+- **Pane body:**
+  1. the agent's prompt, as a user bubble;
+  2. `Model Haiku 5.5` in muted ink;
+  3. the agent's collapsed tool summary (`Counted .rs files recursively under ferrite-ui ▸`);
+  4. its answer.
+- **Motion.** Instant, like the side chat.
+
+## Reply: a floating popover (`claude/reply-popover.png`)
+
+Pressing `Reply` in the selection pill opens a **floating card anchored just above the selection**, over the transcript. It does not go to the main composer.
+
+- **Quote.** The top of the card shows the selected text as a quote: two lines at most in muted ink, ending in "…".
+- **Input.** A single-line input under the quote, with the placeholder `Reply to Claude`.
+- **Send.** A small icon button at the right of the input.
+- **Card.** A dark raised card with rounded corners, a hairline border and a soft shadow. It sits about 280 pt wide, while the selection stays highlighted.
+- **What sending does** (`claude/reply-sent-chip.png`): it does not send a message. The reply becomes an **attachment card in the main composer's tray**, and the popover closes.
+  - The card is about 120×120 pt, rounded, on a darker ground.
+  - Its top shows a quote bar with the typed reply ("testing").
+  - Its foot carries a small outlined `Reply` badge.
+  - The user then writes the main message and sends both together. Several replies can stack as several cards.
+
+This is the "floating panel" the owner wants: Ferrite's Reply must become this popover. Ferrite currently puts the quote in the main composer.
