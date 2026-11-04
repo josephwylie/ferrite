@@ -1797,6 +1797,8 @@ mod tests {
             // Rides the initialize handshake, read by the reader like the
             // model menu; proved by `the_handshake_names_the_plan`.
             SessionEvent::AccountPlan { .. } => return None,
+            // Read from `init` by the Activity decoder; proved on a capture there.
+            SessionEvent::CliVersion { .. } => return None,
             // A stateful stream read by the activity decoder (`drafts`),
             // proved by the show-visual capture in tests/claude_session.rs.
             SessionEvent::ToolDraft { .. } => return None,

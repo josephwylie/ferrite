@@ -1408,6 +1408,8 @@ mod tests {
             SessionEvent::ThinkingTokens { .. } => return None,
             // Claude's handshake names the plan; Codex's is not read for one.
             SessionEvent::AccountPlan { .. } => return None,
+            // Claude's handshake names it; Codex's `userAgent` is not kept.
+            SessionEvent::CliVersion { .. } => return None,
             // The resume capture clears its goal.
             SessionEvent::ScheduledWork { .. } => "ScheduledWork",
             SessionEvent::ContextUsage { .. } | SessionEvent::UsageDetails { .. } => return None,

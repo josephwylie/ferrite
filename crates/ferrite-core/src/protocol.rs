@@ -1546,6 +1546,9 @@ pub enum Live {
     AccountPlan {
         name: String,
     },
+    CliVersion {
+        version: String,
+    },
     /// Tool clocks a replay restores, in milliseconds by call id.
     RestoreTimings {
         subject: WireSubject,
@@ -1969,6 +1972,9 @@ fn main_outgoing(input: &Input, duration: Option<Duration>) -> Outgoing {
         Input::Event(SessionEvent::AccountPlan { name }) => {
             Live::AccountPlan { name: name.clone() }
         }
+        Input::Event(SessionEvent::CliVersion { version }) => Live::CliVersion {
+            version: version.clone(),
+        },
         // Queue acknowledgements and scheduled work are the Thread's state,
         // not its Activity's; the highlighter is each side's own; `Answered`
         // is Activity's.
@@ -2128,6 +2134,9 @@ pub fn incoming(
                 Live::AccountPlan { name } => {
                     main(SessionEvent::AccountPlan { name: name.clone() })
                 }
+                Live::CliVersion { version } => main(SessionEvent::CliVersion {
+                    version: version.clone(),
+                }),
                 Live::RestoreTimings { subject, timings } => ActivityInput::RestoreTimings {
                     subject: subject.try_into().ok()?,
                     timings: timings

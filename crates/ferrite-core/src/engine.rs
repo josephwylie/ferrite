@@ -5726,6 +5726,7 @@ pub(crate) fn event_changes_content(event: &SessionEvent) -> bool {
         | SessionEvent::McpAuthorization { .. }
         | SessionEvent::ThinkingTokens { .. }
         | SessionEvent::AccountPlan { .. }
+        | SessionEvent::CliVersion { .. }
         | SessionEvent::ScheduledWork { .. } => false,
         _ => true,
     }

@@ -2616,6 +2616,7 @@ fn reports(input: &Input) -> bool {
                 | SessionEvent::RateLimits { .. }
                 | SessionEvent::ThinkingTokens { .. }
                 | SessionEvent::AccountPlan { .. }
+                | SessionEvent::CliVersion { .. }
         )
     )
 }

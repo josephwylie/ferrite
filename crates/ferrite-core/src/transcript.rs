@@ -942,6 +942,8 @@ pub struct Transcript {
     rate_limits: RateLimits,
     /// The account's plan, as the provider names it (`SessionEvent::AccountPlan`).
     plan: Option<String>,
+    /// The CLI's version, as the live Session announced it (HD75).
+    cli_version: Option<String>,
     /// When the running turn began — the operator's prompt went out — for
     /// the working line's clock. None between turns.
     turn_started: Option<std::time::Instant>,
@@ -1271,6 +1273,7 @@ impl Transcript {
             mcp_authorizations: std::collections::BTreeMap::new(),
             rate_limits: RateLimits::default(),
             plan: None,
+            cli_version: None,
             turn_started: None,
             turn_output_tokens: 0,
             last_report: 0,
@@ -1486,6 +1489,11 @@ impl Transcript {
     /// The account's plan (`Max`), when the provider named it.
     pub fn plan(&self) -> Option<&str> {
         self.plan.as_deref()
+    }
+
+    /// The CLI's version, when the live Session announced it (HD75).
+    pub fn cli_version(&self) -> Option<&str> {
+        self.cli_version.as_deref()
     }
 
     /// Grows each time a settled call may have moved the workspace's git
@@ -2105,6 +2113,10 @@ impl Transcript {
             }
             Input::Event(SessionEvent::AccountPlan { name }) => {
                 self.plan = Some(name);
+                Update::default()
+            }
+            Input::Event(SessionEvent::CliVersion { version }) => {
+                self.cli_version = Some(version);
                 Update::default()
             }
             Input::Event(SessionEvent::ThinkingTokens { estimated }) => {
