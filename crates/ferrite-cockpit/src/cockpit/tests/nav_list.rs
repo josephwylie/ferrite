@@ -219,6 +219,49 @@ fn a_thread_keeps_its_row_through_working_and_done(cx: &mut TestAppContext) {
     assert_eq!(order(&view, cx), before, "nor does finishing");
 }
 
+/// The bell wears a dot while something asks for the operator or has
+/// finished unseen, and none while the tree is quiet.
+#[gpui::test]
+fn the_bell_wears_a_dot_for_a_request_and_for_an_unseen_finish(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("bell-dot", 3);
+    let threads = core.threads();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    assert!(cx.debug_bounds("nav-activity").is_some(), "the premise: the bell");
+    assert!(cx.debug_bounds("nav-activity-dot").is_none(), "a quiet tree");
+
+    // A finish on a Thread the operator is not looking at.
+    let unfocused = (0..3)
+        .rev()
+        .find(|at| view.read_with(cx, |view, _| view.panes[0].thread() != Some(threads[*at])))
+        .unwrap();
+    fake.streams.borrow()[unfocused]
+        .send(SessionEvent::TextDelta { text: "done".into() })
+        .unwrap();
+    fake.streams.borrow()[unfocused]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.nav_state().alert()),
+        Some(nav::Alert::Unread)
+    );
+    assert!(cx.debug_bounds("nav-activity-dot").is_some(), "an unseen finish");
+
+    // A request outranks it.
+    fake.streams.borrow()[unfocused].send(decision("perm_bell")).unwrap();
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.nav_state().alert()),
+        Some(nav::Alert::NeedsYou)
+    );
+    assert!(cx.debug_bounds("nav-activity-dot").is_some(), "a request waits");
+}
+
 /// The Activity view (the bell, Codex's): `Priority` holds what needs the
 /// operator, oldest request first, then what works, in creation order; a
 /// finish moves a Thread on to `Today`. The bell shows it in the tree's

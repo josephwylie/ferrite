@@ -224,6 +224,23 @@ impl NavState {
         rows
     }
 
+    /// What the bell says: that a Thread needs the operator, else that a
+    /// finish is unseen, else nothing. Every open Thread counts, whatever
+    /// is folded.
+    pub fn alert(&self) -> Option<Alert> {
+        let rows = || {
+            self.pinned
+                .iter()
+                .chain(&self.solos)
+                .chain(self.groups.iter().flat_map(|group| &group.members))
+        };
+        if rows().any(|row| row.status == RowStatus::NeedsYou) {
+            Some(Alert::NeedsYou)
+        } else {
+            rows().any(|row| row.status == RowStatus::Done).then_some(Alert::Unread)
+        }
+    }
+
     /// The loose rows alone, in the tree's order (folded sections too).
     #[cfg(test)]
     pub fn ordered_solos(&self) -> Vec<&ThreadRow> {
@@ -231,6 +248,24 @@ impl NavState {
             .iter()
             .flat_map(|section| section.solos.iter().map(|index| &self.solos[*index]))
             .collect()
+    }
+}
+
+/// What the Activity bell's dot says (`NavState::alert`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Alert {
+    /// A Thread waits on the operator.
+    NeedsYou,
+    /// A Thread finished while unseen.
+    Unread,
+}
+
+impl Alert {
+    fn ink(self) -> u32 {
+        match self {
+            Alert::NeedsYou => ATTENTION,
+            Alert::Unread => UNREAD,
+        }
     }
 }
 
@@ -877,8 +912,9 @@ pub fn collapse_button(rail: bool) -> Stateful<Div> {
 }
 
 /// The Activity view's door in the head: the bell, filled while the view
-/// shows, its tooltip the view's name. The cockpit wires the press.
-pub fn activity_button(on: bool) -> Stateful<Div> {
+/// shows, its tooltip the view's name, a dot on its corner while something
+/// in the tree is `alert`ing (Codex's). The cockpit wires the press.
+pub fn activity_button(on: bool, alert: Option<Alert>) -> Stateful<Div> {
     let glyph = if on { icons::BELL_FILL } else { icons::BELL };
     icon_button(
         "nav-activity",
@@ -887,7 +923,18 @@ pub fn activity_button(on: bool) -> Stateful<Div> {
         ICON_BUTTON,
         R_CONTROL,
     )
+    .relative()
     .tooltip(ferrite_ui::menu::tooltip("Activity"))
+    .children(alert.map(|alert| {
+        div()
+            .debug_selector(|| "nav-activity-dot".into())
+            .absolute()
+            .top(px(SPACE_1_5))
+            .right(px(SPACE_1_5))
+            .size(px(NAV_BELL_DOT))
+            .rounded_full()
+            .bg(rgb(alert.ink()))
+    }))
 }
 
 /// Search's door in the head (Codex's): the magnifier, its tooltip `Search`
@@ -1537,7 +1584,7 @@ pub(crate) fn state_mark(status: RowStatus) -> Option<Div> {
             .debug_selector(|| "nav-unread-dot".into())
             .size(px(NAV_UNREAD_DOT))
             .rounded_full()
-            .bg(rgb(INK_STRONG))
+            .bg(rgb(UNREAD))
             .into_any_element(),
         RowStatus::Idle | RowStatus::Parked | RowStatus::Background => return None,
     };
@@ -2543,6 +2590,43 @@ mod tests {
             RollUp::of(&rows(&[RowStatus::NeedsYou])).unwrap().text,
             "1 needs you"
         );
+    }
+
+    /// The bell says the worst thing in the tree, whatever is folded: a
+    /// Thread that needs the operator over a finish not yet seen, and a
+    /// quiet tree nothing.
+    #[test]
+    fn the_bell_says_the_worst_of_the_tree() {
+        let state = |loose: &[RowStatus], member: &[RowStatus]| {
+            let row = |status: &RowStatus| ThreadRow {
+                status: *status,
+                ..thread()
+            };
+            NavState {
+                pinned: Vec::new(),
+                pinned_folded: false,
+                sections: Vec::new(),
+                groups: vec![GroupBlock {
+                    id: GroupId::new(1),
+                    title: "group".into(),
+                    members: member.iter().map(row).collect(),
+                    folded: true,
+                    selected: false,
+                }],
+                solos: loose.iter().map(row).collect(),
+                parked: Vec::new(),
+            }
+        };
+        use RowStatus::*;
+        assert_eq!(state(&[Idle, Working], &[Parked]).alert(), None);
+        assert_eq!(state(&[Idle, Done], &[]).alert(), Some(Alert::Unread));
+        assert_eq!(
+            state(&[Done], &[NeedsYou]).alert(),
+            Some(Alert::NeedsYou),
+            "a folded Group's member counts, and outranks an unseen finish"
+        );
+        assert_eq!(Alert::NeedsYou.ink(), ATTENTION);
+        assert_eq!(Alert::Unread.ink(), UNREAD);
     }
 
     /// A folded Project heading says, first that has something: its

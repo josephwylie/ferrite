@@ -486,6 +486,9 @@ pub const SEAM_HOVER: u32 = 0xefefef66;
 pub const RUNNING: u32 = GREEN;
 /// Yellow — needs you: the dot, the `◆`, the kind word.
 pub const ATTENTION: u32 = YELLOW;
+/// Blue — a finish not yet seen (Codex's unread dot): a Thread row's dot,
+/// and the bell's while nothing needs the operator.
+pub const UNREAD: u32 = LINK_INK;
 /// `#e49b31` amber — the permission mode that stops for the operator before
 /// every change, its word in the Composer's footer alone (the Claude app's
 /// orange `Manual`; its mode-menu row is neutral): yellow would read as
@@ -2907,9 +2910,13 @@ pub const NAV_CHEVRON: f32 = 12.0;
 pub const NAV_HEADING_CARET: f32 = 10.0;
 /// 6px — between a row's title and the mark (or `⋯`) at its right.
 pub const NAV_MARK_GAP: f32 = SPACE_1_5;
-/// 5px — an unseen finish's dot at a row's right, in the content ink: a
-/// step under the needs-you dot (`NAV_DOT_SMALL`), never orange.
+/// 5px — an unseen finish's dot at a row's right, in `UNREAD`: a step under
+/// the needs-you dot (`NAV_DOT_SMALL`), never orange.
 pub const NAV_UNREAD_DOT: f32 = 5.0;
+/// 6px — the bell's dot, over its glyph's top right corner, `SPACE_1_5` in
+/// from the door's top and right edges: `ATTENTION` while a Thread needs the
+/// operator, else `UNREAD`.
+pub const NAV_BELL_DOT: f32 = 6.0;
 /// 18px — the foot's account disc, its initial at `FS_AVATAR` 500.
 pub const NAV_AVATAR: f32 = 18.0;
 pub const FS_AVATAR: f32 = 10.0;

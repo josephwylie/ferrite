@@ -13401,7 +13401,7 @@ impl CockpitView {
         nav::content()
             .child(nav::head(
                 crate::frame().head_drag(!self.overlay_open(), self.maximized),
-                self.activity_bell(cx),
+                self.activity_bell(state, cx),
                 nav::search_button().on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|_, _: &MouseDownEvent, window, cx| {
@@ -13432,9 +13432,10 @@ impl CockpitView {
     }
 
     /// The Activity view's door in the nav's head: the bell, which shows
-    /// the view or the tree again from it.
-    fn activity_bell(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        nav::activity_button(self.nav_view == nav::NavView::Activity).on_mouse_down(
+    /// the view or the tree again from it, wearing a dot while a Thread
+    /// needs the operator or a finish is unseen.
+    fn activity_bell(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Stateful<Div> {
+        nav::activity_button(self.nav_view == nav::NavView::Activity, state.alert()).on_mouse_down(
             MouseButton::Left,
             cx.listener(|view, _: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
