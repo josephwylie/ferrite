@@ -1675,3 +1675,27 @@ fn search_sits_in_the_nav_head(cx: &mut TestAppContext) {
     tick(cx);
     assert!(view.read_with(cx, |view, _| view.floats.palette.is_some()));
 }
+
+/// A Thread whose time is not known (a legacy log ending in Ferrite's own
+/// marks) is listed last under `Older` with no age, never under `Today`.
+#[gpui::test]
+fn a_thread_of_no_known_time_stands_under_older_not_today(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("bell-older", 2);
+    let threads = core.threads();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    let unknown = threads[1];
+    view.update(cx, |view, _| view.facts.fixture_forget_last_used(unknown));
+    let days: Vec<(String, Vec<ThreadId>)> = view.read_with(cx, |view, _| {
+        view.activity(&view.nav_state())
+            .days
+            .iter()
+            .map(|(label, rows)| {
+                (label.to_string(), rows.iter().map(|entry| entry.row.thread).collect())
+            })
+            .collect()
+    });
+    assert_eq!(days.last().map(|(label, rows)| (label.as_str(), rows.clone())), Some(("Older", vec![unknown])), "{days:?}");
+    assert!(days.iter().filter(|(label, _)| label == "Today").all(|(_, rows)| !rows.contains(&unknown)));
+}

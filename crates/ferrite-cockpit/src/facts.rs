@@ -407,6 +407,12 @@ impl Facts {
         self.threads.get(&thread).and_then(|facts| facts.last_used)
     }
 
+    /// A Thread whose time is not known, as a legacy log ending in marks reads.
+    #[cfg(test)]
+    pub fn fixture_forget_last_used(&mut self, thread: ThreadId) {
+        self.threads.entry(thread).or_default().last_used = None;
+    }
+
     /// How long until any Thread's age (`since_label`, a nav row's `2m`)
     /// next reads differently.
     pub fn next_age_change(&self, now: SystemTime) -> Option<Duration> {

@@ -5903,8 +5903,10 @@ fn parked_rows(store: &Store, threads: Vec<ThreadId>) -> Vec<protocol::ParkedThr
     threads
         .into_iter()
         .map(|thread| {
+            // The last prompt or turn, not the log's write time: Ferrite's
+            // own marks move that (`Store::last_activity`).
             let last_used_ms = store
-                .last_used(thread)
+                .last_activity(thread)
                 .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|since| since.as_millis() as u64);
             let Ok(meta) = store.peek(thread) else {

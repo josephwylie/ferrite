@@ -2516,7 +2516,9 @@ fn a_window_on_this_computer_lists_its_parked_threads_off_the_published_rows() {
     std::fs::rename(&log, &moved).unwrap();
     assert_eq!(window.display_title(thread, true), "Release notes");
     assert_eq!(window.peek(thread).unwrap().provider, Provider::Claude);
-    assert!(window.last_used(thread).is_some());
+    // Never prompted: nothing to date it by, and the marks parking wrote are
+    // Ferrite's own (`Store::last_activity`), so its time is not known.
+    assert!(window.last_used(thread).is_none());
     assert!(window.parked_turns(thread).is_some());
     std::fs::rename(&moved, &log).unwrap();
 

@@ -9150,7 +9150,8 @@ impl CockpitView {
     /// the operator (a request, oldest first; a failure; a finish unseen),
     /// then every one at work; below it every other one by the day of its
     /// last turn (`Store::last_activity`, not the log's write time), newest
-    /// first, six days back. A state change moves a Thread between them, so
+    /// first, six days back, then `Older`, where a Thread of no known time
+    /// stands (an older one is not listed). A state change moves a Thread between them, so
     /// it never leaves from under the operator.
     pub(crate) fn activity(&self, state: &nav::NavState) -> nav::Activity {
         let roster = self.cockpit.roster();
@@ -9210,9 +9211,12 @@ impl CockpitView {
                     .position(|thread| *thread == entry.row.thread)
                     .unwrap_or(usize::MAX);
                 priority.push((rank, asked, entry));
-            } else if let Some((ago, label)) =
-                ferrite_core::clock::recent_day(self.last_used(thread), now)
-            {
+            } else if let Some((ago, label)) = match self.facts.last_used(thread) {
+                Some(at) => ferrite_core::clock::recent_day(at, now),
+                // A Thread of no known time is `Older`, never gone, and the
+                // last section.
+                None => Some((u32::MAX, "Older".to_string())),
+            } {
                 match days.iter_mut().find(|(at, _, _)| *at == ago) {
                     Some((_, _, rows)) => rows.push(entry),
                     None => days.push((ago, label.into(), vec![entry])),

@@ -1770,7 +1770,7 @@ pub fn activity_row(
     }))
     .when_some(
         match &row.tail {
-            NavTail::Age(age) => Some(age.clone()),
+            NavTail::Age(age) if !age.is_empty() => Some(age.clone()),
             _ => None,
         },
         |row, age| row.tooltip(ferrite_ui::menu::tooltip(age)),

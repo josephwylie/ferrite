@@ -117,7 +117,7 @@ const FIRST_PROMPT_SCAN: usize = 64 * 1024;
 
 /// How far back from a log's end `Store::last_activity` looks for a turn's
 /// time before it settles for the file's modification time.
-const ACTIVITY_SCAN: u64 = 4 * 1024 * 1024;
+const ACTIVITY_SCAN: u64 = 512 * 1024;
 
 /// Presence means the Thread had an open Pane when Ferrite last ran. Session
 /// processes are deliberately not durable, but the operator's open/parked
@@ -2860,29 +2860,42 @@ impl Store {
     /// When the Thread last did something its operator would care about: the
     /// newest prompt sent or turn completed, read off the log's tail by the
     /// ISO times those records carry. The log's modification time is no
-    /// answer: a mark or an amendment appended to every open Thread when
-    /// Ferrite starts moves it for Threads nobody touched. Where the tail
-    /// holds no such time (an old log, which kept `4:22 pm`), the
-    /// modification time stands, as `last_used`.
+    /// answer on its own: Ferrite appends a mark (or an amendment) to every
+    /// open Thread when it starts, which moves the time for Threads nobody
+    /// touched. Where the tail holds no dated time (a log from before they
+    /// were dated kept `4:22 pm`) the modification time stands only when the
+    /// log's last record is a real event; ending in a mark or an amendment,
+    /// it is Ferrite's own write, and the answer is `None`: not known, so
+    /// never today.
     pub fn last_activity(&self, id: ThreadId) -> Option<SystemTime> {
         let touched = self.last_used(id)?;
         let Ok(lines) = self.backwards(id, 0) else {
             return Some(touched);
         };
         let end = fs::metadata(self.log_path(id)).map_or(0, |meta| meta.len());
-        let stamped = lines
-            .take_while(|(at, _)| end.saturating_sub(*at) <= ACTIVITY_SCAN)
-            .filter_map(|(_, line)| {
-                let record: serde_json::Value = serde_json::from_slice(&line).ok()?;
-                let stamp = match record.get("type")?.as_str()? {
-                    "prompt_observation" => record.get("sent_at")?,
-                    "completion_observation" => record.get("completed_at")?,
-                    _ => return None,
-                };
-                crate::clock::parse_local(stamp.as_str()?)
-            })
-            .next();
-        Some(stamped.map_or(touched, |at| SystemTime::from(at).min(touched)))
+        let mut last_is_real = None;
+        for (at, line) in lines {
+            if end.saturating_sub(at) > ACTIVITY_SCAN {
+                break;
+            }
+            let Ok(record) = serde_json::from_slice::<serde_json::Value>(&line) else {
+                continue;
+            };
+            let kind = record.get("type").and_then(serde_json::Value::as_str).unwrap_or("");
+            last_is_real.get_or_insert(!matches!(kind, "mark" | "facts"));
+            let stamp = match kind {
+                "prompt_observation" => record.get("sent_at"),
+                "completion_observation" => record.get("completed_at"),
+                _ => None,
+            };
+            if let Some(at) = stamp
+                .and_then(serde_json::Value::as_str)
+                .and_then(crate::clock::parse_local)
+            {
+                return Some(SystemTime::from(at).min(touched));
+            }
+        }
+        last_is_real.unwrap_or(true).then_some(touched)
     }
 
     pub fn peek(&self, id: ThreadId) -> Result<ThreadMeta, LoadError> {
@@ -4776,7 +4789,8 @@ impl WriterState {
             base: self.inherited.clone(),
         })?;
         let at = self.len;
-        self.append_now(mark.as_bytes())?;
+        let written = self.keeping_modified(|log| log.append_now(mark.as_bytes()));
+        written?;
         self.last_mark = Some(at);
         self.mark_len = mark.len();
         #[cfg(test)]
@@ -4792,7 +4806,23 @@ impl WriterState {
         if facts == self.facts {
             return Ok(());
         }
-        self.commit(Record::Facts { facts })
+        // What was buffered is the Thread's own use and keeps its time; the
+        // amendment is Ferrite's.
+        self.flush()?;
+        self.keeping_modified(|log| log.commit(Record::Facts { facts }))
+    }
+
+    /// Run `write`, an append of Ferrite's own (a mark, an amendment), and
+    /// give the log back its modification time: the log's mtime is the time
+    /// of the Thread's last real write, which a reader (the bell, the nav's
+    /// ages, `Store::last_used`) takes for when it was used.
+    fn keeping_modified<R>(&mut self, write: impl FnOnce(&mut Self) -> io::Result<R>) -> io::Result<R> {
+        let before = self.file.metadata().and_then(|meta| meta.modified()).ok();
+        let written = write(self);
+        if let Some(at) = before {
+            let _ = self.file.set_modified(at);
+        }
+        written
     }
 
     /// Append one record now, outside the buffer: an amendment or a handover
@@ -5136,6 +5166,27 @@ mod tests {
     /// A log from Ferrite's future refuses a peek exactly as it refuses a
     /// load: a nav row half-read from an unknown schema would claim a
     /// Thread that cannot actually be revived.
+    /// Ferrite's own appends (an amendment such as a title) leave the log's
+    /// modification time where the Thread's last real write put it: the
+    /// time every reader takes for when the Thread was used.
+    #[test]
+    fn an_amendment_does_not_make_a_thread_look_used() {
+        let dir = scratch("amend-keeps-mtime");
+        let store = Store::open(&dir).unwrap();
+        let (id, mut writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
+        writer.record_prompt("hello").unwrap();
+        writer.flush().unwrap();
+        let path = dir.join(id.to_string()).join("log.jsonl");
+        let past = SystemTime::now() - std::time::Duration::from_secs(20 * 86_400);
+        OpenOptions::new().write(true).open(&path).unwrap().set_modified(past).unwrap();
+
+        store.set_title(id, "A title".into(), Some(&mut writer)).unwrap();
+
+        let kept = fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(kept, past, "the amendment gave the log its time back");
+        assert_eq!(store.peek(id).unwrap().title.as_deref(), Some("A title"));
+    }
+
     #[test]
     fn peek_refuses_a_future_schema_like_load_does() {
         let dir = scratch("peek-future");
@@ -6011,6 +6062,38 @@ mod tests {
         );
         assert_eq!(did, turn_ended, "the completion's time, not the file's");
         assert!(wrote > did, "the file was written long after");
+    }
+
+    /// Logs from before turns were dated kept only a wall-clock time
+    /// (`10:28 am`), and Ferrite's startup appends marks to every open Thread.
+    /// Such a log ending in marks has no known time (its mtime is Ferrite's
+    /// own write: the owner's "Today" held Threads untouched for weeks); one
+    /// ending in a real record keeps its mtime.
+    #[test]
+    fn a_legacy_log_that_ends_in_marks_has_no_known_activity() {
+        let mark = r#"{"type":"mark","facts":{"provider":"claude","workspace":{"kind":"main","checkout":"/w"},"session_project_root":null,"model":"opus","project_id":14,"title":"t","effort":"max"},"summary":{"turns":93,"prompted":true,"subagents":0},"base":{"at":1,"carry":[]}}"#;
+        let observed = r#"{"type":"completion_observation","elapsed_ms":73700,"completed_at":"10:28 am","input_tokens":307219,"output_tokens":9}"#;
+        let prompted = r#"{"type":"prompt_observation","sent_at":"10:27 am","prompt_id":"a"}"#;
+        let header = r#"{"schema":2,"provider":"claude"}"#;
+        let log = |records: &[&str]| {
+            let mut text = String::from(header);
+            for record in records {
+                text.push('\n');
+                text.push_str(record);
+            }
+            text.push('\n');
+            text
+        };
+        let dir = scratch("legacy-activity");
+        plant_log(&dir, "6", &log(&[prompted, observed, mark, mark, mark]));
+        plant_log(&dir, "7", &log(&[prompted, observed, r#"{"type":"run_state","state":"idle"}"#]));
+        let store = Store::open(&dir).unwrap();
+        assert_eq!(store.last_activity(ThreadId::new(6)), None, "ends in Ferrite's marks");
+        assert_eq!(
+            store.last_activity(ThreadId::new(7)),
+            store.last_used(ThreadId::new(7)),
+            "ends in a real record"
+        );
     }
 
     #[test]
