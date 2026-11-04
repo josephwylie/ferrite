@@ -1587,8 +1587,21 @@ fn exit_code(summary: &str) -> Option<i64> {
     digits.parse().ok()
 }
 
+/// The identity of one part of a frame: its `uuid`. A frame with none gets
+/// a deterministic key from what pins it down (HD44): its type and
+/// `timestamp` and a hash of its message, so a replay of the same frame is
+/// recognised while two frames that merely say the same thing, at different
+/// times, are two. A frame with neither has no identity and is never
+/// deduped.
 fn delivery_id(value: &Value, part: &str) -> Option<String> {
-    string(value, "uuid").map(|uuid| format!("{uuid}:{part}"))
+    if let Some(uuid) = string(value, "uuid") {
+        return Some(format!("{uuid}:{part}"));
+    }
+    use std::hash::{Hash, Hasher};
+    let (kind, at) = (string(value, "type")?, string(value, "timestamp")?);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value["message"].to_string().hash(&mut hasher);
+    Some(format!("{kind}@{at}:{:x}:{part}", hasher.finish()))
 }
 
 fn main_block_id(message: &str, index: u64) -> String {
@@ -2043,6 +2056,28 @@ mod tests {
         let parent_key = discovered(&parent).unwrap().key;
         let later = decoder.decode(r#"{"type":"system","subtype":"task_progress","task_id":"child","parent_task_id":"parent","task_type":"local_agent","description":"child"}"#);
         assert_eq!(discovered(&later).unwrap().parent, Some(Subject::Subagent(parent_key)));
+    }
+
+    /// A frame with no `uuid` still has a key (HD44): the same frame replayed
+    /// is one delivery; the same words a moment later are another; and a
+    /// frame with no timestamp either has none.
+    #[test]
+    fn a_frame_without_a_uuid_is_keyed_by_its_time_and_content() {
+        let frame = |at: &str, text: &str| {
+            json!({"type":"assistant","timestamp":at,"message":{"content":[{"type":"text","text":text}]}})
+        };
+        let key = |frame: &Value| delivery_id(frame, "0");
+        let first = key(&frame("2026-11-04T13:00:00Z", "ok"));
+        assert!(first.is_some());
+        assert_eq!(first, key(&frame("2026-11-04T13:00:00Z", "ok")), "a replay is the same");
+        assert_ne!(first, key(&frame("2026-11-04T13:00:05Z", "ok")), "later is another");
+        assert_ne!(first, key(&frame("2026-11-04T13:00:00Z", "no")), "other words are another");
+        assert_eq!(key(&json!({"type":"assistant","message":{}})), None);
+        assert_eq!(
+            delivery_id(&json!({"uuid":"u","type":"assistant"}), "0").as_deref(),
+            Some("u:0"),
+            "a uuid still wins"
+        );
     }
 
     /// `system/init` names the CLI's own version (2.1.318's captures all do).

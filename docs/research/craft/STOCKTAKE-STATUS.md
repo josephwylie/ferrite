@@ -424,7 +424,7 @@ Scope follows the owner's list (settings, voice and mic, plan mode, Remote Contr
 | 18 | HD75 | The session records its CLI version and backend (§19.1) | BUILT | The version is checked against the pin at spawn, then thrown away. **Audit 11-04:** system/init's claude_code_version is decoded with the tool list (SessionEvent::Handshake) and kept on the Transcript (cli_version()); live only. Captured: every claude-*-2.1.318 fixture (BUILT, not ticked; no UI reads it) | `claude.rs:1217-1239` |
 | 19 | HD18 | Hook lifecycle events (§5, §19) | BUILT | Ignored, which is safe. No hook spinner. **Audit 11-04:** hook_started and hook_response are decoded (SessionEvent::HookRan by hook_id: name, outcome) and kept on the Transcript (hooks()); no row, as the handoff asks for no hook spinner. Captured: claude-hello-2.1.243.jsonl (BUILT, not ticked) | grep `hook_started`: none |
 | 20 | HD55 | Failed `TaskCreate` behaviour pinned by a test (fx 31) | BUILT | Receipts only, so no row appears, which is the chosen behaviour. No test. **Audit 11-04:** Pinned by a_failed_task_create_adds_no_task (contract_plans.rs) | `claude/wire.rs:520`; no failing-create case in `tests/contract_plans.rs` |
-| 21 | HD44 | A fallback dedup key for frames with no uuid (§8) | MISSING | `id: None` is never deduped. Claude frames carry a uuid, so this is low impact. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `activity.rs:2569` `delivery_id` |
+| 21 | HD44 | A fallback dedup key for frames with no uuid (§8) | BUILT | `id: None` is never deduped. Claude frames carry a uuid, so this is low impact. **Audit 11-04:** A frame with no uuid is keyed by its type, timestamp and a hash of its message (delivery_id); a frame with neither stays undeduped. Real frames all carry a uuid, so this is tested on synthetic frames only (BUILT, not ticked) | `activity.rs:2569` `delivery_id` |
 
 ### Full table
 
@@ -475,7 +475,7 @@ ID prefix: HD, a handoff requirement. "fx N" is the matching §22 fixture.
 | HD41 | Child history merges a frozen prefix with the live tail once (§8, fx 10) | BUILT | `engine/history.rs:60,279,314` `HistoryContent` | |
 | HD42 | A superseded process can't change its replacement's state (§8, §19.8, fx 9) | BUILT | `activity.rs:285,1078` `Observe { generation }`; `claude/activity.rs:162-190` (a new init resets) | |
 | HD43 | Window reconnect resynchronises from the server (§8) | BUILT | `protocol.rs:757-772` `WireInput` replay/live; `cockpit/mirror.rs` | |
-| HD44 | Fallback dedup key (§8) | MISSING | — | Ranked #21 **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded |
+| HD44 | Fallback dedup key (§8) | BUILT | — | Ranked #21 **Audit 11-04:** A frame with no uuid is keyed by its type, timestamp and a hash of its message (delivery_id); a frame with neither stays undeduped. Real frames all carry a uuid, so this is tested on synthetic frames only (BUILT, not ticked) |
 | HD45 | One explicit tool-presentation policy table (§9.1, §21) | BUILT | `transcript/tools.rs:33-44,64` `policy` (dc19326b) | |
 | HD46 | `AskUserQuestion` and `ExitPlanMode` stand alone (§9.1) | BUILT | `transcript/tools.rs:70-71` | |
 | HD47 | Todo tools are state-only, drawn when they fail (§9.1, fx 6) | BUILT | `transcript/tools.rs:84`; `transcript.rs:208` | |
