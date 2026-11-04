@@ -866,8 +866,8 @@ fn an_opened_agent_docks_in_the_right_pane_with_its_own_head(cx: &mut TestAppCon
         "‹ title, then expand, then close"
     );
     assert!(
-        cx.debug_bounds("panel-toggle").is_none(),
-        "the toggle stands down"
+        cx.debug_bounds("panel-toggle").is_some(),
+        "the rail's door stands against the pane"
     );
 
     // Expanded, it covers the content area; the same control collapses it.

@@ -26,14 +26,13 @@
 //! A preview (`preview.rs`) is the one thing that brings a head: while a
 //! Thread's Pane has one open, the head holds two tabs, `Overview` (the
 //! sections) and the file's name. Otherwise the head row over the panel is
-//! bare but for the toggle.
+//! bare.
 //!
-//! One toggle (`panel_toggle_element`) sits at the head row's right end
-//! either way, laid by the frame rather than by a head, so it never moves
-//! or blinks as the panel comes and goes: the panel head leaves its room
-//! while the panel shows, the view head while it is hidden
-//! (`view_head_end`). Hiding the panel puts its preview away: a hidden
-//! panel holds none.
+//! The title-bar tools (`view_head`, `tools`) stand against the column's
+//! left edge, the rail's door among them, so they ride with it. Beside the
+//! rail the column holds the tools' dock (`tools`: Files, Changes, the
+//! Terminal), the rail first. Hiding the panel puts its preview away: a
+//! hidden panel holds none.
 
 mod background;
 mod changes;
@@ -55,6 +54,9 @@ pub(crate) struct Panel {
     /// The width a preview reads at in this window (`preview_w`), as of
     /// the last frame.
     wide: f32,
+    /// The window's width as of the last frame, what the dock's columns
+    /// are sized from (`dock_widths`).
+    window_w: f32,
     /// The preview is expanded (its head's expand door) until it closes.
     pub(crate) expanded: bool,
     /// The first frame has been tended: a preview open by then is simply
@@ -83,6 +85,25 @@ fn preview_w(width: f32, expanded: bool) -> f32 {
     wide.max(PANEL_W)
 }
 
+/// How wide the dock is in a window `window` wide beside a rail `rail`
+/// wide: the Files and Changes column at the preview's reading width
+/// (`preview_w`'s share), the Terminal's column its own `TERMINAL_W`,
+/// together no more than the board can give (`PANEL_PREVIEW_BOARD_MIN`).
+/// Expanded, the Files column takes all of that the Terminal leaves.
+fn dock_widths(window: f32, rail: f32, files: bool, terminal: bool, expanded: bool) -> f32 {
+    use ferrite_ui::theme::*;
+    let most = (window - NAV_WIDTH - PANEL_PREVIEW_BOARD_MIN - rail).max(0.);
+    let terminal_w = if terminal { TERMINAL_W } else { 0. };
+    let files_w = match (files, expanded) {
+        (false, _) => 0.,
+        (true, true) => most,
+        (true, false) => {
+            (window * PANEL_PREVIEW_SHARE).clamp(PANEL_PREVIEW_MIN_W, PANEL_PREVIEW_MAX_W)
+        }
+    };
+    (files_w + terminal_w).min(most)
+}
+
 impl CockpitView {
     /// The Pane whose panel shows this frame (see the module doc), if any.
     pub(super) fn panel_pane(&self) -> Option<usize> {
@@ -92,6 +113,7 @@ impl CockpitView {
             || self.side_chat_shown(index)
             || self.agent_drill_shown(index)
             || self.background_shown(pane.thread())
+            || self.dock_shown(pane.thread())
             || self.prefs.settings.panel_shown && pane.thread().is_some())
         .then_some(index)
     }
@@ -122,7 +144,8 @@ impl CockpitView {
     /// window, and make sure the shown Thread's sections have their scroll.
     pub(super) fn tend_panel(&mut self, window: &mut Window) {
         self.tend_previews(window);
-        self.panel.wide = preview_w(f32::from(window.viewport_size().width), self.panel.expanded);
+        self.panel.window_w = f32::from(window.viewport_size().width);
+        self.panel.wide = preview_w(self.panel.window_w, self.panel.expanded);
         if let Some(thread) = self
             .panel_pane()
             .and_then(|index| self.panes[index].thread())
@@ -134,16 +157,45 @@ impl CockpitView {
     /// How much of the window's right edge the panel's column covers this
     /// frame: its own width, a preview's while one is shown, none hidden.
     pub(super) fn panel_column_w(&self) -> f32 {
-        match self.panel_pane() {
-            Some(index) if self.side_chat_shown(index) || self.agent_drill_shown(index) => {
-                ferrite_ui::theme::SIDE_CHAT_W
-            }
-            Some(index) if self.preview_shown(index) => {
-                self.panel.wide.max(ferrite_ui::theme::PANEL_W)
-            }
-            Some(_) => ferrite_ui::theme::PANEL_W,
-            None => 0.,
+        use ferrite_ui::theme::*;
+        let Some(index) = self.panel_pane() else {
+            return 0.;
+        };
+        if self.side_chat_shown(index) || self.agent_drill_shown(index) {
+            return SIDE_CHAT_W;
         }
+        let rail = self.rail_w(index);
+        rail + self.dock_w(index, rail)
+    }
+
+    /// The rail's own width in the column: the sections' `PANEL_W`, a
+    /// preview's wider reading width, or none while only the dock shows.
+    fn rail_w(&self, index: usize) -> f32 {
+        let pane = &self.panes[index];
+        if self.preview_shown(index) {
+            self.panel.wide.max(ferrite_ui::theme::PANEL_W)
+        } else if pane.preview.is_open()
+            || self.background_shown(pane.thread())
+            || self.prefs.settings.panel_shown && pane.thread().is_some()
+        {
+            ferrite_ui::theme::PANEL_W
+        } else {
+            0.
+        }
+    }
+
+    /// The dock's width beside a rail `rail` wide: the Files column at a
+    /// reading width and the Terminal's own, as much of that as the board
+    /// can spare (`dock_widths`).
+    fn dock_w(&self, index: usize, rail: f32) -> f32 {
+        let Some(thread) = self.panes[index].thread() else {
+            return 0.;
+        };
+        let (files, terminal) = (
+            self.files_column_shown(thread),
+            self.terminal_column_shown(thread),
+        );
+        dock_widths(self.panel.window_w, rail, files, terminal, self.panel.expanded)
     }
 
     /// What the board leaves at its right: the panel's column, or the
@@ -152,26 +204,6 @@ impl CockpitView {
         match self.panel_pane() {
             Some(_) => self.panel_column_w(),
             None => self.board_pad(),
-        }
-    }
-
-    /// Where the view head ends, in from the window's right edge, and
-    /// whether the toggle's room is its last part. Shown, it stops at the
-    /// panel, whose head holds the toggle; hidden with a Thread for the
-    /// panel, it runs to the toggle and ends in its room.
-    pub(super) fn view_head_end(&self) -> (f32, bool) {
-        let toggle = self.panel_candidate().is_some();
-        let inset = panel_toggle_inset();
-        // On Windows the caption buttons keep the row's right end either
-        // way.
-        if self.panel_pane().is_some() {
-            (self.board_right(), false)
-        } else if toggle {
-            (inset, true)
-        } else if ferrite_ui::frame::CUSTOM {
-            (inset, false)
-        } else {
-            (self.board_right(), false)
         }
     }
 
@@ -216,59 +248,6 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The head row's one panel toggle (SPEC §5.6), while there is a Thread
-    /// for the panel: laid over the row's right end, its right edge
-    /// `panel_toggle_inset` in from the window's, over the panel head while
-    /// the panel shows and over the view head's end while it is hidden.
-    /// The frame lays it after both heads, so it stays put, hover and all.
-    pub(super) fn panel_toggle_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        self.panel_candidate()?;
-        // The side chat's head, or the Background tasks pane's, holds the
-        // row's right end: no toggle there.
-        if self.docked_pane_shown()
-            || self
-                .panel_pane()
-                .is_some_and(|index| self.background_shown(self.panes[index].thread()))
-        {
-            return None;
-        }
-        Some(
-            div()
-                .absolute()
-                .top_0()
-                .right(px(panel_toggle_inset()))
-                .h(px(ferrite_ui::theme::WIN_CHROME_H))
-                .flex()
-                .items_center()
-                .child(self.panel_toggle(cx))
-                .into_any_element(),
-        )
-    }
-
-    /// The toggle itself: the nav head's sidebar toggle's twin
-    /// (`nav::icon_button`), the `panel-right` glyph, its tooltip and chord
-    /// read from the keymap.
-    fn panel_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
-        use ferrite_ui::theme::{ICON_BUTTON, NAV_TOGGLE_GLYPH, R_CONTROL};
-        crate::nav::icon_button(
-            "panel-toggle",
-            icons::PANEL_RIGHT,
-            NAV_TOGGLE_GLYPH,
-            ICON_BUTTON,
-            R_CONTROL,
-        )
-        .occlude()
-        .tooltip(ferrite_ui::menu::action_tooltip(
-            "Toggle panel",
-            "cockpit::TogglePanel",
-        ))
-        .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-            cx.stop_propagation();
-            view.toggle_panel_now(cx);
-        }))
-        .into_any_element()
-    }
-
     /// Ask `thread`'s Session to report its context afresh, when it can.
     fn refresh_context(&mut self, thread: ThreadId) {
         let Some(open) = self.cockpit.thread(thread) else {
@@ -306,8 +285,11 @@ impl CockpitView {
         }
         let previewing = self.preview_shown(index);
         let background = owner.thread().filter(|thread| self.background_shown(Some(*thread)));
+        let rail_w = self.rail_w(index);
         let content = div()
-            .size_full()
+            .w(px(rail_w))
+            .h_full()
+            .flex_shrink_0()
             .flex()
             .flex_col()
             .pl(px(PANEL_PAD_L))
@@ -345,13 +327,19 @@ impl CockpitView {
                 .w(px(self.panel_column_w()))
                 .overflow_hidden()
                 .bg(paint::PANEL)
-                .child(content)
+                .flex()
+                .children((rail_w > 0.).then_some(content))
+                .children(
+                    owner
+                        .thread()
+                        .filter(|thread| self.dock_shown(Some(*thread)))
+                        .map(|thread| self.dock_element(thread, cx)),
+                )
                 .into_any_element(),
         )
     }
 
-    /// The head (in the head row): bare but for the title tools' and the
-    /// toggle's rooms (the frame lays both over it) — unless the Pane
+    /// The head (in the head row): bare — unless the Pane
     /// has a preview open, when it holds the preview's tab, after the
     /// Thread's `Overview` tab that goes back to the sections. On Windows
     /// it stops short of the caption buttons, which keep the row's right
@@ -383,10 +371,8 @@ impl CockpitView {
             .items_center()
             .gap(px(SPACE_1))
             .h(px(WIN_CHROME_H))
-            .pr(px(panel_toggle_inset() - PANEL_PAD_R))
+            .pr(px(tools_inset() - PANEL_PAD_R))
             .child(tabs.unwrap_or_else(|| div().flex_1()))
-            .children(self.title_tools_room(SPACE_1))
-            .child(toggle_room())
     }
 
     /// The `Overview` tab beside a preview's: the sections, the preview
@@ -431,10 +417,10 @@ impl CockpitView {
     }
 }
 
-/// How far in from the window's right edge the panel toggle's right edge
-/// sits, shown or hidden: the panel's own padding, or on Windows just left
-/// of the caption buttons.
-pub(super) fn panel_toggle_inset() -> f32 {
+/// How far in from the window's right edge the title tools' right edge sits
+/// with no column to stand against: the panel's own padding, or on Windows
+/// just left of the caption buttons.
+pub(super) fn tools_inset() -> f32 {
     use ferrite_ui::theme::{CAPTION_W, PANEL_PAD_R};
     if ferrite_ui::frame::CUSTOM {
         3. * CAPTION_W
@@ -460,14 +446,6 @@ pub(super) fn panel_section_head(selector: &'static str, name: &'static str) -> 
         .font_weight(W_LABEL)
         .text_color(rgb(INK_STRONG))
         .child(name)
-}
-
-/// The toggle's room at the end of whichever head the toggle lies over
-/// (`panel_toggle_element`): the toggle's own box, kept clear.
-pub(super) fn toggle_room() -> Div {
-    div()
-        .flex_shrink_0()
-        .size(px(ferrite_ui::theme::ICON_BUTTON))
 }
 
 /// The sections' scroll, under the head, on the Thread's own `scroll`, its
@@ -501,4 +479,35 @@ fn panel_body(body: AnyElement, scroll: &ScrollHandle) -> Div {
                         .gutter(px(PANEL_PAD_R), px(PANEL_SCROLLBAR_INSET)),
                 ),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dock_widths;
+    use ferrite_ui::theme::*;
+
+    #[test]
+    fn the_dock_takes_a_reading_width_and_the_terminals_own() {
+        assert_eq!(dock_widths(2600., 0., false, false, false), 0.);
+        let files = dock_widths(2600., PANEL_W, true, false, false);
+        assert_eq!(files, (2600. * PANEL_PREVIEW_SHARE).clamp(PANEL_PREVIEW_MIN_W, PANEL_PREVIEW_MAX_W));
+        assert_eq!(dock_widths(2600., PANEL_W, false, true, false), TERMINAL_W);
+        assert_eq!(dock_widths(2600., PANEL_W, true, true, false), files + TERMINAL_W);
+    }
+
+    #[test]
+    fn the_dock_leaves_the_board_its_least() {
+        let window = 1400.;
+        let most = window - NAV_WIDTH - PANEL_PREVIEW_BOARD_MIN - PANEL_W;
+        assert_eq!(dock_widths(window, PANEL_W, true, true, false), most);
+        assert_eq!(dock_widths(window, PANEL_W, true, true, true), most);
+        assert_eq!(dock_widths(300., PANEL_W, true, false, false), 0.);
+    }
+
+    #[test]
+    fn expanded_gives_files_all_the_terminal_leaves() {
+        let most = 1900. - NAV_WIDTH - PANEL_PREVIEW_BOARD_MIN - PANEL_W;
+        assert_eq!(dock_widths(1900., PANEL_W, true, false, true), most);
+        assert_eq!(dock_widths(1900., PANEL_W, true, true, true), most);
+    }
 }

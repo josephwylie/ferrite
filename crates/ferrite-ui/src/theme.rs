@@ -1724,6 +1724,9 @@ pub const REPLY_TILE_LINES: usize = 3;
 pub const SIDE_CHAT_W: f32 = 420.0;
 pub const SIDE_CHAT_TAB_MAX_W: f32 = 180.0;
 pub const SIDE_CHAT_INSET: f32 = SPACE_2;
+/// The Terminal's column in the dock (Claude's measures the side chat's
+/// width, `terminal-open.png`).
+pub const TERMINAL_W: f32 = SIDE_CHAT_W;
 /// **The task list** (a plan the provider works to, over the working line):
 /// a card at `R_CARD` on a `CARD_RING`, `TASK_CARD_PAD` inside,
 /// `TASK_ROW_GAP` between its steps, each a `TASK_ICON` mark and its words —

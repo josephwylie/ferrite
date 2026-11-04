@@ -95,7 +95,7 @@ impl CockpitView {
             .items_center()
             .gap(px(SPACE_1))
             .h(px(WIN_CHROME_H))
-            .pr(px(panel_toggle_inset() - PANEL_PAD_R))
+            .pr(px(tools_inset() - PANEL_PAD_R))
             .child(
                 div()
                     .debug_selector(|| "background-pane-head".into())

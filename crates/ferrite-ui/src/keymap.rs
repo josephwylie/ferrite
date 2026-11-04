@@ -303,7 +303,12 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // The palette's two keyed commands: the parked Threads, and the
         // focused Thread's branch in the Review beside it.
         (with_primary("shift-p"), "palette::ShowParked", None),
-        (with_primary("shift-d"), "palette::ReviewBranch", None),
+        // The title-bar tools: Changes and Files (Claude's ⇧⌘D and ⇧⌘F)
+        // and the Terminal (⌘J). The Review beside the Pane keeps its
+        // palette command, but not ⇧⌘D, which Changes has.
+        (with_primary("shift-d"), "cockpit::ToggleChanges", None),
+        (with_primary("shift-f"), "cockpit::ToggleFiles", None),
+        (with_primary("j"), "cockpit::ToggleTerminal", None),
         // The transcript's reading size, the browser's zoom keys: `=` (and
         // `+`, its shifted face) steps up, `-` down, `0` back to Standard.
         (with_primary("="), "cockpit::TextLarger", None),
@@ -830,7 +835,9 @@ mod tests {
             ("cockpit::NewGroup", "shift-g"),
             ("palette::Toggle", "k"),
             ("palette::ShowParked", "shift-p"),
-            ("palette::ReviewBranch", "shift-d"),
+            ("cockpit::ToggleChanges", "shift-d"),
+            ("cockpit::ToggleFiles", "shift-f"),
+            ("cockpit::ToggleTerminal", "j"),
             ("cockpit::TextLarger", "="),
             ("cockpit::TextSmaller", "-"),
             ("cockpit::TextReset", "0"),

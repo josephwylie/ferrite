@@ -97,8 +97,8 @@ fn a_side_chat_docks_right_with_tabs_and_an_empty_word(cx: &mut TestAppContext) 
     );
     assert!(cx.debug_bounds("side-chat-placeholder").is_some());
     assert!(
-        cx.debug_bounds("panel-toggle").is_none(),
-        "the toggle stands down"
+        cx.debug_bounds("panel-toggle").is_some(),
+        "the rail's door stands against the pane"
     );
 
     view.read_with(cx, |view, cx| {

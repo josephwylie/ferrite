@@ -31,6 +31,8 @@ pub(super) enum MenuTarget {
     },
     /// The page a Pane's preview shows: its title's menu.
     Page(PaneIdentity),
+    /// The title bar's `⋯`: the Thread's checkout, in Finder or as a path.
+    Tools(ThreadId),
 }
 
 /// One thing a context-menu row does.
@@ -310,6 +312,10 @@ impl CockpitView {
                         MenuVerb::RewindCode,
                     ))
                 }));
+            }
+            MenuTarget::Tools(_) => {
+                rows.push(Some((menu::Item::new("Reveal in Finder"), MenuVerb::Reveal)));
+                rows.push(Some((menu::Item::new("Copy path"), MenuVerb::CopyPath)));
             }
             MenuTarget::Page(owner) => {
                 let address = self
@@ -679,6 +685,7 @@ impl CockpitView {
                     MenuTarget::Parked
                     | MenuTarget::Review { .. }
                     | MenuTarget::Prompt { .. }
+                    | MenuTarget::Tools(_)
                     | MenuTarget::Page(_) => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);

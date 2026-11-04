@@ -59,15 +59,6 @@ impl CockpitView {
             .is_some_and(|thread| self.agent_drills.is_open(thread))
     }
 
-    /// Whether the right pane holds a docked body of its own this frame —
-    /// a side chat or an agent — which ends the Thread's head against it.
-    pub(super) fn docked_pane_shown(&self) -> bool {
-        self.side_chat_pane_shown()
-            || self
-                .panel_pane()
-                .is_some_and(|index| self.agent_drill_shown(index))
-    }
-
     /// Whether the docked pane covers the content area, the Thread's head
     /// and tools under it.
     pub(super) fn docked_pane_covers(&self) -> bool {

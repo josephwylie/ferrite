@@ -196,10 +196,11 @@ fn back_goes_from_a_subagent_to_main(cx: &mut TestAppContext) {
     assert_eq!(subject(&view, cx), Subject::Subagent(agent));
 }
 
-/// The tools sit at the row's right end before the panel toggle, in the
-/// same place with the panel shown or hidden; the head leaves their room.
+/// The tools stand at the row's right end against the panel's left edge,
+/// the rail's door after the split, `TITLE_TOOLS_GAP` apart; the head leaves their room.
 #[gpui::test]
-fn the_title_tools_sit_before_the_panel_toggle(cx: &mut TestAppContext) {
+fn the_title_tools_stand_against_the_panel(cx: &mut TestAppContext) {
+    use ferrite_ui::theme::{TITLE_TOOLS_GAP, VIEW_HEAD_PAD_X};
     let (core, _fake) = cockpit("title-tools", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -210,23 +211,17 @@ fn the_title_tools_sit_before_the_panel_toggle(cx: &mut TestAppContext) {
         cx.notify();
     });
     tick(cx);
-    let toggle = cx.debug_bounds("panel-toggle").expect("the toggle");
+    let panel = cx.debug_bounds("panel").expect("the panel");
+    let rail = cx.debug_bounds("panel-toggle").expect("the rail's door");
     let split = cx.debug_bounds("title-split").expect("split beside");
-    let review = cx.debug_bounds("title-review").expect("review branch");
-    assert!(review.right() < split.left());
-    assert_eq!(
-        toggle.left() - split.right(),
-        px(ferrite_ui::theme::TITLE_TOOLS_GAP),
-        "Claude's pitch, the toggle last"
-    );
+    let tools = cx.debug_bounds("title-tools").expect("the tools");
+    assert_eq!(panel.left() - tools.right(), px(VIEW_HEAD_PAD_X));
+    assert_eq!(rail.left() - split.right(), px(TITLE_TOOLS_GAP), "Claude's pitch");
     hide_panel(&view, cx);
     tick(cx);
-    assert_eq!(cx.debug_bounds("title-split"), Some(split), "they stay put");
     let head = cx.debug_bounds("view-head").unwrap();
     let title = cx.debug_bounds("view-title").unwrap();
-    assert!(
-        title.right() < review.left(),
-        "the title runs short of them"
-    );
-    assert_eq!(head.right(), toggle.right());
+    let split = cx.debug_bounds("title-split").expect("they stay");
+    assert!(title.right() < split.left(), "the title runs short of them");
+    assert!(head.right() >= cx.debug_bounds("panel-toggle").unwrap().right());
 }

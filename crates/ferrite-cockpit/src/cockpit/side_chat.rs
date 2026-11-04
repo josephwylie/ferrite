@@ -162,12 +162,6 @@ impl CockpitView {
             .is_some_and(|thread| self.side_chats.is_open(thread))
     }
 
-    /// Whether the right pane shows a side chat this frame.
-    pub(super) fn side_chat_pane_shown(&self) -> bool {
-        self.panel_pane()
-            .is_some_and(|index| self.side_chat_shown(index))
-    }
-
     /// Whether the pane covers the content area, the Thread's head and
     /// tools under it.
     pub(super) fn side_chat_covers(&self) -> bool {

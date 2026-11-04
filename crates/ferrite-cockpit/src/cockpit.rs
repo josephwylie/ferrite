@@ -18,6 +18,7 @@ mod parts;
 mod server;
 mod agent_pane;
 mod side_chat;
+pub(crate) mod tools;
 pub(crate) mod subagents;
 mod transcript_glue;
 mod updating;
@@ -130,6 +131,7 @@ use ferrite_pane::select::TranscriptText;
 use ferrite_ui::frame::settings;
 use ferrite_ui::pointer::{Pointer, PointerPressed};
 pub use history::{GoBack, GoForward};
+pub use tools::{ToggleChanges, ToggleFiles, ToggleTerminal};
 
 actions!(
     cockpit,
@@ -392,6 +394,7 @@ pub struct CockpitView {
     selection: TranscriptText,
     /// Each Thread's side chat, the right pane's other body.
     side_chats: side_chat::SideChats,
+    tools: tools::Tools,
     agent_drills: agent_pane::AgentDrills,
     native_copy: Option<String>,
     /// cmd-b (#21): the nav folded to its rail by the operator. In memory
@@ -1484,6 +1487,7 @@ impl CockpitView {
             branch_refresh_queued: false,
             selection: TranscriptText::default(),
             side_chats: Default::default(),
+            tools: Default::default(),
             agent_drills: Default::default(),
             native_copy: None,
             nav_filter: None,
@@ -3495,7 +3499,9 @@ impl CockpitView {
     /// A Thread's effective cwd. A Group has no cwd.
     fn target_path(&self, target: MenuTarget) -> Option<std::path::PathBuf> {
         match target {
-            MenuTarget::Thread(thread) | MenuTarget::Pane(thread) => self.thread_path(thread),
+            MenuTarget::Thread(thread) | MenuTarget::Pane(thread) | MenuTarget::Tools(thread) => {
+                self.thread_path(thread)
+            }
             MenuTarget::Project(project) => self
                 .cockpit
                 .registry()
@@ -10658,6 +10664,9 @@ impl CockpitView {
             .on_action(
                 cx.listener(|view, _: &FocusThread1, window, cx| view.focus_rail(1, window, cx)),
             )
+            .on_action(cx.listener(Self::toggle_terminal))
+            .on_action(cx.listener(Self::toggle_changes))
+            .on_action(cx.listener(Self::toggle_files))
             .on_action(
                 cx.listener(|view, _: &FocusThread2, window, cx| view.focus_rail(2, window, cx)),
             )
@@ -10851,7 +10860,6 @@ impl CockpitView {
             .children(self.panel_element(window, cx))
             .child(self.plane_seams(panel_w))
             .children(self.title_tools_element(cx))
-            .children(self.panel_toggle_element(cx))
             .children(self.plan_card_element(window, cx))
             .children(self.context_menu_element(cx))
             .children(self.session_controls_element(window, cx))

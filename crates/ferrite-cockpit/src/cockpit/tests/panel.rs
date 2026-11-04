@@ -205,31 +205,32 @@ fn toggle_panel_flips_the_saved_setting(cx: &mut TestAppContext) {
     assert!(saved(&view, cx));
 }
 
-/// One toggle, in one place: shown, it is the panel head's last control;
-/// hidden, the view head's, at the same spot. The head stops at the
-/// panel's left edge, and runs to the toggle once the panel is hidden.
+/// The title tools ride with the column: shown, they end against the
+/// panel's left edge, `VIEW_HEAD_PAD_X` clear of it, and the head stops at
+/// the panel; hidden, they end at the window's edge and the head runs to it.
 fn toggle_sits_in_one_place(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
     which: &str,
 ) {
-    use ferrite_ui::theme::PANEL_W;
+    use ferrite_ui::theme::{PANEL_W, VIEW_HEAD_PAD_X};
     let panel = cx.debug_bounds("panel").expect("shown");
-    let shown = cx.debug_bounds("panel-toggle").expect("the panel's toggle");
-    assert!(
-        panel.contains(&shown.center()),
-        "{which}: in the panel head"
+    let tools = cx.debug_bounds("title-tools").expect("the tools");
+    assert!(cx.debug_bounds("panel-toggle").is_some(), "{which}: the rail's door");
+    assert_eq!(
+        panel.left() - tools.right(),
+        px(VIEW_HEAD_PAD_X),
+        "{which}: against the panel"
     );
     let head = cx.debug_bounds("view-head").expect("the view head");
     assert_eq!(head.right(), px(1600. - PANEL_W), "{which}: head stops");
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     tick(cx);
     assert!(cx.debug_bounds("panel").is_none());
-    let hidden = cx.debug_bounds("panel-toggle").expect("the head's toggle");
-    assert_eq!(hidden, shown, "{which}: the same place");
+    let hidden = cx.debug_bounds("title-tools").expect("the tools stay");
+    assert!(hidden.right() > tools.right(), "{which}: they ride to the edge");
     let head = cx.debug_bounds("view-head").unwrap();
-    assert!(head.contains(&hidden.center()), "{which}: in the view head");
-    assert_eq!(head.right(), hidden.right(), "{which}: at its right end");
+    assert!(head.right() >= hidden.right(), "{which}: head runs under them");
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     tick(cx);
 }

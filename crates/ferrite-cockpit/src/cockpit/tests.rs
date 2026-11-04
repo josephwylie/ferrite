@@ -49,6 +49,7 @@ mod stale_chrome;
 mod startup;
 mod subagents;
 mod thread_groups;
+mod tools;
 mod transcript_pointer;
 mod transcript_rows;
 mod ui_a;

@@ -35,6 +35,8 @@ A floating card dropped from the ▤ icon, about 210 pt wide, over the transcrip
 - **Connectors:** `Connectors ▸` with `3 connected`.
 - **Changes:** a `+3,800 −0` diffstat, then a `Create PR` button.
 
+**Correction (`terminal-tabs.png`, 2026-11-04):** the rail is not a floating card. With a side chat and the Terminal open it is a docked column in the right-hand area, the transcript reflowing narrower: `[transcript][rail][side chat][terminal]`. Ferrite keeps its existing panel column as the rail, and the title-bar door toggles it.
+
 The owner asked what `Save` does. Its tooltip didn't show, so this is still unconfirmed.
 
 ## Files explorer (`files-empty.png`, `files-code.png`, `files-more-menu.png`)
@@ -131,8 +133,6 @@ The menu:
 
 ## Still to capture
 
-- The Terminal pane: its tabs, head tools and menus.
-
 - The ⋯ menu on a file in Changes.
 - The file-list view in Changes.
 - The title bar's ⋯ menu.
@@ -167,3 +167,15 @@ The menu:
   - A background shell running at fork time is reported in the side chat as `Background task stopped · Background shell command didn't finish before …`.
   - The tab takes its name from the first message (`testing`).
   - After the first message, the composer placeholder becomes `Reply in this session…`.
+
+## Terminal (`terminal-open.png`, `terminal-command.png`, `terminal-selection.png`, `terminal-menu.png`, `terminal-tabs.png`, `terminal-more-menu.png`, `terminal-attach-*.png`; captured 2026-11-04)
+
+- **Door:** `>_` in the title-bar tools, tooltip `Terminal ⌘J`; the pressed ground shows while the pane is open.
+- **Placement:** its own column, right-docked at the far right, about 417 pt wide, full height under the title bar. The other columns (transcript, rail, side chat) stay, narrower. Same `#181818` ground as the rest, a 1px divider at its left.
+- **Head:** about 52 pt tall, no rule under it. At the left the tab label `Terminal` and a `+` (new tab); at the right `⋯`, expand, close. A single tab is bare text with no x. With a second tab the names are `Terminal 1` and `Terminal 2`, each with a trailing x; the active tab is a filled pill (`#3a3a3a`), the inactive one bare grey text, and the `+` moves after the last tab. The x kills that tab's shell; back to one tab it is bare text again.
+- **Body:** the user's login shell in the thread's folder, the prompt as the shell draws it. Mono, about 11 pt with 15 pt line height, off-white; about 10 pt padding at the left, 6 pt at the top; wraps at the pane width. Block cursor, blue (`#1a8cff`) focused and a hollow outline unfocused, blinking. A small dot in the left gutter marks a command line (shell integration).
+- **Selection:** a flat blue-teal band (`#113852`) in full-width rows, light text.
+- **Right-click menu** (about 202 pt wide): `Attach selection as context ⇧⌘L`, rule, `Copy ⌘C`, `Paste ⌘V`, `Select all ⌘A`, rule, `Clear terminal`. With no selection `Attach selection as context` is absent (not disabled) and `Copy` is greyed.
+- **Attach as context:** a selection also shows a small dark `Attach as context` pill floating directly above the selection, centred on it, label only (no icon, no shortcut, no tooltip). Pill and menu row do the same thing: they attach the selection only (not the visible output) as a tile in the composer tray: the attachment tile (about 120 pt square, rounded, bordered) with the selected text in small grey type behind a thin vertical quote bar, newlines read as spaces, an outlined `Excerpt` badge at its bottom-left, and the corner x on hover.
+- **`⋯` menu:** `Cursor style ›` (Block), `Blink cursor` ✓, `Copy on select`, `Scrollback ›` (10,000 lines).
+- **Not captured:** tooltips for `+`, `⋯`, expand and close; the Cursor style and Scrollback submenus.

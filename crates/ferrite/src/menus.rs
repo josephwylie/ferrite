@@ -13,7 +13,8 @@ pub fn app_menus() -> Vec<Menu> {
     use cockpit::{
         CloseThread, GoBack, GoForward, NewGroup, NewThread, NewWorktreeThread, NextPane,
         OpenPrInBrowser, OpenSettings, PreviousPane, RefreshPrStatus, ReopenThread, TextLarger,
-        TextReset, TextSmaller, ToggleFullscreen, ToggleNav, ToggleNotifications, TogglePanel,
+        TextReset, TextSmaller, ToggleChanges, ToggleFiles, ToggleFullscreen, ToggleNav,
+        ToggleNotifications, TogglePanel, ToggleTerminal,
     };
     use ferrite_pane::pane::NextDecision;
     vec![
@@ -76,6 +77,9 @@ pub fn app_menus() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("Commands\u{2026}", palette::Toggle),
                 MenuItem::action("Review Branch", palette::ReviewBranch),
+                MenuItem::action("Terminal", ToggleTerminal),
+                MenuItem::action("Changes", ToggleChanges),
+                MenuItem::action("Files", ToggleFiles),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleNav),
                 MenuItem::action("Toggle Panel", TogglePanel),
