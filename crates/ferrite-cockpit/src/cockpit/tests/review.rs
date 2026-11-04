@@ -387,20 +387,15 @@ fn the_right_click_menu_comments_opens_and_copies(cx: &mut TestAppContext) {
     let open = row(MenuVerb::OpenAtLine, cx);
     view.update_in(cx, |view, window, cx| view.press_menu_row(open, window, cx));
     tick(cx);
-    let document = view
-        .read_with(cx, |view, _| view.panes[0].preview.document())
-        .expect("the file opens in the preview");
-    assert!(document.path.ends_with("src/nav.rs"), "{:?}", document.path);
-    assert_eq!(document.line(), Some(2), "the removed line's old number");
-    assert!(matches!(
-        document.body,
-        ferrite_pane::preview::Body::Text { .. }
-    ));
+    let path = view
+        .read_with(cx, |view, _| view.files_active_path(view.panes[0].thread().unwrap()))
+        .expect("the file opens in Files");
+    assert!(path.ends_with("src/nav.rs"), "{path:?}");
     assert!(
         view.read_with(cx, |view, _| view.panes[0].review.is_open()),
         "the review stays on the board"
     );
-    assert!(cx.debug_bounds("panel-preview").is_some(), "in the Panel");
+    assert!(cx.debug_bounds("files").is_some(), "in the right pane");
 }
 
 /// A turn snapshots its checkout as it begins, reviewed or not (the

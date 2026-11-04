@@ -1727,6 +1727,14 @@ pub const SIDE_CHAT_INSET: f32 = SPACE_2;
 /// The Terminal's column in the dock (Claude's measures the side chat's
 /// width, `terminal-open.png`).
 pub const TERMINAL_W: f32 = SIDE_CHAT_W;
+/// **Files** (`files-code.png`): the tree column at the right of the pane,
+/// its rows `FILES_ROW_H` tall (Claude's 28 pitch), a folder's children
+/// `FILES_INDENT` in, a git status marked by a `FILES_STATUS_DOT` dot at
+/// the row's end.
+pub const FILES_TREE_W: f32 = 240.0;
+pub const FILES_ROW_H: f32 = 28.0;
+pub const FILES_INDENT: f32 = 12.0;
+pub const FILES_STATUS_DOT: f32 = 6.0;
 /// **The task list** (a plan the provider works to, over the working line):
 /// a card at `R_CARD` on a `CARD_RING`, `TASK_CARD_PAD` inside,
 /// `TASK_ROW_GAP` between its steps, each a `TASK_ICON` mark and its words —

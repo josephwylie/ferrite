@@ -6,7 +6,7 @@ pub mod decision;
 pub mod file_links;
 pub mod find;
 pub mod image_viewer;
-mod line;
+pub mod line;
 pub mod mark;
 pub mod page;
 pub mod pane;

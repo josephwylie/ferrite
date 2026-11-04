@@ -18,6 +18,10 @@
 
 use std::collections::HashMap;
 
+mod editor;
+mod files;
+mod tree;
+
 use super::*;
 use ferrite_ui::{icons, theme};
 
@@ -49,6 +53,7 @@ impl Dock {
 #[derive(Default)]
 pub(crate) struct Tools {
     docks: HashMap<ThreadId, Dock>,
+    files: HashMap<ThreadId, files::Files>,
 }
 
 impl Tools {
@@ -57,7 +62,10 @@ impl Tools {
     }
 }
 
-gpui::actions!(cockpit, [ToggleTerminal, ToggleChanges, ToggleFiles]);
+gpui::actions!(cockpit, [ToggleTerminal, ToggleChanges, ToggleFiles, ToggleFileTree, GoToFile]);
+
+pub(crate) use editor::AUTO_SAVE_AFTER;
+pub(crate) use files::{Sub as FilesSub, Verb as FilesVerb};
 
 impl CockpitView {
     /// Whether the Thread's dock has anything open.
@@ -116,12 +124,15 @@ impl CockpitView {
         }
         if opened {
             self.give_column_to_tools(thread, cx);
+            if tool == Tool::Files {
+                self.ensure_files(thread, cx);
+            }
         }
         cx.notify();
     }
 
     /// Close whatever else held the right column over `thread`'s dock.
-    fn give_column_to_tools(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(super) fn give_column_to_tools(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         self.close_side_chat(thread, cx);
         self.close_agent_drill(thread, cx);
         if self.panel.background == Some(thread) {
@@ -135,6 +146,16 @@ impl CockpitView {
 
     pub(super) fn toggle_changes(&mut self, _: &ToggleChanges, _: &mut Window, cx: &mut Context<Self>) {
         self.press_tool(Tool::Changes, cx);
+    }
+
+    pub(super) fn toggle_file_tree_action(&mut self, _: &ToggleFileTree, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_file_tree(cx);
+    }
+
+    pub(super) fn go_to_file_action(&mut self, _: &GoToFile, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(thread) = self.focused_thread() {
+            self.go_to_file(thread, window, cx);
+        }
     }
 
     pub(super) fn toggle_files(&mut self, _: &ToggleFiles, _: &mut Window, cx: &mut Context<Self>) {
@@ -163,7 +184,7 @@ impl CockpitView {
         let dock = self.tools.dock(thread);
         let mut column = dock_column("dock-files", true);
         if dock.files {
-            column = column.child(dock_head("Files", "dock-files-close", Tool::Files, cx));
+            column = column.child(self.files_pane(thread, cx));
         }
         if dock.changes {
             column = column.child(dock_head("Changes", "dock-changes-close", Tool::Changes, cx));

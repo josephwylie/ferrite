@@ -131,7 +131,7 @@ use ferrite_pane::select::TranscriptText;
 use ferrite_ui::frame::settings;
 use ferrite_ui::pointer::{Pointer, PointerPressed};
 pub use history::{GoBack, GoForward};
-pub use tools::{ToggleChanges, ToggleFiles, ToggleTerminal};
+pub use tools::{GoToFile, ToggleChanges, ToggleFileTree, ToggleFiles, ToggleTerminal};
 
 actions!(
     cockpit,
@@ -3507,6 +3507,8 @@ impl CockpitView {
                 .registry()
                 .project(project)
                 .map(|project| project.root.clone()),
+            MenuTarget::File(thread) => self.files_pressed(thread),
+            MenuTarget::FilesMore(_) => None,
             MenuTarget::Group(_)
             | MenuTarget::Parked
             | MenuTarget::Review { .. }
@@ -10160,6 +10162,7 @@ impl CockpitView {
         if self.solo_beside.is_some() && self.solo_pair().is_none() {
             self.solo_beside = None;
         }
+        self.redirect_previews_to_files(cx);
         self.update_auto_rail(window);
         self.nav_drag_live.set(cx.has_active_drag());
         self.present_cli_updates(window, cx);
@@ -10667,6 +10670,8 @@ impl CockpitView {
             .on_action(cx.listener(Self::toggle_terminal))
             .on_action(cx.listener(Self::toggle_changes))
             .on_action(cx.listener(Self::toggle_files))
+            .on_action(cx.listener(Self::toggle_file_tree_action))
+            .on_action(cx.listener(Self::go_to_file_action))
             .on_action(
                 cx.listener(|view, _: &FocusThread2, window, cx| view.focus_rail(2, window, cx)),
             )

@@ -9,6 +9,7 @@ mod core_transcript_parity;
 mod decision_cards;
 mod decisions_parity;
 mod diagnostics;
+mod files;
 mod find;
 mod floats_parity;
 mod forks;

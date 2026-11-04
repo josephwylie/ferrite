@@ -991,10 +991,7 @@ fn edited_files_are_in_the_panel_and_one_click_away(cx: &mut TestAppContext) {
     cx.simulate_click(link.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.panes[0]
-            .preview
-            .document()
-            .map(|document| document.path)),
+        view.read_with(cx, |view, _| view.files_active_path(view.panes[0].thread().unwrap())),
         Some(document)
     );
     assert!(
@@ -1009,10 +1006,7 @@ fn edited_files_are_in_the_panel_and_one_click_away(cx: &mut TestAppContext) {
     cx.simulate_click(code.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.panes[0]
-            .preview
-            .document()
-            .map(|document| document.path)),
+        view.read_with(cx, |view, _| view.files_active_path(view.panes[0].thread().unwrap())),
         Some(source)
     );
 }

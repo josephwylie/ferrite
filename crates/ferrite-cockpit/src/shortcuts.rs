@@ -68,6 +68,11 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
     use Entry::{Hidden, Row};
     use Place::*;
     let wall = context == Some("Wall");
+    // The file editor edits as the Composer does: its keys are the same
+    // rows, not new ones.
+    if context == Some(ferrite_ui::keymap::FILE_EDITOR) || action == "files::OpenFirst" {
+        return Some(Hidden);
+    }
     Some(match action {
         // Threads.
         "cockpit::NewThread" => Row(Threads, "New thread"),
@@ -108,6 +113,8 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::ToggleTerminal" => Row(Board, "Terminal"),
         "cockpit::ToggleChanges" => Row(Board, "Changes"),
         "cockpit::ToggleFiles" => Row(Board, "Files"),
+        "cockpit::ToggleFileTree" => Row(Board, "Hide or show the file tree"),
+        "cockpit::GoToFile" => Row(Board, "Go to file"),
         "reader::Close" => Row(Board, "Close the preview or the review"),
         "cockpit::TextLarger" => Row(Board, "Text larger"),
         "cockpit::TextSmaller" => Row(Board, "Text smaller"),

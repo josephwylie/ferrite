@@ -140,10 +140,7 @@ fn a_written_file_gets_a_card_that_opens_it(cx: &mut TestAppContext) {
     );
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.panes[0]
-            .preview
-            .document()
-            .map(|document| document.path)),
+        view.read_with(cx, |view, _| view.files_active_path(view.panes[0].thread().unwrap())),
         Some(workspace.join("notes.md"))
     );
 }

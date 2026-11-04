@@ -33,6 +33,10 @@ pub(super) enum MenuTarget {
     Page(PaneIdentity),
     /// The title bar's `⋯`: the Thread's checkout, in Finder or as a path.
     Tools(ThreadId),
+    /// A Files tree row (the path is the Files state's `pressed`).
+    File(ThreadId),
+    /// The Files pane's `⋯`.
+    FilesMore(ThreadId),
 }
 
 /// One thing a context-menu row does.
@@ -85,6 +89,8 @@ pub(super) enum MenuVerb {
     MarkUnread,
     /// A new Thread holding the whole conversation, opened focused.
     Fork,
+    /// A Files verb (`tools::FilesVerb`).
+    Files(tools::FilesVerb),
     /// The Thread's id in the form the CLI takes (`thread_link`).
     CopyLink,
     /// Move the Thread into this Group (Claude's `Move to section ›`).
@@ -98,6 +104,8 @@ pub(super) enum Submenu {
     OpenIn,
     /// The other Groups the Thread can move to.
     MoveToGroup,
+    /// The Files menus' parent rows: `Copy ›` and `Tab size ›`.
+    Files(tools::FilesSub),
 }
 
 /// The context menu up on screen.
@@ -313,6 +321,8 @@ impl CockpitView {
                     ))
                 }));
             }
+            MenuTarget::File(_) => rows = self.files_row_rows(),
+            MenuTarget::FilesMore(thread) => rows = self.files_more_rows(thread),
             MenuTarget::Tools(_) => {
                 rows.push(Some((menu::Item::new("Reveal in Finder"), MenuVerb::Reveal)));
                 rows.push(Some((menu::Item::new("Copy path"), MenuVerb::CopyPath)));
@@ -450,7 +460,20 @@ impl CockpitView {
                 .map(|(group, title)| (menu::Item::new(title), MenuVerb::JoinGroup(group)))
                 .collect(),
             (Submenu::MoveToGroup, _) => Vec::new(),
+            (Submenu::Files(sub), MenuTarget::File(thread) | MenuTarget::FilesMore(thread)) => {
+                self.files_sub_rows(thread, sub)
+            }
+            (Submenu::Files(_), _) => Vec::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn context_submenu_rows_for_test(
+        &self,
+        target: MenuTarget,
+        kind: Submenu,
+    ) -> Vec<(menu::Item, MenuVerb)> {
+        self.submenu_rows(target, kind)
     }
 
     /// Open row `parent`'s submenu beside it (a second press on the parent
@@ -597,6 +620,9 @@ impl CockpitView {
                 }
             }
             (MenuTarget::Page(owner), verb) => self.run_page_verb(owner, verb, cx),
+            (MenuTarget::File(thread) | MenuTarget::FilesMore(thread), MenuVerb::Files(verb)) => {
+                self.run_files_verb(thread, verb, cx)
+            }
             (MenuTarget::Prompt { thread, block }, MenuVerb::Rewind | MenuVerb::RewindCode) => {
                 self.cut_at_prompt(
                     thread,
@@ -686,6 +712,8 @@ impl CockpitView {
                     | MenuTarget::Review { .. }
                     | MenuTarget::Prompt { .. }
                     | MenuTarget::Tools(_)
+                    | MenuTarget::File(_)
+                    | MenuTarget::FilesMore(_)
                     | MenuTarget::Page(_) => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);

@@ -139,6 +139,9 @@ icons![
     "globe",
     "minimize",
     // (end UI refresh)
+    "chevrons-down-up",
+    "list",
+    "code",
 ];
 
 pub const SIDEBAR: &str = "icons/sidebar.svg";
@@ -292,6 +295,12 @@ pub const MINIMIZE: &str = "icons/minimize.svg";
 // (end UI refresh)
 
 pub struct Assets;
+/// Files: collapse every folder.
+pub const COLLAPSE_ALL: &str = "icons/chevrons-down-up.svg";
+/// Files: the tree's door; Changes: its file list.
+pub const LIST: &str = "icons/list.svg";
+/// A source file in the Files tree (Claude's `<>`).
+pub const CODE: &str = "icons/code.svg";
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {

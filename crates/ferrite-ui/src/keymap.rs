@@ -309,6 +309,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         (with_primary("shift-d"), "cockpit::ToggleChanges", None),
         (with_primary("shift-f"), "cockpit::ToggleFiles", None),
         (with_primary("j"), "cockpit::ToggleTerminal", None),
+        (with_primary("shift-y"), "cockpit::ToggleFileTree", None),
+        (with_primary("p"), "cockpit::GoToFile", None),
         // The transcript's reading size, the browser's zoom keys: `=` (and
         // `+`, its shifted face) steps up, `-` down, `0` back to Standard.
         (with_primary("="), "cockpit::TextLarger", None),
@@ -587,6 +589,26 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // The side chat's line: ⏎ sends the question to its tab.
         ("enter".into(), "side_chat::Ask", Some("SideChat")),
     ];
+    // The file editor edits as the Composer does: every key of the
+    // Composer's own grammar, in its own context, then the keys only a
+    // file has (⏎ and ⇥ type, ⌘S saves).
+    let editing: Vec<Binding> = table
+        .iter()
+        .filter(|(_, action, context)| {
+            *context == Some("Composer") && action.starts_with("composer::")
+        })
+        .map(|(keystroke, action, _)| (keystroke.clone(), *action, Some(FILE_EDITOR)))
+        .collect();
+    table.extend(editing);
+    table.extend([
+        ("enter".into(), "editor::Enter", Some(FILE_EDITOR)),
+        ("tab".into(), "editor::Tab", Some(FILE_EDITOR)),
+        ("pageup".into(), "editor::PageUp", Some(FILE_EDITOR)),
+        ("pagedown".into(), "editor::PageDown", Some(FILE_EDITOR)),
+        (with_primary("s"), "editor::Save", Some(FILE_EDITOR)),
+        // The Files tree's filter: ⏎ opens the first match.
+        ("enter".into(), "files::OpenFirst", Some("FilesFilter")),
+    ]);
     if platform == Platform::Mac {
         table.extend([
             ("cmd-h".into(), MAC_ONLY[0], None),
@@ -613,6 +635,8 @@ const REVIEW: &str = "Review && !Composer";
 /// binds its own keys deeper; this context's esc beats the Cockpit's
 /// interrupt.
 pub const READER: &str = "Reader";
+/// The Files editor's key context (`cockpit/tools/editor.rs`).
+pub const FILE_EDITOR: &str = "FileEditor";
 /// The lightbox around the image viewer (`cockpit/lightbox.rs`).
 pub const LIGHTBOX: &str = "Lightbox";
 /// The image viewer's key context (`image_viewer::KEY_CONTEXT`).
@@ -838,6 +862,8 @@ mod tests {
             ("cockpit::ToggleChanges", "shift-d"),
             ("cockpit::ToggleFiles", "shift-f"),
             ("cockpit::ToggleTerminal", "j"),
+            ("cockpit::ToggleFileTree", "shift-y"),
+            ("cockpit::GoToFile", "p"),
             ("cockpit::TextLarger", "="),
             ("cockpit::TextSmaller", "-"),
             ("cockpit::TextReset", "0"),

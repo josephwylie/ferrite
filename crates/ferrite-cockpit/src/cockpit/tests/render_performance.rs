@@ -345,10 +345,7 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     cx.simulate_click(card.center(), gpui::Modifiers::none());
     assert_eq!(cx.opened_url(), None);
     assert_eq!(
-        view.read_with(cx, |view, _| view.panes[0]
-            .preview
-            .document()
-            .map(|document| document.path)),
+        view.read_with(cx, |view, _| view.files_active_path(view.panes[0].thread().unwrap())),
         Some(file.clone()),
         "the file card opens the Thread-workspace file in the preview"
     );
