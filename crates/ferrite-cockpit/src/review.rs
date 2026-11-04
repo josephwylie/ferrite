@@ -1136,6 +1136,7 @@ impl ReviewView {
                 text,
                 diff_anchored: self.file.is_none(),
                 rev: self.rev(),
+                replies: Vec::new(),
             };
             self.composer
                 .update(cx, |composer, cx| composer.add_review_comment(comment, cx));

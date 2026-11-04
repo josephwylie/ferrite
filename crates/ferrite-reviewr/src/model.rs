@@ -122,6 +122,23 @@ pub enum Side {
     Old,
 }
 
+/// Who wrote a reply in a comment's thread.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Author {
+    /// The operator, whose words are the request.
+    You,
+    /// Anyone else (a teammate, a review bot): their words are quoted data
+    /// the agent weighs, never instructions it follows.
+    Other(String),
+}
+
+/// One reply under a comment.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Reply {
+    pub author: Author,
+    pub text: String,
+}
+
 /// A reviewer comment anchored to a run of diff lines, carrying the snippet.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Comment {
@@ -136,6 +153,8 @@ pub struct Comment {
     pub diff_anchored: bool,
     /// Where the new side was read.
     pub rev: Rev,
+    /// The thread under it, oldest first.
+    pub replies: Vec<Reply>,
 }
 
 impl Comment {
@@ -210,6 +229,17 @@ impl CommentStore {
         }
     }
 
+    /// Add a reply to the comment at `index`. Returns `false` if out of range.
+    pub fn reply(&mut self, index: usize, reply: Reply) -> bool {
+        match self.items.get_mut(index) {
+            Some(comment) => {
+                comment.replies.push(reply);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Remove and return the comment at `index` (delete, or consume one on export).
     pub fn take(&mut self, index: usize) -> Option<Comment> {
         if index < self.items.len() {
@@ -241,7 +271,20 @@ mod tests {
             text: text.into(),
             diff_anchored: true,
             rev: Rev::Worktree,
+            replies: Vec::new(),
         }
+    }
+
+    #[test]
+    fn replies_join_their_comments_thread_in_order() {
+        use super::{Author, Reply};
+        let mut s = CommentStore::new();
+        let i = s.add(comment("a.rs", 1, 1, "why?"));
+        assert!(s.reply(i, Reply { author: Author::Other("bot".into()), text: "style".into() }));
+        assert!(s.reply(i, Reply { author: Author::You, text: "fix it".into() }));
+        assert!(!s.reply(9, Reply { author: Author::You, text: "x".into() }));
+        let texts: Vec<&str> = s.get(i).unwrap().replies.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(texts, ["style", "fix it"]);
     }
 
     #[test]

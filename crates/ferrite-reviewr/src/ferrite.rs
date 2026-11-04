@@ -710,6 +710,7 @@ mod tests {
             text: text.into(),
             diff_anchored: true,
             rev: Rev::Worktree,
+            replies: Vec::new(),
         }
     }
 

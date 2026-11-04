@@ -150,6 +150,7 @@ fn review(staged: Staged) -> (Scene, Setup) {
                                 .into(),
                             diff_anchored: true,
                             rev: Rev::Worktree,
+                            replies: Vec::new(),
                         },
                         cx,
                     )
