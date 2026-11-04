@@ -47,7 +47,7 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 9 | XCO9 | Drafts persist per thread | BUILT | Kept in memory only while the thread's Pane is open. Lost on park and on restart. **Audit 11-04:** 4123d281: drafts persist per thread | `core/cockpit.rs:681` |
 | 10 | AP9 | The turn clock keeps counting during an approval | BUILT | The working line is hidden while a decision stands. **Audit 11-04:** 626bd327: the working line stays over a waiting Decision (Solo) | `pane/working.rs:40`, `cockpit.rs:1834` |
 | 11 | NS5 | Chips under the composer: computer, folder, worktree, model+effort, permission, usage ring | BUILT | A draft (new session) has no permission chip and no usage ring (`mode: None, ring: None`). No "This computer". Worktree is a Workspace picker, not a checkbox. **Audit 11-04:** Permission word and usage ring on a draft (ledger item 22; ring not run) | `cockpit.rs:8066` `composer_toolbar`, `:7951` `draft_band_chips` (bfa6b2e6) |
-| 12 | XTR5 | Code blocks as cards: language header, wrap toggle, copy | PARTIAL | Copy on hover and an HTML preview. No language header, no wrap toggle. **Audit 11-04:** ef52f8ba: language header and Copy built; still no wrap toggle | `rich.rs:693-760` (05fc2232) |
+| 12 | XTR5 | Code blocks as cards: language header, wrap toggle, copy | DIFFERENT BY DESIGN | Copy on hover and an HTML preview. No language header, no wrap toggle. **Audit 11-04:** Claude's fence header is language plus Copy (built, ef52f8ba); the wrap toggle is Codex's | `rich.rs:693-760` (05fc2232) |
 | 13 | TR9 | A Read row click opens the file in the right panel | BUILT | A plain click on a tool row's path goes to the OS opener. Only prose file chips reach the panel. **Audit 11-04:** 05e9f63f: the Read row path opens its file in Files | `pane/text.rs:179` → `rich.rs:593` → `file_links.rs:85` `cx.open_url` |
 | 14 | SH6 | Unread dot (Codex blue) plus a badge; clears on view; Mark as unread | BUILT | The dot is white. No badge anywhere. **Audit 11-04:** 6b6072a5: blue unread dot; no count badge | `nav.rs:1545` (d880a138); `context_menu.rs:370` (0e42e74b) |
 | 15 | SH2 | Sidebar header: bell with a dot when a turn finishes; search | BUILT | The bell opens Activity, but it never gets a dot. Search is the ⌘K palette. **Audit 11-04:** 6b6072a5: the bell wears a dot; bell sections 8c514306, bca332a1 | `nav.rs:881,895`; `cockpit.rs:13379,13347` (1c1e5980, 3b33960c) |
@@ -120,7 +120,7 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 82 | CO9 | More models ▸ | PARTIAL | Holds the other provider's models (a handover), not more of the same provider's. | `cockpit.rs:12474` (d6275d4b) |
 | 83 | XSQ1 | Codex queue strip: ↪ Steer, delete, ⋯ (Edit, Open in side chat, Turn off queueing) | PARTIAL | Three buttons. No ⋯, no "Open in side chat", no "Turn off queueing". **Audit 11-04:** Still three buttons | `cockpit.rs:8090` |
 | 84 | XCO1 | Codex environment tray above the box ("Choose project · This computer") | PARTIAL | Project plus branch/workspace. No machine. | `pane/composer.rs:216` `env_strip` (3b33960c) |
-| 85 | XCO3 | Spinner in the composer while running; effort in dimmer ink on the chip | PARTIAL | Dim effort is built. No spinner. **Audit 11-04:** No spinner in the composer | `pane/composer.rs:22` |
+| 85 | XCO3 | Spinner in the composer while running; effort in dimmer ink on the chip | DIFFERENT BY DESIGN | Dim effort is built. No spinner. **Audit 11-04:** The turn's spinner is the working line's mark; Claude's footer has none (parity/running.png) | `pane/composer.rs:22` |
 | 86 | NS3 | Empty-state suggestion list that drops items once they no longer apply (import CLI sessions, turn on Auto, choose a folder) | MISSING | Only the `/import` slash row exists. | LEDGER "home suggestions … deferred" |
 | 87 | NS2 | Environment card ("Default", "Choose environment") | MISSING | No environment card. The env strip (Project, Workspace) stands in; machines are picked only in the nav. | — |
 | 88 | TR1 | Transcript header "Started on this computer · folder · Save as environment" | MISSING | "Save on Environment?" waits on the owner. | — |
@@ -178,7 +178,7 @@ ID prefixes: NS new session, CO/XCO composer (Claude/Codex), XD Codex deeper pas
 | CO22 | Usage ring popover: plan, bar, "See all →" | BUILT | `pane/usage.rs:87` (1c1e5980, b64267b1) | "See all →" left out by a recorded choice (LEDGER, CP7). Codex sends no plan name, so it has no header (see US1). |
 | XCO1 | Codex environment tray above the box ("Choose project · This computer") | PARTIAL | `pane/composer.rs:216` `env_strip` (3b33960c) | Project plus branch/workspace. No machine. |
 | XCO2 | Codex model popover: effort slider, model › link, reset, speed | DIFFERENT BY DESIGN | `cockpit.rs:12458` "Claude's `Effort Medium ›`" | Follows Claude's menu with an Effort submenu. |
-| XCO3 | Spinner in the composer while running; effort in dimmer ink on the chip | PARTIAL | `pane/composer.rs:22` | Dim effort is built. No spinner. **Audit 11-04:** No spinner in the composer |
+| XCO3 | Spinner in the composer while running; effort in dimmer ink on the chip | DIFFERENT BY DESIGN | `pane/composer.rs:22` | Dim effort is built. No spinner. **Audit 11-04:** The turn's spinner is the working line's mark; Claude's footer has none (parity/running.png) |
 | XCO4 | Codex model list: "Select model", Default row, ✓, side tooltip | DIFFERENT BY DESIGN | `cockpit.rs:12558` doc | Claude's shape. |
 | XCO5 | Codex + menu: full-width, sectioned, inline descriptions | DIFFERENT BY DESIGN | LEDGER Lane C "+ menu matches Claude" |  |
 | XCO6 | Codex + menu items: Attach frontmost app, Goal, Record a skill | MISSING | — | Plan mode is out of scope; Sketch is AT7. |
@@ -232,7 +232,7 @@ ID prefixes: NS new session, CO/XCO composer (Claude/Codex), XD Codex deeper pas
 | XTR2 | Plan inline as checkboxes, kept in the turn | BUILT | `pane/working.rs:520` (ed48e679) | Ticks live, then disappears at turn end. **Audit 11-04:** 39785ffd: the plan is kept with its turn |
 | XTR3 | "Thinking" as shimmer text | BUILT | `pane/working.rs:363` | KNOWN: motion. |
 | XTR4 | Streaming fades new tokens and rows in | BUILT | `rich.rs:550`, `transcript.rs:1772` (241f18e8, 2735a69f) | KNOWN: motion. |
-| XTR5 | Code blocks as cards: language header, wrap toggle, copy | PARTIAL | `rich.rs:693-760` (05fc2232) | Copy on hover and an HTML preview. No language header, no wrap toggle. **Audit 11-04:** ef52f8ba: language header and Copy built; still no wrap toggle |
+| XTR5 | Code blocks as cards: language header, wrap toggle, copy | DIFFERENT BY DESIGN | `rich.rs:693-760` (05fc2232) | Copy on hover and an HTML preview. No language header, no wrap toggle. **Audit 11-04:** Claude's fence header is language plus Copy (built, ef52f8ba); the wrap toggle is Codex's |
 | XTR6 | Diffs in red/green text | BUILT | `pane/output.rs:904` (f70a7d21) |  |
 | XTR8 | Inline code in the user bubble as chips | BUILT | `pane::code_spans` (ed5541cf) |  |
 | XTR9 | File output card with "Open in ⌄" | BUILT | `transcript/outputs.rs` (cdc328f3) | Finder and the default app only. |
@@ -410,21 +410,21 @@ Scope follows the owner's list (settings, voice and mic, plan mode, Remote Contr
 | 4 | HD58 | Wrap-up turn box: recap, ask, blocked, at most two validated next actions (commit, create_pr, merge, fix_ci, …) (§13, fx 36–39) | BUILT | No `ccd_turn` equivalent. The answer's last prose stands in. The 11-03 gaps audit chose not to build it, but no owner decision is recorded. **Audit 11-04:** 5427026f: Claude's captured box; reply-style steps | `transcript-architecture-gaps.md:137,368` |
 | 5 | HD27 | Workspace and PR side effects from `code_change_published` / `vcs_state_changed` (§20) | BUILT | Not decoded. Changes counts the agent's own edits, so background work or a pushed PR does not refresh it (see RP15's note). **Audit 11-04:** 63a5de61: PR re-read after commit, push, PR, handback | grep: no hits |
 | 6 | HD79 | A truncating resume or rewind is validated (`--resume-drops-turn`) (§19, fx 50) | BUILT | A rewind cuts at `--resume-session-at` without validation, so a message the turn absorbed mid-way can be dropped silently. This becomes more likely once Claude steering is on. **Audit 11-04:** 63a5de61: --resume-drops-turn | `claude.rs:306`; grep `resume-drops-turn`: no hits |
-| 7 | HD12 | `tool_progress` heartbeat and `subagent_retry` (§5) | PARTIAL | Elapsed time only. A subagent's API retries and attempt counts are invisible. | `claude/wire.rs:382-388` |
+| 7 | HD12 | `tool_progress` heartbeat and `subagent_retry` (§5) | PARTIAL | Elapsed time only. A subagent's API retries and attempt counts are invisible. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `claude/wire.rs:382-388` |
 | 8 | HD83 | Scroll position kept per session (§20) | BUILT | A `TranscriptView` starts at the tail. No saved offset keyed by thread was found. Not verified whether a Solo thread switch keeps the old view alive. **Audit 11-04:** 5e0d3d3e: pinned by a test | `ferrite-pane/src/transcript.rs:424`, `transcript/scroll.rs:29-31` |
 | 9 | HD71 | Human review comments reach the agent as typed data (§16, fx 41) | PARTIAL | Diff comments (file, side, line range, snippet) ride the next prompt. There are no threads or replies, no record of which turn got them, no rendered-element anchors, and no data-not-instructions boundary. A selection Reply quotes text (TXS). **Audit 11-04:** Lane G1 owns it | `ferrite-pane/src/composer.rs:460` → `ferrite-reviewr/src/ferrite.rs:530` `attach`, `export.rs:21` |
-| 10 | HD22 | `permission_denied` kept by call id, even before its row exists (§5, fx 7) | PARTIAL | The event is not decoded. The orphan-result buffer covers the usual result-before-row case. | `transcript.rs:821,2012-2021,2409` `settle_orphan` |
+| 10 | HD22 | `permission_denied` kept by call id, even before its row exists (§5, fx 7) | PARTIAL | The event is not decoded. The orphan-result buffer covers the usual result-before-row case. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `transcript.rs:821,2012-2021,2409` `settle_orphan` |
 | 11 | HD68 | `AskUserQuestion` option previews (§15) | BUILT | Parsed into `Question` options but drawn nowhere. Multi-select, free text and answers are BUILT (HD67). **Audit 11-04:** 5e0d3d3e: option previews | `ferrite-core/src/questions.rs:46,134`; no `preview` use in the decision UI |
 | 12 | HD57 | Custom turn plan (`update_plan`: scope, ≤12 items, advance/done/start, linked sessions) (§12, fx 33–35) | DONE | `mcp__ferrite__update_plan` on Ferrite's server with §12's contract and guidance, moved only by Main's confirmed receipts, settled by an unblocked wrap-up; Codex's native `update_plan` enabled with the same guidance. No linked sessions (Ferrite has none). **Audit 11-04:** 68ed21a6 | `update_plan.rs`, `contract_plans.rs` (real 2.1.318 and 0.166.0 captures) |
 | 13 | HD65 | App side sessions: proposal tools, linked plan rows, parent wakeups (§14) | BUILT | No such mechanism. The side chat is a fork (TXS, RP6, KNOWN). **Audit 11-04:** db13e437: the side chat is a right-docked tabbed pane | — |
-| 14 | HD70 | `ReportFindings` card grouped by file; a failed call stays a failure (§16, fx 40) | PARTIAL | A generic row; failure shows as `Failed`. No findings card. | `transcript/tools.rs:64` (falls to `Other`); `pane/text.rs:47,82` |
-| 15 | HD8 | Task hierarchy: `run_id` guard, `parent_task_id` tree, a child before its parent stays visible (§14, fx 19–20) | PARTIAL | `run_id` is BUILT. `parent_task_id` is never read. | `claude/activity.rs:53,270,1346` |
-| 16 | HD60 | A stopped or failed task keeps its reason (`worker_restart` is not "you stopped it") (§14) | MISSING | `reason` is not read. `killed` and `stopped` both map to Interrupted. | `claude/activity.rs:1503`; grep `worker_restart`: none |
-| 17 | HD14 | Capability record from `system/init` (tools list, deferred tools) (§21, fx 48) | PARTIAL | Initialize answers are kept (modes, models, commands) and `msg_lifecycle_v1` is detected, but `init`'s tool list is not recorded. | `claude.rs:202-217`; `claude/queue.rs:15-19` |
-| 18 | HD75 | The session records its CLI version and backend (§19.1) | PARTIAL | The version is checked against the pin at spawn, then thrown away. | `claude.rs:1217-1239` |
-| 19 | HD18 | Hook lifecycle events (§5, §19) | MISSING | Ignored, which is safe. No hook spinner. | grep `hook_started`: none |
-| 20 | HD55 | Failed `TaskCreate` behaviour pinned by a test (fx 31) | PARTIAL | Receipts only, so no row appears, which is the chosen behaviour. No test. | `claude/wire.rs:520`; no failing-create case in `tests/contract_plans.rs` |
-| 21 | HD44 | A fallback dedup key for frames with no uuid (§8) | MISSING | `id: None` is never deduped. Claude frames carry a uuid, so this is low impact. | `activity.rs:2569` `delivery_id` |
+| 14 | HD70 | `ReportFindings` card grouped by file; a failed call stays a failure (§16, fx 40) | PARTIAL | A generic row; failure shows as `Failed`. No findings card. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `transcript/tools.rs:64` (falls to `Other`); `pane/text.rs:47,82` |
+| 15 | HD8 | Task hierarchy: `run_id` guard, `parent_task_id` tree, a child before its parent stays visible (§14, fx 19–20) | PARTIAL | `run_id` is BUILT. `parent_task_id` is never read. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `claude/activity.rs:53,270,1346` |
+| 16 | HD60 | A stopped or failed task keeps its reason (`worker_restart` is not "you stopped it") (§14) | PARTIAL | `reason` is not read. `killed` and `stopped` both map to Interrupted. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `claude/activity.rs:1503`; grep `worker_restart`: none |
+| 17 | HD14 | Capability record from `system/init` (tools list, deferred tools) (§21, fx 48) | PARTIAL | Initialize answers are kept (modes, models, commands) and `msg_lifecycle_v1` is detected, but `init`'s tool list is not recorded. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `claude.rs:202-217`; `claude/queue.rs:15-19` |
+| 18 | HD75 | The session records its CLI version and backend (§19.1) | PARTIAL | The version is checked against the pin at spawn, then thrown away. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `claude.rs:1217-1239` |
+| 19 | HD18 | Hook lifecycle events (§5, §19) | PARTIAL | Ignored, which is safe. No hook spinner. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | grep `hook_started`: none |
+| 20 | HD55 | Failed `TaskCreate` behaviour pinned by a test (fx 31) | BUILT | Receipts only, so no row appears, which is the chosen behaviour. No test. **Audit 11-04:** Pinned by a_failed_task_create_adds_no_task (contract_plans.rs) | `claude/wire.rs:520`; no failing-create case in `tests/contract_plans.rs` |
+| 21 | HD44 | A fallback dedup key for frames with no uuid (§8) | PARTIAL | `id: None` is never deduped. Claude frames carry a uuid, so this is low impact. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `activity.rs:2569` `delivery_id` |
 
 ### Full table
 
@@ -439,21 +439,21 @@ ID prefix: HD, a handoff requirement. "fx N" is the matching §22 fixture.
 | HD5 | Result attribution (`user_message_uuid(s)`) (§4) | BUILT | `claude/queue.rs` (`user_message_uuids` on `status` and `result`) | Next build 11 **Audit 11-04:** 63a5de61: user_message_uuids |
 | HD6 | Tool call and result joined by id, including out-of-order parallel results (§4, fx 4) | BUILT | `transcript.rs` `settle_tool` by call; `tests/provider_progress.rs:522` | |
 | HD7 | `parent_tool_use_id` / `agent_id` attribution; child prose and todos never reach Main (§4, §19.14, fx 23) | BUILT | `claude/activity.rs` scope; `activity.rs` `Subject::Subagent` | |
-| HD8 | Task hierarchy and run identity (§14, fx 19–20) | PARTIAL | `claude/activity.rs:53,270,1346` | Ranked #15 |
+| HD8 | Task hierarchy and run identity (§14, fx 19–20) | PARTIAL | `claude/activity.rs:53,270,1346` | Ranked #15 **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded |
 | HD9 | Todo, runtime task and app session kept apart (§4) | BUILT | `progress.rs` `plan` vs `tasks`; `Subject::Subagent` | |
 | HD10 | An outer `user` frame is read by content: tool results and replays are never human bubbles (§5, §19.13, fx 5) | BUILT | `claude/activity.rs` main user frames skipped; results become `ToolCompleted` | |
 | HD11 | `result` is not process exit; a background turn ending is distinct (§5) | BUILT | `claude/activity.rs:332` | |
-| HD12 | `tool_progress` with heartbeat and retry (§5) | PARTIAL | `claude/wire.rs:382-388` | Ranked #7 |
+| HD12 | `tool_progress` with heartbeat and retry (§5) | PARTIAL | `claude/wire.rs:382-388` | Ranked #7 **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded |
 | HD13 | `tool_use_summary` attached by `preceding_tool_use_ids`; never hides a failure (§5, §9.3, fx 25) | BUILT | `claude/wire.rs:293`; `transcript.rs:2240-2256` `caption`; `pane/text.rs` `group_summary` (dc19326b, 241f18e8) | |
-| HD14 | Capability record from init (§21, fx 48) | PARTIAL | `claude.rs:202-217`; `claude/queue.rs:15-19` | Ranked #17 |
+| HD14 | Capability record from init (§21, fx 48) | PARTIAL | `claude.rs:202-217`; `claude/queue.rs:15-19` | Ranked #17 **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded |
 | HD15 | `system/status`, including compacting and its null end (§5) | BUILT | `claude/wire.rs:425-441` | |
 | HD16 | `api_retry` shown as retrying, not failed (§5) | BUILT | `claude/wire.rs:412-424` | |
 | HD17 | `compact_boundary` is not a new conversation (§5) | BUILT | `claude/wire.rs:442` | |
-| HD18 | Hook lifecycle events (§5) | MISSING | — | Ranked #19 |
+| HD18 | Hook lifecycle events (§5) | PARTIAL | — | Ranked #19 **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded |
 | HD19 | `informational` and local command output become notices (§5) | BUILT | `claude/activity.rs:237,252` | |
 | HD20 | `task_*` lifecycle; `task_updated` merged as a patch (§14, §19.16, fx 18) | BUILT | `claude/wire.rs:449-470`; `progress.rs:234-243`; agents `claude/activity.rs:1412-1415` (dc19326b) | |
 | HD21 | `background_tasks_changed` replaces the set, empty included (§14, fx 17) | BUILT | `claude/wire.rs:486`; `progress.rs` snapshot | |
-| HD22 | `permission_denied` kept by call id (§5, fx 7) | PARTIAL | `transcript.rs:821,2012-2021,2409` | Ranked #10 |
+| HD22 | `permission_denied` kept by call id (§5, fx 7) | PARTIAL | `transcript.rs:821,2012-2021,2409` | Ranked #10 **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded |
 | HD23 | `thinking_tokens` as an estimate, separate from billed usage (§5, §19) | BUILT | `claude/wire.rs:443` | See US3 |
 | HD24 | `commands_changed` updates the command menu live (§5) | BUILT | `claude/wire.rs:1430` | |
 | HD25 | `session_state_changed` (§5) | BUILT | `claude.rs:264` env flag; `claude/wire.rs` state → `RunState` | |
@@ -475,7 +475,7 @@ ID prefix: HD, a handoff requirement. "fx N" is the matching §22 fixture.
 | HD41 | Child history merges a frozen prefix with the live tail once (§8, fx 10) | BUILT | `engine/history.rs:60,279,314` `HistoryContent` | |
 | HD42 | A superseded process can't change its replacement's state (§8, §19.8, fx 9) | BUILT | `activity.rs:285,1078` `Observe { generation }`; `claude/activity.rs:162-190` (a new init resets) | |
 | HD43 | Window reconnect resynchronises from the server (§8) | BUILT | `protocol.rs:757-772` `WireInput` replay/live; `cockpit/mirror.rs` | |
-| HD44 | Fallback dedup key (§8) | MISSING | — | Ranked #21 |
+| HD44 | Fallback dedup key (§8) | PARTIAL | — | Ranked #21 **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded |
 | HD45 | One explicit tool-presentation policy table (§9.1, §21) | BUILT | `transcript/tools.rs:33-44,64` `policy` (dc19326b) | |
 | HD46 | `AskUserQuestion` and `ExitPlanMode` stand alone (§9.1) | BUILT | `transcript/tools.rs:70-71` | |
 | HD47 | Todo tools are state-only, drawn when they fail (§9.1, fx 6) | BUILT | `transcript/tools.rs:84`; `transcript.rs:208` | |
@@ -486,12 +486,12 @@ ID prefix: HD, a handoff requirement. "fx N" is the matching §22 fixture.
 | HD52 | A stream that ends without a result fails its turn, with no fabricated success (§10, §19.9, fx 12) | BUILT | `transcript.rs:146,2276-2297` (241f18e8) | The failure strip shows the error |
 | HD53 | A disconnected session can be reconnected (§10) | BUILT | `transcript.rs:1936` `Revived`; `engine.rs:995` | |
 | HD54 | Native todo projection: receipts only, child excluded, `TodoWrite` replaces, `TaskCreate` keyed by returned id, delete removes (§11, fx 28–30, 32) | BUILT | `claude/wire.rs:520-594`; `progress.rs` | TR12/XTR2: the card leaves with the turn |
-| HD55 | Failed `TaskCreate` pinned by a test (fx 31) | PARTIAL | `claude/wire.rs:520` | Ranked #20 |
+| HD55 | Failed `TaskCreate` pinned by a test (fx 31) | BUILT | `claude/wire.rs:520` | Ranked #20 **Audit 11-04:** Pinned by a_failed_task_create_adds_no_task (contract_plans.rs) |
 | HD56 | Todo tools opted in for newer models (§11, §19.24) | BUILT | `claude.rs:265` `CLAUDE_CODE_ENABLE_TODO_TOOLS` | |
 | HD57 | Custom turn-plan tool (§12) | DONE | — | Ranked #12 **Audit 11-04:** 68ed21a6 |
 | HD58 | Wrap-up and next-action turn box (§13) | BUILT | `wrap_up.rs`, `pane/wrap_up.rs` | Claude only; reply-style steps, no app action kinds **Audit 11-04:** 5427026f: Claude's captured box; reply-style steps |
 | HD59 | Task status unions kept apart (`killed`, `paused`, `stopped`) (§14, §19.17) | BUILT | `claude/activity.rs:1503-1504`; `claude/wire.rs:468` | |
-| HD60 | A task's stop or failure reason is kept (§14) | MISSING | — | Ranked #16 |
+| HD60 | A task's stop or failure reason is kept (§14) | PARTIAL | — | Ranked #16 **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded |
 | HD61 | `skip_transcript` and `ambient` apply apart from execution state; no endless spinner (§14, §19.18, fx 21) | BUILT | `claude/wire.rs:321,351` | |
 | HD62 | `forwardSubagentText` on, with no false promise of nested token streaming (§14, §19.29, fx 24) | BUILT | `claude.rs:282`; `claude/activity.rs:722,789` `TranscriptCoverage::Live` | |
 | HD63 | Agent progress summaries enabled on purpose and shown on the agent row (§14, §19.30) | BUILT | `claude.rs:425-430`; `claude/activity.rs:1394-1398`; `pane/agents.rs:24-63` (241f18e8) | |
@@ -501,12 +501,12 @@ ID prefix: HD, a handoff requirement. "fx N" is the matching §22 fixture.
 | HD67 | `AskUserQuestion`: 1–4 questions, multi-select, free text; answers sent as updated input; routed once (§15, fx 26) | BUILT | `ferrite-core/src/questions.rs:51-180`; `claude/wire.rs` question response | Forms UI: AP11 |
 | HD68 | Question option previews (§15) | BUILT | `questions.rs:46,134` | Ranked #11 **Audit 11-04:** 5e0d3d3e: option previews |
 | HD69 | Unsupported elicitation or dialog answered with decline/cancel, never a fabricated yes (§15) | BUILT | `claude/wire.rs:1053,1150-1160` | |
-| HD70 | `ReportFindings` card (§16) | PARTIAL | `transcript/tools.rs:64` | Ranked #14 |
+| HD70 | `ReportFindings` card (§16) | PARTIAL | `transcript/tools.rs:64` | Ranked #14 **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded |
 | HD71 | Human comments as typed data (§16) | PARTIAL | `composer.rs:460`; `ferrite-reviewr/src/ferrite.rs:530` | Ranked #9 **Audit 11-04:** Lane G1 owns it |
 | HD72 | Cowork tools: `present_files`, `import_files`, artifacts, writing drafts, widgets, `send_user_message` (§17) | OUT OF SCOPE | Handoff §2.2–2.4, §17 ("Many belong to Cowork … rather than the normal Code runtime") | Ferrite's file cards are XTR9/PG1 |
 | HD73 | A generic renderer for unknown or custom tools, with a visible error even for specialised ones (§17, §19.34, fx 6, 8) | BUILT | `pane/text.rs:47,82` `ToolKind::Other`; `transcript.rs:208,532` `Failed` | MCP tools fall back to pretty-printed JSON (AP11) |
 | HD74 | Shared-renderer folding: classifier, latest-two rows, display groups (§18) | OUT OF SCOPE | Handoff §2.5–2.6 ("not established as the rule for the current Code transcript") | Code's no-fold rule is HD48 |
-| HD75 | CLI version recorded per session (§19.1) | PARTIAL | `claude.rs:1217-1239` | Ranked #18 |
+| HD75 | CLI version recorded per session (§19.1) | PARTIAL | `claude.rs:1217-1239` | Ranked #18 **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded |
 | HD76 | Open input stream for a multi-turn session (§19.5) | BUILT | `claude.rs:273` `--input-format stream-json` | |
 | HD77 | Session persistence kept on for resume (§19.7) | BUILT | No `--no-session-persistence` in `spawn`; only the title one-shot uses it (`claude.rs:1301`) | |
 | HD78 | Precise resume or fork point for rewind and fork (§19) | BUILT | `claude.rs:306-310` `--resume-session-at`, `--fork-session`; `claude/rewind.rs` | |

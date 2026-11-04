@@ -18,6 +18,17 @@ fn proposed_tool_input_does_not_create_or_complete_a_native_plan() {
 }
 
 #[test]
+fn a_failed_task_create_adds_no_task() {
+    let r = Replay::new(
+        "claude",
+        vec![
+            json!({"type":"user","uuid":"failed","tool_use_result":{"success":false,"task":{"id":"9","subject":"Never made"}},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"create","is_error":true,"content":"could not create"}]}}),
+        ],
+    );
+    assert!(fold(r.drain()).view().main().transcript().progress().plan.is_empty());
+}
+
+#[test]
 fn native_task_get_status_is_not_mistaken_for_pending_creation() {
     let r = Replay::new(
         "claude",
