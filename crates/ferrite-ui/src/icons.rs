@@ -139,10 +139,10 @@ icons![
     "zoom-in",
     "globe",
     "minimize",
-    // (end UI refresh)
     "chevrons-down-up",
     "list",
     "code",
+    // (end UI refresh)
 ];
 
 pub const SIDEBAR: &str = "icons/sidebar.svg";
@@ -295,15 +295,15 @@ pub const ZOOM_IN: &str = "icons/zoom-in.svg";
 pub const GLOBE: &str = "icons/globe.svg";
 /// Turn an expanded preview back to its width (`MAXIMIZE`'s undo).
 pub const MINIMIZE: &str = "icons/minimize.svg";
-// (end UI refresh)
-
-pub struct Assets;
 /// Files: collapse every folder.
 pub const COLLAPSE_ALL: &str = "icons/chevrons-down-up.svg";
 /// Files: the tree's door; Changes: its file list.
 pub const LIST: &str = "icons/list.svg";
 /// A source file in the Files tree (Claude's `<>`).
 pub const CODE: &str = "icons/code.svg";
+// (end UI refresh)
+
+pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
@@ -549,7 +549,7 @@ mod tests {
     const TITLE_BAR_ICONS: [&str; 3] = [BACK, FORWARD, DIFF];
 
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
-    const REFRESH_ICONS: [&str; 33] = [
+    const REFRESH_ICONS: [&str; 36] = [
         PANEL_RIGHT,
         SEARCH,
         INBOX,
@@ -583,6 +583,9 @@ mod tests {
         ZOOM_IN,
         GLOBE,
         MINIMIZE,
+        COLLAPSE_ALL,
+        LIST,
+        CODE,
     ];
 
     fn attr(svg: &str, name: &str) -> String {

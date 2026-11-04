@@ -1391,6 +1391,7 @@ mod tests {
             &user_keys(&[
                 ("cockpit::ToggleNav", Some("cmd-a")),
                 ("composer::SelectAll", None),
+                ("terminal::SelectAll", None),
             ]),
         );
         assert!(refused.is_empty(), "{refused:?}");
