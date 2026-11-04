@@ -13,6 +13,8 @@ script is here to record.
   --answer always   ... or by allowing it and adopting the CLI's own
                     permission suggestion, so later calls should not ask
   --answer deny     ... or by denying it with a message
+  --answer deny-interrupt  ... or by denying it and saying `interrupt`, which
+                    is meant to end the turn rather than let the model retry
   --uuid            send the prompt under its own uuid, the way Ferrite does
   --steer TEXT      once Main's first tool call arrives, send TEXT as a
                     mid-turn (`isAsync`) message, the way Ferrite queues one
@@ -200,6 +202,8 @@ else:
                     "updatedPermissions": request.get("permission_suggestions", [])}
         elif opts["answer"] == "allow":
             body = {"behavior": "allow", "updatedInput": request.get("input", {})}
+        elif opts["answer"] == "deny-interrupt":
+            body = {"behavior": "deny", "message": DENY_MESSAGE, "interrupt": True}
         else:
             body = {"behavior": "deny", "message": DENY_MESSAGE}
         send({"type": "control_response", "response": {

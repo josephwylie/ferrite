@@ -133,6 +133,14 @@ for scenario in $WANTED; do
             --prompt 'Create a file named ferrite-perm.txt containing exactly the word ok, using the Write tool. Then say done.' \
             -- --safe-mode --permission-mode default --permission-prompt-tool stdio
         ;;
+    # A denial that says `interrupt` (the SDK's own field): does the CLI end
+    # the turn cleanly, or error, or hang? Ferrite's Claude deny sends it.
+    permission-deny-interrupt)
+        rm -f "$WORK/cwd/ferrite-perm.txt"
+        capture permission-deny-interrupt --answer deny-interrupt \
+            --prompt 'Create a file named ferrite-perm.txt containing exactly the word ok, using the Write tool. Then say done.' \
+            -- --safe-mode --permission-mode default --permission-prompt-tool stdio
+        ;;
     # (g) Resume across processes: a first Session plants a codeword and exits;
     # a second process continues the same conversation via `--resume`. Only the
     # resuming process's exchange is committed (mirroring the codex resume

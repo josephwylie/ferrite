@@ -2009,6 +2009,38 @@ mod tests {
         );
     }
 
+    /// Captured from `claude` 2.1.318 with a denial that says `interrupt`:
+    /// the CLI settles the call as an error result, stops, and closes the
+    /// turn `aborted_tools` (an interrupt, never a failure). The injected
+    /// "[Request interrupted by user for tool use]" line is dropped.
+    #[test]
+    fn a_denial_with_interrupt_ends_the_turn_as_an_interrupt() {
+        let events: Vec<SessionEvent> = include_str!(
+            "../../../tests/fixtures/claude-permission-deny-interrupt-2.1.318.jsonl"
+        )
+        .lines()
+        .filter_map(parse_line)
+        .collect();
+        let ends: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                SessionEvent::TurnEnded { outcome, .. } => Some(outcome),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            matches!(ends.as_slice(), [TurnOutcome::Interrupted]),
+            "{ends:?}"
+        );
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                SessionEvent::ToolCompleted { is_error: true, .. }
+            )),
+            "the denied call settles as an error result"
+        );
+    }
+
     /// A `Read` of a picture, as Claude Desktop's own log records it
     /// (2.1.317; the base64 shortened): the result is the picture, which
     /// Ferrite draws from the file the call names, never as text.
