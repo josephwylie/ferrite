@@ -2041,6 +2041,14 @@ impl CockpitView {
         }
     }
 
+    /// A send in Pane `index`: its prompt, once it arrives, scrolls to the
+    /// top of the transcript (`TranscriptView::scroll_to_new_prompt`).
+    fn scroll_transcript_to_new_prompt(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(transcript) = self.panes[index].transcript() {
+            transcript.update(cx, |transcript, cx| transcript.scroll_to_new_prompt(cx));
+        }
+    }
+
     fn scroll_transcript_to_bottom(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(transcript) = self.panes[index].transcript() {
             transcript.update(cx, |transcript, cx| transcript.scroll_to_bottom(cx));
@@ -5564,7 +5572,7 @@ impl CockpitView {
             }
         } else {
             self.cockpit.send(thread, text.clone());
-            self.scroll_transcript_to_bottom(self.focused(), cx);
+            self.scroll_transcript_to_new_prompt(self.focused(), cx);
         }
         self.facts.acted(&self.cockpit, thread);
         // A first prompt names an untitled Thread.
@@ -8268,8 +8276,8 @@ impl CockpitView {
     /// (`turn_running`) and the line is empty, `stop`, Esc's. The box's
     /// stands only once there is something to send or stop (Claude's: an
     /// empty box shows no send). The `compact` Composer's always stands and
-    /// always sends (queued behind a running turn): its placeholder says
-    /// `↵ to send, ⌘↵ to queue for later`.
+    /// always sends (into a running turn): its placeholder says
+    /// `↵ to steer this turn`.
     fn send_button(
         &self,
         index: usize,

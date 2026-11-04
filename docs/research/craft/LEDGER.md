@@ -163,5 +163,9 @@ Each item is ticked only after it's seen working in the real installed app.
     - Rewind gives the prompt's words back to the Composer.
 12. **Claude steering is surfaced:** "Steering", and Send now folds the message in instead of interrupting. A real fold with tools is captured first. BUILT, not ticked (`claude-steer-2.1.318`): a prompt queued while a turn runs is `Folding`, which the strip shows as `Steering` while keeping edit and remove. Send now hands it over again without interrupting, and a folded prompt keeps the turn's clock.
 13. **Question option previews** (HD68), and **scroll position per thread** (HD83). Previews BUILT, not ticked (`decision_cards.rs`): the option in hand (the cursor's, else the last picked) shows its preview as plain text in the command well, in the transcript and the overlay; no HTML previews. Scroll per thread: already true in a session, so only a test was added (`interaction_regressions.rs`); it is not saved across a restart.
-14. **Review comment threads** (HD71).
-15. **The rest of `STOCKTAKE-STATUS.md`:** MISSING and PARTIAL rows, most noticed first.
+14. **Review comment threads** (HD71). NOT BUILT: not reached.
+15. **The rest of `STOCKTAKE-STATUS.md`:** MISSING and PARTIAL rows, most noticed first. Done, BUILT not ticked:
+    - the transcript scrollbar (TR18): the thin overlay bar, hover mode, over the list (`interaction_regressions.rs`; only that it is mounted is tested, not its painting or a drag);
+    - a send scrolls its prompt to the top with the room below (XD5), now reached by a real send (`scroll_to_new_prompt`; tested), a first prompt on a new thread still scrolls to the foot;
+    - the running placeholder says `↵ to steer this turn`: both keys bind `Submit`, so ⌘↵ was not made to queue and the false hint is gone (the ⌘↵ binding and its comment in `keymap.rs` are left for the other lane).
+    Not done: drafts that persist, the permission chip and usage ring on a new thread, code block language headers (the fence's overlay has no header strip; it is the vendor text view's layout), Read rows opening in the panel (the row's whole-width press overlay covers its path, so a click toggles the row; ⌘-click still opens it), the unread/bell/Needs-approval indicators, the thread loading state, View live output for foreground commands.

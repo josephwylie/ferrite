@@ -1198,6 +1198,15 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
             .unwrap();
         tick(cx);
     }
+    // A send scrolls its prompt to the top, so the first answer is above the
+    // view and its bounds are as last drawn: bring both turns into view.
+    view.update(cx, |view, cx| {
+        let transcript = view.panes[0].transcript().unwrap();
+        transcript.update(cx, |transcript, cx| {
+            transcript.page(ferrite_pane::transcript::Page::Top, cx)
+        });
+    });
+    tick(cx);
     let (namespace, prompts, answers) = view.read_with(cx, |view, _| {
         let pane = &view.panes[0];
         let thread = view.cockpit.thread(pane.thread().unwrap()).unwrap();

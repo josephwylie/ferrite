@@ -401,6 +401,9 @@ pub struct TranscriptView {
     /// of a transcript shorter than that (a board Pane with its first prompt
     /// scrolled away, R2): see `Runway`.
     runway: Rc<Cell<Runway>>,
+    /// A send was made: the prompt it adds is scrolled to the top, with the
+    /// room below it for the answer (`scroll_to_new_prompt`).
+    jump_to_new_prompt: bool,
     /// The agents' visuals in these rows: their live pages (ADR 0013).
     visuals: crate::visual::Shelf,
     /// The list's width as of the last layout (rows can't ask the list
@@ -534,6 +537,7 @@ impl TranscriptView {
             disclosure_bounds: Default::default(),
             targets,
             runway: Rc::default(),
+            jump_to_new_prompt: false,
             visuals,
             list_w: Rc::default(),
             texts: Vec::new(),
@@ -647,6 +651,23 @@ impl TranscriptView {
                 self.rows
                     .reconcile(&self.input.blocks, &self.input.shape(), self.grid().size);
             self.scroll.reconcile(&delta);
+            if std::mem::take(&mut self.jump_to_new_prompt) {
+                let prompts = self
+                    .rows
+                    .rows()
+                    .iter()
+                    .filter(|row| row.kind() == RowKind::Prompt)
+                    .count();
+                if let Some(newest) = prompts.checked_sub(1) {
+                    self.scroll_to(
+                        ScrollTarget::TurnBand {
+                            turn: newest,
+                            offset: 0.0,
+                        },
+                        cx,
+                    );
+                }
+            }
             // The newest row grew in place while the turn runs: its new
             // words fade in by the run.
             if self.input.working.is_some()
@@ -897,6 +918,14 @@ impl TranscriptView {
                         if pane::reasoning_text(thought).0 == caption)
                 })
         })
+    }
+
+    /// The next prompt to arrive scrolls to the top of the view, leaving
+    /// the room below it for its answer (Claude's, on a send). The next
+    /// content change settles it: a send adds its prompt at once.
+    pub fn scroll_to_new_prompt(&mut self, cx: &mut Context<Self>) {
+        self.jump_to_new_prompt = true;
+        cx.notify();
     }
 
     pub fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
@@ -2706,6 +2735,16 @@ impl Render for TranscriptView {
             .text_size(px(grid.size))
             .line_height(px(grid.line))
             .child(list)
+            // The thin overlay bar (Claude's): it shows under the pointer
+            // and while the list moves, and drags the list.
+            .child(
+                ferrite_ui::components::scrollbar_layer()
+                    .debug_selector(|| "transcript-scrollbar".into())
+                    .child(ferrite_ui::components::scrollbar_bar(
+                        SharedString::from(format!("transcript-scrollbar-{}", self.input.namespace)),
+                        self.scroll.list_state(),
+                    )),
+            )
             // What scrolls under the top fades out into the card, under the
             // pinned prompt when there is one.
             .children(

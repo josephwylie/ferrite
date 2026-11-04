@@ -6723,7 +6723,7 @@ mod tests {
         }));
         assert_eq!(
             placeholder(false, false, Some(&running), None).text(),
-            "\u{21b5} to send, \u{2318}\u{21b5} to queue for later"
+            "\u{21b5} to steer this turn"
         );
 
         let mut closed = Transcript::default();

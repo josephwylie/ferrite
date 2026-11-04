@@ -177,3 +177,76 @@ fn a_thread_keeps_its_scroll_position_while_another_shows(cx: &mut TestAppContex
     assert!(!back.is_following_tail(), "it did not jump to the tail");
     assert_eq!(back.offset().y, left_at, "the same lines are in view");
 }
+
+/// A send scrolls the new prompt to the top of the view (Claude's), with
+/// the room below it for the answer, rather than down to the foot.
+#[gpui::test]
+fn a_send_scrolls_its_prompt_to_the_top(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("send-scrolls-prompt-up", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "first".into());
+    cx.update(|cx| {
+        cx.bind_keys([KeyBinding::new("enter", Submit, None)]);
+    });
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: (0..80).map(|n| format!("Answer line {n}\n\n")).collect(),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    cx.simulate_input("second");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    tick(cx);
+    let scroll = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .transcript()
+            .unwrap()
+            .read(cx)
+            .scroll()
+            .clone()
+    });
+    let prompt = cx.debug_bounds("transcript-prompt").expect("the new prompt");
+    assert!(
+        prompt.top() < scroll.bounds().top() + scroll.bounds().size.height / 3.,
+        "the prompt stands at the top of the view: {prompt:?} in {:?}",
+        scroll.bounds()
+    );
+}
+
+/// A transcript longer than its view carries the thin overlay scrollbar,
+/// over the list and not beside it (it takes no room from the rows).
+#[gpui::test]
+fn a_long_transcript_has_a_scrollbar_over_its_list(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("transcript-scrollbar", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "first".into());
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: (0..80).map(|n| format!("Answer line {n}\n\n")).collect(),
+        })
+        .unwrap();
+    tick(cx);
+    let scroll = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .transcript()
+            .unwrap()
+            .read(cx)
+            .scroll()
+            .clone()
+    });
+    let bar = cx
+        .debug_bounds("transcript-scrollbar")
+        .expect("the scrollbar layer");
+    assert_eq!(bar, scroll.bounds(), "it covers the list, taking no room");
+}

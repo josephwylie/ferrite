@@ -881,11 +881,13 @@ const ACCEPT_HINT: &str = "\u{21e5} accept";
 
 /// The resting line's words, and a running turn's.
 const IDLE_PLACEHOLDER: &str = "Type / for commands";
-const RUNNING_PLACEHOLDER: &str = "\u{21b5} to send, \u{2318}\u{21b5} to queue for later";
+/// Both Enter and ⌘Enter bind `Submit`, which while a turn runs joins that
+/// turn (Claude folds it in at the next tool round, Codex steers it), so
+/// the hint names the one thing a key does.
+const RUNNING_PLACEHOLDER: &str = "\u{21b5} to steer this turn";
 
 /// The placeholder for this line, Claude's three: the first prompt, a
-/// draft's or an empty Thread's; while a turn runs, Claude's words: ↵
-/// still sends (into the running turn) and ⌘↵ queues it for after; else
+/// draft's or an empty Thread's; while a turn runs, that ↵ steers it; else
 /// the way to the commands.
 /// A landed prediction shows verbatim instead. A Decision or a dead
 /// Session changes nothing here: the line still takes typing, and sending

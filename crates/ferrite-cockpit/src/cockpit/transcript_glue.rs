@@ -354,7 +354,7 @@ impl CockpitView {
             self.cockpit.queue(thread, prompt);
         } else {
             self.cockpit.send(thread, prompt);
-            self.scroll_transcript_to_bottom(index, cx);
+            self.scroll_transcript_to_new_prompt(index, cx);
         }
         self.facts.acted(&self.cockpit, thread);
         cx.notify();
