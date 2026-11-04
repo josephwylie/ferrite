@@ -946,6 +946,9 @@ pub struct Transcript {
     cli_version: Option<String>,
     /// The tools the CLI had loaded at its handshake (HD14).
     cli_tools: Vec<String>,
+    /// How each user hook the CLI ran ended, by id (`None` while it runs):
+    /// the name and the outcome (HD18).
+    hooks: std::collections::BTreeMap<String, (String, Option<String>)>,
     /// When the running turn began — the operator's prompt went out — for
     /// the working line's clock. None between turns.
     turn_started: Option<std::time::Instant>,
@@ -1277,6 +1280,7 @@ impl Transcript {
             plan: None,
             cli_version: None,
             cli_tools: Vec::new(),
+            hooks: Default::default(),
             turn_started: None,
             turn_output_tokens: 0,
             last_report: 0,
@@ -1492,6 +1496,14 @@ impl Transcript {
     /// The account's plan (`Max`), when the provider named it.
     pub fn plan(&self) -> Option<&str> {
         self.plan.as_deref()
+    }
+
+    /// The user hooks the CLI ran, by id: name, and outcome once it ended
+    /// (HD18).
+    pub fn hooks(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
+        self.hooks
+            .values()
+            .map(|(name, outcome)| (name.as_str(), outcome.as_deref()))
     }
 
     /// The tools the CLI had loaded, when the live Session announced them
@@ -2122,6 +2134,10 @@ impl Transcript {
             }
             Input::Event(SessionEvent::AccountPlan { name }) => {
                 self.plan = Some(name);
+                Update::default()
+            }
+            Input::Event(SessionEvent::HookRan { id, name, outcome }) => {
+                self.hooks.insert(id, (name, outcome));
                 Update::default()
             }
             Input::Event(SessionEvent::Handshake { version, tools }) => {

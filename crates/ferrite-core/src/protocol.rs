@@ -1550,6 +1550,11 @@ pub enum Live {
         version: String,
         tools: Vec<String>,
     },
+    HookRan {
+        id: String,
+        name: String,
+        outcome: Option<String>,
+    },
     /// Tool clocks a replay restores, in milliseconds by call id.
     RestoreTimings {
         subject: WireSubject,
@@ -1977,6 +1982,11 @@ fn main_outgoing(input: &Input, duration: Option<Duration>) -> Outgoing {
             version: version.clone(),
             tools: tools.clone(),
         },
+        Input::Event(SessionEvent::HookRan { id, name, outcome }) => Live::HookRan {
+            id: id.clone(),
+            name: name.clone(),
+            outcome: outcome.clone(),
+        },
         // Queue acknowledgements and scheduled work are the Thread's state,
         // not its Activity's; the highlighter is each side's own; `Answered`
         // is Activity's.
@@ -2139,6 +2149,11 @@ pub fn incoming(
                 Live::Handshake { version, tools } => main(SessionEvent::Handshake {
                     version: version.clone(),
                     tools: tools.clone(),
+                }),
+                Live::HookRan { id, name, outcome } => main(SessionEvent::HookRan {
+                    id: id.clone(),
+                    name: name.clone(),
+                    outcome: outcome.clone(),
                 }),
                 Live::RestoreTimings { subject, timings } => ActivityInput::RestoreTimings {
                     subject: subject.try_into().ok()?,

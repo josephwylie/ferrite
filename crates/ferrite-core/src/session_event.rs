@@ -164,6 +164,15 @@ pub enum SessionEvent {
         version: String,
         tools: Vec<String>,
     },
+    /// A user hook's lifecycle (Claude's `system/hook_started` and
+    /// `hook_response`, HD18): `outcome` is `None` while it runs, then the
+    /// CLI's word for how it ended (`success`). Kept by id; no row is drawn
+    /// for it. Live only, never persisted.
+    HookRan {
+        id: String,
+        name: String,
+        outcome: Option<String>,
+    },
     /// The provider's running estimate of the tokens the model has thought
     /// in the message it is writing (Claude's `system/thinking_tokens`): it
     /// grows while the model thinks and starts again with the next message.

@@ -2617,6 +2617,7 @@ fn reports(input: &Input) -> bool {
                 | SessionEvent::ThinkingTokens { .. }
                 | SessionEvent::AccountPlan { .. }
                 | SessionEvent::Handshake { .. }
+                | SessionEvent::HookRan { .. }
         )
     )
 }

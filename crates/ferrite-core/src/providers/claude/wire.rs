@@ -1450,6 +1450,14 @@ fn parse_system(value: &Value) -> Option<SessionEvent> {
             session_id: value.get("session_id")?.as_str()?.to_string(),
             model: value.get("model")?.as_str()?.to_string(),
         }),
+        "hook_started" | "hook_response" => Some(SessionEvent::HookRan {
+            id: value.get("hook_id")?.as_str()?.to_string(),
+            name: value.get("hook_name")?.as_str()?.to_string(),
+            outcome: value
+                .get("outcome")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        }),
         "permission_denied" => Some(SessionEvent::ToolDenied {
             id: value.get("tool_use_id")?.as_str()?.to_string(),
         }),
@@ -1799,6 +1807,7 @@ mod tests {
             SessionEvent::AccountPlan { .. } => return None,
             // Read from `init` by the Activity decoder; proved on a capture there.
             SessionEvent::Handshake { .. } => return None,
+            SessionEvent::HookRan { .. } => "HookRan",
             // A stateful stream read by the activity decoder (`drafts`),
             // proved by the show-visual capture in tests/claude_session.rs.
             SessionEvent::ToolDraft { .. } => return None,
@@ -1870,14 +1879,16 @@ mod tests {
                         | SessionEvent::TextDelta { .. }
                         | SessionEvent::ThinkingDelta { .. }
                         | SessionEvent::TurnEnded { .. }
+                        | SessionEvent::HookRan { .. }
                 )
             })
             .count();
         assert_eq!(modelled, events.len());
-        // 32 lines in: the init, 7 thinking deltas, 1 text delta and the
-        // result line are events; the other 22 lines are ignored.
+        // 32 lines in: the init, 2 hook lines, 7 thinking deltas, 1 text
+        // delta and the result line are events; the other 20 lines are
+        // ignored.
         assert_eq!(FIXTURE.lines().count(), 32);
-        assert_eq!(events.len(), 10);
+        assert_eq!(events.len(), 12);
     }
 
     /// The whole point of the fixture harness: nothing in the typed surface is
@@ -1896,6 +1907,7 @@ mod tests {
             produced,
             [
                 "DecisionRequested",
+                "HookRan",
                 "Init",
                 "TextDelta",
                 "ThinkingDelta",
@@ -1906,7 +1918,7 @@ mod tests {
         );
     }
 
-    /// Most of the stream is not Ferrite's business — hook chatter, token
+    /// Most of the stream is not Ferrite's business — token
     /// counters, message envelopes, rate limits. Recording how much of each
     /// capture is ignored is what proves an unknown line costs nothing.
     #[test]
@@ -1925,7 +1937,7 @@ mod tests {
             counted,
             [
                 // 1 init, 7 thinking deltas, 1 text delta, 1 result.
-                ("hello", 32, 10),
+                ("hello", 32, 12),
                 // ... and 1 tool start with its completion.
                 ("tool", 51, 14),
                 // ... and the Decision that gated the tool.
@@ -2067,6 +2079,25 @@ mod tests {
             _ => None,
         });
         assert!(started.is_some() && started == denied, "{started:?} / {denied:?}");
+    }
+
+    /// Captured from `claude` 2.1.243 (the hello fixture, taken with hooks
+    /// on): a hook's `hook_started`, then its `hook_response` with the
+    /// outcome, one id.
+    #[test]
+    fn a_hook_is_started_then_answered() {
+        let hooks: Vec<_> = include_str!("../../../tests/fixtures/claude-hello-2.1.243.jsonl")
+            .lines()
+            .filter_map(parse_line)
+            .filter_map(|event| match event {
+                SessionEvent::HookRan { id, name, outcome } => Some((id, name, outcome)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hooks.len(), 2);
+        assert_eq!(hooks[0].0, hooks[1].0);
+        assert_eq!(hooks[0].1, "SessionStart:startup");
+        assert_eq!((hooks[0].2.as_deref(), hooks[1].2.as_deref()), (None, Some("success")));
     }
 
     /// A `Read` of a picture, as Claude Desktop's own log records it

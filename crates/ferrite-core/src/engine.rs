@@ -5727,6 +5727,7 @@ pub(crate) fn event_changes_content(event: &SessionEvent) -> bool {
         | SessionEvent::ThinkingTokens { .. }
         | SessionEvent::AccountPlan { .. }
         | SessionEvent::Handshake { .. }
+        | SessionEvent::HookRan { .. }
         | SessionEvent::ScheduledWork { .. } => false,
         _ => true,
     }
