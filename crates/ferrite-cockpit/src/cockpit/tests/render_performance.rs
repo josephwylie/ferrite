@@ -2838,3 +2838,56 @@ fn a_minimap_click_lands_in_one_frame(cx: &mut TestAppContext) {
     assert_eq!(offset(cx), landed, "the first frame was the last: no glide");
     assert_eq!(display_frames(cx), 0, "and nothing eases on");
 }
+
+/// A Read row's path is a link painted over the row's press overlay: a click
+/// on it opens the file in Files and leaves the row folded, while a click on
+/// the verb unfolds the row as before.
+#[gpui::test]
+fn a_read_rows_path_opens_in_files_and_its_verb_unfolds_the_row(cx: &mut TestAppContext) {
+    let (core, fake, workspace) = bound_cockpit("read-row-path", Provider::Claude);
+    let file = workspace.join("notes.md");
+    std::fs::write(&file, "notes\n").unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolStarted {
+            id: "read-notes".into(),
+            name: "Read".into(),
+            input: serde_json::json!({"file_path": file.display().to_string()}),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolCompleted {
+            id: "read-notes".into(),
+            output: "notes".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        })
+        .unwrap();
+    tick(cx);
+    let row = cx.debug_bounds("tool-row-read-notes").expect("the Read row");
+    let path = cx.debug_bounds("tool-call").expect("its path");
+    assert!(path.left() > row.left() + px(8.), "the verb stands before the path");
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+
+    // The verb: the row's press, the path's link not reached.
+    cx.simulate_click(
+        gpui::point(row.left() + px(4.), row.center().y),
+        gpui::Modifiers::none(),
+    );
+    tick(cx);
+    assert_eq!(view.read_with(cx, |view, _| view.files_active_path(thread)), None);
+
+    cx.simulate_click(
+        gpui::point(path.left() + px(6.), path.center().y),
+        gpui::Modifiers::none(),
+    );
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.files_active_path(thread)),
+        Some(file),
+        "the path opened in Files"
+    );
+}

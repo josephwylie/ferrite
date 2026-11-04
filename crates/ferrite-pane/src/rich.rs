@@ -518,6 +518,7 @@ impl gpui::RenderOnce for Markdown {
         let chips = self.chips.clone();
         let skills = self.skills.clone();
         let link_cwd = cwd.clone();
+        let link_scope = scope.clone();
         let hang = theme::tx_cell(f32::from(base));
         // A ```mermaid fence draws as its diagram (`visual::diagram`); the
         // fence's Markdown (the source, moved in) says whether it has closed.
@@ -605,9 +606,19 @@ impl gpui::RenderOnce for Markdown {
                     }
                     return;
                 }
+                let from_call = url.starts_with(PATH_SCHEME);
                 let url = url.strip_prefix(PATH_SCHEME).unwrap_or(url);
                 if let Some(file) = crate::file_links::FileLink::resolve(url, link_cwd.as_deref()) {
-                    file.open(window, cx);
+                    // A call's path opens where a prose path's ⌘-click does:
+                    // the Thread's preview, in Files.
+                    if let (true, Some(scope)) = (from_call, link_scope.clone()) {
+                        let target = crate::file_links::PathTarget::new(file.path.clone())
+                            .at_line(file.location.as_deref().and_then(crate::file_links::location_line))
+                            .in_scope(scope);
+                        crate::file_links::open_target(&target, window, cx);
+                    } else {
+                        file.open(window, cx);
+                    }
                 } else {
                     cx.open_url(url);
                 }

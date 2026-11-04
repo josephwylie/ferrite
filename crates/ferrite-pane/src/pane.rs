@@ -4165,10 +4165,16 @@ pub(crate) fn render_tool(
     // box makes room for it. A failed call's tag follows the cut, its lead
     // word in the failure ink (rule 6: colour on the word). Runs register
     // as they are built: the call line first, then its tag.
-    let call = selection
-        .markdown(block, text::call_markdown(tool))
-        .ink(INK_SUBTLE)
-        .activity();
+    let run = |markdown: String| selection.markdown(block, markdown).ink(INK_SUBTLE).activity();
+    // One run on one line, or — for a call on a file — its path alone, after
+    // the verb, which is chrome.
+    let (verb, call, trail) = match text::call_pieces(tool) {
+        text::CallPieces::Whole(call) => (None, run(call), None),
+        text::CallPieces::File { verb, path, trail } => {
+            let path = run(path);
+            (Some(verb), path, (!trail.is_empty()).then(|| run(trail)))
+        }
+    };
     let verdict = text::call_verdict(tool).map(|verdict| {
         let mut highlights = separators(&verdict);
         highlights.insert(
@@ -4188,29 +4194,41 @@ pub(crate) fn render_tool(
             .ml(px(theme::SPACE_2))
             .child(selection.line(block, verdict, highlights))
     });
-    let words = div()
-        .child(
-            div()
-                .debug_selector(|| "tool-call".into())
-                .flex_shrink(1.)
-                .min_w_0()
-                .child(edge_cut(
-                    grid.line,
-                    INK_SUBTLE,
-                    div().pr(px(small.cell())).child(call),
-                )),
-        )
-        .children(verdict)
-        .children(chevron);
+    let call = div()
+        .debug_selector(|| "tool-call".into())
+        .flex_shrink(1.)
+        .min_w_0()
+        .child(edge_cut(
+            grid.line,
+            INK_SUBTLE,
+            div().pr(px(small.cell())).child(call),
+        ));
+    let trail = trail.map(|trail| div().flex_shrink_0().child(trail));
     let row_selector = format!("tool-row-{}", tool.call);
-    // The live link comes after the row's press overlay, so it is pressed
-    // itself rather than unfolding the row.
-    let line = activity_line(grid, None, words)
-        .id(SharedString::from(row_selector.clone()))
-        .debug_selector(move || row_selector.clone())
-        .group(DISCLOSURE_ROW)
-        .children(overlay)
-        .children(live);
+    // What stands after the row's press overlay is pressed itself rather
+    // than unfolding the row: the live link, and a call's file path.
+    let line = match verb {
+        None => {
+            let words = div().child(call).children(verdict).children(chevron);
+            activity_line(grid, None, words).children(overlay)
+        }
+        Some(verb) => {
+            let words = div().flex_shrink_0().whitespace_nowrap().child(verb);
+            let rest = div()
+                .flex()
+                .items_center()
+                .min_w_0()
+                .child(call)
+                .children(trail)
+                .children(verdict)
+                .children(chevron);
+            activity_line(grid, None, words).children(overlay).child(rest)
+        }
+    }
+    .id(SharedString::from(row_selector.clone()))
+    .debug_selector(move || row_selector.clone())
+    .group(DISCLOSURE_ROW)
+    .children(live);
     let mut card = div()
         .flex()
         .flex_col()
@@ -5492,9 +5510,10 @@ mod tests {
             shut.contains("Ran 2 commands, reading 1 file (1 failed)"),
             "{shut}"
         );
-        // Shut, it draws its working call alone.
+        // Shut, it draws its working call alone: a call on a file copies as
+        // its path, its verb being chrome.
         assert!(
-            shut.contains("Reading [notes\\.md](<ferrite-path:notes.md>)"),
+            shut.contains("[notes\\.md](<ferrite-path:notes.md>)"),
             "{shut}"
         );
         assert!(!shut.contains("python3 match.py"), "{shut}");
@@ -5512,7 +5531,7 @@ mod tests {
             "python3 match.py",
             "grep -n adelaide",
             "Failed",
-            "Reading [notes\\.md](<ferrite-path:notes.md>)",
+            "[notes\\.md](<ferrite-path:notes.md>)",
         ] {
             assert!(open.contains(text), "{text}: {open}");
         }

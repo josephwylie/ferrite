@@ -551,9 +551,10 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
             .unwrap()
             .left()
         };
-        assert_eq!(
-            x(id("toolu_9")),
-            x(id("toolu_10")),
+        // A call on a file draws its verb as chrome and its path as the run,
+        // so its text starts after the verb, never before a command's.
+        assert!(
+            x(id("toolu_10")) >= x(id("toolu_9")),
             "a disclosure must occupy the existing gutter, not shift call text"
         );
     });

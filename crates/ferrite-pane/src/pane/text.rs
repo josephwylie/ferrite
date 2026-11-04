@@ -190,13 +190,45 @@ pub(crate) fn path_link(shown: &str, path: &str) -> String {
 }
 
 /// A call's line as its one Markdown run (`CallLine::markdown`), less a
-/// failed call's verdict (`call_verdict`), which stands apart from it.
+/// failed call's verdict (`call_verdict`), which stands apart from it. A
+/// call on a file is drawn in pieces instead (`call_pieces`).
 pub(crate) fn call_markdown(tool: &ToolBlock) -> String {
     let mut line = call_line(tool);
     if call_failed(tool) {
         line.result = None;
     }
     line.markdown(argument_is_path(tool))
+}
+
+/// A call's line as the row draws it. A call on a file (`Read src/x.rs`)
+/// has its path in a run of its own, a link painted over the row's press
+/// overlay so that a click opens the file instead of folding the row; the
+/// verb before it is chrome (`Read `), not text a selection takes, so
+/// copying the row gives the path. Any other call is one run.
+pub(crate) enum CallPieces {
+    Whole(String),
+    File {
+        verb: String,
+        /// The path, as Markdown linking to it (`path_link`).
+        path: String,
+        /// What came of it, as Markdown, after the path; empty for none.
+        trail: String,
+    },
+}
+
+pub(crate) fn call_pieces(tool: &ToolBlock) -> CallPieces {
+    if !argument_is_path(tool) {
+        return CallPieces::Whole(call_markdown(tool));
+    }
+    let mut line = call_line(tool);
+    if call_failed(tool) {
+        line.result = None;
+    }
+    CallPieces::File {
+        path: path_link(&line.argument, &line.argument),
+        trail: line.result.as_deref().map(escape_words).unwrap_or_default(),
+        verb: line.verb,
+    }
 }
 
 /// A failed call's tag after its call line (`Failed`, `Failed · 357 passed;
@@ -762,7 +794,17 @@ fn collect_tool_text(block: BlockId, tool: &ToolBlock, expanded: bool, selection
         }
         return;
     }
-    let _ = selection.markdown(block, call_markdown(tool));
+    match call_pieces(tool) {
+        CallPieces::Whole(call) => {
+            let _ = selection.markdown(block, call);
+        }
+        CallPieces::File { path, trail, .. } => {
+            let _ = selection.markdown(block, path);
+            if !trail.is_empty() {
+                let _ = selection.markdown(block, trail);
+            }
+        }
+    }
     if let Some(verdict) = call_verdict(tool) {
         let _ = selection.line(block, verdict, Vec::new());
     }
