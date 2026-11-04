@@ -8811,12 +8811,42 @@ impl CockpitView {
         // A press on the popover's own dead space is not a press outside
         // it: swallowed, so the root's dismissal never sees it. No key-hint
         // footer: the keys act in place (Claude's and Codex's menus).
-        pane::menu_popover()
+        // Claude's slash picker explains the row under the cursor in a card
+        // at its side (claude/slash-picker.png), so a description cut by the
+        // popover's width is still read, by key as well as by pointer. The
+        // card stands level with the row, rows being one grid row each.
+        let explained = matches!(open.kind, Kind::Commands)
+            .then(|| open.rows.get(open.selected))
+            .flatten()
+            .filter(|row| !row.row.inert && !row.row.detail.is_empty())
+            .map(|row| row.row.detail.clone());
+        let row_top = open.selected as f32 * ferrite_ui::theme::FLOAT_ROW_H
+            + f32::from(open.scroll.offset().y);
+        let popover = pane::menu_popover()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
-            .child(rows)
+            .child(rows);
+        div()
+            .relative()
+            .w_full()
+            .child(popover)
+            .children(explained.map(|detail| {
+                ferrite_ui::menu::float()
+                    .debug_selector(|| "composer-menu-tip".into())
+                    .absolute()
+                    .left_full()
+                    .ml(px(ferrite_ui::theme::SUBMENU_GAP))
+                    .top(px(row_top.max(0.)))
+                    .w(px(ferrite_ui::theme::TOOLTIP_MAX_W))
+                    .px(px(ferrite_ui::theme::TOOLTIP_PAD_X))
+                    .py(px(ferrite_ui::theme::TOOLTIP_PAD_Y))
+                    .text_size(px(ferrite_ui::theme::FS_META))
+                    .line_height(px(ferrite_ui::theme::LH_META))
+                    .text_color(rgb(ferrite_ui::theme::INK_STRONG))
+                    .child(detail)
+            }))
             .into_any_element()
     }
 

@@ -308,6 +308,28 @@ fn mention_rows_split_name_from_directory() {
     assert_eq!(rows[0].insert.as_ref(), "src/nested/");
 }
 
+/// The slash picker explains the row under the cursor in a card at its
+/// side, so the keys read what the pointer's tooltip does.
+#[gpui::test]
+fn the_slash_picker_explains_its_cursor_row_at_its_side(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("slash-side-tip", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Commands { commands: menu_commands() })
+        .unwrap();
+    tick(cx);
+    cx.simulate_input("/");
+    cx.run_until_parked();
+    tick(cx);
+    let rows = cx.debug_bounds("composer-menu-rows").expect("the picker is open");
+    let tip = cx.debug_bounds("composer-menu-tip").expect("its cursor row is explained");
+    assert!(tip.left() >= rows.right(), "at its side: {tip:?} / {rows:?}");
+    drop(view);
+}
+
 /// A lone `/` says `Type to filter` after the slash (Claude's picker); once
 /// there is more to the line the hint is gone.
 #[gpui::test]
