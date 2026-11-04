@@ -419,12 +419,12 @@ Scope follows the owner's list (settings, voice and mic, plan mode, Remote Contr
 | 13 | HD65 | App side sessions: proposal tools, linked plan rows, parent wakeups (§14) | BUILT | No such mechanism. The side chat is a fork (TXS, RP6, KNOWN). **Audit 11-04:** db13e437: the side chat is a right-docked tabbed pane | — |
 | 14 | HD70 | `ReportFindings` card grouped by file; a failed call stays a failure (§16, fx 40) | PARTIAL | A generic row; failure shows as `Failed`. No findings card. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `transcript/tools.rs:64` (falls to `Other`); `pane/text.rs:47,82` |
 | 15 | HD8 | Task hierarchy: `run_id` guard, `parent_task_id` tree, a child before its parent stays visible (§14, fx 19–20) | PARTIAL | `run_id` is BUILT. `parent_task_id` is never read. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `claude/activity.rs:53,270,1346` |
-| 16 | HD60 | A stopped or failed task keeps its reason (`worker_restart` is not "you stopped it") (§14) | PARTIAL | `reason` is not read. `killed` and `stopped` both map to Interrupted. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `claude/activity.rs:1503`; grep `worker_restart`: none |
+| 16 | HD60 | A stopped or failed task keeps its reason (`worker_restart` is not "you stopped it") (§14) | MISSING | `reason` is not read. `killed` and `stopped` both map to Interrupted. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `claude/activity.rs:1503`; grep `worker_restart`: none |
 | 17 | HD14 | Capability record from `system/init` (tools list, deferred tools) (§21, fx 48) | PARTIAL | Initialize answers are kept (modes, models, commands) and `msg_lifecycle_v1` is detected, but `init`'s tool list is not recorded. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `claude.rs:202-217`; `claude/queue.rs:15-19` |
 | 18 | HD75 | The session records its CLI version and backend (§19.1) | PARTIAL | The version is checked against the pin at spawn, then thrown away. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `claude.rs:1217-1239` |
-| 19 | HD18 | Hook lifecycle events (§5, §19) | PARTIAL | Ignored, which is safe. No hook spinner. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | grep `hook_started`: none |
+| 19 | HD18 | Hook lifecycle events (§5, §19) | MISSING | Ignored, which is safe. No hook spinner. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | grep `hook_started`: none |
 | 20 | HD55 | Failed `TaskCreate` behaviour pinned by a test (fx 31) | BUILT | Receipts only, so no row appears, which is the chosen behaviour. No test. **Audit 11-04:** Pinned by a_failed_task_create_adds_no_task (contract_plans.rs) | `claude/wire.rs:520`; no failing-create case in `tests/contract_plans.rs` |
-| 21 | HD44 | A fallback dedup key for frames with no uuid (§8) | PARTIAL | `id: None` is never deduped. Claude frames carry a uuid, so this is low impact. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `activity.rs:2569` `delivery_id` |
+| 21 | HD44 | A fallback dedup key for frames with no uuid (§8) | MISSING | `id: None` is never deduped. Claude frames carry a uuid, so this is low impact. **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded | `activity.rs:2569` `delivery_id` |
 
 ### Full table
 
@@ -449,7 +449,7 @@ ID prefix: HD, a handoff requirement. "fx N" is the matching §22 fixture.
 | HD15 | `system/status`, including compacting and its null end (§5) | BUILT | `claude/wire.rs:425-441` | |
 | HD16 | `api_retry` shown as retrying, not failed (§5) | BUILT | `claude/wire.rs:412-424` | |
 | HD17 | `compact_boundary` is not a new conversation (§5) | BUILT | `claude/wire.rs:442` | |
-| HD18 | Hook lifecycle events (§5) | PARTIAL | — | Ranked #19 **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded |
+| HD18 | Hook lifecycle events (§5) | MISSING | — | Ranked #19 **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded |
 | HD19 | `informational` and local command output become notices (§5) | BUILT | `claude/activity.rs:237,252` | |
 | HD20 | `task_*` lifecycle; `task_updated` merged as a patch (§14, §19.16, fx 18) | BUILT | `claude/wire.rs:449-470`; `progress.rs:234-243`; agents `claude/activity.rs:1412-1415` (dc19326b) | |
 | HD21 | `background_tasks_changed` replaces the set, empty included (§14, fx 17) | BUILT | `claude/wire.rs:486`; `progress.rs` snapshot | |
@@ -475,7 +475,7 @@ ID prefix: HD, a handoff requirement. "fx N" is the matching §22 fixture.
 | HD41 | Child history merges a frozen prefix with the live tail once (§8, fx 10) | BUILT | `engine/history.rs:60,279,314` `HistoryContent` | |
 | HD42 | A superseded process can't change its replacement's state (§8, §19.8, fx 9) | BUILT | `activity.rs:285,1078` `Observe { generation }`; `claude/activity.rs:162-190` (a new init resets) | |
 | HD43 | Window reconnect resynchronises from the server (§8) | BUILT | `protocol.rs:757-772` `WireInput` replay/live; `cockpit/mirror.rs` | |
-| HD44 | Fallback dedup key (§8) | PARTIAL | — | Ranked #21 **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded |
+| HD44 | Fallback dedup key (§8) | MISSING | — | Ranked #21 **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded |
 | HD45 | One explicit tool-presentation policy table (§9.1, §21) | BUILT | `transcript/tools.rs:33-44,64` `policy` (dc19326b) | |
 | HD46 | `AskUserQuestion` and `ExitPlanMode` stand alone (§9.1) | BUILT | `transcript/tools.rs:70-71` | |
 | HD47 | Todo tools are state-only, drawn when they fail (§9.1, fx 6) | BUILT | `transcript/tools.rs:84`; `transcript.rs:208` | |
@@ -491,7 +491,7 @@ ID prefix: HD, a handoff requirement. "fx N" is the matching §22 fixture.
 | HD57 | Custom turn-plan tool (§12) | DONE | — | Ranked #12 **Audit 11-04:** 68ed21a6 |
 | HD58 | Wrap-up and next-action turn box (§13) | BUILT | `wrap_up.rs`, `pane/wrap_up.rs` | Claude only; reply-style steps, no app action kinds **Audit 11-04:** 5427026f: Claude's captured box; reply-style steps |
 | HD59 | Task status unions kept apart (`killed`, `paused`, `stopped`) (§14, §19.17) | BUILT | `claude/activity.rs:1503-1504`; `claude/wire.rs:468` | |
-| HD60 | A task's stop or failure reason is kept (§14) | PARTIAL | — | Ranked #16 **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded |
+| HD60 | A task's stop or failure reason is kept (§14) | MISSING | — | Ranked #16 **Audit 11-04:** Deferred, no consumer: nothing in the UI would read it. Needs a real claude 2.1.318 capture of the field before it is decoded |
 | HD61 | `skip_transcript` and `ambient` apply apart from execution state; no endless spinner (§14, §19.18, fx 21) | BUILT | `claude/wire.rs:321,351` | |
 | HD62 | `forwardSubagentText` on, with no false promise of nested token streaming (§14, §19.29, fx 24) | BUILT | `claude.rs:282`; `claude/activity.rs:722,789` `TranscriptCoverage::Live` | |
 | HD63 | Agent progress summaries enabled on purpose and shown on the agent row (§14, §19.30) | BUILT | `claude.rs:425-430`; `claude/activity.rs:1394-1398`; `pane/agents.rs:24-63` (241f18e8) | |
