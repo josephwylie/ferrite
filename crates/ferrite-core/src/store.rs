@@ -917,6 +917,15 @@ enum PersistedProgress {
         steps: Vec<StoredStep>,
         explanation: String,
     },
+    PlanSteps {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        done: Vec<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start: Option<usize>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        advance: bool,
+    },
+    PlanSettled,
     Task {
         id: String,
         subject: String,
@@ -1090,6 +1099,12 @@ impl PersistedProgress {
                     .collect(),
                 explanation: explanation.clone(),
             },
+            E::PlanSteps(steps) => Self::PlanSteps {
+                done: steps.done.clone(),
+                start: steps.start,
+                advance: steps.advance,
+            },
+            E::PlanSettled => Self::PlanSettled,
             E::Task {
                 id,
                 subject,
@@ -1161,6 +1176,16 @@ impl PersistedProgress {
                     .collect(),
                 explanation: explanation.clone(),
             },
+            Self::PlanSteps {
+                done,
+                start,
+                advance,
+            } => E::PlanSteps(crate::update_plan::Steps {
+                done: done.clone(),
+                start: *start,
+                advance: *advance,
+            }),
+            Self::PlanSettled => E::PlanSettled,
             Self::Task {
                 id,
                 subject,

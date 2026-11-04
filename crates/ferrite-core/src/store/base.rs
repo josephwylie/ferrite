@@ -49,7 +49,10 @@ enum Carry {
 
 fn progress(event: &PersistedProgress) -> Carry {
     match event {
-        PersistedProgress::Plan { .. } => Carry::Slot(Slot::Latest("plan")),
+        PersistedProgress::Plan { .. } => Carry::Snapshot("plan"),
+        PersistedProgress::PlanSteps { .. } | PersistedProgress::PlanSettled => {
+            Carry::Delta("plan")
+        }
         PersistedProgress::TasksSnapshot { .. } => Carry::Snapshot("tasks"),
         PersistedProgress::Task { .. } => Carry::Delta("tasks"),
         PersistedProgress::BackgroundSnapshot { .. } => Carry::Snapshot("background"),

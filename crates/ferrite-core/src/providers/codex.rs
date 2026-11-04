@@ -509,6 +509,7 @@ impl CodexSession {
             config.visuals.as_ref(),
             config.resume.is_none(),
         );
+        wire::offer_plan(&mut params);
         // Capture the CLI's default independently of Ferrite's override;
         // turn/start carries the chosen effort.
         self.write_line(&serde_json::json!({

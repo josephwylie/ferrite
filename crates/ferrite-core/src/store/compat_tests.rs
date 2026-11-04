@@ -296,19 +296,23 @@ const V12_TORN: &str = concat!(
 pub(crate) const FIXTURES: &[(&str, &str, usize, u64)] = &[
     // Repinned for HD64: a tool row carries its background work (`None`).
     // Repinned for image reads: a tool row carries `image` (`false`).
-    ("v1", V1, 5, 11008443106938394579),
+    // Repinned for update_plan: progress carries `before_wrap_up` (`None`).
+    ("v1", V1, 5, 16897151429960525007),
     // Repinned for HD64: a tool row carries its background work (`None`).
     // Repinned for image reads: a tool row carries `image` (`false`).
-    ("v8-handover", V8_HANDOVER, 13, 6616395247906374593),
+    // Repinned for update_plan: progress carries `before_wrap_up` (`None`).
+    ("v8-handover", V8_HANDOVER, 13, 15946503212639180565),
     // Repinned when `ContextDetails` dropped `usable_window` and
     // `auto_compact_threshold`: the record still loads, without them.
     // Repinned for HD64: a tool row carries its background work (`None`
     // here), and a background turn's end no longer leaves the generic
     // `N background agents completed` notice.
     // Repinned for image reads: a tool row carries `image` (`false` here).
-    ("v11-activity", V11_ACTIVITY, 31, 5475841580472461714),
+    // Repinned for update_plan: progress carries `before_wrap_up` (`None`).
+    ("v11-activity", V11_ACTIVITY, 31, 5563687887485615094),
     // Repinned at schema 15: its observation now reads `prompt_id: None`.
-    ("v12-torn", V12_TORN, 10, 2170776138345052278),
+    // Repinned for update_plan: progress carries `before_wrap_up` (`None`).
+    ("v12-torn", V12_TORN, 10, 4877578810818087266),
 ];
 
 /// Old logs load to exactly what they always showed — and still do after a

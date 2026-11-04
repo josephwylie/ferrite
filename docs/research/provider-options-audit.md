@@ -123,9 +123,14 @@ Each item is a small change, and none needs new UI unless noted.
 2. **`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`**. Without it, the `RunState`
    parser from 2cb5f2ef is dead in real sessions. This is the CLI's
    authoritative idle signal.
-3. **`CLAUDE_CODE_ENABLE_TODO_TOOLS=1`** (as a setting, default on) so the
-   checklist exists on current models in print mode. Confirm first with one
-   `system:init.tools` capture on an Opus/Sonnet 5 model.
+3. ~~**`CLAUDE_CODE_ENABLE_TODO_TOOLS=1`**~~ Superseded (2026-11-04): confirmed on
+   2.1.318 that Opus 5.5 in print mode gets `TaskCreate…` only with it, but even
+   then nothing tells the agent to plan. Ferrite now offers Claude Desktop's own
+   answer, `mcp__ferrite__update_plan` with §12's guidance
+   (`crates/ferrite-core/src/update_plan.rs`), and leaves the native tools as
+   the CLI decides, so there is one plan. Codex's `update_plan` is off unless
+   `tools.update_plan.enabled`; Ferrite turns it on per thread with the same
+   guidance as `developerInstructions`.
 4. **`agentProgressSummaries: true`** in the initialize request
    (`claude.rs:391`). The renderer already exists. Accept the extra model
    calls, or gate it with a setting.

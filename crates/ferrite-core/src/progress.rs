@@ -83,6 +83,13 @@ pub enum ProgressEvent {
         steps: Vec<PlanStep>,
         explanation: String,
     },
+    /// Step changes on the plan as it stands (`update_plan`'s `done`,
+    /// `start`, `advance`, by 1-based number).
+    PlanSteps(crate::update_plan::Steps),
+    /// The turn that moved the plan wrapped up (`wrap_up`, not blocked):
+    /// its unfinished steps are done. What the agent itself last said is kept, so a later
+    /// step change applies to that, not to the settling.
+    PlanSettled,
     Task {
         id: String,
         subject: String,
@@ -133,6 +140,8 @@ pub struct Progress {
     pub plan: Vec<PlanStep>,
     pub explanation: String,
     pub has_plan: bool,
+    /// The plan as the agent left it before a wrap-up settled it.
+    before_wrap_up: Option<Vec<PlanStep>>,
     summary: String,
     tools: BTreeMap<String, ToolProgress>,
     latest_tool: Option<String>,
@@ -167,6 +176,7 @@ impl Progress {
             }
             ProgressEvent::Plan { steps, explanation } => {
                 self.has_plan = true;
+                self.before_wrap_up = None;
                 self.task_ids.clear();
                 self.plan = steps
                     .iter()
@@ -178,6 +188,32 @@ impl Progress {
                     .collect();
                 self.explanation = one_line(explanation, MAX_TEXT);
             }
+            ProgressEvent::PlanSteps(steps) => {
+                // A native task list is the CLI's, not this tool's to move.
+                if !self.task_ids.is_empty() {
+                    return;
+                }
+                if let Some(before) = self.before_wrap_up.take() {
+                    self.plan = before;
+                }
+                let mut statuses: Vec<_> = self.plan.iter().map(|step| step.status).collect();
+                steps.apply(&mut statuses);
+                for (step, status) in self.plan.iter_mut().zip(statuses) {
+                    step.status = status;
+                }
+            }
+            ProgressEvent::PlanSettled => {
+                let unfinished = self
+                    .plan
+                    .iter()
+                    .any(|step| step.status != StepStatus::Completed);
+                if self.task_ids.is_empty() && unfinished && self.before_wrap_up.is_none() {
+                    self.before_wrap_up = Some(self.plan.clone());
+                    for step in &mut self.plan {
+                        step.status = StepStatus::Completed;
+                    }
+                }
+            }
             ProgressEvent::Task {
                 id,
                 subject,
@@ -185,6 +221,7 @@ impl Progress {
                 deleted,
             } => {
                 self.has_plan = true;
+                self.before_wrap_up = None;
                 if let Some(at) = self.task_ids.iter().position(|key| key == id) {
                     if *deleted {
                         self.task_ids.remove(at);
@@ -211,6 +248,7 @@ impl Progress {
             }
             ProgressEvent::TasksSnapshot { tasks } => {
                 self.has_plan = true;
+                self.before_wrap_up = None;
                 self.task_ids = tasks
                     .iter()
                     .take(MAX_ENTRIES)
@@ -634,6 +672,8 @@ impl ProgressEvent {
             Self::Plan { steps, explanation } => {
                 explanation.len() + steps.iter().map(|step| step.text.len() + 16).sum::<usize>()
             }
+            Self::PlanSteps(steps) => steps.done.len() * 8,
+            Self::PlanSettled => 0,
             Self::Task { id, subject, .. } => id.len() + subject.len(),
             Self::TasksSnapshot { tasks } => tasks
                 .iter()

@@ -265,10 +265,12 @@ impl ClaudeSession {
         // Print mode emits these only when asked; the SDK sets them for its
         // hosts (docs/research/provider-options-audit.md). Set first so a
         // Thread's own env can override them.
+        // The CLI's own checklist tools stay as the CLI decides (off for
+        // current models in print mode, verified on 2.1.318): the plan is
+        // Ferrite's `update_plan`, as in Claude's app, and one plan at a time.
         command.envs([
             ("CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES", "1"),
             ("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS", "1"),
-            ("CLAUDE_CODE_ENABLE_TODO_TOOLS", "1"),
             // File checkpoints for rewind (docs/research/edit-rewind.md):
             // on from now so later rewinds can restore files.
             ("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "1"),
@@ -341,6 +343,7 @@ impl ClaudeSession {
         // Ferrite's own tools are never a Decision: pre-allowed, so no
         // permission mode asks for them (verified on 2.1.292 in `default`).
         command.args(["--allowedTools", crate::wrap_up::CLAUDE_NAME]);
+        command.args(["--allowedTools", crate::update_plan::CLAUDE_NAME]);
         if mcp::Server::offered(config.visuals.as_ref()) {
             command.args(["--allowedTools", crate::visual::CLAUDE_NAME]);
         }
@@ -840,7 +843,11 @@ fn read_stdout(
             // Session.
             let text = String::from_utf8_lossy(&line);
             let text = text.trim_end();
+            let mut plan = Vec::new();
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+                // Read before the line is handed on; sent after its own
+                // events, so the plan moves once the call has settled.
+                plan = server.receipt(&value);
                 shells.observe(&value, &sender);
                 if lock(&file_search).observe(&value) {
                     continue;
@@ -1017,6 +1024,11 @@ fn read_stdout(
                 }
                 // A full channel parks this thread, the OS pipe fills, and the
                 // CLI blocks on its own write. Backpressure, never loss.
+                if sender.send(event).is_err() {
+                    return;
+                }
+            }
+            for event in plan {
                 if sender.send(event).is_err() {
                     return;
                 }

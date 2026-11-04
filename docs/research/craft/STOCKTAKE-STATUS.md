@@ -415,7 +415,7 @@ Scope follows the owner's list (settings, voice and mic, plan mode, Remote Contr
 | 9 | HD71 | Human review comments reach the agent as typed data (§16, fx 41) | PARTIAL | Diff comments (file, side, line range, snippet) ride the next prompt. There are no threads or replies, no record of which turn got them, no rendered-element anchors, and no data-not-instructions boundary. A selection Reply quotes text (TXS). | `ferrite-pane/src/composer.rs:460` → `ferrite-reviewr/src/ferrite.rs:530` `attach`, `export.rs:21` |
 | 10 | HD22 | `permission_denied` kept by call id, even before its row exists (§5, fx 7) | PARTIAL | The event is not decoded. The orphan-result buffer covers the usual result-before-row case. | `transcript.rs:821,2012-2021,2409` `settle_orphan` |
 | 11 | HD68 | `AskUserQuestion` option previews (§15) | PARTIAL | Parsed into `Question` options but drawn nowhere. Multi-select, free text and answers are BUILT (HD67). | `ferrite-core/src/questions.rs:46,134`; no `preview` use in the decision UI |
-| 12 | HD57 | Custom turn plan (`update_plan`: scope, ≤12 items, advance/done/start, linked sessions) (§12, fx 33–35) | MISSING | The native todos (HD54) and Codex's `turn/plan` are the only plans. Not planned (gaps audit). | `transcript-architecture-gaps.md:137` |
+| 12 | HD57 | Custom turn plan (`update_plan`: scope, ≤12 items, advance/done/start, linked sessions) (§12, fx 33–35) | DONE | `mcp__ferrite__update_plan` on Ferrite's server with §12's contract and guidance, moved only by Main's confirmed receipts, settled by an unblocked wrap-up; Codex's native `update_plan` enabled with the same guidance. No linked sessions (Ferrite has none). | `update_plan.rs`, `contract_plans.rs` (real 2.1.318 and 0.166.0 captures) |
 | 13 | HD65 | App side sessions: proposal tools, linked plan rows, parent wakeups (§14) | MISSING | No such mechanism. The side chat is a fork (TXS, RP6, KNOWN). | — |
 | 14 | HD70 | `ReportFindings` card grouped by file; a failed call stays a failure (§16, fx 40) | PARTIAL | A generic row; failure shows as `Failed`. No findings card. | `transcript/tools.rs:64` (falls to `Other`); `pane/text.rs:47,82` |
 | 15 | HD8 | Task hierarchy: `run_id` guard, `parent_task_id` tree, a child before its parent stays visible (§14, fx 19–20) | PARTIAL | `run_id` is BUILT. `parent_task_id` is never read. | `claude/activity.rs:53,270,1346` |
@@ -488,7 +488,7 @@ ID prefix: HD, a handoff requirement. "fx N" is the matching §22 fixture.
 | HD54 | Native todo projection: receipts only, child excluded, `TodoWrite` replaces, `TaskCreate` keyed by returned id, delete removes (§11, fx 28–30, 32) | BUILT | `claude/wire.rs:520-594`; `progress.rs` | TR12/XTR2: the card leaves with the turn |
 | HD55 | Failed `TaskCreate` pinned by a test (fx 31) | PARTIAL | `claude/wire.rs:520` | Ranked #20 |
 | HD56 | Todo tools opted in for newer models (§11, §19.24) | BUILT | `claude.rs:265` `CLAUDE_CODE_ENABLE_TODO_TOOLS` | |
-| HD57 | Custom turn-plan tool (§12) | MISSING | — | Ranked #12 |
+| HD57 | Custom turn-plan tool (§12) | DONE | — | Ranked #12 |
 | HD58 | Wrap-up and next-action turn box (§13) | PARTIAL | `wrap_up.rs`, `pane/wrap_up.rs` | Claude only; reply-style steps, no app action kinds |
 | HD59 | Task status unions kept apart (`killed`, `paused`, `stopped`) (§14, §19.17) | BUILT | `claude/activity.rs:1503-1504`; `claude/wire.rs:468` | |
 | HD60 | A task's stop or failure reason is kept (§14) | MISSING | — | Ranked #16 |

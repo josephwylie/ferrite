@@ -960,6 +960,8 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
                 "model": "gpt-5.4-mini",
                 "approvalPolicy": "on-request",
                 "sandbox": "workspace-write",
+                "config": {"tools": {"update_plan": {"enabled": true}}},
+                "developerInstructions": ferrite_core::update_plan::GUIDANCE,
             },
         })
     );
@@ -1189,6 +1191,8 @@ fn a_resumed_session_passes_effort_on_its_next_turn() {
         serde_json::json!({
             "threadId": "stub-thread",
             "excludeTurns": true,
+            "config": {"tools": {"update_plan": {"enabled": true}}},
+            "developerInstructions": ferrite_core::update_plan::GUIDANCE,
         })
     );
     // The resumed Main's history is paged for subagent discovery, oldest
@@ -1215,7 +1219,14 @@ fn nothing_is_passed_when_the_config_names_nothing() {
     drop(session);
     let thread_start: Value = serde_json::from_str(&recorded[3]).unwrap();
     assert_eq!(thread_start["method"], "thread/start");
-    assert_eq!(thread_start["params"], serde_json::json!({}));
+    // Only the plan offer every thread carries.
+    assert_eq!(
+        thread_start["params"],
+        serde_json::json!({
+            "config": {"tools": {"update_plan": {"enabled": true}}},
+            "developerInstructions": ferrite_core::update_plan::GUIDANCE,
+        })
+    );
 }
 
 #[test]
@@ -1245,7 +1256,11 @@ fn effort_changes_and_default_stay_on_the_same_thread() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert!(sent[3]["params"].get("config").is_none());
+    assert!(sent[3]["params"].get("effort").is_none());
+    assert_eq!(
+        sent[3]["params"]["config"],
+        serde_json::json!({"tools": {"update_plan": {"enabled": true}}})
+    );
     for (turn, effort) in sent[5..].iter().zip(["high", "max", "low", "medium"]) {
         assert_eq!(turn["method"], "turn/start");
         assert_eq!(turn["params"]["threadId"], "stub-thread");

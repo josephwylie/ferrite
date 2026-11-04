@@ -82,6 +82,8 @@ pub fn policy(name: &str) -> ToolPolicy<'_> {
         // `TaskStop` and `TaskOutput` are background-task tools, not the
         // checklist's: they stay ordinary rows.
         "TodoWrite" | "TaskCreate" | "TaskUpdate" | "TaskGet" | "TaskList" => (Todo, StateOnly),
+        // Before `mcp__`: Ferrite's own plan tool is the checklist's too.
+        name if crate::update_plan::is_tool(name) => (Todo, StateOnly),
         name => match name
             .strip_prefix("mcp__")
             .and_then(|rest| rest.split_once("__"))
@@ -313,6 +315,7 @@ mod tests {
             ("TaskCreate", Todo, StateOnly),
             ("TaskUpdate", Todo, StateOnly),
             ("TaskList", Todo, StateOnly),
+            ("mcp__ferrite__update_plan", Todo, StateOnly),
             ("TaskStop", Other, RollsUp),
             ("mcp__github__get_issue", Mcp("github"), RollsUp),
             ("mcp____odd", Other, RollsUp),

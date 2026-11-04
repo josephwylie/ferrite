@@ -236,8 +236,12 @@ fn claude_is_offered_the_tool_in_band_and_its_call_gets_text_and_the_screenshot(
     );
     let list = answer_to(&lines, &request_id(CLAUDE, "tools/list")).unwrap();
     let tools = &list["response"]["response"]["mcp_response"]["result"]["tools"];
-    assert_eq!(tools[0]["name"], "wrap_up", "the wrap-up box is always offered");
-    let tool = &tools[1];
+    assert_eq!(
+        tools[0]["name"], "wrap_up",
+        "the wrap-up box is always offered"
+    );
+    assert_eq!(tools[1]["name"], "update_plan", "so is the plan");
+    let tool = &tools[2];
     assert_eq!(tool["name"], "show_visual");
     assert_eq!(tool["_meta"]["anthropic/alwaysLoad"], true);
     assert_eq!(
@@ -397,9 +401,16 @@ fn claude_without_visuals_offers_only_the_wrap_up() {
             .iter()
             .find(|line| line["request"]["subtype"] == "initialize")
             .unwrap();
-        assert_eq!(initialize["request"]["sdkMcpServers"], json!(["ferrite"]), "{name}");
+        assert_eq!(
+            initialize["request"]["sdkMcpServers"],
+            json!(["ferrite"]),
+            "{name}"
+        );
         let argv = fs::read_to_string(argv).unwrap();
-        assert!(argv.contains("--allowedTools mcp__ferrite__wrap_up"), "{name}: {argv}");
+        assert!(
+            argv.contains("--allowedTools mcp__ferrite__wrap_up"),
+            "{name}: {argv}"
+        );
         assert!(!argv.contains("show_visual"), "{name}: {argv}");
     }
 }

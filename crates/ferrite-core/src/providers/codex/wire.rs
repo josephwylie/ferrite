@@ -107,6 +107,16 @@ pub(super) fn offer_visuals(
     });
 }
 
+/// Offer Codex its own plan tool, and say when to use it. `update_plan` is
+/// off unless configured (`tools.update_plan.enabled`, 0.166) and, when on,
+/// comes with no word on planning: without both an agent never plans
+/// (`turn/plan/updated` never fires). Every start and resume carries both,
+/// as neither is the thread's to remember.
+pub(super) fn offer_plan(params: &mut Value) {
+    params["config"]["tools"]["update_plan"]["enabled"] = Value::Bool(true);
+    params["developerInstructions"] = Value::String(crate::update_plan::GUIDANCE.into());
+}
+
 /// Answer the server's `item/tool/call` for `show_visual`, off this thread:
 /// the render's text and screenshot as the call's content items. Returns
 /// whether `frame` was that call. Any other dynamic call is not Ferrite's.

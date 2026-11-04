@@ -152,7 +152,7 @@ fn write_thread(store: &Store, seed: u64, turns: usize) -> ThreadId {
                 7 => event(
                     &mut writer,
                     SessionEvent::Progress {
-                        event: match rng.below(6) {
+                        event: match rng.below(8) {
                             0 => ProgressEvent::Plan {
                                 steps: vec![PlanStep {
                                     text: rng.text(20),
@@ -187,6 +187,12 @@ fn write_thread(store: &Store, seed: u64, turns: usize) -> ThreadId {
                                     detail: String::new(),
                                 }],
                             },
+                            5 => ProgressEvent::PlanSteps(crate::update_plan::Steps {
+                                done: vec![],
+                                start: None,
+                                advance: true,
+                            }),
+                            6 => ProgressEvent::PlanSettled,
                             _ => ProgressEvent::Phase {
                                 phase: Phase::Thinking,
                                 detail: String::new(),

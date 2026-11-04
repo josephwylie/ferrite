@@ -681,7 +681,7 @@ fn a_resumed_session_answers_from_the_previous_process_history() {
         format!(
             "-p --input-format stream-json --output-format stream-json \
              --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
-             --resume {resumed} --allowedTools mcp__ferrite__wrap_up"
+             --resume {resumed} --allowedTools mcp__ferrite__wrap_up --allowedTools mcp__ferrite__update_plan"
         )
     );
 
@@ -766,7 +766,10 @@ fn a_rewind_resume_names_the_turn_it_drops() {
     let log = log_path("argv-drops.log");
     let program = stub(
         "claude-resumes",
-        &format!("{PRELUDE}\necho \"$@\" > '{}'\ncat >/dev/null", log.display()),
+        &format!(
+            "{PRELUDE}\necho \"$@\" > '{}'\ncat >/dev/null",
+            log.display()
+        ),
     );
     let session = ClaudeSession::spawn(ClaudeConfig {
         resume: Some("sess".into()),
@@ -838,7 +841,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         "-p --input-format stream-json --output-format stream-json \
          --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
          --model haiku --permission-mode default --name CI flake --add-dir /extra/project \
-         --allowedTools mcp__ferrite__wrap_up --dangerously-skip-permissions"
+         --allowedTools mcp__ferrite__wrap_up --allowedTools mcp__ferrite__update_plan --dangerously-skip-permissions"
     );
     assert_eq!(sent.len(), 6);
     // Feature detection comes first, before a word of the Thread. Declaring
@@ -933,7 +936,7 @@ fn no_model_or_permission_mode_is_passed_when_the_config_names_none() {
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
          --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
-         --allowedTools mcp__ferrite__wrap_up"
+         --allowedTools mcp__ferrite__wrap_up --allowedTools mcp__ferrite__update_plan"
     );
 }
 
@@ -967,7 +970,7 @@ fn projects_settings_reach_the_cli_after_ferrites_flags() {
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
          --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
-         --allowedTools mcp__ferrite__wrap_up --settings /d/tasks/app/1/claude.json | /store/api.sock /f/ferrite-projects"
+         --allowedTools mcp__ferrite__wrap_up --allowedTools mcp__ferrite__update_plan --settings /d/tasks/app/1/claude.json | /store/api.sock /f/ferrite-projects"
     );
 }
 
