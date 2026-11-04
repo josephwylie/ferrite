@@ -1505,7 +1505,7 @@ impl Engine {
     ///
     /// The choice's repo registers as a project (idempotent — this is how
     /// the registry grows as Threads bind roots); a new worktree is placed
-    /// by the registry's central layout on a branch it mints; an existing
+    /// inside the project (`Registry::place`) on a branch it mints; an existing
     /// worktree passes the adoption conflict check and skips creation.
     pub fn open(&mut self, provider: Provider, workspace: WorkspaceChoice) -> io::Result<ThreadId> {
         self.open_with(provider, workspace, Launch::default())
@@ -5616,8 +5616,8 @@ fn carry_digest(from: Provider, exchanges: &[(String, String)]) -> String {
 
 /// The workspace a binding names, made real; the main checkout is the
 /// operator's and is touched by nothing. A missing worktree is created —
-/// or recreated after a hand-deletion — on its registered branch (#29's
-/// central layout), falling back to the Thread-named branch for worktrees
+/// or recreated after a hand-deletion — on its registered branch (#29),
+/// falling back to the Thread-named branch for worktrees
 /// from before the registry. A tree already standing passes the adoption
 /// conflict check instead: git itself must call it a worktree of this
 /// repo, or a Session would spawn into a directory that only looks like

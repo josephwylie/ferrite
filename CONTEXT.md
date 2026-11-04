@@ -170,7 +170,11 @@ The checkout a Thread works in: a per-Thread worktree or the main checkout —
 chosen at Thread creation, and following Main after it: into a worktree of
 the same repo its agent makes, enters, or works in for a run of tool calls,
 and back to the main checkout when it leaves or the worktree is gone. The
-Pane's checkout label reads the binding; nothing else moves it.
+Pane's checkout label reads the binding; nothing else moves it. A
+worktree Ferrite makes lives inside its project, at
+`<root>/.worktrees/<branch>`, kept out of `git status` by the repo's
+`.git/info/exclude` (never its tracked `.gitignore`); one made before that
+stays where it is, since a Session is keyed to its cwd.
 
 **Visual**
 An interactive page an agent shows inline in its transcript through

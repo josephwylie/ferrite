@@ -317,6 +317,48 @@ impl std::fmt::Display for GitError {
 
 impl std::error::Error for GitError {}
 
+/// Where Ferrite places the worktrees it makes, inside their project
+/// (`Registry::place`).
+pub const WORKTREES: &str = ".worktrees";
+
+/// A worktree placed inside its own repo (`<root>/.worktrees/…`) stays out
+/// of the main checkout's `git status`: its top directory goes into the
+/// repo's `info/exclude`, once — never into `.gitignore`, a file the repo
+/// tracks. A worktree outside the repo needs nothing. The repo may be
+/// spelled through a symlink its registered root was resolved from.
+fn exclude_inside(repo: &Path, path: &Path) -> Result<(), GitError> {
+    let inside = path.strip_prefix(repo).ok().map(Path::to_path_buf).or_else(|| {
+        let canonical = fs::canonicalize(repo).ok()?;
+        path.strip_prefix(&canonical).ok().map(Path::to_path_buf)
+    });
+    let Some(top) = inside.and_then(|inside| {
+        inside
+            .components()
+            .next()
+            .map(|top| top.as_os_str().to_string_lossy().into_owned())
+    }) else {
+        return Ok(());
+    };
+    let pattern = format!("/{top}/");
+    let common = git(
+        repo,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let exclude = Path::new(common.trim()).join("info").join("exclude");
+    let mut text = fs::read_to_string(&exclude).unwrap_or_default();
+    if text.lines().any(|line| line.trim() == pattern) {
+        return Ok(());
+    }
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&pattern);
+    text.push('\n');
+    fs::create_dir_all(exclude.parent().expect("info/exclude has a parent"))
+        .and_then(|()| fs::write(&exclude, text))
+        .map_err(GitError::Io)
+}
+
 /// Make sure the worktree at `path` exists, on its own branch named
 /// `branch` — creating either or both on demand.
 pub fn ensure_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), GitError> {
@@ -332,6 +374,7 @@ pub fn ensure_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), Git
     // branch "checked out" (probed: re-adding the branch fails until a
     // prune). Pruning first makes recreation just work.
     git(repo, &["worktree", "prune"])?;
+    exclude_inside(repo, path)?;
     let path = path_str(path)?;
     if git(repo, &["branch", "--list", branch])?.trim().is_empty() {
         // Probed: a bare `worktree add` would mint a branch named after the
@@ -355,6 +398,7 @@ pub fn add_worktree(
     base: Option<&str>,
 ) -> Result<(), GitError> {
     git(repo, &["worktree", "prune"])?;
+    exclude_inside(repo, path)?;
     let mut args = vec!["worktree", "add", "-b", branch, path_str(path)?];
     args.extend(base);
     git(repo, &args).map(|_| ())
@@ -1320,6 +1364,33 @@ mod tests {
 
         assert!(tree.join(".git").exists());
         assert_eq!(branch_of(&tree), "ferrite/thread-1");
+    }
+
+    /// A worktree placed inside its repo (`.worktrees/`) leaves the main
+    /// checkout clean: git learns to skip it from the repo's own
+    /// `info/exclude`, once however many trees go there, and no tracked
+    /// file (`.gitignore`) is touched.
+    #[test]
+    fn a_worktree_inside_its_repo_is_excluded_not_ignored() {
+        let root = scratch("inside");
+        let repo = init_repo(&root);
+        let first = repo.join(WORKTREES).join("ferrite-wt-1");
+        add_worktree(&repo, &first, "ferrite/wt-1", None).unwrap();
+        ensure_worktree(&repo, &repo.join(WORKTREES).join("ferrite-wt-2"), "ferrite/wt-2")
+            .unwrap();
+
+        assert!(first.join(".git").exists());
+        assert_eq!(git(&repo, &["status", "--porcelain"]).unwrap(), "");
+        assert!(!repo.join(".gitignore").exists());
+        let exclude = fs::read_to_string(repo.join(".git/info/exclude")).unwrap();
+        assert_eq!(
+            exclude.lines().filter(|line| *line == "/.worktrees/").count(),
+            1,
+            "{exclude}"
+        );
+        // A worktree outside the repo writes nothing there.
+        add_worktree(&repo, &root.join("elsewhere"), "elsewhere", None).unwrap();
+        assert_eq!(fs::read_to_string(repo.join(".git/info/exclude")).unwrap(), exclude);
     }
 
     /// Removing a clean worktree deletes the tree and nothing else: the

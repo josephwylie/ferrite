@@ -814,11 +814,11 @@ fn opening_a_project_exposes_its_additional_directories_without_changing_cwd() {
 }
 
 /// #29: opening registers the choice's repo as a project (the registry
-/// grows as Threads bind roots), a new worktree lands in the central
-/// layout on a registry-minted branch, and the Thread header carries
-/// the project id.
+/// grows as Threads bind roots), a new worktree lands inside the project
+/// on a registry-minted branch, and the Thread header carries the
+/// project id.
 #[test]
-fn opening_registers_the_project_and_places_the_worktree_centrally() {
+fn opening_registers_the_project_and_places_the_worktree_inside_it() {
     let root = scratch("central-open");
     let dir = scratch("central-open-store");
     let repo = init_repo(&root);
@@ -848,13 +848,18 @@ fn opening_registers_the_project_and_places_the_worktree_centrally() {
         .cwd()
         .to_path_buf();
     assert_eq!(entries[0].path, path);
-    // The central layout: under the store's worktrees/, never inside
-    // the repo or a per-Thread store directory.
-    assert!(
-        path.starts_with(dir.join("worktrees")),
-        "central layout: {path:?}"
-    );
+    // Inside the project, under .worktrees/: never a per-Thread store
+    // directory.
+    let project_root = &cockpit.registry().projects()[0].root;
+    assert!(path.starts_with(project_root.join(".worktrees")), "{path:?}");
     assert_eq!(path.file_name().unwrap(), "ferrite-wt-1");
+    // The main checkout stays clean around it: excluded, not ignored.
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&status.stdout), "");
 }
 
 /// #29: choosing an existing worktree adopts the standing tree — no

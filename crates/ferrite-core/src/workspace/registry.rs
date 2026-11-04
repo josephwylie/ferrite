@@ -563,20 +563,18 @@ impl Registry {
         Ok(branch)
     }
 
-    /// Where a worktree of `project` on `branch` lives: the central layout
-    /// `<dir>/worktrees/<repoName>-<hash12>/<branch-dashed>` — outside every
-    /// repo, keyed by branch so the tree outlives any one Thread, the
-    /// 12-hex path hash keeping same-named repos apart. The repo name is
-    /// the root's leaf, never the title: a retitled project keeps placing
-    /// its worktrees where it always did.
+    /// Where a new worktree of `project` on `branch` lives: inside the
+    /// project, `<root>/.worktrees/<branch-dashed>`, keyed by branch so the
+    /// tree outlives any one Thread. Git keeps it out of the main checkout's
+    /// status through the repo's `info/exclude` (`workspace::add_worktree`).
+    /// A worktree placed before keeps its registered path: a Session is
+    /// keyed to its cwd, so a tree that moved would lose its conversation.
     pub fn place(&self, project: ProjectId, branch: &str) -> PathBuf {
-        let (name, root) = self
+        let root = self
             .project(project)
-            .map(|entry| (leaf(&entry.root), entry.root.as_path()))
-            .unwrap_or_else(|| ("unknown".to_string(), Path::new("")));
-        self.dir
-            .join("worktrees")
-            .join(format!("{name}-{}", hash12(root)))
+            .map(|entry| entry.root.as_path())
+            .unwrap_or(Path::new(""));
+        root.join(crate::workspace::WORKTREES)
             .join(branch.replace('/', "-"))
     }
 
@@ -717,18 +715,6 @@ fn leaf(root: &Path) -> String {
         .unwrap_or_else(|| root.display().to_string())
 }
 
-/// The first 12 hex digits of a stable 64-bit FNV-1a over the path's bytes.
-/// Not `DefaultHasher`, whose output may change across Rust releases — the
-/// central layout must place the same repo at the same path forever.
-fn hash12(path: &Path) -> String {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for byte in path.to_string_lossy().as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("{hash:016x}")[..12].to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -826,11 +812,11 @@ mod tests {
         assert!(Registry::open(&store).unwrap().projects().is_empty());
     }
 
-    /// The central layout: under the store's `worktrees/`, one directory per
-    /// repo — leaf name plus a 12-hex path hash, which is what keeps two
-    /// same-named repos apart — one subdirectory per branch, dashed.
+    /// A new worktree goes inside its project, under `.worktrees/`, one
+    /// directory per branch, dashed: same-named repos stay apart by their
+    /// roots.
     #[test]
-    fn placement_follows_the_central_layout_and_separates_same_named_repos() {
+    fn placement_is_inside_the_project_and_separates_same_named_repos() {
         let dir = scratch("place");
         let one = dir.join("teams").join("alpha").join("app");
         let two = dir.join("teams").join("beta").join("app");
@@ -845,12 +831,9 @@ mod tests {
         let placed_two = registry.place(second, "ferrite/wt-1");
 
         assert_ne!(placed_one, placed_two, "same-named repos must not collide");
-        assert_eq!(placed_one.file_name().unwrap(), "ferrite-wt-1");
-        let parent = placed_one.parent().unwrap();
-        let leaf = parent.file_name().unwrap().to_string_lossy().into_owned();
-        assert!(leaf.starts_with("app-"), "leaf: {leaf}");
-        assert_eq!(leaf.len(), "app-".len() + 12, "12-hex path hash: {leaf}");
-        assert_eq!(parent.parent().unwrap(), store.join("worktrees"));
+        let root = |project| registry.project(project).unwrap().root.clone();
+        assert_eq!(placed_one, root(first).join(".worktrees").join("ferrite-wt-1"));
+        assert_eq!(placed_two, root(second).join(".worktrees").join("ferrite-wt-1"));
         // Placement is a pure read: the same ask answers the same path.
         assert_eq!(placed_one, registry.place(first, "ferrite/wt-1"));
     }
@@ -1006,7 +989,7 @@ mod tests {
     }
 
     /// A rename trims and persists; a blank title is refused and changes
-    /// nothing; the central layout keys on the root, so the retitled
+    /// nothing; placement keys on the root, so the retitled
     /// project's next worktree lands where it always would have.
     #[test]
     fn renaming_a_project_persists_and_refuses_blank() {
