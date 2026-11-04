@@ -501,11 +501,12 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         .line_height(px(theme::COMPOSER_ROW_H))
         .text_color(rgb(INK_STRONG))
         .child(view.composer.clone());
-    if empty {
-        let ghost = placeholder(decision.is_some(), draft, transcript, suggestion);
-        // Clear of the caret's bar, so it never touches `↵ to send`.
-        line = line.child(ghost_row(ghost, theme::PLACEHOLDER_GAP));
-    }
+    let ghost = placeholder(decision.is_some(), draft, transcript, suggestion);
+    line = line.child(LineGhost {
+        composer: view.composer.clone(),
+        ghost,
+        empty,
+    });
     // One row, as Claude's: the `+`, the line that grows, the send circle,
     // the buttons standing at the row's foot as the line grows over them.
     let (attach, send, footer, env, actions) = match toolbar {
@@ -937,6 +938,41 @@ pub fn flat_facts_text(files: usize, queued: usize) -> String {
         facts.push(format!("{queued} queued"));
     }
     facts.join(" \u{b7} ")
+}
+
+/// What the line says in grey over its text: the placeholder while it is
+/// empty, and Claude's `Type to filter` after a lone `/` (the slash picker
+/// is open on it), clear of the typed slash.
+#[derive(IntoElement)]
+struct LineGhost {
+    composer: Entity<crate::composer::Composer>,
+    ghost: Ghost,
+    empty: bool,
+}
+
+/// The words after a lone `/`.
+pub(super) const FILTER_HINT: &str = "Type to filter";
+
+impl RenderOnce for LineGhost {
+    fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        if self.composer.read(cx).text() == "/" {
+            let size = px(theme::FS_COMPOSER);
+            let mut face = window.text_style();
+            face.font_family = theme::FONT_UI.into();
+            face.font_weight = theme::W_BODY;
+            let slash = window
+                .text_system()
+                .shape_line("/".into(), size, &[face.to_run(1)], None)
+                .width;
+            return ghost_row(Ghost::says(FILTER_HINT), f32::from(slash) + theme::PLACEHOLDER_GAP)
+                .into_any_element();
+        }
+        if self.empty {
+            // Clear of the caret's bar, so it never touches `↵ to send`.
+            return ghost_row(self.ghost, theme::PLACEHOLDER_GAP).into_any_element();
+        }
+        gpui::Empty.into_any_element()
+    }
 }
 
 /// The placeholder drawn on a clipped row one line high, `left` in (Solo's

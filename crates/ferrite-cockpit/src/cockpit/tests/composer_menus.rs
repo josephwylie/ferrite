@@ -308,6 +308,32 @@ fn mention_rows_split_name_from_directory() {
     assert_eq!(rows[0].insert.as_ref(), "src/nested/");
 }
 
+/// A lone `/` says `Type to filter` after the slash (Claude's picker); once
+/// there is more to the line the hint is gone.
+#[gpui::test]
+fn a_lone_slash_says_type_to_filter(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("slash-hint", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    let editor = cx.debug_bounds("focused-prompt-editor").expect("the line");
+    let rest = cx.debug_bounds("prompt-placeholder").expect("the resting placeholder");
+    cx.simulate_input("/");
+    cx.run_until_parked();
+    tick(cx);
+    let hint = cx.debug_bounds("prompt-placeholder").expect("the filter hint");
+    assert!(
+        hint.left() > rest.left() + px(3.),
+        "it stands after the slash: {hint:?} vs {rest:?} in {editor:?}"
+    );
+    cx.simulate_input("co");
+    cx.run_until_parked();
+    tick(cx);
+    assert!(cx.debug_bounds("prompt-placeholder").is_none(), "gone once more is typed");
+    drop(view);
+}
+
 /// #23: `/` at the line's start opens the Session's own menu, typing
 /// filters it, ↓/↵ pick — and the pick lands as `/name ` ready for args.
 #[gpui::test]
