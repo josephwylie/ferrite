@@ -6162,6 +6162,7 @@ mod tests {
             caption: None,
             background: None,
             image: false,
+            findings: Vec::new(),
             call: "c".into(),
             name: name.into(),
             title: None,
@@ -6210,6 +6211,7 @@ mod tests {
             caption: None,
             background: None,
             image: false,
+            findings: Vec::new(),
             result_line: Some("16:HOLD={".into()),
             ..tool("Bash", "python3 prep.py --hold", ToolState::Ok)
         };
@@ -6230,6 +6232,7 @@ mod tests {
             caption: None,
             background: None,
             image: false,
+            findings: Vec::new(),
             title: Some("List a directory that doesn't exist".into()),
             ..tool("Bash", "ls /definitely-missing-dir", ToolState::Ok)
         };
@@ -6282,6 +6285,7 @@ mod tests {
             caption: None,
             background: None,
             image: false,
+            findings: Vec::new(),
             call: "c".into(),
             name: "Bash".into(),
             title: None,

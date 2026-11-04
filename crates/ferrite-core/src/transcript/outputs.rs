@@ -163,6 +163,7 @@ mod tests {
                 caption: None,
                 background: None,
                 image: false,
+                findings: Vec::new(),
             }),
             None,
         )

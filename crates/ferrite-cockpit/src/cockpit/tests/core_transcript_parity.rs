@@ -10,6 +10,7 @@ fn call(name: &str, summary: &str, state: ToolState, output: &str) -> ToolBlock 
         caption: None,
         background: None,
         image: false,
+        findings: Vec::new(),
         call: "c".into(),
         name: name.into(),
         title: None,

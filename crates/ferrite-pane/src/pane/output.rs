@@ -193,6 +193,9 @@ pub(super) fn call_body(
     grid: Grid,
     selection: &TextRuns,
 ) -> Option<Div> {
+    if tool.state == ToolState::Ok && !tool.findings.is_empty() {
+        return Some(findings_body(block, &tool.findings, grid, selection));
+    }
     let cells = grid.block();
     let mut input = None;
     let mut exit = None;
@@ -1396,4 +1399,70 @@ impl DiffKind {
             },
         }
     }
+}
+
+/// A review's findings (`ReportFindings`, HD70), grouped by file in the
+/// order first reported: the file, then each finding's line, its summary,
+/// its verdict when verified, and its failure scenario beneath in muted ink.
+fn findings_body(
+    block: BlockId,
+    findings: &[ferrite_core::transcript::tools::Finding],
+    grid: Grid,
+    selection: &TextRuns,
+) -> Div {
+    let mut files: Vec<(&str, Vec<&ferrite_core::transcript::tools::Finding>)> = Vec::new();
+    for finding in findings {
+        match files.iter_mut().find(|(file, _)| *file == finding.file) {
+            Some((_, group)) => group.push(finding),
+            None => files.push((&finding.file, vec![finding])),
+        }
+    }
+    let cells = grid.block();
+    div()
+        .debug_selector(|| "findings".into())
+        .flex()
+        .flex_col()
+        .gap(px(theme::SPACE_3))
+        .w_full()
+        .min_w_0()
+        .font_family(theme::FONT_UI)
+        .text_size(px(cells.size))
+        .line_height(px(cells.line))
+        .children(files.into_iter().map(|(file, group)| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(theme::SPACE_1))
+                .child(
+                    div()
+                        .text_color(rgb(INK_STRONG))
+                        .child(selection.line(block, file.to_string(), Vec::new())),
+                )
+                .children(group.into_iter().map(|finding| {
+                    let place = finding.line.map(|line| format!("line {line}")).unwrap_or_default();
+                    let verdict = finding.verdict.as_deref().map(str::to_lowercase);
+                    let head = [Some(place), Some(finding.summary.clone()), verdict]
+                        .into_iter()
+                        .flatten()
+                        .filter(|part| !part.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" \u{b7} ");
+                    div()
+                        .debug_selector(|| "finding".into())
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .text_color(rgb(INK_STRONG))
+                                .child(selection.line(block, head, Vec::new())),
+                        )
+                        .when(!finding.failure_scenario.is_empty(), |row| {
+                            row.child(
+                                div().text_color(rgb(INK_SUBTLE)).child(
+                                    selection.line(block, finding.failure_scenario.clone(), Vec::new()),
+                                ),
+                            )
+                        })
+                }))
+        }))
 }

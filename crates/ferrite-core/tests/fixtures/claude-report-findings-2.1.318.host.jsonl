@@ -1,0 +1,1 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Read bad.rs, then call your ReportFindings tool once with every bug you find in it (two findings), then say done."}]}}

@@ -200,6 +200,9 @@ pub struct ToolBlock {
     /// file its `summary` names under its line, as the provider's own
     /// transcript does. Only a settled success sets it.
     pub image: bool,
+    /// What a `ReportFindings` call reported (HD70), from its input; empty
+    /// for any other call.
+    pub findings: Vec<tools::Finding>,
 }
 
 /// Work a call launched into the background.
@@ -2464,6 +2467,7 @@ impl Transcript {
                     caption: None,
                     background: None,
                     image: false,
+                    findings: tools::findings_of(&input),
                 }));
                 Update {
                     dirty: vec![block],
@@ -2738,6 +2742,7 @@ impl Transcript {
             caption: None,
             background: None,
             image: false,
+            findings: Vec::new(),
         })))
     }
 

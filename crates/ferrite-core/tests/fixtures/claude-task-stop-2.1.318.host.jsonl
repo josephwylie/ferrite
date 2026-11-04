@@ -1,0 +1,1 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Run `sleep 300` with the Bash tool using run_in_background, then stop that background task with TaskStop, then say done."}]}}

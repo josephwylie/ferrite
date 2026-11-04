@@ -22,6 +22,8 @@ pub enum ToolKind<'a> {
     Question,
     /// Ferrite's own `show_visual`.
     Visual,
+    /// Claude's structured review result (`ReportFindings`, HD70).
+    Findings,
     /// An MCP call, by its server (`mcp__github__get_issue` → `github`).
     Mcp(&'a str),
     /// Anything else: shown by its name, state and details.
@@ -79,6 +81,7 @@ pub fn policy(name: &str) -> ToolPolicy<'_> {
         "WebFetch" => (Fetch, RollsUp),
         "WebSearch" | "webSearch" => (WebSearch, RollsUp),
         "Task" | AGENT => (Agent, Agents),
+        "ReportFindings" => (Findings, StandsAlone),
         // `TaskStop` and `TaskOutput` are background-task tools, not the
         // checklist's: they stay ordinary rows.
         "TodoWrite" | "TaskCreate" | "TaskUpdate" | "TaskGet" | "TaskList" => (Todo, StateOnly),
@@ -324,5 +327,76 @@ mod tests {
             let policy = policy(name);
             assert_eq!((policy.kind, policy.grouping), (kind, grouping), "{name}");
         }
+    }
+}
+
+/// One finding a review reported (`ReportFindings`' input, HD70).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Finding {
+    /// Repository-relative path.
+    pub file: String,
+    /// One-based line.
+    pub line: Option<u32>,
+    /// The short label (`short_summary`) when the model wrote one, else the
+    /// summary.
+    pub summary: String,
+    pub failure_scenario: String,
+    /// `CONFIRMED` or `PLAUSIBLE`, when the findings were verified.
+    pub verdict: Option<String>,
+}
+
+/// The findings in a `ReportFindings` call's input; a malformed entry is
+/// left out rather than failing the call.
+pub fn findings_of(input: &serde_json::Value) -> Vec<Finding> {
+    let text = |value: &serde_json::Value, key: &str| {
+        value[key]
+            .as_str()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned)
+    };
+    input["findings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|finding| {
+            Some(Finding {
+                file: text(finding, "file")?,
+                line: finding["line"].as_u64().and_then(|line| u32::try_from(line).ok()),
+                summary: text(finding, "short_summary").or_else(|| text(finding, "summary"))?,
+                failure_scenario: text(finding, "failure_scenario").unwrap_or_default(),
+                verdict: text(finding, "verdict"),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod findings_tests {
+    use super::*;
+
+    #[test]
+    fn findings_read_from_a_real_report_findings_input() {
+        let line = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/claude-report-findings-2.1.318.jsonl"
+        ))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find_map(|frame| {
+            frame["message"]["content"]
+                .as_array()?
+                .iter()
+                .find(|block| block["name"] == "ReportFindings")
+                .map(|block| block["input"].clone())
+        })
+        .expect("the capture holds a ReportFindings call");
+        let found = findings_of(&line);
+        assert_eq!(found.len(), 2);
+        assert_eq!((found[0].file.as_str(), found[0].line), ("bad.rs", Some(2)));
+        assert_eq!(found[0].verdict.as_deref(), Some("CONFIRMED"));
+        assert!(found[1].summary.contains("Out-of-bounds"));
+        assert_eq!(policy("ReportFindings").kind, ToolKind::Findings);
     }
 }

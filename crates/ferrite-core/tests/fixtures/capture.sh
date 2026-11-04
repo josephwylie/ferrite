@@ -183,6 +183,29 @@ for line in open('$WORK/plant.jsonl'):
             --prompt 'Run `sleep 3 && echo one` with Bash, then run `echo two` with Bash, then say done.' \
             -- --safe-mode --allowedTools 'Bash'
         ;;
+    # A call the permission mode refuses outright: `dontAsk` denies anything not
+    # already allowed, so no can_use_tool arrives, and the CLI's own record of
+    # the refusal (`permission_denied`, HD22) is what this captures.
+    permission-denied)
+        rm -f "$WORK/cwd/ferrite-perm.txt"
+        capture permission-denied \
+            --prompt 'Create a file named ferrite-perm.txt containing exactly the word ok, using the Write tool. Then say done.' \
+            -- --safe-mode --permission-mode dontAsk
+        ;;
+    # The findings tool Desktop's review uses (HD70).
+    report-findings)
+        printf 'fn main() {\n    let x = 1 / 0;\n    let y: Vec<i32> = Vec::new();\n    println!("{}", y[3]);\n}\n' >"$WORK/cwd/bad.rs"
+        capture report-findings \
+            --prompt 'Read bad.rs, then call your ReportFindings tool once with every bug you find in it (two findings), then say done.' \
+            -- --safe-mode --allowedTools 'Read ReportFindings'
+        ;;
+    # A background task the model stops itself: the task's final status and
+    # whatever reason the CLI gives (HD60).
+    task-stop)
+        capture task-stop --results 2 \
+            --prompt 'Run `sleep 300` with the Bash tool using run_in_background, then stop that background task with TaskStop, then say done.' \
+            -- --safe-mode --allowedTools 'Bash TaskStop'
+        ;;
     # (c) A failing turn. An empty CLAUDE_CONFIG_DIR has no credentials, so the
     # CLI ends the turn with terminal_reason "api_error" — reliable, offline,
     # and free, unlike provoking a real API failure.

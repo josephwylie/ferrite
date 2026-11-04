@@ -76,6 +76,9 @@ impl<'a> Work<'a> {
             ToolKind::Fetch => return counted("Fetching", "Fetched", "page", "pages"),
             ToolKind::WebSearch => return counted("Running", "Ran", "web search", "web searches"),
             ToolKind::Agent => return counted("Running", "Ran", "agent", "agents"),
+            ToolKind::Findings => {
+                return counted("Reporting", "Reported", "findings report", "findings reports")
+            }
             ToolKind::Mcp(_) if running => "Calling",
             ToolKind::Mcp(_) => "Called",
             ToolKind::Todo | ToolKind::Question | ToolKind::Visual | ToolKind::Other if running => {
@@ -104,6 +107,7 @@ impl<'a> Work<'a> {
             ToolKind::Fetch => tense("Fetching", "Fetched"),
             ToolKind::WebSearch => tense("Searching the web for", "Searched the web for"),
             ToolKind::Agent => tense("Running agent", "Ran agent"),
+            ToolKind::Findings => tense("Reporting findings", "Reported findings"),
             ToolKind::Mcp(_)
             | ToolKind::Todo
             | ToolKind::Question

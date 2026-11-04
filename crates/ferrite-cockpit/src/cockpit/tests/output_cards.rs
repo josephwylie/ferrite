@@ -243,3 +243,42 @@ fn a_local_server_opens_as_a_page_it_cannot_draw(cx: &mut TestAppContext) {
         "nothing to reload"
     );
 }
+
+/// A settled `ReportFindings` call, opened, draws its findings grouped by
+/// file (HD70); a failed one draws none and stays a failure.
+#[gpui::test]
+fn a_settled_findings_call_draws_its_findings_by_file(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("findings-card", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let stream = fake.streams.borrow()[0].clone();
+    stream
+        .send(SessionEvent::ToolStarted {
+            id: "review".into(),
+            name: "ReportFindings".into(),
+            input: serde_json::json!({ "findings": [
+                { "file": "a.rs", "line": 2, "summary": "Divides by zero", "failure_scenario": "main panics", "verdict": "CONFIRMED" },
+                { "file": "a.rs", "line": 9, "summary": "Indexes an empty Vec", "failure_scenario": "main panics" },
+                { "file": "b.rs", "summary": "Leaks a handle", "failure_scenario": "fds run out" },
+            ]}),
+        })
+        .unwrap();
+    stream
+        .send(SessionEvent::ToolCompleted {
+            id: "review".into(),
+            output: "3 findings reported.".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        })
+        .unwrap();
+    stream.send(SessionEvent::TextDelta { text: "Done.\n\n".into() }).unwrap();
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("review".into()));
+        cx.notify();
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("findings").is_some(), "the card is drawn");
+}
