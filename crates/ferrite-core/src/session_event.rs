@@ -155,12 +155,14 @@ pub enum SessionEvent {
     AccountPlan {
         name: String,
     },
-    /// The CLI's own version, as it names itself at its handshake (Claude's
-    /// `system/init` `claude_code_version`, HD75): kept with the Session so a
-    /// report can say which CLI behaved so. Said again by every Session;
-    /// never persisted.
-    CliVersion {
+    /// What the CLI says of itself at its handshake (Claude's `system/init`,
+    /// HD75, HD14): its own version, and the tools it has loaded (the
+    /// deferred ones are not in the list), kept with the Session so a report
+    /// can say which CLI behaved so and what it could call. Said again by
+    /// every Session; never persisted.
+    Handshake {
         version: String,
+        tools: Vec<String>,
     },
     /// The provider's running estimate of the tokens the model has thought
     /// in the message it is writing (Claude's `system/thinking_tokens`): it

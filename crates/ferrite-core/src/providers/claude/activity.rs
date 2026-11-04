@@ -226,8 +226,15 @@ impl Decoder {
                     events.push(SessionEvent::PermissionMode { mode: mode.into() });
                 }
                 if let Some(version) = string(&value, "claude_code_version") {
-                    events.push(SessionEvent::CliVersion {
+                    events.push(SessionEvent::Handshake {
                         version: version.into(),
+                        tools: value["tools"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect(),
                     });
                 }
                 if let Some(event) = wire::parse_value(&value) {
@@ -2040,7 +2047,7 @@ mod tests {
 
     /// `system/init` names the CLI's own version (2.1.318's captures all do).
     #[test]
-    fn init_records_the_cli_version() {
+    fn init_records_the_cli_version_and_its_tools() {
         let init = include_str!("../../../tests/fixtures/claude-background-2.1.318.jsonl")
             .lines()
             .find(|line| line.contains(r#""subtype":"init""#))
@@ -2048,7 +2055,8 @@ mod tests {
         let events = Decoder::default().decode(init);
         assert!(events.iter().any(|event| matches!(
             event,
-            SessionEvent::CliVersion { version } if version == "2.1.318"
+            SessionEvent::Handshake { version, tools }
+                if version == "2.1.318" && tools.iter().any(|tool| tool == "ReportFindings")
         )));
     }
 

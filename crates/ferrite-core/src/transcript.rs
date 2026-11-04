@@ -944,6 +944,8 @@ pub struct Transcript {
     plan: Option<String>,
     /// The CLI's version, as the live Session announced it (HD75).
     cli_version: Option<String>,
+    /// The tools the CLI had loaded at its handshake (HD14).
+    cli_tools: Vec<String>,
     /// When the running turn began — the operator's prompt went out — for
     /// the working line's clock. None between turns.
     turn_started: Option<std::time::Instant>,
@@ -1274,6 +1276,7 @@ impl Transcript {
             rate_limits: RateLimits::default(),
             plan: None,
             cli_version: None,
+            cli_tools: Vec::new(),
             turn_started: None,
             turn_output_tokens: 0,
             last_report: 0,
@@ -1489,6 +1492,12 @@ impl Transcript {
     /// The account's plan (`Max`), when the provider named it.
     pub fn plan(&self) -> Option<&str> {
         self.plan.as_deref()
+    }
+
+    /// The tools the CLI had loaded, when the live Session announced them
+    /// (HD14): what the model could call, never inferred from what it did.
+    pub fn cli_tools(&self) -> &[String] {
+        &self.cli_tools
     }
 
     /// The CLI's version, when the live Session announced it (HD75).
@@ -2115,8 +2124,9 @@ impl Transcript {
                 self.plan = Some(name);
                 Update::default()
             }
-            Input::Event(SessionEvent::CliVersion { version }) => {
+            Input::Event(SessionEvent::Handshake { version, tools }) => {
                 self.cli_version = Some(version);
+                self.cli_tools = tools;
                 Update::default()
             }
             Input::Event(SessionEvent::ThinkingTokens { estimated }) => {

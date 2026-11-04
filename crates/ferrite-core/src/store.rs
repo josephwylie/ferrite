@@ -1397,7 +1397,7 @@ impl Record {
             // An estimate for the live line; the turn's usage is its record.
             SessionEvent::ThinkingTokens { .. } => return None,
             // Every Session says it again at its handshake.
-            SessionEvent::AccountPlan { .. } | SessionEvent::CliVersion { .. } => return None,
+            SessionEvent::AccountPlan { .. } | SessionEvent::Handshake { .. } => return None,
             SessionEvent::ScheduledWork { .. } => return None,
         })
     }
