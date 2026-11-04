@@ -13564,6 +13564,8 @@ impl CockpitView {
             .flex()
             .items_center()
             .child(
+            .prefs
+            .settings
                 button(
                     format!("nav-activity-pin-{}", thread.get()),
                     ferrite_ui::icons::PIN,
