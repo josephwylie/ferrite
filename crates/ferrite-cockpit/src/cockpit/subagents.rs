@@ -2129,6 +2129,21 @@ impl Cards {
                 );
             }
             section = section.child(rows);
+            // The option in hand shows its preview (a layout, a snippet) in
+            // the command well's own style, as plain text: the cursor's
+            // option, else the one picked last.
+            let previewed = (keyed.then_some(cursor).flatten())
+                .or_else(|| answers[qi].picks.last().copied())
+                .and_then(|at| question.options.get(at))
+                .and_then(|option| option.preview.as_deref())
+                .filter(|preview| !preview.trim().is_empty());
+            if let Some(preview) = previewed {
+                section = section.child(
+                    decision::well(false, preview.to_owned())
+                        .debug_selector(move || format!("question-preview-{qi}"))
+                        .mt(px(theme::DECISION_QUESTION_GAP)),
+                );
+            }
             if question.allow_other {
                 // The own answer is not a second field: one bare line on
                 // the options' grid — an option row high, its digit where

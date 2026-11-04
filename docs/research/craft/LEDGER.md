@@ -162,6 +162,6 @@ Each item is ticked only after it's seen working in the real installed app.
     - a rewind cuts at the first prompt under its id, so an old log's echo no longer keeps the real prompt;
     - Rewind gives the prompt's words back to the Composer.
 12. **Claude steering is surfaced:** "Steering", and Send now folds the message in instead of interrupting. A real fold with tools is captured first. BUILT, not ticked (`claude-steer-2.1.318`): a prompt queued while a turn runs is `Folding`, which the strip shows as `Steering` while keeping edit and remove. Send now hands it over again without interrupting, and a folded prompt keeps the turn's clock.
-13. **Question option previews** (HD68), and **scroll position per thread** (HD83).
+13. **Question option previews** (HD68), and **scroll position per thread** (HD83). Previews BUILT, not ticked (`decision_cards.rs`): the option in hand (the cursor's, else the last picked) shows its preview as plain text in the command well, in the transcript and the overlay; no HTML previews. Scroll per thread: already true in a session, so only a test was added (`interaction_regressions.rs`); it is not saved across a restart.
 14. **Review comment threads** (HD71).
 15. **The rest of `STOCKTAKE-STATUS.md`:** MISSING and PARTIAL rows, most noticed first.

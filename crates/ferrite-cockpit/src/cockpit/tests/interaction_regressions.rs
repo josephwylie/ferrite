@@ -129,3 +129,51 @@ fn selection_keeps_position(cx: &mut TestAppContext, name: &str, prompt: &str) {
         "double-click must preserve scroll"
     );
 }
+
+/// A Thread is read where it was left (HD83): scrolled away from the tail,
+/// leaving for another Thread and coming back shows the same lines, not
+/// the tail.
+#[gpui::test]
+fn a_thread_keeps_its_scroll_position_while_another_shows(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("scroll-per-thread", 2);
+    let threads = core.threads();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    let first = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let second = *threads.iter().find(|thread| **thread != first).unwrap();
+    let stream = threads.iter().position(|thread| *thread == first).unwrap();
+    fake.streams.borrow()[stream]
+        .send(SessionEvent::TextDelta {
+            text: (0..80).map(|n| format!("Answer line {n}\n\n")).collect(),
+        })
+        .unwrap();
+    tick(cx);
+    let scroll = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .transcript()
+            .unwrap()
+            .read(cx)
+            .scroll()
+            .clone()
+    });
+    let pointer = gpui::point(scroll.bounds().center().x, scroll.bounds().center().y);
+    wheel(cx, pointer, 600.);
+    assert!(!scroll.is_following_tail(), "the premise: scrolled away");
+    let left_at = scroll.offset().y;
+
+    view.update(cx, |view, cx| view.focus_thread(second, cx));
+    tick(cx);
+    view.update(cx, |view, cx| view.focus_thread(first, cx));
+    tick(cx);
+    let back = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .transcript()
+            .unwrap()
+            .read(cx)
+            .scroll()
+            .clone()
+    });
+    assert!(!back.is_following_tail(), "it did not jump to the tail");
+    assert_eq!(back.offset().y, left_at, "the same lines are in view");
+}

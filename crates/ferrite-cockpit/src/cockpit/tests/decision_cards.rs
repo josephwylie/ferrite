@@ -316,3 +316,55 @@ fn the_working_line_stays_over_a_waiting_decision(cx: &mut TestAppContext) {
         .expect("the Decision waits");
     assert!(line.bottom() <= card.top() + px(1.), "the line is over it");
 }
+
+/// An option's preview (HD68) is drawn as plain text under the options
+/// while that option is the one in hand; an option with none shows none.
+#[gpui::test]
+fn the_option_in_hand_shows_its_preview(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("question-preview", 1);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    let choice = |label: &str, preview: Option<&str>| ferrite_core::questions::Choice {
+        label: label.into(),
+        description: format!("{label} it"),
+        preview: preview.map(str::to_owned),
+    };
+    fake.streams.borrow()[0]
+        .send(SessionEvent::DecisionRequested {
+            decision: Decision {
+                delivery: Default::default(),
+                kind: ferrite_core::DecisionKind::Questions(vec![
+                    ferrite_core::questions::Question {
+                        id: None,
+                        question: "Which layout?".into(),
+                        header: "Layout".into(),
+                        multi_select: false,
+                        secret: false,
+                        allow_other: false,
+                        options: vec![
+                            choice("Rows", Some("| a | b |")),
+                            choice("Columns", None),
+                        ],
+                    },
+                ]),
+                policy: Default::default(),
+                id: "q_preview".into(),
+                tool_use_id: "toolu_preview".into(),
+                tool_name: "AskUserQuestion".into(),
+                description: String::new(),
+                input: serde_json::Value::Null,
+                suggestions: vec![],
+            },
+        })
+        .unwrap();
+    tick(cx);
+    cx.debug_bounds("question-preview-0")
+        .expect("the first option is in hand, with its preview");
+    let second = cx.debug_bounds("question-choice-0-1").expect("option two");
+    cx.simulate_click(second.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        cx.debug_bounds("question-preview-0").is_none(),
+        "an option with no preview shows none"
+    );
+}
