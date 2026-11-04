@@ -138,21 +138,29 @@ Each item is ticked only after it's seen working in the real installed app.
 
 1. **Reply.** A floating card over the selection that becomes a `Reply` card in the composer tray (`claude-sidechat-menus.md`). Owner 2026-11-04: the card is good, but the tray card must use Ferrite's attachment tile; being fixed. BUILT, not ticked: tests pass (`transcript_pointer.rs`); not yet seen in the installed app. The selection wash is drawn by the card (a press clears the real selection), so Esc does not bring the real selection back.
 2. **Side chat.** A right-docked, tabbed pane (`claude-sidechat-menus.md`). Owner 2026-11-04: it is refused while a turn runs, but Claude allows that. Lane B is fixing it. BUILT, not ticked: tests pass (`tests/side_chat.rs`); not yet seen in the installed app. Opening needs the agent to be able to fork (no turn running); a fork that was never closed (quit mid-chat) stays a normal thread.
-3. **Subagent drill-in.** In the same right pane.
-4. **Right-click menus.** Each matches its target: answer, prompt, link, file.
-5. **Files, Changes, session rail and terminal.** Title-bar tools as Claude's (`claude-files-changes.md`). They replace Show in Finder.
+3. **Subagent drill-in.** In the same right pane. BUILT, not ticked: tests pass (`tests/subagents.rs`); not yet seen in the installed app or compared side by side. Opens from the row only; a notice's jump and the history arrows still give the Pane the agent's transcript (`select_subject`). `Model X` shows only when the agent's transcript names its model.
+4. **Right-click menus.** Each matches its target: answer, prompt, link, file. BUILT, not ticked: answer, prompt and link (`tests/forks.rs`, `tests/link_clicks.rs`); not yet seen in the installed app. The file menu waits on the Files tree (item 5). Pin as chapter only marks the answer in its transcript (no chapter list, not saved). Open in Files opens the existing reader until Files exists.
+5. **Files, Changes, session rail and terminal.** Title-bar tools as Claude's (`claude-files-changes.md`). They replace Show in Finder. NOT BUILT: no terminal or PTY crate is in the workspace (a real terminal is a large job); the Files tree, editor and Changes split are unstarted.
 6. **Turn states:**
    - Deny ends the turn, with "(1 stopped)";
    - Stop says "You stopped after Ns";
    - the todo card stays, with a blocked state;
    - a live "Working for Ns";
    - the working line stays during an approval.
-7. **Background work reports back to its row** (HD64).
-8. **Edit and Write stream** while their input arrives (HD39).
-9. **End-of-turn wrap-up box** (HD58).
-10. **Changes refreshes** after background work and pushes (HD27).
-11. **Mid-turn messages are confirmed** (HD5), and rewinds are validated (HD79).
-12. **Claude steering is surfaced:** "Steering", and Send now folds the message in instead of interrupting. A real fold with tools is captured first.
+7. **Background work reports back to its row** (HD64). BUILT, not ticked: tests pass (`tests/background_handback.rs`, on the real `claude-background-2.1.318` capture). The launch row stays running past its turn, with `View live output ▸` opening the right-docked Background tasks pane, and settles with a muted `Background command completed · …` line where the work finished. The rail has a `Background tasks` section. There is no pill. Not built:
+    - the pane's trash and expand, since the icon set has no trash;
+    - an agent's nested child tasks;
+    - a Codex background terminal still settles at its turn's end;
+    - a stopped task reads `failed`.
+8. **Edit and Write stream** while their input arrives (HD39). BUILT, not ticked (`tests/edit_drafts.rs`): the first draft opens a running row, the streaming input grows its would-be change, and the settled call is the same row.
+9. **End-of-turn wrap-up box** (HD58). BUILT for Claude, not ticked (`tests/wrap_up.rs`): Ferrite's in-band server always offers `wrap_up`. Its box holds the recap, the question and up to two next steps, and each step sends its own words. Codex is not offered it. There is no Claude capture of the box, so its look uses the existing card and button styles.
+10. **Changes refreshes** after background work and pushes (HD27). BUILT, not ticked: the PR is read again at once after a `git commit`, `git push` or `gh pr …` command settles, or after background work is handed back (`tests/pr.rs`). Changes still counts the agent's own edits, not a git diff.
+11. **Mid-turn messages are confirmed** (HD5), and rewinds are validated (HD79). BUILT, not ticked:
+    - `user_message_uuids` on a request or a result starts a folded prompt;
+    - a resumed rewind passes `--resume-drops-turn`;
+    - a rewind cuts at the first prompt under its id, so an old log's echo no longer keeps the real prompt;
+    - Rewind gives the prompt's words back to the Composer.
+12. **Claude steering is surfaced:** "Steering", and Send now folds the message in instead of interrupting. A real fold with tools is captured first. BUILT, not ticked (`claude-steer-2.1.318`): a prompt queued while a turn runs is `Folding`, which the strip shows as `Steering` while keeping edit and remove. Send now hands it over again without interrupting, and a folded prompt keeps the turn's clock.
 13. **Question option previews** (HD68), and **scroll position per thread** (HD83).
 14. **Review comment threads** (HD71).
 15. **The rest of `STOCKTAKE-STATUS.md`:** MISSING and PARTIAL rows, most noticed first.
