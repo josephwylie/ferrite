@@ -69,6 +69,17 @@ struct LinkPress(Option<PressedLink>);
 
 impl Global for LinkPress {}
 
+/// The link the latest press landed on, if it landed on one: what an
+/// app's own press handler on a surface around the text (a right-click
+/// menu) asks, since the inline under the pointer has recorded the press
+/// by the time that handler runs.
+pub fn pressed_link(cx: &App) -> Option<SharedString> {
+    cx.try_global::<LinkPress>()?
+        .0
+        .as_ref()
+        .map(|pressed| pressed.url.clone())
+}
+
 #[derive(Clone, Debug)]
 struct PressedLink {
     url: SharedString,

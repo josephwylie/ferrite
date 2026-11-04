@@ -3,7 +3,7 @@
 //! Cockpit owns roster and cross-pane commands. This module owns the expensive
 //! per-Subject row snapshot, native text, selection document and viewport.
 
-mod answer;
+mod message_menu;
 mod find;
 mod outputs;
 mod reply;
@@ -366,8 +366,10 @@ pub struct TranscriptView {
     pressed_at: Option<gpui::Point<gpui::Pixels>>,
     /// A turn card's menu, while open (`outputs`).
     output_menu: Option<outputs::OutputMenu>,
-    /// An answer's `⋯` menu, while open (`answer`).
-    answer_menu: Option<answer::AnswerMenu>,
+    /// A message's or a link's menu, while open (`message_menu`).
+    message_menu: Option<message_menu::MessageMenu>,
+    /// The answers pinned as chapters (`message_menu`), by last block.
+    pinned: HashSet<BlockId>,
 }
 
 /// The scroll room a band jump adds under the last row: the jump's row and
@@ -488,7 +490,8 @@ impl TranscriptView {
             reply_card: None,
             pressed_at: None,
             output_menu: None,
-            answer_menu: None,
+            message_menu: None,
+            pinned: HashSet::new(),
         };
         view.register_scope(cx);
         view.sync_members(cx);
@@ -1143,14 +1146,17 @@ impl TranscriptView {
                             (
                                 "answer-more",
                                 ferrite_ui::icons::ELLIPSIS,
-                                answer::MORE_LABEL,
+                                message_menu::MORE_LABEL,
                             ),
         if row.kind() == RowKind::Note {
             return note_line(row.source().unwrap_or_default()).into_any_element();
         }
                             &Ok(()),
                             view.clone(),
-                            move |view, at, cx| view.open_answer_menu(last, text.clone(), at, cx),
+                            move |view, at, cx| {
+                                let menu = view.answer_menu(&row_id, last, text.clone(), at);
+                                view.open_message_menu(menu, cx)
+                            },
                         )
                     }))
                     .children(time)
@@ -1160,8 +1166,17 @@ impl TranscriptView {
                 .flex()
                 .items_start()
                 .min_w_0()
+                    .children(self.pinned.contains(&last).then(|| {
+                        div()
+                            .debug_selector(|| "answer-chapter".into())
+                            .flex_shrink_0()
+                            .text_color(gpui::rgb(theme::INK_SUBTLE))
+                            .child("Chapter")
+                    }))
                 .w_full()
                 .flex_shrink_0()
+            let right_id = row.id().clone();
+            let right_source = source.to_owned();
                 .when(actions.is_some(), |row| {
                     row.flex_col()
                         .group(MESSAGE_GROUP)
@@ -1169,6 +1184,14 @@ impl TranscriptView {
                 })
                 .child(
                     // The prose alone, its actions under it apart.
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |view, event: &gpui::MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        let menu = view.answer_menu(&right_id, last, right_source.clone(), event.position);
+                        view.right_click_message(menu, window, cx);
+                    }),
+                )
                     div()
                         .debug_selector(|| "transcript-answer".into())
                         .w_full()
@@ -1240,10 +1263,29 @@ impl TranscriptView {
                 .w_full()
                 .min_w_0()
                 .child(pane::prompt_row(
+            let words = ferrite_core::prompt_files::split(line.clone()).0;
+            let prompt_block = block.id;
+            let cuts = cuts.map(|((_, allowed), _)| allowed.clone());
                     block,
                     line,
                     &row_cx,
                     Some(actions.into_any_element()),
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |view, event: &gpui::MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        let menu = message_menu::MessageMenu {
+                            target: message_menu::Target::Prompt {
+                                block: prompt_block,
+                                cuts: cuts.clone(),
+                            },
+                            plain: words.clone(),
+                            markdown: words.clone(),
+                            at: event.position,
+                        };
+                        view.right_click_message(menu, window, cx);
+                    }),
+                )
                 ))
                 .into_any_element();
         }
@@ -2590,7 +2632,7 @@ impl Render for TranscriptView {
         let reply = self.reply_float(window, cx);
         let reply_card = self.reply_card_float(cx);
         let output_menu = self.output_menu_float(cx);
-        let answer_menu = self.answer_menu_float(cx);
+        let message_menu = self.message_menu_float(cx);
         let find_bar = self.find_bar();
         div()
             .relative()
@@ -2635,7 +2677,7 @@ impl Render for TranscriptView {
             .children(reply)
             .children(reply_card)
             .children(output_menu)
-            .children(answer_menu)
+            .children(message_menu)
             .children(find_bar)
             .on_action(cx.listener(|view, _: &crate::find::Next, _, cx| view.find_step(true, cx)))
             .on_action(

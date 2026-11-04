@@ -268,3 +268,28 @@ fn a_tap_on_a_file_card_opens_it_while_other_text_is_highlighted(cx: &mut TestAp
     );
     assert_eq!(copied(cx), None, "the tap let go of the old highlight");
 }
+
+/// A right-click on a link opens its own menu — Open link, Copy link — and
+/// not the message's, nor the Pane's; Copy link copies the address.
+#[gpui::test]
+fn a_right_click_on_a_link_offers_the_links_actions(cx: &mut TestAppContext) {
+    let (view, cx) = linked_answer("link-menu", cx);
+    let at = on_link(&view, cx);
+    cx.simulate_mouse_down(at, MouseButton::Right, gpui::Modifiers::none());
+    cx.simulate_mouse_up(at, MouseButton::Right, gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("answer-menu").is_some(), "a menu opens");
+    assert!(cx.debug_bounds("answer-menu-row-1").is_some());
+    assert!(
+        cx.debug_bounds("answer-menu-row-2").is_none(),
+        "a web link has Open and Copy only"
+    );
+    assert_eq!(cx.opened_url(), None, "a right-click opens nothing");
+    let copy = cx.debug_bounds("answer-menu-row-1").unwrap();
+    cx.simulate_click(copy.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+        Some(URL)
+    );
+}

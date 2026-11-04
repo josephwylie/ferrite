@@ -61,8 +61,9 @@ fn an_answers_fork_opens_the_whole_conversation_focused(cx: &mut TestAppContext)
     assert_eq!(fake.forks.borrow()[0].before, None, "the whole of it");
 }
 
-/// The answer's `⋯`: Copy message, Reply and Fork from here; Copy copies
-/// the answer's Markdown.
+/// The answer's `⋯`, and a right-click on it: Copy message, Copy message as
+/// Markdown │ Attach message as context, Pin as chapter │ Fork from here;
+/// Copy copies the answer, Attach makes a Reply card of it.
 #[gpui::test]
 fn an_answers_menu_copies_replies_and_forks(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("answer-menu", cx);
@@ -70,7 +71,7 @@ fn an_answers_menu_copies_replies_and_forks(cx: &mut TestAppContext) {
     cx.simulate_click(more.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds("answer-menu").is_some(), "the menu opens");
-    for row in 0..2 {
+    for row in [0, 1, 3, 4, 6] {
         assert!(cx
             .debug_bounds(format!("answer-menu-row-{row}").leak())
             .is_some());
@@ -90,7 +91,7 @@ fn an_answers_menu_copies_replies_and_forks(cx: &mut TestAppContext) {
     // Reply attaches the whole answer as a Reply card in the tray.
     cx.simulate_click(more.center(), gpui::Modifiers::none());
     tick(cx);
-    let reply = cx.debug_bounds("answer-menu-row-1").unwrap();
+    let reply = cx.debug_bounds("answer-menu-row-3").unwrap();
     cx.simulate_click(reply.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
@@ -104,7 +105,7 @@ fn an_answers_menu_copies_replies_and_forks(cx: &mut TestAppContext) {
     cx.simulate_click(more.center(), gpui::Modifiers::none());
     tick(cx);
     let fork = cx
-        .debug_bounds("answer-menu-row-3")
+        .debug_bounds("answer-menu-row-6")
         .expect("Fork from here");
     cx.simulate_click(fork.center(), gpui::Modifiers::none());
     landed_on_fork(&view, &fake, cx);
@@ -234,4 +235,68 @@ fn the_rewind_menu_offers_the_code_only_where_the_agent_restores_files(cx: &mut 
         let thread = view.cockpit.threads()[0];
         assert_eq!(labels(view, thread), ["Rewind conversation"]);
     });
+}
+
+fn right_click(cx: &mut gpui::VisualTestContext, at: Point<Pixels>) {
+    cx.simulate_mouse_down(at, MouseButton::Right, gpui::Modifiers::none());
+    cx.simulate_mouse_up(at, MouseButton::Right, gpui::Modifiers::none());
+    tick(cx);
+}
+
+/// Right-clicking an answer opens Claude's message menu, not the Pane's:
+/// Copy message, Copy as Markdown │ Attach, Pin │ Fork; Pin marks the
+/// answer a chapter and the row then reads `Unpin chapter`. On a prompt it
+/// is Copy, Copy as Markdown │ Attach │ Rewind, Fork; Rewind opens the
+/// cockpit's own Rewind menu.
+#[gpui::test]
+fn right_clicking_an_answer_or_a_prompt_opens_the_message_menu(cx: &mut TestAppContext) {
+    let (view, fake, cx) = answered("rc-menus", cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let answer = cx.debug_bounds("transcript-answer").expect("the answer");
+    right_click(cx, answer.center());
+    assert!(cx.debug_bounds("answer-menu").is_some(), "the message menu");
+    for row in [0, 1, 3, 4, 6] {
+        assert!(
+            cx.debug_bounds(format!("answer-menu-row-{row}").leak())
+                .is_some(),
+            "answer row {row}"
+        );
+    }
+    assert!(cx.debug_bounds("answer-menu-row-7").is_none());
+    let pin = cx.debug_bounds("answer-menu-row-4").unwrap();
+    cx.simulate_click(pin.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("answer-chapter").is_some(), "pinned");
+
+    // A prompt: the same menu with its own rows.
+    view.update(cx, |view, _| view.cockpit.send(thread, "again".into()));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "bravo\n\n".into(),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    let prompt = cx.debug_bounds("transcript-prompt").expect("the prompt");
+    right_click(cx, prompt.center());
+    for row in [0, 1, 3, 5, 6] {
+        assert!(
+            cx.debug_bounds(format!("answer-menu-row-{row}").leak())
+                .is_some(),
+            "prompt row {row}"
+        );
+    }
+    assert!(cx.debug_bounds("answer-menu-row-4").is_none(), "no Pin");
+    let copy = cx.debug_bounds("answer-menu-row-0").unwrap();
+    cx.simulate_click(copy.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+        Some("again")
+    );
 }
