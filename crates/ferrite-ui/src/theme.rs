@@ -1745,6 +1745,8 @@ pub const TERMINAL_ANSI: [u32; 16] = [
     0x2a2a2a, RED, GREEN, YELLOW, LINK_INK, 0xc09af0, 0x7fd1d6, 0xcfcfcf, // normal
     0x5e5e5e, 0xff8f93, 0xb0e3a9, 0xf2d99c, 0x9cc0f4, 0xd6b8f7, 0xa3e4e8, INK_STRONG, // bright
 ];
+/// The rows a shell is first told it has, before its pane measures them.
+pub const TERMINAL_FIRST_ROWS: f32 = 40.0;
 /// How many lines of scrollback a new terminal keeps.
 pub const TERMINAL_SCROLLBACK: usize = 10_000;
 /// The glyph under the lit block cursor reads in the pane's own ground.

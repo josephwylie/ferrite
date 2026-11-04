@@ -518,6 +518,10 @@ fn tools(state: &str, tools: &'static [Tool], file: Option<&'static str>) -> (Sc
         let Some(thread) = view.focused_thread() else {
             return;
         };
+        // Claude's captures hold the dock alone, the rail put away.
+        if !tools.contains(&Tool::Terminal) {
+            view.toggle_panel_now(cx);
+        }
         for tool in tools {
             view.press_tool(*tool, cx);
         }

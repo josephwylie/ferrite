@@ -23,9 +23,6 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::tty;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-/// The first size, before a view has measured its pane.
-const INITIAL: (u16, u16) = (80, 24);
-
 /// Hands the emulator's events to whoever holds the receiver.
 #[derive(Clone)]
 pub(crate) struct Listener(Sender<Event>);
@@ -47,11 +44,12 @@ pub struct Terminal {
 
 impl Terminal {
     /// Start the user's login shell in `directory`, keeping `scrollback`
-    /// lines of history.
-    pub fn spawn(directory: &Path, scrollback: usize) -> io::Result<Self> {
+    /// lines of history, at `columns` by `lines` — the pane's size as the
+    /// caller reckons it, so the shell's first prompt is drawn to fit; the
+    /// view sets the measured size on its first frame.
+    pub fn spawn(directory: &Path, scrollback: usize, (columns, lines): (u16, u16)) -> io::Result<Self> {
         let (events_tx, events) = channel();
         let listener = Listener(events_tx);
-        let (columns, lines) = INITIAL;
         let config = Config {
             scrolling_history: scrollback,
             ..Config::default()
@@ -239,7 +237,7 @@ mod tests {
     #[test]
     fn the_shell_starts_in_the_folder_and_runs_what_is_written() {
         let dir = scratch("cwd");
-        let terminal = Terminal::spawn(&dir, 1000).unwrap();
+        let terminal = Terminal::spawn(&dir, 1000, (80, 24)).unwrap();
         terminal.write(&b"pwd; echo ferrite-$((6*7))\r"[..]);
         let text = wait_for(&terminal, "ferrite-42");
         assert!(text.contains("ferrite-42"), "{text}");
@@ -249,7 +247,7 @@ mod tests {
     #[test]
     fn a_resize_reaches_the_shell() {
         let terminal_dir = scratch("size");
-        let mut terminal = Terminal::spawn(&terminal_dir, 1000).unwrap();
+        let mut terminal = Terminal::spawn(&terminal_dir, 1000, (80, 24)).unwrap();
         terminal.resize(100, 30, 8, 16);
         assert_eq!(terminal.size(), (100, 30));
         terminal.write(&b"stty size\r"[..]);
@@ -260,7 +258,7 @@ mod tests {
     #[test]
     fn a_selection_copies_its_text_and_paste_types_it() {
         let dir = scratch("select");
-        let terminal = Terminal::spawn(&dir, 1000).unwrap();
+        let terminal = Terminal::spawn(&dir, 1000, (80, 24)).unwrap();
         terminal.paste("echo hello-selected\n");
         let text = wait_for(&terminal, "\nhello-selected");
         assert!(text.contains("\nhello-selected"), "the shell ran it: {text}");
@@ -274,7 +272,7 @@ mod tests {
     #[test]
     fn dropping_it_ends_the_shell() {
         let dir = scratch("kill");
-        let terminal = Terminal::spawn(&dir, 1000).unwrap();
+        let terminal = Terminal::spawn(&dir, 1000, (80, 24)).unwrap();
         terminal.write(&b"echo $$ > pid.txt\r"[..]);
         let pid_file = dir.join("pid.txt");
         let until = Instant::now() + Duration::from_secs(10);

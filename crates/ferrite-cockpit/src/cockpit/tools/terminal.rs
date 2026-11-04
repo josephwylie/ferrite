@@ -102,7 +102,11 @@ impl CockpitView {
         };
         let prefs = &self.tools.terminal_prefs;
         let (settings, scrollback) = (prefs.settings, prefs.scrollback);
-        let Ok(shell) = Terminal::spawn(&directory, scrollback) else {
+        // The column's width in cells, reckoned from the face's usual advance.
+        let columns = ((theme::TERMINAL_W - 2. * theme::TERMINAL_PAD_X)
+            / (theme::FS_TERMINAL * theme::CODE_ADVANCE)) as u16;
+        let lines = (theme::TERMINAL_FIRST_ROWS) as u16;
+        let Ok(shell) = Terminal::spawn(&directory, scrollback, (columns, lines)) else {
             return;
         };
         let view = cx.new(|cx| TerminalView::new(shell, settings, cx));
