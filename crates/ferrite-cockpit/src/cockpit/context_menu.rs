@@ -40,6 +40,9 @@ pub(super) enum MenuTarget {
     /// The Changes scope dropdown, and its `⋯`.
     ChangesScope(ThreadId),
     ChangesMore(ThreadId),
+    /// The terminal's right-click, and its `⋯`.
+    Terminal(ThreadId),
+    TerminalMore(ThreadId),
 }
 
 /// One thing a context-menu row does.
@@ -96,6 +99,8 @@ pub(super) enum MenuVerb {
     Files(tools::FilesVerb),
     /// A Changes verb (`tools::ChangesVerb`).
     Changes(tools::ChangesVerb),
+    /// A Terminal verb (`tools::TerminalVerb`).
+    Terminal(tools::TerminalVerb),
     /// The Thread's id in the form the CLI takes (`thread_link`).
     CopyLink,
     /// Move the Thread into this Group (Claude's `Move to section ›`).
@@ -113,6 +118,8 @@ pub(super) enum Submenu {
     Files(tools::FilesSub),
     /// `Compare against ›`.
     Changes(tools::ChangesSub),
+    /// `Cursor style ›` and `Scrollback ›`.
+    Terminal(tools::TerminalSub),
 }
 
 /// The context menu up on screen.
@@ -332,6 +339,8 @@ impl CockpitView {
             MenuTarget::FilesMore(thread) => rows = self.files_more_rows(thread),
             MenuTarget::ChangesScope(thread) => rows = self.changes_scope_rows(thread),
             MenuTarget::ChangesMore(thread) => rows = self.changes_more_rows(thread),
+            MenuTarget::Terminal(_) => rows = self.terminal_context_rows(),
+            MenuTarget::TerminalMore(_) => rows = self.terminal_more_rows(),
             MenuTarget::Tools(_) => {
                 rows.push(Some((menu::Item::new("Reveal in Finder"), MenuVerb::Reveal)));
                 rows.push(Some((menu::Item::new("Copy path"), MenuVerb::CopyPath)));
@@ -477,6 +486,7 @@ impl CockpitView {
                 self.changes_branch_rows(thread)
             }
             (Submenu::Changes(_), _) => Vec::new(),
+            (Submenu::Terminal(sub), _) => self.terminal_sub_rows(sub),
         }
     }
 
@@ -640,6 +650,10 @@ impl CockpitView {
                 MenuTarget::ChangesScope(thread) | MenuTarget::ChangesMore(thread),
                 MenuVerb::Changes(verb),
             ) => self.run_changes_verb(thread, verb, cx),
+            (
+                MenuTarget::Terminal(thread) | MenuTarget::TerminalMore(thread),
+                MenuVerb::Terminal(verb),
+            ) => self.run_terminal_verb(thread, verb, cx),
             (MenuTarget::Prompt { thread, block }, MenuVerb::Rewind | MenuVerb::RewindCode) => {
                 self.cut_at_prompt(
                     thread,
@@ -733,6 +747,8 @@ impl CockpitView {
                     | MenuTarget::FilesMore(_)
                     | MenuTarget::ChangesScope(_)
                     | MenuTarget::ChangesMore(_)
+                    | MenuTarget::Terminal(_)
+                    | MenuTarget::TerminalMore(_)
                     | MenuTarget::Page(_) => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);

@@ -21,10 +21,11 @@ use std::collections::HashMap;
 mod changes;
 mod editor;
 mod files;
+mod terminal;
 mod tree;
 
 use super::*;
-use ferrite_ui::{icons, theme};
+use ferrite_ui::theme;
 
 /// One of the title bar's tool doors that has a surface behind it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +57,12 @@ pub(crate) struct Tools {
     docks: HashMap<ThreadId, Dock>,
     files: HashMap<ThreadId, files::Files>,
     changes: HashMap<ThreadId, changes::Changes>,
+    terminals: HashMap<ThreadId, terminal::Terminals>,
+    terminal_prefs: terminal::Prefs,
+    /// The shown shell is to take the keyboard (`tend_terminal`).
+    terminal_focus_wanted: bool,
+    /// Whether the shell's right-click found a selection.
+    terminal_selected: bool,
 }
 
 impl Tools {
@@ -70,6 +77,7 @@ gpui::actions!(cockpit, [ToggleTerminal, ToggleChanges, ToggleFiles, ToggleFileT
 pub(crate) use editor::AUTO_SAVE_AFTER;
 pub(crate) use changes::{Sub as ChangesSub, Verb as ChangesVerb};
 pub(crate) use files::{Sub as FilesSub, Verb as FilesVerb};
+pub(crate) use terminal::{Sub as TerminalSub, Verb as TerminalVerb};
 
 impl CockpitView {
     /// Whether the Thread's dock has anything open.
@@ -122,6 +130,10 @@ impl CockpitView {
         };
         *opening = !*opening;
         let opened = *opening;
+        if tool == Tool::Terminal && !opened {
+            // The column going ends its shells.
+            self.end_terminals(thread);
+        }
         if !self.tools.dock(thread).is_open() {
             self.tools.docks.remove(&thread);
             self.panel.expanded = false;
@@ -133,7 +145,8 @@ impl CockpitView {
                     self.ensure_files(thread, cx);
                 }
                 Tool::Changes => self.ensure_changes(thread, cx),
-                _ => {}
+                Tool::Terminal => self.ensure_terminal(thread, cx),
+                Tool::Rail => {}
             }
         }
         cx.notify();
@@ -200,10 +213,10 @@ impl CockpitView {
         column
     }
 
-    fn terminal_column(&self, _thread: ThreadId, cx: &mut Context<Self>) -> Div {
+    fn terminal_column(&self, thread: ThreadId, cx: &mut Context<Self>) -> Div {
         dock_column("dock-terminal", false)
             .w(px(theme::TERMINAL_W))
-            .child(dock_head("Terminal", "dock-terminal-close", Tool::Terminal, cx))
+            .child(self.terminal_pane(thread, cx))
     }
 }
 
@@ -220,31 +233,4 @@ fn dock_column(selector: &'static str, grows: bool) -> Div {
         .border_color(theme::paint::LINE)
         .when(grows, |column| column.flex_1())
         .when(!grows, |column| column.flex_shrink_0())
-}
-
-/// A dock piece's head: its name, and its close at the right.
-fn dock_head(
-    title: &'static str,
-    close_key: &'static str,
-    tool: Tool,
-    cx: &mut Context<CockpitView>,
-) -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(theme::SPACE_1))
-        .h(px(theme::WIN_CHROME_H))
-        .px(px(theme::PANEL_PAD_L))
-        .text_size(px(theme::FS_LABEL))
-        .text_color(rgb(theme::INK_SUBTLE))
-        .child(div().flex_1().min_w_0().truncate().child(title))
-        .child(
-            ferrite_pane::preview::head_door(close_key, close_key.into(), icons::CLOSE)
-                .tooltip(ferrite_ui::menu::tooltip("Close"))
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.press_tool(tool, cx);
-                })),
-        )
 }

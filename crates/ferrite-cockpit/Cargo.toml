@@ -22,6 +22,8 @@ ferrite-ui = { path = "../ferrite-ui" }
 ferrite-pane = { path = "../ferrite-pane" }
 # System notifications: herdr-focus-notify, vendored (its README).
 ferrite-focus-notify = { path = "../ferrite-focus-notify" }
+# The Terminal tool: the emulator and its PTY, drawn as a grid.
+ferrite-terminal = { path = "../ferrite-terminal" }
 # herdr-reviewr's review core, vendored: the Review slot's rows and comments
 # (ADR 0021).
 ferrite-reviewr = { path = "../ferrite-reviewr" }

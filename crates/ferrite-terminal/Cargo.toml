@@ -1,0 +1,18 @@
+[package]
+name = "ferrite-terminal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ferrite's plain terminal: alacritty_terminal's emulator and PTY, drawn by a GPUI grid"
+
+[lib]
+doctest = false
+
+[dependencies]
+# The emulator, its grid, selection and PTY event loop.
+alacritty_terminal = "0.26.0"
+ferrite-ui = { path = "../ferrite-ui" }
+gpui = { package = "gpui-kit", version = "=0.6.0" }
+
+[dev-dependencies]
+gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }

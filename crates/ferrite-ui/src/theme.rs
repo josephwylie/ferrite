@@ -1727,6 +1727,30 @@ pub const SIDE_CHAT_INSET: f32 = SPACE_2;
 /// The Terminal's column in the dock (Claude's measures the side chat's
 /// width, `terminal-open.png`).
 pub const TERMINAL_W: f32 = SIDE_CHAT_W;
+/// **The terminal's grid** (`terminal-open.png`): the code face at
+/// `FS_TERMINAL` on `LH_TERMINAL` rows, in from the column's edge by
+/// `TERMINAL_PAD_X` and `TERMINAL_PAD_Y`, its block cursor blue
+/// (`TERMINAL_CURSOR`, hollow while the grid is not focused) and its
+/// selection a flat `TERMINAL_SELECTION` wash. The sixteen ANSI inks sit in
+/// the syntax palette's hues; the rest of the 256 are xterm's.
+pub const FS_TERMINAL: f32 = 12.0;
+pub const LH_TERMINAL: f32 = 16.0;
+pub const TERMINAL_PAD_X: f32 = SPACE_3;
+pub const TERMINAL_PAD_Y: f32 = SPACE_2;
+pub const TERMINAL_CURSOR: u32 = 0x1a8cff;
+pub const TERMINAL_SELECTION: u32 = 0x113852;
+/// How long the cursor stays lit, then dark, while it blinks.
+pub const TERMINAL_BLINK_MS: u64 = 530;
+pub const TERMINAL_ANSI: [u32; 16] = [
+    0x2a2a2a, RED, GREEN, YELLOW, LINK_INK, 0xc09af0, 0x7fd1d6, 0xcfcfcf, // normal
+    0x5e5e5e, 0xff8f93, 0xb0e3a9, 0xf2d99c, 0x9cc0f4, 0xd6b8f7, 0xa3e4e8, INK_STRONG, // bright
+];
+/// How many lines of scrollback a new terminal keeps.
+pub const TERMINAL_SCROLLBACK: usize = 10_000;
+/// The glyph under the lit block cursor reads in the pane's own ground.
+pub const TERMINAL_CURSOR_INK: u32 = FRAME;
+/// How far over its selection the `Attach as context` pill hangs.
+pub const TERMINAL_PILL_LIFT: f32 = 28.0;
 /// **Files** (`files-code.png`): the tree column at the right of the pane,
 /// its rows `FILES_ROW_H` tall (Claude's 28 pitch), a folder's children
 /// `FILES_INDENT` in, a git status marked by a `FILES_STATUS_DOT` dot at

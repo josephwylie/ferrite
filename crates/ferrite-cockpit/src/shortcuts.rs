@@ -70,7 +70,10 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
     let wall = context == Some("Wall");
     // The file editor edits as the Composer does: its keys are the same
     // rows, not new ones.
-    if context == Some(ferrite_ui::keymap::FILE_EDITOR) || action == "files::OpenFirst" {
+    if context == Some(ferrite_ui::keymap::FILE_EDITOR)
+        || context == Some(ferrite_ui::keymap::TERMINAL)
+        || action == "files::OpenFirst"
+    {
         return Some(Hidden);
     }
     Some(match action {

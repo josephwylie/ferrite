@@ -3513,9 +3513,11 @@ impl CockpitView {
                 .project(project)
                 .map(|project| project.root.clone()),
             MenuTarget::File(thread) => self.files_pressed(thread),
-            MenuTarget::FilesMore(_) | MenuTarget::ChangesScope(_) | MenuTarget::ChangesMore(_) => None,
-            MenuTarget::File(thread) => self.files_pressed(thread),
-            MenuTarget::FilesMore(_) => None,
+            MenuTarget::FilesMore(_)
+            | MenuTarget::ChangesScope(_)
+            | MenuTarget::ChangesMore(_)
+            | MenuTarget::Terminal(_)
+            | MenuTarget::TerminalMore(_) => None,
             MenuTarget::Group(_)
             | MenuTarget::Parked
             | MenuTarget::Review { .. }
@@ -10226,6 +10228,7 @@ impl CockpitView {
         // without cloning or notifying any retained transcript entity.
         self.sync_visible_transcripts(cx);
         self.tend_side_chat(window, cx);
+        self.tend_terminal(window, cx);
         self.tend_agent_drills(cx);
 
         // The card belongs to the mark that opened it: leaving that Pane,

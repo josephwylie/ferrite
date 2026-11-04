@@ -21,6 +21,7 @@ use ferrite_reviewr::search::{CodeHit, FileHit, SearchResults};
 use gpui::{AppContext, Focusable};
 
 use super::{conversation, Scene, Setup};
+use crate::cockpit::tools::Tool;
 use crate::review::ReviewView;
 
 /// Every state this module draws, at the app size.
@@ -40,9 +41,15 @@ pub(super) const STATES: &[&str] = &[
     "nav-states",
     "mermaid",
     "toast-done",
+    "wrap-up",
+    "wrap-up-spent",
     "output-cards",
     "page-pane",
     "lightbox",
+    "files-code",
+    "files-empty",
+    "changes-split",
+    "terminal",
 ];
 
 pub(super) fn handles(state: &str) -> bool {
@@ -74,12 +81,18 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "nav-states" => nav_states(),
         "mermaid" => mermaid(),
         "toast-done" => toast_done(),
+        "wrap-up" => wrap_up(false),
+        "wrap-up-spent" => wrap_up(true),
         "output-cards" => {
             let (scene, _) = output_cards("output-cards");
             (scene, Box::new(|_, _, _| {}))
         }
         "page-pane" => page_pane(),
         "lightbox" => lightbox(),
+        "files-code" => tools("files-code", &[Tool::Files], Some("crates/ferrite-ui/src/motion.rs")),
+        "files-empty" => tools("files-empty", &[Tool::Files], None),
+        "changes-split" => tools("changes-split", &[Tool::Files, Tool::Changes], Some("crates/ferrite-ui/src/motion.rs")),
+        "terminal" => tools("terminal", &[Tool::Terminal], None),
         _ => unreachable!("`handles` lists every state"),
     }
 }
@@ -493,6 +506,31 @@ fn reply_card() -> (Scene, Setup) {
     (scene, setup)
 }
 
+// ------------------------------------------------------------- title tools
+
+/// The conversation with the dock's `tools` open on its Thread (the
+/// checkout is this repository), `file` opened in Files
+/// (`claude/parity/files-code.png`, `files-empty.png`, `changes-split.png`,
+/// `terminal-command.png`). A terminal runs the command Claude's capture ran.
+fn tools(state: &str, tools: &'static [Tool], file: Option<&'static str>) -> (Scene, Setup) {
+    let scene = conversation(state);
+    let setup: Setup = Box::new(move |view, _, cx| {
+        let Some(thread) = view.focused_thread() else {
+            return;
+        };
+        for tool in tools {
+            view.press_tool(*tool, cx);
+        }
+        if let (Some(file), Ok(root)) = (file, std::env::current_dir()) {
+            view.open_in_files(thread, root.join(file), None, true, cx);
+        }
+        if tools.contains(&Tool::Terminal) {
+            view.fixture_terminal_command(thread, b"echo hello; ls | head -5\r", cx);
+        }
+    });
+    (scene, setup)
+}
+
 // ----------------------------------------------------------------- side chat
 
 /// `Start a side chat` over a selection (`claude/sidechat-open.png`): the
@@ -636,6 +674,46 @@ fn toast_done() -> (Scene, Setup) {
             outcome: TurnOutcome::Completed,
             cost_usd: Some(0.09),
         });
+    (scene, Box::new(|_, _, _| {}))
+}
+
+/// A turn that did a little work and closed with its wrap-up box: recap, the
+/// question and two steps (`claude/parity/wrapup-question.png`); `spent`,
+/// the first step sent (`wrapup-used.png`).
+fn wrap_up(spent: bool) -> (Scene, Setup) {
+    let mut scene = Scene::new(if spent { "wrap-up-spent" } else { "wrap-up" });
+    let ferrite = scene.project("ferrite");
+    let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Append line to notes.txt");
+    scene.core.send(
+        thread,
+        "Append the line \"second line\" to notes.txt. Then stop and ask me whether to commit it."
+            .into(),
+    );
+    feed.boot(Provider::Claude, 76_000)
+        .tool(
+            "edit",
+            "Edit",
+            serde_json::json!({"file_path": "notes.txt", "old_string": "hello", "new_string": "hello\nsecond line"}),
+        )
+        .ok("edit", "Updated notes.txt")
+        .text("I added \u{201c}second line\u{201d} to the end of notes.txt, so it now has two lines. Nothing is committed yet.")
+        .tool(
+            "wrap",
+            ferrite_core::wrap_up::CLAUDE_NAME,
+            serde_json::json!({
+                "recap": "Added \"second line\" to notes.txt, so the file now has two lines. The change hasn't been committed yet.",
+                "ask": "Commit the change to notes.txt?",
+                "next": ["Commit it", "Leave it uncommitted"],
+            }),
+        )
+        .ev(SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: Some(0.02),
+        });
+    if spent {
+        scene.core.pump();
+        scene.core.send(thread, "Commit it".into());
+    }
     (scene, Box::new(|_, _, _| {}))
 }
 

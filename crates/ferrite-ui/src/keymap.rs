@@ -606,6 +606,17 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("pageup".into(), "editor::PageUp", Some(FILE_EDITOR)),
         ("pagedown".into(), "editor::PageDown", Some(FILE_EDITOR)),
         (with_primary("s"), "editor::Save", Some(FILE_EDITOR)),
+        // The Terminal's grid: its own copy, paste, select all and attach,
+        // and the keys the window would otherwise take for its own (⏎, ⇥,
+        // ⇧⇥, esc), which the shell wants.
+        (with_primary("c"), "terminal::Copy", Some(TERMINAL)),
+        (with_primary("v"), "terminal::Paste", Some(TERMINAL)),
+        (with_primary("a"), "terminal::SelectAll", Some(TERMINAL)),
+        (with_primary("shift-l"), "terminal::Attach", Some(TERMINAL)),
+        ("enter".into(), "terminal::Enter", Some(TERMINAL)),
+        ("tab".into(), "terminal::Tab", Some(TERMINAL)),
+        ("shift-tab".into(), "terminal::ShiftTab", Some(TERMINAL)),
+        ("escape".into(), "terminal::Escape", Some(TERMINAL)),
         // The Files tree's filter: ⏎ opens the first match.
         ("enter".into(), "files::OpenFirst", Some("FilesFilter")),
     ]);
@@ -637,6 +648,9 @@ const REVIEW: &str = "Review && !Composer";
 pub const READER: &str = "Reader";
 /// The Files editor's key context (`cockpit/tools/editor.rs`).
 pub const FILE_EDITOR: &str = "FileEditor";
+/// The Terminal grid's key context (`ferrite_terminal::KEY_CONTEXT`'s first
+/// word).
+pub const TERMINAL: &str = "Terminal";
 /// The lightbox around the image viewer (`cockpit/lightbox.rs`).
 pub const LIGHTBOX: &str = "Lightbox";
 /// The image viewer's key context (`image_viewer::KEY_CONTEXT`).
