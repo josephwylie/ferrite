@@ -107,7 +107,7 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 69 | RP23 | Maximise panel with a docked compact composer | PARTIAL | Expand widens a preview only. **Audit 11-04:** Expand widens the docks; no docked compact composer | `panel.rs:62-73` (fa36929a) |
 | 70 | RP21 | Files: inline "Show changes"; "Open ⌄" split | MISSING |  | — |
 | 71 | RP4 | Title-bar tool: Browser (+ launcher, URL bar, tools grid) | MISSING | The page pane loads no URLs. | `view_head.rs:23-25` |
-| 72 | XD1 | "Ran commands" group nesting shell cards (max height, scroll, fade) | PARTIAL | No bottom fade mask. | `pane/output.rs:499` (12 lines, "… +N lines") |
+| 72 | XD1 | "Ran commands" group nesting shell cards (max height, scroll, fade) | BUILT | No bottom fade mask. **Audit 11-04:** Scrolling output fades into the ground at its foot while lines are out of view (BUILT, not ticked; not seen) | `pane/output.rs:499` (12 lines, "… +N lines") |
 | 73 | TR3 | User bubble hover row: ✓✓, relative time, copy, rewind, branch | PARTIAL | No delivered ✓✓. | `transcript.rs:1185-1215` (3b33960c), `:1843` (bfbeb3e2) |
 | 74 | TR2 | User bubble right-aligned, filled, radius ~12–16, ≤70% of the column | PARTIAL | Radius 10 (geometry.md:28 records the choice). Width cap 84%. | `pane.rs:3480`, `theme.rs:898,1532` (58720cf7, 241f18e8) |
 | 75 | XQ5 | Composer metrics (~98 pt tall, radius ~20, aligned with the column) | PARTIAL | Radius 12. 16 px wider than the column on each side on purpose (geometry.md:63). | `theme.rs:2276` (96), `R_FLOAT` 12, `COMPOSER_MAX_W` |
@@ -237,7 +237,7 @@ ID prefixes: NS new session, CO/XCO composer (Claude/Codex), XD Codex deeper pas
 | XTR8 | Inline code in the user bubble as chips | BUILT | `pane::code_spans` (ed5541cf) |  |
 | XTR9 | File output card with "Open in ⌄" | BUILT | `transcript/outputs.rs` (cdc328f3) | Finder and the default app only. |
 | XTR13 | Turn-timeline minimap | BUILT | `transcript.rs:2077` (bc5a2473) | On the right edge, shown only on hover. |
-| XD1 | "Ran commands" group nesting shell cards (max height, scroll, fade) | PARTIAL | `pane/output.rs:499` (12 lines, "… +N lines") | No bottom fade mask. |
+| XD1 | "Ran commands" group nesting shell cards (max height, scroll, fade) | BUILT | `pane/output.rs:499` (12 lines, "… +N lines") | No bottom fade mask. **Audit 11-04:** Scrolling output fades into the ground at its foot while lines are out of view (BUILT, not ticked; not seen) |
 | XD2 | One live activity row, swapped in place, present tense | BUILT | `pane/working.rs:468` (2735a69f) | The icon is the spinner, not one per kind. |
 | XD3 | Colour swatch beside hex values | MISSING | — |  |
 | XD4 | File reference as "From ◉ theme.rs" | MISSING | — |  |

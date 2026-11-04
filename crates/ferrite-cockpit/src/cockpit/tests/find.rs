@@ -225,6 +225,41 @@ fn find_reaches_into_a_scrolling_output(cx: &mut TestAppContext) {
     );
 }
 
+/// Output that scrolls fades into the ground at its foot while text is out
+/// of view; a short one draws no fade.
+#[gpui::test]
+fn scrolling_output_fades_at_its_foot(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("output-fade", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let output: String = (0..400).map(|n| format!("line {n} of output that only pads it\n")).collect();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolStarted {
+            id: "big".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "cargo build" }),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolCompleted {
+            id: "big".into(),
+            output,
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        })
+        .unwrap();
+    say(&fake, "Done.\n\n");
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.panes[0].toggle_tool(&pane::DisclosureId::Tool("big".into()));
+        cx.notify();
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("output-fade").is_some());
+}
+
 /// A long answer at the followed tail: its row is in view but the
 /// occurrence at its head is not. The bar scrolls within the row.
 #[gpui::test]

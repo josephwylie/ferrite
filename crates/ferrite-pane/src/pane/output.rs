@@ -507,11 +507,25 @@ pub(crate) fn output_block(block: BlockId, part: &str, text: &str, selection: &T
         .text_color(rgb(INK_SUBTLE));
     if text::output_scrolls(text) {
         let hidden = text::output_lines(text).saturating_sub(theme::OUTPUT_MAX_LINES);
-        return rows
+        // Text still out of view fades into the ground at the box's foot
+        // (Codex's shell card), and `… +N lines` says how much.
+        let scroller = div()
+            .relative()
             .child(selection.output(block, part, text))
-            .when(hidden > 0, |rows| {
-                rows.child(SharedString::from(format!("\u{2026} +{hidden} lines")))
+            .when(hidden > 0, |scroller| {
+                scroller.child(
+                    div()
+                        .debug_selector(|| "output-fade".into())
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .child(components::edge_fade(rgb(theme::CARD).into(), true)),
+                )
             });
+        return rows.child(scroller).when(hidden > 0, |rows| {
+            rows.child(SharedString::from(format!("\u{2026} +{hidden} lines")))
+        });
     }
     rows.child(selection.line(block, text.to_string(), result_highlights(text)))
 }
