@@ -1451,3 +1451,51 @@ fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
         assert_eq!(view.leaving_warning(), None, "quitting ends nothing");
     });
 }
+
+/// Settings › Server's Restart answers its press: the restart is under
+/// way, or why it is not, on screen. Its act once reached for its window by
+/// the window's handle from inside the press, while gpui had the window
+/// out for the event, so every press did nothing at all.
+#[gpui::test]
+fn the_restart_button_answers_its_press(cx: &mut TestAppContext) {
+    let dir = scratch("restart-press");
+    let core = Cockpit::attach(ferrite_core::cockpit::Attach {
+        store: dir.clone(),
+        server: ferrite_core::cockpit::Endpoint::Local {
+            executable: dir.join("no-such-ferrite"),
+        },
+        client: ferrite_core::protocol::Peer {
+            name: "test".into(),
+            version: "0".into(),
+        },
+        renderer: None,
+        discovery: Box::new(Fake::default()),
+    })
+    .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    view.update(cx, |view, cx| {
+        view.settings_open = true;
+        view.settings_page = settings::PageKey::Server;
+        cx.notify();
+    });
+    tick(cx);
+    let restart = cx
+        .debug_bounds("settings-server-restart")
+        .expect("Settings › Server offers Restart");
+    // A fresh test window takes the first press into it for itself (any
+    // button's, not this one's): the second is the operator's.
+    for _ in 0..2 {
+        cx.simulate_click(restart.center(), gpui::Modifiers::none());
+        tick(cx);
+    }
+    view.read_with(cx, |view, _| {
+        assert!(
+            matches!(
+                view.cockpit.server_restart(),
+                Some(ferrite_core::cockpit::ServerRestart::Failed { .. })
+            ),
+            "a Server that does not answer cannot restart, and the window says so"
+        );
+    });
+}
