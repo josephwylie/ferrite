@@ -29,6 +29,7 @@ use ferrite_ui::theme::{self};
 use super::editor::{self, Editor};
 use super::tree::{FileTree, Row, Status};
 use super::*;
+use crate::cockpit::view_head::Column;
 use crate::cockpit::context_menu::Submenu;
 
 /// The filter field's key context: ⏎ opens the first match.
@@ -538,6 +539,7 @@ impl CockpitView {
             .h(px(WIN_CHROME_H))
             .px(px(SIDE_CHAT_INSET))
             .pr(px(super::super::panel::tools_inset() - PANEL_PAD_R))
+            .mt(px(self.head_drop(Column::Files)))
             .child(
                 div()
                     .debug_selector(|| "files-tabs".into())

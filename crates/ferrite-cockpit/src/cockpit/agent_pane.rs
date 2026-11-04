@@ -11,6 +11,7 @@
 //! a Pane takes a subagent's transcript for itself (a notice's jump, the
 //! history arrows).
 
+use crate::cockpit::view_head::Column;
 use std::collections::HashMap;
 
 use super::*;
@@ -329,6 +330,7 @@ impl CockpitView {
             .gap(px(SPACE_1))
             .h(px(WIN_CHROME_H))
             .px(px(SIDE_CHAT_INSET))
+            .mt(px(self.head_drop(Column::Rail)))
             .child(back)
             .child(expand)
             .child(close)

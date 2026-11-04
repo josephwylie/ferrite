@@ -200,7 +200,7 @@ fn back_goes_from_a_subagent_to_main(cx: &mut TestAppContext) {
 /// the rail's door after the split, `TITLE_TOOLS_GAP` apart; the head leaves their room.
 #[gpui::test]
 fn the_title_tools_stand_against_the_panel(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{TITLE_TOOLS_GAP, VIEW_HEAD_PAD_X};
+    use ferrite_ui::theme::TITLE_TOOLS_GAP;
     let (core, _fake) = cockpit("title-tools", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -215,13 +215,14 @@ fn the_title_tools_stand_against_the_panel(cx: &mut TestAppContext) {
     let rail = cx.debug_bounds("panel-toggle").expect("the rail's door");
     let split = cx.debug_bounds("title-split").expect("split beside");
     let tools = cx.debug_bounds("title-tools").expect("the tools");
-    assert_eq!(panel.left() - tools.right(), px(VIEW_HEAD_PAD_X));
+    assert!(tools.left() > panel.left(), "pinned at the window's edge, over the column");
     assert_eq!(rail.left() - split.right(), px(TITLE_TOOLS_GAP), "Claude's pitch");
     hide_panel(&view, cx);
     tick(cx);
     let head = cx.debug_bounds("view-head").unwrap();
     let title = cx.debug_bounds("view-title").unwrap();
     let split = cx.debug_bounds("title-split").expect("they stay");
+    assert_eq!(cx.debug_bounds("title-tools"), Some(tools), "and do not move");
     assert!(title.right() < split.left(), "the title runs short of them");
     assert!(head.right() >= cx.debug_bounds("panel-toggle").unwrap().right());
 }

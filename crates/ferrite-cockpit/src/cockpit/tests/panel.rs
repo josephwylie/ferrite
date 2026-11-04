@@ -205,30 +205,26 @@ fn toggle_panel_flips_the_saved_setting(cx: &mut TestAppContext) {
     assert!(saved(&view, cx));
 }
 
-/// The title tools ride with the column: shown, they end against the
-/// panel's left edge, `VIEW_HEAD_PAD_X` clear of it, and the head stops at
-/// the panel; hidden, they end at the window's edge and the head runs to it.
+/// The title tools stay at the window's edge whether the column shows or
+/// not (Claude's do not move); the head stops at the panel while it shows
+/// and runs under the tools once it is hidden.
 fn toggle_sits_in_one_place(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
     which: &str,
 ) {
-    use ferrite_ui::theme::{PANEL_W, VIEW_HEAD_PAD_X};
+    use ferrite_ui::theme::PANEL_W;
     let panel = cx.debug_bounds("panel").expect("shown");
     let tools = cx.debug_bounds("title-tools").expect("the tools");
     assert!(cx.debug_bounds("panel-toggle").is_some(), "{which}: the rail's door");
-    assert_eq!(
-        panel.left() - tools.right(),
-        px(VIEW_HEAD_PAD_X),
-        "{which}: against the panel"
-    );
+    assert!(tools.left() > panel.left(), "{which}: over the panel's own corner");
     let head = cx.debug_bounds("view-head").expect("the view head");
     assert_eq!(head.right(), px(1600. - PANEL_W), "{which}: head stops");
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     tick(cx);
     assert!(cx.debug_bounds("panel").is_none());
     let hidden = cx.debug_bounds("title-tools").expect("the tools stay");
-    assert!(hidden.right() > tools.right(), "{which}: they ride to the edge");
+    assert_eq!(hidden, tools, "{which}: they do not move");
     let head = cx.debug_bounds("view-head").unwrap();
     assert!(head.right() >= hidden.right(), "{which}: head runs under them");
     view.update(cx, |view, cx| view.toggle_panel_now(cx));

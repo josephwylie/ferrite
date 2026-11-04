@@ -78,12 +78,29 @@ impl CockpitView {
         }
     }
 
-    /// How far in from the window's right edge the title tools end: against
-    /// the column, or at the window's edge.
+    /// How far in from the window's right edge the title tools end: always
+    /// the window's own edge (clear of the caption buttons on Windows),
+    /// whichever column is open beside the board, as Claude's stay put.
     fn title_tools_right(&self) -> f32 {
-        match self.panel_pane() {
-            Some(_) => self.panel_column_w() + theme::VIEW_HEAD_PAD_X,
-            None => super::panel::tools_inset(),
+        super::panel::tools_inset()
+    }
+
+    /// How far a column's head row stands below the window's top. The title
+    /// tools stand over the window's right edge whatever column is there, so
+    /// the head row of the rightmost column (`Column`) stands under them,
+    /// not beside them where they would crowd its tabs and doors.
+    pub(super) fn head_drop(&self, column: Column) -> f32 {
+        let tools = self.title_tools().len();
+        let shown = tools > 0 && self.panel_candidate().is_some() && !self.docked_pane_covers();
+        let rightmost = match column {
+            Column::Terminal => true,
+            Column::Files => !self.tool_pressed(Tool::Terminal),
+            Column::Rail => !self.dock_shown(self.focused_thread()),
+        };
+        if rightmost && shown {
+            theme::WIN_CHROME_H
+        } else {
+            0.
         }
     }
 
@@ -94,7 +111,8 @@ impl CockpitView {
         if tools == 0 {
             return theme::VIEW_HEAD_PAD_X;
         }
-        self.title_tools_right() + tools_width(tools) + theme::VIEW_HEAD_PAD_X - right
+        (self.title_tools_right() + tools_width(tools) + theme::VIEW_HEAD_PAD_X - right)
+            .max(theme::VIEW_HEAD_PAD_X)
     }
 
     /// Where the view head's content starts, from the board's left edge:
@@ -172,7 +190,7 @@ impl CockpitView {
     }
 
     /// The title-bar tools, laid by the frame at the row's right end
-    /// against the column (`title_tools_right`).
+    /// at the window's edge (`title_tools_right`).
     pub(super) fn title_tools_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let tools = self.title_tools();
         if tools.is_empty() || self.panel_candidate().is_none() || self.docked_pane_covers() {
@@ -411,6 +429,15 @@ fn title_tools(checkout: bool, on_machine: bool, grid_board: bool) -> Vec<TitleT
         ]);
     }
     tools
+}
+
+/// A column of the right side, in the order they stand: the rail, then the
+/// dock's Files or Changes, then its terminal at the window's edge.
+#[derive(Clone, Copy)]
+pub(super) enum Column {
+    Rail,
+    Files,
+    Terminal,
 }
 
 /// `count` tools' doors, `TITLE_TOOLS_GAP` apart.

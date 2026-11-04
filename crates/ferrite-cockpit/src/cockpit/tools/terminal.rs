@@ -21,6 +21,7 @@ use ferrite_ui::icons;
 use ferrite_ui::theme;
 
 use super::*;
+use crate::cockpit::view_head::Column;
 use crate::cockpit::context_menu::Submenu;
 
 /// What a Terminal menu row does.
@@ -406,6 +407,7 @@ impl CockpitView {
             .h(px(WIN_CHROME_H))
             .px(px(SIDE_CHAT_INSET))
             .pr(px(super::super::panel::tools_inset() - PANEL_PAD_R))
+            .mt(px(self.head_drop(Column::Terminal)))
             .child(
                 div()
                     .debug_selector(|| "terminal-tabs".into())
@@ -415,14 +417,14 @@ impl CockpitView {
                     .items_center()
                     .gap(px(SPACE_0_5))
                     .overflow_hidden()
-                    .children(tabs)
-                    .child(door("terminal-new", icons::PLUS, "New terminal").on_click(cx.listener(
-                        move |view, _: &ClickEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.new_terminal_tab(thread, cx);
-                        },
-                    ))),
+                    .children(tabs),
             )
+            .child(door("terminal-new", icons::PLUS, "New terminal").on_click(cx.listener(
+                move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.new_terminal_tab(thread, cx);
+                },
+            )))
             .child(door("terminal-more", icons::ELLIPSIS, "More").on_click(cx.listener(
                 move |view, event: &ClickEvent, _, cx| {
                     cx.stop_propagation();

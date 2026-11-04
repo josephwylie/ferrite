@@ -22,6 +22,7 @@
 //! has made it (`bind`). A fork the agent refuses leaves its reason in the
 //! tab's place.
 
+use crate::cockpit::view_head::Column;
 use std::collections::VecDeque;
 
 use super::*;
@@ -741,6 +742,7 @@ impl CockpitView {
             .gap(px(SPACE_1))
             .h(px(WIN_CHROME_H))
             .px(px(SIDE_CHAT_INSET))
+            .mt(px(self.head_drop(Column::Rail)))
             .children(tabs)
             .child(plus)
             .child(div().flex_1())

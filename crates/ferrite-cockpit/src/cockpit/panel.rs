@@ -41,6 +41,7 @@ pub(crate) mod preview;
 mod sections;
 
 use super::*;
+use crate::cockpit::view_head::Column;
 use ferrite_ui::icons::{self, icon};
 
 /// The panel's own state on the cockpit.
@@ -366,6 +367,8 @@ impl CockpitView {
                 )
                 .child(self.preview_tab_element(owner, label, previewing, cx))
         });
+        // An empty strip has nothing to keep clear of the title tools.
+        let drop = if tabs.is_some() { self.head_drop(Column::Rail) } else { 0. };
         div()
             .flex()
             .flex_shrink_0()
@@ -373,6 +376,7 @@ impl CockpitView {
             .gap(px(SPACE_1))
             .h(px(WIN_CHROME_H))
             .pr(px(tools_inset() - PANEL_PAD_R))
+            .mt(px(drop))
             .child(tabs.unwrap_or_else(|| div().flex_1()))
     }
 

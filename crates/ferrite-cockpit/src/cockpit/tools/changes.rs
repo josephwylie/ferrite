@@ -22,6 +22,7 @@ use ferrite_ui::icons;
 use ferrite_ui::theme::{self, paint};
 
 use super::*;
+use crate::cockpit::view_head::Column;
 use crate::cockpit::context_menu::Submenu;
 use crate::cockpit::panel::hunks::{hunks_element, shown, Line, Shown, Sign};
 
@@ -377,6 +378,7 @@ impl CockpitView {
             .h(px(WIN_CHROME_H))
             .px(px(SIDE_CHAT_INSET))
             .pr(px(super::super::panel::tools_inset() - PANEL_PAD_R))
+            .mt(px(self.head_drop(Column::Files)))
             .child(
                 div()
                     .id("changes-scope")

@@ -16,6 +16,7 @@
 //! own row (`pane::background_link`, `View live output ▸`).
 
 use super::*;
+use crate::cockpit::view_head::Column;
 use ferrite_core::transcript::{ToolBlock, ToolState};
 use ferrite_core::transcript::tools::{policy, ToolKind};
 
@@ -96,6 +97,7 @@ impl CockpitView {
             .gap(px(SPACE_1))
             .h(px(WIN_CHROME_H))
             .pr(px(tools_inset() - PANEL_PAD_R))
+            .mt(px(self.head_drop(Column::Rail)))
             .child(
                 div()
                     .debug_selector(|| "background-pane-head".into())

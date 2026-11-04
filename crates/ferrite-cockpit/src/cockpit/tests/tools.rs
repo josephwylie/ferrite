@@ -124,3 +124,19 @@ fn the_shell_is_resized_with_its_column(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.press_tool(Tool::Terminal, cx));
     tick(cx);
 }
+
+/// The doors stand where they are at the window's top right (Claude's):
+/// opening the rail, Files or the terminal moves none of them.
+#[gpui::test]
+fn the_title_tools_do_not_move_when_a_column_opens(cx: &mut TestAppContext) {
+    let (view, cx) = solo("tools-pinned", cx);
+    let at_rest = cx.debug_bounds("title-tools").expect("the tools");
+    for tool in [Tool::Rail, Tool::Files, Tool::Terminal, Tool::Changes] {
+        let before = pressed(&view, tool, cx);
+        press(&view, tool, cx);
+        assert_ne!(pressed(&view, tool, cx), before, "{tool:?} toggled");
+        assert_eq!(cx.debug_bounds("title-tools"), Some(at_rest), "{tool:?} left them where they were");
+    }
+    // Everything open at once: still where they were.
+    assert_eq!(cx.debug_bounds("title-tools"), Some(at_rest));
+}
