@@ -1693,26 +1693,25 @@ fn search_sits_in_the_nav_head(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |view, _| view.floats.palette.is_some()));
 }
 
-/// A Thread whose time is not known (a legacy log ending in Ferrite's own
-/// marks) is listed last under `Older` with no age, never under `Today`.
+/// A Thread whose time is not known (a legacy log with no dated stamp, or
+/// one ending in Ferrite's own marks) is listed in no section: not under
+/// `Today`, not under an `Older`, and being idle never puts it in `Priority`.
 #[gpui::test]
-fn a_thread_of_no_known_time_stands_under_older_not_today(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("bell-older", 2);
+fn a_thread_of_no_known_time_is_not_listed(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("bell-unknown", 2);
     let threads = core.threads();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     let unknown = threads[1];
     view.update(cx, |view, _| view.facts.fixture_forget_last_used(unknown));
-    let days: Vec<(String, Vec<ThreadId>)> = view.read_with(cx, |view, _| {
-        view.activity(&view.nav_state())
-            .days
-            .iter()
-            .map(|(label, rows)| {
-                (label.to_string(), rows.iter().map(|entry| entry.row.thread).collect())
-            })
-            .collect()
+    let (labels, days) = view.read_with(cx, |view, _| {
+        let activity = view.activity(&view.nav_state());
+        let labels: Vec<String> = activity.days.iter().map(|(label, _)| label.to_string()).collect();
+        (labels, activity.days.iter().flat_map(|(_, rows)| rows.iter().map(|entry| entry.row.thread)).collect::<Vec<_>>())
     });
-    assert_eq!(days.last().map(|(label, rows)| (label.as_str(), rows.clone())), Some(("Older", vec![unknown])), "{days:?}");
-    assert!(days.iter().filter(|(label, _)| label == "Today").all(|(_, rows)| !rows.contains(&unknown)));
+    assert!(!days.contains(&unknown), "{labels:?}");
+    assert!(!labels.iter().any(|label| label == "Older"), "{labels:?}");
+    let (priority, _) = activity(&view, cx);
+    assert!(!priority.contains(&unknown), "an idle Thread asks for nothing");
 }

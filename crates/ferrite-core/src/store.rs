@@ -2860,20 +2860,14 @@ impl Store {
     /// When the Thread last did something its operator would care about: the
     /// newest prompt sent or turn completed, read off the log's tail by the
     /// ISO times those records carry. The log's modification time is no
-    /// answer on its own: Ferrite appends a mark (or an amendment) to every
-    /// open Thread when it starts, which moves the time for Threads nobody
-    /// touched. Where the tail holds no dated time (a log from before they
-    /// were dated kept `4:22 pm`) the modification time stands only when the
-    /// log's last record is a real event; ending in a mark or an amendment,
-    /// it is Ferrite's own write, and the answer is `None`: not known, so
-    /// never today.
-    pub fn last_activity(&self, id: ThreadId) -> Option<SystemTime> {
+    /// answer: Ferrite appends a mark (or an amendment) to every open Thread
+    /// when it starts, and other writes touch a log too. A log with no dated
+    /// time in its tail (one from before they were dated kept `4:22 pm`) has
+    /// no known activity: `None`, so never listed as recent.
+        pub fn last_activity(&self, id: ThreadId) -> Option<SystemTime> {
         let touched = self.last_used(id)?;
-        let Ok(lines) = self.backwards(id, 0) else {
-            return Some(touched);
-        };
+        let lines = self.backwards(id, 0).ok()?;
         let end = fs::metadata(self.log_path(id)).map_or(0, |meta| meta.len());
-        let mut last_is_real = None;
         for (at, line) in lines {
             if end.saturating_sub(at) > ACTIVITY_SCAN {
                 break;
@@ -2881,11 +2875,9 @@ impl Store {
             let Ok(record) = serde_json::from_slice::<serde_json::Value>(&line) else {
                 continue;
             };
-            let kind = record.get("type").and_then(serde_json::Value::as_str).unwrap_or("");
-            last_is_real.get_or_insert(!matches!(kind, "mark" | "facts"));
-            let stamp = match kind {
-                "prompt_observation" => record.get("sent_at"),
-                "completion_observation" => record.get("completed_at"),
+            let stamp = match record.get("type").and_then(serde_json::Value::as_str) {
+                Some("prompt_observation") => record.get("sent_at"),
+                Some("completion_observation") => record.get("completed_at"),
                 _ => None,
             };
             if let Some(at) = stamp
@@ -2895,7 +2887,7 @@ impl Store {
                 return Some(SystemTime::from(at).min(touched));
             }
         }
-        last_is_real.unwrap_or(true).then_some(touched)
+        None
     }
 
     pub fn peek(&self, id: ThreadId) -> Result<ThreadMeta, LoadError> {
@@ -6066,11 +6058,11 @@ mod tests {
 
     /// Logs from before turns were dated kept only a wall-clock time
     /// (`10:28 am`), and Ferrite's startup appends marks to every open Thread.
-    /// Such a log ending in marks has no known time (its mtime is Ferrite's
-    /// own write: the owner's "Today" held Threads untouched for weeks); one
-    /// ending in a real record keeps its mtime.
+    /// Such a log has no known time, whether it ends in marks or in a real
+    /// record (its mtime is not the operator's: the owner's "Today" held
+    /// Threads untouched for weeks); a dated stamp before the marks is known.
     #[test]
-    fn a_legacy_log_that_ends_in_marks_has_no_known_activity() {
+    fn a_legacy_log_has_no_known_activity() {
         let mark = r#"{"type":"mark","facts":{"provider":"claude","workspace":{"kind":"main","checkout":"/w"},"session_project_root":null,"model":"opus","project_id":14,"title":"t","effort":"max"},"summary":{"turns":93,"prompted":true,"subagents":0},"base":{"at":1,"carry":[]}}"#;
         let observed = r#"{"type":"completion_observation","elapsed_ms":73700,"completed_at":"10:28 am","input_tokens":307219,"output_tokens":9}"#;
         let prompted = r#"{"type":"prompt_observation","sent_at":"10:27 am","prompt_id":"a"}"#;
@@ -6087,12 +6079,19 @@ mod tests {
         let dir = scratch("legacy-activity");
         plant_log(&dir, "6", &log(&[prompted, observed, mark, mark, mark]));
         plant_log(&dir, "7", &log(&[prompted, observed, r#"{"type":"run_state","state":"idle"}"#]));
+        let dated = r#"{"type":"completion_observation","elapsed_ms":9,"completed_at":"2026-01-02T09:05:00+00:00"}"#;
+        plant_log(&dir, "8", &log(&[prompted, dated, mark, mark]));
         let store = Store::open(&dir).unwrap();
         assert_eq!(store.last_activity(ThreadId::new(6)), None, "ends in Ferrite's marks");
         assert_eq!(
             store.last_activity(ThreadId::new(7)),
-            store.last_used(ThreadId::new(7)),
-            "ends in a real record"
+            None,
+            "a legacy stamp has no date, whatever the file's time says"
+        );
+        assert_eq!(
+            store.last_activity(ThreadId::new(8)),
+            Some(SystemTime::from(crate::clock::parse_local("2026-01-02T09:05:00+00:00").unwrap())),
+            "Ferrite's marks after a dated turn do not hide it"
         );
     }
 

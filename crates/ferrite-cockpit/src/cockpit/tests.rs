@@ -349,14 +349,31 @@ fn hold_wall_clock() -> ferrite_core::clock::ThreadFixture {
     ferrite_core::clock::ThreadFixture::install(at.into())
 }
 
+/// A turn that ended just now, dated as the log dates them: what the bell
+/// lists a Thread for (`Store::last_activity`); an unused Thread has none.
+fn did_something_now(store: &std::path::Path, thread: ThreadId) {
+    use std::io::Write;
+    let record = format!(
+        r#"{{"type":"completion_observation","elapsed_ms":1,"completed_at":"{}"}}"#,
+        ferrite_core::clock::now_stamp()
+    );
+    let mut log = std::fs::OpenOptions::new()
+        .append(true)
+        .open(store.join(thread.to_string()).join("log.jsonl"))
+        .unwrap();
+    writeln!(log, "{record}").unwrap();
+}
+
 fn cockpit(name: &str, panes: usize) -> (Cockpit, Fake) {
     let fake = Fake::default();
-    let store = Store::open(scratch(name)).unwrap();
+    let dir = scratch(name);
+    let store = Store::open(&dir).unwrap();
     let mut cockpit = Cockpit::new(store, Box::new(fake.clone()));
     for _ in 0..panes {
-        cockpit
+        let thread = cockpit
             .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
             .unwrap();
+        did_something_now(&dir, thread);
     }
     (cockpit, fake)
 }
