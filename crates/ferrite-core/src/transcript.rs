@@ -1441,6 +1441,17 @@ impl Transcript {
         self.status == Status::Idle && self.turn_outcome == Some(TurnOutcome::Completed)
     }
 
+    /// The context in use now. Claude names its window on some reports
+    /// and not others: one that does not leaves the window last named.
+    fn report_usage(&mut self, total_tokens: u64, context_window: Option<u64>) {
+        let context_window =
+            context_window.or_else(|| self.usage.and_then(|usage| usage.context_window));
+        self.usage = Some(Usage {
+            total_tokens,
+            context_window,
+        });
+    }
+
     pub fn usage(&self) -> Option<Usage> {
         self.usage
     }
@@ -2041,10 +2052,7 @@ impl Transcript {
                 output_tokens,
                 ..
             }) => {
-                self.usage = Some(Usage {
-                    total_tokens,
-                    context_window,
-                });
+                self.report_usage(total_tokens, context_window);
                 // A report that grew continues the last message (a running
                 // total); one that shrank is a new message's own count.
                 if output_tokens >= self.last_report {
@@ -2068,10 +2076,7 @@ impl Transcript {
                 total_tokens,
                 context_window,
             }) => {
-                self.usage = Some(Usage {
-                    total_tokens,
-                    context_window,
-                });
+                self.report_usage(total_tokens, context_window);
                 Update::default()
             }
             Input::Event(SessionEvent::UsageDetails { details }) => {
@@ -4516,6 +4521,42 @@ mod tests {
             .expect("usage after the provider reports");
         assert_eq!(usage.total_tokens, 12_400);
         assert_eq!(usage.context_window, Some(200_000));
+    }
+
+    /// Claude reports its window on `/context` and on some messages, not
+    /// on every one: a message that does not name it leaves the window
+    /// known, as thread 851's did (`132k / 400k`, then `132k tokens`).
+    #[test]
+    fn a_report_without_a_window_keeps_the_known_one() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Event(SessionEvent::ContextUsage {
+            total_tokens: 132_666,
+            context_window: Some(400_000),
+        }));
+        transcript.apply(Input::Event(SessionEvent::TokenUsage {
+            total_tokens: 147_148,
+            input_tokens: 147_145,
+            cached_input_tokens: 146_927,
+            output_tokens: 19,
+            reasoning_output_tokens: 0,
+            context_window: None,
+        }));
+        assert_eq!(
+            transcript.usage(),
+            Some(Usage {
+                total_tokens: 147_148,
+                context_window: Some(400_000),
+            })
+        );
+        transcript.apply(Input::Event(SessionEvent::ContextUsage {
+            total_tokens: 150_000,
+            context_window: Some(1_000_000),
+        }));
+        assert_eq!(
+            transcript.usage().unwrap().context_window,
+            Some(1_000_000),
+            "a window reported anew replaces it"
+        );
     }
 
     #[test]

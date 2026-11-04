@@ -6913,6 +6913,47 @@ mod tests {
         assert_eq!(tab[1].0, category_ink("Messages"));
     }
 
+    /// Claude's breakdown, as the owner's panel read it with no window
+    /// reported: each share is of the 400k window, as `/context` shows it,
+    /// which Free space completes; never of the categories alone.
+    #[test]
+    fn context_shares_are_of_the_window_free_space_completes() {
+        let categories: Vec<_> = [
+            ("System prompt", 1_800),
+            ("System tools", 8_500),
+            ("MCP tools", 2_500),
+            ("MCP server instructions", 1_900),
+            ("Memory files", 300),
+            ("Skills", 8_900),
+            ("Messages", 109_000),
+            ("Autocompact buffer", 33_000),
+            ("Free space", 234_100),
+            ("MCP tools (deferred)", 21_000),
+            ("System tools (deferred)", 33_000),
+        ]
+        .into_iter()
+        .map(|(name, tokens)| ferrite_core::ContextCategory {
+            name: name.into(),
+            tokens,
+        })
+        .collect();
+        assert_eq!(usage::context_window(None, &categories), Some(400_000));
+        assert_eq!(
+            usage::context_window(Some(1_000_000), &categories),
+            Some(1_000_000),
+            "a reported window stands"
+        );
+        assert_eq!(
+            usage::context_window(None, &categories[..8]),
+            None,
+            "without Free space the window is unknown, never guessed"
+        );
+        let segments = context_segments(&categories, 400_000);
+        let messages = segments[6].1;
+        assert!((messages - 0.2725).abs() < 1e-4, "{messages}");
+        assert!(segments.iter().map(|(_, share)| share).sum::<f32>() <= 1.);
+    }
+
     // (end WP-D)
 
     // ---- WP-E tests (append above the end line)

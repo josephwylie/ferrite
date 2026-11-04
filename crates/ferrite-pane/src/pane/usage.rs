@@ -287,6 +287,30 @@ fn category_in_window(name: &str) -> bool {
     !name.contains("free") && !name.contains("deferred")
 }
 
+/// The window a context breakdown is a share of: the one the provider
+/// reports; else, when the breakdown names its Free space, the sum of every
+/// category that takes room — Claude's Free space is what the window has
+/// left, so the window's contents and it add up to the window. A breakdown
+/// without Free space leaves the window unknown: a guess is worse than none.
+pub(super) fn context_window(
+    reported: Option<u64>,
+    categories: &[ferrite_core::ContextCategory],
+) -> Option<u64> {
+    let is_free = |name: &str| name.to_ascii_lowercase().contains("free");
+    if let Some(window) = reported.filter(|window| *window > 0) {
+        return Some(window);
+    }
+    if !categories.iter().any(|category| is_free(&category.name)) {
+        return None;
+    }
+    let window = categories
+        .iter()
+        .filter(|category| is_free(&category.name) || category_in_window(&category.name))
+        .map(|category| category.tokens)
+        .sum();
+    (window > 0).then_some(window)
+}
+
 /// What a context bar draws: each category in the window that holds
 /// tokens, its ink and its share of `denominator`, in the provider's order.
 pub fn context_segments(
@@ -349,11 +373,11 @@ pub fn context_usage(
     details: Option<&ContextDetails>,
     usage_details: Option<&ferrite_core::UsageDetails>,
 ) -> impl IntoElement {
-    let maximum = usage.context_window.filter(|limit| *limit > 0);
     let current = usage.total_tokens;
     let categories = details.map_or(&[][..], |details| details.categories.as_slice());
-    // Shares are of the whole window when the provider reports one; of
-    // what the categories add up to when it does not.
+    let maximum = context_window(usage.context_window, categories);
+    // Shares are of the whole window when it is known; of what the
+    // categories add up to when it is not.
     let denominator = maximum.unwrap_or_else(|| {
         categories
             .iter()
