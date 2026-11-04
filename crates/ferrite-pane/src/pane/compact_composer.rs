@@ -27,7 +27,6 @@ pub(super) fn compact_composer(
         empty,
         files,
         attachments,
-        background,
         menu,
         draft,
         draft_error,
@@ -162,12 +161,7 @@ pub(super) fn compact_composer(
                 .child(div().max_w(px(theme::SLASH_MENU_W)).child(menu)),
         ));
     }
-    let (attachments, background) = if live {
-        (attachments, background)
-    } else {
-        (None, None)
-    };
-    composer_stack(attachments, background, false)
+    composer_stack(attachments.filter(|_| live), false)
         // A draft's failed bootstrap says why over the box.
         .children(draft_error.map(|error| {
             div()

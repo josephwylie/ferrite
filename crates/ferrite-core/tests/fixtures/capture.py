@@ -13,6 +13,11 @@ script is here to record.
   --answer always   ... or by allowing it and adopting the CLI's own
                     permission suggestion, so later calls should not ask
   --answer deny     ... or by denying it with a message
+  --uuid            send the prompt under its own uuid, the way Ferrite does
+  --steer TEXT      once Main's first tool call arrives, send TEXT as a
+                    mid-turn (`isAsync`) message, the way Ferrite queues one
+  --results N       stop at the Nth result line instead of the first: a
+                    background task's notification starts a turn of its own
   -- ARGS...        extra arguments for the CLI
 """
 
@@ -23,6 +28,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 OUT = os.environ["CAPTURE_OUT"]
 BIN = os.environ["CAPTURE_BIN"]
@@ -65,7 +71,8 @@ def redact(line):
 
 
 def parse_args(argv):
-    opts = {"initialize": False, "prompt": None, "answer": None, "extra": []}
+    opts = {"initialize": False, "prompt": None, "answer": None, "extra": [],
+            "uuid": False, "steer": None, "results": 1}
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -77,6 +84,14 @@ def parse_args(argv):
         elif arg == "--answer":
             i += 1
             opts["answer"] = argv[i]
+        elif arg == "--uuid":
+            opts["uuid"] = True
+        elif arg == "--steer":
+            i += 1
+            opts["steer"] = argv[i]
+        elif arg == "--results":
+            i += 1
+            opts["results"] = int(argv[i])
         elif arg == "--":
             opts["extra"] = argv[i + 1:]
             break
@@ -149,12 +164,28 @@ if opts["initialize"]:
           "request": {"subtype": "initialize"}})
     drain(lambda v: v.get("type") == "control_response")
 else:
-    send({"type": "user", "message": {"role": "user", "content": [
-        {"type": "text", "text": opts["prompt"]}]}})
+    prompt = {"type": "user", "message": {"role": "user", "content": [
+        {"type": "text", "text": opts["prompt"]}]}}
+    if opts["uuid"]:
+        prompt["uuid"] = str(uuid.uuid4())
+    send(prompt)
+    state = {"results": 0, "steered": False}
+
+    def steer_now(value):
+        if value.get("type") != "assistant" or value.get("parent_tool_use_id"):
+            return False
+        content = value.get("message", {}).get("content", [])
+        return any(block.get("type") == "tool_use" for block in content)
 
     def handle(value):
         if value.get("type") == "result":
-            return True
+            state["results"] += 1
+            return state["results"] >= opts["results"]
+        if opts["steer"] and not state["steered"] and steer_now(value):
+            state["steered"] = True
+            send({"type": "user", "uuid": str(uuid.uuid4()), "isAsync": True,
+                  "message": {"role": "user", "content": [
+                      {"type": "text", "text": opts["steer"]}]}})
         if value.get("type") != "control_request":
             return False
         request = value.get("request", {})

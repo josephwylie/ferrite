@@ -8,6 +8,7 @@ use ferrite_core::transcript::{ToolBlock, ToolOutput, ToolState, TurnEnd};
 fn call(name: &str, summary: &str, state: ToolState, output: &str) -> ToolBlock {
     ToolBlock {
         caption: None,
+        background: None,
         call: "c".into(),
         name: name.into(),
         title: None,

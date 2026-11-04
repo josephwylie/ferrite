@@ -58,6 +58,10 @@ pub(super) struct Decoder {
     /// it running (`shell_output` streams its output there), so it is no
     /// background task. A task the CLI backgrounds later leaves the set.
     foreground_shells: HashSet<String>,
+    /// Calls whose result only launched background work, by call id: who
+    /// made the call, and whether the work is an agent. The task's
+    /// notification names the call, and settles it (`handback`).
+    backgrounded: HashMap<String, (Subject, bool)>,
     main_stream_message: Option<String>,
     /// Main's streaming `show_visual` inputs, drawn as they arrive.
     visual_drafts: super::drafts::Drafts,
@@ -839,6 +843,11 @@ impl Decoder {
                     let is_error = block["is_error"].as_bool().unwrap_or(false);
                     let structured = structured_result;
                     let result = wire::parse_tool_result(structured);
+                    if matches!(result, crate::ToolResult::Background { .. }) {
+                        let agent = structured.is_some_and(|value| value["status"] == "async_launched");
+                        self.backgrounded
+                            .insert(tool_id.to_owned(), (subject.clone(), agent));
+                    }
                     self.requests.retain(|_, (owner, gated)| {
                         gated != tool_id || owner.as_ref() != Some(&subject)
                     });
@@ -1346,6 +1355,9 @@ impl Decoder {
         if self.late_run(task_id, string(value, "run_id")) {
             return;
         }
+        if subtype == "task_notification" {
+            self.handback(value, events);
+        }
         if wire::hidden_task(value) {
             self.excluded_tasks.insert(task_id.into());
             return;
@@ -1434,6 +1446,67 @@ impl Decoder {
         }
     }
 
+    /// A background launch's outcome, joined to the call that launched it
+    /// (HD64) as that call's own result: a command's output (read from the
+    /// task's output file, which the notification names and the CLI keeps)
+    /// and the exit code its summary reports; an agent's final report, and
+    /// its usage. Only a call this connection saw launched: any other
+    /// notification is a task's alone.
+    fn handback(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
+        let Some(call) = string(value, "tool_use_id") else {
+            return;
+        };
+        let Some((subject, agent)) = self.backgrounded.remove(call) else {
+            return;
+        };
+        let summary = string(value, "summary").unwrap_or_default().to_owned();
+        let is_error = string(value, "status").is_some_and(|status| status != "completed");
+        let (output, result) = if agent {
+            let usage = &value["usage"];
+            let result = if usage.is_object() {
+                crate::ToolResult::Structured {
+                    value: usage.clone(),
+                    duration_ms: usage["duration_ms"].as_u64(),
+                }
+            } else {
+                crate::ToolResult::Opaque
+            };
+            (summary, result)
+        } else {
+            let stdout = string(value, "output_file")
+                .filter(|path| !path.is_empty())
+                .and_then(super::shell_output::read_output)
+                .unwrap_or_default();
+            let exit_code = exit_code(&summary);
+            // A failure with nothing printed says why in the CLI's words.
+            let output = if stdout.is_empty() && is_error {
+                summary
+            } else {
+                stdout.clone()
+            };
+            (
+                output,
+                crate::ToolResult::Command {
+                    stdout,
+                    stderr: String::new(),
+                    exit_code,
+                    duration_ms: None,
+                },
+            )
+        };
+        let event = ExecutionEvent::ToolCompleted {
+            id: call.to_owned(),
+            output,
+            is_error,
+            result,
+        };
+        let id = delivery_id(value, "handback");
+        match subject {
+            Subject::Main => self.main_content(value, id, event, events),
+            Subject::Subagent(key) => self.content(&key, id, event, events),
+        }
+    }
+
     fn decision(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
         let Some(SessionEvent::DecisionRequested { decision }) = wire::parse_value(value) else {
             return;
@@ -1480,6 +1553,17 @@ fn string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
         .get(key)
         .and_then(Value::as_str)
         .filter(|text| !text.is_empty())
+}
+
+/// The exit code a background command's summary reports: `Background
+/// command "…" completed (exit code 0)`.
+fn exit_code(summary: &str) -> Option<i64> {
+    let (_, after) = summary.rsplit_once("exit code ")?;
+    let digits: String = after
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit() || *ch == '-')
+        .collect();
+    digits.parse().ok()
 }
 
 fn delivery_id(value: &Value, part: &str) -> Option<String> {

@@ -620,6 +620,9 @@ pub struct CockpitView {
     /// The Thread the pump last saw focused: focusing another asks for its
     /// PR (`check_pr`).
     pr_focus: Option<ThreadId>,
+    /// Each Thread's `Transcript::published` as last seen: when it moves,
+    /// its PR is read again at once (`refresh_published`, HD27).
+    published: std::collections::HashMap<ThreadId, u64>,
     /// The PR reads `check_pr` would have sent `gh`: (Thread, manual).
     #[cfg(test)]
     pub(crate) pr_asked: Vec<(ThreadId, bool)>,
@@ -1481,10 +1484,10 @@ impl CockpitView {
             branch_refresh_queued: false,
             selection: TranscriptText::default(),
             side_chats: Default::default(),
+            agent_drills: Default::default(),
             native_copy: None,
             nav_filter: None,
             nav_folds: std::collections::HashSet::new(),
-            agent_drills: Default::default(),
             nav_fold_moves: std::collections::HashMap::new(),
             nav_more: std::collections::HashSet::new(),
             nav_scroll: ScrollHandle::new(),
@@ -1567,6 +1570,7 @@ impl CockpitView {
             #[cfg(test)]
             chimed: Vec::new(),
             pr_focus: None,
+            published: std::collections::HashMap::new(),
             #[cfg(test)]
             pr_asked: Vec::new(),
             floats: palette::Floats::new(cx),
@@ -1749,6 +1753,34 @@ impl CockpitView {
         .detach();
     }
 
+    /// A Thread whose work may have moved its git or forge state since the
+    /// last frame — a commit, a push, a PR, background work handed back
+    /// (`Transcript::published`): its PR is read again at once, so Changes
+    /// follows (HD27). First sight only notes the count: opening a Thread
+    /// asks already.
+    fn refresh_published(&mut self, cx: &mut Context<Self>) {
+        let moved: Vec<ThreadId> = self
+            .cockpit
+            .threads()
+            .into_iter()
+            .filter(|thread| {
+                let Some(count) = self
+                    .cockpit
+                    .thread(*thread)
+                    .map(|open| open.transcript().published())
+                else {
+                    return false;
+                };
+                self.published
+                    .insert(*thread, count)
+                    .is_some_and(|seen| seen != count)
+            })
+            .collect();
+        for thread in moved {
+            self.check_pr(thread, true, cx);
+        }
+    }
+
     /// Adopt what `gh` said about the Thread's PR.
     fn pr_landed(
         &mut self,
@@ -1879,6 +1911,7 @@ impl CockpitView {
             rewind: rewind.clone(),
             quotes,
             skills: open.commands().len(),
+            note: None,
         };
         let entity = self.panes[index]
             .ensure_transcript(cx)
@@ -1911,7 +1944,6 @@ impl CockpitView {
                 blocks
             },
             signal_status: Some(status),
-            note: None,
             focused,
             reading_size,
             selection_scope,
@@ -1933,6 +1965,7 @@ impl CockpitView {
             quotes,
             reply_to: open.provider().to_string().into(),
             skills: open.commands().into(),
+            note: None,
         };
         let selection = self.selection.clone();
         entity.update(cx, |transcript, cx| transcript.sync(input, selection, cx));
@@ -1965,7 +1998,6 @@ impl CockpitView {
 
     fn sync_visible_transcripts(&mut self, cx: &mut Context<Self>) {
         for index in self.visible_indices() {
-            note: None,
             self.sync_transcript(index, cx);
         }
     }
@@ -2069,6 +2101,20 @@ impl CockpitView {
             ferrite_pane::transcript::TranscriptEvent::SideChat(passage) => {
                 if let Some(thread) = self.panes[index].thread() {
                     self.open_side_chat(thread, Some(passage.clone()), cx);
+                }
+            }
+            // A wrap-up's next step: its words go as the next prompt.
+            ferrite_pane::transcript::TranscriptEvent::Send(words) => {
+                self.focus_pane(index);
+                if let Some(thread) = self.panes[index].thread() {
+                    self.cockpit.send(thread, words.clone());
+                }
+                cx.notify();
+            }
+            ferrite_pane::transcript::TranscriptEvent::OpenBackground => {
+                self.focus_pane(index);
+                if let Some(thread) = self.panes[index].thread() {
+                    self.open_background(thread, cx);
                 }
             }
         }
@@ -2284,6 +2330,7 @@ impl CockpitView {
         if panes_changed {
             self.sync_panes(cx);
         }
+        self.refresh_published(cx);
         let focused = self.focused_thread();
         if focused != self.pr_focus {
             self.pr_focus = focused;
@@ -10163,6 +10210,7 @@ impl CockpitView {
         // without cloning or notifying any retained transcript entity.
         self.sync_visible_transcripts(cx);
         self.tend_side_chat(window, cx);
+        self.tend_agent_drills(cx);
 
         // The card belongs to the mark that opened it: leaving that Pane,
         // zooming below L1, or the refresh that drops the PR out of the
@@ -10210,7 +10258,6 @@ impl CockpitView {
         if self.popover.as_ref().is_some_and(|open| {
             let focused = self.panes.get(self.focused());
             level != Level::Transcript
-        self.tend_agent_drills(cx);
                 || focused.is_none_or(|pane| pane.identity != open.pane)
                 || match &open.kind {
                     // The model picker outlives the first prompt (the
@@ -11029,14 +11076,10 @@ impl CockpitView {
         // picker (#25) or usage meter; the wall answers with keys alone.
         let l1 = level == Level::Transcript;
         let attachments = Composer::attachments(&pane.composer, &pane.preview, cx);
-        let background = (level != Level::Wall)
-            .then(|| self.background_chips(index, cx))
-            .flatten();
         // The docked Decision merges into the Composer when that Composer
         // is a live block with nothing floating between them (rule 2.8.1).
         let joins = pane.is_main()
             && attachments.is_none()
-            && background.is_none()
             && (!self.grid_board() || focused);
         let activity_decisions = (level != Level::Wall)
             .then(|| self.activity_decisions(index, joins, window, cx))
@@ -11066,7 +11109,6 @@ impl CockpitView {
         let wiring = pane::PaneWiring {
             transcript: retained_transcript,
             attachments,
-            background,
             menu: l1.then(|| self.popover_element(index, cx)).flatten(),
             // The title is the Pane's handle at every size: a drag moves a
             // grouped Pane, a double-click renames it — a tile with no
@@ -11845,64 +11887,6 @@ impl CockpitView {
             }
             .into_any_element(),
         ))
-    }
-
-    /// The Pane's background shelf: the Session's running background tasks
-    /// as chips at the Composer's right edge, each `×` wired to `StopTask`
-    /// where the Session can stop one. Main only — a Subagent Subject's
-    /// Composer is Main's, but a shelf there would claim the tasks were the
-    /// Subagent's own. None while nothing runs, so the shelf leaves with
-    /// the last task.
-    fn background_chips(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let pane = &self.panes[index];
-        if !pane.is_main() {
-            return None;
-        }
-        let thread = pane.thread()?;
-        let open = self.cockpit.thread(thread)?;
-        let generation = open.generation();
-        let chips = crate::background_chips::BackgroundChips::new(
-            SharedString::from(format!("background-chips-{}", thread.get())),
-            open.transcript().progress().background().iter().cloned(),
-        );
-        if chips.is_empty() {
-            return None;
-        }
-        if !open.supports_control(ferrite_core::ControlKind::StopTask) {
-            return Some(chips.into_any_element());
-        }
-        let view = cx.entity().downgrade();
-        Some(
-            chips
-                .on_stop(move |id, _, cx| {
-                    let id = id.to_string();
-                    let _ = view.update(cx, |view, cx| {
-                        // Only a task this very Session still reports as
-                        // working: a chip clicked as its snapshot changes
-                        // must not stop whatever took its place.
-                        let running =
-                            view.cockpit.thread(thread).is_some_and(|open| {
-                                open.generation() == generation
-                                    && open.transcript().progress().background().iter().any(
-                                        |task| {
-                                            task.id == id
-                                                && task.status
-                                                    == ferrite_core::progress::TaskStatus::Working
-                                        },
-                                    )
-                            });
-                        if running {
-                            view.run_session_control(
-                                thread,
-                                generation,
-                                ferrite_core::SessionControl::StopTask { id },
-                            );
-                        }
-                        cx.notify();
-                    });
-                })
-                .into_any_element(),
-        )
     }
 
     fn session_controls_element(

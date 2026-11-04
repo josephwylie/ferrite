@@ -161,6 +161,7 @@ mod tests {
                 output: None,
                 progress: None,
                 caption: None,
+                background: None,
             }),
             None,
         )

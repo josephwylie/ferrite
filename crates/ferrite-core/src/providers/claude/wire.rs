@@ -852,6 +852,9 @@ pub(super) fn parse_tool_result(value: Option<&Value>) -> ToolResult {
     let Some(value) = value else {
         return ToolResult::Opaque;
     };
+    if let Some(task) = background_launch(value) {
+        return ToolResult::Background { task };
+    }
     if let Some(patch) = value.get("structuredPatch").and_then(Value::as_array) {
         let Some(path) = value.get("filePath").and_then(Value::as_str) else {
             return ToolResult::Opaque;
@@ -892,6 +895,19 @@ pub(super) fn parse_tool_result(value: Option<&Value>) -> ToolResult {
         value: value.clone(),
         duration_ms: None,
     }
+}
+
+/// The task a result only launched (`claude-background-2.1.318`): a Bash
+/// call's `backgroundTaskId` (its stdout empty, the prose naming the
+/// output file), or an agent's `async_launched` with its `agentId`. Its
+/// outcome comes later, in the task's `task_notification`.
+fn background_launch(value: &Value) -> Option<String> {
+    let task = value
+        .get("backgroundTaskId")
+        .or_else(|| (value["status"] == "async_launched").then(|| &value["agentId"]))?;
+    task.as_str()
+        .filter(|task| !task.is_empty())
+        .map(str::to_owned)
 }
 
 /// Whether the result describes a file the tool wrote where there was

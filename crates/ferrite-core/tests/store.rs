@@ -246,7 +246,7 @@ fn a_restart_restores_the_thread_and_the_next_prompt_continues_the_session() {
 
     let argv = read_lines(&argv_log, 1);
     assert!(
-        argv[0].ends_with(&format!("--resume {CAPTURED_SESSION}")),
+        argv[0].contains(&format!("--resume {CAPTURED_SESSION}")),
         "the Session was not spawned against the stored resume target: {argv:?}"
     );
 

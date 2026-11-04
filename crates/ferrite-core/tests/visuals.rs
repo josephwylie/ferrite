@@ -235,7 +235,9 @@ fn claude_is_offered_the_tool_in_band_and_its_call_gets_text_and_the_screenshot(
         "the notification still gets its control response"
     );
     let list = answer_to(&lines, &request_id(CLAUDE, "tools/list")).unwrap();
-    let tool = &list["response"]["response"]["mcp_response"]["result"]["tools"][0];
+    let tools = &list["response"]["response"]["mcp_response"]["result"]["tools"];
+    assert_eq!(tools[0]["name"], "wrap_up", "the wrap-up box is always offered");
+    let tool = &tools[1];
     assert_eq!(tool["name"], "show_visual");
     assert_eq!(tool["_meta"]["anthropic/alwaysLoad"], true);
     assert_eq!(
@@ -376,8 +378,9 @@ fn a_failed_render_answers_claude_with_an_error_and_no_image() {
         .contains("the browser crashed"));
 }
 
+/// With no visual, the server still offers `wrap_up` (HD58), and only it.
 #[test]
-fn claude_without_visuals_declares_and_allows_nothing() {
+fn claude_without_visuals_offers_only_the_wrap_up() {
     for (name, visuals) in [
         ("claude-none", None),
         ("claude-off", visuals(&renderer(shown()), Level::Off)),
@@ -394,14 +397,10 @@ fn claude_without_visuals_declares_and_allows_nothing() {
             .iter()
             .find(|line| line["request"]["subtype"] == "initialize")
             .unwrap();
-        assert!(
-            initialize["request"].get("sdkMcpServers").is_none(),
-            "{name}"
-        );
-        assert!(
-            !fs::read_to_string(argv).unwrap().contains("--allowedTools"),
-            "{name}"
-        );
+        assert_eq!(initialize["request"]["sdkMcpServers"], json!(["ferrite"]), "{name}");
+        let argv = fs::read_to_string(argv).unwrap();
+        assert!(argv.contains("--allowedTools mcp__ferrite__wrap_up"), "{name}: {argv}");
+        assert!(!argv.contains("show_visual"), "{name}: {argv}");
     }
 }
 

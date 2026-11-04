@@ -1,4 +1,4 @@
-//! A foreground Bash call's output while it runs.
+//! A Bash call's output while it runs, in the foreground or backgrounded.
 //!
 //! stream-json reports a Bash call's output only when the call ends, so a
 //! running test suite would show no count until it finished. Claude Code
@@ -76,6 +76,9 @@ impl ShellOutputs {
                     }
                 }
             }
+            // A background launch's result only acknowledges the launch: the
+            // shell runs on, and its notification ends the follow.
+            (Some("user"), _) if value["tool_use_result"]["backgroundTaskId"].is_string() => {}
             (Some("user"), _) => {
                 for block in value["message"]["content"].as_array().into_iter().flatten() {
                     if block["type"] == "tool_result" {
@@ -94,11 +97,12 @@ impl ShellOutputs {
         else {
             return;
         };
-        // Main's own foreground calls only: a subagent's rows are its own,
-        // and a backgrounded shell is the background chip's.
+        // Main's own calls only: a subagent's rows are its own. A
+        // backgrounded call's row runs on past its turn (HD64), so its
+        // output streams there too, until its notification settles it.
         let main = value["owned_by_subagent"] != true
             && matches!(value.get("parent_tool_use_id"), None | Some(Value::Null));
-        if value["task_type"] != "local_bash" || value["is_backgrounded"] == true || !main {
+        if value["task_type"] != "local_bash" || !main {
             return;
         }
         let (Some(cwd), Some(session)) = (self.cwd.clone(), self.session.clone()) else {
@@ -138,6 +142,30 @@ impl ShellOutputs {
         }
         self.tasks.clear();
     }
+}
+
+/// The most of a finished background command's output a handback keeps:
+/// its row holds a bounded output anyway, and the tail is where a command
+/// says how it ended.
+const HANDBACK_LIMIT: u64 = 64 * 1024;
+
+/// A background task's output file, as its notification names it: the
+/// tail, at most `HANDBACK_LIMIT` bytes of it, lossily decoded. `None`
+/// when the file cannot be read (another machine's path, a CLI that
+/// removed it).
+pub(super) fn read_output(path: &str) -> Option<String> {
+    let mut file = File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    let skip = length.saturating_sub(HANDBACK_LIMIT);
+    file.seek(SeekFrom::Start(skip)).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    // A cut tail starts at the next whole line.
+    Some(match (skip > 0, text.find('\n')) {
+        (true, Some(at)) => text[at + 1..].to_owned(),
+        _ => text.into_owned(),
+    })
 }
 
 /// The cwd as the CLI names its directory: every character outside
@@ -283,6 +311,25 @@ mod tests {
         );
     }
 
+    /// A handback reads the task's whole output file, or the tail of a
+    /// long one from its next whole line; a missing file reads as nothing.
+    #[test]
+    fn a_handback_reads_the_tail_of_the_output_file() {
+        let dir = std::env::temp_dir().join(format!("ferrite-handback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let short = dir.join("short.output");
+        std::fs::write(&short, "bg-done\n").unwrap();
+        assert_eq!(read_output(short.to_str().unwrap()).as_deref(), Some("bg-done\n"));
+        let long = dir.join("long.output");
+        let line = "x".repeat(99) + "\n";
+        std::fs::write(&long, line.repeat(1000) + "last\n").unwrap();
+        let tail = read_output(long.to_str().unwrap()).unwrap();
+        assert!(tail.len() as u64 <= HANDBACK_LIMIT);
+        assert!(tail.starts_with('x') && tail.ends_with("last\n"));
+        assert_eq!(read_output(dir.join("gone").to_str().unwrap()), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_cut_character_waits_for_the_next_read() {
         let mut bytes = "ok \u{2713}".as_bytes().to_vec();
@@ -293,8 +340,9 @@ mod tests {
         assert!(bytes.is_empty());
     }
 
-    /// A foreground shell task's file streams as its call's output, and a
-    /// backgrounded one is left alone.
+    /// A shell task's file streams as its call's output, a backgrounded
+    /// one's too: its launch result leaves it running, and only its
+    /// notification ends the follow.
     #[test]
     fn a_foreground_shell_streams_its_file_as_the_calls_output() {
         let root =
@@ -341,10 +389,20 @@ mod tests {
             &serde_json::json!({"type":"system","subtype":"task_started","task_id":"b2","tool_use_id":"toolu_2","task_type":"local_bash","is_backgrounded":true}),
             &sender,
         );
-        assert!(
-            outputs.following.is_empty(),
-            "a backgrounded shell is the chip's"
+        assert!(outputs.following.contains_key("toolu_2"));
+        outputs.observe(
+            &serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"Command running in background with ID: b2."}]},"tool_use_result":{"stdout":"","backgroundTaskId":"b2"}}),
+            &sender,
         );
+        assert!(
+            outputs.following.contains_key("toolu_2"),
+            "the launch is not the end"
+        );
+        outputs.observe(
+            &serde_json::json!({"type":"system","subtype":"task_notification","task_id":"b2","tool_use_id":"toolu_2","status":"completed"}),
+            &sender,
+        );
+        assert!(!outputs.following.contains_key("toolu_2"));
         outputs.observe(
             &serde_json::json!({"type":"system","subtype":"task_started","task_id":"b3","tool_use_id":"toolu_3","task_type":"local_bash","is_backgrounded":false}),
             &sender,

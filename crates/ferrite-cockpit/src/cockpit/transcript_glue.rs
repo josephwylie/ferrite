@@ -281,7 +281,10 @@ impl CockpitView {
         };
         let asked = match action {
             PromptAction::Edit => self.cockpit.rewind(thread, &prompt, false, true),
-            PromptAction::Rewind => self.cockpit.rewind(thread, &prompt, files, false),
+            // Claude's "Takes this and what follows out of the
+            // conversation": its words come back to the Composer, to edit
+            // and send again.
+            PromptAction::Rewind => self.cockpit.rewind(thread, &prompt, files, true),
             PromptAction::Fork => return self.fork_thread(thread, Some(prompt), None, cx),
         };
         if let Err(why) = asked {

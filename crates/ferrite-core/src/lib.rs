@@ -46,6 +46,7 @@ pub mod transcript;
 pub mod user_commands;
 pub mod visual;
 pub mod workspace;
+pub mod wrap_up;
 
 mod session_event;
 mod thread;

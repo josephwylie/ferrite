@@ -12,11 +12,10 @@
 //!   Composer's ring reads plan usage.
 //! - **Connectors**: `N connected` at its head, which folds its MCP servers
 //!   open, each with how it stands; left out with none.
-//! - **Changes**, last: what it edited, and its pull request once one
-//!   exists (`changes`); left out with neither.
-//!
-//! The work it left running (a dev server, a watch) is not listed here: the
-//! chips over the Composer hold that fact (theme rule 7).
+//! - **Changes**: what it edited, and its pull request once one exists
+//!   (`changes`); left out with neither.
+//! - **Background tasks**, last: the work it left running, live, and how
+//!   much finished (`background`); left out until it launched any.
 
 use super::*;
 use ferrite_core::{McpServer, McpStatus};
@@ -68,6 +67,7 @@ impl CockpitView {
             sections.push(connectors(servers, window, cx));
         }
         sections.extend(self.changes_section(thread, cx));
+        sections.extend(self.background_section(thread, cx));
 
         div()
             .debug_selector(|| "panel-sections".into())

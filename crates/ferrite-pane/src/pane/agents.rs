@@ -96,6 +96,7 @@ pub(crate) fn render_agent(
     row_cx: &RowCx,
     open: Option<AnyElement>,
     targeted: Option<&gpui::FocusHandle>,
+    live: Option<AnyElement>,
 ) -> AnyElement {
     let grid = row_cx.grid();
     let small = grid.activity();
@@ -152,7 +153,7 @@ pub(crate) fn render_agent(
         .children(verdict)
         .children(opens.then(|| disclosure_chevron("agent-chevron", false, false)))
         .child(div().flex_1())
-        .children(running.then(|| {
+        .children((running && tool.background.is_none()).then(|| {
             div()
                 .debug_selector(|| "agent-running".into())
                 .flex()
@@ -166,7 +167,9 @@ pub(crate) fn render_agent(
         .id(SharedString::from(row_selector.clone()))
         .debug_selector(move || row_selector.clone())
         .group(DISCLOSURE_ROW)
-        .children(open);
+        .children(open)
+        // Over the opener, so a press on it opens the tasks pane instead.
+        .children(live);
     match targeted {
         Some(focus) => row
             .bg(theme::paint::RAISED)

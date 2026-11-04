@@ -35,6 +35,7 @@
 //! (`view_head_end`). Hiding the panel puts its preview away: a hidden
 //! panel holds none.
 
+mod background;
 mod changes;
 pub(crate) mod hunks;
 pub(crate) mod preview;
@@ -59,6 +60,12 @@ pub(crate) struct Panel {
     /// The first frame has been tended: a preview open by then is simply
     /// there (`tend_previews`).
     tended: bool,
+    /// The Thread whose Background tasks pane holds the column
+    /// (`background`), until it is closed.
+    pub(crate) background: Option<ThreadId>,
+    /// The background cards turned from how they start (running open,
+    /// finished closed), by call.
+    pub(crate) background_turned: std::collections::HashSet<String>,
 }
 
 /// How wide the Panel is while a preview shows, in a window `width` wide
@@ -84,6 +91,7 @@ impl CockpitView {
         (pane.preview.is_open()
             || self.side_chat_shown(index)
             || self.agent_drill_shown(index)
+            || self.background_shown(pane.thread())
             || self.prefs.settings.panel_shown && pane.thread().is_some())
         .then_some(index)
     }
@@ -215,8 +223,13 @@ impl CockpitView {
     /// The frame lays it after both heads, so it stays put, hover and all.
     pub(super) fn panel_toggle_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         self.panel_candidate()?;
-        // The side chat's head holds the row's right end: no toggle there.
-        if self.docked_pane_shown() {
+        // The side chat's head, or the Background tasks pane's, holds the
+        // row's right end: no toggle there.
+        if self.docked_pane_shown()
+            || self
+                .panel_pane()
+                .is_some_and(|index| self.background_shown(self.panes[index].thread()))
+        {
             return None;
         }
         Some(
@@ -292,6 +305,7 @@ impl CockpitView {
             return Some(self.side_chat_column(thread, window, cx));
         }
         let previewing = self.preview_shown(index);
+        let background = owner.thread().filter(|thread| self.background_shown(Some(*thread)));
         let content = div()
             .size_full()
             .flex()
@@ -303,15 +317,21 @@ impl CockpitView {
             .text_size(px(FS_UI))
             .line_height(px(LH_UI))
             .text_color(rgb(INK_STRONG))
-            .whitespace_nowrap()
-            .child(self.panel_head(owner, previewing, cx));
+            .whitespace_nowrap();
         let content = match owner.thread() {
-            _ if previewing => content.child(self.panel_preview(owner, cx)),
+            _ if background.is_some() => {
+                content.child(self.background_pane(background.expect("just matched"), cx))
+            }
+            _ if previewing => content
+                .child(self.panel_head(owner, previewing, cx))
+                .child(self.panel_preview(owner, cx)),
             Some(thread) => {
                 let scroll = self.panel.scrolls.get(&thread).cloned().unwrap_or_default();
-                content.child(panel_body(self.panel_sections(thread, window, cx), &scroll))
+                content
+                    .child(self.panel_head(owner, previewing, cx))
+                    .child(panel_body(self.panel_sections(thread, window, cx), &scroll))
             }
-            None => content,
+            None => content.child(self.panel_head(owner, previewing, cx)),
         };
         Some(
             div()

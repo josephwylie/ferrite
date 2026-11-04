@@ -98,7 +98,10 @@ mod rewind_tests;
 ///   next Session at an earlier entry of the provider's conversation. A
 ///   v1–v14 log loads with no ids, so none of its prompts can be rewound
 ///   to, and no rewinds.
-const SCHEMA_VERSION: u32 = 15;
+/// - **16** — a `background` tool result: the call launched work that runs
+///   on, whose outcome a later result for the same call brings (HD64). A
+///   v1–v15 log has none, so its background launches read as settled.
+const SCHEMA_VERSION: u32 = 16;
 
 /// How far apart the store's marks sit, at least: what a peek or a reopen
 /// reads back from the end of a log to find its facts.
@@ -289,6 +292,39 @@ impl Facts {
             effort: self.effort,
             summary: None,
         }
+    }
+}
+
+/// The ids a log's prompts were sent under, in order, as a replay meets
+/// them: where a rewind cuts. It cuts at the *first* prompt sent under its
+/// id — an older log can hold one prompt twice under the same id (its echo
+/// taken for a queued prompt starting, fixed in a779f0e3), and the
+/// rewind's own count then names only the echo. A prompt it cannot find
+/// (no id kept) falls back to the count.
+#[derive(Default)]
+struct PromptIds(Vec<Option<String>>);
+
+impl PromptIds {
+    fn prompt(&mut self) {
+        self.0.push(None);
+    }
+
+    /// The prompt just recorded was sent under `id`.
+    fn observe(&mut self, id: &Option<String>) {
+        if let Some(last) = self.0.last_mut().filter(|last| last.is_none()) {
+            *last = id.clone();
+        }
+    }
+
+    /// How many prompts stay after the rewind to `prompt`.
+    fn cut(&mut self, prompt: &str, dropped: u64) -> usize {
+        let keep = self
+            .0
+            .iter()
+            .position(|id| id.as_deref() == Some(prompt))
+            .unwrap_or_else(|| self.0.len().saturating_sub(dropped as usize));
+        self.0.truncate(keep);
+        keep
     }
 }
 
@@ -522,6 +558,9 @@ enum Record {
         at: Option<String>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         fork: bool,
+        /// Schema 16: the prompt a rewind's cut drops; absent before.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        drops: Option<String>,
     },
     Closed {
         reason: String,
@@ -704,6 +743,10 @@ enum PersistedToolResult {
     FileEdits {
         edits: Vec<PersistedFileEdit>,
     },
+    /// Schema 16.
+    Background {
+        task: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -744,6 +787,9 @@ impl PersistedToolResult {
                     value: value.clone(),
                     duration_ms: *duration_ms,
                 }
+            }
+            crate::ToolResult::Background { task } => {
+                PersistedToolResult::Background { task: task.clone() }
             }
             // An Activity's own record, never a provider's event.
             crate::ToolResult::Preview { .. } => {
@@ -806,6 +852,9 @@ impl PersistedToolResult {
                     value: value.clone(),
                     duration_ms: *duration_ms,
                 }
+            }
+            PersistedToolResult::Background { task } => {
+                crate::ToolResult::Background { task: task.clone() }
             }
             PersistedToolResult::FileEdit { path, hunks } => crate::ToolResult::FileEdit {
                 path: path.clone(),
@@ -2639,6 +2688,7 @@ impl Store {
                 session: point.session.clone(),
                 at: point.at.clone(),
                 fork: point.fork,
+                drops: point.drops.clone(),
             })?;
         }
         state.flush_fully()?;
@@ -3800,6 +3850,9 @@ pub struct ResumePoint {
     pub session: String,
     pub at: Option<String>,
     pub fork: bool,
+    /// A rewind's: the prompt whose turn the cut drops, which the provider
+    /// checks the cut against (`ClaudeConfig::resume_drops`, HD79).
+    pub drops: Option<String>,
 }
 
 /// The last provider switch a log records, and what the next prompt on
@@ -3996,6 +4049,7 @@ impl ThreadSnapshot {
     /// out).
     fn exchanges_before(&self, at: usize) -> Vec<(String, String)> {
         let mut exchanges: Vec<(String, AnswerText)> = Vec::new();
+        let mut ids = PromptIds::default();
         let after_reset = self.records[..at]
             .iter()
             .rposition(|record| matches!(record, Record::ConversationReset { .. }))
@@ -4003,10 +4057,12 @@ impl ThreadSnapshot {
             .unwrap_or(0);
         for record in &self.records[after_reset..at] {
             match record {
-                Record::Prompt { text } => exchanges.push((text.clone(), AnswerText::default())),
-                Record::Rewind { dropped, .. } => {
-                    exchanges.truncate(exchanges.len().saturating_sub(*dropped as usize))
+                Record::Prompt { text } => {
+                    ids.prompt();
+                    exchanges.push((text.clone(), AnswerText::default()))
                 }
+                Record::PromptObservation { prompt_id, .. } => ids.observe(prompt_id),
+                Record::Rewind { prompt, dropped } => exchanges.truncate(ids.cut(prompt, *dropped)),
                 Record::Text { text } => {
                     if let Some((_, answer)) = exchanges.last_mut() {
                         answer.parts.push(text.clone());
@@ -4127,12 +4183,15 @@ impl ThreadSnapshot {
             .map(|index| index + 1)
             .unwrap_or(0);
         let mut prompts = Vec::new();
+        let mut ids = PromptIds::default();
         for record in &self.records[after_reset..] {
             match record {
-                Record::Prompt { text } => prompts.push(text.clone()),
-                Record::Rewind { dropped, .. } => {
-                    prompts.truncate(prompts.len().saturating_sub(*dropped as usize))
+                Record::Prompt { text } => {
+                    ids.prompt();
+                    prompts.push(text.clone())
                 }
+                Record::PromptObservation { prompt_id, .. } => ids.observe(prompt_id),
+                Record::Rewind { prompt, dropped } => prompts.truncate(ids.cut(prompt, *dropped)),
                 _ => {}
             }
         }
@@ -4149,13 +4208,17 @@ impl ThreadSnapshot {
             match record {
                 // A fork resumes at its entry or at the end; an in-place
                 // point names its entry.
-                Record::ResumeAt { session, at, fork }
-                    if (at.is_some() || *fork) && !(started && *fork) =>
-                {
+                Record::ResumeAt {
+                    session,
+                    at,
+                    fork,
+                    drops,
+                } if (at.is_some() || *fork) && !(started && *fork) => {
                     return Some(ResumePoint {
                         session: session.clone(),
                         at: at.clone(),
                         fork: *fork,
+                        drops: drops.clone(),
                     })
                 }
                 Record::ResumeAt { .. }
@@ -4246,6 +4309,7 @@ impl ThreadWriter {
             session: point.session.clone(),
             at: point.at.clone(),
             fork: point.fork,
+            drops: point.drops.clone(),
         })
     }
 

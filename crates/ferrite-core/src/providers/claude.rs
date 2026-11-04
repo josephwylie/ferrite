@@ -102,6 +102,11 @@ pub struct ClaudeConfig {
     /// entry with this uuid (`--resume-session-at`), the way a rewind or a
     /// fork is resumed when the CLI cannot cut in place.
     pub resume_at: Option<String>,
+    /// With `resume_at`, a rewind's: the prompt whose turn the cut means
+    /// to drop (`--resume-drops-turn`, HD79). The CLI refuses the resume
+    /// when the dropped entries hold anything else — a message the turn
+    /// absorbed mid-way, a task's notification — so nothing goes silently.
+    pub resume_drops: Option<String>,
     /// With `resume`: continue it as a new session of its own
     /// (`--fork-session`), leaving the original as it was.
     pub fork: bool,
@@ -133,6 +138,7 @@ impl Default for ClaudeConfig {
             permission_mode: None,
             resume: None,
             resume_at: None,
+            resume_drops: None,
             fork: false,
             visuals: None,
             env: Vec::new(),
@@ -304,6 +310,9 @@ impl ClaudeSession {
             command.args(["--resume", session_id.as_str()]);
             if let Some(at) = &config.resume_at {
                 command.args(["--resume-session-at", at.as_str()]);
+                if let Some(prompt) = &config.resume_drops {
+                    command.args(["--resume-drops-turn", prompt.as_str()]);
+                }
             }
             if config.fork {
                 command.arg("--fork-session");
@@ -329,10 +338,10 @@ impl ClaudeSession {
         for directory in &config.additional_directories {
             command.arg("--add-dir").arg(directory);
         }
-        let visuals = mcp::Server::offered(config.visuals.as_ref());
-        if visuals {
-            // Ferrite's own tool is never a Decision: pre-allowed, so no
-            // permission mode asks for it (verified on 2.1.292 in `default`).
+        // Ferrite's own tools are never a Decision: pre-allowed, so no
+        // permission mode asks for them (verified on 2.1.292 in `default`).
+        command.args(["--allowedTools", crate::wrap_up::CLAUDE_NAME]);
+        if mcp::Server::offered(config.visuals.as_ref()) {
             command.args(["--allowedTools", crate::visual::CLAUDE_NAME]);
         }
         command.args(&config.args);
@@ -429,11 +438,9 @@ impl ClaudeSession {
             "perTaskStopAffordance": true,
             "agentProgressSummaries": true,
         });
-        if visuals {
-            // The in-band server (`mcp`): the CLI tunnels its MCP traffic
-            // back over this pipe, starting before it answers this request.
-            initialize["sdkMcpServers"] = serde_json::json!([crate::visual::SERVER]);
-        }
+        // The in-band server (`mcp`): the CLI tunnels its MCP traffic back
+        // over this pipe, starting before it answers this request.
+        initialize["sdkMcpServers"] = serde_json::json!([crate::visual::SERVER]);
         let _ = session.write_line(&serde_json::json!({
             "type": "control_request",
             "request_id": id,

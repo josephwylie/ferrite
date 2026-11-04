@@ -673,6 +673,7 @@ pub(crate) fn collect_block_text(
 ) {
     match &block.body {
         Body::Visual(visual) => crate::visual::collect_text(block.id, visual, selection),
+        Body::WrapUp(wrap) => super::wrap_up::collect_text(block.id, wrap, selection),
         Body::Prompt(line) => match prompt_text(line, skills).0 {
             PromptText::Literal(words) => {
                 if !words.is_empty() {

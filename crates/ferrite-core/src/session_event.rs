@@ -475,6 +475,11 @@ pub enum ToolResult {
         result_line: Option<String>,
         duration_ms: Option<u64>,
     },
+    /// The call only launched work that runs on in the background: its
+    /// result acknowledges the launch, not the outcome. `task` is the
+    /// provider's id for that work (what a stop names); the outcome comes
+    /// later, as another `ToolCompleted` for the same call (HD64).
+    Background { task: String },
     /// A file was written. `hunks` is empty when the file was created, which
     /// has nothing to diff against.
     FileEdit { path: String, hunks: Vec<Hunk> },

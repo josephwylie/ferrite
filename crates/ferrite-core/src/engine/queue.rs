@@ -16,6 +16,10 @@ pub enum Delivery {
     Queued,
     /// Folded into the running turn at its next tool boundary (Codex).
     Steering,
+    /// In the provider's queue while a turn runs, joining that turn at its
+    /// next tool round and still to be taken back until then (Claude,
+    /// `Session::queue_folds`). The strip says `Steering`.
+    Folding,
     /// A state this build does not know, or a Server too old to say.
     #[serde(other)]
     Unknown,

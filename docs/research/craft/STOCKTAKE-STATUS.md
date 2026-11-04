@@ -436,7 +436,7 @@ ID prefix: HD, a handoff requirement. "fx N" is the matching §22 fixture.
 | HD2 | Replay dedup by event identity, never by text (§4, §8, fx 10, 15) | BUILT | `activity.rs:442` `seen.insert`, `:2569` `delivery_id` | |
 | HD3 | A streamed message and its completed form are one visible copy, joined by API `message.id` (§7.4, fx 1) | BUILT | `claude/activity.rs:747,1152` `bind_main_stream_block`; `activity.rs:1830` `TextSnapshot` | Two text blocks in one message fall back to the delivery id (gaps audit, untested) |
 | HD4 | Every outgoing prompt carries its own UUID (§4) | BUILT | `engine.rs:5480` `send_as`; `claude.rs:628-644` `enqueue` | |
-| HD5 | Result attribution (`user_message_uuid(s)`) (§4) | MISSING | — | Ranked #3 |
+| HD5 | Result attribution (`user_message_uuid(s)`) (§4) | BUILT | `claude/queue.rs` (`user_message_uuids` on `status` and `result`) | Next build 11 |
 | HD6 | Tool call and result joined by id, including out-of-order parallel results (§4, fx 4) | BUILT | `transcript.rs` `settle_tool` by call; `tests/provider_progress.rs:522` | |
 | HD7 | `parent_tool_use_id` / `agent_id` attribution; child prose and todos never reach Main (§4, §19.14, fx 23) | BUILT | `claude/activity.rs` scope; `activity.rs` `Subject::Subagent` | |
 | HD8 | Task hierarchy and run identity (§14, fx 19–20) | PARTIAL | `claude/activity.rs:53,270,1346` | Ranked #15 |
@@ -458,7 +458,7 @@ ID prefix: HD, a handoff requirement. "fx N" is the matching §22 fixture.
 | HD24 | `commands_changed` updates the command menu live (§5) | BUILT | `claude/wire.rs:1430` | |
 | HD25 | `session_state_changed` (§5) | BUILT | `claude.rs:264` env flag; `claude/wire.rs` state → `RunState` | |
 | HD26 | Unknown events and fields are forward-compatible, never raw text in chat (§5, §19.21, fx 8) | BUILT | `claude/wire.rs:2336` `junk_lines_are_ignored_never_fatal` | |
-| HD27 | VCS and code-publication events (§20) | MISSING | — | Ranked #5 |
+| HD27 | VCS and code-publication events (§20) | PARTIAL | `Transcript::published` with `CockpitView::refresh_published` | PR re-read after a commit, push, PR or handback; the CLI events themselves are not decoded |
 | HD28 | Partial messages enabled (§6, §19.10) | BUILT | `claude.rs:277` `--include-partial-messages` | |
 | HD29 | Permission broker routed to the app (§6, §15) | BUILT | `claude.rs:284-290` `--permission-prompt-tool stdio` | |
 | HD30 | `perTaskStopAffordance` declared, backed by a real stop (§6, §14, §19.28, fx 15) | BUILT | `claude.rs:429`; `stop_subagent` `claude.rs:702` | See SA5 |
@@ -470,7 +470,7 @@ ID prefix: HD, a handoff requirement. "fx N" is the matching §22 fixture.
 | HD36 | Requested vs effective model and effort (§6) | BUILT | `claude.rs:464-473` `SettingAck` | |
 | HD37 | Delta batching keeps order and flushes on structure (§7.2, fx 44) | BUILT | `activity.rs` record merge; the store and link merges (gaps audit §1) | Structural only: no 16 ms / 250 ms visible-vs-background cadence, and none needed |
 | HD38 | Tool input is not execution: `content_block_stop` is not success (§7.5, §19.11, fx 3) | BUILT | `claude/activity.rs:991` (`content_block_stop` does nothing); the row stays Running until `ToolCompleted` | |
-| HD39 | Provisional tool row while input streams (§7.5, fx 2) | PARTIAL | `claude/activity.rs:955,965-991` | Ranked #2 |
+| HD39 | Provisional tool row while input streams (§7.5, fx 2) | BUILT | `claude/drafts.rs`, `Transcript::draft_edit` | Edit, MultiEdit, Write |
 | HD40 | Main history comes from Ferrite's own log; the runtime is resumed for context, never rebuilt from bubbles (§8) | BUILT | `store.rs:4065` replay; `claude.rs:300-304` | |
 | HD41 | Child history merges a frozen prefix with the live tail once (§8, fx 10) | BUILT | `engine/history.rs:60,279,314` `HistoryContent` | |
 | HD42 | A superseded process can't change its replacement's state (§8, §19.8, fx 9) | BUILT | `activity.rs:285,1078` `Observe { generation }`; `claude/activity.rs:162-190` (a new init resets) | |
@@ -489,13 +489,13 @@ ID prefix: HD, a handoff requirement. "fx N" is the matching §22 fixture.
 | HD55 | Failed `TaskCreate` pinned by a test (fx 31) | PARTIAL | `claude/wire.rs:520` | Ranked #20 |
 | HD56 | Todo tools opted in for newer models (§11, §19.24) | BUILT | `claude.rs:265` `CLAUDE_CODE_ENABLE_TODO_TOOLS` | |
 | HD57 | Custom turn-plan tool (§12) | MISSING | — | Ranked #12 |
-| HD58 | Wrap-up and next-action turn box (§13) | MISSING | — | Ranked #4 |
+| HD58 | Wrap-up and next-action turn box (§13) | PARTIAL | `wrap_up.rs`, `pane/wrap_up.rs` | Claude only; reply-style steps, no app action kinds |
 | HD59 | Task status unions kept apart (`killed`, `paused`, `stopped`) (§14, §19.17) | BUILT | `claude/activity.rs:1503-1504`; `claude/wire.rs:468` | |
 | HD60 | A task's stop or failure reason is kept (§14) | MISSING | — | Ranked #16 |
 | HD61 | `skip_transcript` and `ambient` apply apart from execution state; no endless spinner (§14, §19.18, fx 21) | BUILT | `claude/wire.rs:321,351` | |
 | HD62 | `forwardSubagentText` on, with no false promise of nested token streaming (§14, §19.29, fx 24) | BUILT | `claude.rs:282`; `claude/activity.rs:722,789` `TranscriptCoverage::Live` | |
 | HD63 | Agent progress summaries enabled on purpose and shown on the agent row (§14, §19.30) | BUILT | `claude.rs:425-430`; `claude/activity.rs:1394-1398`; `pane/agents.rs:24-63` (241f18e8) | |
-| HD64 | Background output joins its call (§14, fx 22) | MISSING | — | Ranked #1 |
+| HD64 | Background output joins its call (§14, fx 22) | BUILT | `claude/activity.rs` (`handback`), `ToolBlock::background`, `panel/background.rs` | Claude; Codex terminals still settle at turn end |
 | HD65 | App side sessions (§14) | MISSING | — | Ranked #13 |
 | HD66 | A Decision resolves once; stale clicks and closed runtimes are rejected (§15, §19.26) | BUILT | `activity.rs:248` `DecisionHandle`; `claude.rs:733-754` | |
 | HD67 | `AskUserQuestion`: 1–4 questions, multi-select, free text; answers sent as updated input; routed once (§15, fx 26) | BUILT | `ferrite-core/src/questions.rs:51-180`; `claude/wire.rs` question response | Forms UI: AP11 |
@@ -510,7 +510,7 @@ ID prefix: HD, a handoff requirement. "fx N" is the matching §22 fixture.
 | HD76 | Open input stream for a multi-turn session (§19.5) | BUILT | `claude.rs:273` `--input-format stream-json` | |
 | HD77 | Session persistence kept on for resume (§19.7) | BUILT | No `--no-session-persistence` in `spawn`; only the title one-shot uses it (`claude.rs:1301`) | |
 | HD78 | Precise resume or fork point for rewind and fork (§19) | BUILT | `claude.rs:306-310` `--resume-session-at`, `--fork-session`; `claude/rewind.rs` | |
-| HD79 | Truncating resume validated (§19, fx 50) | MISSING | — | Ranked #6 |
+| HD79 | Truncating resume validated (§19, fx 50) | BUILT | `ClaudeConfig::resume_drops` (`--resume-drops-turn`) | — |
 | HD80 | File checkpointing coordinated with conversation rewind; a fork doesn't claim a new worktree (§20, fx 49) | BUILT | `claude.rs:268`; `claude/rewind.rs`; `ControlKind::RewindFiles` (401c7d8d) | |
 | HD81 | Follow new output; scrolling up stops it (§20) | BUILT | `transcript/scroll.rs:29-31,62` `FollowMode::Tail` | |
 | HD82 | Older content prepends with rows and expansion stable (§20, fx 11, 46) | BUILT | `rows.rs:893,991` splices; expansion by `DisclosureId` | |

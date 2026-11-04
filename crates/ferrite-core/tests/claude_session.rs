@@ -681,7 +681,7 @@ fn a_resumed_session_answers_from_the_previous_process_history() {
         format!(
             "-p --input-format stream-json --output-format stream-json \
              --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
-             --resume {resumed}"
+             --resume {resumed} --allowedTools mcp__ferrite__wrap_up"
         )
     );
 
@@ -759,6 +759,30 @@ fn a_cli_that_exits_at_start_explains_itself_with_stderr() {
     );
 }
 
+/// A rewind resumed at an entry names the turn it means to drop, so the
+/// CLI refuses a cut that would take anything else with it (HD79).
+#[test]
+fn a_rewind_resume_names_the_turn_it_drops() {
+    let log = log_path("argv-drops.log");
+    let program = stub(
+        "claude-resumes",
+        &format!("{PRELUDE}\necho \"$@\" > '{}'\ncat >/dev/null", log.display()),
+    );
+    let session = ClaudeSession::spawn(ClaudeConfig {
+        resume: Some("sess".into()),
+        resume_at: Some("a1".into()),
+        resume_drops: Some("p2".into()),
+        ..config(program)
+    })
+    .unwrap();
+    let argv = read_lines(&log, 1).remove(0);
+    drop(session);
+    assert!(
+        argv.contains("--resume sess --resume-session-at a1 --resume-drops-turn p2"),
+        "{argv}"
+    );
+}
+
 /// What the CLI is asked to be, and what it is told — recorded so a change to
 /// either is deliberate.
 #[test]
@@ -785,6 +809,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         permission_mode: Some("default".into()),
         resume: None,
         resume_at: None,
+        resume_drops: None,
         fork: false,
         visuals: None,
         env: Vec::new(),
@@ -813,7 +838,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         "-p --input-format stream-json --output-format stream-json \
          --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
          --model haiku --permission-mode default --name CI flake --add-dir /extra/project \
-         --dangerously-skip-permissions"
+         --allowedTools mcp__ferrite__wrap_up --dangerously-skip-permissions"
     );
     assert_eq!(sent.len(), 6);
     // Feature detection comes first, before a word of the Thread. Declaring
@@ -823,7 +848,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         serde_json::json!({
             "type": "control_request",
             "request_id": "req_1",
-            "request": {"subtype": "initialize", "perTaskStopAffordance": true, "agentProgressSummaries": true},
+            "request": {"subtype": "initialize", "perTaskStopAffordance": true, "agentProgressSummaries": true, "sdkMcpServers": ["ferrite"]},
         })
     );
     assert_eq!(
@@ -907,7 +932,8 @@ fn no_model_or_permission_mode_is_passed_when_the_config_names_none() {
     assert_eq!(
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
-         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false"
+         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
+         --allowedTools mcp__ferrite__wrap_up"
     );
 }
 
@@ -941,7 +967,7 @@ fn projects_settings_reach_the_cli_after_ferrites_flags() {
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
          --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
-         --settings /d/tasks/app/1/claude.json | /store/api.sock /f/ferrite-projects"
+         --allowedTools mcp__ferrite__wrap_up --settings /d/tasks/app/1/claude.json | /store/api.sock /f/ferrite-projects"
     );
 }
 

@@ -260,6 +260,14 @@ pub struct PendingDecision {
     pub reply_error: Option<String>,
 }
 
+/// Which running clocks a stop stops: a turn's end leaves background work's
+/// running on to its handback.
+#[derive(Clone, Copy)]
+enum Timings {
+    Foreground,
+    All,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum ToolTiming {
     Running(Instant),
@@ -467,7 +475,8 @@ impl SubjectState {
                 }
             }
             Input::Event(SessionEvent::ToolOutputDelta { id, .. }) => {
-                if live && self.transcript.blocks().iter().any(|block| matches!(&block.body, transcript::Body::Tool(tool) if &tool.call == id && tool.state == transcript::ToolState::Running)) {
+                // Background work's output is not the agent working.
+                if live && !self.in_background(id) && self.transcript.blocks().iter().any(|block| matches!(&block.body, transcript::Body::Tool(tool) if &tool.call == id && tool.state == transcript::ToolState::Running)) {
                     self.status = AgentStatus::Working;
                     self.busy = true;
                 }
@@ -489,6 +498,11 @@ impl SubjectState {
                     }
                 }
             }
+            // A launch into the background: its clock runs on to the handback.
+            Input::Event(SessionEvent::ToolCompleted {
+                result: ToolResult::Background { .. },
+                ..
+            }) => {}
             Input::Event(SessionEvent::ToolCompleted { id, result, .. }) => {
                 if !self.retained {
                     // Completed timings belong to cached transcript history.
@@ -513,7 +527,7 @@ impl SubjectState {
                 };
                 self.last_outcome = Some(outcome.clone());
                 self.busy = false;
-                self.stop_timings(at);
+                self.stop_timings(at, Timings::Foreground);
             }
             Input::Event(SessionEvent::RunState { state }) => {
                 self.status = match state {
@@ -532,7 +546,7 @@ impl SubjectState {
                 self.status = AgentStatus::Unknown;
                 self.fresh = false;
                 self.busy = false;
-                self.stop_timings(at);
+                self.stop_timings(at, Timings::All);
             }
             _ => {}
         }
@@ -556,6 +570,9 @@ impl SubjectState {
         let Input::Event(SessionEvent::ToolCompleted { id, result, .. }) = input else {
             return None;
         };
+        if matches!(result, ToolResult::Background { .. }) {
+            return None;
+        }
         result.duration_ms().map(Duration::from_millis).or_else(|| {
             self.timings.get(id).map(|timing| match timing {
                 ToolTiming::Running(since) => at.saturating_duration_since(*since),
@@ -564,12 +581,29 @@ impl SubjectState {
         })
     }
 
-    fn stop_timings(&mut self, at: Instant) {
+    /// Whether `call` launched background work that has not reported back.
+    fn in_background(&self, call: &str) -> bool {
+        self.transcript.running_in_background(call)
+    }
+
+    fn stop_timings(&mut self, at: Instant, stop: Timings) {
         if !self.retained {
             self.timings = HashMap::new();
             return;
         }
-        for timing in self.timings.values_mut() {
+        let background: Vec<String> = match stop {
+            Timings::Foreground => self
+                .transcript
+                .background_calls()
+                .filter(|tool| tool.in_background())
+                .map(|tool| tool.call.clone())
+                .collect(),
+            Timings::All => Vec::new(),
+        };
+        for (call, timing) in self.timings.iter_mut() {
+            if background.contains(call) {
+                continue;
+            }
             if let ToolTiming::Running(since) = timing {
                 *timing = ToolTiming::Done(at.saturating_duration_since(*since));
             }
@@ -1014,10 +1048,6 @@ pub struct Activity {
     connected: bool,
     limited: bool,
     main_operator_turn: bool,
-    /// Subagents that settled since Main's turn last ended: the turn the
-    /// provider starts on its own to hand them back opens with a line
-    /// saying so (`background_origin`).
-    settled_while_idle: usize,
 }
 
 impl Default for Activity {
@@ -1042,7 +1072,6 @@ impl Activity {
             connected: false,
             limited: false,
             main_operator_turn: false,
-            settled_while_idle: 0,
         }
     }
 
@@ -1254,12 +1283,12 @@ impl Activity {
         self.main_operator_turn = false;
         self.main.fresh = false;
         self.main.busy = false;
-        self.main.stop_timings(at);
+        self.main.stop_timings(at, Timings::All);
         let mut blocks = vec![(Subject::Main, self.main.transcript.clear_activity())];
         for (key, agent) in &mut self.agents {
             agent.state.fresh = false;
             agent.state.busy = false;
-            agent.state.stop_timings(at);
+            agent.state.stop_timings(at, Timings::All);
             blocks.push((
                 Subject::Subagent(key.clone()),
                 agent.state.transcript.clear_activity(),
@@ -1305,21 +1334,7 @@ impl Activity {
         let previous_busy = self.main.busy;
         if prompt && live {
             self.main_operator_turn = true;
-            self.settled_while_idle = 0;
         }
-        let opens = matches!(
-            &input,
-            Input::Event(
-                SessionEvent::TextDelta { .. }
-                    | SessionEvent::ThinkingDelta { .. }
-                    | SessionEvent::ReasoningSummaryDelta { .. }
-                    | SessionEvent::ToolStarted { .. }
-                    | SessionEvent::Progress {
-                        event: crate::progress::ProgressEvent::Phase { .. }
-                    }
-            )
-        );
-        let announced = self.background_origin(opens, at, live);
         let ended = matches!(input, Input::Event(SessionEvent::TurnEnded { .. }));
         let closed = matches!(input, Input::Event(SessionEvent::Closed { .. }));
         let mut update = ActivityUpdate {
@@ -1333,12 +1348,8 @@ impl Activity {
         };
         if live && ended {
             self.main_operator_turn = false;
-            self.settled_while_idle = 0;
             self.remove_subject_decisions(&Subject::Main, &mut update);
         }
-        update
-            .blocks
-            .extend(announced.map(|blocks| (Subject::Main, blocks)));
         let blocks = self
             .main
             .append(input, None, None, self.sequence, at, live, self.limits);
@@ -1475,7 +1486,6 @@ impl Activity {
                         _ => None,
                     };
                     if let Some(outcome) = outcome {
-                        self.settled_while_idle += usize::from(live);
                         let blocks = agent.state.append(
                             Input::Event(SessionEvent::TurnEnded {
                                 outcome,
@@ -1497,7 +1507,7 @@ impl Activity {
                     state,
                     AgentStatus::Working | AgentStatus::Pending | AgentStatus::Waiting
                 ) {
-                    agent.state.stop_timings(at);
+                    agent.state.stop_timings(at, Timings::All);
                     let blocks = agent.state.transcript.clear_activity();
                     if !blocks.dirty.is_empty() {
                         update.blocks.push((subject.clone(), blocks));
@@ -1778,22 +1788,6 @@ impl Activity {
         let sequence = self.sequence;
         let limits = self.limits;
         let ended = matches!(event, ExecutionEvent::TurnEnded { .. });
-        let opens = subject == Subject::Main
-            && matches!(
-                &event,
-                ExecutionEvent::TextDelta { .. }
-                    | ExecutionEvent::Text { .. }
-                    | ExecutionEvent::TextSnapshot { .. }
-                    | ExecutionEvent::ThinkingDelta { .. }
-                    | ExecutionEvent::Thinking { .. }
-                    | ExecutionEvent::ThinkingSnapshot { .. }
-                    | ExecutionEvent::ReasoningSummaryDelta { .. }
-                    | ExecutionEvent::ToolStarted { .. }
-                    | ExecutionEvent::Progress {
-                        event: crate::progress::ProgressEvent::Phase { .. }
-                    }
-            );
-        let announced = self.background_origin(opens, at, live);
         let Some(state) = self.state_mut(&subject) else {
             return ActivityUpdate {
                 rejected: true,
@@ -1851,11 +1845,7 @@ impl Activity {
         };
         let mut update = ActivityUpdate {
             changed: vec![subject.clone()],
-            blocks: announced
-                .map(|announced| (Subject::Main, announced))
-                .into_iter()
-                .chain([(subject.clone(), blocks)])
-                .collect(),
+            blocks: vec![(subject.clone(), blocks)],
             completed_tool_duration,
             main_turn_ended: live && root_signal && ended && subject == Subject::Main,
             main_settled: live && ended && subject == Subject::Main,
@@ -1865,48 +1855,10 @@ impl Activity {
             if root_signal && subject == Subject::Main {
                 self.main_operator_turn = false;
             }
-            if subject == Subject::Main {
-                self.settled_while_idle = 0;
-            }
             self.remove_subject_decisions(&subject, &mut update);
         }
         self.refresh_waiting(&subject);
         update
-    }
-
-    /// A turn the provider started on its own, opening while subagents
-    /// settled under an idle Main: Claude hands their results back this way,
-    /// and its first line says so, quietly (`2 background agents
-    /// completed`). Live only: an operator's turn is told apart by
-    /// `main_operator_turn`, which replay does not keep.
-    fn background_origin(
-        &mut self,
-        opens: bool,
-        at: Instant,
-        live: bool,
-    ) -> Option<transcript::Update> {
-        if !live
-            || !opens
-            || self.main_operator_turn
-            || self.settled_while_idle == 0
-            || self.main.transcript.status() == transcript::Status::Streaming
-        {
-            return None;
-        }
-        let count = std::mem::take(&mut self.settled_while_idle);
-        let line = format!(
-            "{count} background {} completed",
-            if count == 1 { "agent" } else { "agents" }
-        );
-        Some(self.main.append(
-            Input::Notice(line),
-            None,
-            None,
-            self.sequence,
-            at,
-            live,
-            self.limits,
-        ))
     }
 
     fn ensure_agent(&mut self, key: AgentKey) -> bool {
@@ -2790,6 +2742,7 @@ pub(crate) fn input_bytes(input: &Input) -> usize {
                                         .sum::<usize>()
                             })
                             .sum(),
+                        ToolResult::Background { task } => task.len(),
                         ToolResult::Opaque => 0,
                     }
             }
@@ -2866,100 +2819,3 @@ fn merge_updates(mut first: transcript::Update, second: transcript::Update) -> t
 #[cfg(test)]
 mod retention_tests;
 
-#[cfg(test)]
-mod background_origin_tests {
-    use super::*;
-    use crate::transcript::Body;
-
-    fn activity_with_children(names: &[&str]) -> Activity {
-        let mut activity = Activity::default();
-        activity.apply(ActivityInput::Connect { generation: 1 });
-        for name in names {
-            let mut info = AgentInfo::new(AgentKey::new(Provider::Claude, "root", name));
-            info.parent = Some(Subject::Main);
-            activity.apply(ActivityInput::Observe {
-                generation: 1,
-                event: ActivityEvent::Discovered(info),
-                at: crate::clock::instant(),
-            });
-        }
-        activity
-    }
-
-    fn settle(activity: &mut Activity, name: &str, state: AgentStatus) {
-        for state in [AgentStatus::Working, state] {
-            activity.apply(ActivityInput::Observe {
-                generation: 1,
-                event: ActivityEvent::Status {
-                    key: AgentKey::new(Provider::Claude, "root", name),
-                    state,
-                },
-                at: crate::clock::instant(),
-            });
-        }
-    }
-
-    fn main(activity: &mut Activity, event: SessionEvent) {
-        activity.apply(ActivityInput::Main {
-            input: Input::Event(event),
-            at: crate::clock::instant(),
-        });
-    }
-
-    fn notices(activity: &Activity) -> Vec<String> {
-        activity
-            .main
-            .transcript
-            .blocks()
-            .iter()
-            .filter_map(|block| match &block.body {
-                Body::Notice(text) => Some(text.clone()),
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn ended() -> SessionEvent {
-        SessionEvent::TurnEnded {
-            outcome: TurnOutcome::Completed,
-            cost_usd: None,
-        }
-    }
-
-    /// Agents that settle while Main rests are handed back in a turn the
-    /// provider starts itself; that turn opens with one quiet line. An
-    /// operator's own turn never does, nor does the next background one.
-    #[test]
-    fn a_background_turn_opens_by_counting_the_agents_it_hands_back() {
-        let mut activity = activity_with_children(&["a", "b", "c"]);
-        activity.apply(ActivityInput::Main {
-            input: Input::Prompt("count files".into()),
-            at: crate::clock::instant(),
-        });
-        // Settled inside the operator's turn: that turn's own work.
-        settle(&mut activity, "c", AgentStatus::Idle);
-        main(&mut activity, ended());
-        settle(&mut activity, "a", AgentStatus::Idle);
-        settle(&mut activity, "b", AgentStatus::Failed);
-        main(
-            &mut activity,
-            SessionEvent::TextDelta {
-                text: "Both finished.".into(),
-            },
-        );
-        main(
-            &mut activity,
-            SessionEvent::TextDelta {
-                text: " More.".into(),
-            },
-        );
-        main(&mut activity, ended());
-        main(
-            &mut activity,
-            SessionEvent::TextDelta {
-                text: "Again.".into(),
-            },
-        );
-        assert_eq!(notices(&activity), ["2 background agents completed"]);
-    }
-}

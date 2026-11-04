@@ -165,3 +165,27 @@ fn a_whole_fork_opens_focused_with_its_draft() {
         Some(("> the passage".into(), false))
     );
 }
+
+/// A side chat opens at any time, mid-turn too (Claude's, captured
+/// `bg-sidechat-midturn.png`): a fork of the whole conversation is asked
+/// while a turn runs, without stopping it. A cut at a prompt still waits.
+#[test]
+fn a_whole_fork_is_asked_while_a_turn_runs() {
+    let (mut cockpit, fake, thread) = two_turns("rewind-fork-midturn");
+    let second = prompts(&cockpit, thread)[1].1.clone().unwrap();
+    cockpit.send(thread, "three".into());
+    live(&fake).send(text("working")).unwrap();
+    cockpit.pump();
+    assert_eq!(
+        cockpit.fork(thread, Some(&second), None),
+        Err("a turn is running; stop it first".to_string())
+    );
+    cockpit.fork(thread, None, None).unwrap();
+    cockpit.pump();
+    assert_eq!(fake.forks.borrow().last().unwrap().before, None);
+    assert_eq!(*fake.interrupts.borrow(), 0, "the running turn goes on");
+    assert!(
+        cockpit.threads().into_iter().any(|open| open != thread),
+        "the fork is open"
+    );
+}

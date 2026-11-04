@@ -1,7 +1,9 @@
-//! Live drafts of a `show_visual` call: the tool's input as it streams in
-//! (`input_json_delta`), read with the tolerant partial-JSON reader so the
-//! Pane can draw the page while the agent is still writing it. Every other
-//! tool's streamed input stays dropped — its row waits for the settled call.
+//! Live drafts of a call whose row draws its input as it streams in
+//! (`input_json_delta`), read with the tolerant partial-JSON reader: a
+//! `show_visual` page builds up while the agent is still writing it, and an
+//! Edit or a Write has its row while its (often long) input arrives (HD39),
+//! rather than nothing until the settled call. Every other tool's streamed
+//! input stays dropped — its row waits for the settled call.
 
 use std::collections::HashMap;
 
@@ -41,7 +43,7 @@ impl Drafts {
             "content_block_start" => {
                 let block = &event["content_block"];
                 let name = block["name"].as_str()?;
-                if block["type"] != "tool_use" || !crate::visual::is_tool(name) {
+                if block["type"] != "tool_use" || !drafted(name) {
                     return None;
                 }
                 self.open.insert(
@@ -80,6 +82,11 @@ impl Drafts {
     }
 }
 
+/// Whether `name`'s row draws its input while it streams.
+fn drafted(name: &str) -> bool {
+    crate::visual::is_tool(name) || crate::transcript::drafts_edit(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,6 +104,21 @@ mod tests {
     fn start(index: u64, name: &str) -> Value {
         frame(json!({"type": "content_block_start", "index": index,
             "content_block": {"type": "tool_use", "id": format!("toolu_{index}"), "name": name, "input": {}}}))
+    }
+
+    /// An edit drafts as its input streams (HD39); a command does not.
+    #[test]
+    fn an_edit_drafts_as_it_streams() {
+        let mut drafts = Drafts::default();
+        assert_eq!(drafts.observe(&start(0, "Write")), None);
+        assert_eq!(
+            drafts.observe(&delta(0, "{\"file_path\": \"/w/a.rs\", \"content\": \"fn")),
+            Some(SessionEvent::ToolDraft {
+                id: "toolu_0".into(),
+                name: "Write".into(),
+                input: json!({"file_path": "/w/a.rs", "content": "fn"}),
+            })
+        );
     }
 
     #[test]

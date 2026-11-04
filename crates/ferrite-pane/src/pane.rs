@@ -23,7 +23,9 @@ mod output;
 mod text;
 mod usage;
 mod working;
+mod wrap_up;
 pub(crate) use agents::{is_agent, render_agent};
+pub(crate) use wrap_up::render_wrap_up;
 pub use agents::{AgentFace, AgentFaces, AgentRun};
 #[cfg(any(test, feature = "test-support"))]
 pub use composer::model_label;
@@ -46,7 +48,7 @@ pub use usage::{
     plan_usage_fraction, plan_usage_ring, usage_ink,
 };
 pub(crate) use working::running_call;
-pub use working::{working_tail, WorkingFacts};
+pub use working::{background_clock, background_link, working_tail, WorkingFacts};
 #[cfg(test)]
 use {
     composer::{composer_fixed_height, composer_queue_height, queued_preview},
@@ -616,11 +618,6 @@ pub struct PaneWiring {
     /// row layout; the Pane only places the allocated viewport.
     pub transcript: Option<AnyElement>,
     pub attachments: Option<AnyElement>,
-    /// The Session's running background tasks as chips at the Composer's
-    /// right edge, each wired to its stop control — the other half of the
-    /// shelf the attachment island sits on. None while nothing runs in the
-    /// background, for a Subagent Subject, and at the wall.
-    pub background: Option<AnyElement>,
     /// The open `/` or `@` popover for this Pane's Composer, rows wired to
     /// their picks in the cockpit and hung above the input line here (#23).
     pub menu: Option<AnyElement>,
@@ -844,7 +841,6 @@ pub(crate) struct PaneCtx<'a> {
     // ---- owned wiring
     /// `l1_composer` / `l2_composer`.
     pub attachments: Option<AnyElement>,
-    pub background: Option<AnyElement>,
     pub menu: Option<AnyElement>,
     /// `l1_dock`: activity requests that were not docked in the body.
     pub activity_decisions: Option<AnyElement>,
@@ -887,7 +883,6 @@ pub fn render_pane(
     let PaneWiring {
         transcript: retained_transcript,
         attachments,
-        background,
         menu,
         title,
         subagent_head,
@@ -1020,7 +1015,6 @@ pub fn render_pane(
         unread,
         grid: show_focus,
         attachments,
-        background,
         menu,
         activity_decisions: None,
         decision_joined,
@@ -1134,7 +1128,6 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
                 empty: cx.composer_empty,
                 files: cx.composer_files,
                 attachments: cx.attachments.take(),
-                background: cx.background.take(),
                 menu: cx.menu.take(),
                 draft: false,
                 draft_error: None,
@@ -1343,7 +1336,6 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
             empty: composer_empty,
             files: composer_files,
             attachments,
-            background: None,
             menu,
             draft: true,
             draft_error: error.cloned(),
@@ -3000,6 +2992,9 @@ pub(crate) struct ToolCx {
     pub expanded: bool,
     pub grouped: bool,
     pub disclosure: Option<Disclosure>,
+    /// Its work running in the background: `View live output ▸`, pressed
+    /// to open the Background tasks pane (`working::background_link`).
+    pub live: Option<AnyElement>,
 }
 
 /// One Block as a transcript row, in the terminal grammar of `theme.rs`'s
@@ -3023,6 +3018,9 @@ pub(crate) fn render_block(
         // A visual's row owns a live page, so the transcript's `Shelf`
         // draws it (`TranscriptView::render_row`); it never reaches here.
         Body::Visual(_) => row.into_any_element(),
+        // A wrap-up's steps are presses the transcript wires
+        // (`TranscriptView::render_row`); drawn bare, it has none.
+        Body::WrapUp(wrap) => wrap_up::render_wrap_up(block.id, wrap, row_cx, Vec::new()),
         Body::Prompt(line) => prompt_row(block, line, row_cx, None),
         // Fallback prose (a block with no Markdown source) reads as the
         // answer does, on the content column.
@@ -3203,6 +3201,7 @@ pub(crate) fn render_block(
                 expanded,
                 grouped: false,
                 disclosure,
+                live: None,
             },
         ),
     }
@@ -3505,11 +3504,11 @@ pub(crate) fn prompt_row(
         .0
         .into_iter()
         .enumerate()
-        .map(|(index, passage)| {
+        .map(|(index, reply)| {
             div()
                 .max_w(relative(theme::PROMPT_BUBBLE_MAX_W))
                 .min_w_0()
-                .child(crate::attachments::quote_row(index, passage))
+                .child(crate::attachments::quote_row(index, reply))
         })
         .collect();
     let bubble = prompt_words(block, text, &gallery, row_cx, None).map(|words| {
@@ -4155,6 +4154,7 @@ pub(crate) fn render_tool(
         expanded,
         grouped,
         disclosure,
+        live,
     } = state;
     let (overlay, chevron, targeted) = disclosure_parts(disclosure);
     // One run on one line at its own width, cut with `…` at the row's edge:
@@ -4201,11 +4201,14 @@ pub(crate) fn render_tool(
         .children(verdict)
         .children(chevron);
     let row_selector = format!("tool-row-{}", tool.call);
+    // The live link comes after the row's press overlay, so it is pressed
+    // itself rather than unfolding the row.
     let line = activity_line(grid, None, words)
         .id(SharedString::from(row_selector.clone()))
         .debug_selector(move || row_selector.clone())
         .group(DISCLOSURE_ROW)
-        .children(overlay);
+        .children(overlay)
+        .children(live);
     let mut card = div()
         .flex()
         .flex_col()
@@ -4954,8 +4957,8 @@ mod tests {
                 quotes: true,
                 reply_to: "Claude".into(),
                 skills: Default::default(),
-            };
                 note: None,
+            };
             let selection = self.selection.clone();
             self.transcript.update(cx, |transcript, cx| {
                 transcript.sync(input, selection, cx);
@@ -4996,8 +4999,8 @@ mod tests {
                     quotes: true,
                     reply_to: "Claude".into(),
                     skills: Default::default(),
-                },
                     note: None,
+                },
                 crate::rich::TextCache::default(),
                 selection.clone(),
                 cx,
@@ -5184,6 +5187,7 @@ mod tests {
                 Body::Meta(_) => "meta",
                 Body::TurnEnd(_) => "turn-end",
                 Body::Visual(_) => "visual",
+                Body::WrapUp(_) => "wrap-up",
             })
             .collect();
         for wanted in [
@@ -6080,6 +6084,7 @@ mod tests {
     fn a_call_line_reads_in_the_apps_words() {
         let tool = |name: &str, summary: &str, state: ToolState| ToolBlock {
             caption: None,
+            background: None,
             call: "c".into(),
             name: name.into(),
             title: None,
@@ -6126,6 +6131,7 @@ mod tests {
         // A shut row previews nothing a command printed.
         let printed = ToolBlock {
             caption: None,
+            background: None,
             result_line: Some("16:HOLD={".into()),
             ..tool("Bash", "python3 prep.py --hold", ToolState::Ok)
         };
@@ -6144,6 +6150,7 @@ mod tests {
         // behind the disclosure.
         let described = ToolBlock {
             caption: None,
+            background: None,
             title: Some("List a directory that doesn't exist".into()),
             ..tool("Bash", "ls /definitely-missing-dir", ToolState::Ok)
         };
@@ -6194,6 +6201,7 @@ mod tests {
     fn an_open_command_says_how_it_failed_and_nothing_on_success() {
         let tool = |state: ToolState, output: Option<&str>| ToolBlock {
             caption: None,
+            background: None,
             call: "c".into(),
             name: "Bash".into(),
             title: None,

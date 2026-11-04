@@ -90,7 +90,13 @@ impl Engine {
         prompt: Option<&str>,
         draft: Option<String>,
     ) -> Result<(), String> {
-        let state = self.cuttable(thread)?;
+        // A fork of the whole conversation cuts nothing: it is asked at any
+        // time, mid-turn too, at the conversation as it stands (Claude's
+        // side chat). A fork before a prompt cuts, and waits as a rewind.
+        let state = match prompt {
+            Some(_) => self.cuttable(thread)?,
+            None => self.forkable(thread)?,
+        };
         let (text, dropped) = match prompt {
             Some(prompt) => {
                 let (text, dropped, _) = target(state.transcript(), prompt)?;
@@ -124,6 +130,23 @@ impl Engine {
             Some(why) => Err(why.into()),
             None => Ok(state),
         }
+    }
+
+    /// `thread`, when a fork of its whole conversation can be asked now:
+    /// only while no other rewind or fork is under way and its agent is not
+    /// changing.
+    fn forkable(&self, thread: ThreadId) -> Result<&Thread, String> {
+        let state = self
+            .threads
+            .get(&thread)
+            .ok_or_else(|| "that Thread is not open".to_string())?;
+        if state.rewinding.is_some() {
+            return Err("a rewind is already under way".into());
+        }
+        if state.replacement.is_some() || state.tuning.is_some() {
+            return Err("its agent is changing; try again in a moment".into());
+        }
+        Ok(state)
     }
 
     /// Start `thread`'s agent if it must, and leave `pending` for the pump.
@@ -237,6 +260,7 @@ impl Engine {
                     session: session.clone(),
                     at: Some(at),
                     fork: false,
+                    drops: Some(request.prompt.clone()),
                 };
                 if let Err(error) = state.writer.record_resume_at(&point) {
                     state.apply(Input::Notice(format!("rewind failed: {error}")));
@@ -285,11 +309,13 @@ impl Engine {
                 session,
                 at: None,
                 fork: false,
+                drops: None,
             }),
             Forked::ResumeAt { session, at } => Some(ResumePoint {
                 session,
                 at,
                 fork: true,
+                drops: None,
             }),
             Forked::Fresh => None,
         };
@@ -355,8 +381,10 @@ fn refusal(state: &Thread) -> Option<&'static str> {
     None
 }
 
-/// The prompt `prompt` names in `transcript`: its words, how many prompts
-/// a cut there takes, and the id of the latest prompt the operator saw.
+/// The prompt `prompt` names in `transcript`: its words as sent, how many
+/// prompts a cut there takes, and the id of the latest prompt the operator
+/// saw. The first prompt under that id (`Transcript::truncate_from`): an
+/// older log's echo of it shares the id and has lost its skill's `/name`.
 fn target(
     transcript: &crate::transcript::Transcript,
     prompt: &str,
@@ -364,7 +392,7 @@ fn target(
     let blocks = transcript.blocks();
     let at = blocks
         .iter()
-        .rposition(|block| block.prompt_id.as_deref() == Some(prompt))
+        .position(|block| block.prompt_id.as_deref() == Some(prompt))
         .ok_or_else(|| "that prompt can no longer be rewound to".to_string())?;
     let crate::transcript::Body::Prompt(text) = &blocks[at].body else {
         return Err("that is not a prompt".into());
@@ -400,5 +428,23 @@ mod tests {
             deletions: 7,
         };
         assert_eq!(files_restored(&files), "2 files, +3 \u{2212}7");
+    }
+
+    /// An older log's echo of a prompt shares its id and lost its skill's
+    /// `/name`: the rewind names the prompt as sent, and takes both.
+    #[test]
+    fn a_rewind_names_the_prompt_as_sent_over_its_old_echo() {
+        let mut transcript = crate::transcript::Transcript::default();
+        for (text, id) in [("earlier", "p0"), ("/skill-x just a test", "p1"), ("just a test", "p1")] {
+            transcript.apply(Input::Prompt(text.into()));
+            transcript.apply(Input::PromptObservation {
+                sent_at: "12:48 pm".into(),
+                prompt_id: Some(id.into()),
+            });
+        }
+        let (text, dropped, latest) = target(&transcript, "p1").unwrap();
+        assert_eq!(text, "/skill-x just a test");
+        assert_eq!(dropped, 2);
+        assert_eq!(latest.as_deref(), Some("p1"));
     }
 }

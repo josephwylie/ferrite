@@ -324,9 +324,6 @@ pub(super) struct ComposerStack<'a> {
     /// the shelf (`attachments`) waits for the live Composer.
     pub(super) files: usize,
     pub(super) attachments: Option<AnyElement>,
-    /// Running background tasks as chips, hung at the right edge of the
-    /// same shelf the pending files sit on.
-    pub(super) background: Option<AnyElement>,
     pub(super) menu: Option<AnyElement>,
     /// A draft's Composer: nothing exists to steer yet.
     pub(super) draft: bool,
@@ -351,9 +348,10 @@ pub(super) struct ComposerStack<'a> {
 }
 
 /// The Composer stack (theme WP-D): a board cell's compact box
-/// (`compact_composer`), Solo's box (`box_composer`, SPEC §5.5). The shelf
-/// stands above either: background tasks, and on a board
-/// the pending files (Solo's ride inside its box, over the text). The Pane lays the stack out `flex_shrink_0` below
+/// (`compact_composer`), Solo's box (`box_composer`, SPEC §5.5). On a
+/// board the shelf of pending files stands above it (Solo's ride inside
+/// its box, over the text). Running background work has no shelf: it is
+/// in its own rows, the rail and the Background tasks pane, as Claude's. The Pane lays the stack out `flex_shrink_0` below
 /// the body, so the transcript gives way. The Decision row is **not**
 /// here: it is the transcript's tail. While a Decision pends the input
 /// carries the `Decision` key context, so its keys answer with the
@@ -384,7 +382,6 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         empty,
         files: _,
         attachments,
-        background,
         menu,
         draft,
         draft_error,
@@ -592,7 +589,7 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
                 .child(div().max_w(px(theme::SLASH_MENU_W)).child(menu)),
         ));
     }
-    composer_stack(None, background, true)
+    composer_stack(None, true)
         .children(queue.map(|queue| {
             in_column(theme::COMPOSER_INSET, true, queue).pb(px(theme::QUEUE_CARD_GAP))
         }))
@@ -616,38 +613,29 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
 }
 
 /// What stands over either Composer: `SHELF_GAP` over the box it belongs
-/// to, the shelf — pending files at left, background chips at right; the
-/// chips give way first, cutting their labels. The shelf keeps to its box's
-/// inset (`boxed`: Solo's). The working line is the transcript's last row
+/// to, the shelf of pending files. The shelf keeps to its box's inset
+/// (`boxed`: Solo's). The working line is the transcript's last row
 /// (`working_tail`), not the stack's.
-pub(super) fn composer_stack(
-    attachments: Option<AnyElement>,
-    background: Option<AnyElement>,
-    boxed: bool,
-) -> Div {
+pub(super) fn composer_stack(attachments: Option<AnyElement>, boxed: bool) -> Div {
     let inset = if boxed {
         theme::COMPOSER_INSET
     } else {
         theme::COMPACT_COMPOSER_INSET
     };
-    div().flex().flex_col().flex_shrink_0().min_w_0().when(
-        attachments.is_some() || background.is_some(),
-        |stack| {
+    div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .min_w_0()
+        .when_some(attachments, |stack, attachments| {
             let shelf = div()
                 .debug_selector(|| "composer-shelf".into())
                 .flex()
                 .items_end()
-                .gap(px(theme::SPACE_2))
                 .min_w_0()
-                .when_some(attachments, |shelf, attachments| {
-                    shelf.child(div().flex_1().min_w_0().child(attachments))
-                })
-                .when_some(background, |shelf, chips| {
-                    shelf.child(div().ml_auto().min_w_0().max_w_full().child(chips))
-                });
+                .child(div().flex_1().min_w_0().child(attachments));
             stack.child(in_column(inset, boxed, shelf).pb(px(theme::SHELF_GAP)))
-        },
-    )
+        })
 }
 
 /// One row of the Composer stack, `inset` in from the card's sides — and in
@@ -695,7 +683,7 @@ pub(super) fn queue_card(
         .rev()
         .enumerate()
         .map(|(shown, (index, item, acts))| {
-            let steering = (item.delivery == Delivery::Steering).then(|| {
+            let steering = matches!(item.delivery, Delivery::Steering | Delivery::Folding).then(|| {
                 div()
                     .debug_selector(move || format!("queued-steering-{index}"))
                     .flex_shrink_0()
@@ -782,7 +770,7 @@ pub fn queued_takes_back(item: &QueueItem) -> bool {
 /// what it has not yet taken).
 pub fn queued_sends_now(item: &QueueItem, running: bool) -> bool {
     match item.delivery {
-        Delivery::Holding | Delivery::Queued => true,
+        Delivery::Holding | Delivery::Queued | Delivery::Folding => true,
         Delivery::Steering => running,
         Delivery::Sending | Delivery::Unknown => false,
     }

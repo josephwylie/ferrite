@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Run `sleep 3 && echo one` with Bash, then run `echo two` with Bash, then say done."}]}, "uuid": "df3c742a-087e-4746-8941-fc42a671762e"}
+{"type": "user", "uuid": "c747d678-96d7-4b97-b511-834e1ade3631", "isAsync": true, "message": {"role": "user", "content": [{"type": "text", "text": "Also run `echo steer-seen` with Bash before you finish."}]}}

@@ -827,7 +827,7 @@ impl Thread {
                         .map(|item| item.text.clone()),
                 )
                 .collect(),
-            queue: self.native_queue.listing(&self.awaiting.prompts),
+            queue: self.queue_listing(),
             suggestion: self.suggestion.clone(),
             commands: announced.commands().iter().map(Into::into).collect(),
             models: announced.models().to_vec(),
@@ -889,6 +889,28 @@ impl Thread {
     }
     fn busy(&self) -> bool {
         self.activity.view().main().busy()
+    }
+
+    /// The queue as the strip shows it: where the provider's own queue
+    /// folds into the running turn (`Session::queue_folds`), what waits in
+    /// it while a turn runs is `Folding` — it joins that turn at its next
+    /// tool round.
+    fn queue_listing(&self) -> Vec<QueueItem> {
+        let folding = (self.busy() || self.activity.view().main_operator_turn())
+            && self
+                .session
+                .as_ref()
+                .and_then(SessionLifecycle::session)
+                .is_some_and(|session| session.queue_folds());
+        let mut listing = self.native_queue.listing(&self.awaiting.prompts);
+        if folding {
+            for item in &mut listing {
+                if item.delivery == Delivery::Queued {
+                    item.delivery = Delivery::Folding;
+                }
+            }
+        }
+        listing
     }
 
     /// Whether a window shows the Session starting: a replacement, or a
@@ -3786,6 +3808,9 @@ impl Engine {
             .is_some_and(|session| session.steers());
         match delivery {
             Some(Delivery::Holding) => self.cancel_queue(thread, Some(target), queue::Then::Resend),
+            // On Claude this is a prompt folding into the running turn
+            // (`queue_listing`): handed over again, it still joins that
+            // turn — never an interrupt.
             Some(Delivery::Queued) if !running || steers => {
                 self.cancel_queue(thread, Some(target), queue::Then::Resend);
             }
@@ -5232,9 +5257,7 @@ impl<'a> ThreadView<'a> {
     /// Every prompt not yet picked up, newest first, with where each
     /// stands and the id that cancel and edit take.
     pub fn queue(&self) -> Vec<QueueItem> {
-        self.state
-            .native_queue
-            .listing(&self.state.awaiting.prompts)
+        self.state.queue_listing()
     }
 
     /// Every prompt held back, newest first: the latest sits on top of the

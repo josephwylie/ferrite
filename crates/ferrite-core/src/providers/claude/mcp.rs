@@ -1,5 +1,6 @@
 //! Ferrite's in-band MCP server: how a Claude Session is offered
-//! `show_visual` with no server process of its own.
+//! `wrap_up` (always) and `show_visual` (at the operator's level) with no
+//! server process of its own.
 //!
 //! The CLI's SDK MCP transport, as the Agent SDK speaks it (verified against
 //! 2.1.292, fixture `claude-show-visual-2.1.292`): the initialize control
@@ -10,9 +11,9 @@
 //! `mcp__ferrite__show_visual`; its calls carry the streamed `tool_use` id in
 //! `_meta["claudecode/toolUseId"]`.
 //!
-//! The tool is never an operator Decision: spawn pre-allows it
-//! (`--allowedTools`), and a permission request for it that comes anyway is
-//! allowed here, before the Decision decoder could see it.
+//! Its tools are never an operator Decision: spawn pre-allows them
+//! (`--allowedTools`), and a permission request for one that comes anyway
+//! is allowed here, before the Decision decoder could see it.
 
 use std::sync::{Arc, Mutex};
 
@@ -29,8 +30,7 @@ pub(super) struct Server {
 }
 
 impl Server {
-    /// `visuals` is `None` (or Off) for a Session that offers nothing; spawn
-    /// then never names the server and the CLI never calls it.
+    /// `visuals` is `None` (or Off) for a Session that offers no visual.
     pub(super) fn new(
         visuals: Option<Visuals>,
         stdin: Arc<Mutex<std::process::ChildStdin>>,
@@ -38,7 +38,7 @@ impl Server {
         Self { visuals, stdin }
     }
 
-    /// Whether this Session offers the tool: what spawn declares.
+    /// Whether this Session offers `show_visual`: what spawn declares.
     pub(super) fn offered(visuals: Option<&Visuals>) -> bool {
         visuals.and_then(Visuals::definition).is_some()
     }
@@ -59,7 +59,10 @@ impl Server {
                 self.message(request_id, &request["message"]);
                 true
             }
-            Some("can_use_tool") if request["tool_name"] == visual::CLAUDE_NAME => {
+            Some("can_use_tool")
+                if request["tool_name"] == visual::CLAUDE_NAME
+                    || request["tool_name"] == crate::wrap_up::CLAUDE_NAME =>
+            {
                 respond(
                     &self.stdin,
                     request_id,
@@ -83,16 +86,27 @@ impl Server {
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": visual::SERVER, "version": env!("CARGO_PKG_VERSION")},
             })),
-            ("tools/list", Some(definition)) => Ok(json!({"tools": [{
+            // Load up front: by default the CLI defers MCP tools behind
+            // ToolSearch, and an agent that must search for a tool first
+            // rarely reaches for it unprompted.
+            ("tools/list", _) => Ok(json!({"tools": std::iter::once(json!({
+                "name": crate::wrap_up::TOOL,
+                "description": crate::wrap_up::DESCRIPTION,
+                "inputSchema": crate::wrap_up::input_schema(),
+                "_meta": {"anthropic/alwaysLoad": true},
+            }))
+            .chain(definition.iter().map(|definition| json!({
                 "name": definition.name,
                 "description": definition.description,
                 "inputSchema": definition.input_schema,
-                // Load up front: by default the CLI defers MCP tools behind
-                // ToolSearch, and an agent that must search for the tool
-                // first rarely reaches for it unprompted.
                 "_meta": {"anthropic/alwaysLoad": true},
-            }]})),
-            ("tools/list", None) => Ok(json!({"tools": []})),
+            })))
+            .collect::<Vec<_>>()})),
+            // The box is drawn from the call's input; the answer only says so.
+            ("tools/call", _) if message["params"]["name"] == crate::wrap_up::TOOL => Ok(json!({
+                "content": [{"type": "text", "text": crate::wrap_up::ANSWER}],
+                "isError": false,
+            })),
             ("tools/call", Some(_)) if message["params"]["name"] == visual::TOOL => {
                 let call = message["params"]["_meta"]["claudecode/toolUseId"]
                     .as_str()

@@ -132,3 +132,33 @@ fn the_menu_and_the_palette_offer_the_pr_actions(cx: &mut TestAppContext) {
     });
     assert_eq!(asked(&view, cx), [(thread, true)]);
 }
+
+/// A push, a PR or background work handed back can move the workspace
+/// behind the agent's own edits: its PR is read again at once, so Changes
+/// follows (HD27). Any other command asks nothing.
+#[gpui::test]
+fn a_push_reads_the_pr_again(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("pr-after-push", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    land(&view, thread, None, cx);
+    asked(&view, cx);
+    let send = |event: SessionEvent| fake.streams.borrow()[0].send(event).unwrap();
+    for (id, command) in [("ls", "ls -la"), ("push", "git push -u origin feature")] {
+        send(SessionEvent::ToolStarted {
+            id: id.into(),
+            name: "Bash".into(),
+            input: serde_json::json!({"command": command}),
+        });
+        send(SessionEvent::ToolCompleted {
+            id: id.into(),
+            output: String::new(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        });
+        tick(cx);
+        let expected: &[(ThreadId, bool)] = if id == "push" { &[(thread, true)] } else { &[] };
+        assert_eq!(asked(&view, cx), expected, "after {command}");
+    }
+}

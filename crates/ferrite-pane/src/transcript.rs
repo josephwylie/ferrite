@@ -265,6 +265,11 @@ pub enum TranscriptEvent {
     /// A selection's `Start a side chat`: a new Thread from this point,
     /// the passage quoted in its Composer.
     SideChat(String),
+    /// A background call's `View live output ▸`: the Background tasks
+    /// pane.
+    OpenBackground,
+    /// A wrap-up's next step pressed: its words, sent as the next prompt.
+    Send(String),
 }
 
 /// What a sent prompt's actions ask of its Thread
@@ -273,7 +278,8 @@ pub enum TranscriptEvent {
 pub enum PromptAction {
     /// Back to before it, its words back in the Composer.
     Edit,
-    /// Back to before it.
+    /// Back to before it, choosing whether its files come back too; its
+    /// words come back to the Composer either way.
     Rewind,
     /// A new Thread from the conversation before it.
     Fork,
@@ -301,6 +307,52 @@ fn agent_opener(call: &str, view: Entity<TranscriptView>) -> AnyElement {
             view.update(cx, |_, cx| cx.emit(TranscriptEvent::OpenAgent(opened)));
         })
         .into_any_element()
+}
+
+/// A background call's `View live output ▸`, live while its work runs:
+/// pressed, it asks the cockpit for the Background tasks pane.
+fn background_opener(tool: &ferrite_core::transcript::ToolBlock, view: Option<&Entity<TranscriptView>>) -> Option<AnyElement> {
+    let view = view.filter(|_| tool.in_background())?.clone();
+    Some(
+        pane::background_link()
+            .id(SharedString::from(format!("background-open-{}", tool.call)))
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                cx.stop_propagation();
+                gpui::base::TextSelection::clear(window, cx);
+                view.update(cx, |_, cx| cx.emit(TranscriptEvent::OpenBackground));
+            })
+            .into_any_element(),
+    )
+}
+
+/// A wrap-up's next steps as buttons, the recommended one first and
+/// raised: a press sends its words (`TranscriptEvent::Send`).
+fn wrap_up_steps(
+    wrap: &ferrite_core::wrap_up::WrapUp,
+    view: &Entity<TranscriptView>,
+    cx: &App,
+) -> Vec<AnyElement> {
+    wrap.next
+        .iter()
+        .enumerate()
+        .map(|(index, step)| {
+            let id = SharedString::from(format!("wrap-up-step-{}-{index}", wrap.call));
+            let button = if index == 0 {
+                ferrite_ui::components::secondary_button(id.clone(), None, step.clone(), cx)
+            } else {
+                ferrite_ui::components::ghost_button(id.clone(), step.clone(), cx)
+            };
+            let view = view.clone();
+            let words = step.clone();
+            div()
+                .debug_selector(move || id.to_string())
+                .child(button.on_click(move |_, _, cx| {
+                    let words = words.clone();
+                    view.update(cx, |_, cx| cx.emit(TranscriptEvent::Send(words)));
+                }))
+                .into_any_element()
+        })
+        .collect()
 }
 
 /// A stable GPUI entity for one Pane Subject's heavy transcript subtree.
@@ -422,6 +474,7 @@ impl TranscriptView {
                 quotes: false,
                 reply_to: SharedString::default(),
                 skills: Default::default(),
+                note: None,
             },
             rich,
             TranscriptText::default(),
@@ -474,7 +527,6 @@ impl TranscriptView {
             controls_end: cx.focus_handle().tab_stop(true),
             document: gpui::base::TextSelectionDocument::new(scope, cx),
             pinned_h: Rc::new(Cell::new(gpui::px(0.))),
-                note: None,
             pinned_drawn: Rc::new(Cell::new(None)),
             pinned_asked: Rc::new(Cell::new(None)),
             heights: Default::default(),
@@ -1096,6 +1148,9 @@ impl TranscriptView {
         if row.kind() == RowKind::Divider {
             return date_divider(&blocks[0]).into_any_element();
         }
+        if row.kind() == RowKind::Note {
+            return note_line(row.source().unwrap_or_default()).into_any_element();
+        }
         if let Some(source) = row.source() {
             let first = answer_first(blocks);
             // Prose on the column's edge, narration (more work follows it
@@ -1141,6 +1196,7 @@ impl TranscriptView {
                     }))
                     .children(view.as_ref().map(|view| {
                         let text = source.to_owned();
+                        let row_id = row.id().clone();
                         self.message_door(
                             row.id(),
                             (
@@ -1148,9 +1204,6 @@ impl TranscriptView {
                                 ferrite_ui::icons::ELLIPSIS,
                                 message_menu::MORE_LABEL,
                             ),
-        if row.kind() == RowKind::Note {
-            return note_line(row.source().unwrap_or_default()).into_any_element();
-        }
                             &Ok(()),
                             view.clone(),
                             move |view, at, cx| {
@@ -1159,13 +1212,6 @@ impl TranscriptView {
                             },
                         )
                     }))
-                    .children(time)
-            });
-            return div()
-                .id(id.clone())
-                .flex()
-                .items_start()
-                .min_w_0()
                     .children(self.pinned.contains(&last).then(|| {
                         div()
                             .debug_selector(|| "answer-chapter".into())
@@ -1173,17 +1219,17 @@ impl TranscriptView {
                             .text_color(gpui::rgb(theme::INK_SUBTLE))
                             .child("Chapter")
                     }))
-                .w_full()
-                .flex_shrink_0()
+                    .children(time)
+            });
             let right_id = row.id().clone();
             let right_source = source.to_owned();
-                .when(actions.is_some(), |row| {
-                    row.flex_col()
-                        .group(MESSAGE_GROUP)
-                        .on_hover(actions_listener(&id))
-                })
-                .child(
-                    // The prose alone, its actions under it apart.
+            return div()
+                .id(id.clone())
+                .flex()
+                .items_start()
+                .min_w_0()
+                .w_full()
+                .flex_shrink_0()
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |view, event: &gpui::MouseDownEvent, window, cx| {
@@ -1192,6 +1238,13 @@ impl TranscriptView {
                         view.right_click_message(menu, window, cx);
                     }),
                 )
+                .when(actions.is_some(), |row| {
+                    row.flex_col()
+                        .group(MESSAGE_GROUP)
+                        .on_hover(actions_listener(&id))
+                })
+                .child(
+                    // The prose alone, its actions under it apart.
                     div()
                         .debug_selector(|| "transcript-answer".into())
                         .w_full()
@@ -1256,20 +1309,13 @@ impl TranscriptView {
                 .child(
                     self.copy_action(row.id(), ferrite_core::prompt_files::split(line.clone()).0),
                 );
+            let words = ferrite_core::prompt_files::split(line.clone()).0;
+            let prompt_block = block.id;
+            let cuts = cuts.map(|((_, allowed), _)| allowed.clone());
             return div()
                 .id(id.clone())
                 .group(MESSAGE_GROUP)
                 .on_hover(actions_listener(&id))
-                .w_full()
-                .min_w_0()
-                .child(pane::prompt_row(
-            let words = ferrite_core::prompt_files::split(line.clone()).0;
-            let prompt_block = block.id;
-            let cuts = cuts.map(|((_, allowed), _)| allowed.clone());
-                    block,
-                    line,
-                    &row_cx,
-                    Some(actions.into_any_element()),
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |view, event: &gpui::MouseDownEvent, window, cx| {
@@ -1286,11 +1332,24 @@ impl TranscriptView {
                         view.right_click_message(menu, window, cx);
                     }),
                 )
+                .w_full()
+                .min_w_0()
+                .child(pane::prompt_row(
+                    block,
+                    line,
+                    &row_cx,
+                    Some(actions.into_any_element()),
                 ))
                 .into_any_element();
         }
         match &block.body {
             Body::Tool(tool) => self.render_call(block.id, tool, &row_cx, view.as_ref(), false),
+            Body::WrapUp(wrap) => {
+                let steps = view.as_ref().map_or_else(Vec::new, |view| {
+                    wrap_up_steps(wrap, view, cx)
+                });
+                pane::render_wrap_up(block.id, wrap, &row_cx, steps)
+            }
             _ => {
                 let call = match &block.body {
                     Body::Thinking(text) if pane::reasoning_has_details(text) => {
@@ -1358,7 +1417,8 @@ impl TranscriptView {
             let targeted = self
                 .tool_targeted(DisclosureId::Tool(tool.call.clone()))
                 .then_some(&self.input.disclosure_focus);
-            return pane::render_agent(block, tool, row_cx, open, targeted);
+            let live = background_opener(tool, view);
+            return pane::render_agent(block, tool, row_cx, open, targeted, live);
         }
         let call = DisclosureId::Tool(tool.call.clone());
         let expanded = self.tool_state(&call) == DisclosureState::Expanded;
@@ -1373,6 +1433,7 @@ impl TranscriptView {
                 expanded,
                 grouped,
                 disclosure,
+                live: background_opener(tool, view),
             },
         )
     }
@@ -1971,6 +2032,21 @@ fn message_time(
 /// A long thread's date divider (`RowKind::Divider`) over the first prompt
 /// of a new day: the day, centred and quiet in `INK_SUBTLE` at the meta
 /// size, between `LINE` hairlines.
+/// The owner's note under the first prompt (`TranscriptInput::note`): one
+/// quiet line.
+fn note_line(text: &str) -> gpui::Div {
+    div()
+        .debug_selector(|| "transcript-note".into())
+        .w_full()
+        .min_w_0()
+        .h(px(theme::LH_META))
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_META))
+        .line_height(px(theme::LH_META))
+        .text_color(gpui::rgb(theme::INK_SUBTLE))
+        .child(SharedString::from(text.to_string()))
+}
+
 fn date_divider(prompt: &Block) -> gpui::Div {
     let day = prompt
         .sent_at
@@ -2031,21 +2107,6 @@ fn answer_times(blocks: &[Block]) -> HashMap<BlockId, String> {
                 if let (Some(id), Some(at)) = (prose.take(), end.completed_at.clone()) {
                     times.insert(id, at);
                 }
-/// The owner's note under the first prompt (`TranscriptInput::note`): one
-/// quiet line.
-fn note_line(text: &str) -> gpui::Div {
-    div()
-        .debug_selector(|| "transcript-note".into())
-        .w_full()
-        .min_w_0()
-        .h(px(theme::LH_META))
-        .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_META))
-        .line_height(px(theme::LH_META))
-        .text_color(gpui::rgb(theme::INK_SUBTLE))
-        .child(SharedString::from(text.to_string()))
-}
-
             }
             _ => {}
         }

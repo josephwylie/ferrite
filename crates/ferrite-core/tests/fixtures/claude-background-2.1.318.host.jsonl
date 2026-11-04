@@ -1,0 +1,1 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Run `sleep 6 && echo bg-done` with the Bash tool using run_in_background, and also launch one background Agent (run_in_background) whose only job is to run `sleep 4 && echo agent-done` and report. Do not wait for either; end your turn right after launching them."}]}}

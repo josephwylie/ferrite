@@ -147,6 +147,35 @@ fn live_clock(started: std::time::Instant) -> AnyElement {
     ferrite_ui::loops_overlay::hosted(move || clock.into_any_element()).into_any_element()
 }
 
+/// A background call's row while its work runs (HD64, Claude's
+/// `bg-live-row.png`): `View live output ▸`, brighter than the row's muted
+/// words, which opens the Background tasks pane. The row's owner wraps it
+/// in the press. It goes when the work is handed back, and the row settles
+/// to plain muted text.
+pub fn background_link() -> Div {
+    div()
+        .debug_selector(|| "tool-background-live".into())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::SPACE_1))
+        .ml(px(theme::SPACE_2))
+        .cursor_pointer()
+        .text_color(rgb(theme::INK_STRONG))
+        .child("View live output")
+        .child(components::chevron_at(0., theme::ICON_CHEVRON, INK_SUBTLE))
+}
+
+/// How long background work has run, counting from its launch (`33s`),
+/// muted: the rail's and the pane's clock.
+pub fn background_clock(launched: std::time::Instant) -> Div {
+    div()
+        .debug_selector(|| "background-clock".into())
+        .flex_shrink_0()
+        .text_color(rgb(INK_SUBTLE))
+        .child(live_clock(launched))
+}
+
 #[derive(IntoElement, Clone, Copy)]
 struct LiveClock {
     started: std::time::Instant,

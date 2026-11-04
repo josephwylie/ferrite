@@ -41,12 +41,16 @@ struct Scripted {
     forks: Rc<RefCell<Vec<crate::providers::ForkRequest>>>,
     rewindable: Rc<RefCell<bool>>,
     steers: Rc<RefCell<bool>>,
+    folds: Rc<RefCell<bool>>,
     interrupts: Rc<RefCell<usize>>,
 }
 
 impl crate::providers::Session for Scripted {
     fn steers(&self) -> bool {
         *self.steers.borrow()
+    }
+    fn queue_folds(&self) -> bool {
+        *self.folds.borrow()
     }
     fn supports_control(&self, kind: crate::ControlKind) -> bool {
         kind == crate::ControlKind::Rewind && *self.rewindable.borrow()
@@ -199,6 +203,9 @@ struct Fake {
     /// While set, Sessions steer a running turn with what is enqueued
     /// (`Session::steers`), as Codex does.
     steers: Rc<RefCell<bool>>,
+    /// While set, what waits in a Session's queue while a turn runs joins
+    /// it (`Session::queue_folds`), as Claude's does.
+    folds: Rc<RefCell<bool>>,
     /// How many interrupts the Sessions were sent.
     interrupts: Rc<RefCell<usize>>,
 }
@@ -276,6 +283,7 @@ impl Spawner for Fake {
             forks: self.forks.clone(),
             rewindable: self.rewindable.clone(),
             steers: self.steers.clone(),
+            folds: self.folds.clone(),
             interrupts: self.interrupts.clone(),
         }))
     }
@@ -3488,6 +3496,32 @@ fn send_now_steers_a_queued_prompt_into_the_running_turn() {
         .map(|item| item.text.clone())
         .collect();
     assert_eq!(left, ["third", "first"], "the others wait as they were");
+}
+
+/// Claude's queue folds into the running turn at its next tool round
+/// (`claude-steer-2.1.318`): while a turn runs, a queued prompt says
+/// `Steering` yet can still be taken back, and send now hands it over
+/// again — never an interrupt. Idle, it is queued as ever.
+#[test]
+fn a_queue_that_folds_says_steering_and_send_now_never_interrupts() {
+    let (mut cockpit, fake) = cockpit("send-now-folds");
+    *fake.steers.borrow_mut() = true;
+    *fake.folds.borrow_mut() = true;
+    let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+    cockpit.send(thread, "start".into());
+    fake.streams.borrow()[0].send(text("working")).unwrap();
+    cockpit.pump();
+    assert!(cockpit.queue(thread, "also this".into()));
+    cockpit.pump();
+    let item = cockpit.thread(thread).unwrap().queue()[0].clone();
+    assert_eq!(item.delivery, crate::engine::Delivery::Folding);
+
+    cockpit.send_queued_now(thread, &item.id);
+    cockpit.pump();
+    cockpit.pump();
+    assert_eq!(*fake.interrupts.borrow(), 0, "nothing was stopped");
+    let native = fake.native.borrow().clone();
+    assert_eq!(native.last().unwrap().1, "also this", "handed over again");
 }
 
 /// On a provider that cannot steer, send now stops the running turn, as

@@ -300,6 +300,9 @@ impl Session for SessionWithDefaults {
     fn steers(&self) -> bool {
         self.inner.steers()
     }
+    fn queue_folds(&self) -> bool {
+        self.inner.queue_folds()
+    }
 
     fn set_suggestions_enabled(&mut self, enabled: bool) -> io::Result<()> {
         self.inner.set_suggestions_enabled(enabled)
@@ -420,6 +423,7 @@ impl Spawn {
                 prompt_suggestions: defaults.placeholder_suggestions,
                 resume,
                 resume_at: request.resume_at.and_then(|point| point.at.clone()),
+                resume_drops: request.resume_at.and_then(|point| point.drops.clone()),
                 fork: request.resume_at.is_some_and(|point| point.fork),
                 additional_directories,
                 visuals: self.visuals(defaults.visuals),

@@ -70,6 +70,7 @@ fn a_resume_point_holds_until_the_conversation_takes_it() {
         session: "sess".into(),
         at: Some("a1".into()),
         fork: false,
+        drops: None,
     };
     writer.record_resume_at(&point).unwrap();
     let snapshot = store.load(id).unwrap();
@@ -84,6 +85,7 @@ fn a_resume_point_holds_until_the_conversation_takes_it() {
         session: "sess".into(),
         at: Some("a1".into()),
         fork: true,
+        drops: None,
     };
     writer.record_resume_at(&forked).unwrap();
     writer
@@ -114,6 +116,7 @@ fn a_fork_copies_the_conversation_before_its_prompt() {
         session: "sess".into(),
         at: Some("a1".into()),
         fork: true,
+        drops: None,
     };
     let fork = store.fork(id, Some("p2"), Some(&point)).unwrap();
     assert_ne!(fork, id);
@@ -143,12 +146,56 @@ fn a_whole_fork_copies_everything_and_resumes_at_the_end() {
         session: "sess".into(),
         at: None,
         fork: true,
+        drops: None,
     };
     let fork = store.fork(id, None, Some(&point)).unwrap();
     let snapshot = store.load(fork).unwrap();
     assert_eq!(snapshot.prompt_texts(), vec!["one", "two", "three"]);
     assert_eq!(snapshot.resume_at(), Some(point));
     assert_eq!(snapshot.resume_target(), Some("sess"));
+    drop(writer);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// An older log holds a prompt twice under one id: the prompt as sent, then
+/// its echo (taken for a queued prompt starting, a779f0e3), the echo with
+/// its skill's `/name` lost — and the rewind to it, counting one. The cut
+/// still takes the prompt as sent, from recall and from the replay
+/// (the record shapes of a real log, its words replaced).
+#[test]
+fn a_rewind_takes_the_prompt_its_old_echo_shares_an_id_with() {
+    let dir = scratch("rewind-echo");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = store.create(Provider::Codex, None, main()).unwrap();
+    writer.record_prompt("earlier").unwrap();
+    writer
+        .record_prompt_observation("12:40 pm", Some("p0"))
+        .unwrap();
+    writer.record_prompt("/skill-x just a test").unwrap();
+    writer
+        .record_prompt_observation("12:48 pm", Some("p1"))
+        .unwrap();
+    writer.record_prompt("just a test").unwrap();
+    writer
+        .record_prompt_observation("12:48 pm", Some("p1"))
+        .unwrap();
+    writer.record_rewind("p1", 1).unwrap();
+    writer.flush().unwrap();
+    let snapshot = store.load(id).unwrap();
+    assert_eq!(snapshot.prompt_texts(), vec!["earlier"]);
+    let mut transcript = crate::transcript::Transcript::default();
+    for input in snapshot.inputs() {
+        transcript.apply(input);
+    }
+    let prompts: Vec<_> = transcript
+        .blocks()
+        .iter()
+        .filter_map(|block| match &block.body {
+            crate::transcript::Body::Prompt(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(prompts, vec!["earlier"]);
     drop(writer);
     let _ = fs::remove_dir_all(&dir);
 }

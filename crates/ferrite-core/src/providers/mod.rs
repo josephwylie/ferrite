@@ -175,6 +175,11 @@ pub trait Session {
     fn steers(&self) -> bool {
         false
     }
+    /// Whether what waits in its own queue while a turn runs joins that
+    /// turn at its next tool round (`Delivery::Folding`), not the next.
+    fn queue_folds(&self) -> bool {
+        false
+    }
     fn cancel_queued(&mut self, _id: &str) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -331,6 +336,16 @@ impl Session for ClaudeSession {
     }
     fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
         ClaudeSession::enqueue(self, client_id, text)
+    }
+    /// An `isAsync` message sent while a turn runs is folded into it
+    /// between tool rounds (`claude-steer-2.1.318`: its lifecycle starts
+    /// mid-turn, the turn's `user_message_uuids` name it, one result ends
+    /// both); with no further tool round it runs as the next turn.
+    fn steers(&self) -> bool {
+        true
+    }
+    fn queue_folds(&self) -> bool {
+        true
     }
     fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
         ClaudeSession::cancel_queued(self, id)

@@ -356,100 +356,124 @@ fn the_composer_mode_chip_opens_a_native_mode_menu_while_idle(cx: &mut TestAppCo
     );
 }
 
+/// Background work (HD64, Claude's `bg-tasks-panel.png`): no shelf over
+/// the Composer. A call launched into the background runs on past its
+/// turn, its row live (the running mark and its clock); the rail lists it
+/// with a stop square, and opens the Background tasks pane. Handed back,
+/// the row settles and the pane counts it finished.
 #[gpui::test]
-fn contract_background_tasks_ride_the_composer_shelf(cx: &mut TestAppContext) {
-    use ferrite_core::progress::{BackgroundTask, ProgressEvent, TaskStatus};
-    let (core, fake) = cockpit("native-background-chips", 1);
+fn background_work_lives_in_its_row_the_rail_and_the_pane(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("background-work", 1);
     *fake.native_controls.borrow_mut() = true;
-    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1100.), px(800.)));
-    assert!(
-        cx.debug_bounds("background-chips").is_none(),
-        "nothing running, no shelf"
-    );
-    let task = |id: &str, label: &str, status| BackgroundTask {
-        id: id.into(),
-        label: label.into(),
-        detail: "local_bash".into(),
-        status,
-    };
-    let snapshot = |tasks| SessionEvent::Progress {
-        event: ProgressEvent::BackgroundSnapshot { tasks },
-    };
-    fake.streams.borrow()[0]
-        .send(snapshot(vec![
-            task("task:1", "cargo test --workspace", TaskStatus::Working),
-            task("task:2", "already finished", TaskStatus::Completed),
-        ]))
-        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+    let send = |event: SessionEvent| fake.streams.borrow()[0].send(event).unwrap();
+    send(SessionEvent::ToolStarted {
+        id: "call".into(),
+        name: "Bash".into(),
+        input: serde_json::json!({"command": "sleep 20 && echo done", "description": "Sleep 20s then print done"}),
+    });
+    send(SessionEvent::ToolCompleted {
+        id: "call".into(),
+        output: "Command running in background with ID: b1.".into(),
+        is_error: false,
+        result: ferrite_core::ToolResult::Background { task: "b1".into() },
+    });
+    send(SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Completed,
+        cost_usd: None,
+    });
     tick(cx);
-    let shelf = cx
-        .debug_bounds("background-chips")
-        .expect("a running task docks a chip above the prompt");
-    let chip = cx.debug_bounds("background-chip-0").unwrap();
+    view.update(cx, |view, cx| {
+        let thread = view.focused_thread().unwrap();
+        view.open_panel(thread, cx);
+    });
+    tick(cx);
     assert!(
-        cx.debug_bounds("background-chip-1").is_none(),
-        "finished tasks leave the shelf"
-    );
-    let editor = cx
-        .debug_bounds("focused-prompt-editor")
-        .or_else(|| cx.debug_bounds("prompt-editor"))
-        .unwrap();
-    assert!(
-        shelf.bottom() <= editor.top(),
-        "the shelf stays above the editable prompt"
+        cx.debug_bounds("composer-shelf").is_none(),
+        "no pill over the Composer"
     );
     assert!(
-        chip.center().x > editor.center().x,
-        "chips hang at the right edge of the prompt box, not the left"
+        cx.debug_bounds("tool-background-live").is_some(),
+        "the launching row is live after its turn ended"
     );
-    // SPEC §5.5: the shelf keeps to the box's own edges.
-    let field = cx.debug_bounds("composer-block").unwrap();
-    assert!(
-        (shelf.right() - field.right()).abs() <= px(1.),
-        "the shelf's right edge is the box's: shelf {:?} vs box {:?}",
-        shelf.right(),
-        field.right()
-    );
-    let stop = cx.debug_bounds("background-chip-stop-0").unwrap();
+    assert!(cx.debug_bounds("panel-background-head").is_some());
+    let stop = cx
+        .debug_bounds("background-stop-call")
+        .expect("the rail's row has a stop square");
     cx.simulate_click(stop.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     assert!(fake
         .controls
         .borrow()
-        .contains(&ferrite_core::SessionControl::StopTask {
-            id: "task:1".into()
-        }));
-    assert!(
-        fake.sent.borrow().is_empty(),
-        "a chip's × is a control, never a prompt"
-    );
-    // A Session that cannot stop tasks still shows what runs — read-only.
-    *fake.native_controls.borrow_mut() = false;
-    fake.streams.borrow()[0]
-        .send(snapshot(vec![task(
-            "task:1",
-            "cargo test --workspace",
-            TaskStatus::Working,
-        )]))
-        .unwrap();
+        .contains(&ferrite_core::SessionControl::StopTask { id: "b1".into() }));
+
+    // The row's `View live output ▸` opens the pane, its card open on the
+    // command's output.
+    let live = cx.debug_bounds("tool-background-live").unwrap();
+    cx.simulate_mouse_down(live.center(), gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_up(live.center(), gpui::MouseButton::Left, gpui::Modifiers::none());
     tick(cx);
-    assert!(cx.debug_bounds("background-chip-0").is_some());
-    assert!(
-        cx.debug_bounds("background-chip-stop-0").is_none(),
-        "no stop control where the Session offers none"
-    );
-    // The last task finishing takes the shelf with it.
-    fake.streams.borrow()[0]
-        .send(snapshot(vec![task(
-            "task:1",
-            "cargo test --workspace",
-            TaskStatus::Completed,
-        )]))
-        .unwrap();
+    assert!(cx.debug_bounds("background-pane").is_some());
+    assert!(cx.debug_bounds("background-running-0").is_some());
+    assert!(cx.debug_bounds("background-output").is_some());
+    // Its head closes it.
+    let head = cx.debug_bounds("background-running-0-head").unwrap();
+    cx.simulate_click(head.center(), gpui::Modifiers::none());
     tick(cx);
+    assert!(cx.debug_bounds("background-output").is_none());
+
+    send(SessionEvent::ToolCompleted {
+        id: "call".into(),
+        output: "done\n".into(),
+        is_error: false,
+        result: ferrite_core::ToolResult::Command {
+            stdout: "done\n".into(),
+            stderr: String::new(),
+            exit_code: Some(0),
+            duration_ms: None,
+        },
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("background-running-0").is_none());
+    assert!(cx.debug_bounds("background-finished-0").is_some());
     assert!(
-        cx.debug_bounds("background-chips").is_none(),
-        "the shelf leaves with the last running task"
+        cx.debug_bounds("tool-background-live").is_none(),
+        "handed back, the row settles to plain text"
     );
+    let close = cx.debug_bounds("background-pane-close").unwrap();
+    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("background-pane").is_none());
+    assert!(cx.debug_bounds("panel-background-finished").is_some());
+}
+
+/// A turn's wrap-up (HD58) draws as its box, and a next step's press sends
+/// its words as the next prompt.
+#[gpui::test]
+fn a_wrap_up_step_sends_its_words(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("wrap-up-step", 1);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
+    let send = |event: SessionEvent| fake.streams.borrow()[0].send(event).unwrap();
+    send(SessionEvent::ToolStarted {
+        id: "w".into(),
+        name: ferrite_core::wrap_up::CLAUDE_NAME.into(),
+        input: serde_json::json!({
+            "recap": "Fixed the parser.",
+            "next": ["Commit these changes", "Run the full suite"],
+        }),
+    });
+    send(SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Completed,
+        cost_usd: None,
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("wrap-up").is_some());
+    let step = cx
+        .debug_bounds("wrap-up-step-w-0")
+        .expect("the recommended step is a button");
+    cx.simulate_click(step.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(fake.sent.borrow().as_slice(), ["Commit these changes"]);
 }

@@ -159,6 +159,22 @@ for line in open('$WORK/plant.jsonl'):
             --prompt 'What is the codeword? Reply with the codeword only.' \
             -- --safe-mode --resume "$SID"
         ;;
+    # (h) Background work reporting back (HD64): a backgrounded Bash call and a
+    # background agent. The launch's tool_result only acknowledges the launch;
+    # the real outcome arrives later as a task_notification, which starts a
+    # turn of its own — hence two results (one per handback, batched or not).
+    background)
+        capture background --results 3 \
+            --prompt 'Run `sleep 6 && echo bg-done` with the Bash tool using run_in_background, and also launch one background Agent (run_in_background) whose only job is to run `sleep 4 && echo agent-done` and report. Do not wait for either; end your turn right after launching them.' \
+            -- --safe-mode --allowedTools 'Bash Agent Task'
+        ;;
+    # (i) A mid-turn message folded into a running turn with tools (QS4, HD5):
+    # sent as an isAsync user frame once Main's first tool call arrives.
+    steer)
+        capture steer --uuid --steer 'Also run `echo steer-seen` with Bash before you finish.' \
+            --prompt 'Run `sleep 3 && echo one` with Bash, then run `echo two` with Bash, then say done.' \
+            -- --safe-mode --allowedTools 'Bash'
+        ;;
     # (c) A failing turn. An empty CLAUDE_CONFIG_DIR has no credentials, so the
     # CLI ends the turn with terminal_reason "api_error" — reliable, offline,
     # and free, unlike provoking a real API failure.

@@ -1,7 +1,6 @@
 // The Cockpit: the grid, the nav, the Roster glue and the window's
 // content. The app (`ferrite`) opens the window on it and owns the frame
 // around it (`ferrite_ui::frame`, ADR 0035).
-mod background_chips;
 mod cli_updates;
 pub mod cockpit;
 pub mod cockpit_window;
@@ -53,7 +52,6 @@ mod tests {
             ("nav.rs", include_str!("nav.rs")),
             ("project_editor.rs", include_str!("project_editor.rs")),
             ("notifications.rs", include_str!("notifications.rs")),
-            ("background_chips.rs", include_str!("background_chips.rs")),
         ]);
     }
 }

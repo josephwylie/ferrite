@@ -86,6 +86,7 @@ impl RowKind {
             Body::Prompt(_) => Self::Prompt,
             Body::Tool(_) => Self::Activity,
             Body::Visual(_) => Self::Visual,
+            Body::WrapUp(_) => Self::Other,
             Body::Thinking(_) => Self::Reasoning,
             Body::Notice(_) => Self::Notice,
             Body::Meta(_) => Self::Meta,
@@ -158,9 +159,9 @@ pub(crate) struct RowShape {
     /// The running call the working line carries (`carried_call`): set by
     /// the projection itself.
     pub carried: Option<String>,
-}
     /// A muted line under the first prompt (`TranscriptInput::note`).
     pub note: Option<gpui::SharedString>,
+}
 
 /// One renderable transcript unit. Its blocks are owned so a list callback
 /// does not borrow the transient slice passed to [`TranscriptRows::reconcile`].
@@ -528,17 +529,18 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                     day = Some(sent);
                 }
                 turn_start = index;
+                let first = rows.iter().all(|row| row.kind != RowKind::Prompt);
                 rows.push(row(
                     RowId::Block(block.id),
                     std::slice::from_ref(block),
                     None,
                     RowKind::Prompt,
                 ));
-            }
-            Body::Tool(tool) => {
                 if let Some(note) = shape.note.as_ref().filter(|_| first) {
                     rows.push(row(RowId::Note, &[], Some(note.as_ref().into()), RowKind::Note));
                 }
+            }
+            Body::Tool(tool) => {
                 if draws_nothing(block, shape) {
                     continue;
                 }

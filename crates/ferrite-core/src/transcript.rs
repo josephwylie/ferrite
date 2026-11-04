@@ -69,6 +69,10 @@ pub enum Body {
     /// An agent's `show_visual` page (see `crate::visual`): a tool call the
     /// Pane draws as the page itself, live while its input streams.
     Visual(crate::visual::Visual),
+    /// An agent's `wrap_up` (see `crate::wrap_up`): a tool call the Pane
+    /// draws as the turn's closing box — its recap, its question, its next
+    /// steps to send with one press.
+    WrapUp(crate::wrap_up::WrapUp),
     /// A line the operator sent.
     Prompt(String),
     /// Extended thinking, kept apart from the answer.
@@ -180,6 +184,21 @@ pub struct ToolBlock {
     /// (`tool_use_summary`), on the last call it names. Its provenance is
     /// the provider: it never stands in for a failure Ferrite knows of.
     pub caption: Option<String>,
+    /// The work this call launched into the background
+    /// (`ToolResult::Background`, HD64): the row runs on past its turn's
+    /// end, and the call's later result (its handback) settles it, leaving a
+    /// line where it completed. A Session that ends first takes the work
+    /// with it. `None` for a call that ran in the foreground.
+    pub background: Option<Background>,
+}
+
+/// Work a call launched into the background.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Background {
+    /// The provider's id for the work, which a stop names.
+    pub task: String,
+    /// When the launch was acknowledged: the live row's clock counts from it.
+    pub launched: std::time::Instant,
 }
 
 /// A running test suite's count, folded from its streamed output. `total`
@@ -201,6 +220,11 @@ impl TestProgress {
 }
 
 impl ToolBlock {
+    /// Running in the background: launched there, and not handed back.
+    pub fn in_background(&self) -> bool {
+        self.background.is_some() && self.state == ToolState::Running
+    }
+
     /// Whether the call draws a row at all: a [`tools::Grouping::StateOnly`]
     /// call shows only when it failed, since what it did is drawn elsewhere.
     pub fn draws_row(&self) -> bool {
@@ -532,6 +556,119 @@ pub enum ToolState {
     Failed(String),
 }
 
+/// Whether a call named `name` that ran `command` (its row's summary)
+/// commits, pushes or works a pull request: a shell's `git commit`, `git
+/// push`, `gh pr …`.
+fn publishes(name: &str, command: &str) -> bool {
+    tools::policy(name).kind == tools::ToolKind::Command
+        && ["git commit", "git push", "gh pr "]
+            .iter()
+            .any(|verb| command.contains(verb))
+}
+
+/// The purpose a call's input states, when the provider wrote one.
+fn call_title(input: &serde_json::Value) -> Option<String> {
+    ["title", "description", "reason"]
+        .into_iter()
+        .find_map(|key| {
+            input
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+        })
+        .map(str::to_owned)
+}
+
+/// Whether `name`'s row opens while its input still streams (HD39): an
+/// edit's input is the change itself, often long, and its row should not
+/// wait for all of it.
+pub fn drafts_edit(name: &str) -> bool {
+    matches!(name, "Edit" | "MultiEdit" | "Write")
+}
+
+/// What an edit's draft (its input so far) would change, read off the
+/// input alone — no file is read on a draft: each replacement is one hunk,
+/// its old text against its new (a Write's all added). Its numbers wait
+/// for the call's result, which brings the real patch.
+fn draft_diffs(name: &str, input: &serde_json::Value) -> Vec<Diff> {
+    let Some(path) = input.get("file_path").and_then(serde_json::Value::as_str) else {
+        return Vec::new();
+    };
+    let text = |value: &serde_json::Value, key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let pairs: Vec<(String, String)> = match name {
+        "Write" => vec![(String::new(), text(input, "content"))],
+        "Edit" => vec![(text(input, "old_string"), text(input, "new_string"))],
+        "MultiEdit" => input
+            .get("edits")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|edit| (text(edit, "old_string"), text(edit, "new_string")))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let hunks: Vec<Hunk> = pairs
+        .iter()
+        .filter(|(old, new)| !(old.is_empty() && new.is_empty()))
+        .map(|(old, new)| {
+            let lines = line_diff(old, new);
+            let count =
+                |mark: char| lines.iter().filter(|line| !line.starts_with(mark)).count() as u32;
+            Hunk {
+                old_start: 0,
+                old_lines: count('+'),
+                new_start: 0,
+                new_lines: count('-'),
+                section: None,
+                lines,
+            }
+        })
+        .collect();
+    if hunks.is_empty() {
+        return Vec::new();
+    }
+    vec![Diff::new(path.to_owned(), hunks)]
+}
+
+/// Which running calls a stream's end retires.
+#[derive(Clone, Copy)]
+enum Retire {
+    /// A turn ended: background work runs on.
+    Foreground,
+    /// The Session (or its log) ended: nothing runs on.
+    All,
+}
+
+/// The muted line a handback leaves where it completed, in Claude's words:
+/// `Background command completed · <its description>`, or for an agent
+/// `Background task completed · Agent "<its task>" · took 22m 55s`.
+fn handback_line(tool: &ToolBlock, elapsed_ms: Option<u64>) -> String {
+    let outcome = match tool.state {
+        ToolState::Failed(_) => "failed",
+        _ => "completed",
+    };
+    let label = tool.title.as_deref().unwrap_or(&tool.summary);
+    if tools::policy(&tool.name).kind == tools::ToolKind::Agent {
+        let mut line = format!("Background task {outcome} \u{b7} Agent \"{label}\"");
+        if let Some(elapsed) = elapsed_ms {
+            line.push_str(" \u{b7} took ");
+            line.push_str(&crate::progress::settled_duration_label(
+                std::time::Duration::from_millis(elapsed),
+            ));
+        }
+        line
+    } else {
+        format!("Background command {outcome} \u{b7} {label}")
+    }
+}
+
 /// A run of text with one inline style.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Span {
@@ -819,6 +956,9 @@ pub struct Transcript {
     /// Results that arrived before their call's row (a denial can), oldest
     /// first, waiting for it within the turn.
     orphan_results: Vec<(String, SessionEvent)>,
+    /// How many settled calls may have moved the workspace's git or forge
+    /// state behind the agent's own edits (`published`).
+    published: u64,
 }
 
 /// A test runner's progress, read off its output one complete line at a
@@ -1120,12 +1260,27 @@ impl Transcript {
             progress: Progress::default(),
             output_tails: Default::default(),
             test_counts: Default::default(),
+            published: 0,
             thinking_open: false,
             thought: None,
             latest_reasoning_part: None,
             reasoning_parts: Default::default(),
             orphan_results: Vec::new(),
         }
+    }
+
+    /// The calls that launched background work, oldest first, while their
+    /// rows are kept: running until handed back (`ToolBlock::background`).
+    pub fn background_calls(&self) -> impl Iterator<Item = &ToolBlock> {
+        self.blocks.iter().filter_map(|block| match &block.body {
+            Body::Tool(tool) if tool.background.is_some() => Some(tool),
+            _ => None,
+        })
+    }
+
+    /// Whether `call`'s work runs on in the background, not yet handed back.
+    pub fn running_in_background(&self, call: &str) -> bool {
+        self.tool(call).is_some_and(ToolBlock::in_background)
     }
 
     pub fn status(&self) -> Status {
@@ -1157,7 +1312,7 @@ impl Transcript {
         self.turn_started = None;
         self.progress.disconnected();
         let update = Update {
-            dirty: self.retire_tools(),
+            dirty: self.retire_tools(Retire::All),
             ..Update::default()
         };
         self.advance_revision();
@@ -1297,6 +1452,15 @@ impl Transcript {
     /// The account's plan (`Max`), when the provider named it.
     pub fn plan(&self) -> Option<&str> {
         self.plan.as_deref()
+    }
+
+    /// Grows each time a settled call may have moved the workspace's git
+    /// or forge state where the agent's own edits do not show it (HD27): a
+    /// commit, a push or a pull request run as a command, or background
+    /// work handed back. Whoever shows Changes reads the forge again when
+    /// it moves.
+    pub fn published(&self) -> u64 {
+        self.published
     }
 
     /// When the running turn started; None between turns.
@@ -1497,7 +1661,9 @@ impl Transcript {
     }
 
     /// Drop the prompt `prompt` names and every Block after it: a rewind.
-    /// A prompt no longer here fell away with the oldest Blocks, so all
+    /// The first prompt under that id: an older log can hold one prompt
+    /// twice under it (its echo, a779f0e3), and the cut takes both. A
+    /// prompt no longer here fell away with the oldest Blocks, so all
     /// that remains came after it and goes too. What the dropped turns
     /// left behind — their diff, their outcome, an open section or
     /// thought — goes with them; the next prompt starts clean.
@@ -1505,7 +1671,7 @@ impl Transcript {
         let start = self
             .blocks
             .iter()
-            .rposition(|block| block.prompt_id.as_deref() == Some(prompt))
+            .position(|block| block.prompt_id.as_deref() == Some(prompt))
             .unwrap_or(0);
         let evicted: Vec<BlockId> = self.blocks.drain(start..).map(|block| block.id).collect();
         if evicted.is_empty() {
@@ -1939,7 +2105,7 @@ impl Transcript {
                 self.progress.disconnected();
                 self.mcp_servers.clear();
                 self.turn_started = None;
-                let mut dirty = self.retire_tools();
+                let mut dirty = self.retire_tools(Retire::All);
                 // The log ended inside a turn (a crash, a kill, a restart):
                 // that turn will never end, so it reads as interrupted
                 // rather than idle with no outcome. Nothing is logged.
@@ -1965,6 +2131,12 @@ impl Transcript {
                 dirty: vec![self.push(Body::Notice(line))],
                 ..Update::default()
             },
+            // Folded into the running turn (a steer, HD5/QS4): the turn goes
+            // on, its clock, count, plan and diff still its own.
+            Input::Prompt(line) if self.status == Status::Streaming => Update {
+                dirty: vec![self.push(Body::Prompt(line))],
+                ..Update::default()
+            },
             Input::Prompt(line) => {
                 self.turn_diff = None;
                 self.turn_outcome = None;
@@ -1988,6 +2160,13 @@ impl Transcript {
                     dirty: vec![self.push(Body::Prompt(line))],
                     ..Update::default()
                 }
+            }
+            // Its answer is ours (`wrap_up::ANSWER`): the box already says it.
+            Input::Event(SessionEvent::ToolCompleted { id, .. })
+                if self.wrap_up_index(&id).is_some() =>
+            {
+                self.progress.finish_tool(&id);
+                Update::default()
             }
             Input::Event(SessionEvent::ToolCompleted {
                 id,
@@ -2021,6 +2200,30 @@ impl Transcript {
                     self.orphan_results.push((id, result));
                     return Update::default();
                 }
+                if let ToolResult::Background { task } = result {
+                    // Only the launch: the row runs on, now in the background.
+                    let block = self.blocks.iter_mut().find(|block| {
+                        matches!(&block.body, Body::Tool(tool) if tool.call == id && tool.state == ToolState::Running)
+                    });
+                    let Some(Block {
+                        id: block,
+                        body: Body::Tool(tool),
+                        ..
+                    }) = block
+                    else {
+                        return Update::default();
+                    };
+                    tool.background.get_or_insert_with(|| Background {
+                        task,
+                        launched: crate::clock::instant(),
+                    });
+                    return Update {
+                        dirty: vec![*block],
+                        ..Update::default()
+                    };
+                }
+                let handback = self.running_in_background(&id);
+                let elapsed_ms = result.duration_ms();
                 let state = if is_error {
                     ToolState::Failed(trim(&output, ERROR_CHARS))
                 } else {
@@ -2071,11 +2274,34 @@ impl Transcript {
                     _ => (Vec::new(), None, row_line(None)),
                 };
                 let output = retained_output(&output);
+                let mut dirty: Vec<BlockId> = self
+                    .settle_tool(&id, state, diffs, structured_preview, result_line, output)
+                    .into_iter()
+                    .collect();
+                if handback
+                    || self
+                        .tool(&id)
+                        .is_some_and(|tool| publishes(&tool.name, &tool.summary))
+                {
+                    self.published += 1;
+                }
+                if handback {
+                    let line = self
+                        .tool(&id)
+                        .map(|tool| handback_line(tool, elapsed_ms))
+                        .expect("a handback settles a row that exists");
+                    dirty.push(self.push(Body::Notice(line)));
+                }
                 Update {
-                    dirty: self
-                        .settle_tool(&id, state, diffs, structured_preview, result_line, output)
-                        .into_iter()
-                        .collect(),
+                    dirty,
+                    ..Update::default()
+                }
+            }
+            Input::Event(SessionEvent::ToolDraft { id, name, input }) if drafts_edit(&name) => {
+                self.status = Status::Streaming;
+                self.progress.phase(Phase::Working);
+                Update {
+                    dirty: self.draft_edit(id, name, &input).into_iter().collect(),
                     ..Update::default()
                 }
             }
@@ -2094,6 +2320,18 @@ impl Transcript {
                 }
             }
             Input::Event(SessionEvent::ToolStarted { id, name, input })
+                if crate::wrap_up::is_tool(&name) =>
+            {
+                if self.wrap_up_index(&id).is_some() {
+                    return Update::default();
+                }
+                let wrap = crate::wrap_up::WrapUp::from_input(id, &input);
+                Update {
+                    dirty: vec![self.push(Body::WrapUp(wrap))],
+                    ..Update::default()
+                }
+            }
+            Input::Event(SessionEvent::ToolStarted { id, name, input })
                 if crate::visual::is_tool(&name) =>
             {
                 self.status = Status::Streaming;
@@ -2108,13 +2346,30 @@ impl Transcript {
             }
             Input::Event(SessionEvent::ToolStarted { id, name, input }) => {
                 // A completed-message snapshot can repeat an already streamed
-                // tool. Its native id owns one row and one lifecycle.
-                if self
+                // tool. Its native id owns one row and one lifecycle. A row its
+                // draft opened (HD39) takes the settled input's words.
+                if let Some(block) = self
                     .blocks
-                    .iter()
-                    .any(|block| matches!(&block.body, Body::Tool(tool) if tool.call == id))
+                    .iter_mut()
+                    .find(|block| matches!(&block.body, Body::Tool(tool) if tool.call == id))
                 {
-                    return Update::default();
+                    let Body::Tool(tool) = &mut block.body else {
+                        unreachable!()
+                    };
+                    if tool.state != ToolState::Running {
+                        return Update::default();
+                    }
+                    let summary = tool_summary(&name, &input);
+                    let title = call_title(&input);
+                    if tool.summary == summary && tool.title == title {
+                        return Update::default();
+                    }
+                    tool.summary = summary;
+                    tool.title = title;
+                    return Update {
+                        dirty: vec![block.id],
+                        ..Update::default()
+                    };
                 }
                 // The model wrote the call's input: it counts as output.
                 self.live.chars += input.to_string().chars().count() as u64;
@@ -2133,16 +2388,7 @@ impl Transcript {
                 let block = self.push(Body::Tool(ToolBlock {
                     call: id,
                     summary: tool_summary(&name, &input),
-                    title: ["title", "description", "reason"]
-                        .into_iter()
-                        .find_map(|key| {
-                            input
-                                .get(key)
-                                .and_then(serde_json::Value::as_str)
-                                .map(str::trim)
-                                .filter(|text| !text.is_empty())
-                        })
-                        .map(str::to_owned),
+                    title: call_title(&input),
                     name,
                     state: ToolState::Running,
                     diffs,
@@ -2151,6 +2397,7 @@ impl Transcript {
                     output: None,
                     progress: None,
                     caption: None,
+                    background: None,
                 }));
                 Update {
                     dirty: vec![block],
@@ -2178,7 +2425,7 @@ impl Transcript {
                 self.status = Status::Idle;
                 self.last_cost = cost_usd;
                 self.turn_started = None;
-                let mut dirty = self.retire_tools();
+                let mut dirty = self.retire_tools(Retire::Foreground);
                 match &outcome {
                     // The cost is kept (`last_cost`) but never rendered —
                     // no dollar value appears anywhere (#22 operator
@@ -2280,7 +2527,7 @@ impl Transcript {
                 self.progress.disconnected();
                 self.mcp_servers.clear();
                 self.latest_reasoning_part = None;
-                let mut dirty = self.retire_tools();
+                let mut dirty = self.retire_tools(Retire::All);
                 // The stream ended inside a turn with no result: that turn
                 // failed, and says so, before the Session says why it closed.
                 if matches!(self.status, Status::Streaming | Status::Blocked) {
@@ -2318,13 +2565,26 @@ impl Transcript {
         grown.dirty
     }
 
-    fn retire_tools(&mut self) -> Vec<BlockId> {
-        self.output_tails.clear();
-        self.test_counts.clear();
+    /// Calls with no result yet are over: their stream ended. A turn's end
+    /// leaves background work running (`Retire::Foreground`); the Session's
+    /// end does not.
+    fn retire_tools(&mut self, retire: Retire) -> Vec<BlockId> {
+        let background: std::collections::HashSet<String> = match retire {
+            Retire::Foreground => self
+                .background_calls()
+                .filter(|tool| tool.in_background())
+                .map(|tool| tool.call.clone())
+                .collect(),
+            Retire::All => Default::default(),
+        };
+        self.output_tails.retain(|call, _| background.contains(call));
+        self.test_counts.retain(|call, _| background.contains(call));
         self.blocks
             .iter_mut()
             .filter_map(|block| match &mut block.body {
-                Body::Tool(tool) if tool.state == ToolState::Running => {
+                Body::Tool(tool)
+                    if tool.state == ToolState::Running && !background.contains(&tool.call) =>
+                {
                     tool.state = ToolState::Unavailable;
                     Some(block.id)
                 }
@@ -2366,6 +2626,44 @@ impl Transcript {
         self.thought = Some((id, scan));
         self.thinking_open = true;
         id
+    }
+
+    /// An edit's row while its input streams (HD39): opened by its first
+    /// draft, running, its words and its would-be change following the
+    /// input; the settled call (`ToolStarted`) and its result finish it.
+    fn draft_edit(&mut self, id: String, name: String, input: &serde_json::Value) -> Option<BlockId> {
+        let summary = tool_summary(&name, input);
+        let diffs = draft_diffs(&name, input);
+        if let Some(block) = self
+            .blocks
+            .iter_mut()
+            .find(|block| matches!(&block.body, Body::Tool(tool) if tool.call == id))
+        {
+            let Body::Tool(tool) = &mut block.body else {
+                unreachable!()
+            };
+            if tool.state != ToolState::Running || (tool.summary == summary && tool.diffs == diffs)
+            {
+                return None;
+            }
+            tool.summary = summary;
+            tool.diffs = diffs;
+            return Some(block.id);
+        }
+        Some(self.push(Body::Tool(ToolBlock {
+            call: id,
+            summary,
+            title: call_title(input),
+            name,
+            state: ToolState::Running,
+            diffs,
+            structured_preview: None,
+            result_line: None,
+            output: None,
+            progress: None,
+            caption: None,
+            background: None,
+        })))
     }
 
     /// Drop the oldest Blocks once the Pane holds more than it keeps.
@@ -2469,6 +2767,12 @@ impl Transcript {
     }
 
     /// Where the visual for call `id` is, newest first.
+    fn wrap_up_index(&self, id: &str) -> Option<usize> {
+        self.blocks
+            .iter()
+            .rposition(|block| matches!(&block.body, Body::WrapUp(wrap) if wrap.call == id))
+    }
+
     fn visual_index(&self, id: &str) -> Option<usize> {
         self.blocks
             .iter()
@@ -2674,6 +2978,7 @@ pub fn plain_text(blocks: &[Block]) -> String {
             Body::TurnEnd(end) => end.text(),
             // The page is a picture; its words are its title and caption.
             Body::Visual(visual) => format!("● Visual ({})", visual.text().replace('\n', " · ")),
+            Body::WrapUp(wrap) => wrap.text(),
         };
         if !out.is_empty() {
             out.push_str("\n\n");
@@ -3250,6 +3555,7 @@ mod tests {
             Body::Notice(text) | Body::Meta(text) => text.clone(),
             Body::TurnEnd(end) => end.text(),
             Body::Visual(visual) => visual.text(),
+            Body::WrapUp(wrap) => wrap.text(),
         }
     }
 
