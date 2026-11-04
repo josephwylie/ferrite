@@ -153,3 +153,17 @@ The menu:
 - **`Finished N`**: collapsed rows, each a `▸ title` with the duration at the right (`Sleep 20s then print done  20s`).
 - **Owner note:** while a task runs, its transcript row is **live** (it animates and updates). When it finishes or stops, it turns back into plain muted text. The live look isn't captured yet; capture it on the next run.
 - There is no pill above the composer. Running work lives in the rail and the pane.
+
+### Owner's captures, 2026-11-04 (`bg-sidechat-midturn.png`, `bg-live-row.png`, `bg-pane-running.png`, `bg-card-collapsed.png`, `bg-card-expanded.png`)
+
+- **Live transcript row** while a task runs: `Waiting 45 seconds in the background` in muted ink, then `View live output ▸` in brighter ink. Clicking the link opens the Background tasks pane. When the task ends, the row settles to plain muted text.
+- **Session rail:** `Background tasks`, then one row per task: a terminal icon, the title truncated with "…", a live elapsed time (`15s`) and a white stop square.
+- **Pane card:**
+  - a `▾`/`▸` disclosure, the title, the elapsed time at the right (`33s`) and a stop button on a raised square;
+  - expanded, it shows mono `$ sleep 45`, then the output, or `No output yet` in muted ink;
+  - a focused card has a blue focus ring.
+- **Side chat mid-turn: Claude allows it at any time, even while text is streaming.**
+  - The fork is taken at the *current* point, so it includes the running turn.
+  - A background shell running at fork time is reported in the side chat as `Background task stopped · Background shell command didn't finish before …`.
+  - The tab takes its name from the first message (`testing`).
+  - After the first message, the composer placeholder becomes `Reply in this session…`.
