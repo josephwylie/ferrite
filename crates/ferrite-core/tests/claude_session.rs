@@ -537,10 +537,10 @@ fn adopting_a_standing_answer_writes_the_permission_change_the_cli_honoured() {
 
 #[test]
 fn denying_a_decision_carries_the_operator_s_reason_to_the_model() {
-    let sent = answering("permission-deny-2.1.243", |_| DecisionAnswer::Deny {
+    let sent = answering("permission-deny-interrupt-2.1.318", |_| DecisionAnswer::Deny {
         message: "Ferrite operator denied this tool".into(),
     });
-    assert_eq!(sent, recorded_answer("permission-deny-2.1.243"));
+    assert_eq!(sent, recorded_answer("permission-deny-interrupt-2.1.318"));
 }
 
 /// A failed turn has to say what failed. Replayed from the committed `error`
