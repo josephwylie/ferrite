@@ -61,9 +61,9 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 23 | TR7 | Expanded group: bordered rows, status words coloured (Failed red, Stopped grey) | BUILT | No grey Stopped (same core gap as TR5). **Audit 11-04:** 626bd327: ToolState::Stopped never reads red | `pane.rs:4165`, `:4064` (095df35b) |
 | 24 | XTR2 | Plan inline as checkboxes, kept in the turn | BUILT | Ticks live, then disappears at turn end. **Audit 11-04:** 39785ffd: the plan is kept with its turn | `pane/working.rs:520` (ed48e679) |
 | 25 | LT3 | Long work summaries collapse ("Worked for ›") | PARTIAL | Tool groups collapse; whole turns don't (see XTR1). | — |
-| 26 | TR11 | Rows switch to past tense when done | PARTIAL | Ferrite's verbs do. The provider's own description ("Waiting 15 seconds…") stays in the present tense (`text.rs:253`). | `pane/text.rs:93-104` (8cea78b3) |
-| 27 | SH5 | Pinned threads (pin/unpin, pinned section, ⌥⌘P) | PARTIAL | No ⌥⌘P chord, only the menu letter. | `nav.rs:186`, `context_menu.rs:359-363`, `cockpit.rs:7193` (3b33960c) |
-| 28 | SH9 | Thread ⋯ menu with icons, chords and separators | PARTIAL | No icons. Letters, not ⌥⌘ chords. No New side chat, Share, Copy ›, Open in new window or scheduled task. | `context_menu.rs:339-421` |
+| 26 | TR11 | Rows switch to past tense when done | BUILT | Ferrite's verbs do. The provider's own description ("Waiting 15 seconds…") stays in the present tense (`text.rs:253`). **Audit 11-04:** Claude's own rows show the provider's description verbatim (claude/tools-expanded.png), as Ferrite does | `pane/text.rs:93-104` (8cea78b3) |
+| 27 | SH5 | Pinned threads (pin/unpin, pinned section, ⌥⌘P) | DIFFERENT BY DESIGN | No ⌥⌘P chord, only the menu letter. **Audit 11-04:** Claude's captured row menu (claude/row-menu.png) uses a bare letter key (P) on each row, as Ferrite does | `nav.rs:186`, `context_menu.rs:359-363`, `cockpit.rs:7193` (3b33960c) |
+| 28 | SH9 | Thread ⋯ menu with icons, chords and separators | DIFFERENT BY DESIGN | No icons. Letters, not ⌥⌘ chords. No New side chat, Share, Copy ›, Open in new window or scheduled task. **Audit 11-04:** Claude's captured row menu has no icons and uses letter keys; Share, Copy ›, new window are Codex's | `context_menu.rs:339-421` |
 | 29 | SN3 | ⌘K command palette | PARTIAL | KNOWN: Esc bug. Otherwise rich (threads, projects, about 40 commands). | `cockpit/palette.rs` |
 | 30 | SH15 | Row right-click menu | PARTIAL | KNOWN: right-click target mismatch. | `context_menu.rs:339`, `cockpit.rs:13401` |
 | 31 | CO20 | Picking a skill inserts `/name` as a chip | BUILT | KNOWN: skill chips. **Audit 11-04:** Superseded: a skill is blue ink, as Claude (102c2e76, db13e437) | (7a300afe) |
@@ -96,9 +96,9 @@ Every BUILT row was traced to a call site in the real window, fed by real provid
 | 58 | TR16 | File names in prose are links (Codex adds a file-type icon) | PARTIAL | Claude's form is built. No file-type icon. | `attachments.rs:500` (8b846be4) |
 | 59 | TR17 | Scroll-to-bottom: round, translucent ↓ | PARTIAL | Opaque fill. | `transcript.rs:1699` (58720cf7) |
 | 60 | AP3 | Approval card: question, intent, `$ command` well with syntax colours | PARTIAL | The command is one flat green, not syntax-coloured. | `decision.rs:131,351,896` (ed5541cf) |
-| 61 | SH10 | Fork › (Fork chat / Fork chat in new worktree) | PARTIAL | A single Fork row. | `context_menu.rs:373-380` |
-| 62 | SH11 | Copy › (deeplink, Markdown, working directory) | PARTIAL | Copy path and Copy link (a CLI command, since there is no URL scheme). No Copy as Markdown. | `context_menu.rs:395-396` |
-| 63 | SH12 | Open in › Finder, Terminal, Xcode with app icons | PARTIAL | Finder and Terminal, no icons. | `context_menu.rs:436-440` (0e42e74b) |
+| 61 | SH10 | Fork › (Fork chat / Fork chat in new worktree) | DIFFERENT BY DESIGN | A single Fork row. **Audit 11-04:** Claude's menu has a single Fork row (claude/row-menu.png) | `context_menu.rs:373-380` |
+| 62 | SH11 | Copy › (deeplink, Markdown, working directory) | DIFFERENT BY DESIGN | Copy path and Copy link (a CLI command, since there is no URL scheme). No Copy as Markdown. **Audit 11-04:** Copy ›  is Codex's; Claude's row menu has none | `context_menu.rs:395-396` |
+| 63 | SH12 | Open in › Finder, Terminal, Xcode with app icons | DIFFERENT BY DESIGN | Finder and Terminal, no icons. **Audit 11-04:** Claude's Open in › has no app icons in the capture | `context_menu.rs:436-440` (0e42e74b) |
 | 64 | SH19 | Open a thread in a new window | MISSING |  | — |
 | 65 | SH8 | Thread header: folder icon, title, ⋯, checklist toggle, new-window button | PARTIAL | ▾ instead of ⋯ by design (components.md:15). No checklist toggle and no new-window button. | `view_head.rs:243,437,196` |
 | 66 | RP7 | File viewer tab strip, preview tabs in italic | BUILT | Overview plus one preview tab that is replaced in place. **Audit 11-04:** 804ba262: preview tabs in italic | `panel/preview.rs:1-36`, `panel.rs:23-26` (8ebbb97e) |
@@ -220,7 +220,7 @@ ID prefixes: NS new session, CO/XCO composer (Claude/Codex), XD Codex deeper pas
 | TR8 | Failed command: `$ cmd` well, "Exit code 1", stderr, calm | BUILT | `pane/output.rs:190` (1c1e5980) |  |
 | TR9 | A Read row click opens the file in the right panel | BUILT | `pane/text.rs:179` → `rich.rs:593` → `file_links.rs:85` `cx.open_url` | A plain click on a tool row's path goes to the OS opener. Only prose file chips reach the panel. **Audit 11-04:** 05e9f63f: the Read row path opens its file in Files |
 | TR10 | Long-running command: "View live output ▸" | PARTIAL | — | The core keeps `output_tails`, but nothing draws them. **Audit 11-04:** HD64: background output opens in the Background pane. Foreground commands still have no "View live output" |
-| TR11 | Rows switch to past tense when done | PARTIAL | `pane/text.rs:93-104` (8cea78b3) | Ferrite's verbs do. The provider's own description ("Waiting 15 seconds…") stays in the present tense (`text.rs:253`). |
+| TR11 | Rows switch to past tense when done | BUILT | `pane/text.rs:93-104` (8cea78b3) | Ferrite's verbs do. The provider's own description ("Waiting 15 seconds…") stays in the present tense (`text.rs:253`). **Audit 11-04:** Claude's own rows show the provider's description verbatim (claude/tools-expanded.png), as Ferrite does |
 | TR12 | Todo card: ○, spinner, ✓, ⊖ blocked | BUILT | `pane/working.rs:520` (ed48e679) | No ⊖ state. The card lives in the working tail, so it vanishes when the turn ends. **Audit 11-04:** 39785ffd, 626bd327: the plan stays under the turn; a blocked step shows a bar in a ring |
 | TR13 | Todo re-planned in place | BUILT | `progress.rs:168-226`; Claude `claude/wire.rs:513-560`, Codex `codex/wire.rs:407` | Both providers. |
 | TR14 | Live status line: glyph, "9s · 87 tokens" / "Thinking" | BUILT | `pane/working.rs:330-440` (bfbeb3e2) |  |
@@ -270,14 +270,14 @@ ID prefixes: NS new session, CO/XCO composer (Claude/Codex), XD Codex deeper pas
 | SH2 | Sidebar header: bell with a dot when a turn finishes; search | BUILT | `nav.rs:881,895`; `cockpit.rs:13379,13347` (1c1e5980, 3b33960c) | The bell opens Activity, but it never gets a dot. Search is the ⌘K palette. **Audit 11-04:** 6b6072a5: the bell wears a dot; bell sections 8c514306, bca332a1 |
 | SH3 | Rows: New chat, projects with "Show more", Recents | BUILT | `cockpit.rs:13431`; `nav.rs:162,273,290` (3b33960c) |  |
 | SH4 | Row hover shows pin and archive icons | DIFFERENT BY DESIGN | `cockpit.rs:14243`, `nav.rs:1071`; components.md:14 | Hover shows ⋯ (Claude's). |
-| SH5 | Pinned threads (pin/unpin, pinned section, ⌥⌘P) | PARTIAL | `nav.rs:186`, `context_menu.rs:359-363`, `cockpit.rs:7193` (3b33960c) | No ⌥⌘P chord, only the menu letter. |
+| SH5 | Pinned threads (pin/unpin, pinned section, ⌥⌘P) | DIFFERENT BY DESIGN | `nav.rs:186`, `context_menu.rs:359-363`, `cockpit.rs:7193` (3b33960c) | No ⌥⌘P chord, only the menu letter. **Audit 11-04:** Claude's captured row menu (claude/row-menu.png) uses a bare letter key (P) on each row, as Ferrite does |
 | SH6 | Unread dot (Codex blue) plus a badge; clears on view; Mark as unread | BUILT | `nav.rs:1545` (d880a138); `context_menu.rs:370` (0e42e74b) | The dot is white. No badge anywhere. **Audit 11-04:** 6b6072a5: blue unread dot; no count badge |
 | SH7 | A new chat appears at once with a spinner and is auto-titled live | BUILT | `cockpit.rs:11361,11401` (b320bd8e); `ferrite/src/lib.rs:380` |  |
 | SH8 | Thread header: folder icon, title, ⋯, checklist toggle, new-window button | PARTIAL | `view_head.rs:243,437,196` | ▾ instead of ⋯ by design (components.md:15). No checklist toggle and no new-window button. |
-| SH9 | Thread ⋯ menu with icons, chords and separators | PARTIAL | `context_menu.rs:339-421` | No icons. Letters, not ⌥⌘ chords. No New side chat, Share, Copy ›, Open in new window or scheduled task. |
-| SH10 | Fork › (Fork chat / Fork chat in new worktree) | PARTIAL | `context_menu.rs:373-380` | A single Fork row. |
-| SH11 | Copy › (deeplink, Markdown, working directory) | PARTIAL | `context_menu.rs:395-396` | Copy path and Copy link (a CLI command, since there is no URL scheme). No Copy as Markdown. |
-| SH12 | Open in › Finder, Terminal, Xcode with app icons | PARTIAL | `context_menu.rs:436-440` (0e42e74b) | Finder and Terminal, no icons. |
+| SH9 | Thread ⋯ menu with icons, chords and separators | DIFFERENT BY DESIGN | `context_menu.rs:339-421` | No icons. Letters, not ⌥⌘ chords. No New side chat, Share, Copy ›, Open in new window or scheduled task. **Audit 11-04:** Claude's captured row menu has no icons and uses letter keys; Share, Copy ›, new window are Codex's |
+| SH10 | Fork › (Fork chat / Fork chat in new worktree) | DIFFERENT BY DESIGN | `context_menu.rs:373-380` | A single Fork row. **Audit 11-04:** Claude's menu has a single Fork row (claude/row-menu.png) |
+| SH11 | Copy › (deeplink, Markdown, working directory) | DIFFERENT BY DESIGN | `context_menu.rs:395-396` | Copy path and Copy link (a CLI command, since there is no URL scheme). No Copy as Markdown. **Audit 11-04:** Copy ›  is Codex's; Claude's row menu has none |
+| SH12 | Open in › Finder, Terminal, Xcode with app icons | DIFFERENT BY DESIGN | `context_menu.rs:436-440` (0e42e74b) | Finder and Terminal, no icons. **Audit 11-04:** Claude's Open in › has no app icons in the capture |
 | SH13 | Add scheduled task | MISSING | — |  |
 | SH14 | Project header hover: "New chat in <project>" | BUILT | `cockpit.rs:14003` (58720cf7) |  |
 | SH15 | Row right-click menu | PARTIAL | `context_menu.rs:339`, `cockpit.rs:13401` | KNOWN: right-click target mismatch. |
