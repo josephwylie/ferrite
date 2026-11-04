@@ -219,6 +219,23 @@ fn a_thread_keeps_its_row_through_working_and_done(cx: &mut TestAppContext) {
     assert_eq!(order(&view, cx), before, "nor does finishing");
 }
 
+/// What the bell's `⋯` shows is a saved setting: a restart keeps it.
+#[gpui::test]
+fn the_bells_show_choices_are_saved(cx: &mut TestAppContext) {
+    use crate::cockpit::context_menu::ActivityVerb;
+    let (core, _fake) = cockpit("bell-saved", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let dir = scratch("bell-saved-settings");
+    std::fs::create_dir_all(&dir).unwrap();
+    view.update(cx, |view, _| view.prefs.dir = dir.clone());
+    view.update(cx, |view, cx| {
+        view.run_activity_verb(ActivityVerb::ShowPriority, cx);
+        view.run_activity_verb(ActivityVerb::ShowPinned, cx);
+    });
+    let saved = ferrite_core::settings::Settings::load(&dir).unwrap().activity_shows;
+    assert!(!saved.priority && saved.pinned, "{saved:?}");
+}
+
 /// The bell's `⋯` stands at its first heading's right and opens Codex's menu:
 /// `Show` its sections, `Mark all as read` and `Archive chats`, the last two
 /// greyed while there is nothing to mark or park; hiding `Priority` keeps

@@ -443,8 +443,6 @@ pub struct CockpitView {
     /// What the nav shows under its views (§5.1.2): the tree, or a view's
     /// list in its place. The tree on every launch.
     pub(crate) nav_view: nav::NavView,
-    /// What the bell's `⋯` shows (`ActivityMore`).
-    pub(crate) activity_shows: nav::ActivityShows,
     /// The keyboard of the tree (⌘⇧E, `nav_keys`) or of a view's list
     /// other than the Inbox (whose keys are the Inbox's,
     /// `Floats::notice_focus`): Esc returns to the tree, or from the tree
@@ -1511,7 +1509,6 @@ impl CockpitView {
             nav_more: std::collections::HashSet::new(),
             nav_scroll: ScrollHandle::new(),
             nav_view: nav::NavView::Tree,
-            activity_shows: nav::ActivityShows::default(),
             nav_view_focus: cx.focus_handle(),
             nav_cursor: None,
             nav_keys_held: false,
@@ -9202,10 +9199,10 @@ impl CockpitView {
                 (_, Attention::Working) => Some(3),
                 _ => None,
             };
-            if self.activity_shows.pinned && pinned_set.contains(&thread) {
+            if self.prefs.settings.activity_shows.pinned && pinned_set.contains(&thread) {
                 let at = pinned_set.iter().position(|pin| *pin == thread).unwrap_or(0);
                 pinned.push((at, entry));
-            } else if let (Some(rank), true) = (rank, self.activity_shows.priority) {
+            } else if let (Some(rank), true) = (rank, self.prefs.settings.activity_shows.priority) {
                 let asked = queue
                     .iter()
                     .position(|thread| *thread == entry.row.thread)
@@ -13606,7 +13603,7 @@ impl CockpitView {
             .iter()
             .any(|entry| entry.row.status == nav::RowStatus::Done);
         let listed = activity.days.iter().any(|(_, rows)| !rows.is_empty());
-        let shows = self.activity_shows;
+        let shows = self.prefs.settings.activity_shows;
         let check = |label: &'static str, on: bool, verb: ActivityVerb| {
             let mut item = menu::Item::new(label);
             item.checked = on;
@@ -13630,8 +13627,12 @@ impl CockpitView {
 
     pub(super) fn run_activity_verb(&mut self, verb: ActivityVerb, cx: &mut Context<Self>) {
         match verb {
-            ActivityVerb::ShowPriority => self.activity_shows.priority ^= true,
-            ActivityVerb::ShowPinned => self.activity_shows.pinned ^= true,
+            ActivityVerb::ShowPriority => {
+                self.change_settings(|settings| settings.activity_shows.priority ^= true, cx)
+            }
+            ActivityVerb::ShowPinned => {
+                self.change_settings(|settings| settings.activity_shows.pinned ^= true, cx)
+            }
             ActivityVerb::MarkAllRead => self.cockpit.mark_notices_read(),
             ActivityVerb::ArchiveListed => {
                 let listed: Vec<ThreadId> = self

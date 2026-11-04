@@ -391,23 +391,6 @@ pub struct Activity {
     pub days: Vec<(SharedString, Vec<ActivityRow>)>,
 }
 
-/// What the bell's `⋯` menu shows (`Show`): the `Priority` section, and a
-/// `Pinned` one. Ferrite has no scheduled tasks, so no `Scheduled`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ActivityShows {
-    pub priority: bool,
-    pub pinned: bool,
-}
-
-impl Default for ActivityShows {
-    fn default() -> Self {
-        Self {
-            priority: true,
-            pinned: false,
-        }
-    }
-}
-
 /// One Activity row: the Thread's tree row (its title, Project, mark and
 /// selection) and the opening of its last message, when the facts hold
 /// one (`ThreadFacts::wall`'s last prose line).

@@ -59,6 +59,9 @@ pub struct Settings {
     /// were pinned (the row menu's `Pin`). An id whose Thread is gone is
     /// passed over. Default: none.
     pub pinned_threads: Vec<crate::ThreadId>,
+    /// What the bell's `⋯` menu shows (`Show`). Default: the Priority
+    /// section, not the Pinned one.
+    pub activity_shows: ActivityShows,
     /// The Projects whose nav section is folded to its heading (its `▾`).
     /// Default: none.
     pub folded_projects: Vec<crate::workspace::registry::ProjectId>,
@@ -234,6 +237,25 @@ pub enum ThreadListOrder {
     Attention,
 }
 
+/// The sections of the bell (Activity view) its `⋯` menu shows: the
+/// `Priority` section, and a `Pinned` one. Ferrite has no scheduled
+/// tasks, so no `Scheduled`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ActivityShows {
+    pub priority: bool,
+    pub pinned: bool,
+}
+
+impl Default for ActivityShows {
+    fn default() -> Self {
+        Self {
+            priority: true,
+            pinned: false,
+        }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -248,6 +270,7 @@ impl Default for Settings {
             nav_collapsed: false,
             panel_shown: false,
             pinned_threads: Vec::new(),
+            activity_shows: ActivityShows::default(),
             folded_projects: Vec::new(),
             thread_list_order: ThreadListOrder::Created,
             confirm_delete: true,
@@ -459,6 +482,10 @@ mod tests {
             nav_collapsed: true,
             panel_shown: true,
             pinned_threads: vec![crate::ThreadId::new(7)],
+            activity_shows: ActivityShows {
+                priority: false,
+                pinned: true,
+            },
             folded_projects: vec![serde_json::from_str("3").unwrap()],
             thread_list_order: ThreadListOrder::Recent,
             confirm_delete: false,
