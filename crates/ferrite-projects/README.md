@@ -54,6 +54,12 @@ Each is marked `Ferrite:` in a comment.
   restarting it. The Ferrite adapter remembers that Provider in its pane
   and scopes revive overrides with `launch_provider`, so stale Claude flags
   cannot replace a Codex Thread's saved launch (or the reverse).
+- **Worktrees inside the project** (`flow/attempts/place.rs`,
+  `delegate/worktree.rs`): an attempt with no worktree to sit beside goes
+  to `<root>/.worktrees/`, not upstream's `<data>/worktrees/<repo>`, as
+  Ferrite's Server places every worktree it makes; `exclude_dir` (upstream's
+  `exclude_rule_dir`, named by its caller) keeps it out of the repo's status
+  through `info/exclude`.
 - **Completed deliveries** (`flow/actions/talk.rs`, `start.rs`): ordinary `tell`
   refuses to reopen completed deliveries. `tell --follow-up` and explicit
   delegation still start genuine new work, retaining the previous PR, merge and

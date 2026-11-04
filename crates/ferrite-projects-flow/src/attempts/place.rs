@@ -6,7 +6,7 @@ use crate::flow;
 use crate::herdr::Herdr;
 use crate::json::*;
 use crate::store::attempts::attempts_of;
-use crate::store::files::{board_env, data_dir, with_lock_wait};
+use crate::store::files::{board_env, with_lock_wait};
 use crate::store::repos::{cwd_of, git_slow};
 use crate::store::tasks::{get, update_wait, Change, Task};
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ pub fn open_place(api: &Herdr, root: &Path, t: &Task, branch: &str, from: &str) 
         // Beside the first one's worktree, named as herdr names one: the branch with its slashes as dashes.
         let p = p.unwrap_or_default();
         let base: PathBuf = if p.b("spaceDir") { PathBuf::from(p.s("spaceDir")) } else {
-            attempts_of(&p).iter().find(|c| c.b("worktree")).and_then(|c| Path::new(c.s("worktree")).parent().map(|x| x.to_path_buf())).unwrap_or_else(|| data_dir().join("worktrees").join(t.s("repo")))
+            attempts_of(&p).iter().find(|c| c.b("worktree")).and_then(|c| Path::new(c.s("worktree")).parent().map(|x| x.to_path_buf())).unwrap_or_else(|| inside_project(root))
         };
         let name: String = branch.chars().map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '-' }).collect();
         let dir = base.join(name);
@@ -41,6 +41,12 @@ pub fn open_place(api: &Herdr, root: &Path, t: &Task, branch: &str, from: &str) 
         Ok(json!({ "workspace": { "workspace_id": ws }, "tab": { "tab_id": if tab.is_empty() { pane.t("tab_id") } else { tab } }, "root_pane": pane, "worktree": { "path": dir.display().to_string() } }))
     })
 }
+/// Ferrite: where an attempt with no worktree beside it goes, as Ferrite's Server places any worktree it makes: inside
+/// the project, at `<root>/.worktrees/`, kept out of its status by the repo's `info/exclude` (never its `.gitignore`).
+fn inside_project(root: &Path) -> PathBuf {
+    crate::delegate::worktree::exclude_dir(root, "/.worktrees");
+    root.join(".worktrees")
+}
 /// A tab for an attempt whose terminal is gone, in the task's space, in its own worktree.
 pub fn reopen_place(api: &Herdr, t: &Task) -> Res<Option<Value>> {
     let ws = if t.at("link").b("workspace") { t.at("link").t("workspace") } else { get(t.s("attemptOf")).map(|p| p.at("link").t("workspace")).unwrap_or_default() };
@@ -48,4 +54,37 @@ pub fn reopen_place(api: &Herdr, t: &Task) -> Res<Option<Value>> {
     let r = api.tab_create(&ws, &cwd_of(t).display().to_string(), &flow::tabs::agent_tab(Some(t)), &board_env())?;
     if r.at("root_pane").is_object() { return Ok(Some(r.at("root_pane").clone())); }
     Ok(api.panes(Some(&ws))?.into_iter().find(|x| x.s("tab_id") == r.at("tab").s("tab_id")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inside_project;
+    use std::process::Command;
+
+    fn git(dir: &std::path::Path, args: &[&str]) -> String {
+        let out = Command::new("git").current_dir(dir).args(args).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    /// An attempt's worktree with no other beside it lives inside its project, and the repo's status stays clean.
+    #[test]
+    fn an_attempt_with_nothing_beside_it_works_inside_the_project_excluded_not_ignored() {
+        let root = std::env::temp_dir().join(format!("ferrite-attempt-place-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init", "-q"]);
+
+        let base = inside_project(&root);
+        assert_eq!(base, root.join(".worktrees"));
+        std::fs::create_dir_all(base.join("work-12a")).unwrap();
+        std::fs::write(base.join("work-12a").join("f"), "x").unwrap();
+        inside_project(&root);
+
+        assert_eq!(git(&root, &["status", "--porcelain"]), "");
+        assert!(!root.join(".gitignore").exists());
+        let exclude = std::fs::read_to_string(root.join(".git/info/exclude")).unwrap();
+        assert_eq!(exclude.lines().filter(|l| *l == "/.worktrees/").count(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

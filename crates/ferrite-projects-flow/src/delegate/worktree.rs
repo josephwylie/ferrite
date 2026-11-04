@@ -37,13 +37,16 @@ pub fn free_branch(root: &Path, t: &Obj) -> String {
 }
 /// Keep the board's folder (the files sent from the web board) out of the repo's status, without touching a committed
 /// file. The exclude file is shared by all of the repo's worktrees.
-pub fn exclude_rule_dir(root: &Path) {
+pub fn exclude_rule_dir(root: &Path) { exclude_dir(root, RULE_DIR) }
+/// Ferrite: the same for any folder (`exclude_rule_dir`'s body, named by its caller), so worktrees kept inside the
+/// project stay out of its status too.
+pub fn exclude_dir(root: &Path, dir: &str) {
     let own = root.join(".git").join("info");
     let file = if own.exists() { own.join("exclude") } else { match git_out(root, &["rev-parse", "--git-path", "info/exclude"]) { Ok(p) => root.join(p), Err(_) => return } };
     let cur = std::fs::read_to_string(&file).unwrap_or_default();
-    if cur.lines().any(|l| l.trim() == format!("{RULE_DIR}/")) { return; }
+    if cur.lines().any(|l| l.trim() == format!("{dir}/")) { return; }
     if let Some(d) = file.parent() { let _ = std::fs::create_dir_all(d); }
-    let add = format!("{}{RULE_DIR}/\n", if cur.ends_with('\n') || cur.is_empty() { "" } else { "\n" });
+    let add = format!("{}{dir}/\n", if cur.ends_with('\n') || cur.is_empty() { "" } else { "\n" });
     let _ = std::fs::OpenOptions::new().create(true).append(true).open(&file).and_then(|mut f| std::io::Write::write_all(&mut f, add.as_bytes()));
 }
 fn glob_match(pattern: &str, s: &str) -> bool {
