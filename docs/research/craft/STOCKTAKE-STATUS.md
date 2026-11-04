@@ -359,3 +359,161 @@ ID prefixes: NS new session, CO/XCO composer (Claude/Codex), XD Codex deeper pas
 | OS3 | Plan mode (+ menu, permission) | OUT OF SCOPE | Owner: plan mode |  |
 | OS4 | Remote Control toggle in the session rail | OUT OF SCOPE | Owner: Remote Control |  |
 | OS5 | Settings (incl. Fast mode "Buy credits", provider options) | OUT OF SCOPE | Owner: settings |  |
+
+## claude-desktop-transcript-handoff.md
+
+Audited 2026-11-04 against `crates/` and the git history on `transcript-app-style` (HEAD `ed5541cf` plus uncommitted work). The source is `docs/research/claude-desktop-transcript-handoff.md`, sections 4–24, including the §19 integration checks and the §22 fixtures (shown as "fx N"). `docs/research/transcript-architecture-gaps.md` (2026-11-03) audited the same doc a day earlier. Its step 0–2 fixes landed in `dc19326b` and `241f18e8`, and every row below was re-checked against today's code rather than taken from it.
+
+Scope follows the owner's list (settings, voice and mic, plan mode, Remote Control, the ChatGPT side, an in-app terminal). Two more parts are OUT OF SCOPE because the handoff says so itself: "Behavior found in one path must not automatically become a requirement for the others" (§2.4–2.6, §17, §18). That covers the Cowork and shared-renderer behaviour and the §24 diagnostics. Where a requirement is already a row above, it is listed under **Already in this file** and not counted again.
+
+### Summary
+
+| Status | Count |
+|---|---|
+| BUILT | 61 |
+| PARTIAL | 11 |
+| MISSING | 10 |
+| DIFFERENT BY DESIGN | 0 |
+| OUT OF SCOPE | 3 |
+| **Total** | **85** |
+
+**Reachability:** every BUILT row runs in the real window on real provider frames. None is reachable only from tests or scenes. The one scene-only hit found is `Drafting` in `pane.rs:5699` and `visual_reference/feature_scenes.rs`: test and scene prose, not a provisional-tool-row state (that is HD39, PARTIAL). Two rows rest on tests for the requirement, but the behaviour itself is live: HD6 (`tests/provider_progress.rs:522`) and HD82 (`rows.rs:991`).
+
+**Bottom line:** the execution foundation the handoff asks for first (§21's implementation sequence, step 1) is done: identities, dedup, supersession, generation guards, the policy table, task patches, run guards, stream loss and orphan results. What is left falls into three groups. Some outputs arrive late or in another place: background output, VCS events and result attribution. Some are Desktop's own app tools: the turn plan, wrap-up and side sessions. The rest is small wire detail.
+
+### Already in this file (not counted again)
+
+| Handoff requirement | Row |
+|---|---|
+| §10, §14 interrupted tools say "stopped"; Deny ends the turn | ER1, ER2, TR5, TR7 (the core `ToolState` has no Stopped) |
+| §11 the checklist stays with its turn after it ends | TR12, XTR2 |
+| §10 user-message delivery states (sending, queued, steered) | QS1, QS3, QS4, XSQ1, XSQ2 |
+| §14 per-task stop control | SA5 |
+| §14 nested agent transcript, its navigation and list | SA1, SA2, SA3, SA4 |
+| §14 background shell output while it runs | TR10 (core keeps `output_tails`; nothing draws them) |
+| §15 question and permission forms | AP1, AP4, AP11 |
+| §17 file output cards; open only what exists | XTR9, PG1 |
+| §20 long history opens at the end, lazy layout | LT2 |
+| §20 Create PR from the changes | RP15 |
+| §6 prompt suggestions | XD9 |
+| §10 starting or setting-up state | XD6 |
+| §19.47 thinking estimate vs billed usage | US3 |
+| §14 app side sessions (the side chat) | RP6, TXS (KNOWN) |
+
+### MISSING and PARTIAL, ranked by how much a daily user would notice
+
+| # | ID | Requirement (§) | Status | What's missing | Evidence |
+|---|---|---|---|---|---|
+| 1 | HD64 | Background output joins its originating call (§14, fx 22) | MISSING | `task_notification`'s `output_file` and resource links are never read. A backgrounded Bash call or agent settles at launch, and its real output never reaches that row. | grep `output_file`, `resource_link`: no hits in `crates/` |
+| 2 | HD39 | A provisional tool row while tool input streams (§7.5, fx 2) | PARTIAL | Only `show_visual` drafts. Any other tool has no row until its complete `assistant` message, so a long Edit or Write is invisible while its input streams. | `claude/activity.rs:955` (visual drafts), `:965-991` (no tool row on `content_block_start`) |
+| 3 | HD5 | A turn's result names the prompts it answered (`user_message_uuid(s)`) (§4) | MISSING | Never read. A prompt that was batched or folded mid-turn has no confirmed turn. This blocks turning on Claude steering (QS4). | Only `rewind.rs:183` reads a uuid (`last_seen_user_message_uuid`) |
+| 4 | HD58 | Wrap-up turn box: recap, ask, blocked, at most two validated next actions (commit, create_pr, merge, fix_ci, …) (§13, fx 36–39) | MISSING | No `ccd_turn` equivalent. The answer's last prose stands in. The 11-03 gaps audit chose not to build it, but no owner decision is recorded. | `transcript-architecture-gaps.md:137,368` |
+| 5 | HD27 | Workspace and PR side effects from `code_change_published` / `vcs_state_changed` (§20) | MISSING | Not decoded. Changes counts the agent's own edits, so background work or a pushed PR does not refresh it (see RP15's note). | grep: no hits |
+| 6 | HD79 | A truncating resume or rewind is validated (`--resume-drops-turn`) (§19, fx 50) | MISSING | A rewind cuts at `--resume-session-at` without validation, so a message the turn absorbed mid-way can be dropped silently. This becomes more likely once Claude steering is on. | `claude.rs:306`; grep `resume-drops-turn`: no hits |
+| 7 | HD12 | `tool_progress` heartbeat and `subagent_retry` (§5) | PARTIAL | Elapsed time only. A subagent's API retries and attempt counts are invisible. | `claude/wire.rs:382-388` |
+| 8 | HD83 | Scroll position kept per session (§20) | PARTIAL | A `TranscriptView` starts at the tail. No saved offset keyed by thread was found. Not verified whether a Solo thread switch keeps the old view alive. | `ferrite-pane/src/transcript.rs:424`, `transcript/scroll.rs:29-31` |
+| 9 | HD71 | Human review comments reach the agent as typed data (§16, fx 41) | PARTIAL | Diff comments (file, side, line range, snippet) ride the next prompt. There are no threads or replies, no record of which turn got them, no rendered-element anchors, and no data-not-instructions boundary. A selection Reply quotes text (TXS). | `ferrite-pane/src/composer.rs:460` → `ferrite-reviewr/src/ferrite.rs:530` `attach`, `export.rs:21` |
+| 10 | HD22 | `permission_denied` kept by call id, even before its row exists (§5, fx 7) | PARTIAL | The event is not decoded. The orphan-result buffer covers the usual result-before-row case. | `transcript.rs:821,2012-2021,2409` `settle_orphan` |
+| 11 | HD68 | `AskUserQuestion` option previews (§15) | PARTIAL | Parsed into `Question` options but drawn nowhere. Multi-select, free text and answers are BUILT (HD67). | `ferrite-core/src/questions.rs:46,134`; no `preview` use in the decision UI |
+| 12 | HD57 | Custom turn plan (`update_plan`: scope, ≤12 items, advance/done/start, linked sessions) (§12, fx 33–35) | MISSING | The native todos (HD54) and Codex's `turn/plan` are the only plans. Not planned (gaps audit). | `transcript-architecture-gaps.md:137` |
+| 13 | HD65 | App side sessions: proposal tools, linked plan rows, parent wakeups (§14) | MISSING | No such mechanism. The side chat is a fork (TXS, RP6, KNOWN). | — |
+| 14 | HD70 | `ReportFindings` card grouped by file; a failed call stays a failure (§16, fx 40) | PARTIAL | A generic row; failure shows as `Failed`. No findings card. | `transcript/tools.rs:64` (falls to `Other`); `pane/text.rs:47,82` |
+| 15 | HD8 | Task hierarchy: `run_id` guard, `parent_task_id` tree, a child before its parent stays visible (§14, fx 19–20) | PARTIAL | `run_id` is BUILT. `parent_task_id` is never read. | `claude/activity.rs:53,270,1346` |
+| 16 | HD60 | A stopped or failed task keeps its reason (`worker_restart` is not "you stopped it") (§14) | MISSING | `reason` is not read. `killed` and `stopped` both map to Interrupted. | `claude/activity.rs:1503`; grep `worker_restart`: none |
+| 17 | HD14 | Capability record from `system/init` (tools list, deferred tools) (§21, fx 48) | PARTIAL | Initialize answers are kept (modes, models, commands) and `msg_lifecycle_v1` is detected, but `init`'s tool list is not recorded. | `claude.rs:202-217`; `claude/queue.rs:15-19` |
+| 18 | HD75 | The session records its CLI version and backend (§19.1) | PARTIAL | The version is checked against the pin at spawn, then thrown away. | `claude.rs:1217-1239` |
+| 19 | HD18 | Hook lifecycle events (§5, §19) | MISSING | Ignored, which is safe. No hook spinner. | grep `hook_started`: none |
+| 20 | HD55 | Failed `TaskCreate` behaviour pinned by a test (fx 31) | PARTIAL | Receipts only, so no row appears, which is the chosen behaviour. No test. | `claude/wire.rs:520`; no failing-create case in `tests/contract_plans.rs` |
+| 21 | HD44 | A fallback dedup key for frames with no uuid (§8) | MISSING | `id: None` is never deduped. Claude frames carry a uuid, so this is low impact. | `activity.rs:2569` `delivery_id` |
+
+### Full table
+
+ID prefix: HD, a handoff requirement. "fx N" is the matching §22 fixture.
+
+| ID | Requirement (§) | Status | Evidence (file:line, commit) | Note |
+|---|---|---|---|---|
+| HD1 | App session id and runtime session id kept apart; resume by runtime id (§4, §19.6) | BUILT | `ThreadId` vs `Transcript.session_id`; `claude.rs:300-310` `--resume` | |
+| HD2 | Replay dedup by event identity, never by text (§4, §8, fx 10, 15) | BUILT | `activity.rs:442` `seen.insert`, `:2569` `delivery_id` | |
+| HD3 | A streamed message and its completed form are one visible copy, joined by API `message.id` (§7.4, fx 1) | BUILT | `claude/activity.rs:747,1152` `bind_main_stream_block`; `activity.rs:1830` `TextSnapshot` | Two text blocks in one message fall back to the delivery id (gaps audit, untested) |
+| HD4 | Every outgoing prompt carries its own UUID (§4) | BUILT | `engine.rs:5480` `send_as`; `claude.rs:628-644` `enqueue` | |
+| HD5 | Result attribution (`user_message_uuid(s)`) (§4) | MISSING | — | Ranked #3 |
+| HD6 | Tool call and result joined by id, including out-of-order parallel results (§4, fx 4) | BUILT | `transcript.rs` `settle_tool` by call; `tests/provider_progress.rs:522` | |
+| HD7 | `parent_tool_use_id` / `agent_id` attribution; child prose and todos never reach Main (§4, §19.14, fx 23) | BUILT | `claude/activity.rs` scope; `activity.rs` `Subject::Subagent` | |
+| HD8 | Task hierarchy and run identity (§14, fx 19–20) | PARTIAL | `claude/activity.rs:53,270,1346` | Ranked #15 |
+| HD9 | Todo, runtime task and app session kept apart (§4) | BUILT | `progress.rs` `plan` vs `tasks`; `Subject::Subagent` | |
+| HD10 | An outer `user` frame is read by content: tool results and replays are never human bubbles (§5, §19.13, fx 5) | BUILT | `claude/activity.rs` main user frames skipped; results become `ToolCompleted` | |
+| HD11 | `result` is not process exit; a background turn ending is distinct (§5) | BUILT | `claude/activity.rs:332` | |
+| HD12 | `tool_progress` with heartbeat and retry (§5) | PARTIAL | `claude/wire.rs:382-388` | Ranked #7 |
+| HD13 | `tool_use_summary` attached by `preceding_tool_use_ids`; never hides a failure (§5, §9.3, fx 25) | BUILT | `claude/wire.rs:293`; `transcript.rs:2240-2256` `caption`; `pane/text.rs` `group_summary` (dc19326b, 241f18e8) | |
+| HD14 | Capability record from init (§21, fx 48) | PARTIAL | `claude.rs:202-217`; `claude/queue.rs:15-19` | Ranked #17 |
+| HD15 | `system/status`, including compacting and its null end (§5) | BUILT | `claude/wire.rs:425-441` | |
+| HD16 | `api_retry` shown as retrying, not failed (§5) | BUILT | `claude/wire.rs:412-424` | |
+| HD17 | `compact_boundary` is not a new conversation (§5) | BUILT | `claude/wire.rs:442` | |
+| HD18 | Hook lifecycle events (§5) | MISSING | — | Ranked #19 |
+| HD19 | `informational` and local command output become notices (§5) | BUILT | `claude/activity.rs:237,252` | |
+| HD20 | `task_*` lifecycle; `task_updated` merged as a patch (§14, §19.16, fx 18) | BUILT | `claude/wire.rs:449-470`; `progress.rs:234-243`; agents `claude/activity.rs:1412-1415` (dc19326b) | |
+| HD21 | `background_tasks_changed` replaces the set, empty included (§14, fx 17) | BUILT | `claude/wire.rs:486`; `progress.rs` snapshot | |
+| HD22 | `permission_denied` kept by call id (§5, fx 7) | PARTIAL | `transcript.rs:821,2012-2021,2409` | Ranked #10 |
+| HD23 | `thinking_tokens` as an estimate, separate from billed usage (§5, §19) | BUILT | `claude/wire.rs:443` | See US3 |
+| HD24 | `commands_changed` updates the command menu live (§5) | BUILT | `claude/wire.rs:1430` | |
+| HD25 | `session_state_changed` (§5) | BUILT | `claude.rs:264` env flag; `claude/wire.rs` state → `RunState` | |
+| HD26 | Unknown events and fields are forward-compatible, never raw text in chat (§5, §19.21, fx 8) | BUILT | `claude/wire.rs:2336` `junk_lines_are_ignored_never_fatal` | |
+| HD27 | VCS and code-publication events (§20) | MISSING | — | Ranked #5 |
+| HD28 | Partial messages enabled (§6, §19.10) | BUILT | `claude.rs:277` `--include-partial-messages` | |
+| HD29 | Permission broker routed to the app (§6, §15) | BUILT | `claude.rs:284-290` `--permission-prompt-tool stdio` | |
+| HD30 | `perTaskStopAffordance` declared, backed by a real stop (§6, §14, §19.28, fx 15) | BUILT | `claude.rs:429`; `stop_subagent` `claude.rs:702` | See SA5 |
+| HD31 | No dialog kinds declared that the UI can't answer; unknown control requests refused by id (§15, §19.27, fx 27) | BUILT | `claude/wire.rs:956`; test `:2371` `an_unknown_control_request_is_refused_by_its_id` | |
+| HD32 | The SDK environment is merged with the inherited one, not replacing it (§11, §19.4) | BUILT | `claude.rs:262-271` (`envs` adds to the inherited env) | |
+| HD33 | `claude_code` preset and default settings sources; Ferrite's own tool registered only when offered (§6, §19.2–3, §17) | BUILT | `claude.rs:272-337` (no prompt override, no `--setting-sources`; `--allowedTools` for `show_visual` only when offered); the session-context preface `engine.rs:5455-5470` | |
+| HD34 | Additional directories (§6) | BUILT | `claude.rs:329-331` `--add-dir` | |
+| HD35 | stderr is kept for diagnostics, never mixed into model text (§6) | BUILT | `claude.rs:1119` `drain_stderr`, `:1157` `exit_reason` | |
+| HD36 | Requested vs effective model and effort (§6) | BUILT | `claude.rs:464-473` `SettingAck` | |
+| HD37 | Delta batching keeps order and flushes on structure (§7.2, fx 44) | BUILT | `activity.rs` record merge; the store and link merges (gaps audit §1) | Structural only: no 16 ms / 250 ms visible-vs-background cadence, and none needed |
+| HD38 | Tool input is not execution: `content_block_stop` is not success (§7.5, §19.11, fx 3) | BUILT | `claude/activity.rs:991` (`content_block_stop` does nothing); the row stays Running until `ToolCompleted` | |
+| HD39 | Provisional tool row while input streams (§7.5, fx 2) | PARTIAL | `claude/activity.rs:955,965-991` | Ranked #2 |
+| HD40 | Main history comes from Ferrite's own log; the runtime is resumed for context, never rebuilt from bubbles (§8) | BUILT | `store.rs:4065` replay; `claude.rs:300-304` | |
+| HD41 | Child history merges a frozen prefix with the live tail once (§8, fx 10) | BUILT | `engine/history.rs:60,279,314` `HistoryContent` | |
+| HD42 | A superseded process can't change its replacement's state (§8, §19.8, fx 9) | BUILT | `activity.rs:285,1078` `Observe { generation }`; `claude/activity.rs:162-190` (a new init resets) | |
+| HD43 | Window reconnect resynchronises from the server (§8) | BUILT | `protocol.rs:757-772` `WireInput` replay/live; `cockpit/mirror.rs` | |
+| HD44 | Fallback dedup key (§8) | MISSING | — | Ranked #21 |
+| HD45 | One explicit tool-presentation policy table (§9.1, §21) | BUILT | `transcript/tools.rs:33-44,64` `policy` (dc19326b) | |
+| HD46 | `AskUserQuestion` and `ExitPlanMode` stand alone (§9.1) | BUILT | `transcript/tools.rs:70-71` | |
+| HD47 | Todo tools are state-only, drawn when they fail (§9.1, fx 6) | BUILT | `transcript/tools.rs:84`; `transcript.rs:208` | |
+| HD48 | Code mode never folds narration (§9.4, §18, fx 45) | BUILT | `ferrite-pane/src/transcript/rows.rs` (narration muted, never hidden) | |
+| HD49 | Waiting for the user is an explicit state with its request (§10, §21) | BUILT | `transcript.rs` `Status::Blocked`; `activity.rs:248` `DecisionHandle` | AP9 covers the clock |
+| HD50 | Retrying and compacting visible on the live line (§10, fx 47) | BUILT | `pane/working.rs` caption; `claude/wire.rs:412-441` | |
+| HD51 | Main settles while background work stays visible (§10, §14, fx 14) | BUILT | `progress.rs` `end_turn` keeps tasks; `ferrite-cockpit/src/background_chips.rs` | |
+| HD52 | A stream that ends without a result fails its turn, with no fabricated success (§10, §19.9, fx 12) | BUILT | `transcript.rs:146,2276-2297` (241f18e8) | The failure strip shows the error |
+| HD53 | A disconnected session can be reconnected (§10) | BUILT | `transcript.rs:1936` `Revived`; `engine.rs:995` | |
+| HD54 | Native todo projection: receipts only, child excluded, `TodoWrite` replaces, `TaskCreate` keyed by returned id, delete removes (§11, fx 28–30, 32) | BUILT | `claude/wire.rs:520-594`; `progress.rs` | TR12/XTR2: the card leaves with the turn |
+| HD55 | Failed `TaskCreate` pinned by a test (fx 31) | PARTIAL | `claude/wire.rs:520` | Ranked #20 |
+| HD56 | Todo tools opted in for newer models (§11, §19.24) | BUILT | `claude.rs:265` `CLAUDE_CODE_ENABLE_TODO_TOOLS` | |
+| HD57 | Custom turn-plan tool (§12) | MISSING | — | Ranked #12 |
+| HD58 | Wrap-up and next-action turn box (§13) | MISSING | — | Ranked #4 |
+| HD59 | Task status unions kept apart (`killed`, `paused`, `stopped`) (§14, §19.17) | BUILT | `claude/activity.rs:1503-1504`; `claude/wire.rs:468` | |
+| HD60 | A task's stop or failure reason is kept (§14) | MISSING | — | Ranked #16 |
+| HD61 | `skip_transcript` and `ambient` apply apart from execution state; no endless spinner (§14, §19.18, fx 21) | BUILT | `claude/wire.rs:321,351` | |
+| HD62 | `forwardSubagentText` on, with no false promise of nested token streaming (§14, §19.29, fx 24) | BUILT | `claude.rs:282`; `claude/activity.rs:722,789` `TranscriptCoverage::Live` | |
+| HD63 | Agent progress summaries enabled on purpose and shown on the agent row (§14, §19.30) | BUILT | `claude.rs:425-430`; `claude/activity.rs:1394-1398`; `pane/agents.rs:24-63` (241f18e8) | |
+| HD64 | Background output joins its call (§14, fx 22) | MISSING | — | Ranked #1 |
+| HD65 | App side sessions (§14) | MISSING | — | Ranked #13 |
+| HD66 | A Decision resolves once; stale clicks and closed runtimes are rejected (§15, §19.26) | BUILT | `activity.rs:248` `DecisionHandle`; `claude.rs:733-754` | |
+| HD67 | `AskUserQuestion`: 1–4 questions, multi-select, free text; answers sent as updated input; routed once (§15, fx 26) | BUILT | `ferrite-core/src/questions.rs:51-180`; `claude/wire.rs` question response | Forms UI: AP11 |
+| HD68 | Question option previews (§15) | PARTIAL | `questions.rs:46,134` | Ranked #11 |
+| HD69 | Unsupported elicitation or dialog answered with decline/cancel, never a fabricated yes (§15) | BUILT | `claude/wire.rs:1053,1150-1160` | |
+| HD70 | `ReportFindings` card (§16) | PARTIAL | `transcript/tools.rs:64` | Ranked #14 |
+| HD71 | Human comments as typed data (§16) | PARTIAL | `composer.rs:460`; `ferrite-reviewr/src/ferrite.rs:530` | Ranked #9 |
+| HD72 | Cowork tools: `present_files`, `import_files`, artifacts, writing drafts, widgets, `send_user_message` (§17) | OUT OF SCOPE | Handoff §2.2–2.4, §17 ("Many belong to Cowork … rather than the normal Code runtime") | Ferrite's file cards are XTR9/PG1 |
+| HD73 | A generic renderer for unknown or custom tools, with a visible error even for specialised ones (§17, §19.34, fx 6, 8) | BUILT | `pane/text.rs:47,82` `ToolKind::Other`; `transcript.rs:208,532` `Failed` | MCP tools fall back to pretty-printed JSON (AP11) |
+| HD74 | Shared-renderer folding: classifier, latest-two rows, display groups (§18) | OUT OF SCOPE | Handoff §2.5–2.6 ("not established as the rule for the current Code transcript") | Code's no-fold rule is HD48 |
+| HD75 | CLI version recorded per session (§19.1) | PARTIAL | `claude.rs:1217-1239` | Ranked #18 |
+| HD76 | Open input stream for a multi-turn session (§19.5) | BUILT | `claude.rs:273` `--input-format stream-json` | |
+| HD77 | Session persistence kept on for resume (§19.7) | BUILT | No `--no-session-persistence` in `spawn`; only the title one-shot uses it (`claude.rs:1301`) | |
+| HD78 | Precise resume or fork point for rewind and fork (§19) | BUILT | `claude.rs:306-310` `--resume-session-at`, `--fork-session`; `claude/rewind.rs` | |
+| HD79 | Truncating resume validated (§19, fx 50) | MISSING | — | Ranked #6 |
+| HD80 | File checkpointing coordinated with conversation rewind; a fork doesn't claim a new worktree (§20, fx 49) | BUILT | `claude.rs:268`; `claude/rewind.rs`; `ControlKind::RewindFiles` (401c7d8d) | |
+| HD81 | Follow new output; scrolling up stops it (§20) | BUILT | `transcript/scroll.rs:29-31,62` `FollowMode::Tail` | |
+| HD82 | Older content prepends with rows and expansion stable (§20, fx 11, 46) | BUILT | `rows.rs:893,991` splices; expansion by `DisclosureId` | |
+| HD83 | Scroll position per session (§20) | PARTIAL | `transcript.rs:424`, `scroll.rs:29` | Ranked #8 |
+| HD84 | A live-text store separate from history rows; tokens don't rebuild old rows (§20) | BUILT | `rich.rs:1` (a stable parser per answer run); `rows.rs:893` Rc reuse | |
+| HD85 | §24 diagnostics and telemetry | OUT OF SCOPE | Handoff §24 ("do not add transcript features … no need to copy Desktop's telemetry") | The stderr tail on exit is HD35 |

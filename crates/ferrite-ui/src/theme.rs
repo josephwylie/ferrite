@@ -406,11 +406,6 @@ pub mod paint {
     /// Composer's ring, a fence's ring.
     pub const LINE: Paint = Paint::solid(super::LINE);
     pub const CARD_RING: Paint = Paint::solid(super::CARD_RING);
-    /// A selection's Reply pill: its ground, its edge, and its ground
-    /// under the pointer (the edge's grey, Claude's white at 10%).
-    pub const SELECTION_REPLY_FILL: Paint = Paint::solid(super::SELECTION_REPLY_FILL);
-    pub const SELECTION_REPLY_EDGE: Paint = Paint::solid(super::SELECTION_REPLY_EDGE);
-    pub const SELECTION_REPLY_HOVER: Paint = Paint::solid(super::SELECTION_REPLY_EDGE);
     pub const FIELD_RING: Paint = Paint::solid(super::FIELD_RING);
     pub const BLOCK_RING: Paint = Paint::solid(super::BLOCK_RING);
 
@@ -1605,20 +1600,6 @@ pub const TEST_BAR_CELLS: f32 = 20.0;
 pub const TEST_BAR_H: f32 = 6.0;
 pub const TEST_BAR_R: f32 = 1.0;
 pub const TEST_BAR_EASE_MS: u64 = 300;
-/// **The hover card** (the prototype's `#hover`): `HOVER_CARD_CELLS` chrome
-/// cells wide (780px), `HOVER_CARD_GAP` below the hovered path (above when
-/// it would overflow), at most `HOVER_CARD_EDGE` from the cockpit's right
-/// edge; six numbered lines (`HOVER_CARD_LINES`), the number column
-/// `HOVER_CARD_NUMBER_CELLS` wide with `HOVER_CARD_NUMBER_PAD_CELLS` after.
-pub const HOVER_CARD_CELLS: f32 = 100.0;
-/// (The prototype measures its 6px from the path's inline box — the face's
-/// content area, which ends 2.5px above the 20px row's foot; the card hangs
-/// from the row, so 3.5 here.)
-pub const HOVER_CARD_GAP: f32 = 3.5;
-pub const HOVER_CARD_EDGE: f32 = 16.0;
-pub const HOVER_CARD_LINES: u32 = 6;
-pub const HOVER_CARD_NUMBER_CELLS: f32 = 6.0;
-pub const HOVER_CARD_NUMBER_PAD_CELLS: f32 = 2.0;
 /// A path's hover underline (the prototype's `.path`): `PATH_UNDERLINE_W`
 /// thick, `PATH_UNDERLINE_OFFSET` below the baseline, in the path's own
 /// ink, fading in over `PATH_UNDERLINE_FADE_MS`; transparent at rest.
@@ -1700,22 +1681,21 @@ pub const PINNED_PROMPT_PAD_Y: f32 = SPACE_2;
 pub const JUMP_LATEST: f32 = 32.0;
 pub const JUMP_LATEST_INSET: f32 = SPACE_3;
 /// **Reply to a selection** (Claude's `SelectionTooltip`): a drag that
-/// selects a passage ends with a pill centred over the selection, its foot
-/// `SELECTION_REPLY_GAP` above it: the word "Reply" (`FS_UI`, medium) then
-/// the `REPLY` arrow at `SELECTION_REPLY_GLYPH`, in `SELECTION_REPLY_INK`,
-/// `SELECTION_REPLY_PAD_X` either side and `SELECTION_REPLY_PAD_Y` above
-/// and below (Claude's 12 and 6). Claude's ground is black at 80% inside a
-/// white-at-10% hairline, lit white at 10% under the pointer: here those
-/// composited over the transcript's ground, as opaque greys (rule 4). Its
-/// radius is Claude's 8, the one pill off the three-radius family.
-pub const SELECTION_REPLY_GAP: f32 = SPACE_2;
+/// selects a passage ends with a pill centred over its first line, its foot
+/// `SELECTION_REPLY_GAP` above it (under its last when there is no room
+/// above; never on the selected text): `Start a side chat` | `Reply` (`FS_UI`,
+/// body weight, `INK_STRONG`), each `SELECTION_REPLY_PAD_X` either side
+/// and `SELECTION_REPLY_PAD_Y` above and below (Claude's 12 and 6), a
+/// `FLOAT_EDGE` hairline `SELECTION_REPLY_DIVIDER_H` tall between them.
+/// The pill is a float (`paint::FLOAT` inside its `FLOAT_EDGE` ring, the
+/// float shadow), an action lit `FLOAT_HOVER` under the pointer
+/// (claude/selection-pill.png). Its radius is Claude's 8, the one pill off
+/// the three-radius family.
+pub const SELECTION_REPLY_GAP: f32 = SPACE_1_5;
 pub const SELECTION_REPLY_PAD_X: f32 = SPACE_3;
 pub const SELECTION_REPLY_PAD_Y: f32 = SPACE_1_5;
-pub const SELECTION_REPLY_GLYPH: f32 = 14.0;
+pub const SELECTION_REPLY_DIVIDER_H: f32 = 14.0;
 pub const SELECTION_REPLY_RADIUS: f32 = 8.0;
-pub const SELECTION_REPLY_FILL: u32 = 0x050505;
-pub const SELECTION_REPLY_EDGE: u32 = 0x1e1e1e;
-pub const SELECTION_REPLY_INK: u32 = INK_STRONG;
 /// **The task list** (a plan the provider works to, over the working line):
 /// a card at `R_CARD` on a `CARD_RING`, `TASK_CARD_PAD` inside,
 /// `TASK_ROW_GAP` between its steps, each a `TASK_ICON` mark and its words —
@@ -1994,6 +1974,12 @@ pub const QUICK_ANSWER_H: f32 = LH_UI + 2.0;
 pub const QUICK_ANSWER_PAD_X: f32 = CH;
 pub const QUICK_ANSWER_GAP: f32 = CH;
 
+/// The reader's code (the Panel's preview of a file as numbered lines):
+/// the transcript's code size, a step under its prose (13 at Standard),
+/// on the grid's row (`prose_line_height(13)` is `LH_UI`); its numbers at
+/// `FS_META`. Prose and Markdown read at `FS_PROSE` on `LH_PROSE`, its head
+/// at `FS_UI`, its tabs at `FS_LABEL`.
+pub const FS_READER_CODE: f32 = FS_PROSE - TX_BLOCK_STEP;
 /// A file's numbered lines in the Panel's preview (`cockpit/panel/
 /// preview.rs`): line numbers in a 6-cell column, right-aligned, two cells
 /// before the code.
@@ -2148,9 +2134,15 @@ pub const PLACEHOLDER_GAP: f32 = CARET_W + SPACE_1;
 /// One selection colour app-wide: the Composer paints the transcript's
 /// native selection wash under its selected runs.
 pub const COMPOSER_SELECTION: u32 = TEXT_SELECTION_WASH;
-/// An `@`-mention the operator picked: a path, so `LINK_INK` on no
-/// ground — the terminal's own colour for a path.
+/// A chip in the Composer's line — a picked `@` mention, a `/command`
+/// the Session knows: `LINK_INK` (a path, a command: the link blue) on a
+/// `MENTION_CHIP` ground (that blue at 16%) at `R_CONTROL`, the ground
+/// `MENTION_CHIP_INSET_Y` inside the row and reaching `MENTION_CHIP_PAD_X`
+/// past the token either side (at most half into the space beside it).
 pub const MENTION_INK: u32 = LINK_INK;
+pub const MENTION_CHIP: u32 = 0x7aa8ee29;
+pub const MENTION_CHIP_PAD_X: f32 = 3.0;
+pub const MENTION_CHIP_INSET_Y: f32 = 1.0;
 /// The panel's Context section (`pane::context_usage`): its stacked bar
 /// (4, Claude's), and the gap above the turn's usage under the legend.
 pub const USAGE_CARD_GAP: f32 = SPACE_3;
@@ -3009,10 +3001,12 @@ pub const MOTION_PROMOTE_FROM_SCALE: f32 = 0.97;
 /// from as far below, each over 180ms on `MOTION_EASE_MORPH`.
 pub const MOTION_MORPH_MS: u64 = 180;
 pub const MOTION_MORPH_SHIFT: f32 = 3.0;
-/// The working line's token count eases to each new value over
-/// `MOTION_DUR_SHEET_MS` on the quart, its changing digits rolling up as
-/// an odometer's do (`odometer::rolling_count`).
-pub const MOTION_COUNT_MS: u64 = MOTION_DUR_SHEET_MS;
+/// The working line's token count ticks to each new reading as Claude's
+/// does: only the cells that change cross-fade, drifting
+/// `MOTION_COUNT_DRIFT` up, over `MOTION_DUR_SNAP_MS` on the quart
+/// (`odometer::rolling_count`).
+pub const MOTION_COUNT_MS: u64 = MOTION_DUR_SNAP_MS;
+pub const MOTION_COUNT_DRIFT: f32 = 2.0;
 /// `fade-quick`: 150ms, opacity only.
 pub const MOTION_FADE_QUICK_MS: u64 = 150;
 /// The send circle's glyph swap (send ⇄ stop, `fade-quick`): the leaving

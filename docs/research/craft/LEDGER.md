@@ -15,6 +15,8 @@ These are not built:
 - Mic and voice input
 - Plan mode
 - The ChatGPT side
+- Read aloud
+- A pending bubble in the transcript; the queue card above the composer is enough (2026-11-04)
 
 Settings: the owner fixes it themselves.
 
@@ -24,6 +26,12 @@ These are kept as they are:
 - White working orbs.
 - The Codex-style hero.
 - The `/` project name.
+
+Decided 2026-11-04:
+
+- Keep Claude's measured type and colour values.
+- The in-app terminal is in, like Claude's.
+- Ferrite's own selection colour stays.
 
 ## Done tonight
 
@@ -59,7 +67,7 @@ These are kept as they are:
 
 - [x] Image attachments show as thumbnail cards in the composer tray (`6733a514`): the picture on an 88px card, × on hover or keyboard focus, a click opens the lightbox. The card is the sent image's frame too.
 - [x] Add an image message to a render scene (`6733a514`): the `composer` scene sends one and has one in the tray.
-- [x] `/skill` picks become chips, as `@` mentions do (`7a300afe`), sent as plain `/name`.
+- [x] `/skill` tokens are chips in the composer, as `@` mentions are, sent as plain `/name`. `7a300afe` only staged a picked `/name` and painted it in the link blue: the composer's "chip" was ink on no ground, for `@` mentions too, so the owner saw blue text and no chip. A typed, pasted or restored `/name` was never staged, so it was not even blue. Fixed: the line paints a rounded `MENTION_CHIP` ground behind every chip, and it knows the Session's commands (`Composer::set_commands`, synced from the Thread's commands, or a draft's discovered ones), so any whole `/name` naming one chips, however it got there. Tests: `composer_chips::a_typed_skill_on_a_codex_thread_draws_as_a_chip`, `a_skill_picked_after_prose_draws_as_a_chip`, `a_restored_draft_keeps_its_skill_chip_and_sends_plain_text`, and `composer::tests::a_known_command_chips_unpicked`.
 - [x] Slash-picker rows carry a source tag (Skill, Plugin, built-in) (`7a300afe`). Claude's come from its initialize list (`builtin`, `plugin:` names, the `(user)`/`(project)` suffixes, MCP prompts). Codex's skills give theirs from their scope; Codex reports nothing for its built-ins or prompts, so those rows are untagged.
 - [x] The + menu matches Claude, with Connectors › and Plugins ›, and a submenu for each plugin (`7a300afe`). Plugins lists the plugins that bring commands, each a submenu of them. A plugin with no commands has nothing to pick, so it is left out, and Codex reports no plugins. Claude's other plugin and connector actions have no data behind them in Ferrite, so they are left out.
 - [x] Each queued message can be edited and removed, and sent now (`73efd684`): a row each, with its own actions. Send now sends that message next. It steers into the running turn where the provider steers (Codex) and stops the turn where it cannot (Claude).
@@ -120,3 +128,28 @@ Renders: `ferrite-cp8/` (`FERRITE_REF_SIZES=app`; answer, answer-hover, approval
 - Push this branch and open its PR.
 - Threaded comments on pages; this follows the page pane.
 - Provider options, CLI session import and home suggestions; these are deferred.
+
+## Next build (owner-approved 2026-11-04, in order)
+
+Each item is ticked only after it's seen working in the real installed app.
+
+1. **Reply.** A floating card over the selection that becomes a `Reply` card in the composer tray (`claude-sidechat-menus.md`).
+2. **Side chat.** A right-docked, tabbed pane (`claude-sidechat-menus.md`).
+3. **Subagent drill-in.** In the same right pane.
+4. **Right-click menus.** Each matches its target: answer, prompt, link, file.
+5. **Files, Changes, session rail and terminal.** Title-bar tools as Claude's (`claude-files-changes.md`). They replace Show in Finder.
+6. **Turn states:**
+   - Deny ends the turn, with "(1 stopped)";
+   - Stop says "You stopped after Ns";
+   - the todo card stays, with a blocked state;
+   - a live "Working for Ns";
+   - the working line stays during an approval.
+7. **Background work reports back to its row** (HD64).
+8. **Edit and Write stream** while their input arrives (HD39).
+9. **End-of-turn wrap-up box** (HD58).
+10. **Changes refreshes** after background work and pushes (HD27).
+11. **Mid-turn messages are confirmed** (HD5), and rewinds are validated (HD79).
+12. **Claude steering is surfaced:** "Steering", and Send now folds the message in instead of interrupting. A real fold with tools is captured first.
+13. **Question option previews** (HD68), and **scroll position per thread** (HD83).
+14. **Review comment threads** (HD71).
+15. **The rest of `STOCKTAKE-STATUS.md`:** MISSING and PARTIAL rows, most noticed first.

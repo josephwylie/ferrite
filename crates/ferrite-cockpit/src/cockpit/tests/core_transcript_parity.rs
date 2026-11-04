@@ -187,31 +187,6 @@ fn a_prompts_code_is_drawn_as_code() {
     ));
 }
 
-/// The hover card hangs `HOVER_CARD_GAP` under its path, flips above it
-/// near the window's foot, and keeps `HOVER_CARD_EDGE` from the window's
-/// right edge.
-#[test]
-fn the_hover_card_hangs_under_its_path_and_flips_above_near_the_foot() {
-    use gpui::{point, size, Bounds};
-    let card = size(px(780.), px(166.));
-    let viewport = size(px(1440.), px(900.));
-    let anchor = Bounds::new(point(px(200.), px(300.)), size(px(120.), px(20.)));
-    assert_eq!(
-        ferrite_pane::hover_card::hang_origin(anchor, card, viewport),
-        point(px(200.), px(320. + ferrite_ui::theme::HOVER_CARD_GAP))
-    );
-    let low = Bounds::new(point(px(200.), px(800.)), size(px(120.), px(20.)));
-    assert_eq!(
-        ferrite_pane::hover_card::hang_origin(low, card, viewport).y,
-        px(800. - ferrite_ui::theme::HOVER_CARD_GAP - 166.)
-    );
-    let right = Bounds::new(point(px(1400.), px(300.)), size(px(30.), px(20.)));
-    assert_eq!(
-        ferrite_pane::hover_card::hang_origin(right, card, viewport).x,
-        px(1440. - 16. - 780.)
-    );
-}
-
 /// Answers underline a link at rest (the Claude app's links), keep a
 /// column of numbers left-aligned as Claude's tables do, and frame their
 /// images like a prompt's.

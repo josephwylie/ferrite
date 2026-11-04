@@ -91,6 +91,9 @@ pub struct Text {
     /// The line with the most characters: what a reader sizes its
     /// sideways scroll by.
     widest: usize,
+    /// Its words as Markdown, when it reads as prose (`prose_markdown`):
+    /// made on first ask, then shared.
+    prose: std::sync::OnceLock<SharedString>,
 }
 
 impl Text {
@@ -112,7 +115,14 @@ impl Text {
             source: source.into(),
             lines,
             widest,
+            prose: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Its words as Markdown (`prose_markdown`), made once.
+    pub fn prose(&self) -> &SharedString {
+        self.prose
+            .get_or_init(|| prose_markdown(&self.source).into())
     }
 
     /// The index of the line with the most characters (0 for no lines).
@@ -340,6 +350,50 @@ impl Preview {
     }
 }
 
+/// Files with no extension that are code, not prose.
+const BUILD_FILES: &[&str] = &[
+    "Makefile",
+    "makefile",
+    "GNUmakefile",
+    "Dockerfile",
+    "Containerfile",
+    "Justfile",
+    "justfile",
+    "Rakefile",
+    "Gemfile",
+    "Procfile",
+    "Vagrantfile",
+    "Brewfile",
+    "BUILD",
+    "WORKSPACE",
+];
+
+/// Plain text as Markdown that renders exactly its words: every ASCII
+/// punctuation mark escaped (they are text, never markup), each line
+/// break a hard break, a blank line a paragraph's end, and a line's
+/// leading spaces kept as no-break spaces (Markdown would drop them, or
+/// read four as code).
+pub fn prose_markdown(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + text.len() / 8);
+    let mut lines = text.lines().peekable();
+    while let Some(line) = lines.next() {
+        let words = line.trim_start_matches(' ');
+        out.extend(std::iter::repeat_n('\u{a0}', line.len() - words.len()));
+        for ch in words.trim_end().chars() {
+            if ch.is_ascii_punctuation() {
+                out.push('\\');
+            }
+            out.push(ch);
+        }
+        let Some(next) = lines.peek() else {
+            break;
+        };
+        let ends_paragraph = words.trim().is_empty() || next.trim().is_empty();
+        out.push_str(if ends_paragraph { "\n" } else { "\\\n" });
+    }
+    out
+}
+
 /// Which document a preview shows, for telling one opening over another:
 /// its path and line.
 fn swap_key(document: &Document) -> u64 {
@@ -360,10 +414,45 @@ impl Document {
             })
     }
 
-    /// Whether it renders as Markdown: a Markdown file opened at no line (a
-    /// file opened at a line reads as numbered lines, to mark it).
-    pub fn renders_markdown(&self) -> bool {
-        matches!(self.body, Body::Text { line: None, .. }) && self.is_markdown()
+    /// Whether it is prose, not code: a file of plain text (`.txt`, or no
+    /// extension and no build file's name), never a command's output. It
+    /// reads as Claude's file viewer reads prose: the reading face at the
+    /// reading size, wrapped, no line numbers.
+    pub fn is_prose(&self) -> bool {
+        if self.name.is_some() {
+            return false;
+        }
+        match self
+            .path
+            .extension()
+            .and_then(|extension| extension.to_str())
+        {
+            Some(extension) => {
+                extension.eq_ignore_ascii_case("txt") || extension.eq_ignore_ascii_case("text")
+            }
+            None => self
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| !name.starts_with('.') && !BUILD_FILES.contains(&name)),
+        }
+    }
+
+    /// The Markdown it renders, when it renders as a reading document
+    /// rather than numbered lines: a Markdown file's own source, or prose's
+    /// words escaped into Markdown — opened at no line (a file opened at a
+    /// line reads as numbered lines, to mark it).
+    pub fn rich_source(&self) -> Option<SharedString> {
+        let Body::Text { text, line: None } = &self.body else {
+            return None;
+        };
+        if self.is_markdown() {
+            Some(text.source.clone())
+        } else if self.is_prose() {
+            Some(text.prose().clone())
+        } else {
+            None
+        }
     }
 
     /// The page it shows, if it is one.
@@ -412,6 +501,8 @@ pub fn reading_head(label: Div, doors: impl IntoIterator<Item = gpui::AnyElement
         .border_b_1()
         .border_color(paint::LINE)
         .whitespace_nowrap()
+        .text_size(px(FS_UI))
+        .line_height(px(LH_UI))
         .child(label)
         .child(div().flex_1())
         .children(doors)

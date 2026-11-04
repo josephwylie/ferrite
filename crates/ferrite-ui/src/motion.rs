@@ -32,11 +32,11 @@
 //! | image in | [`FADE_QUICK`] 150ms | an image that lands in the viewer after its preview is up fades in; one replacing another crossfades with it (opacity only) |
 //! | chevron rotate | [`CHEVRON`] 60ms | every disclosure chevron (the transcript's, the nav's, the Panel's folds) turns its quarter as its fold flips ([`settled`]); the folds themselves snap, as Claude's tool steps do |
 //! | switch | [`SWITCH`] 120ms overshoot | a Settings on/off switch (`components::switch`): its knob slides, its track snaps |
-//! | stream fade | [`STREAM_FADE`] 400ms linear, opacity only | every transcript row appended at the tail while the operator watches, and each run of words streaming into an answer (`TextView::fresh`); at turn end a run with more than [`STREAM_LAND`] left lands within it; never first paint, a history window growing at its head, or scroll-back |
+//! | stream fade | [`STREAM_FADE`] 400ms linear, opacity only | every transcript row appended at the tail while the operator watches, and each run of words streaming into an answer (`TextView::fresh`); a row's clock starts on the frame that first draws it, and a row that arrives whole plays its whole fade; at turn end a streamed run with more than [`STREAM_LAND`] left lands within it; never first paint, a history window growing at its head, or scroll-back |
 //! | bubble pop | [`BUBBLE_IN`] 450ms overshoot | the operator's prompt bubble appended at the tail: opacity, scale 0.92 → 1 from its right edge, a 6px rise ([`bubble_face`]) |
 //! | approval promote | [`PROMOTE_IN`] 220ms ease-out cubic | the approval card: from 0.75, 6px above, scale 0.97 from its top ([`promote_in`]) |
 //! | label roll | [`MORPH`] 180ms | the working line's words when they change ([`morph`]) |
-//! | count roll | [`COUNT`] 300ms quart | the working line's token count eases to each new value, its changing digits rolling up as an odometer's, tabular so nothing shifts; drawn by the loops overlay, so only the count redraws (`odometer::rolling_count`) |
+//! | count tick | [`COUNT`] 120ms quart | the working line's token count ticks to each new reading: only the cells that change cross-fade, drifting `MOTION_COUNT_DRIFT` (2pt) up, tabular so nothing shifts; a new turn's count lands; drawn by the loops overlay, so only the count redraws (`odometer::rolling_count`) |
 //! | message actions | [`ACTIONS_IN`] 120ms after 100ms / [`ACTIONS_OUT`] 60ms, ease-snap | a message's actions under the pointer ([`hover_listener_with`]) |
 //! | jump to latest | [`JUMP_FADE`] 200ms | the transcript's jump button fades in and out, answering no pointer while it goes |
 //! | usage ring | [`USAGE_ARC`] 300ms / [`USAGE_INK`] 200ms, quart | the footer's plan-usage ring moving to a new reading ([`settle`]); first paint lands |
@@ -47,9 +47,7 @@
 //! own behaviour. A tool group's disclosure in the transcript opens without
 //! a height tween, as Claude's tool steps do: its rows are one item of a
 //! virtualized list inside a kit `Collapsible`, and an item mid-reveal
-//! would clip rows the pointer can already reach. The hover card
-//! (`hover_card.rs`) hangs at once: the transcript hosting it would draw
-//! every frame of an entrance again, rebuilding its native text.
+//! would clip rows the pointer can already reach.
 //!
 //! **What a frame costs.** gpui asks for an animation's next frame by
 //! notifying the view drawing it, and redraws that view's ancestors with
@@ -284,7 +282,7 @@ pub const TOOLTIP_IN: MotionSpec = spec(theme::MOTION_TOOLTIP_IN_MS, EASE_SNAP);
 pub const PROMOTE_IN: MotionSpec = spec(theme::MOTION_PROMOTE_MS, EASE_OUT_CUBIC);
 /// The working line's label roll (`morph`).
 pub const MORPH: MotionSpec = spec(theme::MOTION_MORPH_MS, EASE_MORPH);
-/// The working line's token count easing to its next value
+/// The working line's token count ticking to its next reading
 /// (`odometer::rolling_count`).
 pub const COUNT: MotionSpec = spec(theme::MOTION_COUNT_MS, EASE_OUT_QUART);
 /// The image viewer's zoom, tweened on the scale's logarithm so every

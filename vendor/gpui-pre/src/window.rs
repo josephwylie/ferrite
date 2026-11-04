@@ -3837,6 +3837,13 @@ impl Window {
         }
     }
 
+    /// Ferrite's patch: the hitboxes the frame last drawn holds — inserted
+    /// fresh, or carried over with a cached view's reused subtree, whose
+    /// elements did not paint again but are on screen all the same.
+    pub fn drawn_hitboxes(&self) -> impl Iterator<Item = HitboxId> + '_ {
+        self.rendered_frame.hitboxes.iter().map(|hitbox| hitbox.id)
+    }
+
     pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>) {
         // Ferrite's patch: as `reuse_prepaint`, for the paint ranges.
         let to = self.paint_index();

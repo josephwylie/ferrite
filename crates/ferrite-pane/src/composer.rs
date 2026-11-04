@@ -155,6 +155,10 @@ pub struct Composer {
     /// its mention and skill items), so a token edited away simply stops
     /// being one.
     chips: Vec<SharedString>,
+    /// The Session's commands and skills, by bare name (`set_commands`):
+    /// a `/name` token naming one chips however it got into the text —
+    /// picked, typed out, pasted or restored with a draft.
+    commands: std::collections::HashSet<SharedString>,
     /// A `/` or `@` popover is open over this line (#23). The cockpit owns
     /// the menu; this flag only widens the line's own key context to
     /// `ComposerMenu` — on the FOCUSED node, where gpui's same-depth
@@ -205,6 +209,9 @@ pub struct Composer {
     /// Every caret drawn, and when, for the tests of its cadence.
     #[cfg(any(test, feature = "test-support"))]
     caret_draws: Vec<(Instant, Option<Caret>)>,
+    /// The chip grounds last drawn, in window coordinates, for the tests.
+    #[cfg(any(test, feature = "test-support"))]
+    last_chips: Vec<Bounds<Pixels>>,
 }
 
 impl EventEmitter<Edited> for Composer {}
@@ -220,6 +227,7 @@ impl Composer {
             quotes: Vec::new(),
             review: CommentStore::new(),
             chips: Vec::new(),
+            commands: Default::default(),
             menu_open: false,
             history_available: false,
             last_layout: None,
@@ -238,7 +246,15 @@ impl Composer {
             last_caret: None,
             #[cfg(any(test, feature = "test-support"))]
             caret_draws: Vec::new(),
+            #[cfg(any(test, feature = "test-support"))]
+            last_chips: Vec::new(),
         }
+    }
+
+    /// The chip grounds the line last drew, in window coordinates.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn chip_grounds(&self) -> &[Bounds<Pixels>] {
+        &self.last_chips
     }
 
     /// Every caret drawn and when, and when its blink last restarted: the
@@ -551,6 +567,30 @@ impl Composer {
     /// The staged chip tokens, as picked — display state only.
     pub fn chips(&self) -> &[SharedString] {
         &self.chips
+    }
+
+    /// The commands and skills the Session serving this line knows: each
+    /// `/name` naming one draws as a chip. Notifies only on a change.
+    pub fn set_commands(
+        &mut self,
+        commands: &[ferrite_core::SessionCommand],
+        cx: &mut Context<Self>,
+    ) {
+        let same = commands.len() == self.commands.len()
+            && commands
+                .iter()
+                .all(|command| self.commands.contains(command.name.as_str()));
+        if same {
+            return;
+        }
+        let commands: std::collections::HashSet<SharedString> = commands
+            .iter()
+            .map(|command| SharedString::from(command.name.clone()))
+            .collect();
+        if commands != self.commands {
+            self.commands = commands;
+            cx.notify();
+        }
     }
 
     /// The box's height in rows now, for text showing `rows`: easing to it
@@ -997,12 +1037,35 @@ impl Render for Composer {
     }
 }
 
-/// Where staged chip tokens still stand whole in the text — start-of-line
-/// or whitespace on both sides, exactly the boundaries the wire's own
-/// `@`-token and `/`-command rules read — sorted, overlaps dropped. These
-/// byte ranges paint as chips.
-fn pill_ranges(text: &str, chips: &[SharedString]) -> Vec<Range<usize>> {
+/// Where chips stand in the text: each staged token still whole in it,
+/// and each `/name` token naming one of the Session's `commands` — whole
+/// meaning start-of-line or whitespace on both sides, exactly the
+/// boundaries the wire's own `@`-token and `/`-command rules read —
+/// sorted, overlaps dropped. These byte ranges paint as chips.
+fn pill_ranges(
+    text: &str,
+    chips: &[SharedString],
+    commands: &std::collections::HashSet<SharedString>,
+) -> Vec<Range<usize>> {
     let mut ranges: Vec<Range<usize>> = Vec::new();
+    if !commands.is_empty() {
+        let mut start = None;
+        for (at, ch) in text.char_indices().chain([(text.len(), ' ')]) {
+            if !ch.is_whitespace() {
+                start.get_or_insert(at);
+                continue;
+            }
+            let Some(from) = start.take() else {
+                continue;
+            };
+            if text[from..at]
+                .strip_prefix('/')
+                .is_some_and(|name| commands.contains(name))
+            {
+                ranges.push(from..at);
+            }
+        }
+    }
     for token in chips {
         let mut from = 0;
         while let Some(found) = text[from..].find(token.as_ref()) {
@@ -1109,6 +1172,8 @@ pub(crate) struct Layout {
     lines: Vec<WrappedLine>,
     rows: Vec<Row>,
     line_height: Pixels,
+    /// The chips' byte ranges (`pill_ranges`).
+    pills: Vec<Range<usize>>,
 }
 
 impl Layout {
@@ -1123,7 +1188,7 @@ impl Layout {
     ) -> Self {
         let content = SharedString::from(composer.line.text().to_string());
         let selected = composer.line.selection();
-        let pills = pill_ranges(&content, composer.chips());
+        let pills = pill_ranges(&content, composer.chips(), &composer.commands);
         let run = TextRun {
             len: content.len(),
             font: style.font(),
@@ -1171,11 +1236,59 @@ impl Layout {
             lines,
             rows,
             line_height,
+            pills,
         }
     }
 
     fn rows(&self) -> usize {
         self.rows.len().max(1)
+    }
+
+    /// The chips' grounds in `bounds` scrolled by `scroll` rows: one per row
+    /// a chip crosses, `MENTION_CHIP_INSET_Y` inside the row, reaching
+    /// `MENTION_CHIP_PAD_X` past the token either side — but never more
+    /// than half into the character beside it, so two chips a space apart
+    /// never touch.
+    fn chip_grounds(&self, bounds: Bounds<Pixels>, scroll: usize) -> Vec<Bounds<Pixels>> {
+        use ferrite_ui::theme::{MENTION_CHIP_INSET_Y, MENTION_CHIP_PAD_X};
+        let pad = px(MENTION_CHIP_PAD_X);
+        let inset = px(MENTION_CHIP_INSET_Y);
+        let mut grounds = Vec::new();
+        for pill in &self.pills {
+            for (index, row) in self.rows.iter().enumerate() {
+                if pill.end <= row.start || row.end <= pill.start {
+                    continue;
+                }
+                let (from, to) = (pill.start.max(row.start), pill.end.min(row.end));
+                let text = &self.lines[row.line].text;
+                let local = |at: usize| at - row.line_start;
+                let before = text[..local(from)]
+                    .chars()
+                    .next_back()
+                    .filter(|_| from > row.start)
+                    .map(|ch| from - ch.len_utf8());
+                let after = text[local(to)..]
+                    .chars()
+                    .next()
+                    .filter(|_| to < row.end)
+                    .map(|ch| to + ch.len_utf8());
+                let left = self.x_in_row(index, from);
+                let right = self.x_in_row(index, to);
+                let reach_left =
+                    before.map_or(pad, |at| pad.min((left - self.x_in_row(index, at)) / 2.));
+                let reach_right =
+                    after.map_or(pad, |at| pad.min((self.x_in_row(index, at) - right) / 2.));
+                let top = bounds.top() + self.line_height * index - self.line_height * scroll;
+                grounds.push(Bounds::from_corners(
+                    point(bounds.left() + left - reach_left, top + inset),
+                    point(
+                        bounds.left() + right + reach_right,
+                        top + self.line_height - inset,
+                    ),
+                ));
+            }
+        }
+        grounds
     }
 
     /// The widest row, unwrapped — what the box measures as when no width
@@ -1497,6 +1610,12 @@ impl Element for LineElement {
             (cursor, None)
         };
 
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            let grounds = layout.chip_grounds(bounds, scroll);
+            self.composer
+                .update(cx, |composer, _| composer.last_chips = grounds);
+        }
         PrepaintState {
             layout: Some(layout),
             scroll,
@@ -1600,8 +1719,21 @@ fn paint_text(
     cx: &mut App,
 ) {
     let line_height = layout.line_height;
-    window.with_content_mask(Some(ContentMask { bounds }), |window| {
-        // The selection wash and the caret go under the glyphs.
+    // A chip at a row's edge reaches its pad past the text's box.
+    let pad = px(ferrite_ui::theme::MENTION_CHIP_PAD_X);
+    let mask = Bounds::from_corners(
+        point(bounds.left() - pad, bounds.top()),
+        point(bounds.right() + pad, bounds.bottom()),
+    );
+    window.with_content_mask(Some(ContentMask { bounds: mask }), |window| {
+        // The chips' grounds, then the selection wash and the caret, all
+        // under the glyphs.
+        for ground in layout.chip_grounds(bounds, scroll) {
+            window.paint_quad(
+                fill(ground, rgba(ferrite_ui::theme::MENTION_CHIP))
+                    .corner_radii(px(ferrite_ui::theme::R_CONTROL)),
+            );
+        }
         for quad in quads {
             window.paint_quad(quad);
         }
@@ -1804,6 +1936,28 @@ pub mod testing {
 mod tests {
     use super::*;
 
+    fn none() -> std::collections::HashSet<SharedString> {
+        Default::default()
+    }
+
+    /// A `/name` naming one of the Session's commands chips however it got
+    /// into the text — typed, pasted, restored — whole tokens only, with no
+    /// pick staged; the `@` and staged chips still chip beside it.
+    #[test]
+    fn a_known_command_chips_unpicked() {
+        let commands = shared(&["to-spec", "mattpocock-skills:grill-with-docs"])
+            .into_iter()
+            .collect();
+        let text = "for their venue /mattpocock-skills:grill-with-docs";
+        assert_eq!(pill_ranges(text, &[], &commands), [16..text.len()]);
+        assert_eq!(pill_ranges("/to-spec now", &[], &commands), [0..8]);
+        assert!(pill_ranges("/to-specs a/to-spec /to", &[], &commands).is_empty());
+        assert_eq!(
+            pill_ranges("/to-spec @a", &shared(&["@a"]), &commands),
+            [0..8, 9..11]
+        );
+    }
+
     fn shared(tokens: &[&str]) -> Vec<SharedString> {
         tokens
             .iter()
@@ -1817,14 +1971,17 @@ mod tests {
     #[allow(clippy::single_range_in_vec_init)] // assertions compare literal ranges
     fn pill_ranges_cover_whole_tokens_only() {
         let mentions = shared(&["@docs/notes.txt"]);
-        assert_eq!(pill_ranges("read @docs/notes.txt now", &mentions), [5..20]);
+        assert_eq!(
+            pill_ranges("read @docs/notes.txt now", &mentions, &none()),
+            [5..20]
+        );
         // Edited into a longer word, it is no longer the token.
-        assert!(pill_ranges("read @docs/notes.txtx", &mentions).is_empty());
-        assert!(pill_ranges("x@docs/notes.txt", &mentions).is_empty());
+        assert!(pill_ranges("read @docs/notes.txtx", &mentions, &none()).is_empty());
+        assert!(pill_ranges("x@docs/notes.txt", &mentions, &none()).is_empty());
         // At the very ends of the line it still counts.
-        assert_eq!(pill_ranges("@docs/notes.txt", &mentions), [0..15]);
+        assert_eq!(pill_ranges("@docs/notes.txt", &mentions, &none()), [0..15]);
         // Gone from the text, gone from the paint.
-        assert!(pill_ranges("plain prose", &mentions).is_empty());
+        assert!(pill_ranges("plain prose", &mentions, &none()).is_empty());
     }
 
     /// A picked `/` command chips by the same rule as a mention, beside
@@ -1832,16 +1989,19 @@ mod tests {
     #[test]
     fn a_picked_command_chips_as_a_mention_does() {
         let chips = shared(&["/tdd", "@src/lib.rs"]);
-        assert_eq!(pill_ranges("/tdd fix @src/lib.rs", &chips), [0..4, 9..20]);
-        assert!(pill_ranges("/tdd-loop", &chips).is_empty());
-        assert!(pill_ranges("see a/tdd", &chips).is_empty());
+        assert_eq!(
+            pill_ranges("/tdd fix @src/lib.rs", &chips, &none()),
+            [0..4, 9..20]
+        );
+        assert!(pill_ranges("/tdd-loop", &chips, &none()).is_empty());
+        assert!(pill_ranges("see a/tdd", &chips, &none()).is_empty());
     }
 
     #[test]
     #[allow(clippy::single_range_in_vec_init)]
     fn overlapping_pill_candidates_keep_the_first() {
         let mentions = shared(&["@a", "@a"]);
-        assert_eq!(pill_ranges("@a", &mentions), [0..2]);
+        assert_eq!(pill_ranges("@a", &mentions, &none()), [0..2]);
     }
 
     /// The run splitter hands the shaper exactly the text's length, pill

@@ -1576,6 +1576,10 @@ struct WindowSelectionState {
     finish_frame_scheduled: bool,
     mouse_down_prepared: bool,
     auto_scroll: AutoScroll,
+    /// Ferrite: the selection's rectangles as each text element last
+    /// painted them, in window coordinates, by element: an element that
+    /// paints again replaces its own, a cached one keeps what it drew.
+    painted: HashMap<gpui::GlobalElementId, Vec<Bounds<Pixels>>>,
 }
 
 impl WindowSelectionState {
@@ -1758,6 +1762,28 @@ impl WindowSelectionState {
         handlers
     }
 
+    /// Ferrite: a participant a cached view drew last frame, its subtree
+    /// reused this frame without painting again, is still on screen (its
+    /// hitbox is in the frame): it stays registered, its document mounted,
+    /// so a frame that redraws only around it (a caret's blink, a hover
+    /// elsewhere) neither drops its text from hit-testing nor clears the
+    /// selection in it.
+    fn keep_reused(&mut self, drawn: &std::collections::HashSet<gpui::HitboxId>) {
+        let generation = self.frame_generation;
+        for registration in self.participants.values_mut() {
+            if registration.generation == generation
+                || !drawn.contains(&registration.registration.hitbox().id)
+            {
+                continue;
+            }
+            registration.generation = generation;
+            if let Some(member) = &registration.document_member {
+                self.mounted_documents
+                    .insert(member.document.entity_id(), generation);
+            }
+        }
+    }
+
     fn schedule_finish_frame(&mut self) -> bool {
         if self.finish_frame_scheduled {
             return false;
@@ -1858,6 +1884,7 @@ impl WindowSelectionState {
             .filter_map(SelectionEndpoint::participant_for_copy)
             .collect::<Vec<_>>();
         self.stop_anchor_auto_scroll(cx);
+        self.painted.clear();
         self.anchor = None;
         self.cursor = None;
         self.pending_extension_anchor = None;
@@ -2678,6 +2705,35 @@ impl TextSelection {
         live_text_selection_state(window, cx).is_some_and(|state| state.read(cx).has_selection(cx))
     }
 
+    /// Ferrite: the selection's rectangles as its text last painted them,
+    /// in window coordinates — what a float placed by the selection (not
+    /// the pointer) reads. Empty when nothing is selected.
+    pub fn painted_bounds(window: &mut Window, cx: &mut App) -> Vec<Bounds<Pixels>> {
+        live_text_selection_state(window, cx)
+            .map(|state| state.read(cx).painted.values().flatten().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Ferrite: the rectangles element `id` just painted for the selection
+    /// (none: it shows none now).
+    pub(crate) fn note_painted(
+        id: &gpui::GlobalElementId,
+        rects: Vec<Bounds<Pixels>>,
+        window: &Window,
+        cx: &mut App,
+    ) {
+        let Some(state) = WindowSelectionState::existing(window, cx) else {
+            return;
+        };
+        state.update(cx, |state, _| {
+            if rects.is_empty() {
+                state.painted.remove(id);
+            } else {
+                state.painted.insert(id.clone(), rects);
+            }
+        });
+    }
+
     /// Clears window selection and every participant's local selection.
     pub fn clear(window: &mut Window, cx: &mut App) {
         if let Some(state) = live_text_selection_state(window, cx) {
@@ -2903,11 +2959,14 @@ fn retain_text_selection_state(
 fn paint_text_selection(state: &Entity<WindowSelectionState>, window: &mut Window, cx: &mut App) {
     if state.update(cx, |state, _| state.schedule_finish_frame()) {
         let state = state.downgrade();
-        window.defer(cx, move |_, cx| {
+        window.defer(cx, move |window, cx| {
             let Some(state) = state.upgrade() else {
                 return;
-            };
-            let handlers = state.update(cx, |state, cx| state.finish_frame(cx));
+            };            let drawn = window.drawn_hitboxes().collect();
+            let handlers = state.update(cx, |state, cx| {
+                state.keep_reused(&drawn);
+                state.finish_frame(cx)
+            });
             dispatch_clear_handlers(handlers, cx);
         });
     }

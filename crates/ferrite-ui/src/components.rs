@@ -1272,12 +1272,10 @@ pub struct MenuItem {
     pub label_w: Option<f32>,
     /// A 12px leading mark and its ink.
     pub leading: Option<(&'static str, u32)>,
-    /// A trailing detail: Ferrite's description of the row (`INK_SUBTLE` in
-    /// every state), or — when `mono` — machine text such as an `@` path,
-    /// `INK_SUBTLE`, cut at its head so the useful tail survives.
+    /// A trailing detail: Ferrite's description of the row, or an `@`
+    /// row's directory (`INK_SUBTLE` in every state), in the row's UI face
+    /// as Claude's pickers draw both.
     pub detail: Option<SharedString>,
-    /// `detail` is machine text (rule 2.1.1): drawn in the code face.
-    pub mono: bool,
     /// The key that does the same thing, faint at the right edge.
     pub shortcut: Option<SharedString>,
     /// A one-line description under the label (`INK_SUBTLE`, the meta size):
@@ -1321,10 +1319,6 @@ impl MenuItem {
     }
     pub fn detail(mut self, text: impl Into<SharedString>) -> Self {
         self.detail = Some(text.into());
-        self
-    }
-    pub fn mono(mut self, mono: bool) -> Self {
-        self.mono = mono;
         self
     }
     /// An empty shortcut is no shortcut.
@@ -1485,18 +1479,16 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
                 .child(gpui::StyledText::new(label).with_highlights(highlights)),
         )
         .when_some(item.detail.clone(), |row, detail| {
-            let cell = div().flex_1().min_w_0().truncate();
-            let cell = if item.mono {
-                cell.font_family(theme::FONT_CODE)
-                    .text_size(px(theme::FS_UI))
-                    .text_color(rgb(theme::INK_SUBTLE))
-                    .text_ellipsis_start()
-            } else {
-                cell.font_family(theme::FONT_UI)
+            row.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(theme::FONT_UI)
                     .text_size(px(theme::FS_UI))
                     .text_color(rgb(inks.detail))
-            };
-            row.child(cell.child(detail))
+                    .child(detail),
+            )
         })
         .when(item.detail.is_none(), |row| row.child(div().flex_1()))
         .when_some(item.shortcut.clone(), |row, key| {

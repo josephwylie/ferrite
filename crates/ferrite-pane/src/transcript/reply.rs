@@ -119,8 +119,56 @@ impl TranscriptView {
         self.reply.is_some()
     }
 
-    /// The pill, while its selection stands: centred over it, fading once
-    /// a scroll has begun.
+    /// Where the pill's top-left stands, as Claude's does: by the selection,
+    /// never the pointer — centred over its first line, `SELECTION_REPLY_GAP`
+    /// above it, or under its last line when the transcript has no room
+    /// above; inside the transcript's column either way, so it never covers
+    /// the selected text. A selection whose text reports no rectangles (a
+    /// code block's) places it over where the drag went (`fallback`, the
+    /// top centre it swept).
+    fn reply_place(
+        &self,
+        fallback: Point<Pixels>,
+        side_chat: bool,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) -> Point<Pixels> {
+        let column = self.scroll.list_state().viewport_bounds();
+        let size = pill_size(side_chat, window);
+        let gap = px(theme::SELECTION_REPLY_GAP);
+        let rects = gpui::base::TextSelection::painted_bounds(window, cx);
+        let top = rects.iter().map(|rect| rect.top()).reduce(Pixels::min);
+        let (centre, y) = match top {
+            Some(top) => {
+                let first = rects
+                    .iter()
+                    .filter(|rect| (rect.top() - top).abs() < px(1.))
+                    .fold(None, |line: Option<gpui::Bounds<Pixels>>, rect| {
+                        Some(line.map_or(*rect, |line| line.union(rect)))
+                    })
+                    .expect("the top line's rectangles");
+                let above = top - gap - size.height;
+                let y = if above >= column.top() {
+                    above
+                } else {
+                    let bottom = rects
+                        .iter()
+                        .map(|rect| rect.bottom())
+                        .fold(top, Pixels::max);
+                    bottom + gap
+                };
+                (first.center().x, y)
+            }
+            None => (fallback.x, fallback.y - gap - size.height),
+        };
+        let x = (centre - size.width / 2.)
+            .min(column.right() - size.width)
+            .max(column.left());
+        gpui::point(x, y)
+    }
+
+    /// The pill, while its selection stands: by the selection (not the
+    /// pointer, `reply_place`), fading once a scroll has begun.
     pub(super) fn reply_float(
         &mut self,
         window: &mut Window,
@@ -142,7 +190,8 @@ impl TranscriptView {
             }
             None => 1.,
         };
-        let at = gpui::point(reply.at.x, reply.at.y - px(theme::SELECTION_REPLY_GAP));
+        let side_chat_shown = self.input.rewind.is_some();
+        let place = self.reply_place(reply.at, side_chat_shown, window, cx);
         let passage = reply.passage.clone();
         let fading = reply.fading.is_some();
         let weak = cx.entity().downgrade();
@@ -169,7 +218,7 @@ impl TranscriptView {
             }
         };
         let side_chat = self.input.rewind.as_ref().map(|allowed| {
-            let action = pill_action(&namespace, "selection-side-chat", "Start a side chat", None);
+            let action = pill_action(&namespace, "selection-side-chat", "Start a side chat");
             match allowed {
                 Err(why) => action
                     .opacity(0.4)
@@ -183,41 +232,34 @@ impl TranscriptView {
                 }),
             }
         });
-        let reply = pill_action(
-            &namespace,
-            "selection-reply-quote",
-            "Reply",
-            Some(ferrite_ui::icons::REPLY),
-        )
-        .cursor_pointer()
-        .when(!fading, |action| {
-            action.on_mouse_down(MouseButton::Left, press(TranscriptEvent::Quote))
-        });
+        let reply = pill_action(&namespace, "selection-reply-quote", "Reply")
+            .cursor_pointer()
+            .when(!fading, |action| {
+                action.on_mouse_down(MouseButton::Left, press(TranscriptEvent::Quote))
+            });
         let pill = reply_pill(id)
             .opacity(opacity)
             .on_mouse_down_out(move |_, _, cx| {
                 let _ = away.update(cx, |view, cx| view.dismiss_reply(cx));
             })
-            .children(side_chat)
-            .child(reply);
-        // A zero-width column on the point: the pill hangs centred over
-        // it whatever its label measures.
-        Some(
-            gpui::deferred(
-                gpui::anchored()
-                    .anchor(gpui::Anchor::BottomLeft)
-                    .position(at)
-                    .child(gpui::div().w(px(0.)).flex().justify_center().child(pill)),
+            .children(
+                side_chat
+                    .map(|side_chat| [side_chat, divider()])
+                    .into_iter()
+                    .flatten(),
             )
-            .with_priority(3)
-            .into_any_element(),
+            .child(reply);
+        Some(
+            gpui::deferred(gpui::anchored().position(place).child(pill))
+                .with_priority(3)
+                .into_any_element(),
         )
     }
 }
 
-/// Claude's pill: its actions side by side, `FS_UI` at medium weight in
-/// white on `SELECTION_REPLY_FILL` inside a `SELECTION_REPLY_EDGE`
-/// hairline, at `SELECTION_REPLY_RADIUS`.
+/// Claude's pill: its actions side by side, `FS_UI` at body weight in
+/// `INK_STRONG`, a float on `paint::FLOAT` inside its `FLOAT_EDGE`
+/// hairline under the float shadow, at `SELECTION_REPLY_RADIUS`.
 fn reply_pill(id: gpui::ElementId) -> gpui::Stateful<gpui::Div> {
     ferrite_ui::components::text_ui()
         .id(id)
@@ -226,25 +268,62 @@ fn reply_pill(id: gpui::ElementId) -> gpui::Stateful<gpui::Div> {
         .flex()
         .items_center()
         .rounded(px(theme::SELECTION_REPLY_RADIUS))
-        .bg(theme::paint::SELECTION_REPLY_FILL)
+        .bg(theme::paint::FLOAT)
         .border_1()
-        .border_color(theme::paint::SELECTION_REPLY_EDGE)
+        .border_color(theme::paint::FLOAT_EDGE)
         .shadow(ferrite_ui::components::float_shadow())
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(gpui::rgb(theme::SELECTION_REPLY_INK))
+        .font_weight(theme::W_BODY)
+        .text_color(gpui::rgb(theme::INK_STRONG))
         .whitespace_nowrap()
         .overflow_hidden()
         .occlude()
 }
 
-/// One of the pill's actions: its word, then its glyph (Reply's bent-back
-/// arrow), `SELECTION_REPLY_PAD_X` either side, lit as the pointer comes
-/// over it (`SELECTION_REPLY_HOVER`, over `motion::hover_t`).
+/// The pill's size: its words shaped at `FS_UI`, each action's padding,
+/// the divider, its hairline ring.
+fn pill_size(side_chat: bool, window: &mut Window) -> gpui::Size<Pixels> {
+    let mut face = window.text_style();
+    face.font_family = theme::FONT_UI.into();
+    face.font_weight = theme::W_BODY;
+    let shaped = |text: &'static str| {
+        window
+            .text_system()
+            .shape_line(
+                text.into(),
+                px(theme::FS_UI),
+                &[face.to_run(text.len())],
+                None,
+            )
+            .width()
+    };
+    let pad = px(2. * theme::SELECTION_REPLY_PAD_X);
+    let mut width = shaped("Reply") + pad + px(2.);
+    if side_chat {
+        width += shaped("Start a side chat") + pad + px(1.);
+    }
+    gpui::size(
+        width.ceil(),
+        px(theme::LH_UI + 2. * theme::SELECTION_REPLY_PAD_Y + 2.),
+    )
+}
+
+/// The hairline between the pill's actions (Claude's `|`).
+fn divider() -> gpui::Stateful<gpui::Div> {
+    gpui::div()
+        .id("selection-reply-divider")
+        .flex_none()
+        .w(px(1.))
+        .h(px(theme::SELECTION_REPLY_DIVIDER_H))
+        .bg(theme::paint::FLOAT_EDGE)
+}
+
+/// One of the pill's actions: its word, `SELECTION_REPLY_PAD_X` either
+/// side, lit as the pointer comes over it (`FLOAT_HOVER`, over
+/// `motion::hover_t`).
 fn pill_action(
     namespace: &str,
     selector: &'static str,
     label: &'static str,
-    glyph: Option<&'static str>,
 ) -> gpui::Stateful<gpui::Div> {
     let id = gpui::ElementId::from(SharedString::from(format!("{selector}-{namespace}")));
     let key = ferrite_ui::pointer::hover_key(&id);
@@ -257,21 +336,13 @@ fn pill_action(
         .debug_selector(move || selector.into())
         .flex()
         .items_center()
-        .gap(px(theme::SPACE_1))
         .px(px(theme::SELECTION_REPLY_PAD_X))
         .py(px(theme::SELECTION_REPLY_PAD_Y))
         .bg(motion::mix(
-            theme::paint::SELECTION_REPLY_FILL.into(),
-            theme::paint::SELECTION_REPLY_HOVER.into(),
+            theme::paint::FLOAT.into(),
+            theme::paint::FLOAT_HOVER.into(),
             t,
         ))
         .on_hover(motion::hover_listener(key))
         .child(label)
-        .children(glyph.map(|glyph| {
-            ferrite_ui::icons::icon(
-                glyph,
-                theme::SELECTION_REPLY_GLYPH,
-                theme::SELECTION_REPLY_INK,
-            )
-        }))
 }

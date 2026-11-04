@@ -296,12 +296,14 @@ impl CockpitView {
         };
         let tab = &pane.preview_tab;
         let find = tab.find.as_ref();
+        let rich = document.rich_source();
         let body = match &document.body {
-            Body::Text { text, .. } if document.renders_markdown() => {
+            Body::Text { .. } if rich.is_some() => {
                 tab.rich.file_context(document.path.parent(), &pane.preview);
                 let marks = find.and_then(|find| find.bar.marks(0));
                 div()
                     .id("preview-markdown")
+                    .debug_selector(|| "preview-markdown".into())
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
@@ -309,10 +311,14 @@ impl CockpitView {
                     .px(px(TX_INSET_SOLO))
                     .pt(px(BODY_PAD_T))
                     .pb(px(HALF_ROW))
+                    // A reading document (Markdown, prose) reads at the
+                    // transcript's reading size.
+                    .text_size(px(FS_PROSE))
+                    .line_height(px(LH_PROSE))
                     .child(
                         ferrite_pane::rich::Markdown::new(
                             format!("document-{}", document.path.display()),
-                            text.source.clone(),
+                            rich.clone().unwrap_or_default(),
                             tab.rich.clone(),
                         )
                         .find(marks),
@@ -325,7 +331,8 @@ impl CockpitView {
                 *line,
                 tab.scroll.clone(),
                 find.map(|find| &find.bar),
-            ),
+            )
+            .into_any_element(),
             Body::Unshown(why) => unshown(why, &document.path, cx),
             Body::Page(page) => match page.shown(cx) {
                 Shown::Live(web) => div()
@@ -678,8 +685,9 @@ impl CockpitView {
         let Some(find) = tab.find.as_mut() else {
             return;
         };
-        let changed = if document.renders_markdown() {
-            let source = gpui::base::text::TextView::markdown_find_text(&text.source);
+        let rich = document.rich_source();
+        let changed = if let Some(rich) = &rich {
+            let source = gpui::base::text::TextView::markdown_find_text(rich);
             find.bar.search([source.as_str()], 0, cx)
         } else {
             let top = -tab.scroll.0.borrow().base_handle.offset().y;
@@ -687,7 +695,7 @@ impl CockpitView {
             find.bar.search(text.lines(), from, cx)
         };
         if changed {
-            reveal_found(tab, &text, document.renders_markdown(), true);
+            reveal_found(tab, &text, rich.is_some(), true);
         }
         cx.notify();
     }
@@ -707,7 +715,7 @@ impl CockpitView {
             .is_some_and(|find| find.bar.step(forward).is_some())
         {
             if let Some(text) = document.text() {
-                reveal_found(tab, text, document.renders_markdown(), false);
+                reveal_found(tab, text, document.rich_source().is_some(), false);
             }
             cx.notify();
         }
@@ -748,7 +756,7 @@ fn numbered_lines(
     target: Option<u32>,
     scroll: gpui::UniformListScrollHandle,
     find: Option<&ferrite_pane::find::Find>,
-) -> AnyElement {
+) -> gpui::UniformList {
     use ferrite_ui::theme::*;
     let language = ferrite_core::transcript::language_for_path(path);
     let count = text.line_count();
@@ -808,6 +816,7 @@ fn numbered_lines(
                             .w(px(READER_NUMBER_W))
                             .h(px(LH_UI))
                             .pr(px(READER_NUMBER_GAP))
+                            .text_size(px(FS_META))
                             .bg(if marked { paint::SELECTED } else { paint::CARD })
                             .text_color(rgb(if marked { INK_STRONG } else { INK_SUBTLE }))
                             .child(SharedString::from(number.to_string())),
@@ -823,7 +832,8 @@ fn numbered_lines(
     .w_full()
     .py(px(HALF_ROW))
     .font_family(FONT_CODE)
-    .into_any_element()
+    .text_size(px(FS_READER_CODE))
+    .line_height(px(LH_UI))
 }
 
 /// A file the preview cannot show: why, quietly, centred on the card, and
@@ -1004,5 +1014,28 @@ mod tests {
             0.,
             "back to the head"
         );
+    }
+
+    /// The reader's code and head sit on the type scale's tokens: code at
+    /// the transcript's code size on the grid's row, the head at the UI
+    /// size (the owner's: the reader read larger than the transcript).
+    #[test]
+    fn the_readers_code_and_head_are_set_in_the_scales_tokens() {
+        use ferrite_ui::theme::{FONT_CODE, FS_PROSE, FS_READER_CODE, FS_UI, LH_UI, TX_BLOCK_STEP};
+        assert_eq!(FS_READER_CODE, FS_PROSE - TX_BLOCK_STEP, "the fences' size");
+        let text = Arc::new(Text::new("fn main() {}\n".into()));
+        let mut lines = numbered_lines(
+            Path::new("main.rs"),
+            text,
+            None,
+            gpui::UniformListScrollHandle::new(),
+            None,
+        );
+        let style = lines.style();
+        assert_eq!(style.text.font_family.as_deref(), Some(FONT_CODE));
+        assert_eq!(style.text.font_size, Some(px(FS_READER_CODE).into()));
+        assert_eq!(style.text.line_height, Some(px(LH_UI).into()));
+        let mut head = reading_head(div(), []);
+        assert_eq!(head.style().text.font_size, Some(px(FS_UI).into()));
     }
 }

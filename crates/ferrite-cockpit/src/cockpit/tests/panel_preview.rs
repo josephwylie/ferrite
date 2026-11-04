@@ -321,3 +321,58 @@ fn hiding_the_panel_puts_its_preview_away(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(panel_w(cx), Some(PANEL_W), "back on its own tab");
 }
+
+/// The owner's `verification.txt`: a plain-text file reads as prose, as
+/// Claude's file viewer reads it — the UI face at the transcript's reading
+/// size, wrapped, no line numbers — its words exactly as written (no
+/// Markdown in them); a code file keeps its numbered lines in mono.
+#[gpui::test]
+fn a_plain_text_file_reads_as_prose_not_numbered_mono(cx: &mut TestAppContext) {
+    let (view, _fake, cx) = window("preview-prose", 1, cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.update(cx, |view, cx| view.open_panel(thread, cx));
+    tick(cx);
+    let dir = scratch("preview-prose-file");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("verification.txt");
+    std::fs::write(
+        &file,
+        "Workmate Rhea\n\n# not a heading\n1. not a list *or emphasis*\n    indented\n",
+    )
+    .unwrap();
+
+    preview(&view, &file, None, cx);
+    let id = format!("document-{}", file.display());
+    assert!(
+        cx.debug_bounds("preview-markdown").is_some(),
+        "a reading view"
+    );
+    cx.update(|_, cx| {
+        use ferrite_pane::rich::testing;
+        assert_eq!(
+            testing::font_family(&id, cx).as_deref(),
+            Some(ferrite_ui::theme::FONT_UI),
+            "prose is UI text"
+        );
+        assert_eq!(
+            testing::font_size(&id, cx),
+            Some(px(ferrite_ui::theme::FS_PROSE)),
+            "at the transcript's reading size"
+        );
+        let shown = testing::full_text(&id, cx).unwrap();
+        assert!(shown.contains("# not a heading"), "{shown:?}");
+        assert!(shown.contains("1. not a list *or emphasis*"), "{shown:?}");
+        assert!(
+            shown.contains("\u{a0}\u{a0}\u{a0}\u{a0}indented"),
+            "{shown:?}"
+        );
+    });
+
+    // Code keeps its numbered lines.
+    let code = source("preview-prose-code", 3);
+    preview(&view, &code, None, cx);
+    assert!(
+        cx.debug_bounds("preview-markdown").is_none(),
+        "numbered lines"
+    );
+}

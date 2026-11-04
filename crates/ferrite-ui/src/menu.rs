@@ -156,10 +156,10 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
     let label = div()
         .min_w_0()
         .truncate()
-        .map(|cell| match item.label_w {
-            // An aligned column holds names that are code.
-            Some(width) => cell.w(px(width)).flex_shrink_0().font_family(FONT_CODE),
-            None => cell,
+        // An aligned column (the `/` picker's names) is the row's own UI
+        // face, as Claude's: the cockpit measures it in that face.
+        .when_some(item.label_w, |cell, width| {
+            cell.w(px(width)).flex_shrink_0()
         })
         .child(gpui::StyledText::new(label).with_highlights(highlights));
     // A badge rides the label's line; a note takes a line of its own under
@@ -220,16 +220,14 @@ pub fn row_face(item: &Item, cursor: bool, armed: bool) -> Div {
         })
         .child(label)
         .map(|row| match item.detail.clone() {
-            Some(detail) => {
-                let cell = div().flex_1().min_w_0().truncate().text_color(rgb(dim));
-                row.child(if item.mono {
-                    cell.font_family(FONT_CODE)
-                        .text_ellipsis_start()
-                        .child(detail)
-                } else {
-                    cell.child(detail)
-                })
-            }
+            Some(detail) => row.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(dim))
+                    .child(detail),
+            ),
             None => row.child(div().flex_1()),
         })
         .when_some(item.tag.clone(), |row, tag| row.child(badge_face(tag)))
@@ -1457,6 +1455,24 @@ mod tests {
                     .with_priority(2),
                 )
         }
+    }
+
+    /// The `/` and `@` pickers' rows are UI text at the UI size, as
+    /// Claude's are: their aligned name column and their details take the
+    /// row's own face, never the code face (the owner's: skill names drawn
+    /// mono, and cut, since the column is measured in the UI face).
+    #[test]
+    fn a_picker_row_is_ui_text_through_and_through() {
+        let source = include_str!("menu.rs");
+        let face = &source[source.find("pub fn row_face").unwrap()..];
+        let face = &face[..face.find("\n}\n").unwrap()];
+        assert!(!face.contains("FONT_CODE"), "a menu row names no code face");
+        let item = Item::new("better-interface")
+            .label_w(120.)
+            .detail("User-invoked, cross-discipline interface work");
+        let mut drawn = row_face(&item, false, false);
+        assert_eq!(drawn.style().text.font_family.as_deref(), Some(FONT_UI));
+        assert_eq!(drawn.style().text.font_size, Some(px(FS_UI).into()));
     }
 
     #[test]

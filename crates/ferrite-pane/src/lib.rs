@@ -5,7 +5,6 @@ pub mod composer;
 pub mod decision;
 pub mod file_links;
 pub mod find;
-pub mod hover_card;
 pub mod image_viewer;
 mod line;
 pub mod mark;

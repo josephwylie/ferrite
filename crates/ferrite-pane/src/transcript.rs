@@ -13,9 +13,9 @@ mod rows;
 pub use rows::gated;
 mod scroll;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 use ferrite_core::{
     transcript::{Block, BlockId, Body, Status, ToolState},
@@ -32,7 +32,6 @@ use self::{
 };
 use crate::{
     file_links::TargetContext,
-    hover_card::{CardStat, HoverCard},
     pane::{self, DisclosureId, DisclosureState, Grid},
     preview::Preview,
     rich::TextCache,
@@ -149,8 +148,6 @@ pub struct TranscriptInput {
     /// Whether the model's thinking shows as `∴` rows (Settings'
     /// `show_thinking`, the palette's `show thinking`).
     pub thinking: bool,
-    /// When each edit settled, seen live: the hover card's age.
-    pub settled_at: BTreeMap<String, SystemTime>,
     /// The subagents this transcript's calls started, by call: the blocks
     /// already carry their standing (`AgentFaces::apply`); a call with a
     /// face opens its agent (`TranscriptEvent::OpenAgent`).
@@ -300,7 +297,7 @@ pub struct TranscriptView {
     /// come in over their motion (`arrival_fade`). First paint, a history
     /// window growing at its head and a row scrolled back into view never
     /// do.
-    arrivals: HashMap<RowId, (Instant, ferrite_ui::motion::MotionSpec)>,
+    arrivals: HashMap<RowId, Arrival>,
     /// When the streaming answer last grew: its new words fade in by the
     /// run (`rich::Markdown::streaming`), and this transcript asks for the
     /// frames until the last has landed.
@@ -334,8 +331,6 @@ pub struct TranscriptView {
     /// What prose path targets resolve against: the checkout and the paths
     /// this window's calls named.
     targets: TargetContext,
-    /// The hover card this transcript hosts, while a path of its is hovered.
-    hover_card: Option<Entity<HoverCard>>,
     /// Room past the last row so a band jump can put its band at the top
     /// of a transcript shorter than that (a board Pane with its first prompt
     /// scrolled away, R2): see `Runway`.
@@ -404,7 +399,6 @@ impl TranscriptView {
                 workspace: None,
                 solo: false,
                 thinking: false,
-                settled_at: BTreeMap::new(),
                 agents: Default::default(),
                 rewind: None,
                 quotes: false,
@@ -434,16 +428,6 @@ impl TranscriptView {
         } else {
             input.selection_scope
         };
-        // The hover card follows the pointer between path targets: a
-        // transcript hosting one (or asked to by a scene) draws again.
-        cx.observe_global::<crate::hover_card::HoverCards>(|view: &mut Self, cx| {
-            let involved = crate::hover_card::involves(&view.input.namespace, cx);
-            if !involved && view.hover_card.take().is_none() {
-                return;
-            }
-            cx.notify();
-        })
-        .detach();
         let targets = target_context(&input);
         let times = answer_times(&input.blocks);
         // Chromium came up (the first visual asked for it): draw the
@@ -476,7 +460,6 @@ impl TranscriptView {
             #[cfg(any(test, feature = "test-support"))]
             disclosure_bounds: Default::default(),
             targets,
-            hover_card: None,
             runway: Rc::default(),
             visuals,
             list_w: Rc::default(),
@@ -560,7 +543,6 @@ impl TranscriptView {
         self.selection_source = selection_source;
         if namespace_changed {
             self.register_scope(cx);
-            self.hover_card = None;
         }
         if content_changed || workspace_changed {
             self.targets = target_context(&self.input);
@@ -629,8 +611,7 @@ impl TranscriptView {
     /// live. The working row and the Decision after them are not content.
     fn note_arrivals(&mut self, tail: Option<RowId>, cx: &App) {
         let now = cx.background_executor().now();
-        self.arrivals
-            .retain(|_, (at, fade)| now.saturating_duration_since(*at) < fade.duration());
+        self.arrivals.retain(|_, arrival| arrival.moving(now));
         let Some(tail) = tail else {
             return;
         };
@@ -640,8 +621,10 @@ impl TranscriptView {
         };
         for row in &rows[at + 1..] {
             if !matches!(row.kind(), RowKind::Working | RowKind::Tail) {
-                self.arrivals
-                    .insert(row.id().clone(), (now, arrival_fade(row.kind())));
+                self.arrivals.insert(
+                    row.id().clone(),
+                    Arrival::new(arrival_fade(row.kind()), now),
+                );
             }
         }
     }
@@ -651,19 +634,36 @@ impl TranscriptView {
         self.arrivals.len()
     }
 
-    /// How far a live-appended row is into its motion, while it moves: a
-    /// streamed row's fade lands early once the turn ends (`landed_at`).
-    fn arrival(&self, row: &RowId, cx: &App) -> Option<f32> {
+    /// How far along each row still on its way in is now (0 until a frame
+    /// draws it), read without starting a clock.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn arriving(&self, cx: &App) -> Vec<f32> {
+        let now = cx.background_executor().now();
+        self.arrivals
+            .values()
+            .filter(|arrival| arrival.moving(now))
+            .map(|arrival| {
+                arrival.drawn.map_or(0., |drawn| {
+                    arrival
+                        .spec
+                        .progress_at(now.saturating_duration_since(drawn))
+                })
+            })
+            .collect()
+    }
+
+    /// How far a live-appended row is into its motion, while it moves. Its
+    /// clock starts on the frame that first draws it: the frame after a
+    /// send or a turn's end is the heaviest there is, and a clock started
+    /// at the change would have spent most of the entrance before a pixel
+    /// of it showed. A row that arrives whole plays its whole fade, the
+    /// turn's end or not; only streamed words land early (`landed_at`).
+    fn arrival(&mut self, row: &RowId, cx: &App) -> Option<f32> {
         if ferrite_ui::motion::reduced_motion(cx) {
             return None;
         }
-        let (at, fade) = self.arrivals.get(row)?;
         let now = cx.background_executor().now();
-        self.moving(*at, *fade, now)
-            .then(|| match *fade == ferrite_ui::motion::STREAM_FADE {
-                true => fade.progress(self.streamed_progress(*at, now)),
-                false => fade.progress_at(now.saturating_duration_since(*at)),
-            })
+        self.arrivals.get_mut(row)?.drawn(now)
     }
 
     /// A streamed fade's linear progress, landing with the turn's end.
@@ -682,24 +682,17 @@ impl TranscriptView {
             .map(|ended| (ended, ferrite_ui::motion::STREAM_LAND))
     }
 
-    /// Whether a motion that began `at` still moves at `now`.
-    fn moving(&self, at: Instant, spec: ferrite_ui::motion::MotionSpec, now: Instant) -> bool {
-        if spec == ferrite_ui::motion::STREAM_FADE {
-            self.streamed_progress(at, now) < 1.
-        } else {
-            now.saturating_duration_since(at) < spec.duration()
-        }
+    /// Whether the streaming answer's newest words still fade at `now`.
+    fn streaming_fade(&self, now: Instant) -> bool {
+        self.streamed_at
+            .is_some_and(|at| self.streamed_progress(at, now) < 1.)
     }
 
     /// When the turn ended, while the newest answer's words still land.
     fn answer_landing(&self, cx: &App) -> Option<Instant> {
         let now = cx.background_executor().now();
-        self.landed_at.filter(|_| {
-            self.input.working.is_none()
-                && self
-                    .streamed_at
-                    .is_some_and(|at| self.moving(at, ferrite_ui::motion::STREAM_FADE, now))
-        })
+        self.landed_at
+            .filter(|_| self.input.working.is_none() && self.streaming_fade(now))
     }
 
     /// Whether a fade is still running (a row arriving, the streaming
@@ -710,12 +703,7 @@ impl TranscriptView {
             return false;
         }
         let now = cx.background_executor().now();
-        self.streamed_at
-            .is_some_and(|at| self.moving(at, ferrite_ui::motion::STREAM_FADE, now))
-            || self
-                .arrivals
-                .values()
-                .any(|(at, fade)| self.moving(*at, *fade, now))
+        self.streaming_fade(now) || self.arrivals.values().any(|arrival| arrival.moving(now))
     }
 
     /// The newest content row: the working row and the Decision stand
@@ -1506,52 +1494,6 @@ impl TranscriptView {
         }
     }
 
-    /// The hover card this transcript hosts now, hung under its path.
-    fn hover_card(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let Some(hovered) = crate::hover_card::current(&self.input.namespace, cx) else {
-            self.hover_card = None;
-            return None;
-        };
-        let reuse = self
-            .hover_card
-            .as_ref()
-            .filter(|card| card.read(cx).shows(&hovered.target))
-            .cloned();
-        let card = match reuse {
-            Some(card) => card,
-            None => {
-                let shown = hovered.target.display();
-                let stat = ferrite_core::transcript::file_stat_in(
-                    &self.input.blocks,
-                    &self.input.settled_at,
-                    &hovered.target.path.display().to_string(),
-                )
-                .or_else(|| {
-                    ferrite_core::transcript::file_stat_in(
-                        &self.input.blocks,
-                        &self.input.settled_at,
-                        shown.as_ref(),
-                    )
-                });
-                let target = hovered.target.clone();
-                let card = cx.new(|_| {
-                    HoverCard::new(
-                        target,
-                        stat.and_then(|stat| stat.last_change_line),
-                        stat.map(|stat| CardStat {
-                            added: stat.added,
-                            removed: stat.removed,
-                            at: stat.at,
-                        }),
-                    )
-                });
-                self.hover_card = Some(card.clone());
-                card
-            }
-        };
-        Some(crate::hover_card::hang(card, hovered.anchor, window, cx))
-    }
-
     /// A message's `Copy` (`components::copy_button`, the message action's
     /// door): `text` to the clipboard, a check for `COPIED_HOLD_MS` after.
     fn copy_action(&self, row: &RowId, text: String) -> AnyElement {
@@ -1817,6 +1759,44 @@ impl TranscriptView {
                 )
                 .into_any_element(),
         )
+    }
+}
+
+/// A row appended live, on its way in: noted when it arrived, its clock
+/// started by the first frame that draws it ([`Arrival::drawn`]).
+#[derive(Clone, Copy, Debug)]
+struct Arrival {
+    spec: ferrite_ui::motion::MotionSpec,
+    noted: Instant,
+    drawn: Option<Instant>,
+}
+
+impl Arrival {
+    fn new(spec: ferrite_ui::motion::MotionSpec, now: Instant) -> Self {
+        Self {
+            spec,
+            noted: now,
+            drawn: None,
+        }
+    }
+
+    /// Whether it still moves at `now`: drawn, for its spec's length; not
+    /// yet drawn (scrolled away, say), for as long from its arrival, after
+    /// which it simply stands there when it is.
+    fn moving(&self, now: Instant) -> bool {
+        let since = self.drawn.unwrap_or(self.noted);
+        now.saturating_duration_since(since) < self.spec.duration()
+    }
+
+    /// Drawn now: how far into its motion, while it moves. The first draw
+    /// starts its clock.
+    fn drawn(&mut self, now: Instant) -> Option<f32> {
+        if self.drawn.is_none() && self.moving(now) {
+            self.drawn = Some(now);
+        }
+        let drawn = self.drawn?;
+        self.moving(now)
+            .then(|| self.spec.progress_at(now.saturating_duration_since(drawn)))
     }
 }
 
@@ -2567,7 +2547,6 @@ impl Render for TranscriptView {
         if crate::file_links::take_fading() {
             cx.notify();
         }
-        let card = self.hover_card(window, cx);
         let reply = self.reply_float(window, cx);
         let output_menu = self.output_menu_float(cx);
         let answer_menu = self.answer_menu_float(cx);
@@ -2612,7 +2591,6 @@ impl Render for TranscriptView {
             }))
             .children(latest)
             .children(minimap)
-            .children(card)
             .children(reply)
             .children(output_menu)
             .children(answer_menu)
@@ -2627,7 +2605,43 @@ impl Render for TranscriptView {
 
 #[cfg(test)]
 mod tests {
-    use super::answer_times;
+    use super::{answer_times, Arrival};
+    use ferrite_ui::motion::{BUBBLE_IN, STREAM_FADE};
+    use std::time::{Duration, Instant};
+
+    /// A row's entrance starts on the frame that first draws it, however
+    /// long the frame after its arrival took: the whole entrance plays.
+    #[test]
+    fn an_arrival_starts_its_clock_on_its_first_draw() {
+        let noted = Instant::now();
+        let ms = |ms: u64| noted + Duration::from_millis(ms);
+        let mut arrival = Arrival::new(BUBBLE_IN, noted);
+        assert_eq!(
+            arrival.drawn(ms(200)),
+            Some(0.0),
+            "drawn late, from its start"
+        );
+        let half = arrival.drawn(ms(200) + BUBBLE_IN.duration() / 2).unwrap();
+        assert!(half > 0.0 && half < 1.1, "mid-entrance: {half}");
+        assert!(arrival.moving(ms(200) + BUBBLE_IN.duration() - Duration::from_millis(1)));
+        assert_eq!(
+            arrival.drawn(ms(200) + BUBBLE_IN.duration()),
+            None,
+            "landed"
+        );
+    }
+
+    /// A row never drawn (scrolled away) asks for frames no longer than
+    /// its entrance would have run, and then simply stands there.
+    #[test]
+    fn an_arrival_never_drawn_stops_asking() {
+        let noted = Instant::now();
+        let mut arrival = Arrival::new(STREAM_FADE, noted);
+        assert!(arrival.moving(noted + STREAM_FADE.duration() / 2));
+        let late = noted + STREAM_FADE.duration();
+        assert!(!arrival.moving(late));
+        assert_eq!(arrival.drawn(late), None, "drawn after: no entrance");
+    }
     use ferrite_core::transcript::{Body, Input, Transcript};
     use ferrite_core::SessionEvent;
 

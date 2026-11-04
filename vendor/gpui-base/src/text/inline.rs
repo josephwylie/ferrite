@@ -772,64 +772,47 @@ impl Inline {
         bounds: &Bounds<Pixels>,
         window: &mut Window,
         color: gpui::Hsla,
-    ) {
+    ) -> Vec<Bounds<Pixels>> {
         let mut start = selection.start;
         let mut end = selection.end;
         if end < start {
             std::mem::swap(&mut start, &mut end);
         }
         let Some(start_position) = text_layout.position_for_index(start) else {
-            return;
+            return Vec::new();
         };
         let Some(end_position) = text_layout.position_for_index(end) else {
-            return;
+            return Vec::new();
         };
 
         let line_height = text_layout.line_height();
+        // Ferrite: the rectangles, kept for what places itself by the
+        // selection (`TextSelection::painted_bounds`).
+        let mut rects = Vec::new();
         if start_position.y == end_position.y {
-            window.paint_quad(quad(
-                Bounds::from_corners(
-                    start_position,
-                    point(end_position.x, end_position.y + line_height),
-                ),
-                px(0.),
-                color,
-                Edges::default(),
-                gpui::transparent_black(),
-                BorderStyle::default(),
+            rects.push(Bounds::from_corners(
+                start_position,
+                point(end_position.x, end_position.y + line_height),
             ));
         } else {
-            window.paint_quad(quad(
-                Bounds::from_corners(
-                    start_position,
-                    point(bounds.right(), start_position.y + line_height),
-                ),
-                px(0.),
-                color,
-                Edges::default(),
-                gpui::transparent_black(),
-                BorderStyle::default(),
+            rects.push(Bounds::from_corners(
+                start_position,
+                point(bounds.right(), start_position.y + line_height),
             ));
-
             if end_position.y > start_position.y + line_height {
-                window.paint_quad(quad(
-                    Bounds::from_corners(
-                        point(bounds.left(), start_position.y + line_height),
-                        point(bounds.right(), end_position.y),
-                    ),
-                    px(0.),
-                    color,
-                    Edges::default(),
-                    gpui::transparent_black(),
-                    BorderStyle::default(),
+                rects.push(Bounds::from_corners(
+                    point(bounds.left(), start_position.y + line_height),
+                    point(bounds.right(), end_position.y),
                 ));
             }
-
+            rects.push(Bounds::from_corners(
+                point(bounds.left(), end_position.y),
+                point(end_position.x, end_position.y + line_height),
+            ));
+        }
+        for rect in &rects {
             window.paint_quad(quad(
-                Bounds::from_corners(
-                    point(bounds.left(), end_position.y),
-                    point(end_position.x, end_position.y + line_height),
-                ),
+                *rect,
                 px(0.),
                 color,
                 Edges::default(),
@@ -837,6 +820,7 @@ impl Inline {
                 BorderStyle::default(),
             ));
         }
+        rects
     }
 }
 
@@ -1043,12 +1027,16 @@ impl Element for Inline {
             window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
         }
 
+        let mut painted = Vec::new();
         if let Some(selection) = &state.selection {
             let color = GlobalState::global(cx)
                 .text_view_state()
                 .map(|state| state.read(cx).text_view_style.selection())
                 .unwrap_or_else(|| crate::Theme::global(cx).tokens.colors.selection);
-            Self::paint_selection(selection, &text_layout, &bounds, window, color);
+            painted = Self::paint_selection(selection, &text_layout, &bounds, window, color);
+        }
+        if let Some(id) = global_id {
+            crate::TextSelection::note_painted(id, painted, window, cx);
         }
 
         // Projection construction reads the same state for its logical source

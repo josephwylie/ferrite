@@ -500,8 +500,7 @@ impl RenderOnce for Attachments {
 /// A file link in prose: the path as the prose wrote it on the inline-code
 /// chip (`rich::code_chip`, as neither reference app colours a path), a
 /// `:line` suffix in `INK_SUBTLE`. It is a path target
-/// (`file_links::wire_inline`): an underline only under the pointer, the hover card while it is there (hosted by `scope`,
-/// the transcript it sits in), ⌘-click to the Thread's preview; a plain
+/// (`file_links::wire_inline`): an underline only under the pointer, ⌘-click to the Thread's preview; a plain
 /// click opens it in the Pane's preview too, at its `:line`. The native Markdown flow
 /// reserves the returned size and wraps the link atomically, so the width is
 /// measured in the face and size it is drawn in (the prose's own): the path
@@ -554,13 +553,11 @@ pub fn inline_file(
     let host = preview.cloned();
     let selector = format!("file-attachment-{}", file.path.display());
     let accessibility = format!("Open {name}");
-    let mut target = crate::file_links::PathTarget::new(file.path.clone())
-        .at_line(
-            file.location
-                .as_deref()
-                .and_then(crate::file_links::location_line),
-        )
-        .shown(gpui::SharedString::from(name.clone()));
+    let mut target = crate::file_links::PathTarget::new(file.path.clone()).at_line(
+        file.location
+            .as_deref()
+            .and_then(crate::file_links::location_line),
+    );
     if let Some(scope) = scope {
         target = target.in_scope(scope);
     }

@@ -3,7 +3,7 @@
 //! the call a pending Decision gates, the checkout its paths resolve
 //! against, the subagents its calls started), and the commands that act on the transcript the operator is
 //! reading — copy and resend the prompt in view, scroll to a target, open a
-//! path's hover card, open a path in a reader.
+//! path in a reader.
 //!
 //! The prompt band answers nothing under the pointer, so copy and resend
 //! are commands here (the palette and the keymap call them), acting on the

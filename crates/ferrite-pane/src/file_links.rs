@@ -1,9 +1,9 @@
 //! Resolve transcript destinations once, then hand the OS a real file URL;
 //! and the transcript's path targets — every path the transcript names
 //! (a tool call's argument, a prose path, a Markdown file link, a
-//! checkout, an inline file chip) underlines under the pointer, opens the
-//! hover card (`hover_card`), and ⌘-click opens it in a reader pane beside
-//! the Thread (`TranscriptEvent::OpenReader` → `CockpitView::open_beside`).
+//! checkout, an inline file chip) underlines under the pointer, and
+//! ⌘-click opens it in a reader pane beside the Thread. No hint or card
+//! hangs from it: neither Claude nor Codex draws one (`TranscriptEvent::OpenReader` → `CockpitView::open_beside`).
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -130,13 +130,12 @@ pub(crate) fn location_line(location: &str) -> Option<u32> {
 // ------------------------------------------------------------ path targets
 
 /// A path the transcript names, as a hit target: where it resolves, the
-/// line it points at, how the hover card's head names it, and the
-/// transcript (its namespace) that hosts the card and hears ⌘-click.
+/// line it points at, and the transcript (its namespace) that hears
+/// ⌘-click.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PathTarget {
     pub path: PathBuf,
     pub line: Option<u32>,
-    pub shown: Option<SharedString>,
     pub scope: Option<SharedString>,
 }
 
@@ -145,7 +144,6 @@ impl PathTarget {
         Self {
             path: path.into(),
             line: None,
-            shown: None,
             scope: None,
         }
     }
@@ -155,22 +153,9 @@ impl PathTarget {
         self
     }
 
-    pub(crate) fn shown(mut self, shown: impl Into<SharedString>) -> Self {
-        self.shown = Some(shown.into());
-        self
-    }
-
     pub(crate) fn in_scope(mut self, scope: impl Into<SharedString>) -> Self {
         self.scope = Some(scope.into());
         self
-    }
-
-    /// How the hover card's head names it: as the transcript did, else the
-    /// path itself.
-    pub(crate) fn display(&self) -> SharedString {
-        self.shown
-            .clone()
-            .unwrap_or_else(|| SharedString::from(self.path.display().to_string()))
     }
 
     /// A stable key for this target's hover fade and element ids.
@@ -339,21 +324,17 @@ fn underline(key: &str, ink: u32, size: f32, line: f32) -> gpui::Div {
         .opacity(shown)
 }
 
-/// Wire `element` as a path target: the pointer cursor, the hover card while
-/// the pointer is on it, ⌘-click to the preview, and its laid-out box kept.
+/// Wire `element` as a path target: the pointer cursor, its underline's
+/// fade, ⌘-click to the preview, and its laid-out box kept.
 fn wire_target(
     element: gpui::Stateful<gpui::Div>,
     target: PathTarget,
     fade: SharedString,
 ) -> gpui::Stateful<gpui::Div> {
-    let bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::default();
-    let measured = bounds.clone();
     let recorded = target.clone();
-    let hovered = target.clone();
     let clicked = target;
     let fade = ferrite_ui::motion::hover_listener(fade);
     ferrite_ui::components::on_bounds(element, move |laid, _, cx| {
-        measured.set(Some(laid));
         if let Some(scope) = recorded.scope.clone() {
             cx.default_global::<PathScopes>()
                 .laid_out
@@ -364,14 +345,7 @@ fn wire_target(
         }
     })
     .cursor_pointer()
-    .on_hover(move |over, window, cx| {
-        fade(over, window, cx);
-        match (*over, bounds.get()) {
-            (true, Some(anchor)) => crate::hover_card::enter(&hovered, anchor, window, cx),
-            (false, _) => crate::hover_card::leave(&hovered, window, cx),
-            _ => {}
-        }
-    })
+    .on_hover(move |over, window, cx| fade(over, window, cx))
     .on_click(move |event, window, cx| {
         if event.modifiers().secondary() {
             cx.stop_propagation();
@@ -383,7 +357,7 @@ fn wire_target(
 
 /// A path in its own run (`path_text`, the Phase-0 seam the
 /// empty board share): the label in `LINK_INK`, underlined under the
-/// pointer, the hover card, ⌘-click to a reader. It inherits the face and
+/// pointer, ⌘-click to a reader. It inherits the face and
 /// size it sits in.
 pub fn path_text(label: SharedString, target: PathTarget) -> AnyElement {
     let key = target.key("text");

@@ -72,7 +72,7 @@ pub fn menu_item(row: &MenuRow, label_w: Option<f32>) -> components::MenuItem {
         } else {
             head_truncated(&row.detail, theme::MENU_PATH_TAIL)
         };
-        item = item.detail(detail).mono(!row.prose_detail);
+        item = item.detail(detail);
     }
     if let Some(tag) = &row.tag {
         item = item.tag(tag.clone());

@@ -1328,6 +1328,57 @@ fn a_live_appended_row_fades_in_and_then_rests(cx: &mut TestAppContext) {
     assert_eq!(display_frames(cx), 0, "landed: no more frames");
 }
 
+/// An answer that arrives whole as its turn ends (a short reply: one delta,
+/// then the turn's end) fades in over all of `motion::STREAM_FADE`, live:
+/// the turn's end lands streamed words quickly (`STREAM_LAND`), never a
+/// row that has only just come.
+#[gpui::test]
+fn an_answer_arriving_whole_at_its_turn_end_plays_its_whole_fade(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (mut core, fake) = cockpit("motion-whole-answer", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Say hello".into());
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    settle(cx);
+    let arriving = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.panes[0]
+                .transcript()
+                .map(|transcript| transcript.read(cx).arriving(cx))
+                .unwrap_or_default()
+        })
+    };
+    let stream = fake.streams.borrow()[0].clone();
+    stream
+        .send(SessionEvent::TextDelta {
+            text: "Hello.".into(),
+        })
+        .unwrap();
+    stream
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    let past_landing = ferrite_ui::theme::MOTION_STREAM_LAND_MS + 80;
+    for _ in 0..past_landing / 16 {
+        display_frames(cx);
+        cx.executor().advance_clock(Duration::from_millis(16));
+    }
+    display_frames(cx);
+    let fading = arriving(cx);
+    assert_eq!(fading.len(), 1, "the answer still fades in: {fading:?}");
+    assert!(fading[0] > 0.0 && fading[0] < 1.0, "part way: {fading:?}");
+    cx.executor().advance_clock(Duration::from_millis(
+        ferrite_ui::theme::MOTION_STREAM_FADE_MS,
+    ));
+    display_frames(cx);
+    assert!(arriving(cx).is_empty(), "and lands");
+}
+
 /// One clock, one breath (rule 2.10.8): N working Panes and N unread Panes
 /// on one board cost at most the pulse clock's 1000/33 ticks a second, and
 /// no display frame but the working marks' one request.

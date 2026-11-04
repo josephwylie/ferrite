@@ -1919,7 +1919,6 @@ impl CockpitView {
             workspace,
             solo,
             thinking: self.prefs.settings.show_thinking,
-            settled_at: transcript.settled_at().clone(),
             agents,
             rewind,
             quotes,
@@ -6171,6 +6170,10 @@ impl CockpitView {
                 }
                 let menu = self.draft_commands.as_mut().expect("initialized above");
                 menu.poll();
+                if menu.pending.is_none() && menu.error.is_none() {
+                    pane.composer
+                        .update(cx, |composer, cx| composer.set_commands(&menu.commands, cx));
+                }
                 let mut rows: Vec<Row> = command_rows(&menu.commands, filter)
                     .into_iter()
                     .map(|row| Row {
@@ -10242,6 +10245,16 @@ impl CockpitView {
             });
         }
         self.sync_composer_floats(cx);
+        // Each Thread's line chips the `/name`s its Session knows, however
+        // they got into the text (a draft's line keeps what its `/` menu
+        // last discovered: `derive_menu`).
+        for pane in &self.panes {
+            if let Some(open) = pane.thread().and_then(|thread| self.cockpit.thread(thread)) {
+                pane.composer.update(cx, |composer, cx| {
+                    composer.set_commands(open.commands(), cx)
+                });
+            }
+        }
         let history_available: Vec<bool> = (0..self.panes.len())
             .map(|index| self.history_available(index, level))
             .collect();

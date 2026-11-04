@@ -756,3 +756,191 @@ fn page_keys_scroll_the_transcript_from_an_empty_line(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(scroll(cx).1, "End follows the tail again");
 }
+
+/// A frame that redraws only the window's chrome — the loops overlay's
+/// caret blink, a hover's blend on the nav — reuses the cached Panes.
+fn redraw_chrome_only(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+    view.update(cx, |view, cx| view.notify_frame(cx));
+    cx.run_until_parked();
+}
+
+/// The owner's drag-select bug: in the app, a plain press–drag–release
+/// over the transcript selected nothing (only a double-click did). The
+/// window's other frames (the caret's blink, a hover) redraw around the
+/// cached Panes, and each such frame must keep their text selectable: a
+/// drag then selects across words and across lines, in answers and in a
+/// prompt.
+#[gpui::test]
+fn a_plain_drag_selects_after_frames_that_reuse_the_panes(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("drag-after-chrome-frames", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "the prompt words".into());
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "alpha beta gamma\n\nbravo delta\n\n".into(),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    redraw_chrome_only(&view, cx);
+    redraw_chrome_only(&view, cx);
+
+    // Across words, in an answer.
+    drag(&view, cx, (1, 2), (1, 13));
+    assert_eq!(copied(cx).as_deref(), Some("pha beta ga"));
+    redraw_chrome_only(&view, cx);
+    cx.update(|window, cx| {
+        assert!(
+            gpui::base::TextSelection::has_selection(window, cx),
+            "the selection outlives a chrome-only frame"
+        );
+    });
+
+    // Across lines.
+    redraw_chrome_only(&view, cx);
+    drag(&view, cx, (1, 6), (2, 5));
+    assert_eq!(copied(cx).as_deref(), Some("beta gamma\nbravo"));
+
+    // In the prompt.
+    redraw_chrome_only(&view, cx);
+    drag(&view, cx, (0, 4), (0, 10));
+    assert_eq!(copied(cx).as_deref(), Some("prompt"));
+}
+
+/// What ⌘C puts on the clipboard from the selection.
+fn copied(cx: &mut gpui::VisualTestContext) -> Option<String> {
+    cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(String::new())));
+    cx.simulate_keystrokes("cmd-c");
+    clipboard(cx)
+}
+
+/// The owner's pill bug: the selection's pill stays while its selection
+/// does — the pointer moving onto it, and frames that reuse the Panes,
+/// keep it — and a press on it fires; a double-click's word offers it as
+/// a drag's passage does.
+#[gpui::test]
+fn the_reply_pill_stays_under_the_pointer_and_its_press_fires(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("reply-pill-hover", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "alpha beta gamma\n\nbravo delta\n\n".into(),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+
+    drag(&view, cx, (0, 6), (0, 10));
+    let pill = cx.debug_bounds("selection-reply").expect("the pill draws");
+    cx.simulate_mouse_move(pill.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    redraw_chrome_only(&view, cx);
+    assert!(offered(&view, cx), "the pointer on the pill keeps it");
+    let reply = cx
+        .debug_bounds("selection-reply-quote")
+        .expect("still drawn under the pointer");
+    cx.simulate_click(reply.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[0].composer.read(cx).quotes(), ["beta"]);
+    });
+
+    // A double-click's word offers it too.
+    let word = caret(&view, cx, 1, 8);
+    press(cx, word, 1);
+    cx.simulate_mouse_up(word, gpui::MouseButton::Left, gpui::Modifiers::none());
+    press(cx, word, 2);
+    cx.simulate_mouse_up(word, gpui::MouseButton::Left, gpui::Modifiers::none());
+    tick(cx);
+    assert!(offered(&view, cx), "a double-click's word offers the pill");
+    assert!(cx.debug_bounds("selection-reply").is_some());
+}
+
+/// The owner's placement bug: the pill stood wherever the pointer let go,
+/// over the chat. Claude's (and now Ferrite's) stands by the selection:
+/// over its first line, centred on it, `SELECTION_REPLY_GAP` clear, never
+/// on the selected text — whichever way the drag went — and under its
+/// last line when the transcript has no room above; always inside the
+/// transcript's column.
+#[gpui::test]
+fn the_reply_pill_stands_clear_of_the_selection_not_at_the_pointer(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("reply-pill-place", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "alpha beta gamma\n\nbravo delta\n\ncharlie echo\n\nfoxtrot golf\n\n".into(),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    let column = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .transcript()
+            .unwrap()
+            .read(cx)
+            .scroll()
+            .bounds()
+    });
+    let check = |cx: &mut gpui::VisualTestContext, case: &str| {
+        let pill = cx.debug_bounds("selection-reply").expect("the pill draws");
+        let rects = cx.update(|window, cx| gpui::base::TextSelection::painted_bounds(window, cx));
+        assert!(!rects.is_empty(), "{case}: the selection paints");
+        for rect in &rects {
+            assert!(!pill.intersects(rect), "{case}: {pill:?} covers {rect:?}");
+        }
+        let top = rects
+            .iter()
+            .map(|rect| rect.top())
+            .fold(px(f32::MAX), |a, b| a.min(b));
+        let gap = top - pill.bottom();
+        assert!(
+            gap >= px(4.) && gap <= px(ferrite_ui::theme::SELECTION_REPLY_GAP + 1.),
+            "{case}: just above the first line, {gap:?} clear"
+        );
+        assert!(
+            pill.left() >= column.left() && pill.right() <= column.right(),
+            "{case}: inside the column {column:?}: {pill:?}"
+        );
+        pill
+    };
+
+    // Along a line: centred over the run.
+    let (from, to) = drag(&view, cx, (0, 6), (0, 15));
+    let pill = check(cx, "a drag along a line");
+    let middle = (from.x + to.x) / 2.;
+    assert!(
+        (pill.center().x - middle).abs() < px(8.),
+        "centred over the run at {middle:?}: {pill:?}"
+    );
+
+    redraw_chrome_only(&view, cx);
+    // Down across lines, let go far below the first line.
+    let (from, to) = drag(&view, cx, (1, 2), (3, 4));
+    let pill = check(cx, "a drag down");
+    assert!(
+        pill.bottom() < from.y && (pill.center().y - to.y).abs() > px(40.),
+        "by the selection's first line, not the pointer at {to:?}"
+    );
+}

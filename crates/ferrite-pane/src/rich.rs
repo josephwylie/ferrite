@@ -103,7 +103,7 @@ pub struct TextCache(
     Rc<RefCell<(u64, HashMap<SharedString, CachedText>, usize)>>,
     Rc<RefCell<(Option<std::path::PathBuf>, Option<crate::preview::Preview>)>>,
     /// The transcript (its namespace) that hosts this cache's path targets:
-    /// their hover card and ⌘-click (`file_links::PathTarget::scope`).
+    /// their ⌘-click (`file_links::PathTarget::scope`).
     Rc<RefCell<Option<SharedString>>>,
 );
 

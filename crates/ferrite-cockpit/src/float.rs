@@ -1,5 +1,5 @@
 //! Where a float hangs (theme WP-E): the palette, the pickers, the
-//! notifications list, a toast, the shortcuts sheet and the hover card are
+//! notifications list, a toast, and the shortcuts sheet are
 //! each a view, placed against an anchor in window coordinates.
 //!
 //! Floats draw in-window, over everything (`deferred`), as opaque surfaces

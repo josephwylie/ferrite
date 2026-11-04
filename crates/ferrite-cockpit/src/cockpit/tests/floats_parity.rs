@@ -910,3 +910,46 @@ fn the_palette_jumps_to_a_project_and_names_a_threads_directory(cx: &mut TestApp
         "the Project's Thread that waits"
     );
 }
+
+/// The owner's ⌘K bug: open the palette, wait (1.5s, its entrance long
+/// done), esc. The first esc closes it — off the screen, not just out of
+/// the state — with no further input to draw the frame that clears it,
+/// and a click then reaches the board under it. As in the app: the
+/// motion kit live, the keyboard in a Composer (its caret blinking over a
+/// cached Cockpit), frames only when asked for.
+#[gpui::test]
+fn esc_after_a_wait_closes_the_palette_on_screen(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (core, fake) = cockpit("palette-esc-after-wait", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        cx.notify();
+    });
+    tick(cx);
+    display_frames(cx, 1000);
+    cx.simulate_keystrokes("cmd-k");
+    display_frames(cx, 1500);
+    assert!(cx.debug_bounds("palette").is_some(), "the palette is up");
+
+    cx.simulate_keystrokes("escape");
+    display_frames(cx, 1000);
+    assert!(!palette_open(&view, cx), "the first esc closes the palette");
+    assert!(
+        cx.debug_bounds("palette").is_none(),
+        "and its exit finishes on screen without another input"
+    );
+    assert_eq!(*fake.interrupts.borrow(), 0, "esc interrupted nothing");
+}
+
+/// Let `ms` pass a display frame at a time, drawing each frame asked for.
+fn display_frames(cx: &mut gpui::VisualTestContext, ms: u64) {
+    for _ in 0..ms / 16 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
+}
