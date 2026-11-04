@@ -16,6 +16,7 @@ pub mod disk;
 pub mod docview;
 pub mod doorbell;
 pub mod draft;
+pub mod drafts;
 pub mod engine;
 pub mod followup;
 pub mod groups;

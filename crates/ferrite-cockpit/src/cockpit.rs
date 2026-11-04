@@ -5,6 +5,7 @@
 
 pub(crate) mod beside;
 mod context_menu;
+mod drafts;
 pub(crate) mod decisions;
 pub(crate) mod empty_board;
 mod history;
@@ -557,6 +558,8 @@ pub struct CockpitView {
     nav_dragging: Option<Drag>,
     /// The operator's settings and where they save; every change saves.
     prefs: Preferences,
+    /// What each Thread's Composer holds unsent.
+    unsent: drafts::Unsent,
     /// The Settings panel is up.
     settings_open: bool,
     /// The Settings sheet on its way out (`settings_element`).
@@ -747,7 +750,16 @@ impl Preferences {
                 panel_shown: true,
                 ..Default::default()
             },
-            dir: std::env::temp_dir().join(format!("ferrite-prefs-{}", std::process::id())),
+            // One directory each: a window's drafts must not reach the
+            // next test's window.
+            dir: {
+                static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                std::env::temp_dir().join(format!(
+                    "ferrite-prefs-{}-{}",
+                    std::process::id(),
+                    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                ))
+            },
             defaults: std::sync::Arc::new(std::sync::Mutex::new(
                 ferrite_core::spawner::SessionDefaults::default(),
             )),
@@ -1453,6 +1465,7 @@ impl CockpitView {
             updating::schedule_checks(cx);
         }
         cx.on_app_quit(|view, _cx| {
+            view.save_drafts();
             view.cockpit.halt_sessions();
             async {}
         })
@@ -1546,6 +1559,7 @@ impl CockpitView {
             slot_sizes: Default::default(),
             dragging: None,
             nav_dragging: None,
+            unsent: drafts::Unsent::load(&prefs.dir),
             prefs,
             settings_open: false,
             settings_exit: Default::default(),
@@ -1686,6 +1700,7 @@ impl CockpitView {
             };
             let pane = CockpitPane::new(PaneView::new(thread, cx), cx);
             cx.subscribe(&pane.composer, Self::composer_edited).detach();
+            self.restore_draft(thread, &pane.composer.clone(), cx);
             self.panes.push(pane);
             self.thread_opened(thread, cx);
             opened = true;
@@ -2170,6 +2185,7 @@ impl CockpitView {
             .and_then(|pane| pane.thread())
         {
             self.cockpit.set_composing(thread, unsent);
+            self.keep_draft(thread, &composer, cx);
         }
         // A picker or a band chip is not text-derived (#11, #25, #29):
         // writing a prompt on its line dismisses it — while the clearing

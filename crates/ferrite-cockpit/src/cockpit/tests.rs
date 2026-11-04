@@ -10,6 +10,7 @@ mod core_transcript_parity;
 mod decision_cards;
 mod decisions_parity;
 mod diagnostics;
+mod drafts;
 mod files;
 mod find;
 mod floats_parity;
