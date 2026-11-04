@@ -75,6 +75,13 @@ pub enum SessionEvent {
         ids: Vec<String>,
         summary: String,
     },
+    /// The provider refused this call by its permission mode, without asking
+    /// (Claude's `permission_denied`, HD22): the call never ran, and the
+    /// result that follows is a refusal, not a failure. It names the call and
+    /// may arrive before the call's row exists.
+    ToolDenied {
+        id: String,
+    },
     /// Operator input is requested. `Decision::blocks_execution` distinguishes
     /// tool approvals from questions delivered while execution continues. Answer
     /// with the provider's respond-to-Decision call, quoting the Decision's `id`.

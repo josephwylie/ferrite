@@ -1388,6 +1388,8 @@ mod tests {
             SessionEvent::TurnEnded { .. } => "TurnEnded",
             // Claude's concept: Codex names no calls a summary belongs to.
             SessionEvent::ToolSummary { .. } => return None,
+            // Claude's concept: Codex refuses by its sandbox, which it reports itself.
+            SessionEvent::ToolDenied { .. } => return None,
             // The skills menu: a correlated response like Init, read by the
             // reader against its own request id, so it is chained into the
             // produced list from the SKILLS fixture the same way.

@@ -104,7 +104,10 @@ mod rewind_tests;
 /// - **17** — an `image` tool result: the call read a picture (the bytes
 ///   are not kept; the row draws the file its call names). A v1–v16 log
 ///   has none, so its image reads stay plain rows.
-const SCHEMA_VERSION: u32 = 17;
+/// - **18** — a `tool_denied` record: the provider refused a call by its
+///   permission mode (HD22). A v1–v17 log has none, so its refused calls
+///   read as failures.
+const SCHEMA_VERSION: u32 = 18;
 
 /// How far apart the store's marks sit, at least: what a peek or a reopen
 /// reads back from the end of a log to find its facts.
@@ -519,6 +522,10 @@ enum Record {
     ToolSummary {
         ids: Vec<String>,
         summary: String,
+    },
+    /// Schema 18: the provider refused this call by its permission mode.
+    ToolDenied {
+        id: String,
     },
     TurnEnded {
         outcome: Outcome,
@@ -1325,6 +1332,7 @@ impl Record {
                 ids: ids.clone(),
                 summary: summary.clone(),
             },
+            SessionEvent::ToolDenied { id } => Record::ToolDenied { id: id.clone() },
             SessionEvent::TurnEnded { outcome, cost_usd } => Record::TurnEnded {
                 outcome: match outcome {
                     crate::TurnOutcome::Completed => Outcome::Completed,
@@ -1484,6 +1492,7 @@ impl Record {
                 ids: ids.clone(),
                 summary: summary.clone(),
             }),
+            Record::ToolDenied { id } => Input::Event(SessionEvent::ToolDenied { id: id.clone() }),
             Record::TurnEnded { outcome, cost_usd } => Input::Event(SessionEvent::TurnEnded {
                 outcome: match outcome {
                     Outcome::Completed => crate::TurnOutcome::Completed,

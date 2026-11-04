@@ -1987,6 +1987,7 @@ fn main_outgoing(input: &Input, duration: Option<Duration>) -> Outgoing {
             | SessionEvent::ToolStarted { .. }
             | SessionEvent::ToolCompleted { .. }
             | SessionEvent::ToolSummary { .. }
+            | SessionEvent::ToolDenied { .. }
             | SessionEvent::ReasoningSummaryPart { .. }
             | SessionEvent::ReasoningSummaryDelta { .. }
             | SessionEvent::Progress { .. }

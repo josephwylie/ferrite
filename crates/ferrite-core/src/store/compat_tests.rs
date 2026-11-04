@@ -297,11 +297,13 @@ pub(crate) const FIXTURES: &[(&str, &str, usize, u64)] = &[
     // Repinned for HD64: a tool row carries its background work (`None`).
     // Repinned for image reads: a tool row carries `image` (`false`).
     // Repinned for update_plan: progress carries `before_wrap_up` (`None`).
-    ("v1", V1, 5, 10134963862029226844),
+    // Repinned for HD70: a tool row carries `findings` (`[]` here).
+    ("v1", V1, 5, 6135979135795186372),
     // Repinned for HD64: a tool row carries its background work (`None`).
     // Repinned for image reads: a tool row carries `image` (`false`).
     // Repinned for update_plan: progress carries `before_wrap_up` (`None`).
-    ("v8-handover", V8_HANDOVER, 13, 16138578039988594846),
+    // Repinned for HD70: a tool row carries `findings` (`[]` here).
+    ("v8-handover", V8_HANDOVER, 13, 15732288469131379798),
     // Repinned when `ContextDetails` dropped `usable_window` and
     // `auto_compact_threshold`: the record still loads, without them.
     // Repinned for HD64: a tool row carries its background work (`None`
@@ -309,7 +311,8 @@ pub(crate) const FIXTURES: &[(&str, &str, usize, u64)] = &[
     // `N background agents completed` notice.
     // Repinned for image reads: a tool row carries `image` (`false` here).
     // Repinned for update_plan: progress carries `before_wrap_up` (`None`).
-    ("v11-activity", V11_ACTIVITY, 31, 2427071937003775127),
+    // Repinned for HD70: a tool row carries `findings` (`[]` here).
+    ("v11-activity", V11_ACTIVITY, 31, 24188390312491795),
     // Repinned at schema 15: its observation now reads `prompt_id: None`.
     // Repinned for update_plan: progress carries `before_wrap_up` (`None`).
     // All four fixtures repinned for 39785ffd (a turn that ends in its answer

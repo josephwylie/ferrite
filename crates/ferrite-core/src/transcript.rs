@@ -964,6 +964,9 @@ pub struct Transcript {
     summary_index: Option<u64>,
     progress: Progress,
     output_tails: std::collections::BTreeMap<String, OutputTail>,
+    /// Calls the provider refused by its permission mode (HD22), kept by id:
+    /// the refusal can arrive before the call's row does.
+    denied: std::collections::BTreeSet<String>,
     /// Each running test call's count, folded line by line from its stream.
     test_counts: std::collections::BTreeMap<String, TestCounter>,
     thinking_open: bool,
@@ -1278,6 +1281,7 @@ impl Transcript {
             summary_index: None,
             progress: Progress::default(),
             output_tails: Default::default(),
+            denied: Default::default(),
             test_counts: Default::default(),
             published: 0,
             thinking_open: false,
@@ -2453,12 +2457,17 @@ impl Transcript {
                 } else {
                     Vec::new()
                 };
+                let refused = self.denied.remove(&id);
                 let block = self.push(Body::Tool(ToolBlock {
                     call: id,
                     summary: tool_summary(&name, &input),
                     title: call_title(&input),
                     name,
-                    state: ToolState::Running,
+                    state: if refused {
+                        ToolState::Stopped
+                    } else {
+                        ToolState::Running
+                    },
                     diffs,
                     structured_preview: None,
                     result_line: None,
@@ -2558,6 +2567,24 @@ impl Transcript {
                 | SessionEvent::Queue(_)
                 | SessionEvent::ScheduledWork { .. },
             ) => Update::default(),
+            // A refusal by the permission mode is the operator's side of the
+            // call, as a denied Decision is: stopped, never red.
+            Input::Event(SessionEvent::ToolDenied { id }) => {
+                let stopped = self.blocks.iter_mut().find_map(|block| match &mut block.body {
+                    Body::Tool(tool) if tool.call == id && tool.state == ToolState::Running => {
+                        tool.state = ToolState::Stopped;
+                        Some(block.id)
+                    }
+                    _ => None,
+                });
+                if stopped.is_none() {
+                    self.denied.insert(id);
+                }
+                Update {
+                    dirty: stopped.into_iter().collect(),
+                    ..Update::default()
+                }
+            }
             // The summary captions the calls it names, on the last of them
             // with a row; one naming no call here is not drawn.
             Input::Event(SessionEvent::ToolSummary { ids, summary }) => {
@@ -4436,6 +4463,30 @@ mod tests {
         assert_eq!(update.dirty, vec![last.id]);
         assert!(matches!(last.body, Body::Meta(_)));
         assert_eq!(body_text(last), "allowed Write");
+    }
+
+    #[test]
+    fn a_call_the_mode_refused_is_stopped_even_if_the_refusal_comes_first() {
+        let state = |refusal_first: bool| {
+            let mut t = Transcript::default();
+            let start = Input::Event(SessionEvent::ToolStarted {
+                id: "w".into(),
+                name: "Write".into(),
+                input: serde_json::json!({"file_path": "a.txt"}),
+            });
+            let deny = Input::Event(SessionEvent::ToolDenied { id: "w".into() });
+            if refusal_first {
+                t.apply(deny);
+                t.apply(start);
+            } else {
+                t.apply(start);
+                t.apply(deny);
+            }
+            t.apply(completed("w", "Permission to use Write has been denied", true));
+            t.tool("w").map(|tool| tool.state.clone())
+        };
+        assert_eq!(state(false), Some(ToolState::Stopped));
+        assert_eq!(state(true), Some(ToolState::Stopped));
     }
 
     #[test]

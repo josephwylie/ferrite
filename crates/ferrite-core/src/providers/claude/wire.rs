@@ -1450,6 +1450,9 @@ fn parse_system(value: &Value) -> Option<SessionEvent> {
             session_id: value.get("session_id")?.as_str()?.to_string(),
             model: value.get("model")?.as_str()?.to_string(),
         }),
+        "permission_denied" => Some(SessionEvent::ToolDenied {
+            id: value.get("tool_use_id")?.as_str()?.to_string(),
+        }),
         "commands_changed" => Some(SessionEvent::Commands {
             commands: value
                 .get("commands")?
@@ -1760,6 +1763,8 @@ mod tests {
             // No committed capture has one yet; proved through the public
             // Session replay in tests/provider_progress.rs.
             SessionEvent::ToolSummary { .. } => return None,
+            // Proved by `a_mode_denial_is_a_refusal_not_a_failure`, on a capture.
+            SessionEvent::ToolDenied { .. } => return None,
             // Not a wire line at all: the reader thread synthesises Closed when
             // the process exits, so no capture can contain it. Proved instead
             // by `stdout_eof_closes_the_session_with_the_exit_status`.
@@ -2039,6 +2044,27 @@ mod tests {
             )),
             "the denied call settles as an error result"
         );
+    }
+
+    /// Captured from `claude` 2.1.318 in `dontAsk` mode: the CLI refuses the
+    /// Write itself, with a `permission_denied` frame naming the call, and
+    /// then settles it with an error result.
+    #[test]
+    fn a_mode_denial_is_a_refusal_not_a_failure() {
+        let events: Vec<SessionEvent> =
+            include_str!("../../../tests/fixtures/claude-permission-denied-2.1.318.jsonl")
+                .lines()
+                .filter_map(parse_line)
+                .collect();
+        let started = events.iter().find_map(|event| match event {
+            SessionEvent::ToolStarted { id, name, .. } if name == "Write" => Some(id.clone()),
+            _ => None,
+        });
+        let denied = events.iter().find_map(|event| match event {
+            SessionEvent::ToolDenied { id } => Some(id.clone()),
+            _ => None,
+        });
+        assert!(started.is_some() && started == denied, "{started:?} / {denied:?}");
     }
 
     /// A `Read` of a picture, as Claude Desktop's own log records it
