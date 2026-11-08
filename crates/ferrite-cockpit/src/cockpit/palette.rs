@@ -762,7 +762,7 @@ impl CockpitView {
             focused.is_some(),
             "Park thread".into(),
             "",
-            bound_chord_in("cockpit::CloseThread", Some("ComposerEmpty")),
+            bound_chord("cockpit::CloseThread"),
             Command::ParkThread,
         );
         add(

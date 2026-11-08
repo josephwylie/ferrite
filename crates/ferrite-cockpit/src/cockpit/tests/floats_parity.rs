@@ -371,10 +371,9 @@ fn cmd_g_opens_the_groups_and_cmd_shift_g_founds_one(cx: &mut TestAppContext) {
     );
 }
 
-/// FL-6: ⌘⌫ on an empty line parks the Thread; with text it deletes to
-/// the line's start.
+/// Repeated ⌘⌫ clears text without parking the Thread once empty.
 #[gpui::test]
-fn cmd_backspace_parks_from_an_empty_line_and_deletes_with_text(cx: &mut TestAppContext) {
+fn cmd_backspace_deletes_text_without_parking_empty_threads(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("cmd-backspace", 2);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -396,7 +395,12 @@ fn cmd_backspace_parks_from_an_empty_line_and_deletes_with_text(cx: &mut TestApp
     assert_eq!(open(cx), 2, "nothing parked while the line had text");
     cx.simulate_keystrokes("cmd-backspace");
     tick(cx);
-    assert_eq!(open(cx), 1, "an empty line parks");
+    cx.simulate_keystrokes("cmd-backspace");
+    tick(cx);
+    assert_eq!(open(cx), 2, "repeated deletion must not park empty threads");
+    cx.simulate_keystrokes("cmd-w");
+    tick(cx);
+    assert_eq!(open(cx), 1, "cmd-w still parks the focused thread");
 }
 
 /// FL-8: `?` on an empty line opens the shortcuts sheet (esc closes it);
@@ -685,7 +689,7 @@ fn decision_keys_resolve_only_on_an_empty_line(cx: &mut TestAppContext) {
         ("tab", "decision::Amend"),
         ("1", "cockpit::PickOption1"),
         ("3", "cockpit::PickOption3"),
-        ("cmd-backspace", "cockpit::CloseThread"),
+        ("cmd-backspace", "composer::DeleteToStart"),
     ] {
         assert_eq!(resolves(keys, cx), Some(action), "{keys} on an empty line");
     }

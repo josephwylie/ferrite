@@ -110,21 +110,6 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             "composer::DeleteToStart",
             Some("Composer"),
         ),
-        // ⌘⌫ on an empty line parks the Thread (the palette's `park
-        // thread`): bound after DeleteToStart, so the empty line's own
-        // context wins the same-depth tie and a line with text still
-        // deletes to its start. With no text field holding the keyboard
-        // (the transcript, the board) it parks too.
-        (
-            with_primary("backspace"),
-            "cockpit::CloseThread",
-            Some("ComposerEmpty"),
-        ),
-        (
-            with_primary("backspace"),
-            "cockpit::CloseThread",
-            Some(NO_TEXT_FIELD),
-        ),
         (
             with_edge("delete"),
             "composer::DeleteToEnd",
@@ -882,7 +867,6 @@ mod tests {
             ("cockpit::TextSmaller", "-"),
             ("cockpit::TextReset", "0"),
             ("cockpit::CloseThread", "w"),
-            ("cockpit::CloseThread", "backspace"),
             ("cockpit::ReopenThread", "o"),
             ("ferrite::Quit", "q"),
         ];
@@ -1092,20 +1076,11 @@ mod tests {
                 at(&table, "backspace", "composer::Backspace")
                     < at(&table, "backspace", "notifications::Dismiss")
             );
-            let park = match platform {
-                Platform::Mac => "cmd-backspace",
-                Platform::Windows => "ctrl-backspace",
-            };
-            assert!(table.contains(&(park.into(), "cockpit::CloseThread", Some("ComposerEmpty"))));
-            assert!(table.contains(&(park.into(), "cockpit::CloseThread", Some(NO_TEXT_FIELD))));
-            let delete = match platform {
-                Platform::Mac => "cmd-backspace",
-                Platform::Windows => "ctrl-shift-backspace",
-            };
             assert!(
-                at(&table, delete, "composer::DeleteToStart")
-                    < at(&table, park, "cockpit::CloseThread"),
-                "an empty line's park beats the delete; text still deletes"
+                table.iter().all(|(key, action, _)| {
+                    *action != "cockpit::CloseThread" || !key.contains("backspace")
+                }),
+                "text deletion must never park a thread"
             );
         }
     }
