@@ -13,6 +13,22 @@ import sys
 import uuid
 import time
 
+
+def windows_descendants(roots):
+    """Account for owned children even after their bootstrap parent exits."""
+    query = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress"
+    raw = subprocess.check_output(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query],
+        text=True, encoding="utf-8", timeout=20, creationflags=subprocess.CREATE_NO_WINDOW)
+    processes = json.loads(raw.lstrip("\ufeff"))
+    if isinstance(processes, dict):
+        processes = [processes]
+    owned = set(roots)
+    while True:
+        expanded = owned | {int(item["ProcessId"]) for item in processes if int(item["ParentProcessId"]) in owned}
+        if expanded == owned:
+            return [item for item in processes if int(item["ProcessId"]) in owned]
+        owned = expanded
+
 PAGE = b'''<!doctype html><meta charset="utf-8"><style>
 body{margin:0;background:white}button{display:block;margin:40px;width:240px;height:160px;
 border:0;background:rgb(213,37,59);color:white;font:24px sans-serif}
@@ -87,6 +103,7 @@ def main():
         flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
         server_process = subprocess.Popen([executable, 'server'], env=env, cwd=root,
             stdout=server_log, stderr=subprocess.STDOUT, creationflags=flags)
+        descendants = []
         try:
             with (output/'app.log').open('w', encoding='utf-8') as log:
                 process = subprocess.Popen([executable, '--browser-window-smoke', '--import', str(history)],
@@ -97,6 +114,9 @@ def main():
                     process.kill()
                     process.wait()
                     raise RuntimeError('Packaged window did not complete its fixture within 90s')
+            if os.name == 'nt':
+                descendants = windows_descendants([process.pid, server_process.pid])
+                (output/'owned-processes.json').write_text(json.dumps(descendants, indent=2), encoding='utf-8')
             (output/'process-exit.json').write_text(json.dumps({'pid':process.pid, 'exit_code':code, 'exit_hex':hex(code & 0xffffffff), 'server_pid':server_process.pid}), encoding='utf-8')
             if not (output/'window-result.json').exists():
                 raise RuntimeError(f'Packaged app exited before the window scenario result: exit={code} ({code & 0xffffffff:#x}); inspect app.log and startup evidence')
@@ -127,6 +147,12 @@ def main():
                 server_process.wait(timeout=20)
             server_log.close()
             if os.name == 'nt':
+                for child in descendants:
+                    pid = int(child['ProcessId'])
+                    if pid not in (process.pid if process else None, server_process.pid, os.getpid()):
+                        subprocess.run(['taskkill.exe','/PID',str(pid),'/T','/F'],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            timeout=10, creationflags=flags, check=False)
                 query = "Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1001; StartTime=(Get-Date).AddMinutes(-5)} -ErrorAction SilentlyContinue | Where-Object { $_.Message -match 'ferrite' } | Select-Object -First 10 TimeCreated,Id,Message | ConvertTo-Json -Depth 3"
                 with (output/'windows-crash-events.json').open('w', encoding='utf-8') as events:
                     subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',query],
