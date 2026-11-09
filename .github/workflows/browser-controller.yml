@@ -15,6 +15,10 @@ on:
       - 'scripts/install-app.sh'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   native-release:
     name: Verify native release (${{ matrix.os }})
@@ -55,3 +59,6 @@ jobs:
             target/browser-controller/version.txt
             target/browser-controller/transport.json
             target/browser-controller/agent-browser-build.json
+            target/browser-controller/agent-browser
+            target/browser-controller/agent-browser.exe
+            target/browser-controller/agent-browser-licenses
