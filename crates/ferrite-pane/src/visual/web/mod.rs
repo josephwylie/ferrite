@@ -91,6 +91,10 @@ pub trait BrowserView: View {
     /// Stop further controller writes at dispatch while operator input owns the
     /// page. Manual `View::input` and read-only captures remain available.
     fn set_agent_paused(&self, _paused: bool) {}
+    /// Advances before operator input; old native attachments remain fenced.
+    fn control_epoch(&self) -> u64 {
+        0
+    }
     /// Release only a hidden, unprotected, confidently clean document.
     /// A released view restores its last URL lazily when shown.
     fn try_release(&self) -> Result<bool, String>;

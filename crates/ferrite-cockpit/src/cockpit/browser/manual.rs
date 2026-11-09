@@ -19,6 +19,7 @@ pub(super) struct Manual {
     keys: BTreeSet<String>,
     quiet_until: Option<Instant>,
     acknowledged: Option<(Document, u64)>,
+    pub revision: u64,
     server_protected: bool,
     local_protections: usize,
 }
@@ -57,6 +58,7 @@ impl Manual {
         sequence > self.canceled_through
     }
     pub fn acknowledge(&mut self, sequence: u64, document: Document, revision: u64) {
+        self.revision = revision;
         self.acknowledged = Some((document, revision));
         if sequence == self.sequence {
             self.pending = false;

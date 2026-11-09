@@ -1217,6 +1217,9 @@ impl BrowserView for CefView {
             }
         }
     }
+    fn control_epoch(&self) -> u64 {
+        self.0.agent_access.epoch.load(Ordering::SeqCst)
+    }
     fn set_agent_paused(&self, paused: bool) {
         let changed = self.0.agent_access.paused.swap(paused, Ordering::SeqCst) != paused;
         if changed && paused {

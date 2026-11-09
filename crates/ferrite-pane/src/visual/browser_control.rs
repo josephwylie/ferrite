@@ -12,3 +12,6 @@ pub struct CapturedPage {
     pub png: Vec<u8>,
     pub element: Option<ElementContext>,
 }
+
+#[cfg(feature = "cef")]
+pub mod native;
