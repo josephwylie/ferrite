@@ -163,6 +163,7 @@ struct State {
     lightbox: Option<Lightbox>,
     browser_urls: Vec<String>,
     annotation_requests: Vec<ferrite_core::browser_annotations::Annotation>,
+    annotation_edits: Vec<ferrite_core::browser_annotations::Annotation>,
 }
 
 #[derive(Clone)]
@@ -193,6 +194,17 @@ impl Preview {
             .annotation_requests
             .push(annotation);
         window.refresh();
+    }
+
+    /// Edit an already retained capture independently of its original live
+    /// page. The owning window resolves its immutable image asynchronously.
+    pub fn edit_annotation(&self, annotation: ferrite_core::browser_annotations::Annotation) {
+        self.state.lock().unwrap().annotation_edits.push(annotation);
+        self.show_browser();
+    }
+
+    pub fn take_annotation_edits(&self) -> Vec<ferrite_core::browser_annotations::Annotation> {
+        std::mem::take(&mut self.state.lock().unwrap().annotation_edits)
     }
 
     pub fn take_annotation_requests(&self) -> Vec<ferrite_core::browser_annotations::Annotation> {
