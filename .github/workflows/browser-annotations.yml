@@ -42,4 +42,4 @@ jobs:
         run: cargo test -p ferrite-pane --locked --lib browser_annotations_
       - name: Sent annotation history and review
         if: inputs.core_only != true
-        run: cargo test -p ferrite-cockpit --locked --lib browser_annotation_history
+        run: cargo test -p ferrite-cockpit --locked --lib browser_annotation_
