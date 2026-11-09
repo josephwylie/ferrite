@@ -30,10 +30,75 @@ index 58d3fe9..03ad887 100644
 +# Keep vendored native builds independent of the embedding workspace.
 +[workspace]
 diff --git a/cli/src/native/actions.rs b/cli/src/native/actions.rs
-index 2d488de..97b2bba 100644
+index 2d488de..82aacf0 100644
 --- a/cli/src/native/actions.rs
 +++ b/cli/src/native/actions.rs
-@@ -2849,7 +2849,31 @@ fn append_launch_policy_actions(
+@@ -635,6 +635,7 @@ pub struct DaemonState {
+     screenshot_observations: HashMap<(String, String), ScreenshotObservation>,
+     pub domain_filter: Arc<RwLock<Option<DomainFilter>>>,
+     pub event_tracker: EventTracker,
++    ferrite_diagnostics: super::ferrite_diagnostics::Diagnostics,
+     pub session_name: Option<String>,
+     pub restore_save: String,
+     pub restore_check_url: Option<String>,
+@@ -823,6 +824,7 @@ impl DaemonState {
+                     .map(|domains| DomainFilter::new(&domains.join(","))),
+             )),
+             event_tracker: EventTracker::new(),
++            ferrite_diagnostics: Default::default(),
+             session_name: restore.key,
+             restore_save: restore.save,
+             restore_check_url: restore.check_url,
+@@ -1889,6 +1891,9 @@ impl DaemonState {
+                                             sid,
+                                         ) => {}
+                                     Ok(target_info) if target_info.target_type == "iframe" => {
++                                        if let Some(parent) = event.session_id.as_deref() {
++                                            self.ferrite_diagnostics.attached(sid, parent);
++                                        }
+                                         // For OOPIF targets, Chrome uses the frameId as
+                                         // the targetId, so we can key iframe_sessions by it.
+                                         attached_iframe_sessions
+@@ -1912,6 +1917,7 @@ impl DaemonState {
+                             if let Some(sid) =
+                                 event.params.get("sessionId").and_then(|v| v.as_str())
+                             {
++                                self.ferrite_diagnostics.detached(sid);
+                                 if let Some(frame_id) =
+                                     self.iframe_sessions
+                                         .iter()
+@@ -1936,6 +1942,30 @@ impl DaemonState {
+                         _ => {}
+                     }
+ 
++                    if env::var("FERRITE_AGENT_BROWSER").as_deref() == Ok("1") {
++                        if let Some(page) = event.session_id.as_deref().and_then(|session| {
++                            self.ferrite_diagnostics.owner(session, |candidate| {
++                                self.browser
++                                    .as_ref()
++                                    .is_some_and(|browser| browser.has_page_session(candidate))
++                            })
++                        }) {
++                            self.ferrite_diagnostics.record(&page, &event);
++                        }
++                        // Attribute before active-tab filtering. Unknown or
++                        // detached ownership is dropped, never copied into the
++                        // legacy daemon-global diagnostic buffers.
++                        if matches!(
++                            event.method.as_str(),
++                            "Runtime.consoleAPICalled"
++                                | "Runtime.exceptionThrown"
++                                | "Network.requestWillBeSent"
++                                | "Network.responseReceived"
++                        ) {
++                            continue;
++                        }
++                    }
++
+                     let session_matches = if let Some(ref browser) = self.browser {
+                         event.session_id.as_deref() == browser.active_session_id().ok()
+                     } else {
+@@ -2849,7 +2879,31 @@ fn append_launch_policy_actions(
      }
  }
  
@@ -65,7 +130,7 @@ index 2d488de..97b2bba 100644
      let mut response = execute_command_inner(cmd, state).await;
      let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
      if !skip_launch_action(action) {
-@@ -4380,6 +4404,9 @@ async fn auto_launch(
+@@ -4380,6 +4434,9 @@ async fn auto_launch(
      state: &mut DaemonState,
      plugins: Vec<crate::plugins::PluginConfig>,
  ) -> Result<(), String> {
@@ -75,7 +140,7 @@ index 2d488de..97b2bba 100644
      if state.attached_target.is_some() {
          return handle_launch(&json!({ "action": "launch", "plugins": plugins }), state)
              .await
-@@ -5164,6 +5191,16 @@ fn with_cdp_headers(target: Option<String>, cmd: &Value) -> Option<String> {
+@@ -5164,6 +5221,16 @@ fn with_cdp_headers(target: Option<String>, cmd: &Value) -> Option<String> {
      }
  }
  
@@ -92,7 +157,7 @@ index 2d488de..97b2bba 100644
  async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
      handle_launch_with_deadline(cmd, state, BROWSER_USE_SETUP_DEADLINE).await
  }
-@@ -5173,6 +5210,13 @@ async fn handle_launch_with_deadline(
+@@ -5173,6 +5240,13 @@ async fn handle_launch_with_deadline(
      state: &mut DaemonState,
      deadline: std::time::Duration,
  ) -> Result<Value, String> {
@@ -106,7 +171,7 @@ index 2d488de..97b2bba 100644
      let mut resolved = resolve_launch_target(cmd, state.attached_target.as_ref());
      if let Some(launch) = resolved.as_mut() {
          attach_saved_cdp_headers(launch, state);
-@@ -5982,6 +6026,10 @@ async fn handle_cdp_url(state: &DaemonState) -> Result<Value, String> {
+@@ -5982,6 +6056,10 @@ async fn handle_cdp_url(state: &DaemonState) -> Result<Value, String> {
  }
  
  async fn handle_inspect(state: &mut DaemonState) -> Result<Value, String> {
@@ -117,7 +182,47 @@ index 2d488de..97b2bba 100644
      let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
  
      // Shut down any existing inspect server so we always target the current page
-@@ -9750,6 +9798,10 @@ async fn current_stream_status(state: &DaemonState) -> Value {
+@@ -7582,6 +7660,19 @@ async fn handle_offline(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
+ }
+ 
+ async fn handle_console(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
++    if env::var("FERRITE_AGENT_BROWSER").as_deref() == Ok("1") {
++        let page = state
++            .browser
++            .as_ref()
++            .ok_or("Browser not launched")?
++            .active_session_id()?
++            .to_string();
++        return Ok(state.ferrite_diagnostics.read(
++            &page,
++            "console",
++            cmd.get("clear").and_then(Value::as_bool).unwrap_or(false),
++        ));
++    }
+     let clear = cmd.get("clear").and_then(|v| v.as_bool()).unwrap_or(false);
+     if clear {
+         state.event_tracker.clear_console();
+@@ -7594,6 +7685,19 @@ async fn handle_console(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
+ 
+ /// Reads captured page errors or clears them when requested.
+ async fn handle_errors(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
++    if env::var("FERRITE_AGENT_BROWSER").as_deref() == Ok("1") {
++        let page = state
++            .browser
++            .as_ref()
++            .ok_or("Browser not launched")?
++            .active_session_id()?
++            .to_string();
++        return Ok(state.ferrite_diagnostics.read(
++            &page,
++            "errors",
++            cmd.get("clear").and_then(Value::as_bool).unwrap_or(false),
++        ));
++    }
+     let clear = cmd.get("clear").and_then(|v| v.as_bool()).unwrap_or(false);
+     if clear {
+         state.event_tracker.clear_errors();
+@@ -9750,6 +9854,10 @@ async fn current_stream_status(state: &DaemonState) -> Value {
  }
  
  async fn handle_stream_enable(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -128,7 +233,47 @@ index 2d488de..97b2bba 100644
      if state.stream_server.is_some() {
          return Err("Streaming is already enabled for this session".to_string());
      }
-@@ -14311,6 +14363,113 @@ fn attach_tab_gone_data(resp: &mut Value, state: &DaemonState) {
+@@ -12720,6 +12828,19 @@ pub fn matches_status_filter(status: Option<i64>, filter: &str) -> bool {
+ }
+ 
+ async fn handle_requests(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
++    if env::var("FERRITE_AGENT_BROWSER").as_deref() == Ok("1") {
++        let page = state
++            .browser
++            .as_ref()
++            .ok_or("Browser not launched")?
++            .active_session_id()?
++            .to_string();
++        return Ok(state.ferrite_diagnostics.read(
++            &page,
++            "requests",
++            cmd.get("clear").and_then(Value::as_bool).unwrap_or(false),
++        ));
++    }
+     if cmd.get("clear").and_then(|v| v.as_bool()).unwrap_or(false) {
+         state.tracked_requests.clear();
+         return Ok(json!({ "cleared": true }));
+@@ -12777,6 +12898,19 @@ async fn handle_requests(cmd: &Value, state: &mut DaemonState) -> Result<Value,
+ }
+ 
+ async fn handle_request_detail(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
++    if env::var("FERRITE_AGENT_BROWSER").as_deref() == Ok("1") {
++        let page = state
++            .browser
++            .as_ref()
++            .ok_or("Browser not launched")?
++            .active_session_id()?
++            .to_string();
++        let id = cmd
++            .get("requestId")
++            .and_then(Value::as_str)
++            .ok_or("Missing 'requestId' parameter")?;
++        return state.ferrite_diagnostics.detail(&page, id);
++    }
+     let request_id = cmd
+         .get("requestId")
+         .and_then(|v| v.as_str())
+@@ -14311,6 +14445,113 @@ fn attach_tab_gone_data(resp: &mut Value, state: &DaemonState) {
  
  #[cfg(test)]
  mod tests {
@@ -591,3 +736,213 @@ index 41e4f88..1065009 100644
          // Try cached backend_node_id first (fast path)
          if let Some(backend_node_id) = entry.backend_node_id {
              let result: Result<DomResolveNodeResult, String> = client
+diff --git a/cli/src/native/ferrite_diagnostics.rs b/cli/src/native/ferrite_diagnostics.rs
+new file mode 100644
+index 0000000..5bef5f9
+--- /dev/null
++++ b/cli/src/native/ferrite_diagnostics.rs
+@@ -0,0 +1,195 @@
++//! Bounded page-session diagnostics for Ferrite's shared attached controller.
++//! Attribute at arrival, before active-tab filtering loses the source session.
++use super::cdp::types::CdpEvent;
++use serde_json::{json, Value};
++use std::collections::{HashMap, VecDeque};
++
++const MAX_PAGES: usize = 32;
++const MAX_ENTRIES: usize = 64;
++const MAX_TEXT: usize = 2048;
++
++fn text(value: &str) -> String {
++    let mut end = value.len().min(MAX_TEXT);
++    while !value.is_char_boundary(end) {
++        end -= 1;
++    }
++    value[..end].to_string()
++}
++fn field(value: &Value, key: &str) -> String {
++    text(value.get(key).and_then(Value::as_str).unwrap_or_default())
++}
++fn push(values: &mut VecDeque<Value>, value: Value) {
++    if values.len() == MAX_ENTRIES {
++        values.pop_front();
++    }
++    values.push_back(value);
++}
++
++#[derive(Default)]
++struct Bucket {
++    console: VecDeque<Value>,
++    errors: VecDeque<Value>,
++    requests: VecDeque<Request>,
++}
++struct Request {
++    session: String,
++    native_id: String,
++    value: Value,
++}
++#[derive(Default)]
++pub(super) struct Diagnostics {
++    /// Child -> parent. Never infer ownership from whichever tab is selected.
++    parents: HashMap<String, String>,
++    pages: VecDeque<(String, Bucket)>,
++    next_request: u64,
++}
++impl Diagnostics {
++    pub fn attached(&mut self, child: &str, parent: &str) {
++        if self.parents.len() < 512 && child.len() <= 256 && parent.len() <= 256 {
++            self.parents.insert(child.into(), parent.into());
++        }
++    }
++    pub fn detached(&mut self, session: &str) {
++        self.parents.remove(session);
++        // Descendants become unresolvable when any parent disappears.
++        self.pages.retain(|(page, _)| page != session);
++    }
++    pub fn owner(&self, session: &str, is_page: impl Fn(&str) -> bool) -> Option<String> {
++        let mut session = session;
++        for _ in 0..32 {
++            if is_page(session) {
++                return Some(session.into());
++            }
++            session = self.parents.get(session)?;
++        }
++        None
++    }
++    fn bucket(&mut self, page: &str) -> &mut Bucket {
++        let index = match self.pages.iter().position(|(id, _)| id == page) {
++            Some(index) => index,
++            None => {
++                if self.pages.len() == MAX_PAGES {
++                    self.pages.pop_front();
++                }
++                self.pages.push_back((page.into(), Bucket::default()));
++                self.pages.len() - 1
++            }
++        };
++        &mut self.pages[index].1
++    }
++    pub fn record(&mut self, page: &str, event: &CdpEvent) {
++        let params = &event.params;
++        match event.method.as_str() {
++            "Page.frameNavigated"
++                if event.session_id.as_deref() == Some(page)
++                    && params.pointer("/frame/parentId").is_none() =>
++            {
++                *self.bucket(page) = Bucket::default();
++            }
++            "Runtime.consoleAPICalled" => {
++                // Do not retain remote object handles, arbitrary nested objects
++                // or unbounded raw args. Text summaries are enough for diagnosis.
++                let parts: Vec<String> = params
++                    .get("args")
++                    .and_then(Value::as_array)
++                    .into_iter()
++                    .flatten()
++                    .take(8)
++                    .map(|arg| match arg.get("value") {
++                        Some(Value::String(value)) => text(value),
++                        Some(Value::Bool(value)) => value.to_string(),
++                        Some(Value::Number(value)) => value.to_string(),
++                        _ => field(arg, "description"),
++                    })
++                    .collect();
++                push(
++                    &mut self.bucket(page).console,
++                    json!({"type":field(params,"type"),"text":text(&parts.join(" "))}),
++                );
++            }
++            "Runtime.exceptionThrown" => {
++                let details = &params["exceptionDetails"];
++                let message = details
++                    .pointer("/exception/description")
++                    .and_then(Value::as_str)
++                    .or_else(|| details.get("text").and_then(Value::as_str))
++                    .unwrap_or_default();
++                push(
++                    &mut self.bucket(page).errors,
++                    json!({"text":text(message),"url":field(details,"url"),
++                    "line":details.get("lineNumber").and_then(Value::as_i64),
++                    "column":details.get("columnNumber").and_then(Value::as_i64)}),
++                );
++            }
++            "Network.requestWillBeSent" => {
++                let Some(session) = event.session_id.as_ref().filter(|s| s.len() <= 256) else {
++                    return;
++                };
++                let native_id = field(params, "requestId");
++                self.next_request += 1;
++                let value = json!({"requestId":format!("r{}",self.next_request),
++                    "url":field(&params["request"],"url"),"method":field(&params["request"],"method"),
++                    "resourceType":field(params,"type")});
++                let bucket = self.bucket(page);
++                if bucket.requests.len() == MAX_ENTRIES {
++                    bucket.requests.pop_front();
++                }
++                bucket.requests.push_back(Request {
++                    session: session.clone(),
++                    native_id,
++                    value,
++                });
++            }
++            "Network.responseReceived" => {
++                let id = params
++                    .get("requestId")
++                    .and_then(Value::as_str)
++                    .unwrap_or_default();
++                if let Some(request) = self.bucket(page).requests.iter_mut().rev().find(|request| {
++                    request.native_id == id
++                        && Some(request.session.as_str()) == event.session_id.as_deref()
++                }) {
++                    request.value["status"] =
++                        json!(params.pointer("/response/status").and_then(Value::as_f64));
++                    request.value["mimeType"] = json!(field(&params["response"], "mimeType"));
++                }
++            }
++            _ => {}
++        }
++    }
++    pub fn read(&mut self, page: &str, kind: &str, clear: bool) -> Value {
++        let bucket = self.bucket(page);
++        if clear {
++            match kind {
++                "console" => bucket.console.clear(),
++                "errors" => bucket.errors.clear(),
++                _ => bucket.requests.clear(),
++            }
++            return json!({"cleared":true});
++        }
++        let (key, values) = match kind {
++            "console" => (
++                "messages",
++                bucket.console.iter().cloned().collect::<Vec<_>>(),
++            ),
++            "errors" => ("errors", bucket.errors.iter().cloned().collect()),
++            _ => (
++                "requests",
++                bucket
++                    .requests
++                    .iter()
++                    .map(|request| request.value.clone())
++                    .collect(),
++            ),
++        };
++        json!({key:values,"limits":{"entries":MAX_ENTRIES,"textBytes":MAX_TEXT},"bounded":true})
++    }
++    pub fn detail(&mut self, page: &str, id: &str) -> Result<Value, String> {
++        self.bucket(page)
++            .requests
++            .iter()
++            .find(|request| request.value["requestId"] == id)
++            .map(|request| request.value.clone())
++            .ok_or_else(|| "Request not found in this page".into())
++    }
++}
+diff --git a/cli/src/native/mod.rs b/cli/src/native/mod.rs
+index 1a552be..d46f216 100644
+--- a/cli/src/native/mod.rs
++++ b/cli/src/native/mod.rs
+@@ -1,3 +1,4 @@
++mod ferrite_diagnostics;
+ #[allow(dead_code)]
+ pub mod a11y;
+ #[allow(dead_code)]
