@@ -446,7 +446,8 @@ impl Server {
                             return Err("The previous action's completion is uncertain; observe the current page before continuing, and do not retry the write automatically".into());
                         }
                         let lease = if let Some(lease) = self.browser_uncertain.get(&thread) {
-                            self.browser.check_command_recovery(thread, owner, *lease)?;
+                            self.browser
+                                .check_exclusive_command(thread, owner, *lease)?;
                             *lease
                         } else {
                             self.browser.protect(
@@ -473,7 +474,8 @@ impl Server {
                                     revision,
                                     lease,
                                     observation: control.observation(),
-                                    refreshes: matches!(control, crate::browser::Control::Observe),
+                                    refreshes: matches!(control, crate::browser::Control::Observe)
+                                        && !self.browser.operator_active(thread),
                                     recovering,
                                     deadline: Instant::now() + Duration::from_secs(45),
                                     reply: request.reply,
@@ -547,6 +549,7 @@ impl Server {
             .expect("checked request");
         let current = self.browser.check_owner(thread, owner)
             .and_then(|_| self.browser.check_document(thread, document))
+            .and_then(|_| self.browser.check_exclusive_command(thread, owner, pending.lease))
             .and_then(|_| if self.browser.state(thread).active == Some(document.tab) { Ok(()) } else { Err("The selected tab changed; select and observe it before continuing".into()) })
             .and_then(|_| if revision == self.browser.operator_revision(thread) { Ok(()) }
                 else { Err("The operator interacted with this page; observe fresh state before continuing".into()) });

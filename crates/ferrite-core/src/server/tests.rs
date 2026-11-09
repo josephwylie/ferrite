@@ -4953,7 +4953,7 @@ fn a_restart_not_back_in_time_reads_failed_until_it_is() {
 
 #[test]
 fn browser_requests_use_an_attached_thread_window_without_a_synthetic_client() {
-    use crate::browser::{Action, Operation};
+    use crate::browser::Action;
     let harness = start("browser-request-routing");
     let mut window = attach(&harness.address);
     let (thread, _provider) = open(&mut window, &harness);
@@ -5147,6 +5147,16 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
             break revision;
         }
     };
+    browser_test_command(
+        &mut owner_window,
+        79,
+        Op::BrowserSettled {
+            thread,
+            owner,
+            document,
+            revision,
+        },
+    );
     let click = Control::Click {
         reference: "@e1".into(),
     };
@@ -5727,6 +5737,79 @@ fn browser_requests_wait_for_the_latest_manual_gesture_to_settle() {
     assert_eq!(harness.server.join().unwrap(), 0);
 }
 
+#[test]
+fn browser_requests_hold_uncertain_work_when_the_caller_misses_its_reply() {
+    use crate::browser::{Action, Control, Operation, Outcome};
+    let harness = start("browser-undelivered-write");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    let mut owner_window = browser_test_window(&harness, thread);
+    let agent = harness.browser.for_thread(thread);
+    let opened = agent
+        .submit(browser_test_action(Action::Open {
+            url: "https://example.com/form".into(),
+        }))
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    let document = opened.state.tabs[0].document();
+    let receipt = browser_test_observe(&mut owner_window, &agent, document, 0)
+        .observation
+        .unwrap();
+    let click = Control::Click {
+        reference: "@save".into(),
+    };
+    let abandoned = agent.submit(Operation::Control {
+        document,
+        revision: 0,
+        observation: Some(receipt),
+        control: click.clone(),
+    });
+    // A provider timeout can drop this receiver while the native operation is
+    // still in flight. Its later success is not delivered to that caller.
+    drop(abandoned);
+    browser_test_answer(
+        &mut owner_window,
+        click,
+        Outcome::Success {
+            value: serde_json::json!({"saved":true}),
+        },
+    );
+    browser_test_command(&mut owner_window, 401, Op::SettingsChanged);
+    let state = agent
+        .submit(Operation::State)
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(
+        state.state.tabs[0].protected,
+        "undelivered completion must retain its page and require fresh evidence"
+    );
+    assert!(agent
+        .submit(browser_test_action(Action::Open {
+            url: "https://example.com/other".into()
+        }))
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .is_err());
+    let observed = browser_test_observe(&mut owner_window, &agent, document, 0);
+    assert!(observed.observation.is_some());
+    assert!(!observed.state.tabs[0].protected);
+    let opened = agent
+        .submit(Operation::Action {
+            action: Action::Open {
+                url: "https://example.com/other".into(),
+            },
+            observation: observed.observation,
+        })
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert_eq!(opened.state.tabs.len(), 2);
+    window.command(99, Op::Stop { when: When::Now });
+    assert_eq!(harness.server.join().unwrap(), 0);
+}
+
 // The in-process restart harness releases Unix socket paths explicitly.
 #[cfg(unix)]
 #[test]
@@ -5991,6 +6074,169 @@ fn browser_requests_allow_operator_recovery_without_discarding_annotation_protec
         .unwrap()
         .unwrap();
     assert_ne!(reopened.state.tabs[0].id, next.tab);
+    window.command(99, Op::Stop { when: When::Now });
+    assert_eq!(harness.server.join().unwrap(), 0);
+}
+
+#[test]
+fn browser_requests_cannot_promote_reads_started_before_operator_settlement() {
+    use crate::browser::{Action, Control, Operation, Outcome, Protection};
+    let harness = start("browser-observation-phase");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    let mut owner_window = browser_test_window(&harness, thread);
+    let agent = harness.browser.for_thread(thread);
+    let opened = agent
+        .submit(browser_test_action(Action::Open {
+            url: "https://example.com/form".into(),
+        }))
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    let owner = opened.state.owner.unwrap();
+    let document = opened.state.tabs[0].document();
+    let revision = browser_test_input(&mut owner_window, 601, thread, owner, document);
+    let early = agent.submit(Operation::Control {
+        document,
+        revision,
+        observation: None,
+        control: Control::Observe,
+    });
+    let request = loop {
+        if let ServerMessage::BrowserRequest { request, .. } = owner_window
+            .messages
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+        {
+            break request;
+        }
+    };
+    browser_test_command(
+        &mut owner_window,
+        602,
+        Op::BrowserSettled {
+            thread,
+            owner,
+            document,
+            revision,
+        },
+    );
+    owner_window
+        .send(&ClientMessage::BrowserReply {
+            request,
+            thread,
+            owner,
+            document,
+            revision,
+            outcome: Outcome::Success {
+                value: serde_json::json!({"text":"captured before key-up"}),
+            },
+        })
+        .unwrap();
+    assert!(
+        early
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+            .observation
+            .is_none(),
+        "an early read cannot become fresh merely because settlement beat its reply"
+    );
+    let receipt = browser_test_observe(&mut owner_window, &agent, document, revision)
+        .observation
+        .unwrap();
+    let uncertain = agent.submit(Operation::Control {
+        document,
+        revision,
+        observation: Some(receipt),
+        control: Control::Click {
+            reference: "@save".into(),
+        },
+    });
+    browser_test_answer(
+        &mut owner_window,
+        Control::Click {
+            reference: "@save".into(),
+        },
+        Outcome::Uncertain {
+            error: "writer drained with unknown result".into(),
+        },
+    );
+    assert!(uncertain
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .is_err());
+    let overlapping = agent.submit(Operation::Control {
+        document,
+        revision,
+        observation: None,
+        control: Control::Observe,
+    });
+    let request = loop {
+        if let ServerMessage::BrowserRequest { request, .. } = owner_window
+            .messages
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+        {
+            break request;
+        }
+    };
+    let ServerMessage::Reply {
+        ok: Some(Done::BrowserProtection { lease }),
+        error: None,
+        ..
+    } = browser_test_command(
+        &mut owner_window,
+        603,
+        Op::BrowserProtect {
+            thread,
+            owner,
+            document,
+            protection: Protection::Annotation,
+        },
+    )
+    else {
+        panic!("capture may coexist with a drained uncertain writer");
+    };
+    owner_window
+        .send(&ClientMessage::BrowserReply {
+            request,
+            thread,
+            owner,
+            document,
+            revision,
+            outcome: Outcome::Success {
+                value: serde_json::json!({"text":"snapshot while capture holds the page"}),
+            },
+        })
+        .unwrap();
+    assert!(
+        overlapping
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .is_err(),
+        "capture cannot let an already queued read discharge uncertainty"
+    );
+    browser_test_command(
+        &mut owner_window,
+        604,
+        Op::BrowserRelease {
+            thread,
+            owner,
+            lease,
+        },
+    );
+    let state = agent
+        .submit(Operation::State)
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(state.state.tabs[0].protected);
+    assert!(
+        browser_test_observe(&mut owner_window, &agent, document, revision)
+            .observation
+            .is_some()
+    );
     window.command(99, Op::Stop { when: When::Now });
     assert_eq!(harness.server.join().unwrap(), 0);
 }

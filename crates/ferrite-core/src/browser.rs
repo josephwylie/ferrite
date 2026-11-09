@@ -482,7 +482,7 @@ impl Service {
         }
     }
 
-    pub(crate) fn check_command_recovery(
+    pub(crate) fn check_exclusive_command(
         &self,
         thread: ThreadId,
         owner: Owner,
