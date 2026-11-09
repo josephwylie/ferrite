@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import struct
+import signal
 import tempfile
 import threading
 import shlex
@@ -32,6 +33,16 @@ def windows_descendants(roots):
         if expanded == owned:
             return [item for item in processes if int(item["ProcessId"]) in owned]
         owned = expanded
+
+
+def unix_group_processes(group):
+    output = subprocess.check_output(['ps', '-axww', '-o', 'pid=,pgid=,comm='], text=True, timeout=15)
+    processes = []
+    for line in output.splitlines():
+        pid, process_group, executable = line.strip().split(None, 2)
+        if int(process_group) == group:
+            processes.append({'pid':int(pid), 'process_group':int(process_group), 'executable':executable})
+    return processes
 
 
 def pe_stack(path):
@@ -154,7 +165,8 @@ def main():
         try:
             with (output/'app.log').open('w', encoding='utf-8') as log:
                 process = subprocess.Popen([executable, '--browser-window-smoke', '--import', str(history)],
-                    env=env, cwd=root, stdout=log, stderr=subprocess.STDOUT, creationflags=flags)
+                    env=env, cwd=root, stdout=log, stderr=subprocess.STDOUT, creationflags=flags,
+                    start_new_session=os.name != "nt")
                 if args.startup_only:
                     deadline = time.monotonic() + 15
                     while process.poll() is None and not (output/'window-start.json').exists() and time.monotonic() < deadline:
@@ -178,6 +190,13 @@ def main():
             if os.name == 'nt':
                 descendants = windows_descendants([process.pid, server_process.pid])
                 (output/'owned-processes.json').write_text(json.dumps(descendants, indent=2), encoding='utf-8')
+                surviving_controllers = [item for item in descendants if item['Name'].casefold() == 'agent-browser.exe']
+            else:
+                remaining = unix_group_processes(process.pid)
+                (output/'owned-processes.json').write_text(json.dumps(remaining, indent=2), encoding='utf-8')
+                surviving_controllers = [item for item in remaining if Path(item['executable']).name == 'agent-browser']
+            if surviving_controllers:
+                raise RuntimeError(f'Native controller survived ordinary application exit: {surviving_controllers}')
             if not (output/'window-result.json').exists():
                 raise RuntimeError(f'Packaged app exited before the window scenario result: exit={code} ({code & 0xffffffff:#x}); inspect app.log and startup evidence')
             result = json.loads((output/'window-result.json').read_text(encoding='utf-8'))
@@ -209,6 +228,14 @@ def main():
             if process is not None and process.poll() is None:
                 process.kill()
                 process.wait()
+            if os.name != 'nt' and process is not None:
+                remaining = unix_group_processes(process.pid)
+                if remaining:
+                    (output/'cleanup-processes.json').write_text(json.dumps(remaining, indent=2), encoding='utf-8')
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
             stopped = subprocess.run([executable, '--browser-window-stop'], env=env, cwd=root,
                 stdout=server_log, stderr=subprocess.STDOUT, timeout=20, creationflags=flags)
             cleanup_error = None
