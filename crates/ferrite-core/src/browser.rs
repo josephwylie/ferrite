@@ -263,6 +263,16 @@ impl Service {
                         .tabs
                         .get(at.min(state.tabs.len().saturating_sub(1)))
                         .map(|tab| tab.id);
+                    if let Some(next) = state
+                        .tabs
+                        .iter_mut()
+                        .find(|tab| Some(tab.id) == state.active)
+                    {
+                        if !next.live {
+                            next.live = true;
+                            begin_navigation(next);
+                        }
+                    }
                 }
             }
             Action::Navigate { document, url } => {
