@@ -460,9 +460,15 @@ impl CockpitView {
                                 handed_off = true;
                                 cx.notify();
                             } else {
-                                error = Some(
-                                    "Open the capture's Thread to continue annotating.".into(),
-                                );
+                                // Finishing an inactive Thread's capture must
+                                // keep the receipt until its Pane is reopened.
+                                match self
+                                    .cockpit
+                                    .browser_annotation_image(thread, retained.clone())
+                                {
+                                    Ok(image) => session.phase = Phase::Loading { retained, image },
+                                    Err(failure) => error = Some(failure.to_string()),
+                                }
                             }
                         }
                         Ok(Err(failure)) => error = Some(failure.to_string()),
