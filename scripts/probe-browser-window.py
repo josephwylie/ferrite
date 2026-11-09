@@ -139,10 +139,13 @@ def main():
                     deadline = time.monotonic() + 15
                     while process.poll() is None and not (output/'window-start.json').exists() and time.monotonic() < deadline:
                         time.sleep(0.1)
+                    if (output/'window-start.json').exists() and process.poll() is None:
+                        time.sleep(2)
                     (output/'startup-comparison.json').write_text(json.dumps({
                         'diagnostic_only':True, 'browser_acceptance':False,
                         'driver_reached':(output/'window-start.json').exists(),
                         'exit_code':process.poll(), 'pid':process.pid,
+                        'alive_after_settle':process.poll() is None,
                     }, indent=2), encoding='utf-8')
                     return
                 try:
