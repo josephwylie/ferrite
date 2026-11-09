@@ -52,4 +52,3 @@ jobs:
             target/browser-controller/version.txt
             target/browser-controller/transport.json
             target/browser-controller/agent-browser-build.json
-
