@@ -23,6 +23,8 @@ def emit(value):
 
 
 def call(name, arguments):
+    with (output/'provider-requests.jsonl').open('a',encoding='utf-8') as log:
+        log.write(json.dumps({'sent_monotonic':time.monotonic(),'request':name,'arguments':arguments})+'\n')
     if provider == 'claude':
         emit({'type':'control_request','request_id':name,'request':{
             'subtype':'mcp_message','server_name':'ferrite','message':{

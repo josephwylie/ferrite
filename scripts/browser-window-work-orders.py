@@ -1,5 +1,7 @@
 """One prescribed task driven only by public browser tool requests/responses."""
 import json
+import re
+import time
 
 
 def plan(name):
@@ -41,7 +43,7 @@ class WorkOrder:
         self.call('work-state', {'kind':'state'})
 
     def receive(self, request, answer):
-        self.trace.append({'request':request,'answer':answer})
+        self.trace.append({'received_monotonic':time.monotonic(),'request':request,'answer':answer})
         (self.output/'work-order-trace.json').write_text(json.dumps(self.trace,indent=2),encoding='utf-8')
         try:
             if answer.get('isError') is not False:
@@ -82,16 +84,29 @@ class WorkOrder:
         # Read the actual readable observation. Missing full values are a product
         # observation failure; no evaluate/DOM side channel supplies them.
         snapshot = state['value']['snapshot']
-        for value in (self.name,'owner@example.test','Reviewed and approved.','3200','Tracking code','final-0'):
-            if value not in snapshot:
-                raise ValueError(f'Reopened readable observation omits expected value {value!r}')
         refs = state['value']['refs']
         lines = snapshot.splitlines()
-        for label, checked in [('Notify owner',False),('Approve this order',True)]:
-            ref = next(ref for ref,data in refs.items() if data.get('role')=='checkbox' and data.get('name')==label)
-            line = next(line for line in lines if '[ref='+ref+']' in line)
-            if ('[checked]' in line) != checked:
+        def field(role, label):
+            matches = [ref for ref,data in refs.items() if data.get('role')==role and data.get('name')==label]
+            if len(matches)!=1:
+                raise ValueError(f'Expected one reopened {role} {label!r}')
+            matching_lines = [line for line in lines if re.search(r'\bref='+re.escape(matches[0])+r'(?=[,\]])',line)]
+            if len(matching_lines)!=1:
+                raise ValueError(f'Readable observation does not print the offered opaque ref for {label!r}')
+            return matching_lines[0]
+        for label,value in [('Name',self.name),('Owner email','owner@example.test'),
+                            ('Description','Reviewed and approved.'),('Custom field name','Tracking code'),
+                            ('Custom field value','final-0')]:
+            if field('textbox',label).split(']: ',1)[-1] != value:
+                raise ValueError(f'Reopened textbox mismatch: {label}')
+        if field('spinbutton','Budget').split(']: ',1)[-1] != '3200':
+            raise ValueError('Reopened Budget mismatch')
+        for label,checked in [('Notify owner',False),('Approve this order',True)]:
+            line = field('checkbox',label)
+            if ('checked='+str(checked).lower()) not in line:
                 raise ValueError(f'Reopened checkbox mismatch: {label}: {line}')
-        for value in ('Engineering','Normal'):
-            if not any(value in line and '[selected]' in line for line in lines):
+        for label,value in [('Team','Engineering'),('Priority','Normal')]:
+            if field('combobox',label).split(']: ',1)[-1] != value:
+                raise ValueError(f'Reopened combobox mismatch: {label}')
+            if not any(value in line and re.search(r'\bselected(?=[,\]])',line) for line in lines):
                 raise ValueError(f'Reopened selected option absent: {value}')

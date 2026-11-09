@@ -91,7 +91,7 @@ def main():
     # or startup marker, including directories restored by compiler caches.
     for name in ('window-start.json', 'input-ready.json', 'window-result.json', 'provider-result.json',
                  'provider-result.tmp', 'provider-trace.json', 'provider-definitions.json',
-                 'provider-host.jsonl', 'startup-comparison.json', 'oracle.json',
+                 'provider-host.jsonl', 'provider-requests.jsonl', 'startup-comparison.json', 'oracle.json',
                  'work-order-oracle.json', 'work-order-oracle-at-exit.json', 'work-order-trace.json',
                  'window-work-order.png', 'window-work-order-before.png',
                  'cleanup-error.txt', 'cleanup-processes.json', 'shutdown-samples.json', 'oracle-at-exit.json', 'window-before.png', 'window-after.png',
