@@ -242,6 +242,10 @@ pub trait Engine {
     /// Do any work that is due on the main thread, and say how long until the
     /// engine next needs this called. The host calls it on a timer.
     fn pump(&self) -> Duration;
+
+    /// Close all pages and stop the engine on its main thread before process
+    /// exit. Idempotent; retained view handles must no longer call the engine.
+    fn shutdown(&self) {}
 }
 
 /// One page. Dropping it closes the page and frees its resources; hiding it

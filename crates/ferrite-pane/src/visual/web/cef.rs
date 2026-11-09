@@ -261,6 +261,7 @@ impl Dormant {
                 views: RefCell::new(Vec::new()),
                 next_id: Cell::new(1),
                 pumping: Cell::new(false),
+                shutdown: Cell::new(false),
                 browser_isolated: !no_sandbox
                     && !overrides.disable_external
                     && std::env::var_os("FERRITE_CEF_EXTRA_SWITCHES").is_none(),
@@ -428,6 +429,7 @@ struct EngineInner {
     views: RefCell<Vec<Weak<ViewInner>>>,
     next_id: Cell<u64>,
     pumping: Cell<bool>,
+    shutdown: Cell<bool>,
     browser_isolated: bool,
     control: RefCell<Option<control::Control>>,
     browser_context: RefCell<Option<cef::RequestContext>>,
@@ -482,6 +484,9 @@ impl Engine for CefEngine {
     }
 
     fn browser_available(&self) -> Result<(), String> {
+        if self.inner.shutdown.get() {
+            return Err("The browser engine is shutting down".into());
+        }
         if !self.inner.browser_isolated {
             return Err("Conversation browsing requires the Chromium sandbox and web isolation; remove FERRITE_CEF_NO_SANDBOX and sandbox-disabling startup switches".into());
         }
@@ -506,8 +511,15 @@ impl Engine for CefEngine {
         Ok(controller.as_ref().unwrap().endpoint())
     }
 
+    fn shutdown(&self) {
+        self.inner.shutdown();
+    }
+
     fn pump(&self) -> Duration {
         let engine = &self.inner;
+        if engine.shutdown.get() {
+            return Duration::from_secs(1);
+        }
         // cef_do_message_loop_work must not be re-entered.
         if engine.pumping.replace(true) {
             return Duration::from_millis(1);
@@ -653,6 +665,39 @@ impl CefEngine {
 }
 
 impl EngineInner {
+    fn shutdown(&self) {
+        if self.shutdown.replace(true) {
+            return;
+        }
+        let started = Instant::now();
+        // Retained GPUI globals, pump tasks and view handles outlive quit.
+        // Retire their native references explicitly, before cef_shutdown.
+        self.control.borrow_mut().take();
+        for view in self.live_views() {
+            view.agent_access.paused.store(true, Ordering::SeqCst);
+            view.agent_access.epoch.fetch_add(1, Ordering::SeqCst);
+            view.state.generation.fetch_add(1, Ordering::SeqCst);
+            view.observation.borrow_mut().take();
+            if let Some(browser) = view.browser.borrow_mut().take() {
+                if let Some(host) = browser.host() {
+                    host.close_browser(1);
+                }
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while self.global.live_browsers.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
+            do_message_loop_work();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let remaining = self.global.live_browsers.load(Ordering::SeqCst);
+        self.browser_context.borrow_mut().take();
+        cef::shutdown();
+        eprintln!(
+            "ferrite visuals: CEF shutdown in {:?}; browsers remaining before shutdown: {remaining}",
+            started.elapsed()
+        );
+    }
+
     fn live_views(&self) -> Vec<Rc<ViewInner>> {
         let mut views = self.views.borrow_mut();
         views.retain(|view| view.strong_count() > 0);
@@ -666,15 +711,7 @@ impl Drop for EngineInner {
     /// finished closing them before `cef_shutdown`, so pump until it has
     /// (bounded).
     fn drop(&mut self) {
-        // Release observers/browser references before CEF and its library.
-        self.control.get_mut().take();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while self.global.live_browsers.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
-            do_message_loop_work();
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        self.browser_context.get_mut().take();
-        cef::shutdown();
+        self.shutdown();
         // Profile cleanup and its exclusive lock outlive all CEF references.
     }
 }
