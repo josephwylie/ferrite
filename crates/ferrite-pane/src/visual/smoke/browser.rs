@@ -205,6 +205,15 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
         viewport,
         Box::new(|| {}),
     )?;
+    clean.set_protected(true);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while clean.target_id().is_none() {
+        if Instant::now() >= deadline {
+            return Err("Protected first-use tab did not become live".into());
+        }
+        std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
+    }
+    clean.set_protected(false);
     wait_browser(engine, clean.as_ref(), |state| {
         !state.loading && state.dirty == crate::visual::web::BrowserDirty::Clean
     })?;
