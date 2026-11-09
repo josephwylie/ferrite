@@ -137,7 +137,7 @@ pub(super) fn client(
         ViewDisplay::new(state.clone(), generation),
         ViewLoad::new(state.clone(), generation),
         ViewLifeSpan::new(global),
-        ViewRequests::new(page),
+        ViewRequests::new(page, state.clone(), generation),
         NoContextMenu::new(),
         NoDialogs::new(state),
     )
@@ -353,6 +353,8 @@ wrap_life_span_handler! {
 wrap_request_handler! {
     struct ViewRequests {
         page: Arc<PageDoc>,
+        state: Arc<ViewState>,
+        generation: u64,
     }
 
     impl RequestHandler {
@@ -367,7 +369,13 @@ wrap_request_handler! {
             _is_redirect: ::std::os::raw::c_int,
         ) -> ::std::os::raw::c_int {
             let url = request.map(|r| CefString::from(&r.url()).to_string()).unwrap_or_default();
-            if self.page.external { (!external_url(&url)) as i32 } else { (without_fragment(&url) != self.page.url) as i32 }
+            if self.page.external {
+                let blocked = !external_url(&url);
+                if blocked && _frame.is_some_and(|frame| frame.is_main() != 0) {
+                    self.state.navigation(self.generation, |state| { state.loading = false; state.error = Some("This tab can navigate only to http or https websites. Check the destination address.".into()); });
+                }
+                blocked as i32
+            } else { (without_fragment(&url) != self.page.url) as i32 }
         }
 
         fn on_open_urlfrom_tab(
