@@ -36,7 +36,9 @@ def run(*args, **kwargs):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", required=True, type=Path)
-    parser.add_argument("--offline", action="store_true", help="verify the staged build without downloading or rebuilding")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--test", action="store_true", help="run the native Ferrite security regressions before packaging")
+    mode.add_argument("--offline", action="store_true", help="verify the staged build without downloading or rebuilding")
     args = parser.parse_args()
     name = "agent-browser.exe" if os.name == "nt" else "agent-browser"
     patch_digest = digest(PATCH)
@@ -72,6 +74,9 @@ def main():
     if actual_patch != PATCH.read_bytes():
         parser.error("cached upstream source differs from the retained hardening patch")
     build_target = ROOT / "target" / "agent-browser-cargo"
+    if args.test:
+        run("cargo", "test", "--locked", "--target-dir", str(build_target), "--manifest-path", str(source / "cli/Cargo.toml"),
+            "--bin", "agent-browser", "ferrite_", "--", "--test-threads=1")
     run("cargo", "build", "--release", "--locked", "--target-dir", str(build_target), "--manifest-path", str(source / "cli/Cargo.toml"))
     built = build_target / "release" / name
     args.destination.mkdir(parents=True, exist_ok=True)
@@ -79,6 +84,7 @@ def main():
     licenses = args.destination / "agent-browser-licenses"
     licenses.mkdir(exist_ok=True)
     shutil.copy2(source / "LICENSE", licenses / "LICENSE")
+    expected["ferrite_security_tests"] = "passed" if args.test else "not run by this invocation"
     expected["binary_sha256"] = digest(artifact)
     expected["rustc"] = subprocess.check_output(["rustc", "--version"], text=True).strip()
     provenance.write_text(json.dumps(expected, indent=2) + "\n")
