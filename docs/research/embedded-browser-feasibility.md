@@ -67,6 +67,26 @@ restrictions. Packaged runtime isolation, including external-page attempts to
 reach application operations, filesystem tools and sealed visuals, remains
 required on both platforms.
 
+## Local native validation (2026-11-09)
+
+On macOS 27.2/arm64, the retained patch's five Ferrite-specific Rust tests and
+all nineteen upstream native-daemon tests passed. The final native debug
+executable passed `probe-agent-browser-transport.py`: fail-closed startup,
+missing/wrong credentials on observation/close/internal shutdown, two authorized
+requests over separate connections to the same daemon, disabled stream startup
+and reactivation, and explicit no-CDP launch rejection. These are real native
+transport results, not CEF or Windows evidence. The patch SHA-256 is
+`034e4532e404a1c5e78102b219001c8a473f659a8111a089d1cdbda753c3f2ad`.
+
+The combined packaged smoke driver `probe-embedded-browser.py` additionally
+requires the private bridge supplied by the Engine fixture. It uses native
+clicks in two concurrently requested, serialized tabs, independently decodes
+controller screenshots and restarts the controller before rediscovering the
+same targets and page state. The Rust host separately verifies the actual live
+View pixels and that its sealed third page was not changed. The workflow
+retains fixture screenshots and the native result manifest. Adding this driver
+does not claim that the packaged cross-platform run has passed.
+
 ## Reproduction and acceptance status
 
 ```

@@ -59,16 +59,11 @@ wrap_app! {
             ] {
                 command_line.append_switch(Some(&switch.into()));
             }
-            // Fewer processes (measured in NOTES-cef.md): no pre-warmed spare
-            // renderer, and the network service (which only ever serves our
-            // in-memory page) in the browser process.
+            // No pre-warmed spare renderer. Keep the network service in its
+            // own sandboxed process: external views share this CEF runtime.
             command_line.append_switch_with_value(
                 Some(&"disable-features".into()),
                 Some(&"SpareRendererForSitePerProcess".into()),
-            );
-            command_line.append_switch_with_value(
-                Some(&"enable-features".into()),
-                Some(&"NetworkServiceInProcess2".into()),
             );
             // Every page is on the one site `ferrite-view://page`, so this
             // puts all views in a single renderer process instead of one each
@@ -86,6 +81,11 @@ wrap_app! {
                         None => command_line.append_switch(Some(&s.into())),
                     }
                 }
+            }
+            // No global debugging endpoint may expose sealed visuals, even
+            // when a developer passed a Chromium switch on the command line.
+            for switch in ["remote-debugging-port", "remote-debugging-address", "remote-debugging-pipe"] {
+                command_line.remove_switch(Some(&switch.into()));
             }
         }
 
@@ -257,6 +257,7 @@ wrap_display_handler! {
             _source: Option<&CefString>,
             _line: ::std::os::raw::c_int,
         ) -> ::std::os::raw::c_int {
+            if self.state.external { return 0; }
             let Some(height) = message.and_then(|m| document::parse_height(&m.to_string())) else {
                 return 0;
             };
@@ -355,7 +356,7 @@ wrap_request_handler! {
             _is_redirect: ::std::os::raw::c_int,
         ) -> ::std::os::raw::c_int {
             let url = request.map(|r| CefString::from(&r.url()).to_string()).unwrap_or_default();
-            (without_fragment(&url) != self.page.url) as i32
+            if self.page.external { (!external_url(&url)) as i32 } else { (without_fragment(&url) != self.page.url) as i32 }
         }
 
         fn on_open_urlfrom_tab(
@@ -402,6 +403,9 @@ wrap_resource_request_handler! {
         ) -> ReturnValue {
             let url = request.map(|r| CefString::from(&r.url()).to_string()).unwrap_or_default();
             let local = url.starts_with("data:") || url.starts_with("blob:");
+            if self.page.external {
+                return if local || external_url(&url) { ReturnValue::CONTINUE } else { ReturnValue::CANCEL };
+            }
             if local || without_fragment(&url) == self.page.url || font_of(&url).is_some() {
                 ReturnValue::CONTINUE
             } else {
@@ -416,6 +420,7 @@ wrap_resource_request_handler! {
             request: Option<&mut Request>,
         ) -> Option<ResourceHandler> {
             let url = request.map(|r| CefString::from(&r.url()).to_string()).unwrap_or_default();
+            if self.page.external { return None; }
             if let Some(font) = font_of(&url) {
                 return Some(PageResource::new(Arc::from(font), "font/ttf", Arc::new(Mutex::new(0))));
             }
@@ -565,4 +570,15 @@ fn font_of(url: &str) -> Option<&'static [u8]> {
 
 fn without_fragment(url: &str) -> &str {
     url.split('#').next().unwrap_or(url)
+}
+
+/// Website pages have no access to Ferrite schemes, local files or arbitrary
+/// application protocols. CEF's default network loader handles only web URLs.
+pub(super) fn external_url(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|url| {
+        matches!(url.scheme(), "http" | "https")
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+    })
 }

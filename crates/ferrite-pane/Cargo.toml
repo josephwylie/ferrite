@@ -11,7 +11,7 @@ doctest = false
 [features]
 # Agent visuals drawn by Chromium (CEF, off-screen; ADR 0013). The app's
 # own `cef` feature turns this on; see its Cargo.toml.
-cef = ["dep:cef"]
+cef = ["dep:cef", "dep:tungstenite", "dep:getrandom"]
 # The hooks the app's reference captures drive, and the visuals' own
 # snapshots (`visual::shots`).
 visual-reference = ["gpui/test-support"]
@@ -32,6 +32,8 @@ gpui = { package = "gpui-kit", version = "=0.6.0" }
 gpui-base = "=0.6.0"
 serde_json = { workspace = true }
 url = "2"
+tungstenite = { version = "0.24", default-features = false, features = ["handshake"], optional = true }
+getrandom = { version = "0.3", optional = true }
 percent-encoding = "2"
 # Visuals: a rendered frame becomes a gpui RenderImage (which holds
 # image::Frames), and the agent's screenshot is a PNG. Already in the tree
