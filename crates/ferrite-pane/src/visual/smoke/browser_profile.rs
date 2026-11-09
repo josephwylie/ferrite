@@ -135,7 +135,7 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
             },
             Box::new(|| {}),
         );
-        wait_color(engine, sealed.as_ref(), RED)?;
+        wait_color(engine, sealed.as_ref(), RED, &mut None)?;
         println!("PASS profile contender: external browsing unavailable, sealed pixels remain red");
         return Ok(());
     }
@@ -153,10 +153,12 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
         viewport,
         Box::new(|| {}),
     )?;
+    let mut one_frame = None;
     wait_color(
         engine,
         one.as_ref(),
         if stage == "write" { BLUE } else { GREEN },
+        &mut one_frame,
     )
     .map_err(|error| {
         format!(
@@ -166,12 +168,19 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
         )
     })?;
     let two = engine.open_browser(&format!("{base}/check"), viewport, Box::new(|| {}))?;
-    wait_color(engine, two.as_ref(), GREEN)?;
+    wait_color(engine, two.as_ref(), GREEN, &mut None)?;
     wait_color(
         engine,
         one.as_ref(),
         if stage == "write" { BLUE } else { GREEN },
+        &mut one_frame,
     )?;
+    let expected_path = if stage == "write" { "/login" } else { "/check" };
+    if one.state().url != format!("{base}{expected_path}") || one.target_id() == two.target_id() {
+        return Err(
+            "Opening a shared-login tab changed the first tab's navigation or live target".into(),
+        );
+    }
     let expected = if stage == "write" { 1 } else { 2 };
     if fixture.authenticated.load(Ordering::SeqCst) < expected {
         return Err("Rendered login was not confirmed by fixture HTTP cookie oracle".into());
@@ -202,11 +211,17 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
     Ok(())
 }
 
-fn wait_color(engine: &dyn Engine, view: &dyn View, color: [u8; 4]) -> Result<(), String> {
+fn wait_color(
+    engine: &dyn Engine,
+    view: &dyn View,
+    color: [u8; 4],
+    frame: &mut Option<Frame>,
+) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(60);
-    let mut frame: Option<Frame> = None;
     loop {
-        frame = view.take().frame.or(frame);
+        if let Some(next) = view.take().frame {
+            *frame = Some(next);
+        }
         if frame.as_ref().is_some_and(|frame| {
             let offset = ((100 * frame.width + 100) * 4) as usize;
             frame.bgra.get(offset..offset + 4) == Some(color.as_slice())
