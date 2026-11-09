@@ -497,7 +497,7 @@ impl Engine for CefEngine {
             for view in self.inner.live_views() {
                 if view.doc.external {
                     if let Some(browser) = view.browser.borrow().clone() {
-                        created.register(view.target_id(), browser, view.agent_paused.clone());
+                        created.register(view.target_id(), browser, view.agent_access.clone());
                     }
                 }
             }
@@ -633,7 +633,7 @@ impl CefEngine {
             browser: RefCell::new(None),
             observation: RefCell::new(None),
             failed: Cell::new(false),
-            agent_paused: Arc::new(AtomicBool::new(false)),
+            agent_access: Arc::new(AgentAccess::default()),
             protected: Cell::new(false),
             wake,
             visible: Cell::new(true),
@@ -684,6 +684,14 @@ impl Drop for EngineInner {
 
 struct CefView(Rc<ViewInner>);
 
+/// Shared with private target dispatch; intervention invalidates attachments
+/// even after the operator's current input burst has ended.
+#[derive(Default)]
+struct AgentAccess {
+    paused: AtomicBool,
+    epoch: AtomicU64,
+}
+
 struct ViewInner {
     id: u64,
     /// Keeps CEF up while any view lives, whatever order the host drops in.
@@ -696,7 +704,7 @@ struct ViewInner {
     browser: RefCell<Option<Browser>>,
     observation: RefCell<Option<observation::Observation>>,
     failed: Cell<bool>,
-    agent_paused: Arc<AtomicBool>,
+    agent_access: Arc<AgentAccess>,
     protected: Cell<bool>,
     wake: Wake,
     visible: Cell<bool>,
@@ -796,7 +804,7 @@ impl ViewInner {
             if let (Some(control), Some(browser)) =
                 (self._engine.control.borrow_mut().as_mut(), browser.clone())
             {
-                control.register(self.target_id(), browser, self.agent_paused.clone());
+                control.register(self.target_id(), browser, self.agent_access.clone());
             }
         }
         if self.doc.external {
@@ -1210,7 +1218,11 @@ impl BrowserView for CefView {
         }
     }
     fn set_agent_paused(&self, paused: bool) {
-        if self.0.agent_paused.swap(paused, Ordering::SeqCst) != paused {
+        let changed = self.0.agent_access.paused.swap(paused, Ordering::SeqCst) != paused;
+        if changed && paused {
+            self.0.agent_access.epoch.fetch_add(1, Ordering::SeqCst);
+        }
+        if changed {
             if let Some(observation) = self.0.observation.borrow_mut().as_mut() {
                 observation.invalidate(&self.0.state);
             }
@@ -1221,7 +1233,7 @@ impl BrowserView for CefView {
         let state = self.state();
         if view.visible.get()
             || view.protected.get()
-            || view.agent_paused.load(Ordering::SeqCst)
+            || view.agent_access.paused.load(Ordering::SeqCst)
             || state.loading
             || state.dirty != BrowserDirty::Clean
         {
