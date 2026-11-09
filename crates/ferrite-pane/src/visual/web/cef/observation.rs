@@ -69,6 +69,7 @@ pub(super) struct Observation {
     document: u64,
     context: Option<i64>,
     installed: bool,
+    retained: bool,
     clean_at: Option<Instant>,
     pending: Option<Pending>,
     last: Instant,
@@ -90,6 +91,7 @@ impl Observation {
             document: 0,
             context: None,
             installed: false,
+            retained: false,
             clean_at: None,
             pending: None,
             last: Instant::now() - INTERVAL,
@@ -103,6 +105,7 @@ impl Observation {
         // Its old result can never make the post-command document clean.
         self.pending = None;
         self.clean_at = None;
+        self.retained = false;
         self.last = Instant::now() - INTERVAL;
         Self::unknown(state);
     }
@@ -167,6 +170,7 @@ impl Observation {
         {
             self.pending = None;
             self.context = None;
+            self.retained = true;
             Self::unknown(state);
         }
         for response in messages {
@@ -181,6 +185,7 @@ impl Observation {
             if (!matches!(pending.step, Step::Install) && pending.document != self.document)
                 || response.get("error").is_some()
             {
+                self.retained = true;
                 Self::unknown(state);
                 continue;
             }
@@ -238,6 +243,7 @@ impl Observation {
                                         .is_some_and(|roots| !roots.is_empty())
                                 })
                         });
+                    self.retained = uncertain;
                     let mut navigation = state.navigation.lock().unwrap();
                     if navigation.document_generation == pending.document
                         && navigation.dirty != BrowserDirty::Dirty
@@ -257,6 +263,7 @@ impl Observation {
             }
         }
         if !self.installed
+            || self.retained
             || navigation.loading
             || navigation.document_generation == 0
             || navigation.dirty == BrowserDirty::Dirty

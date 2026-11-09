@@ -1087,6 +1087,11 @@ impl View for CefView {
         }
         view.hidden_since.set((!visible).then(Instant::now));
         if !visible {
+            if view.doc.external {
+                if let Some(observation) = view.observation.borrow_mut().as_mut() {
+                    observation.invalidate(&view.state);
+                }
+            }
             let unpainted = view.state.restyle_unpainted.load(Ordering::SeqCst);
             if unpainted && view.host().is_some() {
                 view.hide_deferred.set(true);
