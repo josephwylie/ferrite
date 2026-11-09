@@ -5314,3 +5314,158 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
     window.command(99, Op::Stop { when: When::Now });
     assert_eq!(harness.server.join().unwrap(), 0);
 }
+
+fn browser_test_command(client: &mut crate::link::Client, id: u64, op: Op) -> ServerMessage {
+    client
+        .send(&ClientMessage::Command(Command { id, op }))
+        .unwrap();
+    loop {
+        let message = client
+            .messages
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        if matches!(message, ServerMessage::Reply { id: got, .. } if got == id) {
+            return message;
+        }
+    }
+}
+
+#[test]
+fn browser_requests_reject_old_input_and_retire_the_unwatching_owner() {
+    use crate::browser::{Action, Dirty, Operation, PageState};
+    let harness = start("browser-owner-retirement");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    let mut owner_window = browser_test_window(&harness, thread);
+    let agent = harness.browser.for_thread(thread);
+    let first = agent
+        .submit(browser_test_action(Action::Open {
+            url: "https://example.com/first".into(),
+        }))
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    let owner = first.state.owner.unwrap();
+    let old = first.state.tabs[0].document();
+    agent
+        .submit(browser_test_action(Action::Open {
+            url: "https://example.com/second".into(),
+        }))
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(
+            browser_test_command(
+                &mut owner_window,
+                80,
+                Op::BrowserInput {
+                    thread,
+                    owner,
+                    document: old
+                }
+            ),
+            ServerMessage::Reply {
+                ok: None,
+                error: Some(_),
+                ..
+            }
+        ),
+        "queued input for the previous selected tab must fail"
+    );
+    let ServerMessage::Reply {
+        ok: Some(Done::Browser { state }),
+        error: None,
+        ..
+    } = browser_test_command(
+        &mut owner_window,
+        81,
+        Op::BrowserPage {
+            thread,
+            owner,
+            page: PageState {
+                document: old,
+                navigation: true,
+                visible: false,
+                url: "https://example.com/changed".into(),
+                loading: false,
+                can_back: true,
+                can_forward: false,
+                error: None,
+                dirty: Dirty::Clean,
+            },
+        },
+    )
+    else {
+        panic!("navigation must synchronously return its new document");
+    };
+    let current = state.tabs[0].document();
+    assert_ne!(current, old);
+    browser_test_command(
+        &mut owner_window,
+        82,
+        Op::Browser {
+            thread,
+            action: Action::Select { tab: current.tab },
+        },
+    );
+    assert!(matches!(
+        browser_test_command(
+            &mut owner_window,
+            83,
+            Op::BrowserInput {
+                thread,
+                owner,
+                document: old
+            }
+        ),
+        ServerMessage::Reply {
+            ok: None,
+            error: Some(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        browser_test_command(
+            &mut owner_window,
+            84,
+            Op::BrowserInput {
+                thread,
+                owner,
+                document: current
+            }
+        ),
+        ServerMessage::Reply {
+            ok: Some(Done::BrowserInput { revision: 1 }),
+            error: None,
+            ..
+        }
+    ));
+    owner_window
+        .send(&ClientMessage::Unwatch { thread })
+        .unwrap();
+    loop {
+        if let ServerMessage::Browser {
+            thread: got,
+            owner: None,
+            owned: false,
+            state,
+            ..
+        } = owner_window
+            .messages
+            .recv_timeout(Duration::from_secs(5))
+            .expect("departing owner must receive native-view retirement")
+        {
+            assert_eq!(got, thread);
+            assert!(state.tabs.iter().all(|tab| !tab.live));
+            break;
+        }
+    }
+    assert!(agent
+        .submit(Operation::State)
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .is_err());
+    window.command(99, Op::Stop { when: When::Now });
+    assert_eq!(harness.server.join().unwrap(), 0);
+}
