@@ -20,6 +20,7 @@ use crate::{Decision, DecisionAnswer, SessionEvent};
 
 #[cfg(unix)]
 mod browser_providers;
+mod browser_annotations;
 #[cfg(unix)]
 mod herdr;
 mod park;
