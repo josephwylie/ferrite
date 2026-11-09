@@ -264,6 +264,49 @@ impl Cockpit {
         }
     }
 
+    pub fn browser_capture(
+        &mut self,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        lease: crate::browser::Lease,
+        capture: crate::browser_annotations::Capture,
+        png: crate::protocol::WirePng,
+    ) -> io::Result<crate::browser_annotations::Annotation> {
+        match self
+            .remote()?
+            .execute(Op::BrowserCapture {
+                thread,
+                owner,
+                lease,
+                capture,
+                png,
+            })
+            .map_err(|error| io::Error::other(error.message))?
+        {
+            Some(Done::BrowserCapture { annotation }) => Ok(annotation),
+            _ => Err(io::Error::other(
+                "The Server could not retain this browser capture",
+            )),
+        }
+    }
+
+    pub fn browser_capture_image(
+        &mut self,
+        thread: ThreadId,
+        hash: String,
+    ) -> io::Result<crate::protocol::WirePng> {
+        match self
+            .remote()?
+            .execute(Op::BrowserCaptureImage { thread, hash })
+            .map_err(|error| io::Error::other(error.message))?
+        {
+            Some(Done::BrowserCaptureImage { png }) => Ok(png),
+            _ => Err(io::Error::other(
+                "The Server could not load this browser capture",
+            )),
+        }
+    }
+
     pub fn browser_protect(
         &mut self,
         thread: ThreadId,

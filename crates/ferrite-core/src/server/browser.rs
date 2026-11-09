@@ -19,6 +19,89 @@ pub(super) fn load(store: &crate::store::Store) -> Service {
 }
 
 impl Server {
+    pub(super) fn browser_capture(
+        &self,
+        id: ClientId,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        lease: crate::browser::Lease,
+        capture: crate::browser_annotations::Capture,
+        png: &crate::protocol::WirePng,
+    ) -> Result<Option<Done>, WireError> {
+        use crate::browser_annotations::{self, MAX_CAPTURE_BYTES};
+        use base64::Engine as _;
+        self.browser_owned(id, thread, owner)?;
+        self.browser
+            .check_protection(
+                thread,
+                owner,
+                capture.document,
+                lease,
+                crate::browser::Protection::Annotation,
+            )
+            .map_err(failed)?;
+        if !self
+            .browser
+            .state(thread)
+            .tabs
+            .iter()
+            .any(|tab| tab.id == capture.document.tab && tab.url == capture.url)
+        {
+            return Err(failed("The page changed; capture it again"));
+        }
+        if png.base64.len() > ((MAX_CAPTURE_BYTES + 2) / 3) * 4 {
+            return Err(failed(
+                "The browser capture is too large; use a smaller viewport and capture again",
+            ));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&png.base64)
+            .map_err(|_| failed("The browser capture could not be read; capture the page again"))?;
+        if browser_annotations::png_size(&bytes).map_err(failed)? != (png.width, png.height) {
+            return Err(failed("The page geometry changed; capture it again"));
+        }
+        let annotation = browser_annotations::retain(
+            &self.engine.browser_store().dir().join(thread.to_string()),
+            capture,
+            &bytes,
+            String::new(),
+            vec![],
+        )
+        .map_err(failed)?;
+        Ok(Some(Done::BrowserCapture { annotation }))
+    }
+
+    pub(super) fn browser_capture_image(
+        &self,
+        id: ClientId,
+        thread: ThreadId,
+        hash: &str,
+    ) -> Result<Option<Done>, WireError> {
+        use base64::Engine as _;
+        if !self
+            .clients
+            .get(&id)
+            .is_some_and(|client| client.welcomed && client.watching.contains(&thread))
+        {
+            return Err(failed(
+                "Open this Thread before reviewing its browser captures",
+            ));
+        }
+        let bytes = crate::browser_annotations::read_retained(
+            &self.engine.browser_store().dir().join(thread.to_string()),
+            hash,
+        )
+        .map_err(failed)?;
+        let (width, height) = crate::browser_annotations::png_size(&bytes).map_err(failed)?;
+        Ok(Some(Done::BrowserCaptureImage {
+            png: crate::protocol::WirePng {
+                base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+                width,
+                height,
+            },
+        }))
+    }
+
     pub(super) fn browser_window(&self, id: ClientId, thread: ThreadId) -> Result<(), WireError> {
         if self.engine.thread(thread).is_none() {
             return Err(failed("No such open Thread"));

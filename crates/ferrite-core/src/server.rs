@@ -597,6 +597,16 @@ impl Server {
 
     fn command(&mut self, id: ClientId, Command { id: request, op }: Command) {
         let executed = match &op {
+            Op::BrowserCapture {
+                thread,
+                owner,
+                lease,
+                capture,
+                png,
+            } => self.browser_capture(id, *thread, *owner, *lease, capture.clone(), png),
+            Op::BrowserCaptureImage { thread, hash } => {
+                self.browser_capture_image(id, *thread, hash)
+            }
             Op::BrowserProtect {
                 thread,
                 owner,
