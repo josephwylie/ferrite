@@ -343,12 +343,90 @@ struct Geometry {
     scale: f32,
 }
 
+/// CPU OSR layers for website select menus. CEF popup rectangles and input
+/// use DIPs; paint buffers use device pixels. Keep the original rectangle so
+/// a menu shifted inside the viewport still receives its original coordinates.
+#[derive(Default)]
+struct BrowserLayers {
+    view: Option<super::Frame>,
+    popup: Option<super::Frame>,
+    rect: cef::Rect,
+    shown: bool,
+}
+impl BrowserLayers {
+    fn origin(&self, geometry: Geometry) -> (i32, i32) {
+        (
+            self.rect
+                .x
+                .clamp(0, (geometry.width as i32 - self.rect.width).max(0)),
+            self.rect
+                .y
+                .clamp(0, (geometry.height as i32 - self.rect.height).max(0)),
+        )
+    }
+
+    fn input(&self, x: f32, y: f32, geometry: Geometry) -> (f32, f32) {
+        let (left, top) = self.origin(geometry);
+        if self.shown
+            && self.popup.is_some()
+            && x >= left as f32
+            && y >= top as f32
+            && x < (left + self.rect.width) as f32
+            && y < (top + self.rect.height) as f32
+        {
+            (
+                x + (self.rect.x - left) as f32,
+                y + (self.rect.y - top) as f32,
+            )
+        } else {
+            (x, y)
+        }
+    }
+
+    fn composite(&self, geometry: Geometry) -> Option<super::Frame> {
+        let base = self.view.as_ref()?;
+        let mut frame = super::Frame {
+            width: base.width,
+            height: base.height,
+            bgra: base.bgra.clone(),
+        };
+        if !self.shown {
+            return Some(frame);
+        }
+        let Some(popup) = self.popup.as_ref() else {
+            return Some(frame);
+        };
+        let (left, top) = self.origin(geometry);
+        let left = (left as f32 * geometry.scale).round() as u32;
+        let top = (top as f32 * geometry.scale).round() as u32;
+        let width = popup.width.min(frame.width.saturating_sub(left));
+        let height = popup.height.min(frame.height.saturating_sub(top));
+        for y in 0..height {
+            for x in 0..width {
+                let source = ((y * popup.width + x) * 4) as usize;
+                let destination = (((top + y) * frame.width + left + x) * 4) as usize;
+                // CEF's BGRA is premultiplied; source-over preserves translucent
+                // menu shadows without exposing pixels outside this view.
+                let alpha = u16::from(popup.bgra[source + 3]);
+                for channel in 0..4 {
+                    frame.bgra[destination + channel] = (u16::from(popup.bgra[source + channel])
+                        + (u16::from(frame.bgra[destination + channel]) * (255 - alpha) + 127)
+                            / 255)
+                        .min(255) as u8;
+                }
+            }
+        }
+        Some(frame)
+    }
+}
+
 /// One view's state as the callbacks see it. It outlives the view's browsers:
 /// a released view keeps it, and the next browser picks up where it left off.
 struct ViewState {
     external: bool,
     navigation: Mutex<BrowserState>,
     geometry: Mutex<Geometry>,
+    layers: Mutex<BrowserLayers>,
     updates: Mutex<Updates>,
     last_cursor: Mutex<Cursor>,
     /// Updates are waiting and the host hasn't been woken for them yet.
@@ -371,6 +449,30 @@ struct ViewState {
 }
 
 impl ViewState {
+    fn popup_input(&self, x: f32, y: f32) -> (f32, f32) {
+        if !self.external {
+            return (x, y);
+        }
+        let geometry = self.geometry();
+        self.layers.lock().unwrap().input(x, y, geometry)
+    }
+
+    fn clear_popup(&self) {
+        if !self.external {
+            return;
+        }
+        let geometry = self.geometry();
+        let frame = {
+            let mut layers = self.layers.lock().unwrap();
+            layers.shown = false;
+            layers.popup = None;
+            layers.composite(geometry)
+        };
+        if let Some(frame) = frame {
+            self.update(|updates| updates.frame = Some(frame));
+        }
+    }
+
     fn navigation(&self, generation: u64, f: impl FnOnce(&mut BrowserState)) {
         if self.external && self.is_current(generation) {
             let mut navigation = self.navigation.lock().unwrap();
@@ -627,6 +729,7 @@ impl CefEngine {
                 height: height.clamp(1, MAX_HEIGHT),
                 scale: viewport.scale.max(0.5),
             }),
+            layers: Mutex::new(BrowserLayers::default()),
             updates: Mutex::new(Updates::default()),
             last_cursor: Mutex::new(Cursor::Arrow),
             dirty: AtomicBool::new(false),
@@ -788,6 +891,7 @@ impl ViewInner {
     fn create_browser(&self) {
         let started = Instant::now();
         let generation = self.state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        *self.state.layers.lock().unwrap() = BrowserLayers::default();
         self.state.loaded.store(self.doc.external, Ordering::SeqCst);
         // The reloaded page has the latest theme built in.
         self.state.restyle_unpainted.store(false, Ordering::SeqCst);
@@ -901,6 +1005,7 @@ impl ViewInner {
         // Retire the generation first: anything the closing browser still
         // sends is ignored.
         self.state.generation.fetch_add(1, Ordering::SeqCst);
+        *self.state.layers.lock().unwrap() = BrowserLayers::default();
         if let Some(host) = self
             .browser
             .borrow_mut()
@@ -940,6 +1045,7 @@ impl ViewInner {
             return;
         }
         self.state.generation.fetch_add(1, Ordering::SeqCst);
+        *self.state.layers.lock().unwrap() = BrowserLayers::default();
         if let Some(host) = self
             .browser
             .borrow_mut()
@@ -997,6 +1103,7 @@ impl View for CefView {
             host.notify_screen_info_changed();
         }
         if width_changed || scale_changed {
+            view.state.clear_popup();
             host.was_resized();
         }
     }
@@ -1012,6 +1119,7 @@ impl View for CefView {
         match event {
             Input::Move { x, y, modifiers } => {
                 view.pointer.set((x, y));
+                let (x, y) = view.state.popup_input(x, y);
                 let flags = input::modifier_flags(modifiers) | view.pressed.get();
                 host.send_mouse_move_event(Some(&input::mouse_event(x, y, flags)), 0);
             }
@@ -1020,6 +1128,7 @@ impl View for CefView {
                     host.send_capture_lost_event();
                 }
                 let (x, y) = view.pointer.get();
+                let (x, y) = view.state.popup_input(x, y);
                 host.send_mouse_move_event(Some(&input::mouse_event(x, y, 0)), 1);
             }
             Input::Down {
@@ -1037,6 +1146,7 @@ impl View for CefView {
                 view.pressed
                     .set(view.pressed.get() | input::button_flag(button));
                 let flags = input::modifier_flags(modifiers) | view.pressed.get();
+                let (x, y) = view.state.popup_input(x, y);
                 let event = input::mouse_event(x, y, flags);
                 host.send_mouse_click_event(
                     Some(&event),
@@ -1055,6 +1165,7 @@ impl View for CefView {
                 view.pressed
                     .set(view.pressed.get() & !input::button_flag(button));
                 let flags = input::modifier_flags(modifiers) | view.pressed.get();
+                let (x, y) = view.state.popup_input(x, y);
                 let event = input::mouse_event(x, y, flags);
                 host.send_mouse_click_event(
                     Some(&event),
@@ -1073,6 +1184,7 @@ impl View for CefView {
                 // Same sign convention as GPUI's ScrollDelta (positive = toward
                 // the top/left), in logical pixels.
                 let flags = input::modifier_flags(modifiers) | view.pressed.get();
+                let (x, y) = view.state.popup_input(x, y);
                 host.send_mouse_wheel_event(
                     Some(&input::mouse_event(x, y, flags)),
                     dx.round() as i32,
@@ -1137,6 +1249,8 @@ impl View for CefView {
         }
         view.hidden_since.set((!visible).then(Instant::now));
         if !visible {
+            view.state.clear_popup();
+            *view.state.layers.lock().unwrap() = BrowserLayers::default();
             if view.doc.external {
                 if let Some(observation) = view.observation.borrow_mut().as_mut() {
                     observation.invalidate(&view.state);
@@ -1194,6 +1308,7 @@ impl BrowserView for CefView {
             scale: viewport.scale,
         });
         if changed {
+            self.0.state.clear_popup();
             if let Some(host) = self.0.host() {
                 host.was_resized();
             }
@@ -1303,6 +1418,7 @@ impl BrowserView for CefView {
         }
         view.observation.borrow_mut().take();
         view.state.generation.fetch_add(1, Ordering::SeqCst);
+        *view.state.layers.lock().unwrap() = BrowserLayers::default();
         if let Some(host) = view
             .browser
             .borrow_mut()

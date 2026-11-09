@@ -230,9 +230,27 @@ wrap_render_handler! {
             1
         }
 
+        fn on_popup_show(&self, _browser: Option<&mut Browser>, show: ::std::os::raw::c_int) {
+            if !self.state.external || !self.state.is_current(self.generation) { return; }
+            if show == 0 { self.state.clear_popup(); }
+            else if self.state.visible.load(Ordering::SeqCst) {
+                let mut layers = self.state.layers.lock().unwrap();
+                layers.shown = true;
+                layers.popup = None;
+            }
+        }
+
+        fn on_popup_size(&self, _browser: Option<&mut Browser>, rect: Option<&Rect>) {
+            if !self.state.external || !self.state.is_current(self.generation) { return; }
+            let Some(rect) = rect else { return };
+            let mut layers = self.state.layers.lock().unwrap();
+            layers.rect = rect.clone();
+            layers.popup = None;
+        }
+
         /// The CPU path: CEF hands over the whole view as BGRA in device
-        /// pixels. Copy it into the view's slot; a newer frame replaces an
-        /// untaken one. `<select>` popups (PET_POPUP) are not composited yet.
+        /// pixels. Website select popups are composited into the same bounded
+        /// frame; sealed Visuals retain their existing view-only paint path.
         fn on_paint(
             &self,
             _browser: Option<&mut Browser>,
@@ -242,7 +260,9 @@ wrap_render_handler! {
             width: ::std::os::raw::c_int,
             height: ::std::os::raw::c_int,
         ) {
-            if type_ != PaintElementType::VIEW || buffer.is_null() || width <= 0 || height <= 0 {
+            if (type_ != PaintElementType::VIEW
+                && !(self.state.external && type_ == PaintElementType::POPUP))
+                || buffer.is_null() || width <= 0 || height <= 0 {
                 return;
             }
             // A closing browser, or a page that hasn't laid itself out yet:
@@ -259,9 +279,20 @@ wrap_render_handler! {
             let len = width as usize * height as usize * 4;
             // SAFETY: CEF guarantees `width * height * 4` bytes for the call.
             let bgra = unsafe { std::slice::from_raw_parts(buffer, len) }.to_vec();
-            self.state.update(|updates| {
-                updates.frame = Some(WebFrame { width: width as u32, height: height as u32, bgra });
-            });
+            let frame = WebFrame { width: width as u32, height: height as u32, bgra };
+            let frame = if self.state.external {
+                let geometry = self.state.geometry();
+                let mut layers = self.state.layers.lock().unwrap();
+                if type_ == PaintElementType::VIEW {
+                    layers.view = Some(frame);
+                } else if layers.shown {
+                    layers.popup = Some(frame);
+                } else { return; }
+                layers.composite(geometry)
+            } else { Some(frame) };
+            if let Some(frame) = frame {
+                self.state.update(|updates| updates.frame = Some(frame));
+            }
             self.state.restyle_unpainted.store(false, Ordering::SeqCst);
         }
     }
@@ -585,6 +616,7 @@ wrap_load_handler! {
         }
         fn on_load_start(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType) {
             if frame.is_some_and(|frame| frame.is_main() != 0) {
+                if self.state.is_current(self.generation) { self.state.clear_popup(); }
                 self.state.navigation(self.generation, |state| {
                     state.document_generation = state.document_generation.saturating_add(1);
                     state.loading = true;
