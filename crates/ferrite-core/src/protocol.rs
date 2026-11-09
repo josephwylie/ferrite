@@ -135,6 +135,17 @@ pub struct Command {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
+    BrowserCapture {
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        lease: crate::browser::Lease,
+        capture: crate::browser_annotations::Capture,
+        png: WirePng,
+    },
+    BrowserCaptureImage {
+        thread: ThreadId,
+        hash: String,
+    },
     BrowserProtect {
         thread: ThreadId,
         owner: crate::browser::Owner,
@@ -478,7 +489,9 @@ impl Op {
     /// a new one is placed here on purpose.
     pub fn thread(&self) -> Option<ThreadId> {
         match self {
-            Op::BrowserProtect { thread, .. }
+            Op::BrowserCapture { thread, .. }
+            | Op::BrowserCaptureImage { thread, .. }
+            | Op::BrowserProtect { thread, .. }
             | Op::BrowserRelease { thread, .. }
             | Op::BrowserReclaim { thread, .. }
             | Op::BrowserReclaimed { thread, .. }
@@ -1103,6 +1116,12 @@ pub enum ErrorCode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Done {
+    BrowserCapture {
+        annotation: crate::browser_annotations::Annotation,
+    },
+    BrowserCaptureImage {
+        png: WirePng,
+    },
     BrowserProtection {
         lease: crate::browser::Lease,
     },
