@@ -134,10 +134,17 @@ impl CockpitView {
         if let Some(index) = index {
             cx.emit(GoToMachine {
                 index,
-                open: Some(Landing::Alert(Alert {
-                    away: None,
-                    ..alert
-                })),
+                open: Some({
+                    let alert = Alert {
+                        away: None,
+                        ..alert
+                    };
+                    if self.needs_you_shown() {
+                        Landing::Inbox(alert)
+                    } else {
+                        Landing::Alert(alert)
+                    }
+                }),
             });
         }
     }
@@ -161,12 +168,14 @@ impl CockpitView {
             return;
         }
         match self.landing.take().filter(|_| !expired) {
-            Some((Landing::Alert(alert), _))
+            Some((Landing::Alert(alert) | Landing::Inbox(alert), _))
                 if alert.target.wants(self.cockpit.notifications()) =>
             {
                 self.notice_verb(alert.open_verb(), cx)
             }
-            Some((Landing::Alert(Alert { thread, .. }), _)) => self.land_on_thread(thread, cx),
+            Some((Landing::Alert(alert) | Landing::Inbox(alert), _)) => {
+                self.notice_verb(Verb::OpenThread(alert.thread), cx);
+            }
             None => {}
         }
     }
@@ -184,20 +193,33 @@ impl CockpitView {
             return (requests, finished);
         };
         for away in machines.read(cx).off_screen() {
-            requests.extend(
+            let mut statuses = away.status.rows();
+            statuses.sort_by_key(|status| {
                 away.notifications
-                    .decisions()
-                    .take(50)
-                    .filter_map(|notice| {
-                        away_row(&away, &RowTarget::Decision(notice.id.clone()), now)
-                    }),
-            );
-            finished.extend(away.notifications.notices().take(50).filter_map(|notice| {
-                Some((
-                    notice.at,
-                    away_row(&away, &RowTarget::Notice(notice.id), now)?,
-                ))
-            }));
+                    .first_request(status.thread)
+                    .map(|notice| notice.seq)
+                    .unwrap_or(u64::MAX)
+            });
+            for status in statuses {
+                if away.status.snooze(status.thread).is_some() {
+                    continue;
+                }
+                if status.waiting || away.notifications.first_request(status.thread).is_some() {
+                    if let Some(notice) = away.notifications.first_request(status.thread) {
+                        requests.extend(away_row(
+                            &away,
+                            &RowTarget::Decision(notice.id.clone()),
+                            now,
+                        ));
+                        continue;
+                    }
+                }
+                if !status.working || status.waiting {
+                    if let Some(row) = away_row(&away, &RowTarget::Thread(status.thread), now) {
+                        finished.push((now, row));
+                    }
+                }
+            }
         }
         (requests, finished)
     }
@@ -714,6 +736,18 @@ pub(super) fn away_row(
     now: std::time::SystemTime,
 ) -> Option<NoticeRow> {
     let (thread, state, detail, at, read) = match target {
+        RowTarget::Thread(thread) => {
+            if let Some(notice) = away
+                .notifications
+                .notices()
+                .find(|notice| notice.thread == *thread)
+            {
+                let mut row = away_row(away, &RowTarget::Notice(notice.id), now)?;
+                row.target = target.clone();
+                return Some(row);
+            }
+            (*thread, State::Idle, Detail::None, now, true)
+        }
         RowTarget::Notice(id) => {
             let notice = away.notifications.get(*id)?;
             let (state, detail) = match &notice.outcome {
@@ -729,7 +763,11 @@ pub(super) fn away_row(
             (notice.thread, state, detail, notice.at, notice.read)
         }
         RowTarget::Decision(id) => {
-            let notice = away.notifications.decision(id)?;
+            let notice = away.notifications.decision(id).or_else(|| {
+                away.notifications
+                    .first_request(id.thread)
+                    .filter(|notice| notice.id == *id)
+            })?;
             let detail = away
                 .status
                 .decision(id.thread, &id.handle)
@@ -761,6 +799,5 @@ pub(super) fn away_row(
         detail,
         when: crate::facts::since_label(at, now),
         read,
-        folded: Vec::new(),
     })
 }

@@ -37,6 +37,7 @@ fn the_row_menu_reads_in_claudes_order(cx: &mut TestAppContext) {
                 "Copy path",
                 "Copy link",
                 "Refresh PR status",
+                "Snooze",
                 "Park thread",
                 "Delete thread",
             ]
