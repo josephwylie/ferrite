@@ -437,8 +437,28 @@ impl Server {
         if let Ok(response) = &mut result {
             response.state = self.browser.state(thread);
         }
+        if pending.reply.send(result).is_err() && !pending.observation {
+            // The native action finished, but its caller timed out or went
+            // away before receiving completion. Keep that write uncertain
+            // from the caller's perspective; an old receipt cannot retry it.
+            self.browser_observed.remove(&thread);
+            if !uncertain {
+                match self.browser.protect(
+                    thread,
+                    owner,
+                    document,
+                    crate::browser::Protection::Command,
+                ) {
+                    Ok(lease) => {
+                        self.browser_uncertain.insert(thread, lease);
+                    }
+                    Err(error) => crate::log!(
+                        "browser undelivered completion could not retain protection: {error}"
+                    ),
+                }
+            }
+        }
         self.publish_browser(thread, None);
-        let _ = pending.reply.send(result);
     }
 
     pub(super) fn browser_owner_gone(&mut self, window: ClientId) {

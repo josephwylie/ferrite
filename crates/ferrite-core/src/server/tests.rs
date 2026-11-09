@@ -4949,7 +4949,7 @@ fn a_restart_not_back_in_time_reads_failed_until_it_is() {
 
 #[test]
 fn browser_requests_use_an_attached_thread_window_without_a_synthetic_client() {
-    use crate::browser::{Action, Operation};
+    use crate::browser::Action;
     let harness = start("browser-request-routing");
     let mut window = attach(&harness.address);
     let (thread, _provider) = open(&mut window, &harness);
