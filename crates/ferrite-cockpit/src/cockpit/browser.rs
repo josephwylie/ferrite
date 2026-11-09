@@ -143,7 +143,33 @@ impl CockpitView {
                 }
             }
         }
-        match self.cockpit.browser(thread, action) {
+        let recovery_tab = match &action {
+            Action::Close { tab } => Some(*tab),
+            Action::Reload { document } => Some(document.tab),
+            _ => None,
+        };
+        let recovery = recovery_tab.and_then(|tab| {
+            self.browsers
+                .threads
+                .get(&thread)
+                .and_then(|browser| browser.pages.get(&tab))
+                .map(|page| page.manual.clone())
+        });
+        if let Some(manual) = &recovery {
+            let settled = manual.borrow_mut().retire_for_action();
+            if let (Some((document, revision)), Some(owner)) =
+                (settled, self.browsers.threads[&thread].owner)
+            {
+                let _ = self
+                    .cockpit
+                    .browser_settled(thread, owner, document, revision);
+            }
+        }
+        let result = self.cockpit.browser(thread, action);
+        if let Some(manual) = &recovery {
+            manual.borrow().restore_pause();
+        }
+        match result {
             Ok(state) => {
                 let browser = self.browsers.threads.get_mut(&thread).unwrap();
                 browser.state = state;

@@ -109,6 +109,28 @@ impl Manual {
                 .set_protected(self.server_protected || self.active || self.local_protections > 0);
         }
     }
+    /// An intentional close/reload invalidates the old native attachment
+    /// before its Server RPC. Queued raw input from before it is discarded.
+    pub fn retire_for_action(&mut self) -> Option<(Document, u64)> {
+        self.sequence += 1;
+        self.canceled_through = self.sequence;
+        self.active = false;
+        self.pending = false;
+        self.held = false;
+        self.keys.clear();
+        self.quiet_until = None;
+        if let Some(native) = &self.native {
+            native.set_agent_paused(true);
+        }
+        self.sync_protection();
+        self.acknowledged.take()
+    }
+    pub fn restore_pause(&self) {
+        if let Some(native) = &self.native {
+            native.set_agent_paused(self.active);
+        }
+    }
+
     pub fn finish(&mut self) -> Option<(Document, u64)> {
         self.cancel();
         self.acknowledged.take()
