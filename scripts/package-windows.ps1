@@ -42,6 +42,9 @@ $version = ($metadata.packages | Where-Object name -eq "ferrite").version
 $stage = Join-Path $target "release\bundle\windows\Ferrite"
 & (Join-Path $PSScriptRoot "stage-windows.ps1") -BuildDirectory (Join-Path $target "release") -Destination $stage -NoVisuals:(-not $visuals)
 $binary = Join-Path $stage "ferrite.exe"
+# Build-time Python/git/Rust stage the pinned, authenticated native controller.
+python (Join-Path $PSScriptRoot "package-agent-browser.py") --destination $stage
+if ($LASTEXITCODE -ne 0) { throw "Native browser controller packaging failed" }
 $size = (Get-ChildItem -LiteralPath $stage -Recurse -File | Measure-Object -Sum Length).Sum
 Write-Host ("Staged {0:N0} MB -> {1}" -f ($size / 1MB), $stage)
 
@@ -80,7 +83,7 @@ if ($signed) {
 
     # The bootstrap requires its EXE, application DLL and chrome_elf.dll to
     # have matching signatures (or all be unsigned).
-    $signedFiles = @($binary)
+    $signedFiles = @($binary, (Join-Path $stage "agent-browser.exe"))
     if ($visuals) { $signedFiles += @((Join-Path $stage "ferrite.dll"), (Join-Path $stage "chrome_elf.dll")) }
     foreach ($file in $signedFiles) {
         & $signTool sign /sha1 $CertificateThumbprint /fd SHA256 /td SHA256 /tr $TimestampUrl $file
