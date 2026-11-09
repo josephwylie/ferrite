@@ -78,7 +78,12 @@ jobs:
           CEF_PATH="$HOME/.local/share/cef" cargo build --profile local -p ferrite --locked --features cef
           cargo build --profile local --locked -p herdr-projects --bin ferrite-projects
       - name: Build native controller
-        run: python scripts/package-agent-browser.py --destination target/browser-controller
+        # rust-cache omits nested .git metadata. Re-clone the pinned source
+        # rather than letting git resolve this restored folder to Ferrite's HEAD.
+        # Compiled target/agent-browser-cargo artifacts remain cached.
+        run: |
+          python -c "import shutil; shutil.rmtree('target/agent-browser-build', ignore_errors=True)"
+          python scripts/package-agent-browser.py --destination target/browser-controller
       - name: Stage Windows package
         if: runner.os == 'Windows'
         shell: pwsh
