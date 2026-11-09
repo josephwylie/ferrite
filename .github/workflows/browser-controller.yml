@@ -12,6 +12,8 @@ env:
   SCCACHE_GHA_ENABLED: 'true'
 
 on:
+  push:
+    branches: [feat/browser-194]
   pull_request:
     paths:
       - 'scripts/*agent-browser*'
@@ -45,6 +47,23 @@ jobs:
         with:
           python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
+      - name: Identify native Rust toolchain
+        id: native-rust
+        shell: bash
+        run: |
+          rustc -vV > "$RUNNER_TEMP/native-rust-version"
+          digest=$(python -c "import hashlib,os,pathlib; print(hashlib.sha256((pathlib.Path(os.environ['RUNNER_TEMP']) / 'native-rust-version').read_bytes()).hexdigest())")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      # The exact key includes source/lockfile patch and packaging inputs.
+      # Restore across patches only within one OS/arch/compiler; Cargo checks
+      # dependency fingerprints and the packager still verifies source/patch.
+      - uses: actions/cache/restore@v4
+        id: native-cache
+        with:
+          path: target/agent-browser-cargo
+          key: native-cargo-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-rust.outputs.digest }}-${{ hashFiles('scripts/patches/agent-browser-0.41.2-ferrite.patch', 'scripts/package-agent-browser.py') }}
+          restore-keys: |
+            native-cargo-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-rust.outputs.digest }}-
       - uses: mozilla-actions/sccache-action@v0.0.11
       - name: Reject untrusted artifacts
         run: python -m unittest discover -s scripts -p test_package_agent_browser.py
@@ -56,6 +75,12 @@ jobs:
           executable=target/browser-controller/agent-browser
           if [[ "$RUNNER_OS" == Windows ]]; then executable="$executable.exe"; fi
           python scripts/probe-agent-browser-transport.py "$executable" | tee target/browser-controller/transport.json
+      - name: Verify public native browser behavior
+        shell: bash
+        run: |
+          executable=target/browser-controller/agent-browser
+          if [[ "$RUNNER_OS" == Windows ]]; then executable="$executable.exe"; fi
+          python scripts/probe-agent-browser-behavior.py "$executable" | tee target/browser-controller/behavior.json
       - name: Reverify cached executable
         run: python scripts/package-agent-browser.py --destination target/browser-controller --offline
       - name: Invoke native executable directly
@@ -65,12 +90,18 @@ jobs:
           if [[ "$RUNNER_OS" == Windows ]]; then executable="$executable.exe"; fi
           "$executable" --version | tee target/browser-controller/version.txt
           test "$(cat target/browser-controller/version.txt)" = 'agent-browser 0.41.2'
+      - uses: actions/cache/save@v4
+        if: always() && steps.native-cache.outputs.cache-hit != 'true'
+        with:
+          path: target/agent-browser-cargo
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
         with:
           name: native-controller-${{ runner.os }}-${{ runner.arch }}
           path: |
             target/browser-controller/version.txt
             target/browser-controller/transport.json
+            target/browser-controller/behavior.json
             target/browser-controller/agent-browser-build.json
             target/browser-controller/agent-browser
             target/browser-controller/agent-browser.exe
