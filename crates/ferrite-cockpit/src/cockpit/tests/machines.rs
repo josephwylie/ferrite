@@ -1471,7 +1471,8 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
     until(cx, |cx| view.update(cx, |view, _| {
         view.cockpit.browser_attach(thread).unwrap().tabs.iter().any(|tab| tab.protected)
     }));
-    cx.simulate_click(cx.debug_bounds("browser-new-tab").unwrap().center(), gpui::Modifiers::none());
+    let add_tab = cx.debug_bounds("browser-new-tab").unwrap().center();
+    cx.simulate_click(add_tab, gpui::Modifiers::none());
     until(cx, |cx| view.update(cx, |view, _| {
         view.cockpit.browser_attach(thread).unwrap().tabs.iter().all(|tab| !tab.protected)
     }));
