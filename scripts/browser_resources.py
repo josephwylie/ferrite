@@ -132,6 +132,7 @@ class ResourceSampler:
         self.samples = []
         self.events = []
         self.current_phase = 'baseline'
+        self.phase_id = 0
         self.lock = threading.RLock()
         self.stopping = threading.Event()
         self.thread = None
@@ -148,6 +149,7 @@ class ResourceSampler:
     def phase(self, name):
         with self.lock:
             self.current_phase = str(name)
+            self.phase_id += 1
             self.events.append({'event': 'phase', 'phase': self.current_phase,
                                 'monotonic': time.monotonic()})
         return self.sample()
@@ -170,7 +172,7 @@ class ResourceSampler:
                 return None
             started = time.monotonic()
             sample = {'monotonic': started, 'utc': datetime.now(timezone.utc).isoformat(),
-                      'phase': self.current_phase, 'processes': []}
+                      'phase': self.current_phase, 'phase_id': self.phase_id, 'processes': []}
             try:
                 rows = _processes()
                 current = {row['pid']: row for row in rows}
@@ -211,13 +213,13 @@ class ResourceSampler:
                         row['cpu_delta_seconds'] = delta if delta >= 0 else None
                         row['cpu_interval_seconds'] = elapsed
                         row['cpu_percent_one_core'] = delta / elapsed * 100 if elapsed > 0 and delta >= 0 else None
-                        row['cpu_delta_crosses_phase'] = old['phase'] != sample['phase']
+                        row['cpu_delta_crosses_phase'] = old['phase_id'] != sample['phase_id']
                     else:
                         row['cpu_delta_seconds'] = None
                         row['cpu_interval_seconds'] = None
                         row['cpu_percent_one_core'] = None
                         row['cpu_delta_crosses_phase'] = False
-                    self.previous[identity] = {'monotonic': started, 'cpu_seconds': row['cpu_seconds'], 'phase': sample['phase']}
+                    self.previous[identity] = {'monotonic': started, 'cpu_seconds': row['cpu_seconds'], 'phase_id': sample['phase_id']}
                     self.owned[identity] = {'role': role, 'pid': pid,
                                             'first_seen_monotonic': row['first_seen_monotonic'],
                                             'last_seen_monotonic': started, 'executable': row['executable']}
@@ -256,6 +258,9 @@ class ResourceSampler:
             phase['errors'] += int('error' in sample)
             phase.setdefault('first_sample_monotonic', sample['monotonic'])
             phase['last_sample_monotonic'] = sample['monotonic']
+            segment = phase.setdefault('segments', {}).setdefault(sample['phase_id'], {
+                'first_sample_monotonic': sample['monotonic'], 'last_sample_monotonic': sample['monotonic']})
+            segment['last_sample_monotonic'] = sample['monotonic']
             by_role = {}
             for row in sample['processes']:
                 role = by_role.setdefault(row['role'], {'resident_bytes': 0, 'cpu_delta_seconds': 0, 'process_count': 0})
@@ -269,7 +274,8 @@ class ResourceSampler:
                 summary['peak_process_count'] = max(summary['peak_process_count'], value['process_count'])
                 summary['cpu_delta_seconds'] += value['cpu_delta_seconds']
         for phase in phases.values():
-            duration = phase['last_sample_monotonic'] - phase['first_sample_monotonic']
+            duration = sum(segment['last_sample_monotonic'] - segment['first_sample_monotonic']
+                           for segment in phase['segments'].values())
             phase['sampled_span_seconds'] = duration
             for role in phase['roles'].values():
                 role['cpu_percent_one_core_over_sampled_span'] = role['cpu_delta_seconds'] / duration * 100 if duration > 0 else None
