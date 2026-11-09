@@ -46,6 +46,7 @@ pub struct Tab {
     pub can_forward: bool,
     pub error: Option<String>,
     pub live: bool,
+    pub visible: bool,
     pub dirty: Dirty,
     /// Includes active commands and annotation capture, never a renderer id.
     pub protected: bool,
@@ -95,6 +96,8 @@ pub struct Lease(pub u64);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PageState {
+    /// Trusted owning preview's actual painted visibility, not tab selection.
+    pub visible: bool,
     /// The native main-frame document changed since the last report.
     pub navigation: bool,
     pub document: Document,
@@ -172,6 +175,7 @@ impl Service {
         state.owner = None;
         for tab in &mut state.tabs {
             tab.live = false;
+            tab.visible = false;
             tab.loading = false;
             tab.generation += 1;
             tab.dirty = Dirty::Unknown;
@@ -250,6 +254,7 @@ impl Service {
                     can_forward: false,
                     error: None,
                     live: true,
+                    visible: false,
                     dirty: Dirty::Unknown,
                     protected: false,
                 });
@@ -347,6 +352,7 @@ impl Service {
         }
         tab.url = page.url;
         tab.loading = page.loading;
+        tab.visible = page.visible;
         tab.can_back = page.can_back;
         tab.can_forward = page.can_forward;
         tab.error = page.error;
@@ -431,7 +437,7 @@ impl Service {
             .ok_or("No such tab in this Thread")?;
         if !page.live
             || page.loading
-            || state.active == Some(tab)
+            || page.visible
             || page.dirty != Dirty::Clean
             || self
                 .protections
@@ -441,6 +447,7 @@ impl Service {
             return Ok(false);
         }
         page.live = false;
+        page.visible = false;
         page.loading = false;
         page.generation += 1;
         page.dirty = Dirty::Unknown;
@@ -463,7 +470,7 @@ impl Service {
             .iter()
             .find(|page| page.id == document.tab)
             .expect("checked document");
-        if state.active == Some(document.tab)
+        if page.visible
             || page.loading
             || page.dirty != Dirty::Clean
             || self.protections.values().any(|(id, _, _, _)| *id == thread)
@@ -562,6 +569,7 @@ impl Service {
                     can_forward: false,
                     error: None,
                     live: false,
+                    visible: false,
                     dirty: Dirty::Unknown,
                     protected: false,
                 });

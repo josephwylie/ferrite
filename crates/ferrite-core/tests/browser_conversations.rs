@@ -164,6 +164,7 @@ fn a_loading_page_is_retained_even_when_its_form_is_clean() {
             owner,
             PageState {
                 navigation: false,
+                visible: false,
                 document: first.tabs[0].document(),
                 url: first.tabs[0].url.clone(),
                 loading: true,
