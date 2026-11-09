@@ -39,7 +39,7 @@ class Boundary:
     def __init__(self,call,finish,output,provider='claude'):
         self.call,self.finish,self.output,self.provider=call,finish,output,provider
         self.handlers={};self.number=0;self.ui=0;self.trace=[];self.checks=[];self.polls=0
-        self.concurrent={};self.last=None;self.failed=False
+        self.concurrent={};self.last=None;self.failed=False;self.baseline_settled=False
     def begin(self):self.observe(self.manual)
     def send(self,operation,callback,error=False):
         self.number+=1;name='boundary-'+str(self.number)
@@ -68,10 +68,11 @@ class Boundary:
     def state(self,callback):
         def ready(state,text,answer):
             tab=next(tab for tab in state['state']['tabs'] if tab['id']==state['state']['active'])
-            if tab['loading'] or not tab['live']:
+            if tab['loading'] or not tab['live'] or (not self.baseline_settled and tab['protected']):
                 self.polls+=1
                 if self.polls>60:raise ValueError('Public browser state did not settle')
                 time.sleep(.1);self.state(callback);return
+            self.baseline_settled=True
             self.polls=0;callback(state,text,answer)
         self.send({'kind':'state'},ready)
     def observe(self,callback):
