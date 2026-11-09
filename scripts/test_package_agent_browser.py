@@ -29,6 +29,9 @@ class PackageAgentBrowser(unittest.TestCase):
             "arch": platform.machine(),
             "binary_sha256": FIXTURE_HASH,
         }))
+        licenses = metadata / "agent-browser-licenses"
+        licenses.mkdir(exist_ok=True)
+        (licenses / "LICENSE").write_text("Inert test license fixture")
         return executable, provenance
 
     def verify(self, destination, metadata=None):
@@ -68,6 +71,51 @@ class PackageAgentBrowser(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout)["binary_sha256"], FIXTURE_HASH)
             self.assertFalse((destination / "agent-browser-build.json").exists())
+
+    def copy_stage(self, source, destination, metadata):
+        # The staging path must work with no git, Rust compiler or native
+        # executable available. Python itself is invoked by absolute path.
+        environment = {key: value for key, value in os.environ.items() if key.casefold() != "path"}
+        environment["PATH"] = str(destination / "no-build-tools")
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "--destination", str(destination),
+             "--metadata-directory", str(metadata), "--from-stage", str(source)],
+            capture_output=True, text=True, env=environment,
+        )
+
+    def test_verified_build_stages_without_compiler_and_preserves_provenance(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "built"
+            source.mkdir()
+            executable, provenance = self.stage(source)
+            destination = root / "bundle" / "MacOS"
+            metadata = root / "bundle" / "Resources"
+            result = self.copy_stage(source, destination, metadata)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((destination / executable.name).read_bytes(), executable.read_bytes())
+            self.assertEqual((metadata / provenance.name).read_bytes(), provenance.read_bytes())
+            self.assertEqual((metadata / "agent-browser-licenses" / "LICENSE").read_text(), "Inert test license fixture")
+            self.assertFalse((destination / provenance.name).exists())
+
+    def test_staging_rejects_wrong_source_patch_platform_architecture_or_binary(self):
+        cases = (("source_commit", "0" * 40), ("patch_sha256", "0" * 64),
+                 ("platform", "unsupported fixture platform"), ("arch", "unsupported fixture arch"),
+                 ("binary_sha256", "0" * 64))
+        for field, value in cases:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root / "built"
+                source.mkdir()
+                _, provenance = self.stage(source)
+                data = json.loads(provenance.read_text())
+                data[field] = value
+                provenance.write_text(json.dumps(data))
+                destination = root / "bundle"
+                result = self.copy_stage(source, destination, root / "Resources")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("provenance or SHA-256 mismatch", result.stderr)
+                self.assertFalse(destination.exists())
 
     def test_missing_offline_build_is_not_downloaded_or_built(self):
         with tempfile.TemporaryDirectory() as temporary:
