@@ -48,7 +48,6 @@ wrap_app! {
                 "no-startup-window",
                 "noerrdialogs",
                 "hide-crash-restore-bubble",
-                "use-mock-keychain",
                 "no-first-run",
                 // No traffic Chromium would make on its own behalf.
                 "disable-background-networking",
@@ -81,6 +80,15 @@ wrap_app! {
                         None => command_line.append_switch(Some(&s.into())),
                     }
                 }
+            }
+            // Production website logins use the OS keychain. Only an explicit
+            // isolated packaged smoke opts into Chromium's mock implementation.
+            command_line.remove_switch(Some(&"use-mock-keychain".into()));
+            if cfg!(target_os = "macos")
+                && std::env::args().any(|argument| argument == "--visual-smoke")
+                && std::env::var("FERRITE_BROWSER_SMOKE_MOCK_KEYCHAIN").as_deref() == Ok("1")
+            {
+                command_line.append_switch(Some(&"use-mock-keychain".into()));
             }
             // No global debugging endpoint may expose sealed visuals, even
             // when a developer passed a Chromium switch on the command line.
@@ -154,7 +162,7 @@ pub(super) fn client(
         ViewLifeSpan::new(global),
         ViewRequests::new(page, state.clone(), generation),
         NoContextMenu::new(),
-        NoDialogs::new(state),
+        NoDialogs::new(state, generation),
     )
 }
 
@@ -601,7 +609,7 @@ wrap_load_handler! {
 }
 
 wrap_jsdialog_handler! {
-    struct NoDialogs { state: Arc<ViewState> }
+    struct NoDialogs { state: Arc<ViewState>, generation: u64 }
 
     impl JsdialogHandler {
         /// `alert`/`confirm`/`prompt`: suppressed (as if dismissed).
@@ -631,7 +639,7 @@ wrap_jsdialog_handler! {
             if let Some(callback) = callback {
                 callback.cont((!self.state.external) as i32, None);
                 if self.state.external {
-                    self.state.navigation(self.state.generation.load(Ordering::SeqCst), |state| { state.dirty = super::super::BrowserDirty::Dirty; state.loading = false; state.error = Some("This page has unfinished work and prevented navigation. Save or discard changes on the page before leaving.".into()); });
+                    self.state.navigation(self.generation, |state| { state.dirty = super::super::BrowserDirty::Dirty; state.loading = false; state.error = Some("This page has unfinished work and prevented navigation. Save or discard changes on the page before leaving.".into()); });
                 }
             }
             1

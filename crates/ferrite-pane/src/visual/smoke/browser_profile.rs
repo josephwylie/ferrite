@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::super::web::BrowserViewport;
@@ -12,6 +12,7 @@ use super::{Engine, Frame, Page, View, Viewport, BLUE, GREEN, RED};
 struct Fixture {
     stop: Arc<AtomicBool>,
     authenticated: Arc<AtomicUsize>,
+    last_request: Arc<Mutex<String>>,
     address: std::net::SocketAddr,
 }
 
@@ -23,15 +24,18 @@ impl Fixture {
             address: listener.local_addr().map_err(|e| e.to_string())?,
             stop: Arc::new(AtomicBool::new(false)),
             authenticated: Arc::new(AtomicUsize::new(0)),
+            last_request: Arc::new(Mutex::new(String::new())),
         };
         let stop = fixture.stop.clone();
         let authenticated = fixture.authenticated.clone();
+        let last_request = fixture.last_request.clone();
         std::thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
                 let Ok((mut stream, _)) = listener.accept() else {
                     std::thread::sleep(Duration::from_millis(5));
                     continue;
                 };
+                let _ = stream.set_nonblocking(false);
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
                 let mut bytes = Vec::new();
@@ -46,6 +50,11 @@ impl Fixture {
                     }
                 }
                 let request = String::from_utf8_lossy(&bytes);
+                *last_request.lock().unwrap() = request
+                    .lines()
+                    .next()
+                    .unwrap_or("<empty request>")
+                    .to_owned();
                 let login = request.starts_with("GET /login ");
                 let check = request.starts_with("GET /check ");
                 let cookie =
@@ -126,7 +135,7 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
             },
             Box::new(|| {}),
         );
-        wait_color(engine, sealed.as_ref(), RED)?;
+        wait_color(engine, sealed.as_ref(), RED, &mut None)?;
         println!("PASS profile contender: external browsing unavailable, sealed pixels remain red");
         return Ok(());
     }
@@ -144,18 +153,34 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
         viewport,
         Box::new(|| {}),
     )?;
+    let mut one_frame = None;
     wait_color(
         engine,
         one.as_ref(),
         if stage == "write" { BLUE } else { GREEN },
-    )?;
+        &mut one_frame,
+    )
+    .map_err(|error| {
+        format!(
+            "{error}; native={:?}; last HTTP request={:?}",
+            one.state(),
+            fixture.last_request.lock().unwrap()
+        )
+    })?;
     let two = engine.open_browser(&format!("{base}/check"), viewport, Box::new(|| {}))?;
-    wait_color(engine, two.as_ref(), GREEN)?;
+    wait_color(engine, two.as_ref(), GREEN, &mut None)?;
     wait_color(
         engine,
         one.as_ref(),
         if stage == "write" { BLUE } else { GREEN },
+        &mut one_frame,
     )?;
+    let expected_path = if stage == "write" { "/login" } else { "/check" };
+    if one.state().url != format!("{base}{expected_path}") || one.target_id() == two.target_id() {
+        return Err(
+            "Opening a shared-login tab changed the first tab's navigation or live target".into(),
+        );
+    }
     let expected = if stage == "write" { 1 } else { 2 };
     if fixture.authenticated.load(Ordering::SeqCst) < expected {
         return Err("Rendered login was not confirmed by fixture HTTP cookie oracle".into());
@@ -186,11 +211,17 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
     Ok(())
 }
 
-fn wait_color(engine: &dyn Engine, view: &dyn View, color: [u8; 4]) -> Result<(), String> {
+fn wait_color(
+    engine: &dyn Engine,
+    view: &dyn View,
+    color: [u8; 4],
+    frame: &mut Option<Frame>,
+) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(60);
-    let mut frame: Option<Frame> = None;
     loop {
-        frame = view.take().frame.or(frame);
+        if let Some(next) = view.take().frame {
+            *frame = Some(next);
+        }
         if frame.as_ref().is_some_and(|frame| {
             let offset = ((100 * frame.width + 100) * 4) as usize;
             frame.bgra.get(offset..offset + 4) == Some(color.as_slice())
@@ -198,7 +229,17 @@ fn wait_color(engine: &dyn Engine, view: &dyn View, color: [u8; 4]) -> Result<()
             return Ok(());
         }
         if Instant::now() > deadline {
-            return Err(format!("Timed out waiting for profile pixels {color:?}"));
+            let observed = frame.as_ref().map(|frame| {
+                let offset = ((100 * frame.width + 100) * 4) as usize;
+                (
+                    frame.width,
+                    frame.height,
+                    frame.bgra.get(offset..offset + 4),
+                )
+            });
+            return Err(format!(
+                "Timed out waiting for profile pixels {color:?}; observed={observed:?}"
+            ));
         }
         std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
     }
