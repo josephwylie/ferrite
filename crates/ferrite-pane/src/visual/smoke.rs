@@ -30,6 +30,7 @@ const PAGE: &str = r#"
   body { margin: 0 }
   .a { height: 300px; background: rgb(255, 0, 0) }
   .a:hover { background: rgb(255, 0, 255) }
+  .a:active { background: rgb(255, 255, 0) }
   .b { height: 200px; background: rgb(0, 0, 255); cursor: pointer }
   .c { height: 100px; background: var(--ferrite-accent) }
 </style>
@@ -151,6 +152,25 @@ fn smoke() -> Result<Duration, String> {
         p.pixel(10, 10) == Some(MAGENTA)
     })?;
     println!("hover -> pixel: {:?}", hover.elapsed());
+    view.input(Input::Down {
+        x: 10.0,
+        y: 10.0,
+        button: super::web::MouseButton::Left,
+        clicks: 1,
+        modifiers: Default::default(),
+    });
+    probe.until("held press turning the first block yellow", |p| {
+        p.pixel(10, 10) == Some(YELLOW)
+    })?;
+    view.input(Input::Leave);
+    view.input(Input::Move {
+        x: 10.0,
+        y: 10.0,
+        modifiers: Default::default(),
+    });
+    probe.until("capture loss clearing a held press before re-entry", |p| {
+        p.pixel(10, 10) == Some(MAGENTA)
+    })?;
     view.input(Input::Leave);
     probe.until("leave turning it red again", |p| {
         p.pixel(10, 10) == Some(RED)
