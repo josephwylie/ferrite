@@ -57,7 +57,10 @@ use cef::{
     PaintElementType, RuntimeStyle, Settings, WindowInfo,
 };
 
-use super::{ControllerEndpoint, Cursor, Engine, Input, Page, Updates, View, Viewport, Wake};
+use super::{
+    BrowserDirty, BrowserState, BrowserView, BrowserViewport, ControllerEndpoint, Cursor, Engine,
+    Input, Page, Updates, View, Viewport, Wake,
+};
 
 /// The custom scheme pages are served from (`ferrite-view://page/<n>`).
 const SCHEME: &str = "ferrite-view";
@@ -367,6 +370,7 @@ struct Geometry {
 /// a released view keeps it, and the next browser picks up where it left off.
 struct ViewState {
     external: bool,
+    navigation: Mutex<BrowserState>,
     geometry: Mutex<Geometry>,
     updates: Mutex<Updates>,
     last_cursor: Mutex<Cursor>,
@@ -390,6 +394,13 @@ struct ViewState {
 }
 
 impl ViewState {
+    fn navigation(&self, generation: u64, f: impl FnOnce(&mut BrowserState)) {
+        if self.external && self.is_current(generation) {
+            f(&mut self.navigation.lock().unwrap());
+            self.dirty.store(true, Ordering::SeqCst);
+        }
+    }
+
     fn is_current(&self, generation: u64) -> bool {
         self.generation.load(Ordering::SeqCst) == generation
     }
@@ -447,15 +458,16 @@ struct EngineInner {
 
 impl Engine for CefEngine {
     fn open(&self, page: Page, viewport: Viewport, wake: Wake) -> Box<dyn View> {
-        self.open_view(page, viewport, wake, None)
+        Box::new(self.open_view(page, viewport, wake, None, INITIAL_HEIGHT))
     }
 
     fn open_browser(
         &self,
         url: &str,
-        viewport: Viewport,
+        viewport: BrowserViewport,
         wake: Wake,
-    ) -> Result<Box<dyn View>, String> {
+    ) -> Result<Box<dyn BrowserView>, String> {
+        self.browser_available()?;
         if !self.inner.browser_isolated {
             return Err("Conversation browsing requires the Chromium sandbox and web isolation; remove FERRITE_CEF_NO_SANDBOX and sandbox-disabling startup switches".into());
         }
@@ -471,18 +483,30 @@ impl Engine for CefEngine {
             .ok_or("CEF could not create an isolated website context")?;
             *self.inner.browser_context.borrow_mut() = Some(context);
         }
-        Ok(self.open_view(
+        Ok(Box::new(self.open_view(
             Page {
                 html: String::new(),
                 theme_css: String::new(),
             },
-            viewport,
+            Viewport {
+                width: viewport.width,
+                scale: viewport.scale,
+            },
             wake,
             Some(url),
-        ))
+            viewport.height,
+        )))
+    }
+
+    fn browser_available(&self) -> Result<(), String> {
+        if !self.inner.browser_isolated {
+            return Err("Conversation browsing requires the Chromium sandbox and web isolation; remove FERRITE_CEF_NO_SANDBOX and sandbox-disabling startup switches".into());
+        }
+        Ok(())
     }
 
     fn controller(&self) -> Result<ControllerEndpoint, String> {
+        self.browser_available()?;
         if !self.inner.browser_isolated {
             return Err("Browser controller requires sandboxed Chromium".into());
         }
@@ -579,7 +603,8 @@ impl CefEngine {
         viewport: Viewport,
         wake: Wake,
         external_url: Option<&str>,
-    ) -> Box<dyn View> {
+        height: u32,
+    ) -> CefView {
         let engine = &self.inner;
         let id = engine.next_id.get();
         engine.next_id.set(id + 1);
@@ -593,13 +618,13 @@ impl CefEngine {
         });
         let state = Arc::new(ViewState {
             external: external_url.is_some(),
+            navigation: Mutex::new(BrowserState {
+                url: external_url.unwrap_or_default().into(),
+                ..Default::default()
+            }),
             geometry: Mutex::new(Geometry {
                 width: viewport.width.max(1),
-                height: if external_url.is_some() {
-                    600
-                } else {
-                    INITIAL_HEIGHT
-                },
+                height: height.clamp(1, MAX_HEIGHT),
                 scale: viewport.scale.max(0.5),
             }),
             updates: Mutex::new(Updates::default()),
@@ -618,6 +643,7 @@ impl CefEngine {
             state,
             doc,
             browser: RefCell::new(None),
+            protected: Cell::new(false),
             wake,
             visible: Cell::new(true),
             hidden_since: Cell::new(None),
@@ -631,7 +657,7 @@ impl CefEngine {
         });
         engine.views.borrow_mut().push(Rc::downgrade(&view));
         // The browser is created by the next pump (see `pump`).
-        Box::new(CefView(view))
+        CefView(view)
     }
 }
 
@@ -677,6 +703,7 @@ struct ViewInner {
     /// None until the first pump after opening (CEF's context may not be
     /// initialised yet when the host opens), and again once released.
     browser: RefCell<Option<Browser>>,
+    protected: Cell<bool>,
     wake: Wake,
     visible: Cell<bool>,
     /// When the view was last hidden, while it stays hidden.
@@ -747,16 +774,25 @@ impl ViewInner {
         } else {
             None
         };
+        let url = if self.doc.external {
+            self.state.navigation.lock().unwrap().url.clone()
+        } else {
+            self.doc.url.clone()
+        };
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
             Some(&mut client),
-            Some(&self.doc.url.as_str().into()),
+            Some(&url.as_str().into()),
             Some(&settings),
             None,
             context.as_mut(),
         );
         if browser.is_none() {
             ferrite_core::log!("visuals: cef_browser_host_create_browser_sync returned null");
+            self.state.navigation(generation, |state| {
+                state.loading = false;
+                state.error = Some("Chromium could not create this tab. Reload to retry.".into());
+            });
         }
         if self.doc.external {
             if let (Some(control), Some(browser)) =
@@ -1055,5 +1091,115 @@ impl View for CefView {
         let state = &self.0.state;
         state.dirty.store(false, Ordering::SeqCst);
         std::mem::take(&mut *state.updates.lock().unwrap())
+    }
+}
+
+impl BrowserView for CefView {
+    fn state(&self) -> BrowserState {
+        self.0.state.navigation.lock().unwrap().clone()
+    }
+    fn target_id(&self) -> Option<String> {
+        self.0.browser.borrow().as_ref().map(|_| self.0.target_id())
+    }
+    fn resize_browser(&self, viewport: BrowserViewport) {
+        let changed = {
+            let mut geometry = self.0.state.geometry.lock().unwrap();
+            let height = viewport.height.clamp(1, MAX_HEIGHT);
+            let changed = geometry.height != height;
+            geometry.height = height;
+            changed
+        };
+        self.resize(Viewport {
+            width: viewport.width,
+            scale: viewport.scale,
+        });
+        if changed {
+            if let Some(host) = self.0.host() {
+                host.was_resized();
+            }
+        }
+    }
+    fn navigate(&self, url: &str) -> Result<(), String> {
+        if !handlers::external_url(url) {
+            return Err("Conversation browser requires an http or https URL".into());
+        }
+        {
+            let mut state = self.0.state.navigation.lock().unwrap();
+            state.url = url.into();
+            state.error = None;
+            state.dirty = BrowserDirty::Unknown;
+        }
+        if let Some(frame) = self
+            .0
+            .browser
+            .borrow()
+            .as_ref()
+            .and_then(|browser| browser.main_frame())
+        {
+            frame.load_url(Some(&url.into()));
+        }
+        self.0.state.dirty.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+    fn back(&self) -> Result<(), String> {
+        let browser = self.0.browser.borrow();
+        let browser = browser
+            .as_ref()
+            .ok_or("Tab is unloaded; show it before navigating history")?;
+        if browser.can_go_back() == 0 {
+            return Err("No previous page in this tab".into());
+        }
+        browser.go_back();
+        Ok(())
+    }
+    fn forward(&self) -> Result<(), String> {
+        let browser = self.0.browser.borrow();
+        let browser = browser
+            .as_ref()
+            .ok_or("Tab is unloaded; show it before navigating history")?;
+        if browser.can_go_forward() == 0 {
+            return Err("No next page in this tab".into());
+        }
+        browser.go_forward();
+        Ok(())
+    }
+    fn reload(&self) -> Result<(), String> {
+        if let Some(browser) = self.0.browser.borrow().as_ref() {
+            browser.reload();
+        } else {
+            self.0.visible.set(true);
+            self.0.state.visible.store(true, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+    fn set_protected(&self, protected: bool) {
+        self.0.protected.set(protected);
+    }
+    fn try_release(&self) -> Result<bool, String> {
+        let view = &self.0;
+        let state = self.state();
+        if view.visible.get()
+            || view.protected.get()
+            || state.loading
+            || state.dirty != BrowserDirty::Clean
+        {
+            return Ok(false);
+        }
+        if view.browser.borrow().is_none() {
+            return Ok(true);
+        }
+        view.state.generation.fetch_add(1, Ordering::SeqCst);
+        if let Some(host) = view
+            .browser
+            .borrow_mut()
+            .take()
+            .and_then(|browser| browser.host())
+        {
+            host.close_browser(1);
+        }
+        view.released.set(true);
+        view.focused.set(false);
+        view.pressed.set(0);
+        Ok(true)
     }
 }

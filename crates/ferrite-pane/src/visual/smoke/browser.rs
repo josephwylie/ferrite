@@ -78,7 +78,11 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
             let _ = stream.write_all(response.as_bytes());
         }
     });
-    let viewport = BrowserViewport { width: 400, height: 600, scale: 1.0 };
+    let viewport = BrowserViewport {
+        width: 400,
+        height: 600,
+        scale: 1.0,
+    };
     let one = engine.open_browser(&format!("http://{address}/one"), viewport, Box::new(|| {}))?;
     let two = engine.open_browser(&format!("http://{address}/two"), viewport, Box::new(|| {}))?;
     let sealed = engine.open(
@@ -86,21 +90,61 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
             html: "<style>body{margin:0;height:600px;background:rgb(255,0,0)}</style>sealed".into(),
             theme_css: String::new(),
         },
-        Viewport { width: viewport.width, scale: viewport.scale },
+        Viewport {
+            width: viewport.width,
+            scale: viewport.scale,
+        },
         Box::new(|| {}),
     );
     let mut frames = [None, None, None];
-    let views = [one.as_ref(), two.as_ref(), sealed.as_ref()];
+    let views: [&dyn View; 3] = [one.as_ref(), two.as_ref(), sealed.as_ref()];
     wait_pixels(engine, &views, &mut frames, [RED, RED, RED])?;
-    one.resize_browser(BrowserViewport { width: 320, height: 240, scale: 2.0 });
+    one.resize_browser(BrowserViewport {
+        width: 320,
+        height: 240,
+        scale: 2.0,
+    });
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        if one.take().frame.is_some_and(|frame| frame.width == 640 && frame.height == 480) { break; }
-        if Instant::now() >= deadline { return Err("Browser viewport resize did not produce 640x480 pixels".into()); }
+        if one
+            .take()
+            .frame
+            .is_some_and(|frame| frame.width == 640 && frame.height == 480)
+        {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err("Browser viewport resize did not produce 640x480 pixels".into());
+        }
         std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
     }
-    if one.navigate("file:///private/forbidden").is_ok() { return Err("Browser accepted forbidden navigation".into()); }
+    if one.navigate("file:///private/forbidden").is_ok() {
+        return Err("Browser accepted forbidden navigation".into());
+    }
     one.resize_browser(viewport);
+    let initial = one.state().document_generation;
+    let next = format!("http://{address}/next");
+    one.navigate(&next)?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading && state.url == next && state.can_back && state.document_generation > initial
+    })?;
+    one.back()?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading && state.url.ends_with("/one") && state.can_forward
+    })?;
+    one.forward()?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading && state.url == next
+    })?;
+    let before_reload = one.state().document_generation;
+    one.reload()?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading && state.document_generation > before_reload
+    })?;
+    one.navigate(&format!("http://{address}/one"))?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading && state.url.ends_with("/one")
+    })?;
     let endpoint = engine.controller()?;
     let private_file = ProbeFile::create()?;
     let private_file_url = url::Url::from_file_path(&private_file.0)
@@ -179,6 +223,24 @@ fn wait_pixels(
             return Err(format!(
                 "Embedded view pixel agreement timed out; expected {colors:?}"
             ));
+        }
+        std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
+    }
+}
+
+fn wait_browser(
+    engine: &dyn Engine,
+    view: &dyn crate::visual::web::BrowserView,
+    ready: impl Fn(&crate::visual::web::BrowserState) -> bool,
+) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let state = view.state();
+        if ready(&state) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("Browser navigation timed out: {state:?}"));
         }
         std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
     }

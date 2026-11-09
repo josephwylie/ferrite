@@ -72,8 +72,9 @@ fn smoke() -> Result<Duration, String> {
         }
         match engine.open_browser(
             "http://127.0.0.1:9/",
-            Viewport {
+            super::web::BrowserViewport {
                 width: 400,
+                height: 600,
                 scale: 1.0,
             },
             Box::new(|| {}),

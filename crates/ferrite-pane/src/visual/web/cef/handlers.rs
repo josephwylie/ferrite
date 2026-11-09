@@ -134,11 +134,12 @@ pub(super) fn client(
 ) -> Client {
     ViewClient::new(
         ViewRender::new(state.clone(), generation),
-        ViewDisplay::new(state, generation),
+        ViewDisplay::new(state.clone(), generation),
+        ViewLoad::new(state.clone(), generation),
         ViewLifeSpan::new(global),
         ViewRequests::new(page),
         NoContextMenu::new(),
-        NoDialogs::new(),
+        NoDialogs::new(state),
     )
 }
 
@@ -146,6 +147,7 @@ wrap_client! {
     struct ViewClient {
         render: RenderHandler,
         display: DisplayHandler,
+        load: LoadHandler,
         life_span: LifeSpanHandler,
         requests: RequestHandler,
         context_menu: ContextMenuHandler,
@@ -159,6 +161,7 @@ wrap_client! {
         fn display_handler(&self) -> Option<DisplayHandler> {
             Some(self.display.clone())
         }
+        fn load_handler(&self) -> Option<LoadHandler> { Some(self.load.clone()) }
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
             Some(self.life_span.clone())
         }
@@ -248,6 +251,14 @@ wrap_display_handler! {
     }
 
     impl DisplayHandler {
+        fn on_address_change(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, url: Option<&CefString>) {
+            if frame.is_some_and(|frame| frame.is_main() != 0) {
+                if let Some(url) = url { self.state.navigation(self.generation, |state| state.url = url.to_string()); }
+            }
+        }
+        fn on_title_change(&self, _browser: Option<&mut Browser>, title: Option<&CefString>) {
+            if let Some(title) = title { self.state.navigation(self.generation, |state| state.title = title.to_string()); }
+        }
         /// Carries the host script's height reports (see `document`).
         fn on_console_message(
             &self,
@@ -524,8 +535,43 @@ wrap_context_menu_handler! {
     }
 }
 
+wrap_load_handler! {
+    struct ViewLoad { state: Arc<ViewState>, generation: u64 }
+    impl LoadHandler {
+        fn on_loading_state_change(&self, _browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, can_go_back: ::std::os::raw::c_int, can_go_forward: ::std::os::raw::c_int) {
+            self.state.navigation(self.generation, |state| {
+                state.loading = is_loading != 0;
+                state.can_back = can_go_back != 0;
+                state.can_forward = can_go_forward != 0;
+            });
+        }
+        fn on_load_start(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType) {
+            if frame.is_some_and(|frame| frame.is_main() != 0) {
+                self.state.navigation(self.generation, |state| {
+                    state.document_generation = state.document_generation.saturating_add(1);
+                    state.loading = true;
+                    state.error = None;
+                    state.dirty = super::super::BrowserDirty::Unknown;
+                });
+            }
+        }
+        fn on_load_end(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, http_status_code: ::std::os::raw::c_int) {
+            if frame.is_some_and(|frame| frame.is_main() != 0) && http_status_code >= 400 {
+                self.state.navigation(self.generation, |state| state.error = Some(format!("Website returned HTTP {http_status_code}. Reload or check the address.")));
+            }
+        }
+        fn on_load_error(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, error_code: Errorcode, error_text: Option<&CefString>, failed_url: Option<&CefString>) {
+            if !frame.is_some_and(|frame| frame.is_main() != 0) || error_code == Errorcode::ABORTED { return; }
+            self.state.navigation(self.generation, |state| {
+                state.loading = false;
+                state.error = Some(format!("Could not load {}: {}. Check the address and connection, then reload.", failed_url.map(|url| url.to_string()).unwrap_or_else(|| state.url.clone()), error_text.map(|error| error.to_string()).unwrap_or_else(|| "navigation failed".into())));
+            });
+        }
+    }
+}
+
 wrap_jsdialog_handler! {
-    struct NoDialogs;
+    struct NoDialogs { state: Arc<ViewState> }
 
     impl JsdialogHandler {
         /// `alert`/`confirm`/`prompt`: suppressed (as if dismissed).
@@ -553,7 +599,10 @@ wrap_jsdialog_handler! {
             callback: Option<&mut JsdialogCallback>,
         ) -> ::std::os::raw::c_int {
             if let Some(callback) = callback {
-                callback.cont(1, None);
+                callback.cont((!self.state.external) as i32, None);
+                if self.state.external {
+                    self.state.navigation(self.state.generation.load(Ordering::SeqCst), |state| { state.dirty = super::super::BrowserDirty::Dirty; state.error = Some("This page has unfinished work and prevented navigation. Save or discard changes on the page before leaving.".into()); });
+                }
             }
             1
         }
