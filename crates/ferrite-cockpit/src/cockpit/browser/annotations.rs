@@ -305,6 +305,43 @@ impl CockpitView {
     }
 
     pub(super) fn pump_browser_annotations(&mut self, cx: &mut Context<Self>) {
+        let edits: Vec<_> = self
+            .panes
+            .iter()
+            .flat_map(|pane| {
+                let thread = pane.thread();
+                pane.preview
+                    .take_annotation_edits()
+                    .into_iter()
+                    .map(move |annotation| (thread, annotation))
+            })
+            .collect();
+        for (thread, retained) in edits {
+            let Some(thread) = thread else { continue };
+            self.ensure_browser(thread, cx);
+            if self.browsers.threads[&thread].annotation.is_some() {
+                self.browsers.threads.get_mut(&thread).unwrap().error =
+                    Some("Finish or cancel the current annotation before opening another.".into());
+                continue;
+            }
+            match self
+                .cockpit
+                .browser_annotation_image(thread, retained.clone())
+            {
+                Ok(image) => {
+                    self.browsers.threads.get_mut(&thread).unwrap().annotation = Some(Session {
+                        guard: None,
+                        phase: Phase::Loading { retained, image },
+                        focus: cx.focus_handle(),
+                        started: Instant::now(),
+                    })
+                }
+                Err(error) => {
+                    self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string())
+                }
+            }
+            cx.notify();
+        }
         let threads: Vec<_> = self.browsers.threads.keys().copied().collect();
         for thread in threads {
             let Some(mut session) = self
@@ -315,6 +352,8 @@ impl CockpitView {
             else {
                 continue;
             };
+            // The Server validates at durable commit. A successful receipt can
+            // arrive after later navigation and must keep its original page.
             let valid = matches!(session.phase, Phase::Retaining(_))
                 || session.guard.as_ref().is_none_or(|guard| {
                     self.browsers.threads.get(&thread).is_some_and(|browser| {
@@ -327,6 +366,7 @@ impl CockpitView {
                 });
             let mut error = (!valid)
                 .then(|| "The page changed during selection. Capture it again.".to_string());
+            let mut handed_off = false;
             if !matches!(session.phase, Phase::Selecting { .. } | Phase::Editing(_))
                 && session.started.elapsed() > Duration::from_secs(45)
             {
@@ -415,12 +455,14 @@ impl CockpitView {
                     Phase::Retaining(answer) => match answer.try_recv() {
                         Ok(Ok(retained)) => {
                             self.release_browser_capture(thread, &mut session);
-                            match self
-                                .cockpit
-                                .browser_annotation_image(thread, retained.clone())
-                            {
-                                Ok(image) => session.phase = Phase::Loading { retained, image },
-                                Err(failure) => error = Some(failure.to_string()),
+                            if let Some(index) = self.pane_for(thread) {
+                                self.panes[index].preview.edit_annotation(retained);
+                                handed_off = true;
+                                cx.notify();
+                            } else {
+                                error = Some(
+                                    "Open the capture's Thread to continue annotating.".into(),
+                                );
                             }
                         }
                         Ok(Err(failure)) => error = Some(failure.to_string()),
@@ -484,7 +526,7 @@ impl CockpitView {
                 self.release_browser_capture(thread, &mut session);
                 self.browsers.threads.get_mut(&thread).unwrap().error = Some(error);
                 cx.notify();
-            } else {
+            } else if !handed_off {
                 self.browsers.threads.get_mut(&thread).unwrap().annotation = Some(session);
             }
         }
@@ -493,7 +535,7 @@ impl CockpitView {
     pub(super) fn annotation_browser_body(
         &self,
         thread: ThreadId,
-        web: Entity<WebView>,
+        web: Option<Entity<WebView>>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use ferrite_ui::{components::button, theme::*};
@@ -503,7 +545,7 @@ impl CockpitView {
             .get(&thread)
             .and_then(|browser| browser.annotation.as_ref())
         else {
-            return div().flex_1().min_h_0().child(web).into_any_element();
+            return div().flex_1().min_h_0().children(web).into_any_element();
         };
         if let Phase::Editing(editor) = &session.phase {
             return div()
@@ -653,7 +695,7 @@ impl CockpitView {
                     .relative()
                     .flex_1()
                     .min_h_0()
-                    .child(web)
+                    .children(web)
                     .child(overlay),
             )
             .into_any_element()

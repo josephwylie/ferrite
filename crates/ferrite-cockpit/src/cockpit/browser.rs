@@ -1545,9 +1545,7 @@ impl CockpitView {
                     )))
                 },
             )
-            .when_some(body, |root, body| {
-                root.child(self.annotation_browser_body(thread, body, cx))
-            })
+            .child(self.annotation_browser_body(thread, body, cx))
             .into_any_element()
     }
 }
