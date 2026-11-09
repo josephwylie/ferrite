@@ -258,7 +258,9 @@ impl Engine {
                 self.apply_input(*thread, Input::Notice(text.clone()));
                 Ok(None)
             }
-            Op::BrowserProtect { .. }
+            Op::BrowserCapture { .. }
+            | Op::BrowserCaptureImage { .. }
+            | Op::BrowserProtect { .. }
             | Op::BrowserRelease { .. }
             | Op::BrowserReclaim { .. }
             | Op::BrowserReclaimed { .. }

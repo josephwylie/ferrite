@@ -14,13 +14,18 @@ pub(super) const FIRST_ID: i32 = 1_000_000_000;
 const INTERVAL: Duration = Duration::from_millis(500);
 const LIMIT: usize = 8 * 1024 * 1024;
 
+const INSTALL: &str = r#"(() => {
+  if (globalThis.__ferriteWorkObservation) return;
+  const state = { touched: false };
+  Object.defineProperty(globalThis, '__ferriteWorkObservation', { value: state });
+  for (const event of ['input', 'change'])
+    addEventListener(event, () => { state.touched = true }, true);
+})()"#;
+
 const INSPECT: &str = r#"(() => {
-  let s = globalThis.__ferriteWorkObservation;
-  if (!s) {
-    s = globalThis.__ferriteWorkObservation = { touched: false };
-    for (const event of ['input', 'change'])
-      addEventListener(event, () => { s.touched = true }, true);
-  }
+  const s = globalThis.__ferriteWorkObservation;
+  // A missed document-start installation cannot certify existing work clean.
+  if (!s) return { dirty: false, uncertain: true };
   let dirty = s.touched;
   for (const node of document.querySelectorAll('input,textarea,select')) {
     if (node instanceof HTMLInputElement) {
@@ -44,6 +49,8 @@ const INSPECT: &str = r#"(() => {
 
 #[derive(Clone, Copy)]
 enum Step {
+    EnablePage,
+    EnableRuntime,
     Install,
     Tree,
     World,
@@ -68,7 +75,9 @@ pub(super) struct Observation {
     next: i32,
     document: u64,
     context: Option<i64>,
+    enabled: bool,
     installed: bool,
+    retained: bool,
     clean_at: Option<Instant>,
     pending: Option<Pending>,
     last: Instant,
@@ -89,12 +98,14 @@ impl Observation {
             next: FIRST_ID,
             document: 0,
             context: None,
+            enabled: false,
             installed: false,
+            retained: false,
             clean_at: None,
             pending: None,
             last: Instant::now() - INTERVAL,
         };
-        observation.send(browser, 0, Step::Install, "Page.addScriptToEvaluateOnNewDocument", json!({ "source": INSPECT, "worldName": "ferrite-work-observation", "runImmediately": true }));
+        observation.send(browser, 0, Step::EnablePage, "Page.enable", json!({}));
         Some(observation)
     }
 
@@ -103,6 +114,7 @@ impl Observation {
         // Its old result can never make the post-command document clean.
         self.pending = None;
         self.clean_at = None;
+        self.retained = false;
         self.last = Instant::now() - INTERVAL;
         Self::unknown(state);
     }
@@ -142,11 +154,12 @@ impl Observation {
         if navigation.document_generation != self.document {
             self.document = navigation.document_generation;
             self.context = None;
-            if !self
-                .pending
-                .as_ref()
-                .is_some_and(|pending| matches!(pending.step, Step::Install))
-            {
+            if !self.pending.as_ref().is_some_and(|pending| {
+                matches!(
+                    pending.step,
+                    Step::Install | Step::EnablePage | Step::EnableRuntime
+                )
+            }) {
                 self.pending = None;
             }
             self.clean_at = None;
@@ -167,6 +180,7 @@ impl Observation {
         {
             self.pending = None;
             self.context = None;
+            self.retained = true;
             Self::unknown(state);
         }
         for response in messages {
@@ -178,14 +192,31 @@ impl Observation {
                 continue;
             }
             let pending = self.pending.take().unwrap();
-            if (!matches!(pending.step, Step::Install) && pending.document != self.document)
+            if (!matches!(
+                pending.step,
+                Step::Install | Step::EnablePage | Step::EnableRuntime
+            ) && pending.document != self.document)
                 || response.get("error").is_some()
             {
+                self.retained = true;
                 Self::unknown(state);
                 continue;
             }
             let result = &response["result"];
             match pending.step {
+                Step::EnablePage => {
+                    self.send(
+                        browser,
+                        self.document,
+                        Step::EnableRuntime,
+                        "Runtime.enable",
+                        json!({}),
+                    );
+                }
+                Step::EnableRuntime => {
+                    self.enabled = true;
+                    self.last = Instant::now() - INTERVAL;
+                }
                 Step::Install => {
                     self.installed = true;
                     self.last = Instant::now() - INTERVAL;
@@ -205,6 +236,11 @@ impl Observation {
                 }
                 Step::World => {
                     self.context = result["executionContextId"].as_i64();
+                    if !self.installed && self.context.is_some() {
+                        // The context must exist before runImmediately can
+                        // execute the document-start script on an idle page.
+                        self.send(browser, self.document, Step::Install, "Page.addScriptToEvaluateOnNewDocument", json!({ "source": INSTALL, "worldName": "ferrite-work-observation", "runImmediately": true }));
+                    }
                     self.last = Instant::now() - INTERVAL;
                 }
                 Step::Inspect => {
@@ -238,6 +274,7 @@ impl Observation {
                                         .is_some_and(|roots| !roots.is_empty())
                                 })
                         });
+                    self.retained = uncertain;
                     let mut navigation = state.navigation.lock().unwrap();
                     if navigation.document_generation == pending.document
                         && navigation.dirty != BrowserDirty::Dirty
@@ -256,7 +293,8 @@ impl Observation {
                 }
             }
         }
-        if !self.installed
+        if !self.enabled
+            || self.retained
             || navigation.loading
             || navigation.document_generation == 0
             || navigation.dirty == BrowserDirty::Dirty
@@ -266,6 +304,9 @@ impl Observation {
             return;
         }
         if let Some(context) = self.context {
+            if !self.installed {
+                return;
+            }
             self.send(
                 browser,
                 self.document,

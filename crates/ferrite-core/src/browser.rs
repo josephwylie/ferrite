@@ -414,6 +414,23 @@ impl Service {
         Ok(Lease(self.next_lease))
     }
 
+    pub fn check_protection(
+        &self,
+        thread: ThreadId,
+        owner: Owner,
+        document: Document,
+        lease: Lease,
+        kind: Protection,
+    ) -> Result<()> {
+        self.check_owner(thread, owner)?;
+        self.check_document(thread, document)?;
+        if self.protections.get(&lease.0) == Some(&(thread, owner, document, kind)) {
+            Ok(())
+        } else {
+            Err("This browser capture protection is no longer valid; select the page again".into())
+        }
+    }
+
     pub fn release(&mut self, thread: ThreadId, owner: Owner, lease: Lease) -> Result<()> {
         self.check_owner(thread, owner)?;
         match self.protections.get(&lease.0) {
