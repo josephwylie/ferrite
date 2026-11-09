@@ -1,0 +1,99 @@
+# Embedded controller feasibility gate (#192)
+
+The engine decision in [ADR 0036](../adr/0036-shared-browser-with-conversation-tabs.md)
+remains conditional. Neither the retained Chrome benchmarks nor controller
+packaging alone proves control of Ferrite's visible embedded pages.
+
+## Recovered evidence
+
+The accepted ADR, six `browser-controller-*` research/raw-result files,
+`scripts/bench/browser-controllers/` harness and three benchmark screenshots
+were recovered from the local `ferrite-wt-1` design worktree without modifying
+that worktree. The original harness launches Chrome, requires Node for its
+benchmark orchestration and contains machine-specific defaults. It is retained
+as historical reproducible research, not shipped as the application controller
+or counted as Ferrite/CEF validation. Its lockfile retains the measured versions.
+
+## Native distribution and trust boundary
+
+Ferrite builds the native Rust agent-browser **0.41.2** controller from upstream
+commit `d52a5e90c372ec4710c69adc3837ac14bbd852aa` plus
+[`agent-browser-0.41.2-ferrite.patch`](../../scripts/patches/agent-browser-0.41.2-ferrite.patch).
+The packager verifies the source commit and exact patch, builds with the upstream
+Cargo lockfile and records the patch and executable SHA-256 in
+`agent-browser-build.json`. The package includes upstream's Apache-2.0 license.
+The original official native release digest verifier is retained separately as
+`verify-agent-browser-release.py`; **those unmodified executables must not be
+used by the Conversation browser**.
+
+The patch is necessary: upstream's native daemon unconditionally starts a
+loopback streaming WebSocket server. Its origin check accepts missing Origin,
+`file://` and localhost origins, and its input handler dispatches mouse and key
+commands to CDP. The Windows command daemon also uses unauthenticated loopback
+TCP. An authenticated CDP proxy or private Unix command socket alone would
+leave these alternate input paths open.
+
+Ferrite mode requires `FERRITE_AGENT_BROWSER=1` and a fresh random
+`FERRITE_AGENT_BROWSER_TOKEN`. Every newline-delimited JSON request must carry
+that capability in `ferriteToken`; it is checked before command dispatch, state
+locking and idle activity. The capability is removed before action dispatch.
+The unused stream listener is completely disabled, including its dynamic enable
+command. Implicit browser launch and explicit launches without a CDP target are
+rejected in Ferrite mode; unavailable attachment cannot open unrelated Chrome. Ferrite must launch one
+persistent service in a private session directory and keep the capability out
+of page content, provider tools, logs and transcripts. Only the authorized
+conversation service may issue controller requests. A named agent-browser
+session is not a conversation ownership boundary and must not create one daemon
+or browser per agent.
+
+Do not turn on CEF's global remote debugging port: that would expose sealed
+inline visuals as well as browser tabs. The controller must attach through a
+private, authenticated bridge exposing only the service-authorized live page
+targets. Browser ownership and document generation remain service decisions.
+
+The pinned-source build needs git, Rust and Python >=3.9 at **build time**. The
+packaged application invokes the executable directly; no Node/npm runtime,
+per-action launcher or autonomous model loop is involved. Platform code signing changes executable bytes after staging, so the recorded
+executable digest describes the pre-sign build; the application signature authenticates the delivered bundle.
+
+## Windows sandbox layout
+
+CEF's matching `bootstrap.exe` is packaged as `ferrite.exe` and loads
+`ferrite.dll`. Its broker context reaches all three CEF execute/initialize calls;
+a naked Cargo executable fails closed before initializing CEF. Signing must
+cover the executable, application DLL and `chrome_elf.dll` with one identity.
+The stage test checks file layout; it does not prove effective renderer token
+restrictions. Packaged runtime isolation, including external-page attempts to
+reach application operations, filesystem tools and sealed visuals, remains
+required on both platforms.
+
+## Reproduction and acceptance status
+
+```
+python3 scripts/package-agent-browser.py --destination target/browser-controller
+python3 scripts/package-agent-browser.py --destination target/browser-controller --offline
+python3 scripts/probe-agent-browser-transport.py target/browser-controller/agent-browser
+```
+
+On Windows, use `python` and `agent-browser.exe`. The probe creates isolated
+state, never attaches to or starts a browser, rejects missing/wrong credentials,
+checks reconnect to one persistent native service and verifies the stream
+listener is disabled. It cannot prove embedded-page attachment, page pixels,
+concurrent target routing, browser process counts, renderer isolation or browser
+resource performance. The independent Native browser controller and Packaged
+browser feasibility workflows run without depending on core tests. GitHub has
+hosted Windows runners; the repository reported zero self-hosted runners during
+investigation. A macOS host is not a reason to waive Windows acceptance.
+
+Do not mark #192 complete until packaged Windows and macOS evidence demonstrates
+exact target discovery/attachment, concurrent routing/reconnect, same live page
+screenshots/actions, effective isolation and process-count behavior. A failing
+gate keeps external browsing unavailable; it requires an explicit engine/design
+review rather than substituting an external browser.
+
+Primary source references (all pinned to 0.41.2):
+
+- [Native daemon transport](https://github.com/vercel-labs/agent-browser/blob/v0.41.2/cli/src/native/daemon.rs)
+- [Stream listener and origin rules](https://github.com/vercel-labs/agent-browser/blob/v0.41.2/cli/src/native/stream/mod.rs)
+- [WebSocket input dispatch](https://github.com/vercel-labs/agent-browser/blob/v0.41.2/cli/src/native/stream/websocket.rs)
+- [Authenticated CDP discovery headers](https://github.com/vercel-labs/agent-browser/blob/v0.41.2/cli/src/native/cdp/discovery.rs)

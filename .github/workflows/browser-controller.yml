@@ -1,0 +1,55 @@
+name: Native browser controller
+
+# Keep the feasibility evidence independent of unrelated core test failures.
+on:
+  pull_request:
+    paths:
+      - 'scripts/*agent-browser*'
+      - 'scripts/patches/agent-browser*'
+      - 'scripts/test_package_agent_browser.py'
+      - '.github/workflows/browser-controller.yml'
+      - 'crates/ferrite*/**'
+      - 'scripts/*windows.ps1'
+      - 'scripts/install-app.sh'
+  workflow_dispatch:
+
+jobs:
+  native-release:
+    name: Verify native release (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Reject untrusted artifacts
+        run: python -m unittest discover -s scripts -p test_package_agent_browser.py
+      - name: Stage hash-pinned native release
+        run: python scripts/package-agent-browser.py --destination target/browser-controller
+      - name: Verify private persistent native service
+        shell: bash
+        run: |
+          executable=target/browser-controller/agent-browser
+          if [[ "$RUNNER_OS" == Windows ]]; then executable="$executable.exe"; fi
+          python scripts/probe-agent-browser-transport.py "$executable" | tee target/browser-controller/transport.json
+      - name: Reverify cached executable
+        run: python scripts/package-agent-browser.py --destination target/browser-controller --offline
+      - name: Invoke native executable directly
+        shell: bash
+        run: |
+          executable=target/browser-controller/agent-browser
+          if [[ "$RUNNER_OS" == Windows ]]; then executable="$executable.exe"; fi
+          "$executable" --version | tee target/browser-controller/version.txt
+          test "$(cat target/browser-controller/version.txt)" = 'agent-browser 0.41.2'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-controller-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            target/browser-controller/version.txt
+            target/browser-controller/transport.json
+            target/browser-controller/agent-browser-build.json
