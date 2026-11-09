@@ -19,6 +19,11 @@ use std::{
 const LIMIT: u64 = 24 * 1024 * 1024;
 const TEXT: usize = 128 * 1024;
 
+pub enum Event {
+    Ready(mpsc::SyncSender<bool>),
+    Finished(Outcome),
+}
+
 pub struct Worker {
     send: mpsc::Sender<Job>,
     busy: Arc<AtomicBool>,
@@ -30,7 +35,7 @@ struct Job {
     revision: u64,
     epoch: u64,
     control: Control,
-    reply: mpsc::SyncSender<Outcome>,
+    reply: mpsc::SyncSender<Event>,
 }
 thread_local! {
     static SHARED: std::cell::RefCell<std::sync::Weak<Worker>> = const { std::cell::RefCell::new(std::sync::Weak::new()) };
@@ -66,7 +71,19 @@ impl Worker {
                             }
                             let controller = controller.as_mut().unwrap();
                             controller.deadline = deadline;
-                            controller.perform(&job)
+                            let switched = controller.select(&job.target)?;
+                            let (authorize, permission) = mpsc::sync_channel(1);
+                            job.reply.send(Event::Ready(authorize)).map_err(|_| {
+                                failure("owning window disappeared before dispatch")
+                            })?;
+                            if permission.recv_timeout(Duration::from_secs(5)) != Ok(true) {
+                                return Err(failure(
+                                    "The owning page changed before dispatch; observe again",
+                                ));
+                            }
+                            // No launch, reconnect, or target selection after
+                            // the GUI authorizes this established attachment.
+                            controller.perform_selected(&job, switched)
                         })();
                         if result.is_ok() {
                             if let Some(controller) = controller.as_mut() {
@@ -89,7 +106,7 @@ impl Worker {
                         if controller.as_ref().is_some_and(|c| c.broken) {
                             controller.take();
                         }
-                        let _ = job.reply.send(outcome);
+                        let _ = job.reply.send(Event::Finished(outcome));
                         running.store(false, Ordering::Release);
                     }
                 })
@@ -109,7 +126,7 @@ impl Worker {
         revision: u64,
         epoch: u64,
         control: Control,
-    ) -> Option<mpsc::Receiver<Outcome>> {
+    ) -> Option<mpsc::Receiver<Event>> {
         if self
             .busy
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -352,7 +369,18 @@ impl Controller {
         }
         // A native switch can commit before a later setup failure. Quarantine
         // that process instead of trusting our old cached selection.
-        if let Err(error) = self.command(json!({"action":"tab_switch", "tabId":alias})) {
+        let switched = self.command(json!({"action":"tab_switch", "tabId":alias}));
+        if switched
+            .as_ref()
+            .is_ok_and(|value| value["targetId"] != target)
+        {
+            self.selected = None;
+            self.broken = true;
+            return Err(failure(
+                "Native selection did not acknowledge the exact owned target",
+            ));
+        }
+        if let Err(error) = switched {
             self.selected = None;
             self.broken = true;
             return Err(error);
@@ -360,9 +388,7 @@ impl Controller {
         self.selected = Some(target.to_owned());
         Ok(true)
     }
-    fn perform(&mut self, job: &Job) -> Result<Value, Error> {
-        let switched = self.select(&job.target)?;
-
+    fn perform_selected(&mut self, job: &Job, switched: bool) -> Result<Value, Error> {
         let reference = match &job.control {
             Control::Click { reference }
             | Control::Type { reference, .. }
