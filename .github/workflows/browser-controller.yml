@@ -12,6 +12,8 @@ env:
   SCCACHE_GHA_ENABLED: 'true'
 
 on:
+  push:
+    branches: [feat/browser-194]
   pull_request:
     paths:
       - 'scripts/*agent-browser*'
@@ -56,6 +58,12 @@ jobs:
           executable=target/browser-controller/agent-browser
           if [[ "$RUNNER_OS" == Windows ]]; then executable="$executable.exe"; fi
           python scripts/probe-agent-browser-transport.py "$executable" | tee target/browser-controller/transport.json
+      - name: Verify public native browser behavior
+        shell: bash
+        run: |
+          executable=target/browser-controller/agent-browser
+          if [[ "$RUNNER_OS" == Windows ]]; then executable="$executable.exe"; fi
+          python scripts/probe-agent-browser-behavior.py "$executable" | tee target/browser-controller/behavior.json
       - name: Reverify cached executable
         run: python scripts/package-agent-browser.py --destination target/browser-controller --offline
       - name: Invoke native executable directly
@@ -71,6 +79,7 @@ jobs:
           path: |
             target/browser-controller/version.txt
             target/browser-controller/transport.json
+            target/browser-controller/behavior.json
             target/browser-controller/agent-browser-build.json
             target/browser-controller/agent-browser
             target/browser-controller/agent-browser.exe
