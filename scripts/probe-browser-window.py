@@ -16,7 +16,7 @@ import time
 PAGE = b'''<!doctype html><meta charset="utf-8"><style>
 body{margin:0;background:white}button{display:block;margin:40px;width:240px;height:160px;
 border:0;background:rgb(213,37,59);color:white;font:24px sans-serif}
-</style><button onclick="this.style.background='rgb(23,173,91)';fetch('/clicked',{method:'POST'})">Window fixture</button>'''
+</style><button onclick="fetch('/clicked',{method:'POST'}).then(()=>this.style.background='rgb(23,173,91)')">Window fixture</button>'''
 
 
 def main():
@@ -52,7 +52,7 @@ def main():
     url = f'http://127.0.0.1:{server.server_port}/'
     with tempfile.TemporaryDirectory(prefix='ferrite-window-') as temporary:
         root = Path(temporary)
-        (root/'settings.json').write_text(json.dumps({'check_for_updates':False, 'start_at_login':False}), encoding='utf-8')
+        (root/'settings.json').write_text(json.dumps({'check_for_updates':False, 'start_at_login':False, 'auto_update_clis':False}), encoding='utf-8')
         env = os.environ.copy()
         env.update(FERRITE_STORE=str(root/'threads'), FERRITE_BROWSER_PROFILE=str(root/'profile'),
                    FERRITE_PROJECTS_BIN=str(root/'no-projects'), TERM='dumb',
