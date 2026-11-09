@@ -25,7 +25,7 @@ pub(super) struct Browsers {
     reveal: std::collections::BTreeSet<ThreadId>,
     control_queue: std::collections::VecDeque<ControlRequest>,
     #[cfg(feature = "cef")]
-    controller: Option<std::sync::Arc<ferrite_pane::visual::browser_control::native::Worker>>,
+    pub(super) controller: Option<std::sync::Arc<ferrite_pane::visual::browser_control::native::Worker>>,
     #[cfg(feature = "cef")]
     running_control: Option<RunningControl>,
     #[cfg(feature = "cef")]

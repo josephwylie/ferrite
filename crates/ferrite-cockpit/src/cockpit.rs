@@ -1472,10 +1472,24 @@ impl CockpitView {
         if prefs.ferrite_updates {
             updating::schedule_checks(cx);
         }
-        cx.on_app_quit(|view, _cx| {
+        cx.on_app_quit(|view, cx| {
             view.save_drafts();
             view.cockpit.halt_sessions();
-            async {}
+            #[cfg(feature = "cef")]
+            let browser = view.browsers.controller.clone();
+            let executor = cx.background_executor().clone();
+            async move {
+                #[cfg(feature = "cef")]
+                if let Some(browser) = browser {
+                    executor
+                        .spawn(async move {
+                            browser.shutdown();
+                        })
+                        .await;
+                }
+                #[cfg(not(feature = "cef"))]
+                let _ = executor;
+            }
         })
         .detach();
 
