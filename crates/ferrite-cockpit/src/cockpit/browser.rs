@@ -1435,16 +1435,20 @@ impl CockpitView {
                     })),
             );
         }
+        let annotatable =
+            !browser.new_tab && active.is_some_and(|tab| browser.pages.contains_key(&tab.id));
         toolbar = toolbar
-            .child(
-                ferrite_ui::components::button("browser-annotate")
-                    .debug_selector(|| "browser-annotate".into())
-                    .tab_stop(true)
-                    .child("Annotate")
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.begin_browser_annotation(thread, window, cx);
-                    })),
-            )
+            .when(annotatable, |toolbar| {
+                toolbar.child(
+                    ferrite_ui::components::button("browser-annotate")
+                        .debug_selector(|| "browser-annotate".into())
+                        .tab_stop(true)
+                        .child("Annotate")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.begin_browser_annotation(thread, window, cx);
+                        })),
+                )
+            })
             .child(div().px(px(4.)).child("Address"))
             .child(
                 div()
@@ -1486,6 +1490,7 @@ impl CockpitView {
                         .tooltip(ferrite_ui::menu::tooltip("New tab"))
                         .on_click(cx.listener(
                             move |this, _, window, cx| {
+                                this.cancel_browser_capture(thread, cx);
                                 if let Some(browser) = this.browsers.threads.get_mut(&thread) {
                                     browser.new_tab = true;
                                     browser

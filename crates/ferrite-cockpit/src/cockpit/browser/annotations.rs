@@ -74,9 +74,15 @@ impl CockpitView {
             return;
         }
         let selected = self.browsers.threads.get(&thread).and_then(|browser| {
+            if browser.new_tab {
+                return None;
+            }
             let owner = browser.owner?;
             let tab = browser.state.active?;
             let page = browser.pages.get(&tab)?;
+            if !page.web.read(cx).browser_visible() {
+                return None;
+            }
             Some((
                 owner,
                 page.document.get(),
