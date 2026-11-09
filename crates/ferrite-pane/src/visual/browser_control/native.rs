@@ -54,19 +54,25 @@ impl Worker {
                                 || controller
                                     .epochs
                                     .get(&job.target)
-                                    .is_some_and(|epoch| *epoch != job.epoch)
+                                    .map_or(job.epoch != 0, |epoch| *epoch != job.epoch)
                         });
                         if restart {
                             controller.take();
                         }
+                        let deadline = Instant::now() + Duration::from_secs(30);
                         let result = (|| {
                             if controller.is_none() {
-                                controller = Some(Controller::start(&job.endpoint)?);
+                                controller = Some(Controller::start(&job.endpoint, deadline)?);
                             }
                             let controller = controller.as_mut().unwrap();
-                            controller.deadline = Instant::now() + Duration::from_secs(30);
+                            controller.deadline = deadline;
                             controller.perform(&job)
                         })();
+                        if result.is_ok() {
+                            if let Some(controller) = controller.as_mut() {
+                                controller.epochs.insert(job.target.clone(), job.epoch);
+                            }
+                        }
                         let outcome = match result {
                             Ok(value) => Outcome::Success { value },
                             Err(error) if error.uncertain && !job.control.observation() => {
@@ -179,7 +185,7 @@ impl Drop for Controller {
     }
 }
 impl Controller {
-    fn start(endpoint: &ControllerEndpoint) -> Result<Self, Error> {
+    fn start(endpoint: &ControllerEndpoint, deadline: Instant) -> Result<Self, Error> {
         let executable = std::env::current_exe()
             .map_err(failure)?
             .parent()
@@ -215,6 +221,7 @@ impl Controller {
             .env("AGENT_BROWSER_SESSION", "ferrite")
             .env("AGENT_BROWSER_SOCKET_DIR", &directory)
             .env("AGENT_BROWSER_IDLE_TIMEOUT_MS", "0")
+            .env("AGENT_BROWSER_PIN_TAB", "1")
             .env("FERRITE_AGENT_BROWSER", "1")
             .env("FERRITE_AGENT_BROWSER_TOKEN", &token)
             .stdin(Stdio::null())
@@ -241,7 +248,7 @@ impl Controller {
             refs: HashMap::new(),
             epochs: HashMap::new(),
             broken: false,
-            deadline: Instant::now() + Duration::from_secs(30),
+            deadline,
         };
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
@@ -329,9 +336,6 @@ impl Controller {
         Ok(response["data"].clone())
     }
     fn select(&mut self, target: &str) -> Result<bool, Error> {
-        if self.selected.as_deref() == Some(target) {
-            return Ok(false);
-        }
         let listed = self.command(json!({"action":"tab_list"}))?;
         let alias = listed["tabs"]
             .as_array()
@@ -339,13 +343,26 @@ impl Controller {
             .and_then(|tab| tab["tabId"].as_str())
             .ok_or_else(|| failure("The owned live page is not attached; observe it again"))?
             .to_string();
-        self.command(json!({"action":"tab_switch", "tabId":alias}))?;
+        let active = listed["tabs"].as_array().is_some_and(|tabs| {
+            tabs.iter()
+                .any(|tab| tab["targetId"] == target && tab["active"] == true)
+        });
+        if active && self.selected.as_deref() == Some(target) {
+            return Ok(false);
+        }
+        // A native switch can commit before a later setup failure. Quarantine
+        // that process instead of trusting our old cached selection.
+        if let Err(error) = self.command(json!({"action":"tab_switch", "tabId":alias})) {
+            self.selected = None;
+            self.broken = true;
+            return Err(error);
+        }
         self.selected = Some(target.to_owned());
         Ok(true)
     }
     fn perform(&mut self, job: &Job) -> Result<Value, Error> {
         let switched = self.select(&job.target)?;
-        self.epochs.insert(job.target.clone(), job.epoch);
+
         let reference = match &job.control {
             Control::Click { reference }
             | Control::Type { reference, .. }
