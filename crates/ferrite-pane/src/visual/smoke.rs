@@ -14,6 +14,9 @@
 #[cfg(feature = "cef")]
 mod browser;
 
+#[cfg(windows)]
+mod windows;
+
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -96,6 +99,8 @@ fn smoke() -> Result<Duration, String> {
         p.frame_size() == Some((800, 1200))
     })?;
     println!("laid-out frame: {:?} after open", opened.elapsed());
+    #[cfg(windows)]
+    windows::assert_renderer_sandbox()?;
     probe.until("red/blue/green at y=10/350/550", |p| {
         p.pixel(10, 10) == Some(RED)
             && p.pixel(10, 350) == Some(BLUE)
