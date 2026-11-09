@@ -21,3 +21,4 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p ferrite-core --locked --test browser_conversations
+      - run: cargo test -p ferrite-core --locked --lib server::tests::browser_requests
