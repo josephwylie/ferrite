@@ -5,6 +5,7 @@
 
 pub(crate) mod beside;
 mod context_menu;
+mod browser;
 mod drafts;
 pub(crate) mod decisions;
 pub(crate) mod empty_board;
@@ -328,6 +329,7 @@ impl std::ops::DerefMut for CockpitPane {
 
 pub struct CockpitView {
     cockpit: Cockpit,
+    browsers: browser::Browsers,
     /// One view per Pane of the Cockpit's roster, in its order — the
     /// keyboard, the scrollback and the caches the window owns for each.
     /// `sync_panes` is the one door: after every act on the roster the
@@ -1480,8 +1482,10 @@ impl CockpitView {
         // tested directly against an empty registry below.
         #[cfg(test)]
         let launch_project = launch_project.or_else(|| cockpit.register_project(&here()).ok());
+        cx.bind_keys([gpui::KeyBinding::new("enter", browser::Go, Some("BrowserAddress"))]);
         let mut view = Self {
             cockpit,
+            browsers: Default::default(),
             panes: Vec::new(),
             focus: cx.focus_handle(),
             perf: std::env::var("FERRITE_PERF").is_ok().then(|| Perf {
@@ -2279,6 +2283,7 @@ impl CockpitView {
             self.sync_menu(cx);
         }
         let frame = self.cockpit.pump();
+        self.pump_browsers(cx);
         self.poll_remote_path(cx);
         self.poll_machine_repo(cx);
         let server_moved = self.server_moved();

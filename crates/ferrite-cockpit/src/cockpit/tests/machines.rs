@@ -207,6 +207,7 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
     ));
     let attach = |name: &str| {
         let mut core = Cockpit::attach(Attach {
+            browser: false,
             store: dir.join(name).join("threads"),
             server: Endpoint::Machine(bridge.clone()),
             client: ferrite_core::protocol::Peer {
@@ -503,6 +504,7 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
         ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default())))
             .unwrap();
     let mut core = Cockpit::attach(Attach {
+            browser: false,
         store: dir.join("window").join("threads"),
         server: Endpoint::Machine(std::sync::Arc::new(Bridge::new(
             "box",

@@ -20,7 +20,7 @@ use super::web::Engine;
 
 /// Whether visuals can be drawn live here, and with what.
 #[derive(Clone)]
-pub(crate) enum Availability {
+pub enum Availability {
     Ready(Rc<dyn Engine>),
     /// Chromium is starting; ask again on the next draw.
     Starting,
@@ -126,7 +126,7 @@ impl Visuals {
     }
 
     /// The engine, starting it on the first ask. Never blocks.
-    pub(crate) fn engine(cx: &mut App) -> Availability {
+    pub fn engine(cx: &mut App) -> Availability {
         if !cx.has_global::<Visuals>() {
             return Availability::Unavailable(NOT_IN_THIS_BUILD.into());
         }
