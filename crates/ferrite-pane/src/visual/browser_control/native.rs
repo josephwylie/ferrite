@@ -317,6 +317,8 @@ impl Controller {
         child: Arc<Mutex<Option<Child>>>,
         stop: Arc<AtomicBool>,
     ) -> Result<Self, Error> {
+        #[cfg(feature = "browser-smoke")]
+        let mut ready_timing = super::phase_log::Timer::start("controller_process_ready", "none");
         let executable = std::env::current_exe()
             .map_err(failure)?
             .parent()
@@ -416,7 +418,18 @@ impl Controller {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+        #[cfg(feature = "browser-smoke")]
+        {
+            ready_timing.outcome = "success";
+            drop(ready_timing);
+        }
+        #[cfg(feature = "browser-smoke")]
+        let mut attach_timing = super::phase_log::Timer::start("controller_cdp_attach", "launch");
         controller.command(json!({"action":"launch", "cdpUrl":endpoint.url, "cdpHeaders":{"Authorization":endpoint.authorization}}))?;
+        #[cfg(feature = "browser-smoke")]
+        {
+            attach_timing.outcome = "success";
+        }
         Ok(controller)
     }
     #[cfg(unix)]
@@ -441,6 +454,11 @@ impl Controller {
         Ok(stream)
     }
     fn command(&mut self, mut value: Value) -> Result<Value, Error> {
+        #[cfg(feature = "browser-smoke")]
+        let mut command_timing = super::phase_log::Timer::start(
+            "native_command",
+            value["action"].as_str().unwrap_or("none"),
+        );
         if self.stopping.load(Ordering::Acquire) {
             return Err(failure("browser owner is shutting down"));
         }
@@ -482,6 +500,12 @@ impl Controller {
         })();
         let response = result.map_err(|message| {
             self.broken = true;
+            #[cfg(feature = "browser-smoke")]
+            {
+                if writes {
+                    command_timing.outcome = "uncertain";
+                }
+            }
             Error {
                 message: format!(
                     "Browser controller transport failed; completion may be uncertain: {message}"
@@ -508,6 +532,12 @@ impl Controller {
                     selector
                 )
                 || message == format!("Element ref {} is stale", selector.trim_start_matches('@'));
+            #[cfg(feature = "browser-smoke")]
+            {
+                if writes && !known_before_dispatch {
+                    command_timing.outcome = "uncertain";
+                }
+            }
             return Err(Error {
                 message,
                 uncertain: writes && !known_before_dispatch,
@@ -518,6 +548,10 @@ impl Controller {
             // Upstream's generic launch claims do not describe the embedded
             // CEF lifetime and may include private attachment configuration.
             data.remove("lifecycle");
+        }
+        #[cfg(feature = "browser-smoke")]
+        {
+            command_timing.outcome = "success";
         }
         Ok(data)
     }
