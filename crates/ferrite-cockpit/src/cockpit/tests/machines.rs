@@ -1426,4 +1426,35 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
         let state = view.cockpit.browser_attach(thread).unwrap();
         state.tabs[1].url == "http://localhost:5173/delayed#section" && !state.tabs[1].loading
     }));
+    let viewport = cx.debug_bounds("browser-preview").unwrap();
+    let page_point = viewport.center();
+    cx.simulate_mouse_down(page_point, gpui::MouseButton::Left, gpui::Modifiers::none());
+    until(cx, |cx| view.update(cx, |view, _| {
+        view.cockpit.browser_attach(thread).unwrap().tabs.iter().any(|tab| tab.protected)
+    }));
+    for _ in 0..3 { tick(cx); }
+    assert!(view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap().tabs.iter().any(|tab| tab.protected)),
+        "a held gesture must not settle between pointer events");
+    cx.simulate_mouse_up(viewport.origin - gpui::point(px(10.), px(10.)), gpui::MouseButton::Left, gpui::Modifiers::none());
+    until(cx, |cx| view.update(cx, |view, _| {
+        view.cockpit.browser_attach(thread).unwrap().tabs.iter().all(|tab| !tab.protected)
+    }));
+    cx.simulate_click(page_point, gpui::Modifiers::none());
+    cx.simulate_keystrokes("a");
+    tick(cx);
+    cx.simulate_keystrokes("b");
+    tick(cx);
+    assert!(view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap().tabs.iter().any(|tab| tab.protected)),
+        "a typing burst must remain protected between keys");
+    until(cx, |cx| view.update(cx, |view, _| {
+        view.cockpit.browser_attach(thread).unwrap().tabs.iter().all(|tab| !tab.protected)
+    }));
+    cx.simulate_mouse_down(page_point, gpui::MouseButton::Left, gpui::Modifiers::none());
+    until(cx, |cx| view.update(cx, |view, _| {
+        view.cockpit.browser_attach(thread).unwrap().tabs.iter().any(|tab| tab.protected)
+    }));
+    cx.simulate_click(cx.debug_bounds("browser-new-tab").unwrap().center(), gpui::Modifiers::none());
+    until(cx, |cx| view.update(cx, |view, _| {
+        view.cockpit.browser_attach(thread).unwrap().tabs.iter().all(|tab| !tab.protected)
+    }));
 }
