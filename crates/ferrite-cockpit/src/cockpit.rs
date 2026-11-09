@@ -6,6 +6,8 @@
 pub(crate) mod beside;
 mod context_menu;
 mod browser;
+#[cfg(feature = "browser-smoke")]
+mod browser_smoke;
 mod drafts;
 pub(crate) mod decisions;
 pub(crate) mod empty_board;

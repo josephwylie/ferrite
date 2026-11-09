@@ -401,6 +401,10 @@ pub fn launch() {
                         });
                         // The kit Root paints the window's ground
                         // (`paint::WINDOW`) under every region.
+                        #[cfg(feature = "browser-smoke")]
+                        if std::env::args().any(|arg| arg == "--browser-window-smoke") {
+                            CockpitView::start_browser_smoke(view.clone(), window, cx);
+                        }
                         let content =
                             cx.new(|cx| cockpit_window::CockpitWindow::new(view, window, cx));
                         // The Cockpit the window shows when it is asked:

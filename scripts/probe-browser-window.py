@@ -8,6 +8,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 import threading
+import shlex
+import sys
+import uuid
 import time
 
 PAGE = b'''<!doctype html><meta charset="utf-8"><style>
@@ -20,6 +23,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('executable', type=Path)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--provider', choices=['claude'])
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     output = args.output.resolve()
@@ -48,10 +52,25 @@ def main():
     url = f'http://127.0.0.1:{server.server_port}/'
     with tempfile.TemporaryDirectory(prefix='ferrite-window-') as temporary:
         root = Path(temporary)
+        (root/'settings.json').write_text(json.dumps({'check_for_updates':False, 'start_at_login':False}), encoding='utf-8')
         env = os.environ.copy()
         env.update(FERRITE_STORE=str(root/'threads'), FERRITE_BROWSER_PROFILE=str(root/'profile'),
                    FERRITE_PROJECTS_BIN=str(root/'no-projects'), TERM='dumb',
                    FERRITE_BROWSER_WINDOW_URL=url, FERRITE_BROWSER_WINDOW_OUTPUT=str(output))
+        if args.provider:
+            peer = Path(__file__).with_name('browser-window-provider.py').resolve()
+            binaries = root/'bin'
+            binaries.mkdir()
+            if os.name == 'nt':
+                shim = binaries/(args.provider+'.cmd')
+                shim.write_text(f'@echo off\n"{sys.executable}" "{peer}" --provider {args.provider} %*\n')
+            else:
+                shim = binaries/args.provider
+                shim.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(peer))} --provider {args.provider} "$@"\n')
+                shim.chmod(0o755)
+            env.update(PATH=str(binaries)+os.pathsep+env.get('PATH',''),
+                FERRITE_BROWSER_WINDOW_PROVIDER=args.provider,
+                FERRITE_BROWSER_WINDOW_PROBE=uuid.uuid4().hex)
         # An imported, idle Thread exercises the real Server without calling a model.
         history = root/'thread.jsonl'
         history.write_text(json.dumps({'type':'user','sessionId':'browser-window-fixture',
@@ -63,6 +82,9 @@ def main():
             'timestamp':'2026-11-09T00:00:01Z'})+'\n', encoding='utf-8')
         executable = str(args.executable.resolve())
         started = time.monotonic()
+        process = None
+        server_process = subprocess.Popen([executable, 'server'], env=env, cwd=root,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             with (output/'app.log').open('w', encoding='utf-8') as log:
                 process = subprocess.Popen([executable, '--browser-window-smoke', '--import', str(history)],
@@ -76,6 +98,12 @@ def main():
             result = json.loads((output/'window-result.json').read_text(encoding='utf-8'))
             if code != 0 or result.get('success') is not True:
                 raise RuntimeError(f'Packaged window failed: exit={code}, result={result}')
+            if args.provider:
+                peer_result = json.loads((output/'provider-result.json').read_text(encoding='utf-8'))
+                if peer_result.get('probe') != env['FERRITE_BROWSER_WINDOW_PROBE'] or peer_result.get('provider') != args.provider:
+                    raise RuntimeError('The intended isolated provider peer did not produce the response')
+                if peer_result.get('success') is not True:
+                    raise RuntimeError(f'Actual provider browser Observe failed: {peer_result}')
             if len(clicked) != 1:
                 raise RuntimeError(f'Independent fixture oracle saw {len(clicked)} clicks, expected one')
             for name in ('window-before.png', 'window-after.png'):
@@ -85,11 +113,16 @@ def main():
                 'elapsed_seconds':time.monotonic()-started, 'window_result':result}, indent=2))
         finally:
             # Stop this launch's actual Server before deleting its isolated store.
-            # The green driver stops its Server through Cockpit::stop_server_and_wait.
-            # On failed probes, terminate only this launch's process group below.
-            if process.poll() is None:
+            # Both handles belong exclusively to this isolated probe.
+            if process is not None and process.poll() is None:
                 process.kill()
                 process.wait()
+            if server_process.poll() is None:
+                server_process.terminate()
+                server_process.wait(timeout=20)
+            import shutil
+            if (root/'logs').exists():
+                shutil.copytree(root/'logs', output/'diagnostics', dirs_exist_ok=True)
             server.shutdown()
 
 

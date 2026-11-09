@@ -27,6 +27,9 @@
 # where the Server and the board find it and hand it to agents and hooks
 # (`FERRITE_PROJECTS_BIN` overrides that), signed as the app is.
 #
+# FERRITE_BUILD_FEATURES=browser-smoke opts into the packaged window acceptance
+# driver; ordinary packages continue to build only cef.
+#
 # --dmg (the published release) builds with the release profile; installs
 # here use the `local` profile (Cargo.toml), which skips ThinLTO.
 #
@@ -83,6 +86,9 @@ if [ -z "${FERRITE_NO_CEF:-}" ]; then
   done
   export CEF_PATH="${CEF_PATH:-$HOME/.local/share/cef}"
   FEATURES=(--features cef)
+  if [ -n "${FERRITE_BUILD_FEATURES:-}" ]; then
+    FEATURES=(--features "cef,$FERRITE_BUILD_FEATURES")
+  fi
 fi
 
 PROFILE=local

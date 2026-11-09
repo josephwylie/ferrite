@@ -67,13 +67,15 @@ jobs:
         shell: pwsh
         run: |
           $env:CEF_PATH = Join-Path $HOME '.local\share\cef'
-          cargo build -p ferrite --locked --features cef
+          cargo build -p ferrite --locked --features browser-smoke
           if ($LASTEXITCODE -ne 0) { throw 'CEF build failed' }
       - name: Build macOS CEF application
         if: runner.os == 'macOS'
         run: |
-          CEF_PATH="$HOME/.local/share/cef" cargo build --profile local -p ferrite --locked --features cef
+          CEF_PATH="$HOME/.local/share/cef" cargo build --profile local -p ferrite --locked --features browser-smoke
           cargo build --profile local --locked -p herdr-projects --bin ferrite-projects
+      - name: Discard incomplete cached native source
+        run: python -c "import shutil; shutil.rmtree('target/agent-browser-build', ignore_errors=True)"
       - name: Build native controller
         run: python scripts/package-agent-browser.py --destination target/browser-controller
       - name: Stage Windows package
@@ -87,6 +89,7 @@ jobs:
         if: runner.os == 'macOS'
         env:
           FERRITE_BROWSER_CONTROLLER_STAGE: ${{ github.workspace }}/target/browser-controller
+          FERRITE_BUILD_FEATURES: browser-smoke
         run: scripts/install-app.sh --bundle-only
       - name: Probe Windows production window
         if: runner.os == 'Windows'
@@ -94,6 +97,9 @@ jobs:
       - name: Probe macOS production window
         if: runner.os == 'macOS'
         run: python scripts/probe-browser-window.py target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite --output target/browser-window-evidence
+      - name: Observe displayed fixture through actual Claude adapter
+        run: |
+          python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider claude --output target/browser-window-evidence/claude
       - uses: actions/upload-artifact@v4
         if: always()
         with:
