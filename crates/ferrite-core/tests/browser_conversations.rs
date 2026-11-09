@@ -186,3 +186,83 @@ fn a_loading_page_is_retained_even_when_its_form_is_clean() {
     assert!(!browser.reclaim(thread, owner, first.tabs[0].id).unwrap());
     assert!(browser.state(thread).tabs[0].live);
 }
+
+#[test]
+fn hidden_selected_pages_release_only_after_native_acknowledgement() {
+    use ferrite_core::browser::{Dirty, PageState, Protection};
+    let thread = ThreadId::new(1);
+    let mut browser = Service::default();
+    let owner = browser.attach(thread, 7).unwrap();
+    let opened = browser
+        .apply(
+            thread,
+            7,
+            Action::Open {
+                url: "https://example.com/form".into(),
+            },
+        )
+        .unwrap();
+    let document = opened.tabs[0].document();
+    let mut page = PageState {
+        navigation: false,
+        visible: false,
+        document,
+        url: opened.tabs[0].url.clone(),
+        loading: false,
+        can_back: false,
+        can_forward: false,
+        error: None,
+        dirty: Dirty::Clean,
+    };
+    browser.update(thread, owner, page.clone()).unwrap();
+    let lease = browser
+        .begin_reclaim(thread, owner, document)
+        .unwrap()
+        .expect("a hidden Thread's selected page may unload");
+    assert!(browser
+        .protect(thread, owner, document, Protection::Command)
+        .is_err());
+    assert!(browser
+        .apply(thread, 7, Action::Select { tab: document.tab })
+        .is_err());
+    let retained = browser.finish_reclaim(thread, owner, lease, false).unwrap();
+    assert!(retained.tabs[0].live);
+    assert_eq!(retained.tabs[0].document(), document);
+    let capture = browser
+        .protect(thread, owner, document, Protection::Annotation)
+        .unwrap();
+    assert!(browser.state(thread).tabs[0].protected);
+    assert!(browser
+        .protect(thread, owner, document, Protection::Command)
+        .is_err());
+    assert!(browser
+        .begin_reclaim(thread, owner, document)
+        .unwrap()
+        .is_none());
+    browser.release(thread, owner, capture).unwrap();
+    page.dirty = Dirty::Unknown;
+    browser.update(thread, owner, page.clone()).unwrap();
+    assert!(browser
+        .begin_reclaim(thread, owner, document)
+        .unwrap()
+        .is_none());
+    page.dirty = Dirty::Clean;
+    browser.update(thread, owner, page.clone()).unwrap();
+    let lease = browser
+        .begin_reclaim(thread, owner, document)
+        .unwrap()
+        .unwrap();
+    let released = browser.finish_reclaim(thread, owner, lease, true).unwrap();
+    assert!(!released.tabs[0].live);
+    assert!(browser.update(thread, owner, page.clone()).is_err());
+    let selected = browser
+        .apply(thread, 7, Action::Select { tab: document.tab })
+        .unwrap();
+    page.document = selected.tabs[0].document();
+    page.visible = true;
+    browser.update(thread, owner, page.clone()).unwrap();
+    assert!(browser
+        .begin_reclaim(thread, owner, page.document)
+        .unwrap()
+        .is_none());
+}
