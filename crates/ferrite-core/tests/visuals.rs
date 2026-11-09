@@ -482,7 +482,12 @@ fn codex_is_offered_a_direct_dynamic_tool_and_its_call_gets_text_and_the_screens
     let renderer = renderer(shown());
     let (session, host) = codex("codex-offered", visuals(&renderer, Level::WhenAsked));
     let events = drain(session.events());
-    let lines = host_lines(&host, |lines| lines.iter().any(|line| line["id"] == 0));
+    // The replay may answer a tool before startup finishes. Wait for both
+    // independently written frames before inspecting the captured request.
+    let lines = host_lines(&host, |lines| {
+        lines.iter().any(|line| line["id"] == 0)
+            && lines.iter().any(|line| line["method"] == "thread/start")
+    });
 
     let start = lines
         .iter()
@@ -570,11 +575,16 @@ fn a_resumed_codex_thread_keeps_its_tool_and_is_told_to_call_it_directly() {
 fn codex_without_visuals_offers_nothing_and_refuses_a_stray_call() {
     let (session, host) = codex("codex-none", None);
     drain(session.events());
-    let lines = host_lines(&host, |lines| lines.iter().any(|line| line["id"] == 0));
+    // The replay may answer a tool before startup finishes. Wait for both
+    // independently written frames before inspecting the captured request.
+    let lines = host_lines(&host, |lines| {
+        lines.iter().any(|line| line["id"] == 0)
+            && lines.iter().any(|line| line["method"] == "thread/start")
+    });
     let start = lines
         .iter()
         .find(|line| line["method"] == "thread/start")
-        .unwrap_or_else(|| panic!("[DEBUG-visual-order] host frames before thread/start: {lines:?}"));
+        .expect("the fixture captured thread/start before completing");
     assert!(start["params"].get("dynamicTools").is_none());
     assert!(start["params"]["config"].get("features").is_none());
     assert_eq!(
