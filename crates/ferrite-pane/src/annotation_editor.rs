@@ -11,6 +11,8 @@ use gpui::{
 };
 use std::{cell::Cell, path::PathBuf, rc::Rc};
 
+gpui::actions!(annotation_editor, [Cancel]);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
     Pen,
@@ -319,6 +321,10 @@ impl Render for AnnotationEditor {
             .id("annotation-editor")
             .size_full()
             .key_context("AnnotationEditor")
+            .on_action(cx.listener(|_, _: &Cancel, _, cx| {
+                cx.emit(EditorEvent::Cancelled);
+                cx.stop_propagation();
+            }))
             .on_key_down(cx.listener(|_, event: &gpui::KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" {
                     cx.emit(EditorEvent::Cancelled);
