@@ -14,18 +14,6 @@ env:
 on:
   push:
     branches: ['feat/browser-193-native']
-  pull_request:
-    paths:
-      - 'scripts/*agent-browser*'
-      - 'scripts/native_browser_service.py'
-      - 'scripts/browser_processes.py'
-      - 'scripts/probe-embedded-browser.py'
-      - 'scripts/patches/agent-browser*'
-      - 'scripts/test_package_agent_browser.py'
-      - '.github/workflows/browser-feasibility.yml'
-      - 'crates/ferrite*/**'
-      - 'scripts/*windows.ps1'
-      - 'scripts/install-app.sh'
   workflow_dispatch:
 
 concurrency:
