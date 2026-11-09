@@ -376,6 +376,7 @@ fn resumed_codex_browser_call_preserves_history_and_explains_legacy_tool_absence
     let harness = start("codex-browser-resume");
     let mut window = attach(&harness.address);
     let (thread, _provider) = open(&mut window, &harness);
+    let _owner = browser_test_window(&harness, thread);
     let (session, host) = provider_call(&harness, thread, true, json!({"kind":"state"}), true);
     let lines = lines_until(&host, call_answered);
     let resume = lines
