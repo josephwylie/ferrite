@@ -5732,3 +5732,76 @@ fn browser_requests_wait_for_the_latest_manual_gesture_to_settle() {
     window.command(99, Op::Stop { when: When::Now });
     assert_eq!(harness.server.join().unwrap(), 0);
 }
+
+#[test]
+fn browser_requests_hold_uncertain_work_when_the_caller_misses_its_reply() {
+    use crate::browser::{Action, Control, Operation, Outcome};
+    let harness = start("browser-undelivered-write");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    let mut owner_window = browser_test_window(&harness, thread);
+    let agent = harness.browser.for_thread(thread);
+    let opened = agent
+        .submit(browser_test_action(Action::Open {
+            url: "https://example.com/form".into(),
+        }))
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    let document = opened.state.tabs[0].document();
+    let receipt = browser_test_observe(&mut owner_window, &agent, document, 0)
+        .observation
+        .unwrap();
+    let click = Control::Click {
+        reference: "@save".into(),
+    };
+    let abandoned = agent.submit(Operation::Control {
+        document,
+        revision: 0,
+        observation: Some(receipt),
+        control: click.clone(),
+    });
+    // A provider timeout can drop this receiver while the native operation is
+    // still in flight. Its later success is not delivered to that caller.
+    drop(abandoned);
+    browser_test_answer(
+        &mut owner_window,
+        click,
+        Outcome::Success {
+            value: serde_json::json!({"saved":true}),
+        },
+    );
+    browser_test_command(&mut owner_window, 401, Op::SettingsChanged);
+    let state = agent
+        .submit(Operation::State)
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(
+        state.state.tabs[0].protected,
+        "undelivered completion must retain its page and require fresh evidence"
+    );
+    assert!(agent
+        .submit(browser_test_action(Action::Open {
+            url: "https://example.com/other".into()
+        }))
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .is_err());
+    let observed = browser_test_observe(&mut owner_window, &agent, document, 0);
+    assert!(observed.observation.is_some());
+    assert!(!observed.state.tabs[0].protected);
+    let opened = agent
+        .submit(Operation::Action {
+            action: Action::Open {
+                url: "https://example.com/other".into(),
+            },
+            observation: observed.observation,
+        })
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert_eq!(opened.state.tabs.len(), 2);
+    window.command(99, Op::Stop { when: When::Now });
+    assert_eq!(harness.server.join().unwrap(), 0);
+}
