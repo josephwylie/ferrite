@@ -25,7 +25,7 @@ fn request(client: &mut Client, id: u64, op: Op) -> Result<Option<Done>, WireErr
 
 #[test]
 fn browser_annotation_receipt_survives_navigation_and_fetches_only_retained_images() {
-    let harness = start("browser-annotation-retention");
+    let harness = start("ba-retain");
     let mut opener = attach(&harness.address);
     let (thread, _provider) = open(&mut opener, &harness);
     let mut owner_window = browser_test_window(&harness, thread);
