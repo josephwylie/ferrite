@@ -472,3 +472,139 @@ fn a_connection_let_go_closes_its_stream() {
     ));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn browser_annotation_upload_does_not_wait_for_socket_and_keeps_following_messages_ordered() {
+    use crate::browser::{Document, Lease, Owner, TabId};
+    use crate::browser_annotations::{Capture, Selection, Viewport};
+    let dir = scratch("capture-out");
+    let path = address(&dir);
+    let listener = listen(&path).unwrap();
+    let (read, reading) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let mut stream = listener.accept().unwrap();
+        let mut input = Lines::new(stream.try_clone().unwrap());
+        assert!(matches!(
+            input.next_message::<ClientMessage>().unwrap(),
+            Some(ClientMessage::Hello { .. })
+        ));
+        send(
+            &mut stream,
+            &protocol::welcome(
+                1,
+                ServerInfo {
+                    version: "test".into(),
+                    executable: "/fixture/ferrite".into(),
+                },
+                "capture".into(),
+                0,
+            ),
+        )
+        .unwrap();
+        send(
+            &mut stream,
+            &ServerMessage::Snapshot(Snapshot {
+                boot_id: "capture".into(),
+                revision: 1,
+                threads: vec![],
+                roster: SharedRoster::default(),
+                decisions: vec![],
+                groups: None,
+                registry: None,
+                notices: None,
+                providers: None,
+                parked: None,
+                digests: None,
+            }),
+        )
+        .unwrap();
+        reading
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        let first = input.next_message::<ClientMessage>().unwrap().unwrap();
+        assert!(matches!(
+            first,
+            ClientMessage::Command(protocol::Command {
+                id: 7,
+                op: protocol::Op::BrowserCapture { .. }
+            })
+        ));
+        let second = input.next_message::<ClientMessage>().unwrap().unwrap();
+        assert!(
+            matches!(second, ClientMessage::Watch { thread, .. } if thread == ThreadId::new(3))
+        );
+    });
+    let mut attached = Client::attach(
+        &path,
+        ClientMessage::Hello {
+            generation: 1,
+            client: Peer {
+                name: "capture".into(),
+                version: "test".into(),
+            },
+            capabilities: vec![],
+        },
+    )
+    .unwrap();
+    let upload = ClientMessage::Command(protocol::Command {
+        id: 7,
+        op: protocol::Op::BrowserCapture {
+            thread: ThreadId::new(3),
+            owner: Owner {
+                window: 1,
+                epoch: 1,
+            },
+            lease: Lease(9),
+            capture: Capture {
+                document: Document {
+                    tab: TabId(1),
+                    generation: 1,
+                },
+                native_generation: 1,
+                url: "https://example.test/".into(),
+                viewport: Viewport {
+                    width_css: 1.,
+                    height_css: 1.,
+                    device_scale: 1.,
+                },
+                selection: Selection::Region {
+                    x: 0.,
+                    y: 0.,
+                    width: 1.,
+                    height: 1.,
+                },
+            },
+            png: protocol::WirePng {
+                width: 1,
+                height: 1,
+                base64: "A".repeat(8 * 1024 * 1024),
+            },
+        },
+    });
+    let (queued, returned) = mpsc::channel();
+    let (finish, finished) = mpsc::channel();
+    let client = std::thread::spawn(move || {
+        attached.client.send_capture(upload).unwrap();
+        attached
+            .client
+            .send(&ClientMessage::Watch {
+                thread: ThreadId::new(3),
+                resume: None,
+            })
+            .unwrap();
+        queued.send(()).unwrap();
+        finished
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+    });
+    let nonblocking = returned.recv_timeout(std::time::Duration::from_secs(3));
+    read.send(()).unwrap();
+    server.join().unwrap();
+    finish.send(()).unwrap();
+    client.join().unwrap();
+    assert!(
+        nonblocking.is_ok(),
+        "capture and later commands must enqueue before the peer drains screenshot bytes"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
