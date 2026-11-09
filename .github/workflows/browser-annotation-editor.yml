@@ -3,16 +3,11 @@ on:
   push:
     branches: ['feat/browser-195-editor']
   workflow_dispatch:
-    inputs:
-      core_only:
-        description: Skip the GPUI collection check
-        type: boolean
-        default: false
 concurrency:
   group: browser-annotation-editor-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  core:
+  editor:
     runs-on: macos-latest
     env:
       CARGO_PROFILE_TEST_DEBUG: 0
