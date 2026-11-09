@@ -75,3 +75,59 @@ fn claude_browser_opens_the_bound_threads_tab_with_visuals_off() {
     window.command(99, Op::Stop { when: When::Now });
     assert_eq!(harness.server.join().unwrap(), 0);
 }
+
+#[test]
+fn codex_browser_opens_the_bound_threads_tab_with_visuals_off() {
+    use crate::providers::{CodexConfig, CodexSession};
+    let harness = start("codex-browser-provider");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    let _browser_window = browser_test_window(&harness, thread);
+    let host = harness.dir.join("codex-host.jsonl");
+    let call = json!({"jsonrpc":"2.0","id":8,"method":"item/tool/call","params":{
+        "threadId":"native-thread", "namespace":"ferrite","tool":"browser","callId":"browser-open",
+        "arguments":{"kind":"action","action":{
+            "kind":"open","url":"https://example.com/provider-owned"
+        }}
+    }});
+    let program = stub(&harness.dir, &format!(
+        "case \"$1\" in --version) echo 'codex-cli 0.167.0'; exit 0;; esac\n\
+         echo '{{\"id\":1,\"result\":{{}}}}'\n\
+         echo '{{\"id\":3,\"result\":{{\"data\":[]}}}}'\n\
+         echo '{{\"id\":2,\"result\":{{\"thread\":{{\"id\":\"native-thread\"}},\"model\":\"m\"}}}}'\n\
+         echo '{call}'\nexec cat > '{}'", host.display()));
+    let session = CodexSession::spawn(CodexConfig {
+        program,
+        browser: Some(harness.browser.for_thread(thread)),
+        ..Default::default()
+    })
+    .unwrap();
+    let lines = lines_until(&host, |line| line["id"] == 8);
+    let start = lines
+        .iter()
+        .find(|line| line["method"] == "thread/start")
+        .unwrap();
+    assert_eq!(
+        start["params"]["dynamicTools"][0]["tools"][0]["name"],
+        "browser"
+    );
+    assert_eq!(
+        start["params"]["config"]["tools"]["update_plan"]["enabled"],
+        true
+    );
+    let answer = lines.iter().find(|line| line["id"] == 8).unwrap();
+    assert_eq!(answer["result"]["success"], true, "{answer}");
+    let value: Value = serde_json::from_str(
+        answer["result"]["contentItems"][0]["text"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        value["state"]["tabs"][0]["url"],
+        "https://example.com/provider-owned"
+    );
+    drop(session);
+    window.command(99, Op::Stop { when: When::Now });
+    assert_eq!(harness.server.join().unwrap(), 0);
+}
