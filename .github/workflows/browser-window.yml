@@ -81,10 +81,35 @@ jobs:
         run: |
           CEF_PATH="$HOME/.local/share/cef" cargo build --profile local -p ferrite --locked --features browser-smoke
           cargo build --profile local --locked -p herdr-projects --bin ferrite-projects
+      - name: Identify native compiler
+        id: native-rust
+        shell: bash
+        run: |
+          rustc -vV > "$RUNNER_TEMP/browser-window-rust-version"
+          digest=$(python -c "import hashlib,os,pathlib; print(hashlib.sha256((pathlib.Path(os.environ['RUNNER_TEMP']) / 'browser-window-rust-version').read_bytes()).hexdigest())")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Restore exact native controller stage
+        id: native-stage
+        uses: actions/cache/restore@v4
+        with:
+          path: target/browser-controller
+          key: browser-native-stage-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-rust.outputs.digest }}-${{ hashFiles('scripts/package-agent-browser.py', 'scripts/patches/agent-browser-0.41.2-ferrite.patch') }}
       - name: Discard incomplete cached native source
+        if: steps.native-stage.outputs.cache-hit != 'true'
         run: python -c "import shutil; shutil.rmtree('target/agent-browser-build', ignore_errors=True)"
       - name: Build native controller
+        if: steps.native-stage.outputs.cache-hit != 'true'
         run: python scripts/package-agent-browser.py --destination target/browser-controller
+      - name: Verify exact native controller stage
+        run: python scripts/package-agent-browser.py --destination target/browser-controller --offline
+      # Save before the feature probe: a truthful red result must not force a
+      # rebuild of this unchanged, independently verified native binary.
+      - name: Cache verified native controller stage
+        if: steps.native-stage.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: target/browser-controller
+          key: ${{ steps.native-stage.outputs.cache-primary-key }}
       - name: Stage Windows package
         if: runner.os == 'Windows'
         shell: pwsh
