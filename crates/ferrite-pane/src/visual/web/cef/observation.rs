@@ -14,13 +14,18 @@ pub(super) const FIRST_ID: i32 = 1_000_000_000;
 const INTERVAL: Duration = Duration::from_millis(500);
 const LIMIT: usize = 8 * 1024 * 1024;
 
+const INSTALL: &str = r#"(() => {
+  if (globalThis.__ferriteWorkObservation) return;
+  const state = { touched: false };
+  Object.defineProperty(globalThis, '__ferriteWorkObservation', { value: state });
+  for (const event of ['input', 'change'])
+    addEventListener(event, () => { state.touched = true }, true);
+})()"#;
+
 const INSPECT: &str = r#"(() => {
-  let s = globalThis.__ferriteWorkObservation;
-  if (!s) {
-    s = globalThis.__ferriteWorkObservation = { touched: false };
-    for (const event of ['input', 'change'])
-      addEventListener(event, () => { s.touched = true }, true);
-  }
+  const s = globalThis.__ferriteWorkObservation;
+  // A missed document-start installation cannot certify existing work clean.
+  if (!s) return { dirty: false, uncertain: true };
   let dirty = s.touched;
   for (const node of document.querySelectorAll('input,textarea,select')) {
     if (node instanceof HTMLInputElement) {
@@ -96,7 +101,7 @@ impl Observation {
             pending: None,
             last: Instant::now() - INTERVAL,
         };
-        observation.send(browser, 0, Step::Install, "Page.addScriptToEvaluateOnNewDocument", json!({ "source": INSPECT, "worldName": "ferrite-work-observation", "runImmediately": true }));
+        observation.send(browser, 0, Step::Install, "Page.addScriptToEvaluateOnNewDocument", json!({ "source": INSTALL, "worldName": "ferrite-work-observation", "runImmediately": true }));
         Some(observation)
     }
 
