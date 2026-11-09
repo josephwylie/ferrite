@@ -153,6 +153,9 @@ pub fn launch() {
     let args: Vec<String> = std::env::args().collect();
     let browser_smoke = cfg!(feature = "browser-smoke")
         && args.iter().any(|arg| arg == "--browser-window-smoke");
+    if browser_smoke {
+        ferrite_core::log!("browser window smoke: launch pid {}", std::process::id());
+    }
     let load = args.iter().any(|arg| arg == "--load");
     let demo = load || args.iter().any(|arg| arg == "--demo");
     // One Ferrite updates itself: the first window, which holds the update
@@ -220,6 +223,9 @@ pub fn launch() {
         .with_assets(icons::Assets)
         .with_http_client(http_client())
         .run(move |cx: &mut App| {
+            if browser_smoke {
+                ferrite_core::log!("browser window smoke: native application callback");
+            }
             keep_mouse_cursor_visible(cx);
             ferrite_pane::pane::init_components(cx);
             motion::init(cx);
@@ -335,6 +341,9 @@ pub fn launch() {
             // Who posts the system notifications (ADR 0017): the bundle's
             // identifier, and on Windows the AppUserModelID.
             cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite");
+            if browser_smoke {
+                ferrite_core::log!("browser window smoke: opening native window; Threads {:?}", core.threads());
+            }
             let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
             let mut cockpit_window = None;
             let window = cx
@@ -428,7 +437,10 @@ pub fn launch() {
                         })
                     },
                 )
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    ferrite_core::log!("cannot open Ferrite's native window: {error}");
+                    panic!("cannot open Ferrite's native window: {error}");
+                });
             // ⌘Q asks first while an agent works or a Decision waits — in
             // this process; a Server's agents keep running.
             let cockpit_window: WeakEntity<cockpit_window::CockpitWindow> =

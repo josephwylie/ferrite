@@ -25,6 +25,16 @@ impl CockpitView {
                 .is_ok_and(|url| url.scheme() == "http" && url.host_str() == Some("127.0.0.1")),
             "loopback fixture URL required"
         );
+        std::fs::write(
+            output.join("window-start.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "pid": std::process::id(), "scale": window.scale_factor(),
+                "stage": "production CockpitView constructed in native Window",
+            }))
+            .unwrap(),
+        )
+        .expect("retain native window startup evidence");
+        ferrite_core::log!("browser window smoke: production CockpitView constructed");
         cx.spawn(async move |cx| {
             let started = Instant::now();
             let mut opened = false;

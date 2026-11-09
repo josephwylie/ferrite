@@ -84,18 +84,22 @@ def main():
         started = time.monotonic()
         process = None
         server_log = (output/'server-process.log').open('w', encoding='utf-8')
+        flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
         server_process = subprocess.Popen([executable, 'server'], env=env, cwd=root,
-            stdout=server_log, stderr=subprocess.STDOUT)
+            stdout=server_log, stderr=subprocess.STDOUT, creationflags=flags)
         try:
             with (output/'app.log').open('w', encoding='utf-8') as log:
                 process = subprocess.Popen([executable, '--browser-window-smoke', '--import', str(history)],
-                    env=env, cwd=root, stdout=log, stderr=subprocess.STDOUT)
+                    env=env, cwd=root, stdout=log, stderr=subprocess.STDOUT, creationflags=flags)
                 try:
                     code = process.wait(timeout=90)
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
                     raise RuntimeError('Packaged window did not complete its fixture within 90s')
+            (output/'process-exit.json').write_text(json.dumps({'pid':process.pid, 'exit_code':code, 'exit_hex':hex(code & 0xffffffff), 'server_pid':server_process.pid}), encoding='utf-8')
+            if not (output/'window-result.json').exists():
+                raise RuntimeError(f'Packaged app exited before the window scenario result: exit={code} ({code & 0xffffffff:#x}); inspect app.log and startup evidence')
             result = json.loads((output/'window-result.json').read_text(encoding='utf-8'))
             if code != 0 or result.get('success') is not True:
                 raise RuntimeError(f'Packaged window failed: exit={code}, result={result}')
