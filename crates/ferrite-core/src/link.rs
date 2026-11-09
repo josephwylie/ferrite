@@ -745,6 +745,7 @@ pub trait TryClone: Sized {
 /// Server says arrives on `messages`, read by its own thread.
 pub struct Client {
     writer: Stream,
+    capture_out: Option<mpsc::SyncSender<ClientMessage>>,
     pub messages: Receiver<ServerMessage>,
 }
 
@@ -796,6 +797,7 @@ impl Client {
         Ok(Attached {
             client: Self {
                 writer: stream,
+                capture_out: None,
                 messages,
             },
             welcome,
@@ -804,12 +806,61 @@ impl Client {
     }
 
     pub fn send(&mut self, message: &ClientMessage) -> io::Result<()> {
+        if self.capture_out.is_some() {
+            return self.enqueue_capture_stream(message.clone());
+        }
         send(&mut self.writer, message)
     }
 
-    /// Capture uploads keep their place in this connection's command stream.
+    /// Start an ordered, bounded writer for large captures. Once started, all
+    /// later messages use it: no UI command waits behind a socket upload or
+    /// overtakes an earlier capture. Ownership remains this same connection's.
     pub fn send_capture(&mut self, message: ClientMessage) -> io::Result<()> {
-        self.send(&message)
+        if !matches!(
+            &message,
+            ClientMessage::Command(protocol::Command {
+                op: protocol::Op::BrowserCapture { .. },
+                ..
+            })
+        ) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "expected a retained browser capture",
+            ));
+        }
+        if self.capture_out.is_none() {
+            let mut writer = self.writer.try_clone()?;
+            let (queue, pending) = mpsc::sync_channel::<ClientMessage>(8);
+            std::thread::Builder::new()
+                .name("ferrite-capture-out".into())
+                .spawn(move || {
+                    while let Ok(message) = pending.recv() {
+                        if send(&mut writer, &message).is_err() {
+                            // Wake the normal incoming reader/detach path. That
+                            // drops outstanding replies rather than stranding a
+                            // capture lease while its window waits for an ACK.
+                            let _ = writer.shutdown();
+                            return;
+                        }
+                    }
+                })?;
+            self.capture_out = Some(queue);
+        }
+        self.enqueue_capture_stream(message)
+    }
+
+    fn enqueue_capture_stream(&self, message: ClientMessage) -> io::Result<()> {
+        self.capture_out
+            .as_ref()
+            .unwrap()
+            .try_send(message)
+            .map_err(|error| {
+                let kind = match error {
+                    mpsc::TrySendError::Full(_) => io::ErrorKind::WouldBlock,
+                    mpsc::TrySendError::Disconnected(_) => io::ErrorKind::BrokenPipe,
+                };
+                io::Error::new(kind, "the browser capture upload connection is unavailable")
+            })
     }
 }
 

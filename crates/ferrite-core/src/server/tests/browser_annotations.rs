@@ -7,9 +7,13 @@ use crate::protocol::WirePng;
 use base64::Engine as _;
 
 fn request(client: &mut Client, id: u64, op: Op) -> Result<Option<Done>, WireError> {
-    client
-        .send(&ClientMessage::Command(Command { id, op }))
-        .unwrap();
+    let capture = matches!(&op, Op::BrowserCapture { .. });
+    let message = ClientMessage::Command(Command { id, op });
+    if capture {
+        client.send_capture(message).unwrap();
+    } else {
+        client.send(&message).unwrap();
+    }
     loop {
         if let ServerMessage::Reply { id: got, ok, error } = client
             .messages

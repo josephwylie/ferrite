@@ -34,6 +34,10 @@ enum Phase {
         expected: Viewport,
         region: Option<Rect>,
     },
+    Encoding {
+        capture: Capture,
+        png: Receiver<std::io::Result<ferrite_core::protocol::WirePng>>,
+    },
     Retaining(Receiver<std::io::Result<Annotation>>),
     Loading {
         retained: Annotation,
@@ -293,15 +297,16 @@ impl CockpitView {
             else {
                 continue;
             };
-            let valid = session.guard.as_ref().is_none_or(|guard| {
-                self.browsers.threads.get(&thread).is_some_and(|browser| {
-                    browser.owner == Some(guard.owner)
-                        && browser.pages.get(&guard.document.tab).is_some_and(|page| {
-                            page.document.get() == guard.document
-                                && page.native.state().document_generation == guard.generation
-                        })
-                })
-            });
+            let valid = matches!(session.phase, Phase::Retaining(_))
+                || session.guard.as_ref().is_none_or(|guard| {
+                    self.browsers.threads.get(&thread).is_some_and(|browser| {
+                        browser.owner == Some(guard.owner)
+                            && browser.pages.get(&guard.document.tab).is_some_and(|page| {
+                                page.document.get() == guard.document
+                                    && page.native.state().document_generation == guard.generation
+                            })
+                    })
+                });
             let mut error = (!valid)
                 .then(|| "The page changed during selection. Capture it again.".to_string());
             if !matches!(session.phase, Phase::Selecting { .. } | Phase::Editing(_))
@@ -347,17 +352,15 @@ impl CockpitView {
                                     viewport: page.viewport,
                                     selection,
                                 };
-                                match ferrite_core::browser_annotations::wire_png(&page.png)
-                                    .and_then(|png| {
-                                        self.cockpit.browser_capture(
-                                            thread,
-                                            guard.owner,
-                                            guard.lease,
-                                            capture,
-                                            png,
-                                        )
+                                let (ready, png) = std::sync::mpsc::channel();
+                                match std::thread::Builder::new()
+                                    .name("ferrite-capture-encode".into())
+                                    .spawn(move || {
+                                        let _ = ready.send(
+                                            ferrite_core::browser_annotations::wire_png(&page.png),
+                                        );
                                     }) {
-                                    Ok(answer) => session.phase = Phase::Retaining(answer),
+                                    Ok(_) => session.phase = Phase::Encoding { capture, png },
                                     Err(failure) => error = Some(failure.to_string()),
                                 }
                             } else {
@@ -367,6 +370,27 @@ impl CockpitView {
                         Ok(Err(failure)) => error = Some(failure),
                         Err(TryRecvError::Disconnected) => {
                             error = Some("The capture was interrupted. Select it again.".into())
+                        }
+                        Err(TryRecvError::Empty) => {}
+                    },
+                    Phase::Encoding { capture, png } => match png.try_recv() {
+                        Ok(Ok(png)) => {
+                            let guard = session.guard.as_ref().unwrap();
+                            match self.cockpit.browser_capture(
+                                thread,
+                                guard.owner,
+                                guard.lease,
+                                capture.clone(),
+                                png,
+                            ) {
+                                Ok(answer) => session.phase = Phase::Retaining(answer),
+                                Err(failure) => error = Some(failure.to_string()),
+                            }
+                        }
+                        Ok(Err(failure)) => error = Some(failure.to_string()),
+                        Err(TryRecvError::Disconnected) => {
+                            error =
+                                Some("Capture encoding was interrupted. Select it again.".into())
                         }
                         Err(TryRecvError::Empty) => {}
                     },

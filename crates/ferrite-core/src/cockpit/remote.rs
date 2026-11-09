@@ -593,19 +593,34 @@ impl Remote {
         capture: crate::browser_annotations::Capture,
         png: crate::protocol::WirePng,
     ) -> io::Result<Receiver<io::Result<crate::browser_annotations::Annotation>>> {
-        self.ask(
-            Op::BrowserCapture {
-                thread,
-                owner,
-                lease,
-                capture,
-                png,
-            },
-            |done| match done {
-                Done::BrowserCapture { annotation } => Some(annotation),
-                _ => None,
-            },
-        )
+        let attachment = self
+            .attachment
+            .as_mut()
+            .ok_or_else(|| io::Error::from(gone(&self.detached)))?;
+        self.next_request += 1;
+        let id = self.next_request;
+        let sent = attachment
+            .client
+            .send_capture(ClientMessage::Command(Command {
+                id,
+                op: Op::BrowserCapture {
+                    thread,
+                    owner,
+                    lease,
+                    capture,
+                    png,
+                },
+            }));
+        if let Err(error) = sent {
+            self.detach(&format!("the capture upload could not be queued: {error}"));
+            return Err(error);
+        }
+        let (answer, answered) = mpsc::channel();
+        self.answer(id, answer, |done| match done {
+            Done::BrowserCapture { annotation } => Some(annotation),
+            _ => None,
+        });
+        Ok(answered)
     }
 
     pub(crate) fn browser_capture_image(
