@@ -32,12 +32,13 @@ enum Incoming {
 
 struct Connection {
     output: Output,
-    sessions: HashSet<String>,
+    sessions: HashMap<String, u64>,
     discover: bool,
 }
 
 struct Target {
     browser: Browser,
+    agent_access: Arc<super::AgentAccess>,
     // Keeping the registration alive is what keeps CEF delivering messages.
     _registration: Registration,
 }
@@ -128,7 +129,12 @@ impl Control {
         self.endpoint.clone()
     }
 
-    pub(super) fn register(&mut self, id: String, browser: Browser) {
+    pub(super) fn register(
+        &mut self,
+        id: String,
+        browser: Browser,
+        agent_access: Arc<super::AgentAccess>,
+    ) {
         let Some(host) = browser.host() else { return };
         let mut observer = Observer::new(id.clone(), self.send.clone(), self.overflow.clone());
         let Some(registration) = host.add_dev_tools_message_observer(Some(&mut observer)) else {
@@ -138,6 +144,7 @@ impl Control {
             id.clone(),
             Target {
                 browser,
+                agent_access,
                 _registration: registration,
             },
         );
@@ -162,7 +169,7 @@ impl Control {
         for id in removed {
             self.targets.remove(&id);
             for connection in self.connections.values_mut() {
-                if connection.sessions.remove(&id) {
+                if connection.sessions.remove(&id).is_some() {
                     emit(
                         &connection.output,
                         json!({"method":"Target.detachedFromTarget","params":{"sessionId":id,"targetId":id}}),
@@ -240,7 +247,7 @@ impl Control {
                         id,
                         Connection {
                             output,
-                            sessions: HashSet::new(),
+                            sessions: HashMap::new(),
                             discover: false,
                         },
                     );
@@ -267,7 +274,7 @@ impl Control {
                     } else {
                         value["sessionId"] = target.clone().into();
                         for connection in self.connections.values() {
-                            if connection.sessions.contains(&target) {
+                            if connection.sessions.contains_key(&target) {
                                 emit(&connection.output, value.clone());
                             }
                         }
@@ -320,10 +327,19 @@ impl Control {
             .and_then(Value::as_str)
             .map(str::to_owned);
         if let Some(session) = session {
-            if !self.connections[&peer].sessions.contains(&session)
+            if !self.connections[&peer].sessions.contains_key(&session)
                 || !self.targets.contains_key(&session)
             {
                 self.error(peer, id, "Unknown embedded target session");
+                return;
+            }
+            let access = &self.targets[&session].agent_access;
+            let stale_attachment =
+                self.connections[&peer].sessions[&session] != access.epoch.load(Ordering::SeqCst);
+            if (access.paused.load(Ordering::SeqCst) || stale_attachment)
+                && !read_only_while_paused(&method)
+            {
+                self.output(peer, json!({"id":id,"error":{"code":-32000,"message":"Operator interaction invalidated this agent attachment. Wait for it to settle, reconnect, and inspect fresh page state before continuing.","data":{"completion":"not_dispatched","reason":"manual_interaction"}}}));
                 return;
             }
             // Never forward browser-wide/target-management commands. CEF's page
@@ -409,11 +425,13 @@ impl Control {
                     self.error(peer, id, "Unknown embedded target or non-flat session");
                     return;
                 }
-                self.connections
-                    .get_mut(&peer)
-                    .unwrap()
-                    .sessions
-                    .insert(target.into());
+                self.connections.get_mut(&peer).unwrap().sessions.insert(
+                    target.into(),
+                    self.targets[target]
+                        .agent_access
+                        .epoch
+                        .load(Ordering::SeqCst),
+                );
                 json!({"sessionId":target})
             }
             "Target.detachFromTarget" => {
@@ -435,15 +453,25 @@ impl Control {
                 json!({"targetInfo":self.info(target)})
             }
             "Target.activateTarget" => {
-                let Some(host) = self
-                    .targets
-                    .get(params["targetId"].as_str().unwrap_or(""))
-                    .and_then(|target| target.browser.host())
+                let Some(target) = self.targets.get(params["targetId"].as_str().unwrap_or(""))
                 else {
                     self.error(peer, id, "Unknown embedded target");
                     return;
                 };
-                host.set_focus(1);
+                // Selecting a controller session for a read-only capture must
+                // not steal the operator's native keyboard focus.
+                let attached_epoch = self.connections[&peer]
+                    .sessions
+                    .get(params["targetId"].as_str().unwrap_or(""));
+                if !target.agent_access.paused.load(Ordering::SeqCst)
+                    && attached_epoch.is_none_or(|epoch| {
+                        *epoch == target.agent_access.epoch.load(Ordering::SeqCst)
+                    })
+                {
+                    if let Some(host) = target.browser.host() {
+                        host.set_focus(1);
+                    }
+                }
                 json!({})
             }
             "Browser.getVersion" => {
@@ -460,6 +488,52 @@ impl Control {
         };
         self.output(peer, json!({"id":id,"result":result}));
     }
+}
+
+/// Conservatively deny anything that can execute page JS or change the page.
+/// Observations and capture setup remain usable while the operator owns input.
+fn read_only_while_paused(method: &str) -> bool {
+    matches!(
+        method,
+        "Page.captureScreenshot"
+            | "Page.getLayoutMetrics"
+            | "Page.getFrameTree"
+            | "Page.enable"
+            | "Page.disable"
+            | "Page.setLifecycleEventsEnabled"
+            | "Runtime.enable"
+            | "Runtime.disable"
+            | "DOM.enable"
+            | "DOM.disable"
+            | "DOM.getDocument"
+            | "DOM.describeNode"
+            | "DOM.getBoxModel"
+            | "DOM.getContentQuads"
+            | "DOM.getNodeForLocation"
+            | "DOM.getOuterHTML"
+            | "DOM.querySelector"
+            | "DOM.querySelectorAll"
+            | "DOM.resolveNode"
+            | "DOM.requestNode"
+            | "DOM.getAttributes"
+            | "DOMSnapshot.captureSnapshot"
+            | "Accessibility.enable"
+            | "Accessibility.disable"
+            | "Accessibility.getFullAXTree"
+            | "Accessibility.getPartialAXTree"
+            | "Accessibility.getAXNodeAndAncestors"
+            | "Accessibility.getChildAXNodes"
+            | "Accessibility.getRootAXNode"
+            | "Accessibility.queryAXTree"
+            | "CSS.getComputedStyleForNode"
+            | "CSS.getMatchedStylesForNode"
+            | "Network.enable"
+            | "Network.disable"
+            | "Network.getResponseBody"
+            | "Log.enable"
+            | "Log.disable"
+            | "Performance.getMetrics"
+    )
 }
 
 impl Drop for Control {
