@@ -14,6 +14,8 @@ import shlex
 import sys
 import uuid
 import hashlib
+import urllib.request
+import urllib.parse
 import platform
 from datetime import datetime, timezone
 import time
@@ -74,9 +76,12 @@ def main():
     parser.add_argument('executable', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--provider', choices=['claude'])
+    parser.add_argument('--work-orders', action='store_true', help='complete one real work order through the provider')
     parser.add_argument('--compare-executable', type=Path, help='retain PE header diagnostics for a matching naked Windows build')
     parser.add_argument('--startup-only', action='store_true', help='diagnose native startup only; never browser acceptance')
     args = parser.parse_args()
+    if args.work_orders and args.provider != 'claude':
+        parser.error('--work-orders currently requires --provider claude')
     args.output.mkdir(parents=True, exist_ok=True)
     output = args.output.resolve()
     # Reusing an artifact directory must not reuse a previous run's completion
@@ -84,6 +89,8 @@ def main():
     for name in ('window-start.json', 'input-ready.json', 'window-result.json', 'provider-result.json',
                  'provider-result.tmp', 'provider-trace.json', 'provider-definitions.json',
                  'provider-host.jsonl', 'startup-comparison.json', 'oracle.json',
+                 'work-order-oracle.json', 'work-order-oracle-at-exit.json', 'work-order-trace.json',
+                 'window-work-order.png', 'window-work-order-before.png',
                  'cleanup-error.txt', 'oracle-at-exit.json', 'window-before.png', 'window-after.png',
                  'window-provider.png', 'window-current.png'):
         (output/name).unlink(missing_ok=True)
@@ -104,7 +111,7 @@ def main():
         'executable':str(args.executable.resolve()), 'sha256':executable_digest,
         'application_components':components, 'native_build':native_build,
         'platform':platform.platform(), 'architecture':platform.machine(),
-        'provider':args.provider, 'diagnostic_only':args.startup_only,
+        'provider':args.provider, 'work_orders':args.work_orders, 'diagnostic_only':args.startup_only,
         'profile_mode':'isolated temporary production profile',
     }, indent=2), encoding='utf-8')
     if os.name == 'nt':
@@ -156,6 +163,8 @@ def main():
             env.update(PATH=str(binaries)+os.pathsep+env.get('PATH',''),
                 FERRITE_BROWSER_WINDOW_PROVIDER=args.provider,
                 FERRITE_BROWSER_WINDOW_PROBE=uuid.uuid4().hex)
+        if args.work_orders:
+            env['FERRITE_BROWSER_WINDOW_SCENARIO'] = 'work-orders'
         # An imported, idle Thread exercises the real Server without calling a model.
         history = root/'thread.jsonl'
         history.write_text(json.dumps({'type':'user','sessionId':'browser-window-fixture',
@@ -173,7 +182,21 @@ def main():
         server_process = subprocess.Popen([executable, 'server'], env=env, cwd=root,
             stdout=server_log, stderr=subprocess.STDOUT, creationflags=flags)
         descendants = []
+        work_fixture = None
         try:
+            if args.work_orders:
+                ready = root/'fixture-ready.json'
+                fixture_script = Path(__file__).parent/'bench'/'browser-controllers'/'fixture-server.mjs'
+                fixture_env = {**env, 'FIXTURE_READY_FILE':str(ready)}
+                work_fixture = subprocess.Popen(['node',str(fixture_script.resolve())], env=fixture_env,
+                    stdout=server_log, stderr=subprocess.STDOUT, creationflags=flags)
+                deadline = time.monotonic()+10
+                while not ready.exists():
+                    if work_fixture.poll() is not None or time.monotonic()>deadline:
+                        raise RuntimeError('Standalone work-order fixture did not become ready')
+                    time.sleep(0.05)
+                url = json.loads(ready.read_text())['url']
+                env['FERRITE_BROWSER_WINDOW_URL'] = url
             with (output/'app.log').open('w', encoding='utf-8') as log:
                 process = subprocess.Popen([executable, '--browser-window-smoke', '--import', str(history)],
                     env=env, cwd=root, stdout=log, stderr=subprocess.STDOUT, creationflags=flags,
@@ -192,7 +215,7 @@ def main():
                     }, indent=2), encoding='utf-8')
                     return
                 try:
-                    code = process.wait(timeout=90)
+                    code = process.wait(timeout=210 if args.work_orders else 90)
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
@@ -219,11 +242,26 @@ def main():
                     raise RuntimeError('The intended isolated provider peer did not produce the response')
                 if peer_result.get('success') is not True:
                     raise RuntimeError(f'Actual provider browser Observe failed: {peer_result}')
-            expected_clicks = 2 if args.provider else 1
+            if args.work_orders:
+                task = peer_result['task_name']
+                with urllib.request.urlopen(url+'oracle?name='+urllib.parse.quote(task), timeout=5) as response:
+                    persisted = json.load(response)
+                with urllib.request.urlopen(url+'audit', timeout=5) as response:
+                    audit = json.load(response)
+                expected = {'name':task,'email':'owner@example.test','description':'Reviewed and approved.',
+                    'team':'Engineering','priority':'Normal','budget':'3200','customName':'Tracking code',
+                    'customValue':'final-0','notify':False,'approved':True}
+                (output/'work-order-oracle.json').write_text(json.dumps({'record':persisted,'audit':audit},indent=2),encoding='utf-8')
+                for key,value in expected.items():
+                    if persisted.get(key) != value:
+                        raise RuntimeError(f'Independent work-order oracle mismatch {key}: {persisted}')
+                if len([entry for entry in audit if entry['name']==task]) != 2:
+                    raise RuntimeError('Independent audit did not record exactly two saves')
+            expected_clicks = 0 if args.work_orders else (2 if args.provider else 1)
             if len(clicked) != expected_clicks:
                 raise RuntimeError(f'Independent fixture oracle saw {len(clicked)} clicks, expected {expected_clicks}')
-            screenshots = ['window-before.png', 'window-after.png']
-            if args.provider:
+            screenshots = ['window-work-order.png'] if args.work_orders else ['window-before.png', 'window-after.png']
+            if args.provider and not args.work_orders:
                 screenshots.append('window-provider.png')
             for name in screenshots:
                 if (output/name).stat().st_size < 100:
@@ -274,6 +312,16 @@ def main():
             import shutil
             if (root/'logs').exists():
                 shutil.copytree(root/'logs', output/'diagnostics', dirs_exist_ok=True)
+            if work_fixture is not None:
+                try:
+                    with urllib.request.urlopen(url+'api/records', timeout=5) as response:
+                        records = json.load(response)
+                    with urllib.request.urlopen(url+'audit', timeout=5) as response:
+                        audit = json.load(response)
+                    (output/'work-order-oracle-at-exit.json').write_text(json.dumps({'records':records,'audit':audit},indent=2),encoding='utf-8')
+                finally:
+                    work_fixture.terminate()
+                    work_fixture.wait(timeout=10)
             server.shutdown()
             # Retain independent page activation even when rendering/input or
             # provider setup fails before the success-only oracle is written.

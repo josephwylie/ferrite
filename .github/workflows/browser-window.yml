@@ -62,6 +62,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Install macOS build tools
         if: runner.os == 'macOS'
         run: brew install cmake ninja
@@ -132,6 +135,9 @@ jobs:
       - name: Observe displayed fixture through actual Claude adapter
         run: |
           python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider claude --output target/browser-window-evidence/claude
+      - name: Complete one work order through the actual Claude adapter
+        run: |
+          python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider claude --work-orders --output target/browser-window-evidence/work-order-claude
       - name: Diagnose Windows naked native startup after a packaged failure
         if: failure() && runner.os == 'Windows'
         run: python scripts/probe-browser-window.py target/debug/ferrite.exe --startup-only --output target/browser-window-evidence/naked-startup-diagnostic

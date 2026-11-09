@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import time
+import importlib.util
 
 provider = sys.argv[sys.argv.index('--provider') + 1]
 if '--version' in sys.argv:
@@ -13,6 +14,8 @@ if '--version' in sys.argv:
 
 output = Path(os.environ['FERRITE_BROWSER_WINDOW_OUTPUT'])
 probe = os.environ['FERRITE_BROWSER_WINDOW_PROBE']
+work_orders = os.environ.get('FERRITE_BROWSER_WINDOW_SCENARIO') == 'work-orders'
+task_name = 'order-'+provider+'-'+probe[:8]+'-0'
 
 
 def emit(value):
@@ -35,12 +38,12 @@ def record(answer):
     # Only an actual tool response can produce this evidence. Discovery/version
     # processes cannot claim the Session reached the browser boundary.
     content = answer.get('content', []) if provider == 'claude' else answer.get('contentItems', [])
-    observed_fixture = any('Window fixture' in item.get('text', '') for item in content)
+    observed_fixture = any(('Work orders' if work_orders else 'Window fixture') in item.get('text', '') for item in content)
     result = {'probe':probe,'provider':provider,'peer_pid':os.getpid(),
               'observed_fixture':observed_fixture,
               'success':answer.get('isError') is False if provider == 'claude'
                         else answer.get('success') is True,
-              'answer':answer}
+              'answer':answer, 'task_name':task_name if work_orders else None}
     result['success'] = result['success'] and observed_fixture
     temporary = output/'provider-result.tmp'
     temporary.write_text(json.dumps(result, indent=2), encoding='utf-8')
@@ -50,6 +53,11 @@ def record(answer):
 started = False
 trace = []
 receipt_polls = 0
+if work_orders:
+    spec = importlib.util.spec_from_file_location('work_orders', Path(__file__).with_name('browser-window-work-orders.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    scenario = module.WorkOrder(task_name, call, record, output)
 for line in sys.stdin:
     try:
         frame = json.loads(line)
@@ -95,9 +103,12 @@ for line in sys.stdin:
         if not {'browser','update_plan','wrap_up'} <= tools.keys() or not tools['browser'].get('inputSchema'):
             record({'isError':True, 'success':False, 'error':'Browser capability was not advertised beside plan/wrap_up'})
         else:
-            call('browser-state', {'kind':'state'})
+            scenario.begin() if work_orders else call('browser-state', {'kind':'state'})
+    if work_orders and isinstance(name,str) and name.startswith('work-') and answer is not None:
+        scenario.receive(name, answer)
+        continue
     if name in ('browser-state', 'browser-observe', 'browser-click', 'browser-after') and answer:
-        trace.append({'name':name, 'answer':answer})
+        trace.append({'name':name, 'answer':answer, 'task_name':task_name if work_orders else None})
         try:
             if (provider == 'claude' and answer.get('isError') is not False) or (provider != 'claude' and answer.get('success') is not True):
                 raise ValueError('Actual provider tool returned an error')

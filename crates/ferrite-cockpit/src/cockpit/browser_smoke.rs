@@ -41,6 +41,7 @@ impl CockpitView {
             let mut clicked = false;
             let mut provider_started = false;
             let mut ready_document = None;
+            let work_orders = std::env::var("FERRITE_BROWSER_WINDOW_SCENARIO").ok().as_deref() == Some("work-orders");
             let provider = std::env::var_os("FERRITE_BROWSER_WINDOW_PROVIDER").is_some();
             let mut frames = 0u64;
             let mut last_error = String::new();
@@ -58,6 +59,10 @@ impl CockpitView {
                         // Preview changed. Decode the actual native Window again.
                         window.draw(cx);
                         let image = window.render_to_image().map_err(|error| error.to_string())?;
+                        if work_orders {
+                            image.save(output.join("window-work-order.png")).map_err(|error| error.to_string())?;
+                            return Ok(true);
+                        }
                         let blue = image.pixels().filter(|pixel| pixel.0[..3] == [29, 97, 219]).count();
                         if blue < 2000 { return Ok(false); }
                         image.save(output.join("window-provider.png")).map_err(|error| error.to_string())?;
@@ -83,6 +88,25 @@ impl CockpitView {
                     frames += 1;
                     if frames == 1 || frames % 20 == 0 {
                         image.save(output.join("window-current.png")).map_err(|error| error.to_string())?;
+                    }
+                    if work_orders {
+                        let document = view.update(cx, |view, _| {
+                            let thread = view.cockpit.threads()[0];
+                            let state = view.cockpit.browser_attach(thread).map_err(|error| error.to_string())?;
+                            Ok::<_, String>(state.tabs.iter().find(|tab| Some(tab.id) == state.active)
+                                .filter(|tab| tab.live && tab.visible && !tab.loading && tab.error.is_none() && tab.url == url)
+                                .map(|tab| tab.document()))
+                        })?;
+                        let stable = document.is_some() && ready_document == document;
+                        ready_document = document;
+                        if !stable { return Ok(false); }
+                        image.save(output.join("window-work-order-before.png")).map_err(|error| error.to_string())?;
+                        view.update(cx, |view, _| {
+                            let thread = view.cockpit.threads()[0];
+                            view.cockpit.send(thread, "Complete the prescribed work order through browser tools".into());
+                        });
+                        provider_started = true;
+                        return Ok(false);
                     }
                     let color = if clicked { [23, 173, 91] } else { [213, 37, 59] };
                     let mut count = 0u64;
@@ -145,7 +169,7 @@ impl CockpitView {
                     Err(error) => break Err(error.to_string()),
                     _ => {}
                 }
-                if started.elapsed() > Duration::from_secs(60) {
+                if started.elapsed() > Duration::from_secs(if work_orders { 180 } else { 60 }) {
                     break Err(format!("window fixture timed out: opened={opened}, clicked={clicked}, frames={frames}, last error={last_error}"));
                 }
             };
@@ -156,9 +180,9 @@ impl CockpitView {
                 "success": error.is_none(), "error": error,
                 "normal_native_window": true, "preview_operator_route": opened,
                 "window_pointer_input": clicked, "rendered_frames": frames,
-                "provider_requested": provider, "provider_started": provider_started,
+                "provider_requested": provider, "work_orders": work_orders, "provider_started": provider_started,
                 "elapsed_ms": started.elapsed().as_millis(),
-                "scope": "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested",
+                "scope": if work_orders { "one prescribed work order through actual provider and owning Preview; annotations are not tested" } else { "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested" },
             });
             let _ = std::fs::write(output.join("window-result.json"), serde_json::to_vec_pretty(&result).unwrap());
             let _ = cx.update(|cx| cx.quit());

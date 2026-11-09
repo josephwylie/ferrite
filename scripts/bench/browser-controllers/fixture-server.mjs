@@ -1,7 +1,7 @@
 // One fixture implementation for historical controller measurements and the
 // packaged Ferrite acceptance runner. Oracle reads never mutate application data.
 import {createServer} from 'node:http';
-import {readFileSync} from 'node:fs';
+import {readFileSync, writeFileSync} from 'node:fs';
 import {pathToFileURL} from 'node:url';
 import {resolve} from 'node:path';
 
@@ -54,6 +54,8 @@ export function createWorkOrderServer({records: initialRecords = []} = {}) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const server = createWorkOrderServer();
   server.listen(Number(process.env.FIXTURE_PORT || 0), '127.0.0.1', () => {
-    console.log(JSON.stringify({url: `http://127.0.0.1:${server.address().port}`}));
+    const ready = JSON.stringify({url: `http://127.0.0.1:${server.address().port}/`});
+    if (process.env.FIXTURE_READY_FILE) writeFileSync(process.env.FIXTURE_READY_FILE, ready);
+    console.log(ready);
   });
 }
