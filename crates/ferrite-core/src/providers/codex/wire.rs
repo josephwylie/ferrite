@@ -2202,6 +2202,51 @@ mod tests {
     }
 
     #[test]
+    fn browser_annotation_native_image_reaches_codex() {
+        use crate::browser::{Document, TabId};
+        use crate::browser_annotations::{self, Capture, Selection, Viewport};
+        let root =
+            std::env::temp_dir().join(format!("ferrite-codex-browser-{}", std::process::id()));
+        let png = include_bytes!("../../../tests/fixtures/browser-original.png");
+        let annotation = browser_annotations::retain(
+            &root,
+            Capture {
+                document: Document {
+                    tab: TabId(8),
+                    generation: 2,
+                },
+                native_generation: 5,
+                url: "https://example.test/captured".into(),
+                viewport: Viewport {
+                    width_css: 1.0,
+                    height_css: 1.0,
+                    device_scale: 1.0,
+                },
+                selection: Selection::Region {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+            },
+            png,
+            "Align this field".into(),
+            vec![],
+        )
+        .unwrap();
+        let text = browser_annotations::compose("Fix it", &[], &[annotation.clone()]);
+        assert_eq!(
+            input_items(&text, &[], None),
+            [
+                serde_json::json!({"type": "localImage", "path": annotation.original()}),
+                serde_json::json!({"type": "text", "text": text}),
+            ]
+        );
+        assert_eq!(std::fs::read(annotation.original()).unwrap(), png);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn dropped_images_and_other_files_use_native_input_items() {
         let dir = std::env::temp_dir().join(format!("ferrite-codex-files-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
