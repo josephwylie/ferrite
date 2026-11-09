@@ -20,6 +20,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p ferrite-core --locked --no-run
       - name: Verify Codex visual transport ordering
         run: |
           for attempt in $(seq 1 50); do
