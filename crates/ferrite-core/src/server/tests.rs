@@ -4962,7 +4962,7 @@ fn browser_requests_use_an_attached_thread_window_without_a_synthetic_client() {
         .recv_timeout(Duration::from_secs(5))
         .unwrap()
         .is_err());
-    let Attached { client, .. } = Client::attach(
+    let Attached { mut client, .. } = Client::attach(
         &harness.address,
         ClientMessage::Hello {
             generation: 1,
