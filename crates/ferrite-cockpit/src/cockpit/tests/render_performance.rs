@@ -1994,12 +1994,12 @@ fn the_activity_view_at_rest_asks_for_no_frames(cx: &mut TestAppContext) {
     }
     tick(cx);
     view.update(cx, |view, cx| {
-        view.show_nav_view(nav::NavView::Activity, None, cx)
+        view.show_nav_view(nav::NavView::Inbox, None, cx)
     });
     tick(cx);
     let listed = view.read_with(cx, |view, _| {
         let activity = view.activity(&view.nav_state());
-        activity.priority.len() + activity.days.iter().map(|(_, rows)| rows.len()).sum::<usize>()
+        activity.inbox.len() + activity.working.len()
     });
     // The untouched first Thread was opened today too.
     assert_eq!(listed, 3, "the premise: every Thread is listed");

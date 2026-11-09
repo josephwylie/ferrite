@@ -219,96 +219,6 @@ fn a_thread_keeps_its_row_through_working_and_done(cx: &mut TestAppContext) {
     assert_eq!(order(&view, cx), before, "nor does finishing");
 }
 
-/// What the bell's `⋯` shows is a saved setting: a restart keeps it.
-#[gpui::test]
-fn the_bells_show_choices_are_saved(cx: &mut TestAppContext) {
-    use crate::cockpit::context_menu::ActivityVerb;
-    let (core, _fake) = cockpit("bell-saved", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    let dir = scratch("bell-saved-settings");
-    std::fs::create_dir_all(&dir).unwrap();
-    view.update(cx, |view, _| view.prefs.dir = dir.clone());
-    view.update(cx, |view, cx| {
-        view.run_activity_verb(ActivityVerb::ShowPriority, cx);
-        view.run_activity_verb(ActivityVerb::ShowPinned, cx);
-    });
-    let saved = ferrite_core::settings::Settings::load(&dir).unwrap().activity_shows;
-    assert!(!saved.priority && saved.pinned, "{saved:?}");
-}
-
-/// The bell's `⋯` stands at its first heading's right and opens Codex's menu:
-/// `Show` its sections, `Mark all as read` and `Archive chats`, the last two
-/// greyed while there is nothing to mark or park; hiding `Priority` keeps
-/// the `⋯` where it was.
-#[gpui::test]
-fn the_bells_menu_shows_sections_and_marks_read(cx: &mut TestAppContext) {
-    use crate::cockpit::context_menu::ActivityVerb;
-    let (core, fake) = cockpit("bell-menu", 3);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    tick(cx);
-    view.update(cx, |view, cx| view.show_nav_view(nav::NavView::Activity, None, cx));
-    tick(cx);
-    let more = cx.debug_bounds("nav-activity-more").expect("the heading's ⋯");
-    cx.simulate_click(more.center(), gpui::Modifiers::none());
-    tick(cx);
-    let rows = view.read_with(cx, |view, _| {
-        view.context_menu
-            .as_ref()
-            .map(|menu| {
-                menu.rows
-                    .iter()
-                    .flatten()
-                    .map(|(item, _)| (item.label.to_string(), item.checked, item.disabled))
-                    .collect::<Vec<_>>()
-            })
-            .expect("the menu")
-    });
-    assert_eq!(
-        rows,
-        [
-            ("Show".to_string(), false, true),
-            ("Priority section".into(), true, false),
-            ("Pinned".into(), false, false),
-            ("Mark all as read".into(), false, true),
-            ("Archive chats".into(), false, false),
-        ],
-        "nothing unseen, but every Thread is listed under Today"
-    );
-    view.update(cx, |view, cx| view.run_activity_verb(ActivityVerb::ShowPriority, cx));
-    tick(cx);
-    assert!(cx.debug_bounds("nav-activity-priority").is_none(), "Priority hidden");
-    assert!(cx.debug_bounds("nav-activity-more").is_some(), "the ⋯ stays");
-
-    // A finish unseen on a Thread nobody looks at enables the bulk read.
-    view.update(cx, |view, cx| view.run_activity_verb(ActivityVerb::ShowPriority, cx));
-    let unfocused = (0..3)
-        .rev()
-        .find(|at| {
-            view.read_with(cx, |view, _| {
-                view.panes[0].thread() != Some(view.cockpit.threads()[*at])
-            })
-        })
-        .unwrap();
-    fake.streams.borrow()[unfocused]
-        .send(SessionEvent::TextDelta { text: "done".into() })
-        .unwrap();
-    fake.streams.borrow()[unfocused]
-        .send(SessionEvent::TurnEnded {
-            outcome: ferrite_core::TurnOutcome::Completed,
-            cost_usd: None,
-        })
-        .unwrap();
-    tick(cx);
-    let unseen = view.read_with(cx, |view, _| {
-        view.activity_more_rows()
-            .iter()
-            .flatten()
-            .any(|(item, _)| item.label == "Mark all as read" && !item.disabled)
-    });
-    assert!(unseen, "Mark all as read is live while a finish is unseen");
-}
-
 /// The bell wears a dot while something asks for the operator or has
 /// finished unseen, and none while the tree is quiet.
 #[gpui::test]
@@ -318,8 +228,14 @@ fn the_bell_wears_a_dot_for_a_request_and_for_an_unseen_finish(cx: &mut TestAppC
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    assert!(cx.debug_bounds("nav-activity").is_some(), "the premise: the bell");
-    assert!(cx.debug_bounds("nav-activity-dot").is_none(), "a quiet tree");
+    assert!(
+        cx.debug_bounds("nav-activity").is_some(),
+        "the premise: the bell"
+    );
+    assert!(
+        cx.debug_bounds("nav-activity-dot").is_none(),
+        "a quiet tree"
+    );
 
     // A finish on a Thread the operator is not looking at.
     let unfocused = (0..3)
@@ -327,7 +243,9 @@ fn the_bell_wears_a_dot_for_a_request_and_for_an_unseen_finish(cx: &mut TestAppC
         .find(|at| view.read_with(cx, |view, _| view.panes[0].thread() != Some(threads[*at])))
         .unwrap();
     fake.streams.borrow()[unfocused]
-        .send(SessionEvent::TextDelta { text: "done".into() })
+        .send(SessionEvent::TextDelta {
+            text: "done".into(),
+        })
         .unwrap();
     fake.streams.borrow()[unfocused]
         .send(SessionEvent::TurnEnded {
@@ -340,118 +258,26 @@ fn the_bell_wears_a_dot_for_a_request_and_for_an_unseen_finish(cx: &mut TestAppC
         view.read_with(cx, |view, _| view.nav_state().alert()),
         Some(nav::Alert::Unread)
     );
-    assert!(cx.debug_bounds("nav-activity-dot").is_some(), "an unseen finish");
+    assert!(
+        cx.debug_bounds("nav-activity-dot").is_some(),
+        "an unseen finish"
+    );
 
     // A request outranks it.
-    fake.streams.borrow()[unfocused].send(decision("perm_bell")).unwrap();
+    fake.streams.borrow()[unfocused]
+        .send(decision("perm_bell"))
+        .unwrap();
     tick(cx);
     assert_eq!(
         view.read_with(cx, |view, _| view.nav_state().alert()),
         Some(nav::Alert::NeedsYou)
     );
-    assert!(cx.debug_bounds("nav-activity-dot").is_some(), "a request waits");
-}
-
-/// The Activity view (the bell, Codex's): `Priority` holds what needs the
-/// operator, oldest request first, then a finish not yet seen, then what
-/// works, in creation order; every other Thread is under its day. The bell shows it in the tree's
-/// place, filled, and again gives the tree back; a row says its title and
-/// its mark, and a press lands on its Thread. The tree carries no status
-/// sections of its own.
-#[gpui::test]
-fn the_activity_view_lists_priority_then_today(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("activity-view", 5);
-    let threads = core.threads();
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    tick(cx);
-    assert!(activity(&view, cx).0.is_empty(), "nothing in flight");
-    let send = |index: usize, event: SessionEvent| {
-        fake.streams.borrow()[index].send(event).unwrap();
-    };
-    let working = || SessionEvent::TextDelta {
-        text: "thinking".into(),
-    };
-    send(4, working());
-    send(1, working());
-    tick(cx);
-    assert_eq!(activity(&view, cx).0, vec![threads[1], threads[4]]);
-    send(2, working());
-    tick(cx);
-    send(
-        2,
-        SessionEvent::TurnEnded {
-            outcome: ferrite_core::TurnOutcome::Completed,
-            cost_usd: None,
-        },
-    );
-    tick(cx);
-    send(3, decision("perm-a"));
-    tick(cx);
-    send(1, decision("perm-b"));
-    tick(cx);
-    let (priority, today) = activity(&view, cx);
-    assert_eq!(
-        priority,
-        vec![threads[3], threads[1], threads[2], threads[4]],
-        "the requests, then the finish not yet seen, then the work"
-    );
-    assert!(!today.contains(&threads[2]), "an unseen finish waits in Priority");
-    assert!(today.iter().all(|thread| !priority.contains(thread)));
-
-    // The tree says no section of status; the bell swaps it for the view.
-    assert!(cx.debug_bounds("nav-activity-list").is_none());
-    assert!(cx.debug_bounds("nav-projects-heading").is_some());
-    let bell = cx.debug_bounds("nav-activity").expect("the bell");
-    cx.simulate_click(bell.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert_eq!(
-        view.read_with(cx, |view, _| view.nav_view),
-        nav::NavView::Activity
-    );
     assert!(
-        cx.debug_bounds("nav-projects-heading").is_none(),
-        "in the tree's place"
-    );
-    let at = |cx: &mut gpui::VisualTestContext, key: String| {
-        cx.debug_bounds(key.clone().leak())
-            .unwrap_or_else(|| panic!("{key} drawn"))
-    };
-    let (head, later) = (
-        at(cx, "nav-activity-priority".into()),
-        at(cx, "nav-activity-today".into()),
-    );
-    assert!(head.bottom() <= later.top(), "Priority over Today");
-    let running = at(cx, format!("nav-activity-row-{}", threads[4].get()));
-    let mark = at(cx, format!("nav-activity-state-{}", threads[4].get()));
-    assert!(mark.left() > running.center().x, "its spinner at the right");
-    assert!(
-        running.size.height > px(ferrite_ui::theme::NAV_ROW_H),
-        "title, then the Project"
-    );
-
-    // A press lands on the Thread.
-    let done = at(cx, format!("nav-activity-row-{}", threads[2].get()));
-    cx.simulate_click(done.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert_eq!(
-        view.read_with(cx, |view, _| view.cockpit.roster().focused_thread()),
-        Some(threads[2])
-    );
-
-    // The bell again: the tree.
-    let bell = cx.debug_bounds("nav-activity").expect("the bell");
-    cx.simulate_click(bell.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert_eq!(
-        view.read_with(cx, |view, _| view.nav_view),
-        nav::NavView::Tree
+        cx.debug_bounds("nav-activity-dot").is_some(),
+        "a request waits"
     );
 }
 
-/// C8 under `sort: recent`: the tree never re-sorts under the pointer.
-/// While the pointer is inside the nav the rows hold the order they
-/// were drawn in; leaving re-ranks them.
 #[gpui::test]
 fn sort_recent_holds_still_under_the_pointer(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("nav-hold-order", 3);
@@ -1691,27 +1517,4 @@ fn search_sits_in_the_nav_head(cx: &mut TestAppContext) {
     cx.simulate_click(search.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(view.read_with(cx, |view, _| view.floats.palette.is_some()));
-}
-
-/// A Thread whose time is not known (a legacy log with no dated stamp, or
-/// one ending in Ferrite's own marks) is listed in no section: not under
-/// `Today`, not under an `Older`, and being idle never puts it in `Priority`.
-#[gpui::test]
-fn a_thread_of_no_known_time_is_not_listed(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("bell-unknown", 2);
-    let threads = core.threads();
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    tick(cx);
-    let unknown = threads[1];
-    view.update(cx, |view, _| view.facts.fixture_forget_last_used(unknown));
-    let (labels, days) = view.read_with(cx, |view, _| {
-        let activity = view.activity(&view.nav_state());
-        let labels: Vec<String> = activity.days.iter().map(|(label, _)| label.to_string()).collect();
-        (labels, activity.days.iter().flat_map(|(_, rows)| rows.iter().map(|entry| entry.row.thread)).collect::<Vec<_>>())
-    });
-    assert!(!days.contains(&unknown), "{labels:?}");
-    assert!(!labels.iter().any(|label| label == "Older"), "{labels:?}");
-    let (priority, _) = activity(&view, cx);
-    assert!(!priority.contains(&unknown), "an idle Thread asks for nothing");
 }

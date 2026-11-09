@@ -730,3 +730,277 @@ fn contract_request_notice_opens_its_owning_child(cx: &mut TestAppContext) {
         assert!(!view.needs_you_shown());
     });
 }
+
+#[gpui::test]
+fn inbox_tracks_open_threads_independently_of_notices(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("inbox-lifecycle", 2);
+    let threads = core.threads();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let inbox = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.needs_you_rows(cx)
+                .iter()
+                .map(|row| row.thread)
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(
+        inbox(cx).len(),
+        2,
+        "idle open Threads need handling without Notices"
+    );
+    view.update(cx, |view, _| {
+        view.facts.fixture_forget_last_used(threads[0]);
+        view.prefs.settings.activity_shows.priority = false;
+        view.prefs.settings.activity_shows.pinned = false;
+    });
+    assert_eq!(
+        inbox(cx).len(),
+        2,
+        "unknown age and old Activity preferences cannot hide Inbox work"
+    );
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "working".into(),
+        })
+        .unwrap();
+    tick(cx);
+    assert_eq!(inbox(cx), vec![threads[1]]);
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.focus_thread(threads[0], cx);
+        view.notice_verb(Verb::MarkAllRead, cx);
+        view.focus_thread(threads[1], cx);
+    });
+    tick(cx);
+    assert_eq!(inbox(cx).len(), 2, "reading and leaving is not finishing");
+    view.update(cx, |view, cx| view.park_listed(&threads, cx));
+    tick(cx);
+    assert!(inbox(cx).is_empty(), "Park finishes handling");
+}
+
+#[gpui::test]
+fn inbox_empty_working_decision_and_keyboard_park(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("inbox-empty-working", 3);
+    let threads = core.threads();
+    for thread in &threads {
+        core.send(*thread, "go".into());
+    }
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-i");
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert!(view.needs_you_rows(cx).is_empty());
+        assert_eq!(view.activity(&view.nav_state()).working.len(), 3);
+    });
+    assert!(cx.debug_bounds("nav-needs-you-empty").is_some());
+    assert!(cx.debug_bounds("nav-inbox-working").is_some());
+    fake.streams.borrow()[1]
+        .send(decision("inbox-approval"))
+        .unwrap();
+    tick(cx);
+    view.update(cx, |view, cx| {
+        let rows = view.needs_you_rows(cx);
+        assert_eq!(rows.len(), 1, "Decision takes precedence over work");
+        assert_eq!(rows[0].thread, threads[1]);
+        if let RowTarget::Decision(id) = &rows[0].target {
+            view.notice_verb(Verb::DismissDecision(id.clone()), cx);
+        }
+    });
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.needs_you_rows(cx).len()),
+        1
+    );
+    // Park the only Inbox row; the two agents still working remain visible.
+    cx.simulate_keystrokes("cmd-w");
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert!(view.needs_you_rows(cx).is_empty());
+        assert_eq!(view.activity(&view.nav_state()).working.len(), 2);
+        assert_eq!(view.needs_you.cursor, 0);
+    });
+    assert!(cx.debug_bounds("nav-needs-you-empty").is_some());
+    assert!(cx.debug_bounds("nav-inbox-working").is_some());
+}
+
+#[gpui::test]
+fn inbox_keyboard_parks_middle_first_and_final_rows(cx: &mut TestAppContext) {
+    let (core, _) = cockpit("inbox-park-cursor", 3);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let bell = cx.debug_bounds("nav-activity").unwrap();
+    cx.simulate_click(bell.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        view.read_with(cx, |view, _| view.needs_you_shown()),
+        "bell opens the same Inbox as cmd-i"
+    );
+    cx.simulate_keystrokes("down cmd-w");
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.needs_you_rows(cx).len(), 2);
+        assert!(view.needs_you.cursor < 2);
+    });
+    cx.simulate_keystrokes("up cmd-w");
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.needs_you_rows(cx).len()),
+        1
+    );
+    cx.simulate_keystrokes("cmd-w");
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert!(view.needs_you_rows(cx).is_empty());
+        assert_eq!(view.cockpit.parked().unwrap().len(), 3);
+    });
+}
+
+#[gpui::test]
+fn inbox_followup_returns_to_work_and_repeated_finishes_stay_one_row(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("inbox-followup", 1);
+    cx.update(|cx| cx.bind_keys([KeyBinding::new("enter", Submit, None)]));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    for _ in 0..2 {
+        cx.simulate_input("continue");
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        assert!(view.read_with(cx, |view, cx| view.needs_you_rows(cx).is_empty()));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        tick(cx);
+        assert_eq!(
+            view.read_with(cx, |view, cx| view.needs_you_rows(cx).len()),
+            1
+        );
+    }
+    view.update(cx, |view, cx| {
+        let id = view.cockpit.notifications().notices().next().unwrap().id;
+        view.notice_verb(Verb::Dismiss(id), cx);
+        assert_eq!(
+            view.needs_you_rows(cx).len(),
+            1,
+            "dismissal is notification housekeeping"
+        );
+    });
+    tick(cx);
+    assert!(
+        view.read_with(cx, |view, _| view.needs_you.toasts().is_empty()),
+        "watched results never alert"
+    );
+}
+
+#[gpui::test]
+fn stopped_failures_and_interruptions_remain_inbox(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("inbox-stopped", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    for (index, outcome) in [
+        ferrite_core::TurnOutcome::Interrupted,
+        ferrite_core::TurnOutcome::Error("provider failed".into()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        fake.streams.borrow()[index]
+            .send(SessionEvent::TextDelta {
+                text: "working".into(),
+            })
+            .unwrap();
+        fake.streams.borrow()[index]
+            .send(SessionEvent::TurnEnded {
+                outcome,
+                cost_usd: None,
+            })
+            .unwrap();
+    }
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.needs_you_rows(cx).len(), 2);
+        assert!(view.activity(&view.nav_state()).working.is_empty());
+    });
+}
+
+#[gpui::test]
+fn main_completion_waits_for_working_descendants_before_inbox(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject};
+    let (core, fake) = cockpit("inbox-descendants", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let key = AgentKey::new(Provider::Claude, "native", "inbox-child");
+    let mut info = AgentInfo::new(key.clone());
+    info.parent = Some(Subject::Main);
+    for event in [
+        ActivityEvent::Discovered(info),
+        ActivityEvent::Status {
+            key: key.clone(),
+            state: AgentStatus::Working,
+        },
+    ] {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Activity(event))
+            .unwrap();
+    }
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    assert!(view.read_with(cx, |view, cx| view.needs_you_rows(cx).is_empty()));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Activity(ActivityEvent::Status {
+            key,
+            state: AgentStatus::Idle,
+        }))
+        .unwrap();
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.needs_you_rows(cx).len()),
+        1
+    );
+}
+
+#[gpui::test]
+fn inbox_completion_keeps_keyboard_park_on_the_selected_thread(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("inbox-cursor-identity", 3);
+    let threads = core.threads();
+    core.send(threads[0], "go".into());
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-i down");
+    tick(cx);
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    cx.simulate_keystrokes("cmd-w");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.cockpit.parked().unwrap(),
+            vec![threads[2]],
+            "completion cannot redirect Park to another Thread"
+        );
+    });
+}

@@ -143,3 +143,31 @@ the key is ignored.
   what happened. This rule lives in the nav, not in core: the Notice is
   read when it is seen, as ever, so the Bar, the Pane head, the toasts and
   ⌘D are unchanged.
+
+## Amendment (2026-11-09): Inbox retains read, unfinished Threads
+
+Issue #198 replaces the separate bell Activity and Recent-notice views
+with one Inbox mode of the existing nav. Membership follows authoritative
+open Threads: Parked is excluded; a pending Decision belongs to Inbox even
+while execution continues; otherwise Main, descendants, background and
+queued work belong to Working; remaining open Threads belong to Inbox.
+Blockers retain oldest-request-first order, with stable creation order for
+remaining rows. Pinning and former Activity section visibility settings
+cannot hide queue membership.
+
+Seen still acknowledges Notices and clears unread styling. Reading,
+dismissing a Notice, or moving focus does not finish handling a Thread.
+The operator sends a follow-up to return it to Working, or uses Park to
+finish handling it. In Inbox, ⌘W parks the selected Thread; Backspace
+continues to dismiss only its Notice. A watched completion stays in Inbox after focus leaves.
+The Inbox heading counts queue Threads, excluding Working and Parked.
+An empty Inbox can therefore coexist with visible Working Threads.
+
+This is a view classification, not a fifth Attention state or a new
+persisted disposition. Idle Session eviction (ADR 0032) leaves the Thread
+open and in Inbox. Digests and Server open/parked listings reconstruct the
+view across restarts, reconnects and other clients' Park operations; no
+transcript watch or Notice retention is required. Notification delivery
+and acknowledgment (ADRs 0005 and 0017) remain event based, so retaining a
+read Thread never rings again. Park/reopen retains existing Session,
+history, Group and focus behavior.

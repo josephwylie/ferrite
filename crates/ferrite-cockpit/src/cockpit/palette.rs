@@ -1366,19 +1366,21 @@ impl CockpitView {
     // --------------------------------------------------- the notifications
 
     fn step_notices(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let count = self.needs_you_rows(cx).len();
+        let rows = self.needs_you_rows(cx);
+        let count = rows.len();
         if count == 0 || !self.needs_you_shown() {
             return;
         }
-        self.needs_you.cursor = (self.needs_you.cursor.min(count - 1) as isize + delta)
-            .rem_euclid(count as isize) as usize;
+        let next =
+            (self.needs_you.cursor_at(&rows) as isize + delta).rem_euclid(count as isize) as usize;
+        self.needs_you.select_cursor(next, &rows);
         cx.notify();
     }
 
     /// ⏎ on the list: open the cursor's Thread (its request), and close.
     fn open_notice_at_cursor(&mut self, cx: &mut Context<Self>) {
         let rows = self.needs_you_rows(cx);
-        let Some(row) = rows.get(self.needs_you.cursor.min(rows.len().saturating_sub(1))) else {
+        let Some(row) = rows.get(self.needs_you.cursor_at(&rows)) else {
             return;
         };
         let verb = row.open_verb();
@@ -1386,24 +1388,38 @@ impl CockpitView {
         self.close_nav_view(cx);
     }
 
-    /// ⌫ on the list: dismiss the cursor's row (a request until it changes,
-    /// a finished turn with every one folded under it); the cursor stays on
-    /// the row that takes its place.
+    /// Dismiss only the Notice; its open Thread remains in Inbox.
     fn dismiss_notice_at_cursor(&mut self, cx: &mut Context<Self>) {
         let rows = self.needs_you_rows(cx);
-        let Some(row) = rows.get(self.needs_you.cursor.min(rows.len().saturating_sub(1))) else {
+        let Some(row) = rows.get(self.needs_you.cursor_at(&rows)) else {
             return;
         };
-        let Some(verb) = row.dismiss_verb() else {
+        if row.away.is_some() {
             return;
-        };
-        let folded = row.folded.clone();
-        self.notice_verb(verb, cx);
-        for id in folded {
-            self.notice_verb(crate::notifications::Verb::Dismiss(id), cx);
         }
-        let left = self.needs_you_rows(cx).len();
-        self.needs_you.cursor = self.needs_you.cursor.min(left.saturating_sub(1));
+        let verb = match &row.target {
+            crate::notifications::RowTarget::Notice(id) => Verb::Dismiss(*id),
+            crate::notifications::RowTarget::Decision(id) => Verb::DismissDecision(id.clone()),
+            crate::notifications::RowTarget::Thread(_) => return,
+        };
+        self.notice_verb(verb, cx);
+        cx.notify();
+    }
+
+    /// Existing Park (⌘W) applies to the selected Inbox Thread.
+    pub(super) fn park_inbox_cursor(&mut self, cx: &mut Context<Self>) {
+        let rows = self.needs_you_rows(cx);
+        let Some(row) = rows.get(self.needs_you.cursor_at(&rows)) else {
+            return;
+        };
+        if row.away.is_some() {
+            return;
+        }
+        let thread = row.thread;
+        self.park_listed(&[thread], cx);
+        let rows = self.needs_you_rows(cx);
+        let at = self.needs_you.cursor_at(&rows);
+        self.needs_you.select_cursor(at, &rows);
         cx.notify();
     }
 

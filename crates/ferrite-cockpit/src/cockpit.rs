@@ -3,10 +3,11 @@
 //! Rendering and keys only. What each Pane shows — the Blocks, the pending
 //! Decision, the held prompt — is folded in core and read from there.
 
+mod agent_pane;
 pub(crate) mod beside;
 mod context_menu;
-mod drafts;
 pub(crate) mod decisions;
+mod drafts;
 pub(crate) mod empty_board;
 mod history;
 mod leaving;
@@ -17,10 +18,9 @@ mod palette;
 pub(crate) mod panel;
 mod parts;
 mod server;
-mod agent_pane;
 mod side_chat;
-pub(crate) mod tools;
 pub(crate) mod subagents;
+pub(crate) mod tools;
 mod transcript_glue;
 mod updating;
 mod user_commands;
@@ -30,7 +30,7 @@ mod view_head;
 type FloatTriggers =
     std::rc::Rc<std::cell::RefCell<std::collections::HashMap<SharedString, gpui::Bounds<Pixels>>>>;
 
-use self::context_menu::{ActivityVerb, ContextMenu, MenuTarget, MenuVerb};
+use self::context_menu::{ContextMenu, MenuTarget, MenuVerb};
 use ferrite_ui::components::home_relative;
 use ferrite_ui::components::Tip as _;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -753,7 +753,8 @@ impl Preferences {
             // One directory each: a window's drafts must not reach the
             // next test's window.
             dir: {
-                static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                static NEXT: std::sync::atomic::AtomicUsize =
+                    std::sync::atomic::AtomicUsize::new(0);
                 std::env::temp_dir().join(format!(
                     "ferrite-prefs-{}-{}",
                     std::process::id(),
@@ -3536,7 +3537,6 @@ impl CockpitView {
             | MenuTarget::TerminalMore(_) => None,
             MenuTarget::Group(_)
             | MenuTarget::Parked
-            | MenuTarget::ActivityMore
             | MenuTarget::Review { .. }
             | MenuTarget::Prompt { .. }
             | MenuTarget::Page(_) => None,
@@ -7330,7 +7330,7 @@ impl CockpitView {
         }
         self.nav_view = view;
         if view == nav::NavView::Inbox {
-            self.needs_you.cursor = 0;
+            self.needs_you.reset_cursor();
         }
         if let Some(window) = window {
             match view {
@@ -9171,97 +9171,54 @@ impl CockpitView {
         }
     }
 
-    /// The Activity view's list (`nav::Activity`, the bell's) from the
-    /// tree's rows (`state`), so it lists what the Project filter admits and
-    /// reads nothing new: under `Priority` every open Thread that asks for
-    /// the operator (a request, oldest first; a failure; a finish unseen),
-    /// then every one at work; below it every other one by the day of its
-    /// last turn (`Store::last_activity`, not the log's write time), newest
-    /// first, six days back. A Thread of no known time, or an older one, is
-    /// not listed; being an idle Group member is no reason to be. A state
-    /// change moves a Thread between them, so it never leaves from under
-    /// the operator.
+    /// Inbox membership follows open Thread lifecycle, independently of Notices.
+    /// Blockers precede work; every other open Thread awaits the operator.
     pub(crate) fn activity(&self, state: &nav::NavState) -> nav::Activity {
-        let roster = self.cockpit.roster();
-        let focused = roster.focused_thread();
-        // The row stands for what the board shows, as in the tree: the Solo
-        // Thread, or the shown Group's focused member.
-        let shown = |thread: ThreadId| {
-            !self.empty_board_shown()
-                && focused == Some(thread)
-                && match roster.view() {
-                    View::Solo => true,
-                    View::Group(group) => self
-                        .cockpit
-                        .groups()
-                        .get(group)
-                        .is_some_and(|group| group.members.contains(&thread)),
-                }
-        };
-        let mut rows: Vec<&nav::ThreadRow> = state
+        let mut rows: Vec<_> = state
             .pinned
             .iter()
-            .chain(state.solos.iter())
-            .chain(state.groups.iter().flat_map(|group| group.members.iter()))
+            .chain(&state.solos)
+            .chain(state.groups.iter().flat_map(|group| &group.members))
             .collect();
         rows.sort_by_key(|row| row.thread);
         rows.dedup_by_key(|row| row.thread);
         let queue = self.cockpit.needs_you();
-        let now = std::time::SystemTime::from(ferrite_core::clock::now());
-        let pinned_set = &self.prefs.settings.pinned_threads;
-        let mut pinned: Vec<(usize, nav::ActivityRow)> = Vec::new();
-        let mut priority: Vec<(usize, usize, nav::ActivityRow)> = Vec::new();
-        let mut days: Vec<(u32, SharedString, Vec<nav::ActivityRow>)> = Vec::new();
+        let mut inbox = Vec::new();
+        let mut working = Vec::new();
         for row in rows {
-            let thread = row.thread;
             let entry = nav::ActivityRow {
-                row: nav::ThreadRow {
-                    selected: shown(thread),
-                    ..row.clone()
-                },
-                preview: self.last_message(thread),
+                row: row.clone(),
+                preview: self.last_message(row.thread),
             };
-            // What asks for the operator, in the order it asks: a request
-            // (oldest first), a failure, a finish unseen, work in flight.
-            let rank = match (row.status, row.status.attention()) {
-                (_, Attention::Blocked) => Some(0),
-                (nav::RowStatus::Failed, _) => Some(1),
-                (_, Attention::Done) => Some(2),
-                (_, Attention::Working) => Some(3),
-                _ => None,
-            };
-            if self.prefs.settings.activity_shows.pinned && pinned_set.contains(&thread) {
-                let at = pinned_set.iter().position(|pin| *pin == thread).unwrap_or(0);
-                pinned.push((at, entry));
-            } else if let (Some(rank), true) = (rank, self.prefs.settings.activity_shows.priority) {
-                let asked = queue
-                    .iter()
-                    .position(|thread| *thread == entry.row.thread)
-                    .unwrap_or(usize::MAX);
-                priority.push((rank, asked, entry));
-            } else if let Some((ago, label)) = self
-                .facts
-                .last_used(thread)
-                .and_then(|at| ferrite_core::clock::recent_day(at, now))
+            let open = self.cockpit.thread(row.thread);
+            if open.is_some_and(|open| open.pending_decisions().is_empty())
+                && open.is_some_and(|open| {
+                    open.needs_queue() || open.background_work() || !open.queue().is_empty()
+                })
             {
-                match days.iter_mut().find(|(at, _, _)| *at == ago) {
-                    Some((_, _, rows)) => rows.push(entry),
-                    None => days.push((ago, label.into(), vec![entry])),
-                }
+                working.push(entry);
+            } else {
+                inbox.push(entry);
             }
         }
-        // Stable: creation order among equals.
-        priority.sort_by_key(|(rank, asked, _)| (*rank, *asked));
-        pinned.sort_by_key(|(at, _)| *at);
-        days.sort_by_key(|(ago, _, _)| *ago);
-        for (_, _, rows) in &mut days {
-            rows.sort_by_key(|entry| std::cmp::Reverse(self.last_used(entry.row.thread)));
-        }
-        nav::Activity {
-            priority: priority.into_iter().map(|(_, _, entry)| entry).collect(),
-            pinned: pinned.into_iter().map(|(_, entry)| entry).collect(),
-            days: days.into_iter().map(|(_, label, rows)| (label, rows)).collect(),
-        }
+        inbox.sort_by_key(|entry| {
+            (
+                if self
+                    .cockpit
+                    .thread(entry.row.thread)
+                    .is_some_and(|open| !open.pending_decisions().is_empty())
+                {
+                    0
+                } else {
+                    1
+                },
+                queue
+                    .iter()
+                    .position(|id| *id == entry.row.thread)
+                    .unwrap_or(usize::MAX),
+            )
+        });
+        nav::Activity { inbox, working }
     }
 
     /// The opening of a Thread's last message, as an Activity row previews
@@ -9577,6 +9534,10 @@ impl CockpitView {
     /// Close the focused Pane — cmd-w. The core decides what that means
     /// (park, leave, defer onto a draft, discard); the mirror follows.
     fn close_thread(&mut self, _: &CloseThread, window: &mut Window, cx: &mut Context<Self>) {
+        if self.needs_you_shown() && self.floats.notice_focus.is_focused(window) {
+            self.park_inbox_cursor(cx);
+            return;
+        }
         // ⌘W over the lightbox closes it; in the focused Pane's preview or
         // Review it closes that, not the Pane (F-14).
         if let Some((index, _)) = self.lightbox() {
@@ -10576,7 +10537,7 @@ impl CockpitView {
         let nav_list_focused = match self.nav_view {
             nav::NavView::Inbox => self.floats.notice_focus.is_focused(window),
             nav::NavView::Tree => self.nav_keys_held && self.nav_view_focus.is_focused(window),
-            nav::NavView::Parked | nav::NavView::Activity => self.nav_view_focus.is_focused(window),
+            nav::NavView::Parked => self.nav_view_focus.is_focused(window),
         };
         if window.has_active_dialog(cx)
             || self.floats_hold_focus()
@@ -11205,9 +11166,7 @@ impl CockpitView {
         let attachments = Composer::attachments(&pane.composer, &pane.preview, cx);
         // The docked Decision merges into the Composer when that Composer
         // is a live block with nothing floating between them (rule 2.8.1).
-        let joins = pane.is_main()
-            && attachments.is_none()
-            && (!self.grid_board() || focused);
+        let joins = pane.is_main() && attachments.is_none() && (!self.grid_board() || focused);
         let activity_decisions = (level != Level::Wall)
             .then(|| self.activity_decisions(index, joins, window, cx))
             .flatten();
@@ -12174,10 +12133,12 @@ impl CockpitView {
                             )
                         })),
                 )
-                .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-                    view.request_mode(thread, generation, value.clone(), window, cx);
-                    cx.notify();
-                })),
+                .on_click(cx.listener(
+                    move |view, _: &ClickEvent, window, cx| {
+                        view.request_mode(thread, generation, value.clone(), window, cx);
+                        cx.notify();
+                    },
+                )),
             );
         }
         // With no servers the note alone says so; a `MCP servers` head over
@@ -13075,6 +13036,17 @@ impl CockpitView {
     /// answer needs the window: `answer_from_toast`.)
     pub(crate) fn notice_verb(&mut self, verb: Verb, cx: &mut Context<Self>) {
         match verb {
+            Verb::OpenThread(thread) => {
+                let subject = self
+                    .cockpit
+                    .thread(thread)
+                    .and_then(|open| open.pending_decisions().first())
+                    .and_then(|pending| pending.subject.clone());
+                self.land_on_thread(thread, cx);
+                if let Some(subject) = subject {
+                    self.select_subject_from_notice(thread, subject, cx);
+                }
+            }
             Verb::Open(id) => {
                 self.needs_you
                     .drop_toast(&crate::notifications::RowTarget::Notice(id));
@@ -13095,9 +13067,26 @@ impl CockpitView {
                     .decision(&id)
                     .and_then(|notice| notice.subject.clone())
                     .unwrap_or(ferrite_core::activity::Subject::Main);
+                let pending_subject = self
+                    .cockpit
+                    .thread(id.thread)
+                    .and_then(|open| {
+                        open.pending_decisions()
+                            .iter()
+                            .find(|pending| pending.handle == id.handle)
+                    })
+                    .map(|pending| {
+                        pending
+                            .subject
+                            .clone()
+                            .unwrap_or(ferrite_core::activity::Subject::Main)
+                    });
                 if let Some(thread) = self.cockpit.open_decision_notice(&id) {
                     self.sync_panes(cx);
                     self.select_subject_from_notice(thread, subject, cx);
+                } else if let Some(subject) = pending_subject {
+                    self.land_on_thread(id.thread, cx);
+                    self.select_subject_from_notice(id.thread, subject, cx);
                 }
                 self.close_nav_view(cx);
             }
@@ -13206,7 +13195,6 @@ impl CockpitView {
             detail,
             when: crate::facts::since_label(notice.at, now),
             read: notice.read,
-            folded: Vec::new(),
         }
     }
 
@@ -13397,6 +13385,7 @@ impl CockpitView {
         }
         let notifications = self.cockpit.notifications();
         Some(match &alert.target {
+            RowTarget::Thread(_) => return None,
             RowTarget::Notice(id) => self.notice_row(notifications.get(*id)?, now),
             RowTarget::Decision(id) => self.decision_row(notifications.decision(id)?, now),
         })
@@ -13458,41 +13447,50 @@ impl CockpitView {
             detail,
             when: crate::facts::since_label(notice.at, now),
             read: notice.read,
-            folded: Vec::new(),
         }
     }
 
-    /// The list's rows (FL-16): the live requests first, in the order the
-    /// answer keys take them (the Needs-you queue), then the machines off
-    /// screen's, then finished turns newest first on every machine, each
-    /// Thread folded to its newest.
+    /// One row per open Thread awaiting handling, independent of Notices.
+    /// Requests precede other rows, retaining each machine's attention order.
     pub(super) fn needs_you_rows(&self, cx: &gpui::App) -> Vec<NoticeRow> {
+        self.inbox_rows(&self.activity(&self.nav_state()), cx)
+    }
+
+    fn inbox_rows(&self, activity: &nav::Activity, cx: &gpui::App) -> Vec<NoticeRow> {
         let now = ferrite_core::clock::system_time();
         let notifications = self.cockpit.notifications();
-        let queue = self.cockpit.needs_you();
-        let mut rows: Vec<NoticeRow> = notifications
-            .decisions()
-            .take(50)
-            .map(|notice| self.decision_row(notice, now))
+        let mut rows: Vec<_> = activity
+            .inbox
+            .iter()
+            .map(|entry| {
+                let thread = entry.row.thread;
+                if let Some(decision) = notifications.first_request(thread) {
+                    self.decision_row(decision, now)
+                } else if let Some(notice) = notifications
+                    .notices()
+                    .find(|notice| notice.thread == thread)
+                {
+                    self.notice_row(notice, now)
+                } else {
+                    NoticeRow {
+                        away: None,
+                        target: RowTarget::Thread(thread),
+                        thread,
+                        title: self.facts.name(thread),
+                        state: crate::notifications::State::Idle,
+                        detail: crate::notifications::Detail::None,
+                        when: "".into(),
+                        read: true,
+                    }
+                }
+            })
             .collect();
-        rows.sort_by_key(|row| {
-            queue
-                .iter()
-                .position(|thread| *thread == row.thread)
-                .unwrap_or(usize::MAX)
-        });
-        let (away_requests, away_finished) = self.away_rows(cx);
-        rows.extend(away_requests);
-        let mut finished: Vec<_> = notifications
-            .notices()
-            .take(50)
-            .map(|notice| (notice.at, self.notice_row(notice, now)))
-            .chain(away_finished)
-            .collect();
-        finished.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
-        rows.extend(crate::notifications::fold(
-            finished.into_iter().map(|(_, row)| row).collect(),
-        ));
+        let (requests, finished) = self.away_rows(cx);
+        rows.extend(requests);
+        rows.extend(finished.into_iter().map(|(_, row)| row));
+        rows.sort_by_key(|row| !row.request());
+        let mut seen = std::collections::BTreeSet::new();
+        rows.retain(|row| seen.insert((row.away.clone(), row.thread)));
         rows
     }
 
@@ -13509,9 +13507,8 @@ impl CockpitView {
         }
         let list = match self.nav_view {
             nav::NavView::Tree => self.nav_tree(state, cx),
-            nav::NavView::Inbox => self.needs_you_list(window, cx),
+            nav::NavView::Inbox => self.needs_you_list(state, window, cx),
             nav::NavView::Parked => self.parked_list(state, cx),
-            nav::NavView::Activity => self.activity_list(state, cx),
         };
         let gear = nav::gear_button().on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
             cx.stop_propagation();
@@ -13554,61 +13551,13 @@ impl CockpitView {
     /// the view or the tree again from it, wearing a dot while a Thread
     /// needs the operator or a finish is unseen.
     fn activity_bell(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Stateful<Div> {
-        nav::activity_button(self.nav_view == nav::NavView::Activity, state.alert()).on_mouse_down(
+        nav::activity_button(self.nav_view == nav::NavView::Inbox, state.alert()).on_mouse_down(
             MouseButton::Left,
             cx.listener(|view, _: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
-                view.toggle_nav_view(nav::NavView::Activity, Some(window), cx);
+                view.toggle_nav_view(nav::NavView::Inbox, Some(window), cx);
             }),
         )
-    }
-
-    /// The Activity view's list in the tree's place (`activity`), Esc's
-    /// way back to the tree: a row's press lands on its Thread
-    /// (`land_on_thread`), a right press opens its menu.
-    fn activity_list(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Stateful<Div> {
-        let activity = self.activity(state);
-        let more = nav::row_action("nav-activity-more", ferrite_ui::icons::ELLIPSIS)
-            .tooltip(ferrite_ui::menu::tooltip("More"))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|view, event: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.open_context_menu(MenuTarget::ActivityMore, event.position, cx);
-                }),
-            )
-            .into_any_element();
-        let mut row = |entry: &nav::ActivityRow| -> AnyElement {
-            let thread = entry.row.thread;
-            nav::activity_row(entry, Some(self.activity_row_actions(thread, cx)), &nav::Measure::Text(cx))
-                .on_click(
-                    cx.listener(move |view, _: &ClickEvent, _, cx| view.land_on_thread(thread, cx)),
-                )
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
-                    }),
-                )
-                .into_any_element()
-        };
-        let priority = self
-            .prefs
-            .settings
-            .activity_shows
-            .priority
-            .then(|| activity.priority.iter().map(&mut row).collect());
-        let pinned = activity.pinned.iter().map(&mut row).collect();
-        let days = activity
-            .days
-            .iter()
-            .map(|(label, rows)| (label.clone(), rows.iter().map(&mut row).collect()))
-            .collect();
-        nav::nav_tree(&self.nav_scroll)
-            .track_focus(&self.nav_view_focus)
-            .key_context("NavView")
-            .child(nav::activity_list(priority, more, pinned, days))
     }
 
     /// The pin and archive a bell row shows under the pointer (Codex's):
@@ -13652,59 +13601,6 @@ impl CockpitView {
                 ),
             )
             .into_any_element()
-    }
-
-    /// The bell's `⋯` menu: `Show` (`Priority`, `Pinned`), then `Mark all
-    /// as read` and `Archive chats` (parking what the day sections list).
-    pub(super) fn activity_more_rows(&self) -> Vec<Option<(menu::Item, MenuVerb)>> {
-        let activity = self.activity(&self.nav_state());
-        let unseen = activity
-            .priority
-            .iter()
-            .any(|entry| entry.row.status == nav::RowStatus::Done);
-        let listed = activity.days.iter().any(|(_, rows)| !rows.is_empty());
-        let shows = self.prefs.settings.activity_shows;
-        let check = |label: &'static str, on: bool, verb: ActivityVerb| {
-            let mut item = menu::Item::new(label);
-            item.checked = on;
-            Some((item, MenuVerb::Activity(verb)))
-        };
-        vec![
-            Some((menu::Item::new("Show").disabled(true), MenuVerb::Activity(ActivityVerb::ShowPriority))),
-            check("Priority section", shows.priority, ActivityVerb::ShowPriority),
-            check("Pinned", shows.pinned, ActivityVerb::ShowPinned),
-            None,
-            Some((
-                menu::Item::new("Mark all as read").disabled(!unseen),
-                MenuVerb::Activity(ActivityVerb::MarkAllRead),
-            )),
-            Some((
-                menu::Item::new("Archive chats").disabled(!listed),
-                MenuVerb::Activity(ActivityVerb::ArchiveListed),
-            )),
-        ]
-    }
-
-    pub(super) fn run_activity_verb(&mut self, verb: ActivityVerb, cx: &mut Context<Self>) {
-        match verb {
-            ActivityVerb::ShowPriority => {
-                self.change_settings(|settings| settings.activity_shows.priority ^= true, cx)
-            }
-            ActivityVerb::ShowPinned => {
-                self.change_settings(|settings| settings.activity_shows.pinned ^= true, cx)
-            }
-            ActivityVerb::MarkAllRead => self.cockpit.mark_notices_read(),
-            ActivityVerb::ArchiveListed => {
-                let listed: Vec<ThreadId> = self
-                    .activity(&self.nav_state())
-                    .days
-                    .iter()
-                    .flat_map(|(_, rows)| rows.iter().map(|entry| entry.row.thread))
-                    .collect();
-                self.park_listed(&listed, cx);
-            }
-        }
-        cx.notify();
     }
 
     /// Park each of `threads` (reversible: the Parked view holds them).
@@ -13779,28 +13675,29 @@ impl CockpitView {
     /// The Inbox's list in the tree's place (§5.1.2), scrolling as
     /// the tree does and holding its own keys (`needs_you_rows`, its cursor
     /// `needs_you.cursor` while it has the keyboard): the blocked Threads
-    /// oldest-first as their two-line rows, a machine off screen's
-    /// requests, then `Recent`, the Notices. A row's press opens what it
-    /// stands for.
-    fn needs_you_list(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
+    /// oldest-first, then idle open Threads, with Working below. A row's
+    /// press opens its Thread or its Decision's owning Subject.
+    fn needs_you_list(
+        &self,
+        state: &nav::NavState,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let tree = nav::nav_tree(&self.nav_scroll);
-        let rows = self.needs_you_rows(cx);
+        let activity = self.activity(state);
+        let rows = self.inbox_rows(&activity, cx);
         let cursor = self
             .floats
             .notice_focus
             .is_focused(window)
-            .then(|| self.needs_you.cursor.min(rows.len().saturating_sub(1)));
+            .then(|| self.needs_you.cursor_at(&rows));
         let mut list = nav::view_list("nav-view-needs-you-list");
+        list = list.child(self.inbox_heading(rows.len(), cx));
         if rows.is_empty() {
             list = list.child(nav::note("nav-needs-you-empty", "Nothing needs you"));
         }
-        let mut recent = false;
         for (index, row) in rows.iter().enumerate() {
-            let local_request = row.request() && row.away.is_none();
-            if !row.request() && !recent {
-                recent = true;
-                list = list.child(self.recent_heading(cx));
-            }
+            let local_request = row.away.is_none();
             let verb = row.open_verb();
             let open = cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
@@ -13815,7 +13712,7 @@ impl CockpitView {
                 let drawn = nav::thread_row_with_title(
                     &thread,
                     thread.name.clone(),
-                    None,
+                    Some(self.activity_row_actions(row.thread, cx)),
                     nav::RowPlace::Inbox,
                     None,
                     false,
@@ -13826,6 +13723,20 @@ impl CockpitView {
                     .debug_selector(move || format!("notice-row-{index}"))
                     .flex_shrink_0()
                     .child(drawn)
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener({
+                            let thread = row.thread;
+                            move |view, event: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                view.open_context_menu(
+                                    MenuTarget::Thread(thread),
+                                    event.position,
+                                    cx,
+                                );
+                            }
+                        }),
+                    )
                     .on_click(open)
                     .into_any_element()
             } else {
@@ -13835,8 +13746,28 @@ impl CockpitView {
             };
             list = list.child(element);
         }
-        if !rows.is_empty() && !recent {
-            list = list.child(self.recent_heading(cx));
+        if !activity.working.is_empty() {
+            list = list.child(nav::heading("nav-inbox-working", "Working"));
+            for entry in &activity.working {
+                let thread = entry.row.thread;
+                list = list.child(
+                    nav::activity_row(
+                        entry,
+                        Some(self.activity_row_actions(thread, cx)),
+                        &nav::Measure::Text(cx),
+                    )
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        view.land_on_thread(thread, cx)
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
+                        }),
+                    ),
+                );
+            }
         }
         tree.track_focus(&self.floats.notice_focus)
             .key_context("Notifications")
@@ -13968,12 +13899,11 @@ impl CockpitView {
             .collect()
     }
 
-    /// The Inbox's `Recent` heading, with `Mark all read` at its
-    /// right: every row read, none removed.
-    fn recent_heading(&self, cx: &mut Context<Self>) -> Div {
+    /// Inbox counts Threads; Mark all read acknowledges Notices only.
+    fn inbox_heading(&self, count: usize, cx: &mut Context<Self>) -> Div {
         // A text control in the heading's ink, the `+`'s height and its
         // ground under the pointer and pressed, so it reads as one.
-        nav::heading("nav-recent", "Recent").child(
+        nav::heading("nav-recent", format!("Inbox · {count}")).child(
             div()
                 .id("notifications-mark-read")
                 .debug_selector(|| "notifications-mark-read".into())

@@ -781,7 +781,23 @@ fn a_decision_off_screen_rings_once_and_its_click_goes_to_its_machine(cx: &mut T
         assert_eq!(toasts.len(), 1);
         assert_eq!(toasts[0].alert, alert);
         let rows = view.needs_you_rows(cx);
-        let row = rows.iter().find(|row| row.target == asked).unwrap();
+        let queued: Vec<_> = rows
+            .iter()
+            .filter(|row| row.away.as_ref() == Some(&key) && row.thread == thread)
+            .collect();
+        assert_eq!(queued.len(), 1, "one queue row per machine and Thread");
+        assert_eq!(
+            queued[0].target,
+            box_asked(thread, 1),
+            "oldest request owns the queue row"
+        );
+        let row = view
+            .alert_row(
+                &alert,
+                Some(machines.read(cx)),
+                ferrite_core::clock::system_time(),
+            )
+            .unwrap();
         assert_eq!(
             row.title.as_ref(),
             "box \u{203a} Release",
@@ -1352,4 +1368,62 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
         ],
         "a commit's lines take comments as the uncommitted work's do"
     );
+}
+
+#[gpui::test]
+fn remote_inbox_uses_digests_and_follows_another_clients_park(cx: &mut TestAppContext) {
+    use ferrite_core::protocol::{ServerMessage, SharedRoster};
+    let (core, _) = cockpit("remote-inbox", 1);
+    let machines = cx.new(|_| machines("remote-inbox", None));
+    let (root, cx) = machine_window(cx, core, machines.clone());
+    let view = shown(&root, cx);
+    let thread = ThreadId::new(1);
+    let key = crate::machines::MachineKey(Some("me@box".into()));
+    hear_box(&machines, box_snapshot(&[(thread, "Review")], vec![]), cx);
+    tick(cx);
+    let remote = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.needs_you_rows(cx)
+                .into_iter()
+                .filter(|row| row.away.as_ref() == Some(&key))
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(remote(cx).len(), 1, "an idle remote Thread needs no Notice");
+    hear_box(
+        &machines,
+        ServerMessage::Digest {
+            thread,
+            digest: ferrite_core::digest::Digest {
+                background_work: true,
+                ..Default::default()
+            },
+        },
+        cx,
+    );
+    tick(cx);
+    assert!(remote(cx).is_empty(), "background work is Working");
+    hear_box(
+        &machines,
+        ServerMessage::Digest {
+            thread,
+            digest: Default::default(),
+        },
+        cx,
+    );
+    tick(cx);
+    assert_eq!(remote(cx).len(), 1);
+    hear_box(
+        &machines,
+        ServerMessage::Roster {
+            revision: 2,
+            roster: SharedRoster {
+                open: vec![],
+                parked: vec![thread],
+            },
+        },
+        cx,
+    );
+    tick(cx);
+    assert!(remote(cx).is_empty(), "another client's Park removes it");
 }

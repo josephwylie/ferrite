@@ -6,11 +6,8 @@
 //! members hanging under it, then `Recents`, the Threads in no Project —
 //! and the foot (the view switcher, the account row and the gear). A view
 //! other than the tree shows its list in the tree's place; Esc or a click
-//! on the active view returns to it. The Activity view (the bell, Codex's)
-//! is one: what runs or needs the operator under `Priority`, the rest
-//! touched today under `Today`, each row its title, Project and the last
-//! message's opening lines. The Inbox (⌘I) is another, reached from the
-//! keyboard and the palette.
+//! on the active view returns to it. The Inbox, reached by the bell or ⌘I,
+//! lists open Threads awaiting the operator and separates Working below.
 //! It is a view, never the only door: everything a row does (focus,
 //! revive, regroup) stays reachable from the keyboard and the ⌘K palette.
 //!
@@ -167,13 +164,11 @@ pub const SHOWN_ROWS: usize = 5;
 pub enum NavView {
     #[default]
     Tree,
-    /// The Inbox: the blocked Threads oldest-first, then the Notices
-    /// under `Recent`. (`notifications::NeedsYou` holds its cursor.)
+    /// Open Threads awaiting handling, blockers oldest-first.
+    /// `notifications::NeedsYou` holds its cursor.
     Inbox,
     /// The parked Threads no Group claims.
     Parked,
-    /// The bell's (Codex's activity list): `Priority`, then `Today`.
-    Activity,
 }
 
 /// What the nav draws this frame: the Project sections and the views'
@@ -237,7 +232,9 @@ impl NavState {
         if rows().any(|row| row.status == RowStatus::NeedsYou) {
             Some(Alert::NeedsYou)
         } else {
-            rows().any(|row| row.status == RowStatus::Done).then_some(Alert::Unread)
+            rows()
+                .any(|row| row.status == RowStatus::Done)
+                .then_some(Alert::Unread)
         }
     }
 
@@ -376,19 +373,12 @@ impl RollUp {
 }
 
 /// The Activity view's list (the bell, Codex's), from the tree's rows:
-/// `Priority` — what asks for the operator: a request waiting (in ⌘D's
-/// order), a failure, a finish not yet seen, then what is at work — and
-/// below it every other open Thread by the day of its last turn, `Today`,
-/// `Yesterday`, then weekdays, newest first. A Thread moves between them as
-/// its state does, so a finish stays in view. An empty section is gone.
+/// Inbox holds open Threads awaiting handling; Working holds execution.
+/// Neither list depends on Notice acknowledgment or recency.
 #[derive(Clone, Default)]
 pub struct Activity {
-    pub priority: Vec<ActivityRow>,
-    /// The pinned Threads, when the bell's `⋯` shows them: their own
-    /// section after `Priority`, and not again under a day.
-    pub pinned: Vec<ActivityRow>,
-    /// Each day's heading and rows, most recent day first.
-    pub days: Vec<(SharedString, Vec<ActivityRow>)>,
+    pub inbox: Vec<ActivityRow>,
+    pub working: Vec<ActivityRow>,
 }
 
 /// One Activity row: the Thread's tree row (its title, Project, mark and
@@ -928,7 +918,7 @@ pub fn activity_button(on: bool, alert: Option<Alert>) -> Stateful<Div> {
         R_CONTROL,
     )
     .relative()
-    .tooltip(ferrite_ui::menu::tooltip("Activity"))
+    .tooltip(ferrite_ui::menu::tooltip("Inbox"))
     .children(alert.map(|alert| {
         div()
             .debug_selector(|| "nav-activity-dot".into())
@@ -1616,66 +1606,6 @@ pub fn title_w(place: RowPlace, marked: bool) -> f32 {
     place.text_w() - if marked { RIGHT_ROOM } else { 0.0 }
 }
 
-/// The Activity view's list (the bell's): `Priority` and `Today`, each a
-/// plain heading (§5.1.3's grammar) over its rows, flush, a section gap
-/// between them. The rows are the caller's (`activity_row`, wired).
-pub fn activity_list(
-    priority: Option<Vec<AnyElement>>,
-    more: AnyElement,
-    pinned: Vec<AnyElement>,
-    days: Vec<(SharedString, Vec<AnyElement>)>,
-) -> Div {
-    let mut list = view_list("nav-activity-list");
-    let mut sections: Vec<(&'static str, SharedString, Vec<AnyElement>)> = Vec::new();
-    if let Some(rows) = priority {
-        sections.push(("nav-activity-priority", "Priority".into(), rows));
-    }
-    if !pinned.is_empty() {
-        sections.push(("nav-activity-pinned", "Pinned".into(), pinned));
-    }
-    sections.extend(days.into_iter().map(|(label, rows)| {
-        let key = match &*label {
-            "Today" => "nav-activity-today",
-            "Yesterday" => "nav-activity-yesterday",
-            _ => "nav-activity-day",
-        };
-        (key, label, rows)
-    }));
-    // The `⋯` stands at the first heading's right, always shown (Codex's):
-    // the `Priority` one, or the first section's when `Priority` is hidden,
-    // so the menu that brings it back is never lost.
-    let mut more = Some(more);
-    let mut first = true;
-    for (key, label, rows) in sections {
-        // `Priority` keeps its heading with no rows, and says why.
-        if rows.is_empty() && key != "nav-activity-priority" {
-            continue;
-        }
-        let head = heading_frame(key)
-            .text_color(rgb(INK_SUBTLE))
-            .child(div().flex_1().child(label))
-            .children(more.take());
-        let rows = if rows.is_empty() {
-            vec![note("nav-activity-empty", "Nothing needs attention").into_any_element()]
-        } else {
-            rows
-        };
-        list = list.child(section(first).child(head).children(rows));
-        first = false;
-    }
-    if first {
-        // Nothing listed and `Priority` hidden: the menu stands alone.
-        list = list.child(
-            section(true).child(
-                heading_frame("nav-activity-priority")
-                    .child(div().flex_1())
-                    .children(more.take()),
-            ),
-        );
-    }
-    list
-}
-
 /// One Activity row (Codex's): the title in primary ink with the row's
 /// mark at its right (the spinner while it runs, the needs-you dot, a
 /// failure's), then the Project in `INK_SUBTLE`, then up to
@@ -1772,11 +1702,12 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
         NoticeState::NeedsYou(_) => RowStatus::NeedsYou,
         NoticeState::Failed => RowStatus::Failed,
         NoticeState::Done => RowStatus::Done,
+        NoticeState::Idle => RowStatus::Idle,
     };
     let ink = match row.state {
         NoticeState::NeedsYou(_) => ATTENTION,
         NoticeState::Failed => BLOCKED,
-        NoticeState::Done => {
+        NoticeState::Done | NoticeState::Idle => {
             if cursor {
                 INK_STRONG
             } else {
