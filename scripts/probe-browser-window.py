@@ -12,6 +12,9 @@ import threading
 import shlex
 import sys
 import uuid
+import hashlib
+import platform
+from datetime import datetime, timezone
 import time
 
 
@@ -65,6 +68,23 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     output = args.output.resolve()
+    # Reusing an artifact directory must not reuse a previous run's completion
+    # or startup marker, including directories restored by compiler caches.
+    for name in ('window-start.json', 'window-result.json', 'provider-result.json',
+                 'provider-result.tmp', 'provider-trace.json', 'provider-definitions.json',
+                 'provider-host.jsonl', 'startup-comparison.json', 'oracle.json',
+                 'cleanup-error.txt', 'window-before.png', 'window-after.png',
+                 'window-provider.png', 'window-current.png'):
+        (output/name).unlink(missing_ok=True)
+    with args.executable.open('rb') as binary:
+        executable_digest = hashlib.file_digest(binary, 'sha256').hexdigest()
+    (output/'provenance.json').write_text(json.dumps({
+        'started_utc':datetime.now(timezone.utc).isoformat(),
+        'executable':str(args.executable.resolve()), 'sha256':executable_digest,
+        'platform':platform.platform(), 'architecture':platform.machine(),
+        'provider':args.provider, 'diagnostic_only':args.startup_only,
+        'profile_mode':'isolated temporary production profile',
+    }, indent=2), encoding='utf-8')
     if os.name == 'nt':
         headers = [pe_stack(args.executable.resolve())]
         if args.compare_executable:
