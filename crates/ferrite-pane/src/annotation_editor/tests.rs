@@ -48,7 +48,10 @@ fn annotation_editor_pointer_feedback_preserves_capture(cx: &mut TestAppContext)
         AnnotationEditor::new(retained.clone(), retained.original().into(), cx)
     });
     cx.simulate_resize(size(px(600.), px(700.)));
-    editor.update(cx, |editor, cx| editor.select_tool(Tool::Rectangle, cx));
+    let rectangle = cx
+        .debug_bounds("annotation-tool-Rectangle")
+        .expect("Rectangle tool");
+    cx.simulate_click(rectangle.center(), Modifiers::none());
     let bounds = editor.read_with(cx, |editor, _| editor.picture_bounds().unwrap());
     let from = bounds.origin + point(bounds.size.width * 0.25, bounds.size.height * 0.25);
     let to = bounds.origin + point(bounds.size.width * 0.75, bounds.size.height * 0.75);
