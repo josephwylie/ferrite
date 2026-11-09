@@ -40,6 +40,7 @@ impl CockpitView {
             let mut opened = false;
             let mut clicked = false;
             let mut provider_started = false;
+            let mut ready_document = None;
             let provider = std::env::var_os("FERRITE_BROWSER_WINDOW_PROVIDER").is_some();
             let mut frames = 0u64;
             let mut last_error = String::new();
@@ -94,6 +95,27 @@ impl CockpitView {
                         }
                     }
                     if count < 2000 { return Ok(false); }
+                    if !clicked {
+                        // Painted pixels can precede the native navigation ACK.
+                        // Wait for the public service's loaded document to remain
+                        // current across a frame before injecting one gesture.
+                        // Otherwise production correctly discards that gesture
+                        // when its older document is superseded in the queue.
+                        let document = view.update(cx, |view, _| {
+                            let thread = view.cockpit.threads()[0];
+                            let state = view.cockpit.browser_attach(thread).map_err(|error| error.to_string())?;
+                            Ok::<_, String>(state.tabs.iter()
+                                .find(|tab| Some(tab.id) == state.active)
+                                .filter(|tab| tab.live && tab.visible && !tab.loading && tab.error.is_none() && tab.url == url)
+                                .map(|tab| tab.document()))
+                        })?;
+                        let stable = document.is_some() && ready_document == document;
+                        ready_document = document;
+                        if !stable { return Ok(false); }
+                        std::fs::write(output.join("input-ready.json"), serde_json::to_vec_pretty(&serde_json::json!({
+                            "document":document,"public_service_loaded":true,"stable_across_frames":true,
+                        })).unwrap()).map_err(|error| error.to_string())?;
+                    }
                     let name = if clicked { "window-after.png" } else { "window-before.png" };
                     image.save(output.join(name)).map_err(|error| error.to_string())?;
                     if clicked {

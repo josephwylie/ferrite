@@ -81,7 +81,7 @@ def main():
     output = args.output.resolve()
     # Reusing an artifact directory must not reuse a previous run's completion
     # or startup marker, including directories restored by compiler caches.
-    for name in ('window-start.json', 'window-result.json', 'provider-result.json',
+    for name in ('window-start.json', 'input-ready.json', 'window-result.json', 'provider-result.json',
                  'provider-result.tmp', 'provider-trace.json', 'provider-definitions.json',
                  'provider-host.jsonl', 'startup-comparison.json', 'oracle.json',
                  'cleanup-error.txt', 'oracle-at-exit.json', 'window-before.png', 'window-after.png',
