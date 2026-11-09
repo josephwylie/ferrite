@@ -17,7 +17,7 @@ import tempfile
 
 def security(*arguments):
     result = subprocess.run(
-        ["security", *arguments], capture_output=True, text=True, check=False
+        ["security", *arguments], capture_output=True, text=True, check=False, timeout=30
     )
     if result.returncode:
         # Do not include the command argv: create/unlock contains an ephemeral
@@ -57,7 +57,7 @@ def main():
             for stage in ("write", "read"):
                 environment["FERRITE_BROWSER_PROFILE_SMOKE"] = stage
                 result = subprocess.run(
-                    [executable, "--visual-smoke"], env=environment, check=False
+                    [executable, "--visual-smoke"], env=environment, check=False, timeout=180
                 )
                 if result.returncode:
                     raise RuntimeError(f"Production keychain profile {stage} failed")
