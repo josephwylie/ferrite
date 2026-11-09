@@ -23,6 +23,7 @@ pub struct ServerStatus {
     /// The open Threads, in the Roster's order.
     open: Vec<ThreadId>,
     states: HashMap<ThreadId, ThreadState>,
+    digests: HashMap<ThreadId, crate::digest::Digest>,
     /// The pending Decisions.
     waiting: BTreeMap<(ThreadId, WireHandle), WireDecision>,
     /// The Server's Notices as last heard; `None` until the first snapshot.
@@ -66,6 +67,7 @@ impl ServerStatus {
             remote,
             open: Vec::new(),
             states: HashMap::new(),
+            digests: HashMap::new(),
             waiting: BTreeMap::new(),
             notifications: None,
             revision: 0,
@@ -109,7 +111,15 @@ impl ServerStatus {
                 StatusRow {
                     thread: *thread,
                     title: state.and_then(|state| state.title.clone()),
-                    working: state.is_some_and(|state| state.working || state.starting),
+                    working: state.is_some_and(|state| {
+                        state.working
+                            || state.starting
+                            || state.native_queue_pending
+                            || !state.queue.is_empty()
+                            || !state.queued.is_empty()
+                    }) || self.digests.get(thread).is_some_and(|digest| {
+                        digest.working || digest.operator_turn || digest.background_work
+                    }),
                     waiting: self.waiting.keys().any(|(waits, _)| waits == thread),
                 }
             })
@@ -140,6 +150,10 @@ impl ServerStatus {
     }
 
     /// An open Thread's title, as far as it has one.
+    pub fn snooze(&self, thread: ThreadId) -> Option<crate::snooze::Snooze> {
+        self.states.get(&thread)?.snooze
+    }
+
     pub fn title(&self, thread: ThreadId) -> Option<&str> {
         self.states.get(&thread)?.title.as_deref()
     }
@@ -165,6 +179,12 @@ impl ServerStatus {
     }
 
     fn reset(&mut self, snapshot: Snapshot) {
+        self.digests = snapshot
+            .digests
+            .unwrap_or_default()
+            .into_iter()
+            .map(|entry| (entry.thread, entry.digest))
+            .collect();
         self.revision = snapshot.revision;
         self.open = snapshot.roster.open;
         self.states = snapshot
@@ -184,12 +204,17 @@ impl ServerStatus {
 
     fn heard(&mut self, message: ServerMessage) -> bool {
         match message {
+            ServerMessage::Digest { thread, digest } => {
+                self.digests.insert(thread, digest);
+                true
+            }
             ServerMessage::Thread { revision, state } if revision >= self.revision => {
                 self.states.insert(state.thread, state);
                 true
             }
             ServerMessage::Roster { revision, roster } if revision >= self.revision => {
                 self.open = roster.open;
+                self.digests.retain(|thread, _| self.open.contains(thread));
                 true
             }
             ServerMessage::Notices { revision, notices } if revision >= self.revision => {

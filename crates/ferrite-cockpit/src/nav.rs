@@ -6,11 +6,8 @@
 //! members hanging under it, then `Recents`, the Threads in no Project —
 //! and the foot (the view switcher, the account row and the gear). A view
 //! other than the tree shows its list in the tree's place; Esc or a click
-//! on the active view returns to it. The Activity view (the bell, Codex's)
-//! is one: what runs or needs the operator under `Priority`, the rest
-//! touched today under `Today`, each row its title, Project and the last
-//! message's opening lines. The Inbox (⌘I) is another, reached from the
-//! keyboard and the palette.
+//! on the active view returns to it. The Inbox, reached by the bell or ⌘I,
+//! lists open Threads awaiting the operator and separates Working below.
 //! It is a view, never the only door: everything a row does (focus,
 //! revive, regroup) stays reachable from the keyboard and the ⌘K palette.
 //!
@@ -167,13 +164,11 @@ pub const SHOWN_ROWS: usize = 5;
 pub enum NavView {
     #[default]
     Tree,
-    /// The Inbox: the blocked Threads oldest-first, then the Notices
-    /// under `Recent`. (`notifications::NeedsYou` holds its cursor.)
+    /// Open Threads awaiting handling, blockers oldest-first.
+    /// `notifications::NeedsYou` holds its cursor.
     Inbox,
     /// The parked Threads no Group claims.
     Parked,
-    /// The bell's (Codex's activity list): `Priority`, then `Today`.
-    Activity,
 }
 
 /// What the nav draws this frame: the Project sections and the views'
@@ -237,7 +232,9 @@ impl NavState {
         if rows().any(|row| row.status == RowStatus::NeedsYou) {
             Some(Alert::NeedsYou)
         } else {
-            rows().any(|row| row.status == RowStatus::Done).then_some(Alert::Unread)
+            rows()
+                .any(|row| row.status == RowStatus::Done)
+                .then_some(Alert::Unread)
         }
     }
 
@@ -376,28 +373,13 @@ impl RollUp {
 }
 
 /// The Activity view's list (the bell, Codex's), from the tree's rows:
-/// `Priority` — what asks for the operator: a request waiting (in ⌘D's
-/// order), a failure, a finish not yet seen, then what is at work — and
-/// below it every other open Thread by the day of its last turn, `Today`,
-/// `Yesterday`, then weekdays, newest first. A Thread moves between them as
-/// its state does, so a finish stays in view. An empty section is gone.
+/// Inbox holds open Threads awaiting handling; Working holds execution.
+/// Neither list depends on Notice acknowledgment or recency.
 #[derive(Clone, Default)]
-pub struct Activity {
-    pub priority: Vec<ActivityRow>,
-    /// The pinned Threads, when the bell's `⋯` shows them: their own
-    /// section after `Priority`, and not again under a day.
-    pub pinned: Vec<ActivityRow>,
-    /// Each day's heading and rows, most recent day first.
-    pub days: Vec<(SharedString, Vec<ActivityRow>)>,
-}
-
-/// One Activity row: the Thread's tree row (its title, Project, mark and
-/// selection) and the opening of its last message, when the facts hold
-/// one (`ThreadFacts::wall`'s last prose line).
-#[derive(Clone)]
-pub struct ActivityRow {
-    pub row: ThreadRow,
-    pub preview: Option<SharedString>,
+pub struct Inbox {
+    pub inbox: Vec<ThreadRow>,
+    pub working: Vec<ThreadRow>,
+    pub snoozed: Vec<ThreadRow>,
 }
 
 /// One Project's run of a view's list (§5.1.2), drawn as the tree draws
@@ -928,7 +910,7 @@ pub fn activity_button(on: bool, alert: Option<Alert>) -> Stateful<Div> {
         R_CONTROL,
     )
     .relative()
-    .tooltip(ferrite_ui::menu::tooltip("Activity"))
+    .tooltip(ferrite_ui::menu::tooltip("Inbox"))
     .children(alert.map(|alert| {
         div()
             .debug_selector(|| "nav-activity-dot".into())
@@ -1078,7 +1060,12 @@ fn heading_frame(key: &'static str) -> Div {
 /// label its caret (`components::fold_chevron`
 /// at `NAV_HEADING_CARET`): `▸` shut, `▾` open, turning as the fold flips.
 /// The cockpit wires the press.
-pub fn fold_heading(key: &'static str, label: &'static str, folded: bool) -> Stateful<Div> {
+pub fn fold_heading(
+    key: &'static str,
+    label: impl Into<SharedString>,
+    folded: bool,
+) -> Stateful<Div> {
+    let label: SharedString = label.into();
     let blend = SharedString::from(key);
     let t = motion::hover_t(&blend);
     heading_frame(key)
@@ -1616,152 +1603,6 @@ pub fn title_w(place: RowPlace, marked: bool) -> f32 {
     place.text_w() - if marked { RIGHT_ROOM } else { 0.0 }
 }
 
-/// The Activity view's list (the bell's): `Priority` and `Today`, each a
-/// plain heading (§5.1.3's grammar) over its rows, flush, a section gap
-/// between them. The rows are the caller's (`activity_row`, wired).
-pub fn activity_list(
-    priority: Option<Vec<AnyElement>>,
-    more: AnyElement,
-    pinned: Vec<AnyElement>,
-    days: Vec<(SharedString, Vec<AnyElement>)>,
-) -> Div {
-    let mut list = view_list("nav-activity-list");
-    let mut sections: Vec<(&'static str, SharedString, Vec<AnyElement>)> = Vec::new();
-    if let Some(rows) = priority {
-        sections.push(("nav-activity-priority", "Priority".into(), rows));
-    }
-    if !pinned.is_empty() {
-        sections.push(("nav-activity-pinned", "Pinned".into(), pinned));
-    }
-    sections.extend(days.into_iter().map(|(label, rows)| {
-        let key = match &*label {
-            "Today" => "nav-activity-today",
-            "Yesterday" => "nav-activity-yesterday",
-            _ => "nav-activity-day",
-        };
-        (key, label, rows)
-    }));
-    // The `⋯` stands at the first heading's right, always shown (Codex's):
-    // the `Priority` one, or the first section's when `Priority` is hidden,
-    // so the menu that brings it back is never lost.
-    let mut more = Some(more);
-    let mut first = true;
-    for (key, label, rows) in sections {
-        // `Priority` keeps its heading with no rows, and says why.
-        if rows.is_empty() && key != "nav-activity-priority" {
-            continue;
-        }
-        let head = heading_frame(key)
-            .text_color(rgb(INK_SUBTLE))
-            .child(div().flex_1().child(label))
-            .children(more.take());
-        let rows = if rows.is_empty() {
-            vec![note("nav-activity-empty", "Nothing needs attention").into_any_element()]
-        } else {
-            rows
-        };
-        list = list.child(section(first).child(head).children(rows));
-        first = false;
-    }
-    if first {
-        // Nothing listed and `Priority` hidden: the menu stands alone.
-        list = list.child(
-            section(true).child(
-                heading_frame("nav-activity-priority")
-                    .child(div().flex_1())
-                    .children(more.take()),
-            ),
-        );
-    }
-    list
-}
-
-/// One Activity row (Codex's): the title in primary ink with the row's
-/// mark at its right (the spinner while it runs, the needs-you dot, a
-/// failure's), then the Project in `INK_SUBTLE`, then up to
-/// `NAV_ACTIVITY_PREVIEW_LINES` of the last message, wrapped and cut with
-/// an ellipsis, in `INK_SUBTLE` too. It washes and selects as a tree row
-/// does; the cockpit wires its press (`land_on_thread`).
-pub fn activity_row(
-    activity: &ActivityRow,
-    actions: Option<AnyElement>,
-    measure: &Measure,
-) -> Stateful<Div> {
-    let row = &activity.row;
-    let thread = row.thread;
-    let key = SharedString::from(format!("nav-activity-row-{}", thread.get()));
-    // Under the pointer the row's pin and archive stand where its mark does.
-    let actions = actions.filter(|_| hovered(&key));
-    let mark = actions.is_none().then(|| state_mark(row.status)).flatten();
-    let text_w = INNER_W - 2.0 * NAV_ROW_PAD_X;
-    let title_w = text_w
-        - if actions.is_some() {
-            2.0 * NAV_HEADING_BUTTON + NAV_MARK_GAP
-        } else if mark.is_some() {
-            RIGHT_ROOM
-        } else {
-            0.0
-        };
-    let (ink, weight) = title_face(row);
-    let ground = row_ground(&key, row.selected);
-    let title_ground = cut_ground(measure, &row.name, FS_NAV, weight, title_w, ground);
-    let meta = |text: SharedString| {
-        div()
-            .w(px(text_w))
-            .text_size(px(FS_META))
-            .line_height(px(LH_META))
-            .text_color(rgb(INK_SUBTLE))
-            .child(text)
-    };
-    pitched(row_frame(
-        ("nav-activity-row", thread.get() as usize),
-        key,
-        row.selected,
-    ))
-    .debug_selector(move || format!("nav-activity-row-{}", thread.get()))
-    .flex_col()
-    .px(px(NAV_ROW_PAD_X))
-    .py(px(NAV_ACTIVITY_PAD_Y))
-    .child(
-        div()
-            .flex()
-            .items_center()
-            .h(px(NAV_LINE))
-            .child(fitted(
-                title_w,
-                FS_NAV,
-                ink,
-                weight,
-                row.name.clone(),
-                title_ground,
-            ))
-            .children(mark.map(|mark| {
-                at_right(
-                    mark.debug_selector(move || format!("nav-activity-state-{}", thread.get()))
-                        .into_any_element(),
-                )
-            }))
-            .children(actions.map(at_right)),
-    )
-    .children(row.project.clone().map(|project| meta(project).truncate()))
-    .children(activity.preview.clone().map(|preview| {
-        meta(preview)
-            .debug_selector(move || format!("nav-activity-preview-{}", thread.get()))
-            .whitespace_normal()
-            .line_clamp(NAV_ACTIVITY_PREVIEW_LINES)
-            .text_ellipsis()
-    }))
-    .when_some(
-        match &row.tail {
-            NavTail::Age(age) if !age.is_empty() => Some(age.clone()),
-            _ => None,
-        },
-        |row, age| row.tooltip(ferrite_ui::menu::tooltip(age)),
-    )
-}
-
-// ------------------------------------------------------------- the views' lists// ------------------------------------------------------------- the views' lists
-
 /// A Notice under `Recent` in the Inbox (or a request from a
 /// machine off screen above it), two lines: its mark, its title
 /// (`INK_STRONG` while unread) and its age, then its state's word and
@@ -1772,11 +1613,12 @@ pub fn notice_row(index: usize, row: &NoticeRow, cursor: bool, measure: &Measure
         NoticeState::NeedsYou(_) => RowStatus::NeedsYou,
         NoticeState::Failed => RowStatus::Failed,
         NoticeState::Done => RowStatus::Done,
+        NoticeState::Idle => RowStatus::Idle,
     };
     let ink = match row.state {
         NoticeState::NeedsYou(_) => ATTENTION,
         NoticeState::Failed => BLOCKED,
-        NoticeState::Done => {
+        NoticeState::Done | NoticeState::Idle => {
             if cursor {
                 INK_STRONG
             } else {
@@ -2394,30 +2236,6 @@ mod tests {
         );
         assert_eq!(RowPlace::Row(1).title_x(), NAV_ROW_PAD_X + NAV_TREE_INDENT);
         assert_eq!(RowPlace::Member(0).title_x(), RowPlace::Row(1).title_x());
-    }
-
-    /// The Activity view's row (Codex's): the title with the spinner at
-    /// its right while it runs, then the Project and the last message's
-    /// opening, clamped to two lines; a row with no preview says none.
-    #[test]
-    fn an_activity_row_says_title_project_and_preview() {
-        let working = ActivityRow {
-            row: ThreadRow {
-                status: RowStatus::Working,
-                project: Some("ferrite".into()),
-                ..thread()
-            },
-            preview: Some("Split the nav into its views".into()),
-        };
-        let mut drawn = activity_row(&working, None, &Measure::Cells(7.0));
-        assert_eq!(drawn.style().padding.left, Some(px(NAV_ROW_PAD_X).into()));
-        assert!(state_mark(RowStatus::Working).is_some(), "the spinner");
-        assert_eq!(NAV_ACTIVITY_PREVIEW_LINES, 2);
-        let quiet = ActivityRow {
-            preview: None,
-            ..working
-        };
-        let _ = activity_row(&quiet, None, &Measure::Cells(7.0));
     }
 
     /// N-5, the selection rule: one selection, on the row of what the board
