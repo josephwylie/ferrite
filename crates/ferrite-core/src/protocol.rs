@@ -62,6 +62,14 @@ pub enum ClientMessage {
         thread: ThreadId,
     },
     Command(Command),
+    BrowserReply {
+        request: u64,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        revision: u64,
+        outcome: crate::browser::Outcome,
+    },
     BrowserPage {
         thread: ThreadId,
         owner: crate::browser::Owner,
@@ -127,9 +135,37 @@ pub struct Command {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
+    BrowserProtect {
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        protection: crate::browser::Protection,
+    },
+    BrowserRelease {
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        lease: crate::browser::Lease,
+    },
+    BrowserReclaim {
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+    },
+    BrowserReclaimed {
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        lease: crate::browser::Lease,
+        released: bool,
+    },
+    BrowserPage {
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        page: crate::browser::PageState,
+    },
     BrowserInput {
         thread: ThreadId,
         owner: crate::browser::Owner,
+        document: crate::browser::Document,
     },
     BrowserAttach {
         thread: ThreadId,
@@ -442,7 +478,12 @@ impl Op {
     /// a new one is placed here on purpose.
     pub fn thread(&self) -> Option<ThreadId> {
         match self {
-            Op::BrowserInput { thread, .. }
+            Op::BrowserProtect { thread, .. }
+            | Op::BrowserRelease { thread, .. }
+            | Op::BrowserReclaim { thread, .. }
+            | Op::BrowserReclaimed { thread, .. }
+            | Op::BrowserPage { thread, .. }
+            | Op::BrowserInput { thread, .. }
             | Op::BrowserAttach { thread }
             | Op::Browser { thread, .. }
             | Op::Send { thread, .. }
@@ -755,8 +796,18 @@ pub enum NoticeAction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
+    BrowserRequest {
+        request: u64,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        revision: u64,
+        control: crate::browser::Control,
+    },
     Browser {
         thread: ThreadId,
+        /// True only for the connection that actually owns this state.
+        owned: bool,
         owner: Option<crate::browser::Owner>,
         state: crate::browser::State,
         action: Option<crate::browser::Action>,
@@ -1052,6 +1103,12 @@ pub enum ErrorCode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Done {
+    BrowserProtection {
+        lease: crate::browser::Lease,
+    },
+    BrowserReclaim {
+        lease: Option<crate::browser::Lease>,
+    },
     BrowserInput {
         revision: u64,
     },

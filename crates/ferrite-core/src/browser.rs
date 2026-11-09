@@ -2,6 +2,10 @@
 //! engine pages; neither providers nor previews own an independent browser.
 //! Only URL/order/selection survive restart. Capabilities and live state do not.
 
+mod control;
+pub(crate) use control::{channel, Requests};
+pub use control::{Client, Control, Operation, Outcome, Response, ThreadClient};
+
 use crate::ThreadId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -43,6 +47,8 @@ pub struct Tab {
     pub error: Option<String>,
     pub live: bool,
     pub dirty: Dirty,
+    /// Includes active commands and annotation capture, never a renderer id.
+    pub protected: bool,
 }
 
 impl Tab {
@@ -78,6 +84,8 @@ pub enum Action {
 pub enum Protection {
     Command,
     Annotation,
+    /// Internal two-phase unloading reservation; never an agent lease.
+    Reclaim,
 }
 
 /// An opaque protection token. The service checks its owner/document before
@@ -124,7 +132,13 @@ type Result<T> = std::result::Result<T, String>;
 
 impl Service {
     pub fn state(&self, thread: ThreadId) -> State {
-        self.threads.get(&thread).cloned().unwrap_or_default()
+        let mut state = self.threads.get(&thread).cloned().unwrap_or_default();
+        for tab in &mut state.tabs {
+            tab.protected = self.protections.values().any(|(id, _, document, kind)| {
+                *id == thread && document.tab == tab.id && *kind != Protection::Reclaim
+            });
+        }
+        state
     }
 
     /// The caller verifies that `window` advertises browser capability and is
@@ -147,23 +161,32 @@ impl Service {
         Ok(owner)
     }
 
-    pub fn detach_window(&mut self, window: u64) -> Vec<ThreadId> {
-        let mut detached = Vec::new();
-        for (thread, state) in &mut self.threads {
-            if state.owner.is_some_and(|owner| owner.window == window) {
-                state.owner = None;
-                for tab in &mut state.tabs {
-                    tab.live = false;
-                    tab.loading = false;
-                    tab.generation += 1;
-                    tab.dirty = Dirty::Unknown;
-                }
-                detached.push(*thread);
-            }
+    pub fn detach(&mut self, thread: ThreadId, window: u64) -> bool {
+        let Some(state) = self
+            .threads
+            .get_mut(&thread)
+            .filter(|state| state.owner.is_some_and(|owner| owner.window == window))
+        else {
+            return false;
+        };
+        state.owner = None;
+        for tab in &mut state.tabs {
+            tab.live = false;
+            tab.loading = false;
+            tab.generation += 1;
+            tab.dirty = Dirty::Unknown;
         }
-        self.protections
-            .retain(|_, (_, owner, _, _)| owner.window != window);
-        detached
+        self.protections.retain(|_, (id, _, _, _)| *id != thread);
+        self.manual.remove(&thread);
+        true
+    }
+
+    pub fn detach_window(&mut self, window: u64) -> Vec<ThreadId> {
+        let threads: Vec<_> = self.threads.keys().copied().collect();
+        threads
+            .into_iter()
+            .filter(|thread| self.detach(*thread, window))
+            .collect()
     }
 
     pub fn check_owner(&self, thread: ThreadId, owner: Owner) -> Result<()> {
@@ -228,10 +251,19 @@ impl Service {
                     error: None,
                     live: true,
                     dirty: Dirty::Unknown,
+                    protected: false,
                 });
                 state.active = Some(id);
             }
             Action::Select { tab } => {
+                if self.protections.values().any(|(id, _, document, kind)| {
+                    *id == thread && document.tab == tab && *kind == Protection::Reclaim
+                }) {
+                    return Err(
+                        "This page is being unloaded; select it again once unloading completes"
+                            .into(),
+                    );
+                }
                 let selected = state
                     .tabs
                     .iter_mut()
@@ -263,6 +295,16 @@ impl Service {
                         .tabs
                         .get(at.min(state.tabs.len().saturating_sub(1)))
                         .map(|tab| tab.id);
+                    if let Some(next) = state
+                        .tabs
+                        .iter_mut()
+                        .find(|tab| Some(tab.id) == state.active)
+                    {
+                        if !next.live {
+                            next.live = true;
+                            begin_navigation(next);
+                        }
+                    }
                 }
             }
             Action::Navigate { document, url } => {
@@ -285,7 +327,7 @@ impl Service {
                 begin_navigation(tab);
             }
         }
-        Ok(state.clone())
+        Ok(self.state(thread))
     }
 
     /// Navigation/dirty information from the exact window-owned page. An old
@@ -312,6 +354,23 @@ impl Service {
         Ok(state.clone())
     }
 
+    pub(crate) fn persistence_error(&mut self, thread: ThreadId, error: &str) {
+        if let Some(state) = self.threads.get_mut(&thread) {
+            if let Some(tab) = state
+                .tabs
+                .iter_mut()
+                .find(|tab| Some(tab.id) == state.active)
+            {
+                let previous = tab
+                    .error
+                    .take()
+                    .map(|error| format!("{error}. "))
+                    .unwrap_or_default();
+                tab.error = Some(format!("{previous}Tab URLs could not be saved: {error}. Check available disk space and the store permissions"));
+            }
+        }
+    }
+
     pub fn protect(
         &mut self,
         thread: ThreadId,
@@ -321,14 +380,12 @@ impl Service {
     ) -> Result<Lease> {
         self.check_owner(thread, owner)?;
         self.check_document(thread, document)?;
-        if kind == Protection::Command
-            && self
-                .protections
-                .values()
-                .any(|(t, _, _, k)| *t == thread && *k == Protection::Command)
-        {
+        if kind == Protection::Reclaim {
+            return Err("Use the page reclamation handshake to reserve an unload".into());
+        }
+        if self.protections.values().any(|(id, _, _, _)| *id == thread) {
             return Err(
-                "Another agent is using this Thread's browser; wait for its command to finish"
+                "This Thread's browser is in use; finish its command or annotation capture first"
                     .into(),
             );
         }
@@ -373,6 +430,7 @@ impl Service {
             .find(|page| page.id == tab)
             .ok_or("No such tab in this Thread")?;
         if !page.live
+            || page.loading
             || state.active == Some(tab)
             || page.dirty != Dirty::Clean
             || self
@@ -387,6 +445,66 @@ impl Service {
         page.generation += 1;
         page.dirty = Dirty::Unknown;
         Ok(true)
+    }
+
+    /// Reserve an eligible inactive page while the owning window asks its
+    /// native view to release. Commands cannot select or use it in between.
+    pub fn begin_reclaim(
+        &mut self,
+        thread: ThreadId,
+        owner: Owner,
+        document: Document,
+    ) -> Result<Option<Lease>> {
+        self.check_owner(thread, owner)?;
+        self.check_document(thread, document)?;
+        let state = self.state(thread);
+        let page = state
+            .tabs
+            .iter()
+            .find(|page| page.id == document.tab)
+            .expect("checked document");
+        if state.active == Some(document.tab)
+            || page.loading
+            || page.dirty != Dirty::Clean
+            || self.protections.values().any(|(id, _, _, _)| *id == thread)
+        {
+            return Ok(None);
+        }
+        self.next_lease += 1;
+        let lease = Lease(self.next_lease);
+        self.protections
+            .insert(lease.0, (thread, owner, document, Protection::Reclaim));
+        Ok(Some(lease))
+    }
+
+    /// A failed native release keeps the exact document. Only a successful
+    /// acknowledgement changes live identity and invalidates stale callbacks.
+    pub fn finish_reclaim(
+        &mut self,
+        thread: ThreadId,
+        owner: Owner,
+        lease: Lease,
+        released: bool,
+    ) -> Result<State> {
+        self.check_owner(thread, owner)?;
+        let document = match self.protections.get(&lease.0) {
+            Some((id, candidate, document, Protection::Reclaim))
+                if *id == thread && *candidate == owner =>
+            {
+                *document
+            }
+            _ => return Err("This page reclamation reservation is no longer valid".into()),
+        };
+        self.release(thread, owner, lease)?;
+        if released {
+            self.check_document(thread, document)?;
+        }
+        if released && !self.reclaim(thread, owner, document.tab)? {
+            return Err(
+                "The page changed while unloading; reopen this tab to restore its URL".into(),
+            );
+        }
+        Ok(self.state(thread))
     }
 
     pub fn save(&self) -> Saved {
@@ -445,6 +563,7 @@ impl Service {
                     error: None,
                     live: false,
                     dirty: Dirty::Unknown,
+                    protected: false,
                 });
             }
             state.active = saved

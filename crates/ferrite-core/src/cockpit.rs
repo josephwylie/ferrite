@@ -264,17 +264,113 @@ impl Cockpit {
         }
     }
 
+    pub fn browser_protect(
+        &mut self,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        protection: crate::browser::Protection,
+    ) -> io::Result<crate::browser::Lease> {
+        match self
+            .remote()?
+            .execute(Op::BrowserProtect {
+                thread,
+                owner,
+                document,
+                protection,
+            })
+            .map_err(|error| io::Error::other(error.message))?
+        {
+            Some(Done::BrowserProtection { lease }) => Ok(lease),
+            _ => Err(io::Error::other(
+                "The Server could not protect this browser page",
+            )),
+        }
+    }
+
+    pub fn browser_release(
+        &mut self,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        lease: crate::browser::Lease,
+    ) -> io::Result<()> {
+        self.remote()?
+            .execute(Op::BrowserRelease {
+                thread,
+                owner,
+                lease,
+            })
+            .map_err(|error| io::Error::other(error.message))?;
+        Ok(())
+    }
+
+    pub fn browser_reclaim(
+        &mut self,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+    ) -> io::Result<Option<crate::browser::Lease>> {
+        match self
+            .remote()?
+            .execute(Op::BrowserReclaim {
+                thread,
+                owner,
+                document,
+            })
+            .map_err(|error| io::Error::other(error.message))?
+        {
+            Some(Done::BrowserReclaim { lease }) => Ok(lease),
+            _ => Err(io::Error::other(
+                "The Server could not reserve this page for unloading",
+            )),
+        }
+    }
+
+    pub fn browser_reclaimed(
+        &mut self,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        lease: crate::browser::Lease,
+        released: bool,
+    ) -> io::Result<crate::browser::State> {
+        self.browser_op(Op::BrowserReclaimed {
+            thread,
+            owner,
+            lease,
+            released,
+        })
+    }
+
     pub fn browser_page(
         &mut self,
         thread: ThreadId,
         owner: crate::browser::Owner,
         page: crate::browser::PageState,
+    ) -> io::Result<crate::browser::State> {
+        self.browser_op(Op::BrowserPage {
+            thread,
+            owner,
+            page,
+        })
+    }
+
+    pub fn browser_reply(
+        &mut self,
+        request: u64,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        revision: u64,
+        outcome: crate::browser::Outcome,
     ) {
         if let Ok(remote) = self.remote() {
-            remote.say(&crate::protocol::ClientMessage::BrowserPage {
+            remote.say(&crate::protocol::ClientMessage::BrowserReply {
+                request,
                 thread,
                 owner,
-                page,
+                document,
+                revision,
+                outcome,
             });
         }
     }
@@ -283,10 +379,15 @@ impl Cockpit {
         &mut self,
         thread: ThreadId,
         owner: crate::browser::Owner,
+        document: crate::browser::Document,
     ) -> io::Result<u64> {
         match self
             .remote()?
-            .execute(Op::BrowserInput { thread, owner })
+            .execute(Op::BrowserInput {
+                thread,
+                owner,
+                document,
+            })
             .map_err(|e| io::Error::other(e.message))?
         {
             Some(Done::BrowserInput { revision }) => Ok(revision),
@@ -669,7 +770,10 @@ impl Cockpit {
     }
 
     fn message(&mut self, message: ServerMessage, boot: Instant) {
-        if matches!(message, ServerMessage::Browser { .. }) {
+        if matches!(
+            message,
+            ServerMessage::Browser { .. } | ServerMessage::BrowserRequest { .. }
+        ) {
             self.browser_messages.push(message);
             return;
         }

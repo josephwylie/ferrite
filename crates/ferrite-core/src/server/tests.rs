@@ -164,6 +164,7 @@ struct Harness {
     sessions: Receiver<Sender<SessionEvent>>,
     answers: Answers,
     queued: Queued,
+    browser: crate::browser::Client,
 }
 
 fn start(name: &str) -> Harness {
@@ -210,6 +211,7 @@ fn serve_in(
     };
     let settings_dir = dir.clone();
     let (relaunches, relaunched) = mpsc::channel();
+    let (browser, browser_requests) = crate::browser::channel();
     let server = std::thread::spawn(move || {
         let engine = Engine::try_new(Store::open(&store).unwrap(), Box::new(spawn)).unwrap();
         let info = ServerInfo {
@@ -219,6 +221,7 @@ fn serve_in(
         let (_, renders) = render::remote();
         let defaults = Arc::new(Mutex::new(SessionDefaults::default()));
         let mut server = Server::new(engine, info, renders, defaults, settings_dir);
+        server.browser_requests = browser_requests;
         server.projects = projects;
         server.relaunch = Box::new(move |executable: &Path| {
             relaunches.send(executable.to_owned()).unwrap();
@@ -238,6 +241,7 @@ fn serve_in(
         sessions: started,
         answers,
         queued,
+        browser,
     }
 }
 
@@ -4939,4 +4943,81 @@ fn a_restart_not_back_in_time_reads_failed_until_it_is() {
             Some(ServerRestart::Restarted { .. })
         )
     });
+}
+
+#[test]
+fn browser_requests_use_an_attached_thread_window_without_a_synthetic_client() {
+    use crate::browser::{Action, Operation};
+    let harness = start("browser-request-routing");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    window.watch(thread, None);
+    let request = || {
+        Operation::Action(Action::Open {
+            url: "https://example.com/account".into(),
+        })
+    };
+    let unavailable = harness.browser.for_thread(thread).submit(request());
+    assert!(unavailable
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .is_err());
+    let Attached { mut client, .. } = Client::attach(
+        &harness.address,
+        ClientMessage::Hello {
+            generation: 1,
+            client: Peer {
+                name: "browser-owner".into(),
+                version: "0".into(),
+            },
+            capabilities: vec![Capability::ConversationBrowser],
+        },
+    )
+    .unwrap();
+    client
+        .send(&ClientMessage::Watch {
+            thread,
+            resume: None,
+        })
+        .unwrap();
+    // The synchronous command also orders Watch ahead of the agent request.
+    client
+        .send(&ClientMessage::Command(Command {
+            id: 4,
+            op: Op::SettingsChanged,
+        }))
+        .unwrap();
+    loop {
+        if matches!(
+            client
+                .messages
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+            ServerMessage::Reply { id: 4, .. }
+        ) {
+            break;
+        }
+    }
+    let reply = harness.browser.for_thread(thread).submit(request());
+    let result = reply.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    assert_eq!(result.state.tabs[0].url, "https://example.com/account");
+    let mut realized = false;
+    while !realized {
+        if let ServerMessage::Browser {
+            thread: got,
+            state,
+            action: Some(Action::Open { .. }),
+            ..
+        } = client
+            .messages
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+        {
+            assert_eq!(got, thread);
+            assert_eq!(state.tabs[0].id, result.state.tabs[0].id);
+            realized = true;
+        }
+    }
+    window.command(99, Op::Stop { when: When::Now });
+    assert_eq!(harness.server.join().unwrap(), 0);
 }
