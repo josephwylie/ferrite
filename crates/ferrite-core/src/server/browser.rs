@@ -139,6 +139,7 @@ pub(super) struct Pending {
     revision: u64,
     lease: crate::browser::Lease,
     observation: bool,
+    refreshes: bool,
     recovering: bool,
     deadline: Instant,
     reply: std::sync::mpsc::SyncSender<Result<crate::browser::Response, String>>,
@@ -174,6 +175,49 @@ impl Server {
         }
     }
 
+    fn browser_agent_action(
+        &mut self,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        action: Action,
+    ) -> Result<crate::browser::Response, String> {
+        if self
+            .browser_pending
+            .values()
+            .any(|pending| pending.thread == thread)
+            || self.browser_uncertain.contains_key(&thread)
+        {
+            return Err("This Thread's browser has an active or uncertain command; observe its result before navigating, switching or closing pages".into());
+        }
+        let state = self.browser.state(thread);
+        let revision = self.browser.operator_revision(thread);
+        let target = match &action {
+            Action::Navigate { document, .. }
+            | Action::Back { document }
+            | Action::Forward { document }
+            | Action::Reload { document } => Some(*document),
+            Action::Close { tab } => state
+                .tabs
+                .iter()
+                .find(|page| page.id == *tab)
+                .map(|page| page.document()),
+            Action::Open { .. } | Action::Select { .. } if revision > 0 => state
+                .tabs
+                .iter()
+                .find(|page| Some(page.id) == state.active)
+                .map(|page| page.document()),
+            _ => None,
+        };
+        if let Some(document) = target {
+            if self.browser_observed.get(&thread) != Some(&(document, revision)) {
+                return Err("Observe the current page before navigating, switching or closing it; operator input invalidates earlier observations".into());
+            }
+        }
+        self.browser_action(owner.window, thread, action)
+            .map_err(|error| error.message)?;
+        Ok(self.browser_response(thread, None))
+    }
+
     pub(super) fn forward_browser_requests(&mut self) {
         use crate::browser::Operation;
         while let Ok(request) = self.browser_requests.0.try_recv() {
@@ -187,10 +231,7 @@ impl Server {
             };
             let result = match request.operation {
                 Operation::State => Ok(self.browser_response(thread, None)),
-                Operation::Action(action) => self
-                    .browser_action(owner.window, thread, action)
-                    .map(|_| self.browser_response(thread, None))
-                    .map_err(|error| error.message),
+                Operation::Action(action) => self.browser_agent_action(thread, owner, action),
                 Operation::Control {
                     document,
                     revision,
@@ -207,9 +248,11 @@ impl Server {
                             return Err("Another agent is using this Thread's browser; wait for its command to finish".into());
                         }
                         if !control.observation()
-                            && revision != self.browser.operator_revision(thread)
+                            && (revision != self.browser.operator_revision(thread)
+                                || self.browser_observed.get(&thread)
+                                    != Some(&(document, revision)))
                         {
-                            return Err("The operator interacted with this page; observe fresh state before continuing".into());
+                            return Err("Observe the current page before continuing; operator input and page changes invalidate earlier observations".into());
                         }
                         let recovering = self.browser_uncertain.contains_key(&thread);
                         if recovering && !control.observation() {
@@ -242,6 +285,7 @@ impl Server {
                                     revision,
                                     lease,
                                     observation: control.observation(),
+                                    refreshes: matches!(control, crate::browser::Control::Observe),
                                     recovering,
                                     deadline: Instant::now() + Duration::from_secs(45),
                                     reply: request.reply,
@@ -318,11 +362,15 @@ impl Server {
                 else { Err("The operator interacted with this page; observe fresh state before continuing".into()) });
         let (result, uncertain) = match (current, outcome) {
             (Err(error), _) => (Err(error), !pending.observation || pending.recovering),
-            (Ok(()), crate::browser::Outcome::Success { value }) => (Ok(self.browser_response(thread, Some(value))), false),
+            (Ok(()), crate::browser::Outcome::Success { value }) => {
+                if pending.refreshes { self.browser_observed.insert(thread, (document, revision)); }
+                (Ok(self.browser_response(thread, Some(value))), pending.recovering && !pending.refreshes)
+            },
             (Ok(()), crate::browser::Outcome::Failed { error }) => (Err(error), pending.recovering),
             (Ok(()), crate::browser::Outcome::Uncertain { error }) => (Err(format!("Action completion is uncertain: {error}. Observe current page state; do not retry writes automatically")), true),
         };
         if uncertain {
+            self.browser_observed.remove(&thread);
             self.browser_uncertain.insert(thread, pending.lease);
         } else {
             self.browser_uncertain.remove(&thread);
@@ -358,6 +406,7 @@ impl Server {
         };
         for thread in detached {
             self.browser_uncertain.remove(&thread);
+            self.browser_observed.remove(&thread);
             self.publish_browser(thread, None);
         }
     }

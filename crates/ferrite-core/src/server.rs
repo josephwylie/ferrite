@@ -331,6 +331,7 @@ struct Server {
     browser_pending: BTreeMap<u64, browser::Pending>,
     browser_next: u64,
     browser_uncertain: BTreeMap<ThreadId, crate::browser::Lease>,
+    browser_observed: BTreeMap<ThreadId, (crate::browser::Document, u64)>,
     searches: Vec<Search>,
     reads: Vec<Read>,
     /// First sends still starting, by the tag the Engine knows them by:
@@ -380,6 +381,7 @@ impl Server {
             browser_pending: BTreeMap::new(),
             browser_next: 0,
             browser_uncertain: BTreeMap::new(),
+            browser_observed: BTreeMap::new(),
             searches: Vec::new(),
             reads: Vec::new(),
             starting: HashMap::new(),
