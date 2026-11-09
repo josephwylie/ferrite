@@ -82,6 +82,9 @@ impl Worker {
                         }
                         let deadline = Instant::now() + Duration::from_secs(30);
                         let result = (|| {
+                            if !job.control.supported() {
+                                return Err(failure("Unsupported browser control or wait state"));
+                            }
                             if matches!(job.control, Control::Screenshot) {
                                 let mut page = ReadOnlyPage::open(
                                     &job.endpoint,
@@ -599,6 +602,7 @@ impl Controller {
             None
         };
         let mut value = match &job.control {
+            Control::Unknown => Err(failure("Unsupported browser control")),
             Control::Observe => {
                 let mut value = self.command(json!({"action":"snapshot", "interactive":true}))?;
                 self.refs.retain(|_, binding| binding.target != job.target);
@@ -665,19 +669,26 @@ impl Controller {
                 let command = json!({"action":"click","selector":selector});
                 match self.command(command.clone()) {
                     Err(error) if error.message == format!("Element '{}' is outside the viewport, so the click would not reach it", selector.as_deref().unwrap_or("")) => {
-                        self.command(json!({"action":"scrollintoview","selector":selector}))?;
-                        let snapshot =
-                            self.command(json!({"action":"snapshot","interactive":true}))?;
-                        let native = selector.as_ref().unwrap().trim_start_matches('@');
-                        if snapshot["refs"].get(native).is_none() {
-                            return Err(failure(
-                                "The original click target disappeared during viewport recovery",
-                            ));
+                        let recovery = (|| {
+                            self.command(json!({"action":"scrollintoview","selector":selector}))?;
+                            let snapshot = self.command(json!({"action":"snapshot","interactive":true}))?;
+                            let native = selector.as_ref().unwrap().trim_start_matches('@');
+                            if snapshot["refs"].get(native).is_none() {
+                                return Err(failure("The original click target disappeared during viewport recovery"));
+                            }
+                            self.command(command)
+                        })();
+                        match recovery {
+                            Ok(mut value) => {
+                                value["initial_failures"] = json!(1);
+                                value["recovery_attempts"] = json!(1);
+                                Ok(value)
+                            }
+                            Err(mut error) => {
+                                error.message.push_str(" [initial_failures=1 recovery_attempts=1]");
+                                Err(error)
+                            }
                         }
-                        let mut value = self.command(command)?;
-                        value["initial_failures"] = json!(1);
-                        value["recovery_attempts"] = json!(1);
-                        Ok(value)
                     }
                     result => result,
                 }

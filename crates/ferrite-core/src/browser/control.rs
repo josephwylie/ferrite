@@ -42,6 +42,8 @@ pub enum Control {
         x: i32,
         y: i32,
     },
+    #[serde(other)]
+    Unknown,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -50,9 +52,22 @@ pub enum WaitState {
     Hidden,
     Attached,
     Detached,
+    #[serde(other)]
+    Unknown,
 }
 
 impl Control {
+    pub fn supported(&self) -> bool {
+        !matches!(
+            self,
+            Self::Unknown
+                | Self::Wait {
+                    state: WaitState::Unknown,
+                    ..
+                }
+        )
+    }
+
     pub fn observation(&self) -> bool {
         matches!(
             self,
@@ -75,6 +90,8 @@ pub enum Operation {
         observation: Option<Observation>,
         control: Control,
     },
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -90,6 +107,8 @@ pub enum Outcome {
     Uncertain {
         error: String,
     },
+    #[serde(other)]
+    Unknown,
 }
 
 /// Opaque receipt minted only after a readable observation. A revision from

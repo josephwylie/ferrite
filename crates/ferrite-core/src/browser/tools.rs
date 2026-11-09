@@ -144,6 +144,17 @@ fn parse(input: &Value) -> Result<Operation, String> {
     }
     let operation: Operation = serde_json::from_value(input.clone())
         .map_err(|error| format!("Invalid browser operation: {error}"))?;
+    match &operation {
+        Operation::Unknown
+        | Operation::Action {
+            action: super::Action::Unknown,
+            ..
+        } => return Err("Unsupported browser operation or action".into()),
+        Operation::Control { control, .. } if !control.supported() => {
+            return Err("Unsupported browser control or wait state".into())
+        }
+        _ => {}
+    }
     closed(
         input,
         &serde_json::to_value(&operation).map_err(|e| e.to_string())?,

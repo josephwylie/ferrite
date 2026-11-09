@@ -515,6 +515,12 @@ fn stage(
             height: *height,
         },
         Selection::Element { context } => context.bounds_css.clone(),
+        Selection::Unknown => {
+            picture.set(None);
+            return div()
+                .flex_1()
+                .child("This selection requires a newer Ferrite version.");
+        }
     };
     div()
         .debug_selector(|| "annotation-stage".into())
@@ -655,7 +661,7 @@ fn paint(drawing: &Drawing, bounds: Bounds<Pixels>, viewport: &Viewport, window:
                 .collect(),
             ink,
         ),
-        Drawing::Text { .. } | Drawing::Step { .. } => return,
+        Drawing::Text { .. } | Drawing::Step { .. } | Drawing::Unknown => return,
     };
     let mut path =
         gpui::PathBuilder::stroke(bounds.size.width * (ink.width / viewport.width_css) as f32);

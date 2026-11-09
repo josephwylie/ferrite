@@ -36,6 +36,7 @@ pub enum Dirty {
     Clean,
     Dirty,
     #[default]
+    #[serde(other)]
     Unknown,
 }
 
@@ -74,13 +75,30 @@ pub struct State {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Action {
-    Open { url: String },
-    Select { tab: TabId },
-    Close { tab: TabId },
-    Navigate { document: Document, url: String },
-    Back { document: Document },
-    Forward { document: Document },
-    Reload { document: Document },
+    Open {
+        url: String,
+    },
+    Select {
+        tab: TabId,
+    },
+    Close {
+        tab: TabId,
+    },
+    Navigate {
+        document: Document,
+        url: String,
+    },
+    Back {
+        document: Document,
+    },
+    Forward {
+        document: Document,
+    },
+    Reload {
+        document: Document,
+    },
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +108,8 @@ pub enum Protection {
     Annotation,
     /// Internal two-phase unloading reservation; never an agent lease.
     Reclaim,
+    #[serde(other)]
+    Unknown,
 }
 
 /// An opaque protection token. The service checks its owner/document before
@@ -255,6 +275,7 @@ impl Service {
         }
         let state = self.threads.get_mut(&thread).expect("checked owner");
         match action {
+            Action::Unknown => return Err("Unsupported browser action".into()),
             Action::Open { url } => {
                 self.next = self.next.checked_add(1).ok_or(
                     "Browser tab identities are exhausted; no identity can safely be reused",
@@ -411,6 +432,9 @@ impl Service {
     ) -> Result<Lease> {
         self.check_owner(thread, owner)?;
         self.check_document(thread, document)?;
+        if kind == Protection::Unknown {
+            return Err("Unsupported browser protection".into());
+        }
         if kind == Protection::Reclaim {
             return Err("Use the page reclamation handshake to reserve an unload".into());
         }
