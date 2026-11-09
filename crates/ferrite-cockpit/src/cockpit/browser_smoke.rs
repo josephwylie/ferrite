@@ -50,7 +50,17 @@ impl CockpitView {
                         let path = output.join("provider-result.json");
                         if !path.exists() { return Ok(false); }
                         let answer: serde_json::Value = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-                        return if answer["success"] == true { Ok(true) } else { Err(format!("actual provider Observe failed: {answer}")) };
+                        if answer["success"] != true {
+                            return Err(format!("actual provider browser action failed: {answer}"));
+                        }
+                        // Provider acknowledgements alone do not prove the owning
+                        // Preview changed. Decode the actual native Window again.
+                        window.draw(cx);
+                        let image = window.render_to_image().map_err(|error| error.to_string())?;
+                        let blue = image.pixels().filter(|pixel| pixel.0[..3] == [29, 97, 219]).count();
+                        if blue < 2000 { return Ok(false); }
+                        image.save(output.join("window-provider.png")).map_err(|error| error.to_string())?;
+                        return Ok(true);
                     }
                     if !opened {
                         opened = view.update(cx, |view, cx| {
@@ -90,7 +100,7 @@ impl CockpitView {
                         if !provider { return Ok(true); }
                         view.update(cx, |view, _| {
                             let thread = view.cockpit.threads()[0];
-                            view.cockpit.send(thread, "Observe the displayed fixture".into());
+                            view.cockpit.send(thread, "Observe the displayed fixture, click its button, and observe the result".into());
                         });
                         provider_started = true;
                         return Ok(false);
@@ -126,7 +136,7 @@ impl CockpitView {
                 "window_pointer_input": clicked, "rendered_frames": frames,
                 "provider_requested": provider, "provider_started": provider_started,
                 "elapsed_ms": started.elapsed().as_millis(),
-                "scope": "operator Preview and optional actual provider Observe; annotations are not tested",
+                "scope": "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested",
             });
             let _ = std::fs::write(output.join("window-result.json"), serde_json::to_vec_pretty(&result).unwrap());
             let _ = cx.update(|cx| cx.quit());

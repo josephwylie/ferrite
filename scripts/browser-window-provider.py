@@ -47,6 +47,7 @@ def record(answer):
 
 
 started = False
+trace = []
 for line in sys.stdin:
     try:
         frame = json.loads(line)
@@ -84,14 +85,29 @@ for line in sys.stdin:
         name = frame.get('id')
         answer = frame.get('result')
         items = (answer or {}).get('contentItems', [])
-    if name == 'browser-state' and answer:
+    if name in ('browser-state', 'browser-observe', 'browser-click', 'browser-after') and answer:
+        trace.append({'name':name, 'answer':answer})
         try:
+            if (provider == 'claude' and answer.get('isError') is not False) or (provider != 'claude' and answer.get('success') is not True):
+                raise ValueError('Actual provider tool returned an error')
             state = json.loads(next(item['text'] for item in items if 'text' in item))
             active = next(tab for tab in state['state']['tabs'] if tab['id'] == state['state']['active'])
-            call('browser-observe', {'kind':'control',
-                'document':{'tab':active['id'],'generation':active['generation']},
-                'revision':state['revision'],'control':{'kind':'observe'}})
-        except (KeyError, StopIteration, ValueError) as error:
-            record({'isError':True,'success':False,'state_answer':answer,'error':str(error)})
-    elif name == 'browser-observe' and answer:
-        record(answer)
+            identity = {'document':{'tab':active['id'],'generation':active['generation']},
+                        'revision':state['revision']}
+            if name in ('browser-state', 'browser-click'):
+                call('browser-observe' if name == 'browser-state' else 'browser-after',
+                     {'kind':'control', **identity, 'control':{'kind':'observe'}})
+            elif name == 'browser-observe':
+                refs = state['value']['refs']
+                reference = next(ref for ref, element in refs.items()
+                                 if element.get('role') == 'button' and element.get('name') == 'Window fixture')
+                receipt = state['observation']
+                if not isinstance(receipt, str) or not receipt:
+                    raise ValueError('Readable Observe did not provide its receipt')
+                call('browser-click', {'kind':'control', **identity,
+                     'observation':receipt, 'control':{'kind':'click','reference':reference}})
+            else:
+                record(answer)
+        except (KeyError, StopIteration, ValueError, TypeError) as error:
+            record({'isError':True,'success':False,'tool_answer':answer,'error':str(error)})
+        (output/'provider-trace.json').write_text(json.dumps(trace, indent=2), encoding='utf-8')

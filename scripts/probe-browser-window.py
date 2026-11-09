@@ -52,7 +52,7 @@ def pe_stack(path):
 PAGE = b'''<!doctype html><meta charset="utf-8"><style>
 body{margin:0;background:white}button{display:block;margin:40px;width:240px;height:160px;
 border:0;background:rgb(213,37,59);color:white;font:24px sans-serif}
-</style><button onclick="fetch('/clicked',{method:'POST'}).then(()=>this.style.background='rgb(23,173,91)')">Window fixture</button>'''
+</style><button onclick="fetch('/clicked',{method:'POST'}).then(()=>{this.dataset.clicks=Number(this.dataset.clicks||0)+1;this.style.background=this.dataset.clicks==='1'?'rgb(23,173,91)':'rgb(29,97,219)'})">Window fixture</button>'''
 
 
 def main():
@@ -169,9 +169,13 @@ def main():
                     raise RuntimeError('The intended isolated provider peer did not produce the response')
                 if peer_result.get('success') is not True:
                     raise RuntimeError(f'Actual provider browser Observe failed: {peer_result}')
-            if len(clicked) != 1:
-                raise RuntimeError(f'Independent fixture oracle saw {len(clicked)} clicks, expected one')
-            for name in ('window-before.png', 'window-after.png'):
+            expected_clicks = 2 if args.provider else 1
+            if len(clicked) != expected_clicks:
+                raise RuntimeError(f'Independent fixture oracle saw {len(clicked)} clicks, expected {expected_clicks}')
+            screenshots = ['window-before.png', 'window-after.png']
+            if args.provider:
+                screenshots.append('window-provider.png')
+            for name in screenshots:
                 if (output/name).stat().st_size < 100:
                     raise RuntimeError(f'Missing window screenshot: {name}')
             (output/'oracle.json').write_text(json.dumps({'clicks':len(clicked),
