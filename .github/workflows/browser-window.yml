@@ -93,7 +93,7 @@ jobs:
         run: scripts/install-app.sh --bundle-only
       - name: Probe Windows production window
         if: runner.os == 'Windows'
-        run: python scripts/probe-browser-window.py target/debug/bundle/windows/Ferrite/ferrite.exe --output target/browser-window-evidence
+        run: python scripts/probe-browser-window.py target/debug/bundle/windows/Ferrite/ferrite.exe --compare-executable target/debug/ferrite.exe --output target/browser-window-evidence
       - name: Probe macOS production window
         if: runner.os == 'macOS'
         run: python scripts/probe-browser-window.py target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite --output target/browser-window-evidence

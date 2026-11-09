@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import struct
 import tempfile
 import threading
 import shlex
@@ -29,6 +30,25 @@ def windows_descendants(roots):
             return [item for item in processes if int(item["ProcessId"]) in owned]
         owned = expanded
 
+
+def pe_stack(path):
+    with path.open('rb') as executable:
+        executable.seek(0x3c)
+        header = struct.unpack('<I', executable.read(4))[0]
+        executable.seek(header)
+        if executable.read(4) != b'PE\0\0':
+            raise ValueError(f'Not a PE executable: {path}')
+        optional = header + 24
+        executable.seek(optional)
+        magic = struct.unpack('<H', executable.read(2))[0]
+        if magic not in (0x10b, 0x20b):
+            raise ValueError(f'Unknown PE optional header: {magic:#x}')
+        executable.seek(optional + 72)
+        size = 8 if magic == 0x20b else 4
+        reserve = int.from_bytes(executable.read(size), 'little')
+        commit = int.from_bytes(executable.read(size), 'little')
+        return {'path':str(path), 'stack_reserve':reserve, 'stack_commit':commit}
+
 PAGE = b'''<!doctype html><meta charset="utf-8"><style>
 body{margin:0;background:white}button{display:block;margin:40px;width:240px;height:160px;
 border:0;background:rgb(213,37,59);color:white;font:24px sans-serif}
@@ -40,10 +60,16 @@ def main():
     parser.add_argument('executable', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--provider', choices=['claude'])
+    parser.add_argument('--compare-executable', type=Path, help='retain PE header diagnostics for a matching naked Windows build')
     parser.add_argument('--startup-only', action='store_true', help='diagnose native startup only; never browser acceptance')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     output = args.output.resolve()
+    if os.name == 'nt':
+        headers = [pe_stack(args.executable.resolve())]
+        if args.compare_executable:
+            headers.append(pe_stack(args.compare_executable.resolve()))
+        (output/'pe-headers.json').write_text(json.dumps(headers, indent=2), encoding='utf-8')
     clicked = []
 
     class Fixture(http.server.BaseHTTPRequestHandler):
