@@ -48,6 +48,11 @@ fn browser_opened(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) 
     assert!(view.read_with(cx, |view, _| view.panes[0].preview.document().is_some_and(|document| matches!(document.body, ferrite_pane::preview::Body::Browser))));
 }
 
+fn browser_closed(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+    assert_eq!(cx.opened_url(), None);
+    assert!(view.read_with(cx, |view, _| !view.panes[0].preview.is_open()), "selection and context menus do not open a browser");
+}
+
 #[gpui::test]
 fn a_plain_click_on_a_link_opens_it(cx: &mut TestAppContext) {
     let (view, cx) = linked_answer("link-click-plain", cx);
@@ -70,7 +75,7 @@ fn a_click_on_a_link_opens_it_while_other_text_is_highlighted(cx: &mut TestAppCo
     let (from, to) = (caret(&view, cx, 0, 0), caret(&view, cx, 0, 11));
     drag(cx, from, to);
     assert_eq!(copied(cx).as_deref(), Some("Plain words"));
-    assert_eq!(cx.opened_url(), None);
+    browser_closed(&view, cx);
 
     let at = on_link(&view, cx);
     cx.simulate_click(at, gpui::Modifiers::none());
@@ -84,11 +89,7 @@ fn a_click_on_a_highlighted_link_opens_it(cx: &mut TestAppContext) {
     let (from, to) = (caret(&view, cx, 0, 0), caret(&view, cx, 1, 20));
     drag(cx, from, to);
     assert!(copied(cx).is_some_and(|text| text.contains("example")));
-    assert_eq!(
-        cx.opened_url(),
-        None,
-        "the drag across the link opens nothing"
-    );
+    browser_closed(&view, cx);
 
     let at = on_link(&view, cx);
     cx.simulate_click(at, gpui::Modifiers::none());
@@ -100,7 +101,7 @@ fn a_drag_that_starts_on_a_link_selects_rather_than_opens(cx: &mut TestAppContex
     let (view, cx) = linked_answer("link-drag-from", cx);
     let (from, to) = (on_link(&view, cx), caret(&view, cx, 1, 20));
     drag(cx, from, to);
-    assert_eq!(cx.opened_url(), None);
+    browser_closed(&view, cx);
     assert!(copied(cx).is_some(), "the drag selected text");
 }
 
@@ -109,7 +110,7 @@ fn a_drag_that_ends_on_a_link_selects_rather_than_opens(cx: &mut TestAppContext)
     let (view, cx) = linked_answer("link-drag-to", cx);
     let (from, to) = (caret(&view, cx, 0, 0), on_link(&view, cx));
     drag(cx, from, to);
-    assert_eq!(cx.opened_url(), None);
+    browser_closed(&view, cx);
     assert!(copied(cx).is_some(), "the drag selected text");
 }
 
@@ -278,7 +279,7 @@ fn a_right_click_on_a_link_offers_the_links_actions(cx: &mut TestAppContext) {
         cx.debug_bounds("answer-menu-row-2").is_none(),
         "a web link has Open and Copy only"
     );
-    assert_eq!(cx.opened_url(), None, "a right-click opens nothing");
+    browser_closed(&view, cx);
     let copy = cx.debug_bounds("answer-menu-row-1").unwrap();
     cx.simulate_click(copy.center(), gpui::Modifiers::none());
     tick(cx);

@@ -142,6 +142,13 @@ impl CockpitView {
             for browser in self.browsers.threads.values_mut() {
                 browser.pages.clear();
                 browser.owner = None;
+                browser.state.owner = None;
+                for tab in &mut browser.state.tabs {
+                    tab.live = false;
+                    tab.loading = false;
+                }
+                browser.error =
+                    Some("Browser disconnected. Reconnect Ferrite to resume this page.".into());
             }
         }
         let requests: Vec<_> = self
@@ -222,26 +229,38 @@ impl CockpitView {
             // Navigation commands operate on the exact existing view. The Server
             // has already validated the Thread, owner and previous generation.
             if let Some(action) = action {
-                let command = match action {
-                    Action::Navigate { document, url } => Some((document.tab, Some(url), 0)),
-                    Action::Back { document } => Some((document.tab, None, 1)),
-                    Action::Forward { document } => Some((document.tab, None, 2)),
-                    Action::Reload { document } => Some((document.tab, None, 3)),
+                let document = match &action {
+                    Action::Navigate { document, .. }
+                    | Action::Back { document }
+                    | Action::Forward { document }
+                    | Action::Reload { document } => Some(*document),
                     _ => None,
                 };
-                if let Some((id, url, kind)) = command {
-                    if let Some(page) = browser.pages.get(&id) {
-                        if let Some(tab) = browser.state.tabs.iter().find(|tab| tab.id == id) {
-                            page.document.set(tab.document());
-                        }
-                        let result = match kind {
-                            0 => page.native.navigate(url.as_deref().unwrap()),
-                            1 => page.native.back(),
-                            2 => page.native.forward(),
-                            _ => page.native.reload(),
+                if let Some(document) = document {
+                    if let Some(page) = browser.pages.get(&document.tab) {
+                        let result = match action {
+                            Action::Navigate { url, .. } => page.native.navigate(&url),
+                            Action::Back { .. } => page.native.back(),
+                            Action::Forward { .. } => page.native.forward(),
+                            Action::Reload { .. } => page.native.reload(),
+                            _ => unreachable!("navigation document checked above"),
                         };
+                        if result.is_ok() {
+                            browser.error = None;
+                        }
                         if let Err(error) = result {
-                            browser.error = Some(error);
+                            browser.error = Some(error.clone());
+                            if let (Some(owner), Some(tab)) = (
+                                browser.owner,
+                                browser.state.tabs.iter().find(|tab| tab.id == document.tab),
+                            ) {
+                                self.browsers.events.borrow_mut().push(Event::Changed(
+                                    thread,
+                                    owner,
+                                    failed_page(tab, error),
+                                    Some(page.native.state().document_generation),
+                                ));
+                            }
                         }
                     }
                 }
@@ -254,6 +273,12 @@ impl CockpitView {
         while let Some(event) = events.next() {
             match event {
                 Event::Restore(thread, tab) => {
+                    if !matches!(
+                        self.cockpit.server(),
+                        Some(ferrite_core::cockpit::ServerState::Attached { .. })
+                    ) {
+                        continue;
+                    }
                     if self.browsers.threads.get(&thread).is_some_and(|browser| {
                         browser
                             .state
