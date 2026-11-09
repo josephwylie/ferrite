@@ -2,16 +2,21 @@
 //! loop on a thread of its own, with no window attached. The user's login
 //! shell starts in the Thread's folder (the PTY's default shell on this
 //! platform is the user's, as a login shell). Its events — new output, a
-//! title, the shell's end — come out of `take_events`. Dropping the
+//! title, the shell's end — come out of `take_events`. Windows uses the
+//! native PowerShell/ConPTY default; Unix uses the user's login shell. Dropping the
 //! session shuts the loop down, which ends the shell.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::fs::File;
-use std::io::{self, Read};
+use std::io;
+#[cfg(unix)]
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread::JoinHandle;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
@@ -41,9 +46,11 @@ pub struct Terminal {
     events: Option<Receiver<Event>>,
     io: Option<JoinHandle<(EventLoop<tty::Pty, Listener>, State)>>,
     /// The shell's process id.
+    #[cfg(unix)]
     shell: u32,
     /// A second handle on the PTY's master end, to read what the shell
     /// writes after the loop has stopped.
+    #[cfg(unix)]
     master: Option<File>,
     columns: u16,
     lines: u16,
@@ -52,13 +59,14 @@ pub struct Terminal {
 /// The user's shell, run directly as a login shell. alacritty's macOS default
 /// wraps it in `/usr/bin/login`, which is setuid root: while it runs, the
 /// PTY's drop cannot signal it. The shell itself is ours to signal.
+#[cfg(unix)]
 fn login_shell() -> tty::Shell {
     let program = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     tty::Shell::new(program, vec!["-l".to_string()])
 }
 
 impl Terminal {
-    /// Start the user's login shell in `directory`, keeping `scrollback`
+    /// Start the platform shell in `directory`, keeping `scrollback`
     /// lines of history, at `columns` by `lines` — the pane's size as the
     /// caller reckons it, so the shell's first prompt is drawn to fit; the
     /// view sets the measured size on its first frame.
@@ -75,7 +83,9 @@ impl Terminal {
             listener.clone(),
         )));
         let options = tty::Options {
+            #[cfg(unix)]
             shell: Some(login_shell()),
+            // On Windows, use alacritty's native PowerShell/ConPTY default.
             working_directory: Some(directory.to_path_buf()),
             env: HashMap::from([
                 ("TERM".to_string(), "xterm-256color".to_string()),
@@ -90,7 +100,9 @@ impl Terminal {
             cell_height: 1,
         };
         let pty = tty::new(&options, size, 0)?;
+        #[cfg(unix)]
         let shell = pty.child().id();
+        #[cfg(unix)]
         let master = pty.file().try_clone()?;
         let event_loop = EventLoop::new(term.clone(), listener, pty, options.drain_on_exit, false)?;
         let sender = event_loop.channel();
@@ -100,7 +112,9 @@ impl Terminal {
             sender,
             events: Some(events),
             io: Some(io),
+            #[cfg(unix)]
             shell,
+            #[cfg(unix)]
             master: Some(master),
             columns,
             lines,
@@ -231,18 +245,29 @@ impl Drop for Terminal {
         // unread, and an interactive one may ignore the hangup until the PTY
         // closes. So the end is seen to elsewhere: the view never waits on a
         // shell.
+        #[cfg(unix)]
         if let (Some(io), Some(master)) = (self.io.take(), self.master.take()) {
             let shell = self.shell;
             std::thread::spawn(move || end_shell(io, shell, master));
+        }
+        #[cfg(windows)]
+        if let Some(io) = self.io.take() {
+            // Alacritty owns the ConPTY and its child watcher. Dropping the
+            // returned event loop closes the pseudoconsole (and attached
+            // clients). ClosePseudoConsole can block on older Windows, so
+            // joining and dropping it must also stay off the UI thread.
+            std::thread::spawn(move || drop(io.join()));
         }
     }
 }
 
 /// How long a shell gets to leave on a hangup before it is killed.
+#[cfg(unix)]
 const HANGUP_GRACE: Duration = Duration::from_secs(2);
 
 /// Wait out the loop's end, then hang the shell up, reading what it still
 /// writes, and kill it if it stays; the PTY's drop then reaps it.
+#[cfg(unix)]
 fn end_shell(io: JoinHandle<(EventLoop<tty::Pty, Listener>, State)>, shell: u32, mut master: File) {
     let Ok(ended) = io.join() else { return };
     let pid = shell as libc::pid_t;
@@ -264,6 +289,7 @@ fn end_shell(io: JoinHandle<(EventLoop<tty::Pty, Listener>, State)>, shell: u32,
 }
 
 /// Whether the child has exited, without reaping it: the PTY's drop does that.
+#[cfg(unix)]
 fn has_exited(pid: libc::pid_t) -> bool {
     let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
     let seen = unsafe {
@@ -272,7 +298,7 @@ fn has_exited(pid: libc::pid_t) -> bool {
     seen == 0 && info.si_signo == libc::SIGCHLD
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

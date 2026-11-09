@@ -12,9 +12,11 @@ doctest = false
 # The emulator, its grid, selection and PTY event loop.
 alacritty_terminal = "0.26.0"
 ferrite-ui = { path = "../ferrite-ui" }
-# Hanging a shell up and seeing it gone.
-libc.workspace = true
 gpui = { package = "gpui-kit", version = "=0.6.0" }
+
+[target.'cfg(unix)'.dependencies]
+# Hanging a Unix shell up and seeing it gone. Windows uses ConPTY teardown.
+libc.workspace = true
 
 [dev-dependencies]
 gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }
