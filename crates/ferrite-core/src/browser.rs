@@ -593,15 +593,15 @@ fn begin_navigation(tab: &mut Tab) {
 }
 
 fn validate_url(url: &str) -> Result<()> {
-    // Do not allow app/file/javascript schemes into the external page surface.
-    if (url.starts_with("http://") || url.starts_with("https://"))
-        && !url.chars().any(|ch| ch.is_control())
-        && url
-            .split_once("://")
-            .is_some_and(|(_, rest)| !rest.is_empty() && !rest.starts_with('/'))
+    let parsed = url::Url::parse(url)
+        .map_err(|_| "Enter a valid http:// or https:// website address".to_string())?;
+    if matches!(parsed.scheme(), "http" | "https")
+        && parsed.host_str().is_some()
+        && !url.chars().any(char::is_control)
+        && url.trim() == url
     {
         Ok(())
     } else {
-        Err("Enter an http:// or https:// website address".into())
+        Err("Enter a valid http:// or https:// website address".into())
     }
 }
