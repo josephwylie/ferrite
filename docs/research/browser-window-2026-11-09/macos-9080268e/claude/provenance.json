@@ -1,0 +1,10 @@
+{
+  "started_utc": "2026-11-09T06:03:32.113092+00:00",
+  "executable": "/Users/runner/work/ferrite/ferrite/target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite",
+  "sha256": "841d859d4609bb157513faae6928ce60d0753668e095b9442d815b401d2cc6a7",
+  "platform": "macOS-26.7.2-arm64-arm-64bit",
+  "architecture": "arm64",
+  "provider": "claude",
+  "diagnostic_only": false,
+  "profile_mode": "isolated temporary production profile"
+}
