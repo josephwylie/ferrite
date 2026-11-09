@@ -78,12 +78,21 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
             };
             let page = if request.starts_with("GET /clean ") {
                 "<!doctype html><title>Clean lifecycle fixture</title><style>html,body{margin:0;background:rgb(255,0,0);height:100%}</style>".to_owned()
+            } else if request.starts_with("GET /script-form ") {
+                "<!doctype html><title>Draft</title><input id=draft><script>document.querySelector('input').value='unsaved work'</script>".to_owned()
+            } else if request.starts_with("GET /uncertain ") {
+                "<!doctype html><title>Closed shadow</title><body><script>document.body.attachShadow({mode:'closed'}).innerHTML='<input value=unfinished>';console.log('ferrite-clean')</script>".to_owned()
             } else {
                 format!(
                     r#"<!doctype html><html style="background:rgb(255,0,0)"><head><title>Ferrite browser fixture</title></head><body style="margin:0;background:rgb(255,0,0)"><button id="paint" onclick="document.documentElement.style.background='{color}';document.body.style.background='{color}';this.textContent='Painted'">Paint</button><input id="value" oninput="fetch('/dirty?value='+encodeURIComponent(this.value))"><script>window.fixtureReady=true</script></body></html>"#
                 )
             };
-            let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
+            let status = if request.starts_with("GET /error ") {
+                "503 Service Unavailable"
+            } else {
+                "200 OK"
+            };
+            let response = format!("HTTP/1.1 {status}\r\nContent-Type: text/html\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
             let _ = stream.write_all(response.as_bytes());
         }
     });
@@ -134,6 +143,9 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
     let initial = one.state().document_generation;
     let next = format!("http://{address}/next");
     one.navigate(&next)?;
+    if !one.state().loading || one.state().dirty != crate::visual::web::BrowserDirty::Unknown {
+        return Err("Accepted navigation retained pre-command clean/loading state".into());
+    }
     wait_browser(engine, one.as_ref(), |state| {
         !state.loading && state.url == next && state.can_back && state.document_generation > initial
     })?;
@@ -149,6 +161,31 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
     one.reload()?;
     wait_browser(engine, one.as_ref(), |state| {
         !state.loading && state.document_generation > before_reload
+    })?;
+    let same_document = one.state().document_generation;
+    let fragment = format!("{next}#section");
+    one.navigate(&fragment)?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading && state.url == fragment
+    })?;
+    if one.state().document_generation != same_document {
+        return Err("Fragment navigation replaced the document identity".into());
+    }
+    one.back()?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading && state.url == next && state.can_forward
+    })?;
+    one.forward()?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading && state.url == fragment
+    })?;
+    one.navigate(&format!("http://{address}/error"))?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading
+            && state
+                .error
+                .as_ref()
+                .is_some_and(|error| error.contains("503"))
     })?;
     one.navigate(&format!("http://{address}/one"))?;
     wait_browser(engine, one.as_ref(), |state| {
@@ -170,6 +207,9 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
         return Err("Protected page was reclaimed".into());
     }
     clean.set_protected(false);
+    if clean.state().dirty != crate::visual::web::BrowserDirty::Unknown || clean.try_release()? {
+        return Err("Reclamation reused clean evidence from before a protected operation".into());
+    }
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if clean.try_release()? {
@@ -191,6 +231,36 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
         return Err("Recreated page retained its retired target".into());
     }
     drop(clean);
+    let draft = engine.open_browser(
+        &format!("http://{address}/script-form"),
+        viewport,
+        Box::new(|| {}),
+    )?;
+    wait_browser(engine, draft.as_ref(), |state| {
+        !state.loading && state.dirty == crate::visual::web::BrowserDirty::Dirty
+    })?;
+    draft.set_visible(false);
+    if draft.try_release()? || draft.target_id().is_none() {
+        return Err("Changed form defaults were discarded".into());
+    }
+    drop(draft);
+    let uncertain = engine.open_browser(
+        &format!("http://{address}/uncertain"),
+        viewport,
+        Box::new(|| {}),
+    )?;
+    wait_browser(engine, uncertain.as_ref(), |state| {
+        !state.loading && state.document_generation > 0
+    })?;
+    uncertain.set_visible(false);
+    let until = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < until {
+        if uncertain.try_release()? || uncertain.target_id().is_none() {
+            return Err("Uncertain closed-shadow work was discarded".into());
+        }
+        std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
+    }
+    drop(uncertain);
     let endpoint = engine.controller()?;
     let private_file = ProbeFile::create()?;
     let private_file_url = url::Url::from_file_path(&private_file.0)

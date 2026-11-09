@@ -122,6 +122,21 @@ wrap_browser_process_handler! {
     }
 }
 
+/// Disk-backed contexts initialize asynchronously, unlike the old in-memory
+/// context. Never call CreateBrowserSync before CEF acknowledges readiness.
+pub(super) fn website_context(ready: Arc<std::sync::atomic::AtomicBool>) -> RequestContextHandler {
+    WebsiteContext::new(ready)
+}
+
+wrap_request_context_handler! {
+    struct WebsiteContext { ready: Arc<std::sync::atomic::AtomicBool> }
+    impl RequestContextHandler {
+        fn on_request_context_initialized(&self, _context: Option<&mut RequestContext>) {
+            self.ready.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Per-view client.
 
@@ -137,7 +152,7 @@ pub(super) fn client(
         ViewDisplay::new(state.clone(), generation),
         ViewLoad::new(state.clone(), generation),
         ViewLifeSpan::new(global),
-        ViewRequests::new(page),
+        ViewRequests::new(page, state.clone(), generation),
         NoContextMenu::new(),
         NoDialogs::new(state),
     )
@@ -251,9 +266,16 @@ wrap_display_handler! {
     }
 
     impl DisplayHandler {
-        fn on_address_change(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, url: Option<&CefString>) {
+        fn on_address_change(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, url: Option<&CefString>) {
             if frame.is_some_and(|frame| frame.is_main() != 0) {
-                if let Some(url) = url { self.state.navigation(self.generation, |state| state.url = url.to_string()); }
+                if let Some(url) = url { self.state.navigation(self.generation, |state| {
+                    state.url = url.to_string();
+                    if let Some(browser) = browser.as_ref() {
+                        state.loading = browser.is_loading() != 0;
+                        state.can_back = browser.can_go_back() != 0;
+                        state.can_forward = browser.can_go_forward() != 0;
+                    }
+                }); }
             }
         }
         fn on_title_change(&self, _browser: Option<&mut Browser>, title: Option<&CefString>) {
@@ -353,6 +375,8 @@ wrap_life_span_handler! {
 wrap_request_handler! {
     struct ViewRequests {
         page: Arc<PageDoc>,
+        state: Arc<ViewState>,
+        generation: u64,
     }
 
     impl RequestHandler {
@@ -367,7 +391,13 @@ wrap_request_handler! {
             _is_redirect: ::std::os::raw::c_int,
         ) -> ::std::os::raw::c_int {
             let url = request.map(|r| CefString::from(&r.url()).to_string()).unwrap_or_default();
-            if self.page.external { (!external_url(&url)) as i32 } else { (without_fragment(&url) != self.page.url) as i32 }
+            if self.page.external {
+                let blocked = !external_url(&url);
+                if blocked && _frame.is_some_and(|frame| frame.is_main() != 0) {
+                    self.state.navigation(self.generation, |state| { state.loading = false; state.error = Some("This tab can navigate only to http or https websites. Check the destination address.".into()); });
+                }
+                blocked as i32
+            } else { (without_fragment(&url) != self.page.url) as i32 }
         }
 
         fn on_open_urlfrom_tab(
@@ -624,6 +654,9 @@ fn without_fragment(url: &str) -> &str {
 /// Website pages have no access to Ferrite schemes, local files or arbitrary
 /// application protocols. CEF's default network loader handles only web URLs.
 pub(super) fn external_url(url: &str) -> bool {
+    if url.trim() != url || url.chars().any(char::is_control) {
+        return false;
+    }
     url::Url::parse(url).is_ok_and(|url| {
         matches!(url.scheme(), "http" | "https")
             && url.host_str().is_some()

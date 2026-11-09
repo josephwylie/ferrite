@@ -98,16 +98,25 @@ impl Observation {
         Some(observation)
     }
 
+    pub(super) fn invalidate(&mut self, state: &ViewState) {
+        // A protected command may have written after any in-flight inspection.
+        // Its old result can never make the post-command document clean.
+        self.pending = None;
+        self.clean_at = None;
+        self.last = Instant::now() - INTERVAL;
+        Self::unknown(state);
+    }
+
     pub(super) fn release_ready(&self) -> bool {
         self.pending.is_none() && self.clean_at.is_some_and(|time| time.elapsed() < INTERVAL)
     }
 
     fn unknown(state: &ViewState) {
         let mut navigation = state.navigation.lock().unwrap();
-        if navigation.dirty != BrowserDirty::Dirty {
+        if navigation.dirty == BrowserDirty::Clean {
             navigation.dirty = BrowserDirty::Unknown;
+            state.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
         }
-        state.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn send(&mut self, browser: &Browser, document: u64, step: Step, method: &str, params: Value) {
@@ -234,12 +243,15 @@ impl Observation {
                         && navigation.dirty != BrowserDirty::Dirty
                     {
                         self.clean_at = (!uncertain).then(Instant::now);
-                        navigation.dirty = if uncertain {
+                        let dirty = if uncertain {
                             BrowserDirty::Unknown
                         } else {
                             BrowserDirty::Clean
                         };
-                        state.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
+                        if navigation.dirty != dirty {
+                            navigation.dirty = dirty;
+                            state.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
                     }
                 }
             }
@@ -277,17 +289,17 @@ wrap_dev_tools_message_observer! {
     struct WorkObserver { inbox: Arc<Mutex<Inbox>> }
     impl DevToolsMessageObserver {
         fn on_dev_tools_message(&self, _browser: Option<&mut Browser>, message: Option<&[u8]>) -> ::std::os::raw::c_int {
-            let Some(bytes) = message else { return 0 };
+            let Some(bytes) = message else { return 1 };
             let mut inbox = self.inbox.lock().unwrap();
-            if bytes.len() > LIMIT { inbox.overflow = true; return 0; }
+            if bytes.len() > LIMIT { inbox.overflow = true; return 1; }
             if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
                 if value["id"].as_i64().is_some_and(|id| id >= FIRST_ID as i64) {
                     if inbox.messages.len() < 16 { inbox.messages.push_back(value); }
                     else { inbox.overflow = true; }
                 }
             }
-            // Other observers, including the exact-target controller, coexist.
-            0
+            // CEF invokes each observer independently; no typed callbacks here.
+            1
         }
     }
 }

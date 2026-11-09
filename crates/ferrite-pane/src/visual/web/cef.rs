@@ -266,6 +266,7 @@ impl Dormant {
                     && std::env::var_os("FERRITE_CEF_EXTRA_SWITCHES").is_none(),
                 control: RefCell::new(None),
                 browser_context: RefCell::new(None),
+                browser_context_ready: Arc::new(AtomicBool::new(false)),
                 profile,
                 _app: app,
                 _library: library,
@@ -371,8 +372,12 @@ struct ViewState {
 impl ViewState {
     fn navigation(&self, generation: u64, f: impl FnOnce(&mut BrowserState)) {
         if self.external && self.is_current(generation) {
-            f(&mut self.navigation.lock().unwrap());
-            self.dirty.store(true, Ordering::SeqCst);
+            let mut navigation = self.navigation.lock().unwrap();
+            let before = navigation.clone();
+            f(&mut navigation);
+            if *navigation != before {
+                self.dirty.store(true, Ordering::SeqCst);
+            }
         }
     }
 
@@ -426,6 +431,7 @@ struct EngineInner {
     browser_isolated: bool,
     control: RefCell<Option<control::Control>>,
     browser_context: RefCell<Option<cef::RequestContext>>,
+    browser_context_ready: Arc<AtomicBool>,
     profile: profile::Profile,
     _app: cef::App,
     _library: platform::Library,
@@ -448,13 +454,14 @@ impl Engine for CefEngine {
         }
         if self.inner.browser_context.borrow().is_none() {
             // One shared website context, separate from every sealed visual.
+            let mut handler = handlers::website_context(self.inner.browser_context_ready.clone());
             let context = cef::request_context_create_context(
                 Some(&cef::RequestContextSettings {
                     cache_path: path_string(&self.inner.profile.websites()?),
                     persist_session_cookies: 1,
                     ..Default::default()
                 }),
-                None,
+                Some(&mut handler),
             )
             .ok_or("CEF could not create an isolated website context")?;
             *self.inner.browser_context.borrow_mut() = Some(context);
@@ -600,6 +607,7 @@ impl CefEngine {
             external: external_url.is_some(),
             navigation: Mutex::new(BrowserState {
                 url: external_url.unwrap_or_default().into(),
+                loading: external_url.is_some(),
                 ..Default::default()
             }),
             geometry: Mutex::new(Geometry {
@@ -721,7 +729,10 @@ impl ViewInner {
 
     /// Visible and without a browser: never created yet, or released.
     fn wants_browser(&self) -> bool {
-        self.visible.get() && !self.failed.get() && self.browser.borrow().is_none()
+        self.visible.get()
+            && !self.failed.get()
+            && self.browser.borrow().is_none()
+            && (!self.doc.external || self._engine.browser_context_ready.load(Ordering::SeqCst))
     }
 
     /// Load the page in a fresh browser. The view's geometry (including the
@@ -892,6 +903,17 @@ impl ViewInner {
         }
         self.focused.set(false);
         self.pressed.set(0);
+    }
+
+    fn navigation_intent(&self) {
+        if let Some(observation) = self.observation.borrow_mut().as_mut() {
+            observation.invalidate(&self.state);
+        }
+        let mut state = self.state.navigation.lock().unwrap();
+        state.loading = true;
+        state.dirty = BrowserDirty::Unknown;
+        state.error = None;
+        self.state.dirty.store(true, Ordering::SeqCst);
     }
 
     fn host(&self) -> Option<cef::BrowserHost> {
@@ -1126,6 +1148,7 @@ impl BrowserView for CefView {
             .as_ref()
             .and_then(|browser| browser.main_frame())
         {
+            self.0.navigation_intent();
             frame.load_url(Some(&url.into()));
         } else {
             let mut state = self.0.state.navigation.lock().unwrap();
@@ -1144,6 +1167,7 @@ impl BrowserView for CefView {
         if browser.can_go_back() == 0 {
             return Err("No previous page in this tab".into());
         }
+        self.0.navigation_intent();
         browser.go_back();
         Ok(())
     }
@@ -1155,21 +1179,28 @@ impl BrowserView for CefView {
         if browser.can_go_forward() == 0 {
             return Err("No next page in this tab".into());
         }
+        self.0.navigation_intent();
         browser.go_forward();
         Ok(())
     }
     fn reload(&self) -> Result<(), String> {
         self.0.failed.set(false);
         if let Some(browser) = self.0.browser.borrow().as_ref() {
+            self.0.navigation_intent();
             browser.reload();
         } else {
+            self.0.navigation_intent();
             self.0.visible.set(true);
             self.0.state.visible.store(true, Ordering::SeqCst);
         }
         Ok(())
     }
     fn set_protected(&self, protected: bool) {
-        self.0.protected.set(protected);
+        if self.0.protected.replace(protected) && !protected {
+            if let Some(observation) = self.0.observation.borrow_mut().as_mut() {
+                observation.invalidate(&self.0.state);
+            }
+        }
     }
     fn try_release(&self) -> Result<bool, String> {
         let view = &self.0;
