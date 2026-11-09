@@ -17,7 +17,7 @@ use std::{
     rc::Rc,
 };
 
-gpui::actions!(browser, [Go]);
+gpui::actions!(browser, [Go, CancelAnnotation]);
 
 #[derive(Default)]
 pub(super) struct Browsers {

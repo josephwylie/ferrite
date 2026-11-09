@@ -584,6 +584,11 @@ impl CockpitView {
         }
         div()
             .track_focus(&session.focus)
+            .key_context("BrowserAnnotationCapture")
+            .on_action(cx.listener(move |this, _: &CancelAnnotation, _, cx| {
+                cx.stop_propagation();
+                this.close_browser_annotation(thread, cx);
+            }))
             .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
                 cx.stop_propagation();
                 if event.keystroke.key == "escape" {
