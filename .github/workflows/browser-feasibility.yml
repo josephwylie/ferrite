@@ -14,17 +14,20 @@ env:
 on:
   pull_request:
     paths:
-      - 'scripts/*agent-browser*'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/config.toml'
+      - 'crates/ferrite*/**'
+      - 'scripts/package-agent-browser.py'
+      - 'scripts/patches/agent-browser-0.41.2-ferrite.patch'
       - 'scripts/native_browser_service.py'
       - 'scripts/browser_processes.py'
       - 'scripts/probe-embedded-browser.py'
       - 'scripts/probe-browser-keychain.py'
-      - 'scripts/patches/agent-browser*'
-      - 'scripts/test_package_agent_browser.py'
-      - '.github/workflows/browser-feasibility.yml'
-      - 'crates/ferrite*/**'
-      - 'scripts/*windows.ps1'
+      - 'scripts/stage-windows.ps1'
+      - 'scripts/copy-chromium-windows.ps1'
       - 'scripts/install-app.sh'
+      - '.github/workflows/browser-feasibility.yml'
   workflow_dispatch:
 
 concurrency:
