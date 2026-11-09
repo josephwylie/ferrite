@@ -62,7 +62,9 @@ for line in sys.stdin:
             continue
         if frame.get('type') == 'user' and not started:
             started = True
-            call('browser-state', {'kind':'state'})
+            emit({'type':'control_request','request_id':'browser-definitions','request':{
+                'subtype':'mcp_message','server_name':'ferrite','message':{
+                    'jsonrpc':'2.0','id':'browser-definitions','method':'tools/list','params':{}}}})
         response = frame.get('response', {})
         name = response.get('request_id')
         answer = response.get('response', {}).get('mcp_response', {}).get('result')
@@ -85,6 +87,13 @@ for line in sys.stdin:
         name = frame.get('id')
         answer = frame.get('result')
         items = (answer or {}).get('contentItems', [])
+    if name == 'browser-definitions' and answer is not None:
+        tools = {tool['name']:tool for tool in answer.get('tools', [])}
+        (output/'provider-definitions.json').write_text(json.dumps(answer, indent=2), encoding='utf-8')
+        if not {'browser','update_plan','wrap_up'} <= tools.keys() or not tools['browser'].get('inputSchema'):
+            record({'isError':True, 'success':False, 'error':'Browser capability was not advertised beside plan/wrap_up'})
+        else:
+            call('browser-state', {'kind':'state'})
     if name in ('browser-state', 'browser-observe', 'browser-click', 'browser-after') and answer:
         trace.append({'name':name, 'answer':answer})
         try:
