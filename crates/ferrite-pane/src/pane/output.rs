@@ -1433,16 +1433,13 @@ fn findings_body(
                 .flex()
                 .flex_col()
                 .gap(px(theme::SPACE_1))
-                .child(div().text_color(rgb(INK_STRONG)).child(selection.line(
-                    block,
-                    file.to_string(),
-                    Vec::new(),
-                )))
+                .child(
+                    div()
+                        .text_color(rgb(INK_STRONG))
+                        .child(selection.line(block, file.to_string(), Vec::new())),
+                )
                 .children(group.into_iter().map(|finding| {
-                    let place = finding
-                        .line
-                        .map(|line| format!("line {line}"))
-                        .unwrap_or_default();
+                    let place = finding.line.map(|line| format!("line {line}")).unwrap_or_default();
                     let verdict = finding.verdict.as_deref().map(str::to_lowercase);
                     let head = [Some(place), Some(finding.summary.clone()), verdict]
                         .into_iter()
@@ -1454,17 +1451,17 @@ fn findings_body(
                         .debug_selector(|| "finding".into())
                         .flex()
                         .flex_col()
-                        .child(div().text_color(rgb(INK_STRONG)).child(selection.line(
-                            block,
-                            head,
-                            Vec::new(),
-                        )))
+                        .child(
+                            div()
+                                .text_color(rgb(INK_STRONG))
+                                .child(selection.line(block, head, Vec::new())),
+                        )
                         .when(!finding.failure_scenario.is_empty(), |row| {
-                            row.child(div().text_color(rgb(INK_SUBTLE)).child(selection.line(
-                                block,
-                                finding.failure_scenario.clone(),
-                                Vec::new(),
-                            )))
+                            row.child(
+                                div().text_color(rgb(INK_SUBTLE)).child(
+                                    selection.line(block, finding.failure_scenario.clone(), Vec::new()),
+                                ),
+                            )
                         })
                 }))
         }))

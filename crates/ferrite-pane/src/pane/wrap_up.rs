@@ -43,11 +43,11 @@ pub(crate) fn render_wrap_up(
         .when(spent, |card| card.max_w(px(theme::WRAP_UP_SPENT_MAX_W)))
         .when(!spent, |card| card.w_full())
         .when(!wrap.recap.is_empty(), |card| {
-            card.child(div().text_color(rgb(INK_SUBTLE)).child(selection.line(
-                block,
-                wrap.recap.clone(),
-                Vec::new(),
-            )))
+            card.child(
+                div()
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(selection.line(block, wrap.recap.clone(), Vec::new())),
+            )
         })
         .children(wrap.ask.as_ref().map(|ask| {
             let chosen = match &face {

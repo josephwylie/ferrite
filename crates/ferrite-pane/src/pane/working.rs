@@ -25,10 +25,7 @@ pub struct WorkingFacts<'a> {
 #[derive(Clone, Debug, Hash, PartialEq)]
 enum Working {
     Line(WorkingLine),
-    Starting {
-        still: bool,
-        solo: bool,
-    },
+    Starting { still: bool, solo: bool },
     /// No turn runs, but the last one was cut short: its plan stays under
     /// its rows, where the turn left it, the step it stopped on blocked.
     Plan {
@@ -519,19 +516,14 @@ impl WorkingLine {
                                 ("working-chevron", thread as usize),
                                 disclosure.open,
                                 ferrite_ui::motion::CHEVRON,
-                                |turn| {
-                                    components::chevron_at(turn, theme::ICON_CHEVRON, INK_SUBTLE)
-                                },
+                                |turn| components::chevron_at(turn, theme::ICON_CHEVRON, INK_SUBTLE),
                             )),
                     )
                     .cursor_pointer()
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        move |_, window, cx| {
-                            cx.stop_propagation();
-                            toggle(window, cx);
-                        },
-                    )
+                    .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                        cx.stop_propagation();
+                        toggle(window, cx);
+                    })
                 });
         }
         let planned = !plan.is_empty();
