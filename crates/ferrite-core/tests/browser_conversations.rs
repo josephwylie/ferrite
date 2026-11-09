@@ -267,3 +267,71 @@ fn hidden_selected_pages_release_only_after_native_acknowledgement() {
         .unwrap()
         .is_none());
 }
+
+#[test]
+fn malformed_website_authorities_never_create_tabs() {
+    let thread = ThreadId::new(1);
+    let mut browser = Service::default();
+    browser.attach(thread, 7).unwrap();
+    for url in [
+        "https://:443/",
+        "https://bad host/",
+        "https://[::1/",
+        "https://user@:443/",
+    ] {
+        assert!(
+            browser
+                .apply(thread, 7, Action::Open { url: url.into() })
+                .is_err(),
+            "invalid website authority: {url}"
+        );
+        assert!(browser.state(thread).tabs.is_empty());
+    }
+    browser
+        .apply(
+            thread,
+            7,
+            Action::Open {
+                url: "http://localhost:3000/page#section".into(),
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn unsupported_or_invalid_browser_metadata_survives_attempted_replacement() {
+    let root = std::env::temp_dir().join(format!("ferrite-browser-invalid-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let store = ferrite_core::store::Store::open(&root).unwrap();
+    let mut browser = Service::default();
+    let thread = ThreadId::new(1);
+    browser.attach(thread, 7).unwrap();
+    browser
+        .apply(
+            thread,
+            7,
+            Action::Open {
+                url: "https://example.com/account".into(),
+            },
+        )
+        .unwrap();
+    let saved = serde_json::to_value(browser.save()).unwrap();
+    let mut future = saved.clone();
+    future["version"] = serde_json::json!(999);
+    let mut invalid_generation = saved;
+    invalid_generation["threads"]["1"]["tabs"][0][2] = serde_json::json!(u64::MAX);
+    for document in [future, invalid_generation] {
+        let bytes = serde_json::to_vec(&document).unwrap();
+        let path = root.join("browser-tabs.json");
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            store.load_browser().unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        assert!(store.save_browser(&Service::default().save()).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+    store.quit(std::time::Duration::from_secs(1));
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}
