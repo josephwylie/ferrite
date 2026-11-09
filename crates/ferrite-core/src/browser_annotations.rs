@@ -343,9 +343,15 @@ pub fn compose(text: &str, files: &[PathBuf], annotations: &[Annotation]) -> Str
             text.push_str("\n\n");
         }
         text.push_str(START);
-        text.push_str(
-            &serde_json::to_string(annotations).expect("annotation contains serializable values"),
-        );
+        // Page-derived strings must remain data even when they contain prompt
+        // file tokens or codec delimiter lookalikes. JSON decoding restores
+        // the exact text; only our explicit image trailer becomes attachments.
+        let context = serde_json::to_string(annotations)
+            .expect("annotation contains serializable values")
+            .replace('@', "\\u0040")
+            .replace('<', "\\u003c")
+            .replace('>', "\\u003e");
+        text.push_str(&context);
         text.push_str(END);
         for annotation in annotations {
             if !files.iter().any(|path| path == annotation.original()) {
