@@ -1,0 +1,23 @@
+name: Browser annotations boundary
+on:
+  push:
+    branches: ['feat/browser-195']
+  workflow_dispatch:
+concurrency:
+  group: browser-annotations-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  core:
+    runs-on: macos-latest
+    env:
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p ferrite-core --locked --test browser_annotations
