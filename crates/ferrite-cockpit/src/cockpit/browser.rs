@@ -37,11 +37,12 @@ struct Page {
     native: Rc<dyn BrowserView>,
     document: Rc<Cell<Document>>,
     suppress_navigation: Rc<Cell<bool>>,
+    acknowledged: Cell<Option<(Document, u64)>>,
 }
 enum Event {
     Restore(ThreadId, TabId),
     Input(ThreadId, Owner, Document, Option<u64>, Input),
-    Changed(ThreadId, Owner, PageState),
+    Changed(ThreadId, Owner, PageState, Option<u64>),
 }
 
 impl CockpitView {
@@ -249,7 +250,13 @@ impl CockpitView {
         while let Some(event) = events.next() {
             match event {
                 Event::Restore(thread, tab) => {
-                    if self.browsers.threads.get(&thread).is_some_and(|browser| browser.state.tabs.iter().any(|page| page.id == tab && !page.live)) {
+                    if self.browsers.threads.get(&thread).is_some_and(|browser| {
+                        browser
+                            .state
+                            .tabs
+                            .iter()
+                            .any(|page| page.id == tab && !page.live)
+                    }) {
                         self.browser_action(thread, Action::Select { tab }, cx);
                     }
                 }
@@ -277,8 +284,8 @@ impl CockpitView {
                         }
                     }
                 }
-                Event::Changed(thread, owner, mut page) => {
-                    while let Some(Event::Changed(next_thread, next_owner, next_page)) =
+                Event::Changed(thread, owner, mut page, mut generation) => {
+                    while let Some(Event::Changed(next_thread, next_owner, next_page, _)) =
                         events.peek()
                     {
                         if *next_thread != thread
@@ -287,11 +294,13 @@ impl CockpitView {
                         {
                             break;
                         }
-                        let Some(Event::Changed(_, _, mut next)) = events.next() else {
+                        let Some(Event::Changed(_, _, mut next, next_generation)) = events.next()
+                        else {
                             unreachable!()
                         };
                         next.navigation |= page.navigation;
                         page = next;
+                        generation = next_generation;
                     }
                     let Some(browser) = self
                         .browsers
@@ -309,10 +318,22 @@ impl CockpitView {
                     {
                         continue;
                     }
+                    page.visible = browser
+                        .pages
+                        .get(&page.document.tab)
+                        .is_some_and(|page| page.web.read(cx).browser_visible());
+                    let tab_id = page.document.tab;
                     match self.cockpit.browser_page(thread, owner, page) {
                         Ok(state) => {
                             let browser = self.browsers.threads.get_mut(&thread).unwrap();
                             browser.state = state;
+                            if let (Some(generation), Some(page), Some(tab)) = (
+                                generation,
+                                browser.pages.get(&tab_id),
+                                browser.state.tabs.iter().find(|tab| tab.id == tab_id),
+                            ) {
+                                page.acknowledged.set(Some((tab.document(), generation)));
+                            }
                             browser.sync_documents(cx, true);
                         }
                         Err(error) => {
@@ -371,6 +392,7 @@ impl CockpitView {
                         *thread,
                         owner,
                         failed_page(tab, error.clone()),
+                        None,
                     ));
                     browser.error = Some(error);
                     continue;
@@ -411,6 +433,7 @@ impl CockpitView {
                         .is_some_and(|generation| generation != state.document_generation);
                     let navigation = changed_generation && !suppress.replace(false);
                     let page = PageState {
+                        visible: false,
                         navigation,
                         document: changed_document.get(),
                         url: state.url.clone(),
@@ -432,9 +455,12 @@ impl CockpitView {
                     };
                     if last.borrow().as_ref() != Some(&page) {
                         *last.borrow_mut() = Some(page.clone());
-                        changed_events
-                            .borrow_mut()
-                            .push(Event::Changed(thread, owner, page));
+                        changed_events.borrow_mut().push(Event::Changed(
+                            thread,
+                            owner,
+                            page,
+                            Some(state.document_generation),
+                        ));
                     }
                 }),
                 cx,
@@ -452,6 +478,7 @@ impl CockpitView {
                             native,
                             document,
                             suppress_navigation,
+                            acknowledged: Cell::new(None),
                         },
                     );
                     browser.error = None;
@@ -462,10 +489,136 @@ impl CockpitView {
                         thread,
                         owner,
                         failed_page(tab, error.clone()),
+                        None,
                     ));
                     browser.error = Some(error);
                 }
             }
+        }
+        self.tend_browser_pages(cx);
+    }
+
+    fn tend_browser_pages(&mut self, cx: &mut Context<Self>) {
+        // Visibility comes from the actual host, including selected tabs in
+        // Threads that are no longer on screen. Selection is not visibility.
+        let mut visibility = Vec::new();
+        for (thread, browser) in &self.browsers.threads {
+            let Some(owner) = browser.owner else { continue };
+            for tab in &browser.state.tabs {
+                let Some(page) = browser.pages.get(&tab.id) else {
+                    continue;
+                };
+                let visible = page.web.read(cx).browser_visible();
+                if tab.visible != visible {
+                    visibility.push((
+                        *thread,
+                        owner,
+                        PageState {
+                            document: tab.document(),
+                            navigation: false,
+                            visible,
+                            url: tab.url.clone(),
+                            loading: tab.loading,
+                            can_back: tab.can_back,
+                            can_forward: tab.can_forward,
+                            error: tab.error.clone(),
+                            dirty: tab.dirty,
+                        },
+                    ));
+                }
+            }
+        }
+        for (thread, owner, page) in visibility {
+            match self.cockpit.browser_page(thread, owner, page) {
+                Ok(state) => {
+                    let browser = self.browsers.threads.get_mut(&thread).unwrap();
+                    browser.state = state;
+                    browser.sync_documents(cx, true);
+                }
+                Err(error) => {
+                    self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string())
+                }
+            }
+        }
+        let focused = self.focused_thread();
+        let mut candidates = Vec::new();
+        for (thread, browser) in &self.browsers.threads {
+            let Some(owner) = browser.owner else { continue };
+            for tab in &browser.state.tabs {
+                let Some(page) = browser.pages.get(&tab.id) else {
+                    continue;
+                };
+                if tab.live
+                    && !tab.visible
+                    && !tab.loading
+                    && !tab.protected
+                    && tab.dirty == ferrite_core::browser::Dirty::Clean
+                    && !page.web.read(cx).browser_visible()
+                    && page.native.state().dirty == ferrite_pane::visual::web::BrowserDirty::Clean
+                    && !(Some(*thread) == focused && Some(tab.id) == browser.state.active)
+                {
+                    if let Some((document, generation)) =
+                        page.acknowledged.get().filter(|(document, generation)| {
+                            *document == tab.document()
+                                && *generation == page.native.state().document_generation
+                        })
+                    {
+                        candidates.push((
+                            *thread,
+                            owner,
+                            document,
+                            generation,
+                            page.native.clone(),
+                            page.web.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+        // Immediate state-based release is provisional; no unmeasured timer or
+        // memory budget is imposed. The Server reserves before native release.
+        for (thread, owner, document, generation, native, web) in candidates {
+            let lease = match self.cockpit.browser_reclaim(thread, owner, document) {
+                Ok(Some(lease)) => lease,
+                Ok(None) => continue,
+                Err(error) => {
+                    self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string());
+                    continue;
+                }
+            };
+            let released = if native.state().document_generation == generation {
+                match native.try_release() {
+                    Ok(released) => released,
+                    Err(error) => {
+                        self.browsers.threads.get_mut(&thread).unwrap().error = Some(error);
+                        false
+                    }
+                }
+            } else {
+                web.update(cx, |web, cx| web.refresh_browser_state(cx));
+                false
+            };
+            match self
+                .cockpit
+                .browser_reclaimed(thread, owner, lease, released)
+            {
+                Ok(state) => {
+                    let browser = self.browsers.threads.get_mut(&thread).unwrap();
+                    browser.state = state;
+                    browser.pages.retain(|id, _| {
+                        browser
+                            .state
+                            .tabs
+                            .iter()
+                            .any(|tab| tab.id == *id && tab.live)
+                    });
+                    browser.sync_documents(cx, false);
+                }
+                Err(error) => {
+                    self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string())
+                }
+            }
+            cx.notify();
         }
     }
 
@@ -515,7 +668,10 @@ impl CockpitView {
             .iter()
             .find(|tab| Some(tab.id) == browser.state.active);
         if let Some(tab) = active.filter(|tab| !tab.live) {
-            self.browsers.events.borrow_mut().push(Event::Restore(thread, tab.id));
+            self.browsers
+                .events
+                .borrow_mut()
+                .push(Event::Restore(thread, tab.id));
         }
         let tabs = browser.state.tabs.iter().map(|tab| {
             let id = tab.id;
@@ -528,10 +684,23 @@ impl CockpitView {
                 .flex()
                 .items_center()
                 .min_w_0()
+                .flex_shrink_0()
                 .max_w(px(190.))
+                .rounded(px(R_CONTROL))
+                .text_size(px(FS_LABEL))
+                .font_weight(W_LABEL)
                 .px(px(8.))
                 .py(px(4.))
-                .when(Some(id) == browser.state.active, |tab| tab.bg(paint::CARD))
+                .map(|tab| {
+                    let key = format!("browser-tab-{}", id.0);
+                    if Some(id) == browser.state.active && !browser.new_tab {
+                        tab.hover_carried(key).text_color(rgb(INK_STRONG))
+                    } else {
+                        tab.hover_raised(key)
+                            .press_raised()
+                            .text_color(rgb(INK_SUBTLE))
+                    }
+                })
                 .child(
                     div()
                         .min_w_0()
@@ -657,19 +826,23 @@ impl CockpitView {
                     ),
             )
             .child(toolbar)
-            .when(active.is_some_and(|tab| tab.loading), |body| {
-                body.child(
-                    div()
-                        .px(px(8.))
-                        .text_color(rgb(INK_SUBTLE))
-                        .child("Loading…"),
-                )
-            })
+            .when(
+                active.is_some_and(|tab| tab.loading) && !browser.new_tab,
+                |body| {
+                    body.child(
+                        div()
+                            .px(px(8.))
+                            .text_color(rgb(INK_SUBTLE))
+                            .child("Loading…"),
+                    )
+                },
+            )
             .when_some(
-                browser
-                    .error
-                    .as_ref()
-                    .or_else(|| active.and_then(|tab| tab.error.as_ref())),
+                browser.error.as_ref().or_else(|| {
+                    active
+                        .filter(|_| !browser.new_tab)
+                        .and_then(|tab| tab.error.as_ref())
+                }),
                 |body, error| {
                     body.child(div().px(px(8.)).py(px(4.)).child(format!(
                         "{error} · Edit the address or reload to try again."
@@ -699,6 +872,7 @@ impl Browser {
 fn failed_page(tab: &ferrite_core::browser::Tab, error: String) -> PageState {
     PageState {
         document: tab.document(),
+        visible: false,
         navigation: false,
         url: tab.url.clone(),
         loading: false,

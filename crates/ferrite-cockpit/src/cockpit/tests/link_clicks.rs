@@ -43,12 +43,17 @@ fn copied(cx: &mut gpui::VisualTestContext) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
+fn browser_opened(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+    assert_eq!(cx.opened_url(), None, "ordinary web links stay in Ferrite");
+    assert!(view.read_with(cx, |view, _| view.panes[0].preview.document().is_some_and(|document| matches!(document.body, ferrite_pane::preview::Body::Browser))));
+}
+
 #[gpui::test]
 fn a_plain_click_on_a_link_opens_it(cx: &mut TestAppContext) {
     let (view, cx) = linked_answer("link-click-plain", cx);
     let at = on_link(&view, cx);
     cx.simulate_click(at, gpui::Modifiers::none());
-    assert_eq!(cx.opened_url().as_deref(), Some(URL));
+    browser_opened(&view, cx);
 }
 
 #[gpui::test]
@@ -56,7 +61,7 @@ fn a_click_that_wobbles_a_pixel_still_opens_the_link(cx: &mut TestAppContext) {
     let (view, cx) = linked_answer("link-click-wobble", cx);
     let at = on_link(&view, cx);
     drag(cx, at, at + gpui::point(px(1.), px(0.)));
-    assert_eq!(cx.opened_url().as_deref(), Some(URL));
+    browser_opened(&view, cx);
 }
 
 #[gpui::test]
@@ -69,11 +74,7 @@ fn a_click_on_a_link_opens_it_while_other_text_is_highlighted(cx: &mut TestAppCo
 
     let at = on_link(&view, cx);
     cx.simulate_click(at, gpui::Modifiers::none());
-    assert_eq!(
-        cx.opened_url().as_deref(),
-        Some(URL),
-        "a click on a link opens it whatever is highlighted"
-    );
+    browser_opened(&view, cx);
     assert_eq!(copied(cx), None, "the click let go of the old highlight");
 }
 
@@ -91,7 +92,7 @@ fn a_click_on_a_highlighted_link_opens_it(cx: &mut TestAppContext) {
 
     let at = on_link(&view, cx);
     cx.simulate_click(at, gpui::Modifiers::none());
-    assert_eq!(cx.opened_url().as_deref(), Some(URL));
+    browser_opened(&view, cx);
 }
 
 #[gpui::test]
@@ -144,7 +145,7 @@ fn a_tap_on_a_link_opens_it(cx: &mut TestAppContext) {
     let (view, cx) = linked_answer("link-tap-plain", cx);
     let at = on_link(&view, cx);
     tap(cx, at);
-    assert_eq!(cx.opened_url().as_deref(), Some(URL));
+    browser_opened(&view, cx);
 }
 
 #[gpui::test]
@@ -156,11 +157,7 @@ fn a_tap_on_a_link_opens_it_while_other_text_is_highlighted(cx: &mut TestAppCont
 
     let at = on_link(&view, cx);
     tap(cx, at);
-    assert_eq!(
-        cx.opened_url().as_deref(),
-        Some(URL),
-        "a tap on a link opens it whatever is highlighted"
-    );
+    browser_opened(&view, cx);
     assert_eq!(copied(cx), None, "the tap let go of the old highlight");
 }
 
@@ -187,7 +184,7 @@ fn a_click_on_a_link_opens_it_while_the_answer_streams(cx: &mut TestAppContext) 
     tick(cx);
     assert_eq!(on_link(&view, cx), at, "the link stays under the pointer");
     cx.simulate_mouse_up(at, MouseButton::Left, gpui::Modifiers::none());
-    assert_eq!(cx.opened_url().as_deref(), Some(URL));
+    browser_opened(&view, cx);
 }
 
 /// A double-click on a link takes its word, as on any text: the first click
@@ -199,7 +196,7 @@ fn a_double_click_on_a_link_selects_its_word(cx: &mut TestAppContext) {
     let (view, cx) = linked_answer("link-double-click", cx);
     let at = on_link(&view, cx);
     cx.simulate_click(at, gpui::Modifiers::none());
-    assert_eq!(cx.opened_url().as_deref(), Some(URL));
+    browser_opened(&view, cx);
     cx.simulate_event(MouseDownEvent {
         button: MouseButton::Left,
         position: at,
@@ -231,7 +228,7 @@ fn a_click_on_a_bare_url_opens_it(cx: &mut TestAppContext) {
     tick(cx);
     let at = caret(&view, cx, 0, 8);
     cx.simulate_click(at, gpui::Modifiers::none());
-    assert_eq!(cx.opened_url().as_deref(), Some(URL));
+    browser_opened(&view, cx);
 }
 
 /// A file link's card opens its reader on a tap, while other text is
