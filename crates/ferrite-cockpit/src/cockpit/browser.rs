@@ -95,6 +95,35 @@ struct Page {
     pending_navigation: RefCell<Option<PendingNavigation>>,
     manual: Rc<RefCell<manual::Manual>>,
 }
+impl Browsers {
+    /// Rechecked at queue dispatch and after native attachment becomes Ready.
+    /// The latter additionally checks the exact native document and epoch.
+    fn control_page(&self, request: &ControlRequest) -> Option<&Page> {
+        if !request.control.supported() {
+            return None;
+        }
+        let browser = self.threads.get(&request.thread)?;
+        if browser.owner != Some(request.owner)
+            || !browser.pages.values().all(|page| {
+                let manual = page.manual.borrow();
+                manual.revision <= request.revision
+                    && (request.control.observation() || !manual.active)
+            })
+        {
+            return None;
+        }
+        browser.pages.get(&request.document.tab).filter(|page| {
+            let manual = page.manual.borrow();
+            page.document.get() == request.document
+                && page.pending_navigation.borrow().is_none()
+                && (!matches!(request.control, ferrite_core::browser::Control::Screenshot)
+                    || !page.native.state().loading)
+                && manual.revision <= request.revision
+                && (request.control.observation() || !manual.active)
+        })
+    }
+}
+
 impl Drop for Page {
     fn drop(&mut self) {
         // Running work retains its local protection handle. Fence the native
@@ -848,6 +877,11 @@ impl CockpitView {
                     Ok(NativeEvent::Finished(
                         Outcome::Failed { error } | Outcome::Uncertain { error },
                     )) => break Some(Err(error)),
+                    Ok(NativeEvent::Finished(Outcome::Unknown)) => {
+                        break Some(Err(
+                            "Browser capture completion is unknown; capture again".into()
+                        ))
+                    }
                     Err(std::sync::mpsc::TryRecvError::Empty) => break None,
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         break Some(Err("Browser capture worker disconnected".into()))
@@ -958,43 +992,15 @@ impl CockpitView {
         use ferrite_core::browser::Outcome;
         #[cfg(feature = "cef")]
         if let Some(running) = self.browsers.running_control.take() {
-            let result = loop {
-                match running.answer.try_recv() {
+            let result =
+                loop {
+                    match running.answer.try_recv() {
                     Ok(ferrite_pane::visual::browser_control::native::Event::Ready(authorize)) => {
-                        let thread_idle = self
-                            .browsers
-                            .threads
-                            .get(&running.request.thread)
-                            .is_some_and(|browser| {
-                                browser.pages.values().all(|page| {
-                                    page.manual.borrow().revision <= running.request.revision
-                                        && (running.request.control.observation()
-                                            || !page.manual.borrow().active)
-                                })
+                        let valid = self.browsers.control_page(&running.request)
+                            .is_some_and(|page| {
+                                page.native.state().document_generation == running.native_generation
+                                    && page.native.control_epoch() == running.epoch
                             });
-                        let valid = thread_idle
-                            && self
-                                .browsers
-                                .threads
-                                .get(&running.request.thread)
-                                .filter(|browser| browser.owner == Some(running.request.owner))
-                                .and_then(|browser| {
-                                    browser.pages.get(&running.request.document.tab)
-                                })
-                                .is_some_and(|page| {
-                                    page.document.get() == running.request.document
-                                        && page.pending_navigation.borrow().is_none()
-                                        && page.native.state().document_generation
-                                            == running.native_generation
-                                        && page.native.control_epoch() == running.epoch
-                                        && (!matches!(
-                                            running.request.control,
-                                            ferrite_core::browser::Control::Screenshot
-                                        ) || !page.native.state().loading)
-                                        && page.manual.borrow().revision <= running.request.revision
-                                        && (running.request.control.observation()
-                                            || !page.manual.borrow().active)
-                                });
                         let _ = authorize.send(valid);
                     }
                     Ok(ferrite_pane::visual::browser_control::native::Event::Finished(outcome)) => {
@@ -1009,7 +1015,7 @@ impl CockpitView {
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => break None,
                 }
-            };
+                };
             if let Some(mut outcome) = result {
                 let current = self
                     .browsers
@@ -1044,31 +1050,7 @@ impl CockpitView {
             let Some(request) = self.browsers.control_queue.pop_front() else {
                 return;
             };
-            let page = self
-                .browsers
-                .threads
-                .get(&request.thread)
-                .filter(|browser| browser.owner == Some(request.owner))
-                .and_then(|browser| browser.pages.get(&request.document.tab));
-            let thread_idle = self
-                .browsers
-                .threads
-                .get(&request.thread)
-                .is_some_and(|browser| {
-                    browser.pages.values().all(|page| {
-                        page.manual.borrow().revision <= request.revision
-                            && (request.control.observation() || !page.manual.borrow().active)
-                    })
-                });
-            let valid = thread_idle
-                && page.is_some_and(|page| {
-                    page.document.get() == request.document
-                        && page.pending_navigation.borrow().is_none()
-                        && (!matches!(request.control, ferrite_core::browser::Control::Screenshot)
-                            || !page.native.state().loading)
-                        && page.manual.borrow().revision <= request.revision
-                        && (request.control.observation() || !page.manual.borrow().active)
-                });
+            let valid = self.browsers.control_page(&request).is_some();
             if !valid {
                 self.reply_browser_control(request, Outcome::Failed { error: "The owned browser document or operator revision changed before dispatch; obtain fresh State and Observe".into() });
                 continue;
@@ -1096,7 +1078,12 @@ impl CockpitView {
                         continue;
                     }
                 };
-                let page = page.unwrap();
+                let page = self
+                    .browsers
+                    .threads
+                    .get(&request.thread)
+                    .and_then(|browser| browser.pages.get(&request.document.tab))
+                    .expect("control eligibility checked above");
                 let Some(target) = page.native.target_id() else {
                     self.reply_browser_control(
                         request,

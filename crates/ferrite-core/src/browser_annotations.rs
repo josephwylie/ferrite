@@ -54,6 +54,8 @@ pub enum Selection {
     Element {
         context: ElementContext,
     },
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -75,13 +77,40 @@ pub struct Ink {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Drawing {
-    Pen { points: Vec<Point>, ink: Ink },
-    Line { from: Point, to: Point, ink: Ink },
-    Arrow { from: Point, to: Point, ink: Ink },
-    Rectangle { bounds: Rect, ink: Ink },
-    Ellipse { bounds: Rect, ink: Ink },
-    Text { at: Point, text: String, ink: Ink },
-    Step { at: Point, number: u32, ink: Ink },
+    Pen {
+        points: Vec<Point>,
+        ink: Ink,
+    },
+    Line {
+        from: Point,
+        to: Point,
+        ink: Ink,
+    },
+    Arrow {
+        from: Point,
+        to: Point,
+        ink: Ink,
+    },
+    Rectangle {
+        bounds: Rect,
+        ink: Ink,
+    },
+    Ellipse {
+        bounds: Rect,
+        ink: Ink,
+    },
+    Text {
+        at: Point,
+        text: String,
+        ink: Ink,
+    },
+    Step {
+        at: Point,
+        number: u32,
+        ink: Ink,
+    },
+    #[serde(other)]
+    Unknown,
 }
 
 /// Once added to the Composer the original and captured context cannot be
@@ -329,6 +358,7 @@ fn validate_capture(capture: &Capture, width: u32, height: u32) -> io::Result<()
             height: *height,
         },
         Selection::Element { context } => context.bounds_css.clone(),
+        Selection::Unknown => return Err(io::Error::other("Unsupported browser selection")),
     };
     let valid_selection = valid_rect(&bounds)
         && bounds.x < viewport.width_css
@@ -349,6 +379,7 @@ fn validate_drawings(drawings: &[Drawing]) -> io::Result<()> {
     let point = |point: &Point| point.x.is_finite() && point.y.is_finite();
     for drawing in drawings {
         let (valid, ink) = match drawing {
+            Drawing::Unknown => return Err(io::Error::other("Unsupported browser drawing")),
             Drawing::Pen { points, ink } => (!points.is_empty() && points.iter().all(&point), ink),
             Drawing::Line { from, to, ink } | Drawing::Arrow { from, to, ink } => {
                 (point(from) && point(to), ink)
@@ -455,6 +486,15 @@ pub fn split(prompt: String) -> (String, Vec<PathBuf>, Vec<Annotation>) {
     let Ok(annotations) = serde_json::from_str::<Vec<Annotation>>(&body[at + START.len()..]) else {
         return (text, files, vec![]);
     };
+    if annotations.iter().any(|annotation| {
+        matches!(annotation.capture.selection, Selection::Unknown)
+            || annotation
+                .drawings
+                .iter()
+                .any(|drawing| matches!(drawing, Drawing::Unknown))
+    }) {
+        return (text, files, vec![]);
+    }
     files.retain(|path| {
         !annotations
             .iter()

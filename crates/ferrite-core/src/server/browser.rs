@@ -400,6 +400,7 @@ impl Server {
                 }
             };
             let result = match request.operation {
+                Operation::Unknown => Err("Unsupported browser operation".into()),
                 Operation::State => Ok(self.browser_response(thread, None)),
                 Operation::Action {
                     action,
@@ -412,6 +413,9 @@ impl Server {
                     control,
                 } => {
                     let prepare = (|| {
+                        if !control.supported() {
+                            return Err("Unsupported browser control or wait state".into());
+                        }
                         self.browser.check_owner(thread, owner)?;
                         self.browser.check_document(thread, document)?;
                         if self.browser.state(thread).active != Some(document.tab) {
@@ -565,6 +569,7 @@ impl Server {
                 }
                 (Ok(response), pending.recovering && !refreshes)
             },
+            (Ok(()), crate::browser::Outcome::Unknown) => (Err("Browser completion is unknown; observe current state and do not replay writes automatically".into()), true),
             (Ok(()), crate::browser::Outcome::Failed { error }) => (Err(error), pending.recovering),
             (Ok(()), crate::browser::Outcome::Uncertain { error }) => (Err(format!("Action completion is uncertain: {error}. Observe current page state; do not retry writes automatically")), true),
         };
