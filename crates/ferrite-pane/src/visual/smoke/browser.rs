@@ -53,6 +53,8 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let fixture = Fixture(Arc::new(AtomicBool::new(false)));
     let stop = fixture.0.clone();
+    let edited = Arc::new(AtomicBool::new(false));
+    let observed_edit = edited.clone();
     std::thread::spawn(move || {
         while !stop.load(Ordering::Relaxed) {
             let Ok((mut stream, _)) = listener.accept() else {
@@ -66,6 +68,9 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
                 continue;
             };
             let request = String::from_utf8_lossy(&request[..length]);
+            if request.starts_with("GET /dirty?value=x ") {
+                observed_edit.store(true, Ordering::SeqCst);
+            }
             let color = if request.starts_with("GET /one ") {
                 "rgb(0, 0, 255)"
             } else {
@@ -75,7 +80,7 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
                 "<!doctype html><title>Clean lifecycle fixture</title><style>html,body{margin:0;background:rgb(255,0,0);height:100%}</style>".to_owned()
             } else {
                 format!(
-                    r#"<!doctype html><html style="background:rgb(255,0,0)"><head><title>Ferrite browser fixture</title></head><body style="margin:0;background:rgb(255,0,0)"><button id="paint" onclick="document.documentElement.style.background='{color}';document.body.style.background='{color}';this.textContent='Painted'">Paint</button><input id="value"><script>window.fixtureReady=true</script></body></html>"#
+                    r#"<!doctype html><html style="background:rgb(255,0,0)"><head><title>Ferrite browser fixture</title></head><body style="margin:0;background:rgb(255,0,0)"><button id="paint" onclick="document.documentElement.style.background='{color}';document.body.style.background='{color}';this.textContent='Painted'">Paint</button><input id="value" oninput="fetch('/dirty?value='+encodeURIComponent(this.value))"><script>window.fixtureReady=true</script></body></html>"#
                 )
             };
             let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
@@ -229,6 +234,33 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
         std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
     }
     wait_pixels(engine, &views, &mut frames, [BLUE, GREEN, RED])?;
+    one.input(crate::visual::web::Input::Down {
+        x: 100.0,
+        y: 10.0,
+        button: crate::visual::web::MouseButton::Left,
+        clicks: 1,
+        modifiers: Default::default(),
+    });
+    one.input(crate::visual::web::Input::Up {
+        x: 100.0,
+        y: 10.0,
+        button: crate::visual::web::MouseButton::Left,
+        clicks: 1,
+        modifiers: Default::default(),
+    });
+    one.input(crate::visual::web::Input::Key {
+        key: "x".into(),
+        text: Some("x".into()),
+        down: true,
+        modifiers: Default::default(),
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !edited.load(Ordering::SeqCst) {
+        if Instant::now() >= deadline {
+            return Err("Native form input was not confirmed by fixture HTTP oracle".into());
+        }
+        std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
+    }
     wait_browser(engine, one.as_ref(), |state| {
         state.dirty == crate::visual::web::BrowserDirty::Dirty
     })?;
