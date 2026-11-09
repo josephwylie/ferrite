@@ -70,6 +70,7 @@ pub struct Cockpit {
     /// What every window shares, as the Engine's messages left it.
     shared: shared::Shared,
     bootstrap_results: Vec<BootstrapResult>,
+    browser_messages: Vec<ServerMessage>,
     allowance_warnings: Vec<crate::providers::limits::AllowanceWarning>,
     /// What API callers asked of the windows, oldest first.
     asked: Vec<Asked>,
@@ -219,6 +220,7 @@ impl Cockpit {
             synced: Vec::new(),
             mirrors: mirror::Mirrors::default(),
             bootstrap_results: Vec::new(),
+            browser_messages: Vec::new(),
             allowance_warnings: Vec::new(),
             asked: Vec::new(),
             visible_subjects: std::collections::BTreeMap::new(),
@@ -229,6 +231,57 @@ impl Cockpit {
             free_disk_fixture: None,
             drawn: None,
             told: None,
+        }
+    }
+
+    /// Window adapter receives metadata and actions for its exact owned pages.
+    pub fn take_browser_messages(&mut self) -> Vec<ServerMessage> {
+        std::mem::take(&mut self.browser_messages)
+    }
+
+    pub fn browser_attach(&mut self, thread: ThreadId) -> io::Result<crate::browser::State> {
+        self.browser_op(Op::BrowserAttach { thread })
+    }
+
+    pub fn browser(
+        &mut self,
+        thread: ThreadId,
+        action: crate::browser::Action,
+    ) -> io::Result<crate::browser::State> {
+        self.browser_op(Op::Browser { thread, action })
+    }
+
+    fn browser_op(&mut self, op: Op) -> io::Result<crate::browser::State> {
+        match self
+            .remote()?
+            .execute(op)
+            .map_err(|e| io::Error::other(e.message))?
+        {
+            Some(Done::Browser { state }) => Ok(state),
+            _ => Err(io::Error::other(
+                "The Server does not support the Conversation browser; update Ferrite",
+            )),
+        }
+    }
+
+    pub fn browser_page(
+        &mut self,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        page: crate::browser::PageState,
+    ) {
+        if let Ok(remote) = self.remote() {
+            remote.say(&crate::protocol::ClientMessage::BrowserPage {
+                thread,
+                owner,
+                page,
+            });
+        }
+    }
+
+    pub fn browser_input(&mut self, thread: ThreadId, owner: crate::browser::Owner) {
+        if let Ok(remote) = self.remote() {
+            remote.say(&crate::protocol::ClientMessage::BrowserInput { thread, owner });
         }
     }
 
@@ -605,6 +658,10 @@ impl Cockpit {
     }
 
     fn message(&mut self, message: ServerMessage, boot: Instant) {
+        if matches!(message, ServerMessage::Browser { .. }) {
+            self.browser_messages.push(message);
+            return;
+        }
         if let ServerMessage::AllowanceWarning {
             provider,
             window,

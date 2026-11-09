@@ -62,6 +62,15 @@ pub enum ClientMessage {
         thread: ThreadId,
     },
     Command(Command),
+    BrowserPage {
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        page: crate::browser::PageState,
+    },
+    BrowserInput {
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+    },
     /// The answer to a `render`.
     Rendered {
         request: u64,
@@ -86,6 +95,7 @@ pub struct Peer {
 pub enum Capability {
     /// This client can draw Visuals for an agent.
     RenderVisual,
+    ConversationBrowser,
     /// This client lists the Server's parked Threads off its `parked`
     /// message: a window on a machine, whose logs stay there (ADR 0026).
     ParkedThreads,
@@ -121,6 +131,13 @@ pub struct Command {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
+    BrowserAttach {
+        thread: ThreadId,
+    },
+    Browser {
+        thread: ThreadId,
+        action: crate::browser::Action,
+    },
     Open {
         provider: Provider,
         workspace: WireChoice,
@@ -425,7 +442,9 @@ impl Op {
     /// a new one is placed here on purpose.
     pub fn thread(&self) -> Option<ThreadId> {
         match self {
-            Op::Send { thread, .. }
+            Op::BrowserAttach { thread }
+            | Op::Browser { thread, .. }
+            | Op::Send { thread, .. }
             | Op::Queue { thread, .. }
             | Op::Unqueue { thread, .. }
             | Op::CancelQueued { thread, .. }
@@ -735,6 +754,12 @@ pub enum NoticeAction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
+    Browser {
+        thread: ThreadId,
+        owner: Option<crate::browser::Owner>,
+        state: crate::browser::State,
+        action: Option<crate::browser::Action>,
+    },
     Welcome {
         generation: u32,
         server: ServerInfo,
@@ -1026,6 +1051,9 @@ pub enum ErrorCode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Done {
+    Browser {
+        state: crate::browser::State,
+    },
     Thread {
         thread: ThreadId,
     },

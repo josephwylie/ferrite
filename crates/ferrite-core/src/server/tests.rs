@@ -1223,6 +1223,7 @@ fn cockpit(harness: &Harness) -> crate::cockpit::Cockpit {
             version: "0".into(),
         },
         renderer: None,
+        browser: false,
         discovery: Box::new(NoDiscovery),
     })
     .unwrap()
@@ -2595,6 +2596,7 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
         server: crate::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
         client: peer(),
         renderer: None,
+        browser: false,
         discovery: Box::new(NoDiscovery),
     })
     .unwrap();

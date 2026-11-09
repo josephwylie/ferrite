@@ -29,6 +29,7 @@ use crate::ThreadId;
 
 pub mod agent;
 mod bridge;
+mod browser;
 mod calls;
 pub(crate) mod projects;
 mod render;
@@ -287,6 +288,7 @@ struct Client {
     /// Said hello in a generation this Server speaks.
     welcomed: bool,
     renders_visuals: bool,
+    browser_capable: bool,
     watching: BTreeSet<ThreadId>,
 }
 
@@ -321,6 +323,7 @@ struct Server {
     /// Who answered each of them that an answer was delivered for.
     answered: BTreeMap<(ThreadId, WireHandle), ClientId>,
     renders: render::Renders,
+    browser: crate::browser::Service,
     searches: Vec<Search>,
     reads: Vec<Read>,
     /// First sends still starting, by the tag the Engine knows them by:
@@ -364,6 +367,7 @@ impl Server {
             told_watched: None,
             answered: BTreeMap::new(),
             renders,
+            browser: browser::load(&settings_dir),
             searches: Vec::new(),
             reads: Vec::new(),
             starting: HashMap::new(),
@@ -448,6 +452,7 @@ impl Server {
                         connection,
                         welcomed: false,
                         renders_visuals: false,
+                        browser_capable: false,
                         watching: BTreeSet::new(),
                     },
                 );
@@ -456,6 +461,9 @@ impl Server {
                 self.clients.remove(&id);
                 self.engine.window_gone(id);
                 self.renders.client_gone(id);
+                for thread in self.browser.detach_window(id) {
+                    self.publish_browser(thread, None);
+                }
             }
             Heard::Message(id, message) => self.message(id, message),
             Heard::Api(heard) => self.api_heard(heard),
@@ -491,6 +499,8 @@ impl Server {
                     };
                     client.welcomed = true;
                     client.renders_visuals = capabilities.contains(&Capability::RenderVisual);
+                    client.browser_capable =
+                        capabilities.contains(&Capability::ConversationBrowser);
                     let snapshot = self.engine.snapshot();
                     self.send(id, ServerMessage::Snapshot(snapshot));
                 }
@@ -503,6 +513,23 @@ impl Server {
                 client.watching.remove(&thread);
             }
             ClientMessage::Command(command) => self.command(id, command),
+            ClientMessage::BrowserPage {
+                thread,
+                owner,
+                page,
+            } => {
+                if owner.window == id && self.browser_window(id, thread).is_ok() {
+                    if self.browser.update(thread, owner, page).is_ok() {
+                        let _ = self.save_browser();
+                        self.publish_browser(thread, None);
+                    }
+                }
+            }
+            ClientMessage::BrowserInput { thread, owner } => {
+                if owner.window == id && self.browser_window(id, thread).is_ok() {
+                    let _ = self.browser.operator_input(thread, owner);
+                }
+            }
             ClientMessage::Rendered {
                 request,
                 png,
@@ -549,10 +576,13 @@ impl Server {
         if let Some(client) = self.clients.get_mut(&id) {
             client.watching.insert(thread);
         }
+        self.publish_browser(thread, None);
     }
 
     fn command(&mut self, id: ClientId, Command { id: request, op }: Command) {
         let executed = match &op {
+            Op::BrowserAttach { thread } => self.attach_browser(id, *thread),
+            Op::Browser { thread, action } => self.browser_action(id, *thread, action.clone()),
             Op::SettingsChanged => match Settings::load(&self.settings_dir) {
                 Ok(settings) => {
                     self.apply_settings(&settings);
