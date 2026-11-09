@@ -83,8 +83,9 @@ def main():
         executable = str(args.executable.resolve())
         started = time.monotonic()
         process = None
+        server_log = (output/'server-process.log').open('w', encoding='utf-8')
         server_process = subprocess.Popen([executable, 'server'], env=env, cwd=root,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            stdout=server_log, stderr=subprocess.STDOUT)
         try:
             with (output/'app.log').open('w', encoding='utf-8') as log:
                 process = subprocess.Popen([executable, '--browser-window-smoke', '--import', str(history)],
@@ -120,6 +121,7 @@ def main():
             if server_process.poll() is None:
                 server_process.terminate()
                 server_process.wait(timeout=20)
+            server_log.close()
             import shutil
             if (root/'logs').exists():
                 shutil.copytree(root/'logs', output/'diagnostics', dirs_exist_ok=True)
