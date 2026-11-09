@@ -1,5 +1,6 @@
 // Ferrite's Pane: the visible cell for one Thread. Its transcript, its
 // Composer and the Draft, and what they draw with.
+pub mod annotation_editor;
 mod attachments;
 pub mod composer;
 pub mod decision;
