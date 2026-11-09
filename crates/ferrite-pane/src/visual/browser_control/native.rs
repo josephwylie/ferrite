@@ -11,7 +11,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
+        mpsc, Arc, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -27,6 +27,9 @@ pub enum Event {
 pub struct Worker {
     send: mpsc::Sender<Job>,
     busy: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+    child: Arc<Mutex<Option<Child>>>,
+    thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 struct Job {
     endpoint: ControllerEndpoint,
@@ -49,11 +52,20 @@ impl Worker {
             let (send, receive) = mpsc::channel::<Job>();
             let busy = Arc::new(AtomicBool::new(false));
             let running = busy.clone();
-            std::thread::Builder::new()
+            let stop = Arc::new(AtomicBool::new(false));
+            let stopping = stop.clone();
+            let child = Arc::new(Mutex::new(None));
+            let owned_child = child.clone();
+            let thread = std::thread::Builder::new()
                 .name("conversation-browser".into())
                 .spawn(move || {
                     let mut controller: Option<Controller> = None;
-                    while let Ok(job) = receive.recv() {
+                    while !stopping.load(Ordering::Acquire) {
+                        let job = match receive.recv_timeout(Duration::from_millis(50)) {
+                            Ok(job) => job,
+                            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        };
                         let restart = controller.as_ref().is_some_and(|controller| {
                             controller.endpoint != job.endpoint.url
                                 || controller
@@ -67,7 +79,12 @@ impl Worker {
                         let deadline = Instant::now() + Duration::from_secs(30);
                         let result = (|| {
                             if controller.is_none() {
-                                controller = Some(Controller::start(&job.endpoint, deadline)?);
+                                controller = Some(Controller::start(
+                                    &job.endpoint,
+                                    deadline,
+                                    owned_child.clone(),
+                                    stopping.clone(),
+                                )?);
                             }
                             let controller = controller.as_mut().unwrap();
                             controller.deadline = deadline;
@@ -76,10 +93,18 @@ impl Worker {
                             job.reply.send(Event::Ready(authorize)).map_err(|_| {
                                 failure("owning window disappeared before dispatch")
                             })?;
-                            if permission.recv_timeout(Duration::from_secs(5)) != Ok(true) {
-                                return Err(failure(
-                                    "The owning page changed before dispatch; observe again",
-                                ));
+                            let until = Instant::now() + Duration::from_secs(5);
+                            loop {
+                                if stopping.load(Ordering::Acquire) || Instant::now() >= until {
+                                    return Err(failure("Browser owner shut down before dispatch"));
+                                }
+                                match permission.recv_timeout(Duration::from_millis(50)) {
+                                    Ok(true) => break,
+                                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                                    _ => return Err(failure(
+                                        "The owning page changed before dispatch; observe again",
+                                    )),
+                                }
                             }
                             // No launch, reconnect, or target selection after
                             // the GUI authorizes this established attachment.
@@ -106,16 +131,34 @@ impl Worker {
                         if controller.as_ref().is_some_and(|c| c.broken) {
                             controller.take();
                         }
-                        let _ = job.reply.send(Event::Finished(outcome));
+                        let _ = job.reply.try_send(Event::Finished(outcome));
                         running.store(false, Ordering::Release);
                     }
                 })
                 .expect("start conversation browser worker");
-            let worker = Arc::new(Self { send, busy });
+            let worker = Arc::new(Self {
+                send,
+                busy,
+                stop,
+                child,
+                thread: Mutex::new(Some(thread)),
+            });
             *slot.borrow_mut() = Arc::downgrade(&worker);
             worker
         })
     }
+    /// Run on the application's background executor, and await it during quit.
+    pub fn shutdown(&self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(mut child) = self.child.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        if let Some(thread) = self.thread.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            let _ = thread.join();
+        }
+    }
+
     /// Call only after the owning GUI has revalidated document and intervention
     /// state. Busy jobs remain in that window's queue, without native dispatch.
     pub fn try_start(
@@ -127,6 +170,9 @@ impl Worker {
         epoch: u64,
         control: Control,
     ) -> Option<mpsc::Receiver<Event>> {
+        if self.stop.load(Ordering::Acquire) {
+            return None;
+        }
         if self
             .busy
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -153,6 +199,31 @@ impl Worker {
         Some(answer)
     }
 }
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        let child = self.child.clone();
+        let thread = self
+            .thread
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        // Last-window disposal stays responsive. Normal app quit explicitly
+        // awaits shutdown before the process is allowed to exit.
+        let _ = std::thread::Builder::new()
+            .name("browser-reaper".into())
+            .spawn(move || {
+                if let Some(mut child) = child.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                if let Some(thread) = thread {
+                    let _ = thread.join();
+                }
+            });
+    }
+}
+
 struct Error {
     message: String,
     uncertain: bool,
@@ -184,7 +255,7 @@ struct Binding {
     epoch: u64,
 }
 struct Controller {
-    child: Child,
+    child: Arc<Mutex<Option<Child>>>,
     directory: PathBuf,
     token: String,
     endpoint: String,
@@ -196,13 +267,20 @@ struct Controller {
 }
 impl Drop for Controller {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(mut child) = self.child.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         let _ = std::fs::remove_dir_all(&self.directory);
     }
 }
 impl Controller {
-    fn start(endpoint: &ControllerEndpoint, deadline: Instant) -> Result<Self, Error> {
+    fn start(
+        endpoint: &ControllerEndpoint,
+        deadline: Instant,
+        child: Arc<Mutex<Option<Child>>>,
+        stop: Arc<AtomicBool>,
+    ) -> Result<Self, Error> {
         let executable = std::env::current_exe()
             .map_err(failure)?
             .parent()
@@ -249,13 +327,20 @@ impl Controller {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000);
         }
-        let child = match command.spawn() {
-            Ok(child) => child,
-            Err(error) => {
+        {
+            let mut owned = child.lock().unwrap_or_else(|e| e.into_inner());
+            if stop.load(Ordering::Acquire) {
                 let _ = std::fs::remove_dir_all(&directory);
-                return Err(failure(error));
+                return Err(failure("browser owner is shutting down"));
             }
-        };
+            match command.spawn() {
+                Ok(process) => *owned = Some(process),
+                Err(error) => {
+                    let _ = std::fs::remove_dir_all(&directory);
+                    return Err(failure(error));
+                }
+            }
+        }
         let mut controller = Self {
             child,
             directory,
@@ -269,7 +354,20 @@ impl Controller {
         };
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
-            if controller.child.try_wait().map_err(failure)?.is_some() {
+            if stop.load(Ordering::Acquire) {
+                return Err(failure("browser owner is shutting down"));
+            }
+            let exited = controller
+                .child
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_mut()
+                .map(|child| child.try_wait())
+                .transpose()
+                .map_err(failure)?
+                .flatten()
+                .is_some();
+            if exited {
                 return Err(failure("exited before becoming ready"));
             }
             if controller.connect().is_ok() {
@@ -525,4 +623,21 @@ fn bounded(value: Value) -> Value {
     } else {
         json!({"truncated":true,"message":"Diagnostics exceeded the response limit"})
     }
+}
+
+/// Decode only the bounded PNG produced by the owned screenshot command.
+pub fn screenshot_bytes(value: &Value) -> Result<Vec<u8>, String> {
+    let encoded = value["png_base64"]
+        .as_str()
+        .ok_or("Browser screenshot did not contain PNG data")?;
+    if encoded.len() > 16 * 1024 * 1024 * 4 / 3 + 4 {
+        return Err("Browser screenshot exceeded its bound".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| "Browser screenshot contained invalid image data")?;
+    if bytes.len() > 16 * 1024 * 1024 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("Browser screenshot was not a bounded PNG".into());
+    }
+    Ok(bytes)
 }

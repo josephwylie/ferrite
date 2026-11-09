@@ -82,6 +82,9 @@ pub struct BrowserState {
 pub trait BrowserView: View {
     fn state(&self) -> BrowserState;
     fn target_id(&self) -> Option<String>;
+    fn browser_viewport(&self) -> Option<BrowserViewport> {
+        None
+    }
     fn resize_browser(&self, viewport: BrowserViewport);
     fn navigate(&self, url: &str) -> Result<(), String>;
     fn back(&self) -> Result<(), String>;
