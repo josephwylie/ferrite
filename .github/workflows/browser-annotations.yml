@@ -28,6 +28,8 @@ jobs:
         with:
           cache-on-failure: true
       - run: cargo test -p ferrite-core --locked --test browser_annotations
+      - name: Capture receipt and bounded remote image access
+        run: cargo test -p ferrite-core --locked --lib browser_annotation_receipt
       - name: Native provider image delivery
         run: cargo test -p ferrite-core --locked --lib browser_annotation_native_image
       - name: Browser annotation collection and send
