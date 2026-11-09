@@ -75,7 +75,10 @@ executable passed `probe-agent-browser-transport.py`: fail-closed startup,
 missing/wrong credentials on observation/close/internal shutdown, two authorized
 requests over separate connections to the same daemon, disabled stream startup
 and reactivation, and explicit no-CDP launch rejection. These are real native
-transport results, not CEF or Windows evidence. The patch SHA-256 is
+transport results, not CEF or Windows evidence. The native executable and provenance are retained separately from disposable
+compilation caches. Local release compilation was stopped when the operator
+reported low disk space; packaged release validation continues on CI.
+The patch SHA-256 is
 `034e4532e404a1c5e78102b219001c8a473f659a8111a089d1cdbda753c3f2ad`.
 
 The combined packaged smoke driver `probe-embedded-browser.py` additionally
