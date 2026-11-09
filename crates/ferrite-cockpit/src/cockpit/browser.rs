@@ -29,6 +29,7 @@ struct Browser {
     address_shown: Option<(TabId, String)>,
     error: Option<String>,
     new_tab: bool,
+    failed: BTreeMap<TabId, Document>,
 }
 struct Page {
     web: Entity<WebView>,
@@ -59,6 +60,7 @@ impl CockpitView {
                 address_shown: None,
                 error: None,
                 new_tab: false,
+                failed: BTreeMap::new(),
             });
     }
 
@@ -71,11 +73,17 @@ impl CockpitView {
                 browser.owner = state.owner;
                 browser.state = state;
                 browser.error = None;
-                if let Some(tab) = active { self.browser_action(thread, Action::Select { tab }, cx); }
+                if let Some(tab) = active {
+                    self.browser_action(thread, Action::Select { tab }, cx);
+                }
             }
-            Err(error) => self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string()),
+            Err(error) => {
+                self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string())
+            }
         }
-        if let Some(index) = self.pane_for(thread) { self.panes[index].preview.show_browser(); }
+        if let Some(index) = self.pane_for(thread) {
+            self.panes[index].preview.show_browser();
+        }
         cx.notify();
     }
 
@@ -153,7 +161,9 @@ impl CockpitView {
             };
             self.ensure_browser(thread, cx);
             if matches!(action, Some(Action::Open { .. } | Action::Select { .. })) {
-                if let Some(index) = self.pane_for(thread) { self.panes[index].preview.show_browser(); }
+                if let Some(index) = self.pane_for(thread) {
+                    self.panes[index].preview.show_browser();
+                }
             }
             let browser = self.browsers.threads.get_mut(&thread).unwrap();
             browser.state = state;
@@ -253,14 +263,24 @@ impl CockpitView {
                     .update(cx, |field, cx| field.set(tab.url.clone(), cx));
                 browser.address_shown = Some(shown);
             }
-            if !tab.live || browser.pages.contains_key(&tab.id) {
+            if !tab.live
+                || browser.pages.contains_key(&tab.id)
+                || browser.failed.get(&tab.id) == Some(&tab.document())
+            {
                 continue;
             }
             let engine = match Visuals::engine(cx) {
                 Availability::Ready(engine) => engine,
                 Availability::Starting => continue,
                 Availability::Unavailable(why) => {
-                    browser.error = Some(why.to_string());
+                    let error = why.to_string();
+                    browser.failed.insert(tab.id, tab.document());
+                    events.borrow_mut().push(Event::Changed(
+                        *thread,
+                        owner,
+                        failed_page(tab, error.clone()),
+                    ));
+                    browser.error = Some(error);
                     continue;
                 }
             };
@@ -338,9 +358,39 @@ impl CockpitView {
                     );
                     browser.error = None;
                 }
-                Err(error) => browser.error = Some(error),
+                Err(error) => {
+                    browser.failed.insert(tab.id, tab.document());
+                    events.borrow_mut().push(Event::Changed(
+                        thread,
+                        owner,
+                        failed_page(tab, error.clone()),
+                    ));
+                    browser.error = Some(error);
+                }
             }
         }
+    }
+
+    fn browser_go(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let Some(browser) = self.browsers.threads.get(&thread) else {
+            return;
+        };
+        let url = browser.address.read(cx).text().trim().to_owned();
+        let document = browser
+            .state
+            .tabs
+            .iter()
+            .find(|tab| Some(tab.id) == browser.state.active)
+            .filter(|_| !browser.new_tab)
+            .map(|tab| tab.document());
+        self.browser_action(
+            thread,
+            match document {
+                Some(document) => Action::Navigate { document, url },
+                None => Action::Open { url },
+            },
+            cx,
+        );
     }
 
     pub(super) fn browser_body(
@@ -450,24 +500,20 @@ impl CockpitView {
                     })),
             );
         }
-        let address = browser.address.clone();
-        let document = active
-            .filter(|_| !browser.new_tab)
-            .map(|tab| tab.document());
-        toolbar = toolbar.child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .child(browser.address.clone())
-                .on_action(cx.listener(move |this, _: &Go, _, cx| {
-                    let url = address.read(cx).text().trim().to_owned();
-                    let action = match document {
-                        Some(document) => Action::Navigate { document, url },
-                        None => Action::Open { url },
-                    };
-                    this.browser_action(thread, action, cx);
-                })),
-        );
+        toolbar = toolbar
+            .child(div().px(px(4.)).child("Address"))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(browser.address.clone())
+                    .on_action(cx.listener(move |this, _: &Go, _, cx| this.browser_go(thread, cx))),
+            )
+            .child(
+                ferrite_pane::preview::head_door("browser-go", "browser-go".into(), icons::FORWARD)
+                    .tooltip(ferrite_ui::menu::tooltip("Go to address"))
+                    .on_click(cx.listener(move |this, _, _, cx| this.browser_go(thread, cx))),
+            );
         let body = active
             .filter(|_| !browser.new_tab)
             .and_then(|tab| browser.pages.get(&tab.id))
@@ -481,9 +527,11 @@ impl CockpitView {
             .overflow_hidden()
             .child(
                 div()
+                    .id("browser-tabs")
                     .flex()
+                    .flex_shrink_0()
                     .items_center()
-                    .overflow_hidden()
+                    .overflow_x_scroll()
                     .children(tabs)
                     .child(
                         ferrite_pane::preview::head_door(
@@ -501,7 +549,7 @@ impl CockpitView {
                                         .update(cx, |field, cx| field.set(String::new(), cx));
                                     let focus = browser.address.read(cx).focus_target(window, cx);
                                     window.focus(&focus, cx);
-                            cx.notify();
+                                    cx.notify();
                                 }
                             },
                         )),
@@ -541,5 +589,18 @@ impl Browser {
                 page.document.set(tab.document());
             }
         }
+    }
+}
+
+fn failed_page(tab: &ferrite_core::browser::Tab, error: String) -> PageState {
+    PageState {
+        document: tab.document(),
+        navigation: false,
+        url: tab.url.clone(),
+        loading: false,
+        can_back: tab.can_back,
+        can_forward: tab.can_forward,
+        error: Some(error),
+        dirty: ferrite_core::browser::Dirty::Unknown,
     }
 }

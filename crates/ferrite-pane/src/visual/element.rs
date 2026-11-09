@@ -1059,4 +1059,75 @@ mod tests {
             .journal()
             .contains(&Call::Resize(Viewport { width: 460, scale })));
     }
+    #[gpui::test]
+    fn browser_preview_draws_the_service_handle_and_queues_input_before_dispatch(
+        cx: &mut TestAppContext,
+    ) {
+        let engine = Rc::new(FakeEngine::new());
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        let queue = pending.clone();
+        let (host, cx) = cx.add_window_view(|_, cx| Host {
+            web: WebView::browser(
+                engine.clone(),
+                "http://localhost:5173/",
+                BrowserViewport {
+                    width: 1,
+                    height: 1,
+                    scale: 1.,
+                },
+                Rc::new(move |input| queue.borrow_mut().push(input)),
+                Rc::new(|_| {}),
+                cx,
+            )
+            .unwrap(),
+            shown: true,
+        });
+        cx.simulate_resize(size(px(500.), px(700.)));
+        cx.run_until_parked();
+        let scale = cx.update(|window, _| window.scale_factor());
+        assert!(engine
+            .journal()
+            .contains(&Call::BrowserResize(BrowserViewport {
+                width: 460,
+                height: 650,
+                scale
+            })));
+        let web = host.read_with(cx, |host, _| host.web.clone());
+        let native = web.read_with(cx, |web, _| web.browser_handle().unwrap());
+        let before = web.read_with(cx, |web, _| web.frames());
+        assert_eq!(engine.live_views(), 1);
+        cx.simulate_mouse_move(
+            point(px(LEFT + 15.), px(TOP + 20.)),
+            None,
+            Modifiers::default(),
+        );
+        assert!(
+            inputs(&engine).is_empty(),
+            "input waits for the service authorization callback"
+        );
+        let queued = std::mem::take(&mut *pending.borrow_mut());
+        assert_eq!(
+            queued,
+            [Input::Move {
+                x: 15.,
+                y: 20.,
+                modifiers: web::Modifiers::default()
+            }]
+        );
+        for input in queued {
+            native.input(input);
+        }
+        cx.run_until_parked();
+        assert_eq!(
+            engine.live_views(),
+            1,
+            "dispatch uses the same page drawn by the preview"
+        );
+        assert!(
+            web.read_with(cx, |web, _| web.frames()) > before,
+            "the exact page produces the updated frame"
+        );
+        set_shown(&host, false, cx);
+        assert!(engine.journal().contains(&Call::Visible(false)));
+    }
 }

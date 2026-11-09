@@ -25,7 +25,10 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
-use super::{Cursor, Engine, Frame, Input, Page, Updates, View, Viewport, Wake};
+use super::{
+    BrowserDirty, BrowserState, BrowserView, BrowserViewport, Cursor, Engine, Frame, Input, Page,
+    Updates, View, Viewport, Wake,
+};
 
 /// The fake page's height in logical pixels.
 pub const CONTENT_HEIGHT: u32 = 360;
@@ -50,6 +53,8 @@ const BLOCKS: [(f32, f32, f32, f32, [u8; 3]); 5] = [
 #[derive(Clone, Debug, PartialEq)]
 pub enum Call {
     Open(Viewport),
+    BrowserOpen(String, BrowserViewport),
+    BrowserResize(BrowserViewport),
     Resize(Viewport),
     Input(Input),
     Theme(String),
@@ -106,12 +111,19 @@ impl FakeEngine {
     }
 }
 
-impl Engine for FakeEngine {
-    fn open(&self, page: Page, viewport: Viewport, wake: Wake) -> Box<dyn View> {
+impl FakeEngine {
+    fn open_view(
+        &self,
+        page: Page,
+        viewport: Viewport,
+        wake: Wake,
+        external: bool,
+    ) -> Box<dyn View> {
         self.journal.borrow_mut().push(Call::Open(viewport));
         let view = Rc::new(FakeView {
             state: RefCell::new(State {
                 viewport,
+                external,
                 bg: parse_bg(&page.theme_css),
                 hover: None,
                 visible: true,
@@ -128,6 +140,40 @@ impl Engine for FakeEngine {
         view.render();
         Box::new(Handle(view))
     }
+}
+
+impl Engine for FakeEngine {
+    fn open(&self, page: Page, viewport: Viewport, wake: Wake) -> Box<dyn View> {
+        self.open_view(page, viewport, wake, false)
+    }
+
+    fn open_browser(
+        &self,
+        url: &str,
+        viewport: BrowserViewport,
+        wake: Wake,
+    ) -> Result<Box<dyn BrowserView>, String> {
+        self.journal
+            .borrow_mut()
+            .push(Call::BrowserOpen(url.into(), viewport));
+        let view = self.open_view(
+            Page {
+                html: String::new(),
+                theme_css: String::new(),
+            },
+            Viewport {
+                width: viewport.width,
+                scale: viewport.scale,
+            },
+            wake,
+            true,
+        );
+        Ok(Box::new(BrowserHandle {
+            view,
+            journal: self.journal.clone(),
+            url: RefCell::new(url.into()),
+        }))
+    }
 
     fn pump(&self) -> Duration {
         let mut views = self.views.borrow_mut();
@@ -135,7 +181,9 @@ impl Engine for FakeEngine {
         for view in views.iter().filter_map(Weak::upgrade) {
             let release = {
                 let mut s = view.state.borrow_mut();
-                let due = !s.released && s.hidden_since.is_some_and(|t| t.elapsed() >= self.grace);
+                let due = !s.external
+                    && !s.released
+                    && s.hidden_since.is_some_and(|t| t.elapsed() >= self.grace);
                 if due {
                     s.released = true;
                     // The page is gone, and its state with it.
@@ -157,6 +205,76 @@ impl Engine for FakeEngine {
     }
 }
 
+/// External page adapter over the same synthetic framebuffer/input engine.
+struct BrowserHandle {
+    view: Box<dyn View>,
+    journal: Rc<RefCell<Vec<Call>>>,
+    url: RefCell<String>,
+}
+impl View for BrowserHandle {
+    fn resize(&self, viewport: Viewport) {
+        self.view.resize(viewport);
+    }
+    fn input(&self, input: Input) {
+        self.view.input(input);
+    }
+    fn set_theme(&self, theme: &str) {
+        self.view.set_theme(theme);
+    }
+    fn set_html(&self, html: &str) {
+        self.view.set_html(html);
+    }
+    fn set_visible(&self, visible: bool) {
+        self.view.set_visible(visible);
+    }
+    fn take(&self) -> Updates {
+        self.view.take()
+    }
+}
+impl BrowserView for BrowserHandle {
+    fn state(&self) -> BrowserState {
+        BrowserState {
+            url: self.url.borrow().clone(),
+            title: String::new(),
+            loading: false,
+            can_back: false,
+            can_forward: false,
+            error: None,
+            document_generation: 1,
+            dirty: BrowserDirty::Unknown,
+        }
+    }
+    fn target_id(&self) -> Option<String> {
+        None
+    }
+    fn resize_browser(&self, viewport: BrowserViewport) {
+        self.journal
+            .borrow_mut()
+            .push(Call::BrowserResize(viewport));
+        self.view.resize(Viewport {
+            width: viewport.width,
+            scale: viewport.scale,
+        });
+    }
+    fn navigate(&self, url: &str) -> Result<(), String> {
+        *self.url.borrow_mut() = url.into();
+        Ok(())
+    }
+    fn back(&self) -> Result<(), String> {
+        Err("No previous page".into())
+    }
+    fn forward(&self) -> Result<(), String> {
+        Err("No next page".into())
+    }
+    fn reload(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn set_protected(&self, _: bool) {}
+    fn try_release(&self) -> Result<bool, String> {
+        Ok(false)
+    }
+}
+
 /// What the host holds; the engine keeps a weak reference for `pump`.
 struct Handle(Rc<FakeView>);
 
@@ -167,6 +285,7 @@ struct FakeView {
 }
 
 struct State {
+    external: bool,
     viewport: Viewport,
     bg: [u8; 3],
     /// In-page state: lost when the view is released.
