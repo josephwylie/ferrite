@@ -136,8 +136,16 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
         }
         std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
     }
-    if one.navigate("file:///private/forbidden").is_ok() {
-        return Err("Browser accepted forbidden navigation".into());
+    for url in [
+        "file:///private/forbidden",
+        "https://:443/",
+        "http://127.0.0.1\n/",
+        " http://127.0.0.1/",
+        "http://user:password@127.0.0.1/",
+    ] {
+        if one.navigate(url).is_ok() {
+            return Err(format!("Browser accepted forbidden navigation: {url:?}"));
+        }
     }
     one.resize_browser(viewport);
     let initial = one.state().document_generation;
