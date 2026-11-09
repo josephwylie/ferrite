@@ -87,6 +87,8 @@ pub struct Lease(pub u64);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PageState {
+    /// The native main-frame document changed since the last report.
+    pub navigation: bool,
     pub document: Document,
     pub url: String,
     pub loading: bool,
@@ -104,11 +106,11 @@ pub struct Saved {
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct SavedThread {
-    tabs: Vec<(TabId, String)>,
+    tabs: Vec<(TabId, String, u64)>,
     active: Option<TabId>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Service {
     threads: BTreeMap<ThreadId, State>,
     next: u64,
@@ -298,6 +300,9 @@ impl Service {
             .iter_mut()
             .find(|tab| tab.id == page.document.tab)
             .expect("checked document");
+        if page.navigation {
+            tab.generation += 1;
+        }
         tab.url = page.url;
         tab.loading = page.loading;
         tab.can_back = page.can_back;
@@ -398,7 +403,7 @@ impl Service {
                             tabs: state
                                 .tabs
                                 .iter()
-                                .map(|tab| (tab.id, tab.url.clone()))
+                                .map(|tab| (tab.id, tab.url.clone(), tab.generation))
                                 .collect(),
                             active: state.active,
                         },
@@ -418,7 +423,7 @@ impl Service {
         };
         for (thread, saved) in saved.threads {
             let mut state = State::default();
-            for (id, url) in saved.tabs {
+            for (id, url, generation) in saved.tabs {
                 validate_url(&url)?;
                 if id.0 == 0
                     || id.0 > service.next
@@ -433,7 +438,7 @@ impl Service {
                 state.tabs.push(Tab {
                     id,
                     url,
-                    generation: 0,
+                    generation: generation + 1,
                     loading: false,
                     can_back: false,
                     can_forward: false,

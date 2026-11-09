@@ -3,21 +3,14 @@
 use super::*;
 use crate::browser::{Action, Service};
 
-pub(super) fn load(dir: &std::path::Path) -> Service {
-    let path = dir.join("browser-tabs.json");
-    match std::fs::read(&path) {
-        Ok(bytes) => match serde_json::from_slice(&bytes)
-            .map_err(|e| e.to_string())
-            .and_then(Service::restore)
-        {
-            Ok(service) => service,
-            Err(error) => {
-                crate::log!("browser metadata unavailable: {error}");
-                // Preserve the unreadable document for recovery; never replace it.
-                Service::default()
-            }
-        },
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Service::default(),
+pub(super) fn load(store: &crate::store::Store) -> Service {
+    match store.load_browser().and_then(|saved| {
+        saved
+            .map(Service::restore)
+            .transpose()
+            .map_err(io::Error::other)
+    }) {
+        Ok(service) => service.unwrap_or_default(),
         Err(error) => {
             crate::log!("browser metadata unavailable: {error}");
             Service::default()
@@ -56,25 +49,24 @@ impl Server {
         action: Action,
     ) -> Result<Option<Done>, WireError> {
         self.browser_window(id, thread)?;
-        let state = self
-            .browser
-            .apply(thread, id, action.clone())
-            .map_err(failed)?;
+        let mut next = self.browser.clone();
+        let state = next.apply(thread, id, action.clone()).map_err(failed)?;
         // Metadata is durable before realizing a page. A failed disk write is
         // reported, never silently described as a successful persisted open.
-        self.save_browser()?;
+        self.engine
+            .browser_store()
+            .save_browser(&next.save())
+            .map_err(failed)?;
+        self.browser = next;
         self.publish_browser(thread, Some(action));
         Ok(Some(Done::Browser { state }))
     }
 
     pub(super) fn save_browser(&self) -> Result<(), WireError> {
-        let path = self.settings_dir.join("browser-tabs.json");
-        if path.exists() {
-            let bytes = std::fs::read(&path).map_err(failed)?;
-            let _: crate::browser::Saved = serde_json::from_slice(&bytes).map_err(failed)?;
-        }
-        let bytes = serde_json::to_vec(&self.browser.save()).map_err(failed)?;
-        crate::store::replace_file(&path, &bytes).map_err(failed)
+        self.engine
+            .browser_store()
+            .save_browser(&self.browser.save())
+            .map_err(failed)
     }
 
     pub(super) fn publish_browser(&mut self, thread: ThreadId, action: Option<Action>) {

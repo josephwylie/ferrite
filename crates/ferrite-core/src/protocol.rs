@@ -67,10 +67,6 @@ pub enum ClientMessage {
         owner: crate::browser::Owner,
         page: crate::browser::PageState,
     },
-    BrowserInput {
-        thread: ThreadId,
-        owner: crate::browser::Owner,
-    },
     /// The answer to a `render`.
     Rendered {
         request: u64,
@@ -131,6 +127,10 @@ pub struct Command {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
+    BrowserInput {
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+    },
     BrowserAttach {
         thread: ThreadId,
     },
@@ -442,7 +442,8 @@ impl Op {
     /// a new one is placed here on purpose.
     pub fn thread(&self) -> Option<ThreadId> {
         match self {
-            Op::BrowserAttach { thread }
+            Op::BrowserInput { thread, .. }
+            | Op::BrowserAttach { thread }
             | Op::Browser { thread, .. }
             | Op::Send { thread, .. }
             | Op::Queue { thread, .. }
@@ -1051,6 +1052,9 @@ pub enum ErrorCode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Done {
+    BrowserInput {
+        revision: u64,
+    },
     Browser {
         state: crate::browser::State,
     },
