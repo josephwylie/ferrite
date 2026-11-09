@@ -8,13 +8,9 @@ param(
     [string] $TimestampUrl = "http://timestamp.digicert.com"
 )
 
-# Visuals (ADR 0013): Ferrite is built with `--features cef`, and the
-# installer carries Chromium (CEF) beside ferrite.exe: libcef.dll, its
-# resources and locales\ (`copy-chromium-windows.ps1`). The binary is its own
-# Chromium helper (`visual::boot` spots `--type=`). Building CEF's C++
-# wrapper needs cmake and ninja on PATH; CEF itself (~170 MB download, ~400 MB
-# of it installed) is fetched once into $env:CEF_PATH (default
-# ~\.local\share\cef). FERRITE_NO_CEF=1 builds without visuals.
+# Visuals ship as CEF's sandbox bootstrap (ferrite.exe), the Rust application
+# (ferrite.dll), and Chromium's runtime. cmake and ninja build CEF's wrapper.
+# FERRITE_NO_CEF=1 retains the ordinary executable without visuals.
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -42,20 +38,10 @@ $metadata = cargo metadata --no-deps --format-version 1 --manifest-path $manifes
 if ($LASTEXITCODE -ne 0) { throw "cargo metadata failed" }
 $target = $metadata.target_directory
 $version = ($metadata.packages | Where-Object name -eq "ferrite").version
-$built = Join-Path $target "release\ferrite.exe"
-if (-not (Test-Path -LiteralPath $built -PathType Leaf)) {
-    throw "No release binary at $built"
-}
-
-# The install directory, staged: the binary, and Chromium beside it.
+# Stage the same bootstrap/DLL layout exercised by CI's packaged smoke.
 $stage = Join-Path $target "release\bundle\windows\Ferrite"
-if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
-New-Item -ItemType Directory -Path $stage | Out-Null
+& (Join-Path $PSScriptRoot "stage-windows.ps1") -BuildDirectory (Join-Path $target "release") -Destination $stage -NoVisuals:(-not $visuals)
 $binary = Join-Path $stage "ferrite.exe"
-Copy-Item -LiteralPath $built -Destination $binary
-if ($visuals) {
-    & (Join-Path $PSScriptRoot "copy-chromium-windows.ps1") -Destination $stage
-}
 $size = (Get-ChildItem -LiteralPath $stage -Recurse -File | Measure-Object -Sum Length).Sum
 Write-Host ("Staged {0:N0} MB -> {1}" -f ($size / 1MB), $stage)
 
@@ -92,8 +78,14 @@ if ($signed) {
     }
     if (-not $signTool) { throw "signtool.exe was not found" }
 
-    & $signTool sign /sha1 $CertificateThumbprint /fd SHA256 /td SHA256 /tr $TimestampUrl $binary
-    if ($LASTEXITCODE -ne 0) { throw "Signing ferrite.exe failed" }
+    # The bootstrap requires its EXE, application DLL and chrome_elf.dll to
+    # have matching signatures (or all be unsigned).
+    $signedFiles = @($binary)
+    if ($visuals) { $signedFiles += @((Join-Path $stage "ferrite.dll"), (Join-Path $stage "chrome_elf.dll")) }
+    foreach ($file in $signedFiles) {
+        & $signTool sign /sha1 $CertificateThumbprint /fd SHA256 /td SHA256 /tr $TimestampUrl $file
+        if ($LASTEXITCODE -ne 0) { throw "Signing $file failed" }
+    }
 
     # Inno signs both Setup and its embedded uninstaller. Its $f token must
     # remain literal here so ISCC can replace it with the current file.
@@ -109,8 +101,10 @@ if (-not (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
     throw "Installer was not created at $outputPath"
 }
 if ($signed) {
-    & $signTool verify /pa /all /v $binary
-    if ($LASTEXITCODE -ne 0) { throw "ferrite.exe signature verification failed" }
+    foreach ($file in $signedFiles) {
+        & $signTool verify /pa /all /v $file
+        if ($LASTEXITCODE -ne 0) { throw "$file signature verification failed" }
+    }
     & $signTool verify /pa /all /v $outputPath
     if ($LASTEXITCODE -ne 0) { throw "Installer signature verification failed" }
 }

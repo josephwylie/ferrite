@@ -10,7 +10,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string] $Destination
+    [string] $Destination,
+
+    # Return the selected distribution so staging can use its matching bootstrap.
+    [switch] $PassThru
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,7 +21,8 @@ Set-StrictMode -Version Latest
 
 # What CEF's README ("REDISTRIBUTION") and its cmake (CEF_BINARY_FILES,
 # CEF_RESOURCE_FILES) put beside the executable, for CEF 154 on x64. The
-# import library, bootstrap*.exe and the build files beside them stay out.
+# import library and build files stay out. stage-windows.ps1 separately
+# selects bootstrap.exe from this same distribution for the application host.
 $runtime = @(
     "libcef.dll",
     "chrome_elf.dll",
@@ -60,3 +64,4 @@ foreach ($name in $runtime) {
     Copy-Item -LiteralPath $path -Destination $Destination -Recurse
 }
 Write-Host "Chromium (CEF $version) -> $Destination"
+if ($PassThru) { $cef }
