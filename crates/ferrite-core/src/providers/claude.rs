@@ -119,6 +119,8 @@ pub struct ClaudeConfig {
     /// level and the app's renderer. `None`, or a level of Off, offers
     /// nothing. Fixed for the Session: the CLI lists its tools once.
     pub visuals: Option<crate::visual::Visuals>,
+    /// Trusted browser capability bound to this Session's Thread.
+    pub browser: Option<crate::browser::ThreadClient>,
     /// Ferrite's caller context for the agent (`api::caller_environment`):
     /// set over whatever the CLI inherited, after the Thread's own
     /// (`thread.start --env`).
@@ -146,6 +148,7 @@ impl Default for ClaudeConfig {
             resume_drops: None,
             fork: false,
             visuals: None,
+            browser: None,
             env: Vec::new(),
             launcher: Vec::new(),
             args: Vec::new(),
@@ -352,6 +355,9 @@ impl ClaudeSession {
         if mcp::Server::offered(config.visuals.as_ref()) {
             command.args(["--allowedTools", crate::visual::CLAUDE_NAME]);
         }
+        if config.browser.is_some() {
+            command.args(["--allowedTools", crate::browser::tools::CLAUDE_NAME]);
+        }
         command.args(&config.args);
         let mut child = command
             .stdin(Stdio::piped())
@@ -390,7 +396,11 @@ impl ClaudeSession {
         let skills = Arc::new(Mutex::new(skill_mentions::Skills::default()));
         let file_search = Arc::new(Mutex::new(file_search::Requests::default()));
         let rewinds = Arc::new(Mutex::new(rewind::Rewinds::default()));
-        let server = mcp::Server::new(config.visuals.clone(), Arc::clone(&stdin));
+        let server = mcp::Server::new(
+            config.visuals.clone(),
+            config.browser.clone(),
+            Arc::clone(&stdin),
+        );
         let capabilities = read_stdout(
             stdout,
             sender,

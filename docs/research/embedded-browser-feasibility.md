@@ -47,10 +47,19 @@ reach private files, Ferrite schemes and the controller endpoint.
 
 ## Native distribution and authorization
 
-Ferrite builds native Rust agent-browser **0.41.2**, upstream commit
+The #192 packaged evidence used native Rust agent-browser **0.41.2**, upstream commit
 `d52a5e90c372ec4710c69adc3837ac14bbd852aa`, plus the retained
 [hardening patch](../../scripts/patches/agent-browser-0.41.2-ferrite.patch), SHA256
 `c9a6df0b0cf5f806cfd7eccedfe0f59b781ec02784abe042d36d427b40cc553c`.
+The current retained patch also includes #194 exact-node reference handling and
+page-session diagnostic buckets. Its SHA256 is
+`3cdede7f2ee6b15e56f877e801d045c691c5ddf3e4564526e71cfc7165701e33`.
+The original #192 hashes above remain historical evidence; they do not describe
+this extension. [Native behavior run 42560579166](https://github.com/josephwylie/ferrite/actions/runs/42560579166)
+validates the updated controller through its authenticated public command
+transport against isolated runner-installed Chrome. This is controller evidence;
+it does not establish #194 production-window/provider workflow acceptance.
+
 The packager verifies the source commit and exact patch, builds with the
 upstream lockfile, and records source/patch/compiler/platform/executable hashes
 in `agent-browser-build.json`. Apache-2.0 licensing is packaged alongside it.
@@ -59,7 +68,7 @@ in `agent-browser-build.json`. Apache-2.0 licensing is packaged alongside it.
 passed Windows x64, macOS arm64 and macOS Intel: six focused Rust security
 regressions, six public packager CLI tests, direct native invocation, persistent
 service authorization/reconnect and offline artifact verification. Earlier
-[raw native manifests](browser-native-validation-c9a6df0b.json) retain the same
+[raw native manifests](browser-native-validation-c9a6df0b.json) retain the original #192
 hardening patch's independent all-platform validation. No Node/npm runtime,
 per-action launcher or autonomous model loop is used.
 
