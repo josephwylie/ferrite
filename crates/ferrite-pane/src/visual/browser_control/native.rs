@@ -1,5 +1,8 @@
 //! One owned, authenticated native process. The worker serializes whole
 //! select/observe/action transactions; no command can choose a caller's target.
+//! Screenshots and annotation evidence share that reservation but read the
+//! exact CEF target directly, so capture never needs to unpause input or run
+//! the native controller's script-based bootstrap probes.
 use super::super::web::ControllerEndpoint;
 use base64::Engine as _;
 use ferrite_core::browser::{Control, Document, Outcome};
@@ -79,6 +82,17 @@ impl Worker {
                         }
                         let deadline = Instant::now() + Duration::from_secs(30);
                         let result = (|| {
+                            if matches!(job.control, Control::Screenshot) {
+                                let mut page = ReadOnlyPage::open(
+                                    &job.endpoint,
+                                    &job.target,
+                                    deadline,
+                                    stopping.clone(),
+                                )
+                                .map_err(failure)?;
+                                authorize(&job, &stopping)?;
+                                return page.capture(job.point.as_ref()).map_err(failure);
+                            }
                             if controller.is_none() {
                                 controller = Some(Controller::start(
                                     &job.endpoint,
@@ -90,27 +104,18 @@ impl Worker {
                             let controller = controller.as_mut().unwrap();
                             controller.deadline = deadline;
                             let switched = controller.select(&job.target)?;
-                            let (authorize, permission) = mpsc::sync_channel(1);
-                            job.reply.send(Event::Ready(authorize)).map_err(|_| {
-                                failure("owning window disappeared before dispatch")
-                            })?;
-                            let until = Instant::now() + Duration::from_secs(5);
-                            loop {
-                                if stopping.load(Ordering::Acquire) || Instant::now() >= until {
-                                    return Err(failure("Browser owner shut down before dispatch"));
-                                }
-                                match permission.recv_timeout(Duration::from_millis(50)) {
-                                    Ok(true) => break,
-                                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                                    _ => return Err(failure(
-                                        "The owning page changed before dispatch; observe again",
-                                    )),
-                                }
-                            }
+                            authorize(&job, &stopping)?;
                             // No launch, reconnect, or target selection after
                             // the GUI authorizes this established attachment.
                             controller.perform_selected(&job, switched)
-                        })();
+                        })()
+                        .map_err(|mut error: Error| {
+                            error.message = error
+                                .message
+                                .replace(&job.endpoint.authorization, "[private]")
+                                .replace(&job.endpoint.url, "[private]");
+                            error
+                        });
                         if result.is_ok() {
                             if let Some(controller) = controller.as_mut() {
                                 controller.epochs.insert(job.target.clone(), job.epoch);
@@ -202,6 +207,28 @@ impl Worker {
         Some(answer)
     }
 }
+fn authorize(job: &Job, stopping: &AtomicBool) -> Result<(), Error> {
+    let (authorize, permission) = mpsc::sync_channel(1);
+    job.reply
+        .send(Event::Ready(authorize))
+        .map_err(|_| failure("owning window disappeared before dispatch"))?;
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        if stopping.load(Ordering::Acquire) || Instant::now() >= until {
+            return Err(failure("Browser owner shut down before dispatch"));
+        }
+        match permission.recv_timeout(Duration::from_millis(50)) {
+            Ok(true) => return Ok(()),
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            _ => {
+                return Err(failure(
+                    "The owning page changed before dispatch; observe again",
+                ))
+            }
+        }
+    }
+}
+
 impl Drop for Worker {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
@@ -266,6 +293,7 @@ struct Controller {
     stopping: Arc<AtomicBool>,
     selected: Option<String>,
     refs: HashMap<String, Binding>,
+    observed: HashMap<String, (Document, u64, u64)>,
     epochs: HashMap<String, u64>,
     broken: bool,
     deadline: Instant,
@@ -354,6 +382,7 @@ impl Controller {
             stopping: stop.clone(),
             selected: None,
             refs: HashMap::new(),
+            observed: HashMap::new(),
             epochs: HashMap::new(),
             broken: false,
             deadline,
@@ -481,7 +510,13 @@ impl Controller {
                 uncertain: writes && !known_before_dispatch,
             });
         }
-        Ok(response["data"].clone())
+        let mut data = response["data"].clone();
+        if let Some(data) = data.as_object_mut() {
+            // Upstream's generic launch claims do not describe the embedded
+            // CEF lifetime and may include private attachment configuration.
+            data.remove("lifecycle");
+        }
+        Ok(data)
     }
     fn select(&mut self, target: &str) -> Result<bool, Error> {
         let listed = self.command(json!({"action":"tab_list"}))?;
@@ -523,6 +558,11 @@ impl Controller {
         Ok(true)
     }
     fn perform_selected(&mut self, job: &Job, switched: bool) -> Result<Value, Error> {
+        if !job.control.observation()
+            && self.observed.get(&job.target) != Some(&(job.document, job.revision, job.epoch))
+        {
+            return Err(failure("The controller attachment changed; obtain a fresh readable observation before input"));
+        }
         let reference = match &job.control {
             Control::Click { reference }
             | Control::Type { reference, .. }
@@ -558,7 +598,7 @@ impl Controller {
         } else {
             None
         };
-        match &job.control {
+        let mut value = match &job.control {
             Control::Observe => {
                 let mut value = self.command(json!({"action":"snapshot", "interactive":true}))?;
                 self.refs.retain(|_, binding| binding.target != job.target);
@@ -566,15 +606,13 @@ impl Controller {
                 if self.refs.len() > 16384 {
                     self.refs.clear();
                 }
-                let mut tree = value["snapshot"].as_str().unwrap_or("").to_owned();
+                let tree = value["snapshot"].as_str().unwrap_or("");
                 let native_refs = value["refs"].as_object().cloned().unwrap_or_default();
                 let nonce = secret()?;
                 let mut refs = serde_json::Map::new();
+                let mut native_to_opaque = HashMap::new();
                 let mut ref_bytes = 0usize;
                 let mut refs_truncated = false;
-                // Replace longest refs first so e1 cannot rewrite e10.
-                let mut native_refs: Vec<_> = native_refs.into_iter().collect();
-                native_refs.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
                 for (index, (native, metadata)) in native_refs.into_iter().enumerate() {
                     let bounded_field = |field: &str, limit: usize| {
                         metadata[field]
@@ -586,12 +624,11 @@ impl Controller {
                     let bytes = metadata.to_string().len() + 64;
                     if index >= 4096 || ref_bytes + bytes > 64 * 1024 {
                         refs_truncated = true;
-                        tree = tree.replace(&format!("[ref={native}]"), "[reference omitted]");
                         continue;
                     }
                     ref_bytes += bytes;
                     let opaque = format!("f{}_{index}", &nonce[..24]);
-                    tree = tree.replace(&format!("[ref={native}]"), &format!("[ref={opaque}]"));
+                    native_to_opaque.insert(native.clone(), opaque.clone());
                     self.refs.insert(
                         opaque.clone(),
                         Binding {
@@ -604,37 +641,16 @@ impl Controller {
                     );
                     refs.insert(opaque, metadata);
                 }
-                let truncated = tree.len() > TEXT || refs_truncated;
-                while tree.len() > TEXT {
-                    tree.pop();
-                }
+                let (tree, tree_truncated) = rewrite_references(tree, &native_to_opaque);
+                let truncated = tree_truncated || refs_truncated;
                 value = json!({"snapshot":tree,"refs":refs,"truncated":truncated});
+                self.observed
+                    .insert(job.target.clone(), (job.document, job.revision, job.epoch));
                 Ok(value)
             }
-            Control::Screenshot => {
-                if let Some(point) = &job.point {
-                    // Context is read on both sides of the screenshot on this
-                    // exact target. Same-label replacement must not retarget it.
-                    let mut peer = ReadOnlyPage::open(
-                        &job.endpoint,
-                        &job.target,
-                        self.deadline,
-                        self.stopping.clone(),
-                    )
-                    .ok();
-                    let before = peer.as_mut().and_then(|peer| peer.element(point).ok());
-                    let mut value = self.screenshot()?;
-                    let after = peer.as_mut().and_then(|peer| peer.element(point).ok());
-                    if let (Some(before), Some(after)) = (before, after) {
-                        if before == after {
-                            value["element"] = serde_json::to_value(before.1).map_err(failure)?;
-                        }
-                    }
-                    Ok(value)
-                } else {
-                    self.screenshot()
-                }
-            }
+            Control::Screenshot => Err(failure(
+                "Screenshot must use the reserved readonly capture transaction",
+            )),
             Control::Console => self.command(json!({"action":"console"})).map(bounded),
             Control::Network => {
                 let value = self.command(json!({"action":"requests"}))?;
@@ -679,23 +695,97 @@ impl Controller {
                 json!({"action":if *checked {"check"} else {"uncheck"},"selector":selector}),
             ),
             Control::Scroll { x, y } => self.command(json!({"action":"scroll","x":x,"y":y})),
+        }?;
+        if !job.control.observation() {
+            value["acknowledged"] = json!(true);
         }
-    }
-    fn screenshot(&mut self) -> Result<Value, Error> {
-        let path = self.directory.join("capture.png");
-        self.command(json!({"action":"screenshot","path":path,"format":"png"}))?;
-        let file = std::fs::File::open(&path).map_err(failure)?;
-        let mut bytes = Vec::new();
-        file.take(16 * 1024 * 1024 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(failure)?;
-        let _ = std::fs::remove_file(&path);
-        if bytes.len() > 16 * 1024 * 1024 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-            return Err(failure("screenshot is not a bounded PNG"));
+        if let (Some(reference), Some(selector)) = (reference, selector.as_ref()) {
+            for field in [
+                "clicked",
+                "filled",
+                "typed",
+                "selected",
+                "checked",
+                "unchecked",
+            ] {
+                if value[field].as_str() == Some(selector.as_str()) {
+                    value[field] = json!(reference.trim_start_matches('@'));
+                }
+            }
         }
-        Ok(json!({"png_base64":base64::engine::general_purpose::STANDARD.encode(bytes)}))
+        Ok(value)
     }
 }
+// References share a bracket with flags (`[required, ref=e12]`) and are
+// not necessarily the only attribute. Rewrite whole ref tokens outside quoted
+// page text; preserve required/selected/checked metadata verbatim.
+fn rewrite_references(tree: &str, refs: &HashMap<String, String>) -> (String, bool) {
+    let mut output = String::new();
+    let (mut index, mut bytes) = (0usize, 0usize);
+    let (mut quoted, mut escaped, mut attributes, mut truncated) = (false, false, false, false);
+    while index < tree.len() {
+        let remaining = &tree[index..];
+        let character = remaining.chars().next().unwrap();
+        if !quoted && attributes && remaining.starts_with("ref=") {
+            let suffix = &remaining[4..];
+            let length = suffix.bytes().take_while(u8::is_ascii_alphanumeric).count();
+            let native = &suffix[..length];
+            let boundary = suffix[length..].chars().next().is_none_or(|character| {
+                character == ']' || character == ',' || character.is_whitespace()
+            });
+            let preceding = index == 0
+                || tree.as_bytes()[index - 1] == b'['
+                || tree.as_bytes()[index - 1] == b','
+                || tree.as_bytes()[index - 1].is_ascii_whitespace();
+            if length > 0 && boundary && preceding {
+                let reference = match refs.get(native) {
+                    Some(reference) => reference.as_str(),
+                    None => {
+                        truncated = true;
+                        "unavailable"
+                    }
+                };
+                let token = format!("ref={reference}");
+                if bytes + token.len() > TEXT {
+                    return (output, true);
+                }
+                bytes += token.len();
+                output.push_str(&token);
+                index += 4 + length;
+                continue;
+            }
+        }
+        let encoded = match character {
+            '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+            character if character <= '\u{1f}' => 6,
+            character => character.len_utf8(),
+        };
+        if bytes + encoded > TEXT {
+            return (output, true);
+        }
+        output.push(character);
+        bytes += encoded;
+        index += character.len_utf8();
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                quoted = false;
+            }
+        } else {
+            match character {
+                '"' => quoted = true,
+                '[' => attributes = true,
+                ']' => attributes = false,
+                _ => {}
+            }
+        }
+    }
+    (output, truncated)
+}
+
 fn bounded(value: Value) -> Value {
     if value.to_string().len() <= TEXT {
         value
@@ -727,6 +817,8 @@ struct ReadOnlyPage {
     socket: tungstenite::WebSocket<std::net::TcpStream>,
     session: String,
     frame: String,
+    loader: String,
+    url: String,
     next: u64,
     deadline: Instant,
     stopping: Arc<AtomicBool>,
@@ -763,8 +855,8 @@ impl ReadOnlyPage {
                 .map_err(|_| "Invalid private controller authorization")?,
         );
         let config = tungstenite::protocol::WebSocketConfig {
-            max_message_size: Some(8 * 1024 * 1024),
-            max_frame_size: Some(8 * 1024 * 1024),
+            max_message_size: Some(LIMIT as usize),
+            max_frame_size: Some(LIMIT as usize),
             ..Default::default()
         };
         let (socket, _) = tungstenite::client::client_with_config(request, stream, Some(config))
@@ -773,6 +865,8 @@ impl ReadOnlyPage {
             socket,
             session: String::new(),
             frame: String::new(),
+            loader: String::new(),
+            url: String::new(),
             next: 0,
             deadline,
             stopping,
@@ -786,12 +880,68 @@ impl ReadOnlyPage {
             .ok_or("Owned capture target did not attach")?
             .to_string();
         page.call("DOM.enable", json!({}))?;
-        let tree = page.call("Page.getFrameTree", json!({}))?;
-        page.frame = tree["frameTree"]["frame"]["id"]
+        let (frame, loader, url) = page.identity()?;
+        page.frame = frame;
+        page.loader = loader;
+        page.url = url;
+        Ok(page)
+    }
+    fn identity(&mut self) -> Result<(String, String, String), String> {
+        let tree = self.call("Page.getFrameTree", json!({}))?;
+        let frame = &tree["frameTree"]["frame"];
+        let id = frame["id"]
             .as_str()
+            .filter(|value| !value.is_empty())
             .ok_or("Capture frame is unavailable")?
             .to_string();
-        Ok(page)
+        let loader = frame["loaderId"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or("Wait for the browser document to finish loading before capture")?
+            .to_string();
+        let mut url = frame["url"]
+            .as_str()
+            .ok_or("Capture URL is unavailable")?
+            .to_string();
+        if let Some(fragment) = frame["urlFragment"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+        {
+            if !url.contains('#') {
+                if !fragment.starts_with('#') {
+                    url.push('#');
+                }
+                url.push_str(fragment);
+            }
+        }
+        Ok((id, loader, url))
+    }
+    fn capture(
+        &mut self,
+        point: Option<&ferrite_core::browser_annotations::Point>,
+    ) -> Result<Value, String> {
+        let before = (self.frame.clone(), self.loader.clone(), self.url.clone());
+        let element_before = point.and_then(|point| self.element(point).ok());
+        let image = self.call(
+            "Page.captureScreenshot",
+            json!({"format":"png","fromSurface":true,"captureBeyondViewport":false}),
+        )?;
+        let mut value = json!({"png_base64":image["data"],"url":&before.2});
+        // Use the same PNG bound and signature validation as Provider codecs
+        // and retained annotation assets; no private output path is exposed.
+        let _ = screenshot_bytes(&value)?;
+        let element_after = point.and_then(|point| self.element(point).ok());
+        let after = self.identity()?;
+        if before != after {
+            return Err("The browser document changed during capture; capture it again".into());
+        }
+        if let (Some(before), Some(after)) = (element_before, element_after) {
+            if before == after {
+                value["element"] =
+                    serde_json::to_value(before.1).map_err(|error| error.to_string())?;
+            }
+        }
+        Ok(value)
     }
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         if self.stopping.load(Ordering::Acquire) {
