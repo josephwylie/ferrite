@@ -466,7 +466,10 @@ impl CockpitView {
                                     .cockpit
                                     .browser_annotation_image(thread, retained.clone())
                                 {
-                                    Ok(image) => session.phase = Phase::Loading { retained, image },
+                                    Ok(image) => {
+                                        session.started = Instant::now();
+                                        session.phase = Phase::Loading { retained, image };
+                                    }
                                     Err(failure) => error = Some(failure.to_string()),
                                 }
                             }
