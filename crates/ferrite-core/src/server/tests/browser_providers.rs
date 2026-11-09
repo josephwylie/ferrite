@@ -405,3 +405,37 @@ fn resumed_codex_browser_call_preserves_history_and_explains_legacy_tool_absence
     window.command(99, Op::Stop { when: When::Now });
     assert_eq!(harness.server.join().unwrap(), 0);
 }
+
+#[test]
+fn both_providers_report_unavailable_when_no_browser_window_is_attached() {
+    for codex in [false, true] {
+        let harness = start(if codex {
+            "codex-browser-unavailable"
+        } else {
+            "claude-browser-unavailable"
+        });
+        let mut window = attach(&harness.address);
+        let (thread, _provider) = open(&mut window, &harness);
+        let (session, host) =
+            provider_call(&harness, thread, codex, json!({"kind":"state"}), false);
+        let lines = lines_until(&host, call_answered);
+        let answer = browser_answer(&lines, codex);
+        let content = if codex {
+            assert_eq!(answer["success"], false);
+            &answer["contentItems"]
+        } else {
+            assert_eq!(answer["isError"], true);
+            &answer["content"]
+        };
+        assert!(
+            content[0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Conversation browser unavailable"),
+            "{answer}"
+        );
+        drop(session);
+        window.command(99, Op::Stop { when: When::Now });
+        assert_eq!(harness.server.join().unwrap(), 0);
+    }
+}
