@@ -119,6 +119,10 @@ impl Worker {
                                 .replace(&job.endpoint.url, "[private]");
                             error
                         });
+                        #[cfg(feature = "browser-smoke")]
+                        if result.is_ok() && !job.control.observation() {
+                            super::completion_gate::after_write(&stopping);
+                        }
                         if result.is_ok() {
                             if let Some(controller) = controller.as_mut() {
                                 controller.epochs.insert(job.target.clone(), job.epoch);

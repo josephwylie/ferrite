@@ -55,6 +55,8 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
     let stop = fixture.0.clone();
     let edited = Arc::new(AtomicBool::new(false));
     let observed_edit = edited.clone();
+    let selected = Arc::new(AtomicBool::new(false));
+    let observed_selection = selected.clone();
     std::thread::spawn(move || {
         while !stop.load(Ordering::Relaxed) {
             let Ok((mut stream, _)) = listener.accept() else {
@@ -72,12 +74,19 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
             if request.starts_with("GET /dirty?value=x ") {
                 observed_edit.store(true, Ordering::SeqCst);
             }
+            if request.starts_with("GET /selected?value=two ") {
+                observed_selection.store(true, Ordering::SeqCst);
+            }
             let color = if request.starts_with("GET /one ") {
                 "rgb(0, 0, 255)"
             } else {
                 "rgb(0, 255, 0)"
             };
-            let page = if request.starts_with("GET /clean ") {
+            let page = if request.starts_with("GET /select-popup ") {
+                // The control and menu extend beyond the right viewport edge:
+                // the popup compositor must clip/shift it and remap its inputs.
+                r#"<!doctype html><title>Select popup fixture</title><style>html,body{margin:0;background:rgb(255,0,0);height:100%;overflow:hidden}select{position:absolute;left:260px;top:185px;width:220px;height:36px;font:20px sans-serif;background:rgb(255,0,0);color:white}option{font:20px sans-serif;color:white}option[value=one]{background:rgb(110,20,20)}option[value=two]{background:rgb(13,71,151)}option[value=three]{background:rgb(20,110,20)}</style><select onchange="fetch('/selected?value='+this.value);if(this.value==='two'){document.documentElement.style.background='rgb(0,255,0)';document.body.style.background='rgb(0,255,0)'}"><option value=one>First option</option><option value=two>Second option</option><option value=three>Third option</option></select>"#.to_owned()
+            } else if request.starts_with("GET /clean ") {
                 "<!doctype html><title>Clean lifecycle fixture</title><style>html,body{margin:0;background:rgb(255,0,0);height:100%}</style>".to_owned()
             } else if request.starts_with("GET /script-form ") {
                 "<!doctype html><title>Draft</title><input id=draft><script>document.querySelector('input').value='unsaved work'</script>".to_owned()
@@ -200,6 +209,7 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
     wait_browser(engine, one.as_ref(), |state| {
         !state.loading && state.url.ends_with("/one")
     })?;
+    select_popup(engine, &format!("http://{address}/select-popup"), &selected)?;
     let clean = engine.open_browser(
         &format!("http://{address}/clean"),
         viewport,
@@ -414,4 +424,111 @@ fn wait_browser(
         }
         std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
     }
+}
+
+/// Exercises the operator's real OSR popup, independently of native Select
+/// (which changes a value without ever painting or clicking the menu).
+fn select_popup(engine: &dyn Engine, url: &str, selected: &AtomicBool) -> Result<(), String> {
+    let view = engine.open_browser(
+        url,
+        BrowserViewport {
+            width: 400,
+            height: 240,
+            scale: 2.0,
+        },
+        Box::new(|| {}),
+    )?;
+    wait_browser(engine, view.as_ref(), |state| {
+        !state.loading && state.document_generation > 0
+    })?;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if view.take().frame.is_some_and(|frame| {
+            frame.width == 800
+                && frame.height == 480
+                && frame.bgra.get(0..4) == Some(RED.as_slice())
+        }) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err("Select fixture did not paint its base frame".into());
+        }
+        std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
+    }
+    pointer_click(view.as_ref(), 280.0, 200.0);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (x, y) = loop {
+        if let Some(frame) = view.take().frame {
+            // Exact fixture option color is absent from the closed select.
+            // A wide run proves the popup pixels reached the displayed frame;
+            // native controller selection or base-only paint cannot pass.
+            let mut candidates = Vec::new();
+            for y in 0..frame.height {
+                let mut longest = (0u32, 0u32);
+                let mut start = 0u32;
+                for x in 0..=frame.width {
+                    let offset = ((y * frame.width + x.min(frame.width - 1)) * 4) as usize;
+                    let target = x < frame.width
+                        && frame.bgra.get(offset..offset + 4)
+                            == Some([151, 71, 13, 255].as_slice());
+                    if !target {
+                        if x - start > longest.1 {
+                            longest = (start, x - start);
+                        }
+                        start = x + 1;
+                    }
+                }
+                if longest.1 >= 120 {
+                    candidates.push(((longest.0 + longest.1 / 2) as f32 / 2.0, y as f32 / 2.0));
+                }
+            }
+            if let Some(point) = candidates.get(candidates.len() / 2) {
+                break *point;
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err("HTML select popup option was not composited into the live frame".into());
+        }
+        std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
+    };
+    pointer_click(view.as_ref(), x, y);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut green = false;
+    loop {
+        if let Some(frame) = view.take().frame {
+            green = frame.bgra.get(0..4) == Some(GREEN.as_slice());
+        }
+        if selected.load(Ordering::SeqCst) && green {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err("Pointer selection of the painted HTML option did not confirm value=two and green base pixels".into());
+        }
+        std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
+    }
+    println!("PASS operator select popup: composited option pixels, pointer-selected value=two at scale 2");
+    Ok(())
+}
+
+fn pointer_click(view: &dyn View, x: f32, y: f32) {
+    use crate::visual::web::{Input, MouseButton};
+    view.input(Input::Move {
+        x,
+        y,
+        modifiers: Default::default(),
+    });
+    view.input(Input::Down {
+        x,
+        y,
+        button: MouseButton::Left,
+        clicks: 1,
+        modifiers: Default::default(),
+    });
+    view.input(Input::Up {
+        x,
+        y,
+        button: MouseButton::Left,
+        clicks: 1,
+        modifiers: Default::default(),
+    });
 }
