@@ -10488,6 +10488,13 @@ impl CockpitView {
                 self.panes[index].preview.held_focus(window, cx)
             })
             .or_else(|| {
+                let index = self.focused();
+                if !self.preview_shown(index) { return None; }
+                let pane = self.panes.get(index)?;
+                if !pane.preview.document().is_some_and(|document| matches!(&document.body, ferrite_pane::preview::Body::Browser)) { return None; }
+                self.browser_annotation_focus(pane.thread()?, cx)
+            })
+            .or_else(|| {
                 self.panes
                     .get(self.focused())?
                     .review

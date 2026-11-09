@@ -47,6 +47,18 @@ enum Phase {
 }
 
 impl CockpitView {
+    pub(in crate::cockpit) fn browser_annotation_focus(
+        &self,
+        thread: ThreadId,
+        cx: &gpui::App,
+    ) -> Option<gpui::FocusHandle> {
+        let session = self.browsers.threads.get(&thread)?.annotation.as_ref()?;
+        Some(match &session.phase {
+            Phase::Editing(editor) => gpui::Focusable::focus_handle(editor.read(cx), cx),
+            _ => session.focus.clone(),
+        })
+    }
+
     pub(super) fn begin_browser_annotation(
         &mut self,
         thread: ThreadId,
@@ -504,10 +516,12 @@ impl CockpitView {
             ("Region", "browser-annotation-region", false),
             ("Select element", "browser-annotation-element", true),
         ] {
+            let selected = matches!(&session.phase, Phase::Selecting { element: active, .. } if *active == element);
             controls = controls.child(
                 button(id)
                     .debug_selector(move || id.into())
                     .tab_stop(true)
+                    .toggled(selected)
                     .child(label)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(Session {
@@ -542,7 +556,6 @@ impl CockpitView {
                     cx.listener(move |this, _, _, cx| this.close_browser_annotation(thread, cx)),
                 ),
         );
-        let selecting = matches!(session.phase, Phase::Selecting { .. });
         let mut overlay = div()
             .id("browser-annotation-overlay")
             .debug_selector(|| "browser-annotation-overlay".into())
@@ -624,10 +637,10 @@ impl CockpitView {
             .flex_1()
             .min_h_0()
             .child(controls)
-            .child(div().px(px(SPACE_2)).child(if selecting {
-                "Select an element, or drag a region. Escape cancels."
-            } else {
-                "Retaining capture…"
+            .child(div().px(px(SPACE_2)).child(match &session.phase {
+                Phase::Selecting { element: true, .. } => "Click an element. Escape cancels.",
+                Phase::Selecting { element: false, .. } => "Drag a region. Escape cancels.",
+                _ => "Retaining capture…",
             }))
             .child(
                 div()
