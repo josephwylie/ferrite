@@ -59,7 +59,7 @@ pub struct AnnotationEditor {
 impl EventEmitter<EditorEvent> for AnnotationEditor {}
 impl gpui::Focusable for AnnotationEditor {
     fn focus_handle(&self, cx: &App) -> gpui::FocusHandle {
-        self.comment.read(cx).focus_handle(cx)
+        gpui::Focusable::focus_handle(self.comment.read(cx), cx)
     }
 }
 impl AnnotationEditor {
