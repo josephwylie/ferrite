@@ -4953,7 +4953,7 @@ fn browser_requests_use_an_attached_thread_window_without_a_synthetic_client() {
     let (thread, _provider) = open(&mut window, &harness);
     window.watch(thread, None);
     let request = || {
-        Operation::Action(Action::Open {
+        browser_test_action(Action::Open {
             url: "https://example.com/account".into(),
         })
     };
@@ -5020,6 +5020,13 @@ fn browser_requests_use_an_attached_thread_window_without_a_synthetic_client() {
     }
     window.command(99, Op::Stop { when: When::Now });
     assert_eq!(harness.server.join().unwrap(), 0);
+}
+
+fn browser_test_action(action: crate::browser::Action) -> crate::browser::Operation {
+    crate::browser::Operation::Action {
+        action,
+        observation: None,
+    }
 }
 
 fn browser_test_window(harness: &Harness, thread: ThreadId) -> crate::link::Client {
@@ -5103,7 +5110,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
     let mut owner_window = browser_test_window(&harness, thread);
     let agent = harness.browser.for_thread(thread);
     let opened = agent
-        .submit(Operation::Action(Action::Open {
+        .submit(browser_test_action(Action::Open {
             url: "https://example.com/form".into(),
         }))
         .recv_timeout(Duration::from_secs(5))
@@ -5138,6 +5145,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
         reference: "@e1".into(),
     };
     let paused = agent.submit(Operation::Control {
+        observation: None,
         document,
         revision,
         control: click.clone(),
@@ -5147,6 +5155,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
         .expect("manual input must reject a queued agent input immediately")
         .is_err());
     let shot = agent.submit(Operation::Control {
+        observation: None,
         document,
         revision,
         control: Control::Screenshot,
@@ -5161,6 +5170,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
     shot.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
     assert!(agent
         .submit(Operation::Control {
+            observation: None,
             document,
             revision,
             control: click.clone()
@@ -5169,7 +5179,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
         .unwrap()
         .is_err());
     assert!(agent
-        .submit(Operation::Action(Action::Navigate {
+        .submit(browser_test_action(Action::Navigate {
             document,
             url: "https://example.com/other".into()
         }))
@@ -5177,6 +5187,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
         .unwrap()
         .is_err());
     let observe = agent.submit(Operation::Control {
+        observation: None,
         document,
         revision,
         control: Control::Observe,
@@ -5188,11 +5199,42 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
             value: serde_json::json!({"text":"Save button","references":["@e1"]}),
         },
     );
-    observe
+    let fresh = observe
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap()
+        .observation
+        .expect("only a readable observation mints a receipt");
+    let other_agent = harness.browser.for_thread(thread);
+    let state = other_agent
+        .submit(Operation::State)
         .recv_timeout(Duration::from_secs(5))
         .unwrap()
         .unwrap();
+    assert!(
+        state.observation.is_none(),
+        "State must never reveal another agent's receipt"
+    );
+    assert!(other_agent
+        .submit(Operation::Control {
+            document,
+            revision: state.revision,
+            observation: None,
+            control: click.clone()
+        })
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .is_err());
+    assert!(other_agent
+        .submit(browser_test_action(Action::Navigate {
+            document,
+            url: "https://example.com/other".into()
+        }))
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .is_err());
     let write = agent.submit(Operation::Control {
+        observation: Some(fresh.clone()),
         document,
         revision,
         control: click.clone(),
@@ -5206,13 +5248,14 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
     );
     assert!(write.recv_timeout(Duration::from_secs(5)).unwrap().is_err());
     assert!(agent
-        .submit(Operation::Action(Action::Open {
+        .submit(browser_test_action(Action::Open {
             url: "https://example.com/other".into()
         }))
         .recv_timeout(Duration::from_secs(2))
         .unwrap()
         .is_err());
     let shot = agent.submit(Operation::Control {
+        observation: None,
         document,
         revision,
         control: Control::Screenshot,
@@ -5227,6 +5270,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
     shot.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
     assert!(agent
         .submit(Operation::Control {
+            observation: None,
             document,
             revision,
             control: click.clone()
@@ -5235,6 +5279,7 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
         .unwrap()
         .is_err());
     let observe = agent.submit(Operation::Control {
+        observation: None,
         document,
         revision,
         control: Control::Observe,
@@ -5246,11 +5291,14 @@ fn browser_requests_require_readable_observation_after_operator_or_uncertain_inp
             value: serde_json::json!({"text":"Saved"}),
         },
     );
-    observe
+    let fresh = observe
         .recv_timeout(Duration::from_secs(5))
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .observation
+        .expect("only a readable observation mints a receipt");
     let write = agent.submit(Operation::Control {
+        observation: Some(fresh.clone()),
         document,
         revision,
         control: click.clone(),
