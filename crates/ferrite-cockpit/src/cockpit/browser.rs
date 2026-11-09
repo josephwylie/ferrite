@@ -119,6 +119,12 @@ impl CockpitView {
                 browser.state = state;
                 browser.error = None;
                 browser.new_tab = false;
+                browser.address_shown = None;
+                if browser.state.active.is_none() {
+                    browser
+                        .address
+                        .update(cx, |field, cx| field.set(String::new(), cx));
+                }
                 browser.sync_documents(cx, false);
             }
             Err(error) => {
@@ -470,6 +476,7 @@ impl CockpitView {
                         .read(cx)
                         .browser_handle()
                         .expect("browser host has its native page");
+                    native.set_protected(tab.protected);
                     browser.pages.insert(
                         id,
                         Page {
