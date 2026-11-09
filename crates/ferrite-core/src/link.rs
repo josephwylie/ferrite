@@ -813,8 +813,8 @@ impl Client {
     }
 
     /// Start an ordered, bounded writer for large captures. Once started, all
-    /// later messages use it: no UI command waits behind a socket upload or
-    /// overtakes an earlier capture. Ownership remains this same connection's.
+    /// later messages use it: enqueueing them never waits for a socket upload
+    /// or overtakes an earlier capture. Ownership remains this connection's.
     pub fn send_capture(&mut self, message: ClientMessage) -> io::Result<()> {
         if !matches!(
             &message,

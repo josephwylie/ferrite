@@ -133,11 +133,14 @@ fn browser_annotation_retained_editor_adds_original_evidence_without_a_live_page
         cx.debug_bounds("browser-annotation-attachment").is_some()
     });
     let prompt = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).prompt());
-    let (_, _, sent) = browser_annotations::split(prompt);
-    assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].capture(), original.capture());
-    assert_eq!(sent[0].original_hash(), original.original_hash());
-    assert_eq!(sent[0].comment(), "Keep this feedback on the closed page");
+    let (_, _, annotations) = browser_annotations::split(prompt);
+    assert_eq!(annotations.len(), 1);
+    assert_eq!(annotations[0].capture(), original.capture());
+    assert_eq!(annotations[0].original_hash(), original.original_hash());
+    assert_eq!(
+        annotations[0].comment(),
+        "Keep this feedback on the closed page"
+    );
     assert_eq!(std::fs::read(original.original()).unwrap(), png);
     std::fs::remove_dir_all(root).unwrap();
 }

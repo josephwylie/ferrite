@@ -352,6 +352,8 @@ impl CockpitView {
             else {
                 continue;
             };
+            // The Server validates at durable commit. A successful receipt can
+            // arrive after later navigation and must keep its original page.
             let valid = matches!(session.phase, Phase::Retaining(_))
                 || session.guard.as_ref().is_none_or(|guard| {
                     self.browsers.threads.get(&thread).is_some_and(|browser| {
@@ -533,7 +535,7 @@ impl CockpitView {
     pub(super) fn annotation_browser_body(
         &self,
         thread: ThreadId,
-        web: Entity<WebView>,
+        web: Option<Entity<WebView>>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use ferrite_ui::{components::button, theme::*};
@@ -543,7 +545,7 @@ impl CockpitView {
             .get(&thread)
             .and_then(|browser| browser.annotation.as_ref())
         else {
-            return div().flex_1().min_h_0().child(web).into_any_element();
+            return div().flex_1().min_h_0().children(web).into_any_element();
         };
         if let Phase::Editing(editor) = &session.phase {
             return div()
@@ -693,7 +695,7 @@ impl CockpitView {
                     .relative()
                     .flex_1()
                     .min_h_0()
-                    .child(web)
+                    .children(web)
                     .child(overlay),
             )
             .into_any_element()
