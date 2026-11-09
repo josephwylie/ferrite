@@ -666,8 +666,13 @@ impl Element for WebViewElement {
         let inner = self.inner.clone();
         let hb = hitbox.clone();
         window.on_mouse_event(move |event: &MouseUpEvent, phase, window, _| {
+            // Capture dispatch precedes Bubble. Clearing here during Capture
+            // loses an outside release before the Bubble handler can send it.
+            if phase != DispatchPhase::Bubble {
+                return;
+            }
             let captured = inner.pressed.replace(false);
-            if phase != DispatchPhase::Bubble || !(captured || hb.is_hovered(window)) {
+            if !(captured || hb.is_hovered(window)) {
                 return;
             }
             let Some(button) = button(event.button) else {
