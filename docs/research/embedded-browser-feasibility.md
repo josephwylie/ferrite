@@ -90,6 +90,17 @@ View pixels and that its sealed third page was not changed. The workflow
 retains fixture screenshots and the native result manifest. Adding this driver
 does not claim that the packaged cross-platform run has passed.
 
+## Packaged native CI validation
+
+[Run 42540596906](https://github.com/josephwylie/ferrite/actions/runs/42540596906)
+passed on hosted Windows x64, macOS arm64 and macOS Intel. Every job built the
+pinned patched source in release mode, invoked the executable directly, passed
+the isolated persistent transport probe and reverified the packaged executable's
+SHA-256/provenance offline. [Retained raw manifests](browser-native-validation.json)
+include each executable digest, Rust compiler version and transport result.
+No browser was attached in these native-only jobs; this evidence does not close
+the separate packaged CEF attachment or effective-isolation gates.
+
 ## Reproduction and acceptance status
 
 ```
