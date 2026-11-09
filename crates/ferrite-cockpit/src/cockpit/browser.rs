@@ -23,7 +23,55 @@ pub(super) struct Browsers {
     threads: BTreeMap<ThreadId, Browser>,
     events: Rc<RefCell<Vec<Event>>>,
     reveal: std::collections::BTreeSet<ThreadId>,
+    control_queue: std::collections::VecDeque<ControlRequest>,
+    #[cfg(feature = "cef")]
+    controller: Option<std::sync::Arc<ferrite_pane::visual::browser_control::native::Worker>>,
+    #[cfg(feature = "cef")]
+    running_control: Option<RunningControl>,
+    #[cfg(feature = "cef")]
+    capture_queue: std::collections::VecDeque<CaptureRequest>,
+    #[cfg(feature = "cef")]
+    running_capture: Option<RunningCapture>,
 }
+
+struct ControlRequest {
+    request: u64,
+    thread: ThreadId,
+    owner: Owner,
+    document: Document,
+    revision: u64,
+    control: ferrite_core::browser::Control,
+}
+#[cfg(feature = "cef")]
+struct RunningControl {
+    request: ControlRequest,
+    native_generation: u64,
+    epoch: u64,
+    manual: Rc<RefCell<manual::Manual>>,
+    answer: std::sync::mpsc::Receiver<ferrite_pane::visual::browser_control::native::Event>,
+}
+
+#[cfg(feature = "cef")]
+struct CaptureRequest {
+    thread: ThreadId,
+    owner: Owner,
+    document: Document,
+    reply: std::sync::mpsc::SyncSender<
+        Result<ferrite_pane::visual::browser_control::CapturedPage, String>,
+    >,
+    queued: std::time::Instant,
+}
+#[cfg(feature = "cef")]
+struct RunningCapture {
+    request: CaptureRequest,
+    native_generation: u64,
+    epoch: u64,
+    viewport: BrowserViewport,
+    url: String,
+    manual: Rc<RefCell<manual::Manual>>,
+    answer: std::sync::mpsc::Receiver<ferrite_pane::visual::browser_control::native::Event>,
+}
+
 struct Browser {
     state: State,
     owner: Option<Owner>,
@@ -41,6 +89,13 @@ struct Page {
     acknowledged: Cell<Option<(Document, u64)>>,
     pending_navigation: RefCell<Option<PendingNavigation>>,
     manual: Rc<RefCell<manual::Manual>>,
+}
+impl Drop for Page {
+    fn drop(&mut self) {
+        // Running work retains its local protection handle. Fence the native
+        // attachment before that handle can outlive the owning page/window.
+        self.native.set_agent_paused(true);
+    }
 }
 struct PendingNavigation {
     generation: u64,
@@ -204,21 +259,21 @@ impl CockpitView {
         Result<ferrite_pane::visual::browser_control::CapturedPage, String>,
     > {
         let (reply, answer) = std::sync::mpsc::sync_channel(1);
-        let available = self
-            .browsers
-            .threads
-            .get(&thread)
-            .filter(|browser| {
-                browser.owner == Some(owner) && browser.state.active == Some(document.tab)
-            })
-            .and_then(|browser| browser.pages.get(&document.tab))
-            .is_some_and(|page| page.document.get() == document);
-        let error = if available {
-            "Conversation browser capture is not available in this build"
-        } else {
-            "The selected browser document is no longer available; capture it again"
-        };
-        let _ = reply.send(Err(error.into()));
+        #[cfg(feature = "cef")]
+        self.browsers.capture_queue.push_back(CaptureRequest {
+            thread,
+            owner,
+            document,
+            reply,
+            queued: std::time::Instant::now(),
+        });
+        #[cfg(not(feature = "cef"))]
+        {
+            let _ = (thread, owner, document);
+            let _ = reply.send(Err(
+                "Conversation browser capture is not available in this build".into(),
+            ));
+        }
         answer
     }
 
@@ -263,18 +318,16 @@ impl CockpitView {
                     owner,
                     document,
                     revision,
-                    ..
+                    control,
                 } => {
-                    self.cockpit.browser_reply(
+                    self.browsers.control_queue.push_back(ControlRequest {
                         request,
                         thread,
                         owner,
                         document,
                         revision,
-                        ferrite_core::browser::Outcome::Failed {
-                            error: "Browser agent control is not available in this build".into(),
-                        },
-                    );
+                        control,
+                    });
                     continue;
                 }
                 other => other,
@@ -711,6 +764,320 @@ impl CockpitView {
             }
         }
         self.tend_browser_pages(cx);
+        #[cfg(feature = "cef")]
+        self.pump_browser_captures(cx);
+        self.pump_browser_controls(cx);
+    }
+
+    #[cfg(feature = "cef")]
+    fn pump_browser_captures(&mut self, cx: &mut Context<Self>) {
+        use ferrite_core::browser::{Control, Outcome};
+        use ferrite_pane::visual::browser_control::{
+            native::{screenshot_bytes, Event as NativeEvent, Worker},
+            CapturedPage,
+        };
+        if let Some(running) = self.browsers.running_capture.take() {
+            let unchanged = || {
+                self.browsers
+                    .threads
+                    .get(&running.request.thread)
+                    .filter(|browser| {
+                        browser.owner == Some(running.request.owner)
+                            && browser.state.active == Some(running.request.document.tab)
+                    })
+                    .and_then(|browser| browser.pages.get(&running.request.document.tab))
+                    .is_some_and(|page| {
+                        page.document.get() == running.request.document
+                            && page.pending_navigation.borrow().is_none()
+                            && page.native.state().document_generation == running.native_generation
+                            && page.native.browser_viewport() == Some(running.viewport)
+                            && page.native.control_epoch() == running.epoch
+                    })
+            };
+            let result = loop {
+                match running.answer.try_recv() {
+                    Ok(NativeEvent::Ready(authorize)) => {
+                        let _ = authorize.send(unchanged());
+                    }
+                    Ok(NativeEvent::Finished(Outcome::Success { value })) => {
+                        break Some(if unchanged() {
+                            screenshot_bytes(&value).map(|png| CapturedPage {
+                                document: running.request.document,
+                                native_generation: running.native_generation,
+                                url: running.url.clone(),
+                                viewport: ferrite_core::browser_annotations::Viewport {
+                                    width_css: running.viewport.width as f64,
+                                    height_css: running.viewport.height as f64,
+                                    device_scale: running.viewport.scale as f64,
+                                },
+                                png,
+                                // Without exact hit-tested DOM evidence the
+                                // editor offers region feedback explicitly.
+                                element: None,
+                            })
+                        } else {
+                            Err(
+                                "The page or viewport changed during capture; capture it again"
+                                    .into(),
+                            )
+                        });
+                    }
+                    Ok(NativeEvent::Finished(
+                        Outcome::Failed { error } | Outcome::Uncertain { error },
+                    )) => break Some(Err(error)),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break None,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        break Some(Err("Browser capture worker disconnected".into()))
+                    }
+                }
+            };
+            if let Some(result) = result {
+                running.manual.borrow_mut().release_local();
+                let _ = running.request.reply.send(result);
+            } else {
+                self.browsers.running_capture = Some(running);
+                return;
+            }
+        }
+        let Some(request) = self.browsers.capture_queue.pop_front() else {
+            return;
+        };
+        let page = self
+            .browsers
+            .threads
+            .get(&request.thread)
+            .filter(|browser| {
+                browser.owner == Some(request.owner)
+                    && browser.state.active == Some(request.document.tab)
+            })
+            .and_then(|browser| browser.pages.get(&request.document.tab))
+            .filter(|page| {
+                page.document.get() == request.document
+                    && page.pending_navigation.borrow().is_none()
+            });
+        let Some(page) =
+            page.filter(|_| request.queued.elapsed() < std::time::Duration::from_secs(35))
+        else {
+            let _ = request.reply.send(Err(
+                "The selected browser document is no longer available; capture it again".into(),
+            ));
+            return;
+        };
+        let Some(viewport) = page.native.browser_viewport() else {
+            let _ = request
+                .reply
+                .send(Err("The exact browser viewport is unavailable".into()));
+            return;
+        };
+        let Some(target) = page.native.target_id() else {
+            let _ = request
+                .reply
+                .send(Err("The live browser target is unavailable".into()));
+            return;
+        };
+        let endpoint = match Visuals::engine(cx) {
+            Availability::Ready(engine) => engine.controller(),
+            _ => Err("The owning browser engine is unavailable".into()),
+        };
+        let endpoint = match endpoint {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                let _ = request.reply.send(Err(error));
+                return;
+            }
+        };
+        let worker = self.browsers.controller.get_or_insert_with(Worker::shared);
+        let state = page.native.state();
+        let epoch = page.native.control_epoch();
+        page.manual.borrow_mut().protect_local();
+        let answer = worker.try_start(
+            endpoint,
+            target,
+            request.document,
+            page.manual.borrow().revision,
+            epoch,
+            Control::Screenshot,
+        );
+        if let Some(answer) = answer {
+            self.browsers.running_capture = Some(RunningCapture {
+                request,
+                native_generation: state.document_generation,
+                epoch,
+                viewport,
+                url: state.url,
+                manual: page.manual.clone(),
+                answer,
+            });
+        } else {
+            page.manual.borrow_mut().release_local();
+            self.browsers.capture_queue.push_front(request);
+        }
+    }
+
+    fn reply_browser_control(
+        &mut self,
+        request: ControlRequest,
+        outcome: ferrite_core::browser::Outcome,
+    ) {
+        self.cockpit.browser_reply(
+            request.request,
+            request.thread,
+            request.owner,
+            request.document,
+            request.revision,
+            outcome,
+        );
+    }
+
+    fn pump_browser_controls(&mut self, cx: &mut Context<Self>) {
+        use ferrite_core::browser::Outcome;
+        #[cfg(feature = "cef")]
+        if let Some(running) = self.browsers.running_control.take() {
+            let result = loop {
+                match running.answer.try_recv() {
+                    Ok(ferrite_pane::visual::browser_control::native::Event::Ready(authorize)) => {
+                        let valid = self
+                            .browsers
+                            .threads
+                            .get(&running.request.thread)
+                            .filter(|browser| browser.owner == Some(running.request.owner))
+                            .and_then(|browser| browser.pages.get(&running.request.document.tab))
+                            .is_some_and(|page| {
+                                page.document.get() == running.request.document
+                                    && page.pending_navigation.borrow().is_none()
+                                    && page.native.state().document_generation
+                                        == running.native_generation
+                                    && page.native.control_epoch() == running.epoch
+                                    && page.manual.borrow().revision == running.request.revision
+                                    && (running.request.control.observation()
+                                        || !page.manual.borrow().active)
+                            });
+                        let _ = authorize.send(valid);
+                    }
+                    Ok(ferrite_pane::visual::browser_control::native::Event::Finished(outcome)) => {
+                        break Some(outcome)
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        break Some(Outcome::Uncertain {
+                            error:
+                                "Browser worker disconnected; observe the page before continuing"
+                                    .into(),
+                        })
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break None,
+                }
+            };
+            if let Some(mut outcome) = result {
+                let current = self
+                    .browsers
+                    .threads
+                    .get(&running.request.thread)
+                    .filter(|browser| browser.owner == Some(running.request.owner))
+                    .and_then(|browser| browser.pages.get(&running.request.document.tab));
+                let unchanged = current.is_some_and(|page| {
+                    page.document.get() == running.request.document
+                        && page.native.state().document_generation == running.native_generation
+                        && page.native.control_epoch() == running.epoch
+                });
+                if !unchanged {
+                    outcome = if running.request.control.observation() {
+                        Outcome::Failed { error: "The page or operator state changed during observation; observe again".into() }
+                    } else {
+                        Outcome::Uncertain { error: "The page or operator state changed while input was in flight; observe the result and do not replay the write".into() }
+                    };
+                }
+                running.manual.borrow_mut().release_local();
+                self.reply_browser_control(running.request, outcome);
+            } else {
+                self.browsers.running_control = Some(running);
+                return;
+            }
+        }
+        loop {
+            let Some(request) = self.browsers.control_queue.pop_front() else {
+                return;
+            };
+            let page = self
+                .browsers
+                .threads
+                .get(&request.thread)
+                .filter(|browser| browser.owner == Some(request.owner))
+                .and_then(|browser| browser.pages.get(&request.document.tab));
+            let valid = page.is_some_and(|page| {
+                page.document.get() == request.document
+                    && page.pending_navigation.borrow().is_none()
+                    && page.manual.borrow().revision == request.revision
+                    && (request.control.observation() || !page.manual.borrow().active)
+            });
+            if !valid {
+                self.reply_browser_control(request, Outcome::Failed { error: "The owned browser document or operator revision changed before dispatch; obtain fresh State and Observe".into() });
+                continue;
+            }
+            #[cfg(not(feature = "cef"))]
+            {
+                let _ = cx;
+                self.reply_browser_control(
+                    request,
+                    Outcome::Failed {
+                        error: "Browser agent control is not available in this build".into(),
+                    },
+                );
+            }
+            #[cfg(feature = "cef")]
+            {
+                let endpoint = match Visuals::engine(cx) {
+                    Availability::Ready(engine) => engine.controller(),
+                    _ => Err("The owning browser engine is unavailable".into()),
+                };
+                let endpoint = match endpoint {
+                    Ok(endpoint) => endpoint,
+                    Err(error) => {
+                        self.reply_browser_control(request, Outcome::Failed { error });
+                        continue;
+                    }
+                };
+                let page = page.unwrap();
+                let Some(target) = page.native.target_id() else {
+                    self.reply_browser_control(
+                        request,
+                        Outcome::Failed {
+                            error: "The exact live browser target is not ready; observe again"
+                                .into(),
+                        },
+                    );
+                    continue;
+                };
+                let worker = self.browsers.controller.get_or_insert_with(
+                    ferrite_pane::visual::browser_control::native::Worker::shared,
+                );
+                let generation = page.native.state().document_generation;
+                let epoch = page.native.control_epoch();
+                // This direct edge precedes dispatch and cannot disappear in a
+                // coalesced Server state update.
+                page.manual.borrow_mut().protect_local();
+                let answer = worker.try_start(
+                    endpoint,
+                    target,
+                    request.document,
+                    request.revision,
+                    epoch,
+                    request.control.clone(),
+                );
+                if let Some(answer) = answer {
+                    self.browsers.running_control = Some(RunningControl {
+                        request,
+                        native_generation: generation,
+                        epoch,
+                        manual: page.manual.clone(),
+                        answer,
+                    });
+                } else {
+                    page.manual.borrow_mut().release_local();
+                    self.browsers.control_queue.push_front(request);
+                }
+                return;
+            }
+        }
     }
 
     fn finish_browser_interaction(&mut self, thread: ThreadId, owner: Owner, tab: TabId) {
