@@ -51,7 +51,7 @@ impl Profile {
         create_private_dir(root).map_err(|e| unavailable(e.to_string()))?;
         // CEF requires absolute cache paths; canonicalization also ensures
         // aliases contend on the same lock and sealed cleanup stays bounded.
-        let root = fs::canonicalize(root).map_err(|e| unavailable(e.to_string()))?;
+        let root = canonical_root(root).map_err(|e| unavailable(e.to_string()))?;
         let claim = OpenOptions::new()
             .write(true)
             .create(true)
@@ -83,7 +83,7 @@ impl Profile {
         // never switch back to the real website profile on any failure.
         let root = unique_path(&std::env::temp_dir(), "ferrite-cef");
         let _ = create_private_dir(&root);
-        let root = fs::canonicalize(&root).unwrap_or(root);
+        let root = canonical_root(&root).unwrap_or(root);
         let sealed = root.join("sealed");
         let _ = create_private_dir(&sealed);
         let websites = match unavailable {
@@ -150,4 +150,46 @@ fn unique_child(parent: &Path, prefix: &str) -> std::io::Result<PathBuf> {
     }
     builder.create(&path)?;
     Ok(path)
+}
+
+/// Resolve aliases for the claim without passing Windows verbatim paths to CEF.
+fn canonical_root(path: &Path) -> std::io::Result<PathBuf> {
+    let canonical = fs::canonicalize(path)?;
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let mut components = canonical.components();
+        let mut ordinary = match components.next() {
+            Some(Component::Prefix(prefix)) => match prefix.kind() {
+                Prefix::VerbatimDisk(drive) => PathBuf::from(format!("{}:\\", char::from(drive))),
+                Prefix::VerbatimUNC(server, share) => {
+                    let mut unc = PathBuf::from(r"\\");
+                    unc.push(server);
+                    unc.push(share);
+                    unc
+                }
+                Prefix::Disk(_) | Prefix::UNC(_, _) => return Ok(canonical),
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "CEF profile requires a drive or UNC path",
+                    ))
+                }
+            },
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "CEF profile must resolve to an absolute path",
+                ))
+            }
+        };
+        for component in components {
+            if !matches!(component, Component::RootDir) {
+                ordinary.push(component.as_os_str());
+            }
+        }
+        Ok(ordinary)
+    }
+    #[cfg(not(windows))]
+    Ok(canonical)
 }
