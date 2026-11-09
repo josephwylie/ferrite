@@ -475,12 +475,21 @@ impl Composer {
     /// Put a line back into the Composer, ready to edit at its end. The
     /// review comments stay as they are: they are not part of the line.
     pub fn set(&mut self, text: String, cx: &mut Context<Self>) {
-        let (text, files, annotations) = browser_annotations::split(text);
-        let (replies, text) = crate::quote::split(&text);
-        self.files = files;
-        self.browser_annotations = annotations;
-        self.line.set(text.to_string());
-        self.replies = replies;
+        if matches!(self.role, Role::Field(_)) {
+            // Fields hold literal values, including captured page text and
+            // comments. Only a prompt recalls attachment/reply context.
+            self.line.set(text);
+            self.files.clear();
+            self.replies.clear();
+            self.browser_annotations.clear();
+        } else {
+            let (text, files, annotations) = browser_annotations::split(text);
+            let (replies, text) = crate::quote::split(&text);
+            self.files = files;
+            self.browser_annotations = annotations;
+            self.line.set(text.to_string());
+            self.replies = replies;
+        }
         self.edited(cx);
     }
 
@@ -2217,6 +2226,28 @@ mod tests {
 
     fn composer(host: &Entity<Host>, cx: &mut VisualTestContext) -> Entity<Composer> {
         host.read_with(cx, |host, _| host.composer.clone())
+    }
+
+    #[gpui::test]
+    fn browser_annotations_fields_preserve_literal_codec_lookalikes(cx: &mut TestAppContext) {
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        let path = std::env::temp_dir().join("literal-comment.png");
+        let literal = format!("Comment\n\n<ferrite_browser_annotations version=\"1\">\n[]\n</ferrite_browser_annotations>\n@{}", serde_json::to_string(&path).unwrap());
+        composer.update(cx, |composer, cx| {
+            composer.set_role(Role::Field(Some("AnnotationEditor")), cx);
+            composer.set(literal.clone(), cx);
+            assert_eq!(
+                composer.text(),
+                literal,
+                "a comment field contains literal text, not a recalled prompt"
+            );
+            assert_eq!(
+                composer.attachment_count(),
+                0,
+                "field text must never become attachments"
+            );
+        });
     }
 
     #[gpui::test]
