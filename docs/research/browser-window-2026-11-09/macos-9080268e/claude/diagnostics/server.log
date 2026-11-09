@@ -1,0 +1,5 @@
+2026-11-09 06:04:07.188 server: Projects are off: no /var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/ferrite-window-reu33j2d/no-projects
+2026-11-09 06:04:07.191 server: 0.4.0 listening, boot 5578-18e64b41b8358ce0
+2026-11-09 06:04:07.193 could not discover Codex models: codex CLI not found: `codex`
+2026-11-09 06:04:11.434 server: stopping, as a window asked
+2026-11-09 06:04:11.434 quitting: 1 sessions ended

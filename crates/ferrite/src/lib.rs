@@ -151,6 +151,11 @@ pub fn launch() {
     let settings_dir = settings_dir();
     ferrite_core::diagnostics::open(&settings_dir);
     let args: Vec<String> = std::env::args().collect();
+    let browser_smoke = cfg!(feature = "browser-smoke")
+        && args.iter().any(|arg| arg == "--browser-window-smoke");
+    if browser_smoke {
+        ferrite_core::log!("browser window smoke: launch pid {}", std::process::id());
+    }
     let load = args.iter().any(|arg| arg == "--load");
     let demo = load || args.iter().any(|arg| arg == "--demo");
     // One Ferrite updates itself: the first window, which holds the update
@@ -218,6 +223,9 @@ pub fn launch() {
         .with_assets(icons::Assets)
         .with_http_client(http_client())
         .run(move |cx: &mut App| {
+            if browser_smoke {
+                ferrite_core::log!("browser window smoke: native application callback");
+            }
             keep_mouse_cursor_visible(cx);
             ferrite_pane::pane::init_components(cx);
             motion::init(cx);
@@ -333,8 +341,17 @@ pub fn launch() {
 
             // Who posts the system notifications (ADR 0017): the bundle's
             // identifier, and on Windows the AppUserModelID.
+            if browser_smoke {
+                ferrite_core::log!("browser window smoke: setting native app identity");
+            }
             cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite");
+            if browser_smoke {
+                ferrite_core::log!("browser window smoke: opening native window; Threads {:?}", core.threads());
+            }
             let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
+            if browser_smoke {
+                ferrite_core::log!("browser window smoke: native bounds computed");
+            }
             let mut cockpit_window = None;
             let window = cx
                 .open_window(
@@ -383,8 +400,8 @@ pub fn launch() {
                                     settings: settings.clone(),
                                     dir: settings_dir.clone(),
                                     defaults: defaults.clone(),
-                                    titler: true,
-                                    cli_updates: true,
+                                    titler: !browser_smoke,
+                                    cli_updates: !browser_smoke,
                                     ferrite_updates,
                                     whats_new: whats_new.clone(),
                                     unreadable: unreadable.clone(),
@@ -402,6 +419,10 @@ pub fn launch() {
                         });
                         // The kit Root paints the window's ground
                         // (`paint::WINDOW`) under every region.
+                        #[cfg(feature = "browser-smoke")]
+                        if std::env::args().any(|arg| arg == "--browser-window-smoke") {
+                            CockpitView::start_browser_smoke(view.clone(), window, cx);
+                        }
                         let content =
                             cx.new(|cx| cockpit_window::CockpitWindow::new(view, window, cx));
                         // The Cockpit the window shows when it is asked:
@@ -423,7 +444,10 @@ pub fn launch() {
                         })
                     },
                 )
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    ferrite_core::log!("cannot open Ferrite's native window: {error}");
+                    panic!("cannot open Ferrite's native window: {error}");
+                });
             // ⌘Q asks first while an agent works or a Decision waits — in
             // this process; a Server's agents keep running.
             let cockpit_window: WeakEntity<cockpit_window::CockpitWindow> =

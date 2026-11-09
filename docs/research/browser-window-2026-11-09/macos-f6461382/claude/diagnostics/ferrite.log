@@ -1,0 +1,7 @@
+2026-11-09 06:24:07.806 browser window smoke: launch pid 21853
+2026-11-09 06:24:08.385 browser window smoke: native application callback
+2026-11-09 06:24:08.591 attached to the Ferrite server, boot 555a-18e64c592cd30ab0
+2026-11-09 06:24:08.631 browser window smoke: setting native app identity
+2026-11-09 06:24:08.631 browser window smoke: opening native window; Threads [ThreadId(1)]
+2026-11-09 06:24:08.633 browser window smoke: native bounds computed
+2026-11-09 06:24:08.968 browser window smoke: production CockpitView constructed

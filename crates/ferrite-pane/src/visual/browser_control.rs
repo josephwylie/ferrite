@@ -15,3 +15,8 @@ pub struct CapturedPage {
 
 #[cfg(feature = "cef")]
 pub mod native;
+
+#[cfg(feature = "browser-smoke")]
+mod completion_gate;
+#[cfg(feature = "browser-smoke")]
+mod phase_log;

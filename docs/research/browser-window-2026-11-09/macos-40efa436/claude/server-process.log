@@ -1,0 +1,5 @@
+ferrite: server: Projects are off: no /var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/ferrite-window-3evh4_59/no-projects
+ferrite: server: 0.4.0 listening, boot 2896-18e64bbbe1b0d398
+ferrite: could not discover Codex models: codex CLI not found: `codex`
+ferrite: server: stopping, as a window asked
+ferrite: quitting: 1 sessions ended

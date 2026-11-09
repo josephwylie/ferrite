@@ -1,0 +1,1 @@
+{"probe": "42872790c44e4056b5cce2ef440deb72", "provider": "claude", "frame": {"type": "control_request", "request_id": "commands", "request": {"subtype": "initialize"}}}

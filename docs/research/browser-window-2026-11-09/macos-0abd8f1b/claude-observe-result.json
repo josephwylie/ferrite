@@ -1,0 +1,16 @@
+{
+  "probe": "669499029bd2404e92345954067c2b61",
+  "provider": "claude",
+  "peer_pid": 34174,
+  "observed_fixture": false,
+  "success": false,
+  "answer": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Browser agent control is not available in this build"
+      }
+    ],
+    "isError": true
+  }
+}

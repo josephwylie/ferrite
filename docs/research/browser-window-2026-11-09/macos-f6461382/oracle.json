@@ -1,0 +1,16 @@
+{
+  "clicks": 1,
+  "elapsed_seconds": 11.81973041599997,
+  "window_result": {
+    "success": true,
+    "error": null,
+    "normal_native_window": true,
+    "preview_operator_route": true,
+    "window_pointer_input": true,
+    "rendered_frames": 19,
+    "provider_requested": false,
+    "provider_started": false,
+    "elapsed_ms": 6576,
+    "scope": "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested"
+  }
+}

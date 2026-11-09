@@ -1,0 +1,8 @@
+{
+  "diagnostic_only": true,
+  "browser_acceptance": false,
+  "driver_reached": true,
+  "exit_code": 3221225725,
+  "pid": 3212,
+  "alive_after_settle": false
+}

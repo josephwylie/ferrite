@@ -6,6 +6,8 @@
 mod agent_pane;
 pub(crate) mod beside;
 mod browser;
+#[cfg(feature = "browser-smoke")]
+mod browser_smoke;
 mod context_menu;
 pub(crate) mod decisions;
 mod drafts;

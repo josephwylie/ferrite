@@ -17,6 +17,8 @@ cef = ["dep:cef", "dep:tungstenite", "dep:getrandom", "dep:base64"]
 visual-reference = ["gpui/test-support"]
 # The test hooks the app's own tests reach for.
 test-support = []
+# Bounded packaged acceptance dispatch/completion hooks, absent from releases.
+browser-smoke = []
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }

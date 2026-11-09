@@ -1,10 +1,9 @@
 import {spawn,execFileSync} from 'node:child_process';
-import {createServer} from 'node:http';
+import {createWorkOrderServer} from './fixture-server.mjs';
 import {readFileSync,writeFileSync,mkdtempSync,mkdirSync} from 'node:fs';
 import {performance} from 'node:perf_hooks';
 import {fileURLToPath} from 'node:url';
 const ROOT=process.env.BENCH_ROOT||'/tmp/ferrite-controller-bench', PORT=19583, WEB=19584, BASE=`http://127.0.0.1:${WEB}`;
-const fixture=readFileSync(new URL('./fixture.html',import.meta.url));
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const rss=pid=>Number(execFileSync('ps',['-o','rss=','-p',String(pid)],{encoding:'utf8'}).trim())/1024;
 const run=(bin,args)=>new Promise((resolve,reject)=>{const p=spawn(bin,args);let out='',err='';const timer=setTimeout(()=>{p.kill();reject(Error('command timeout'));},15000);p.stdout.on('data',x=>out+=x);p.stderr.on('data',x=>err+=x);p.on('error',reject);p.on('exit',c=>{clearTimeout(timer);c?reject(Error(err+out)):resolve(out)})});
@@ -45,7 +44,7 @@ if(process.argv[2]==='worker'){
  writeFileSync(ROOT+`/${process.env.RESULT_PREFIX||'sustained'}-${block}-${kind}.json`,JSON.stringify({kind,block,viewport,elapsedMs:performance.now()-startAll,memoryBefore,memoryWarm,memoryAfter:memory(),recoveryErrors,results},null,2));
  if(daemonPid)process.kill(daemonPid);if(browser)await browser.disconnect?.();process.exit(0);
 }else{
- let records=[];if(process.env.RESUME){for(const kind of ['ab','playwright'])for(let i=0;i<24;i++)records.push({id:String(records.length+1),name:`order-${kind}-0-${i}`,email:'owner@example.test',description:'Reviewed and approved.',team:'Engineering',priority:'Normal',budget:'3200',customName:'Tracking code',customValue:'final-'+i,notify:false,approved:true});console.log('RESUMED server records',records.length)}const server=createServer(async(req,res)=>{res.setHeader('Content-Type','application/json');if(req.url==='/api/records'&&req.method==='POST'){let body='';for await(const chunk of req)body+=chunk;const d=JSON.parse(body);await sleep(250);d.id=d.id||String(records.length+1);records=records.filter(r=>r.id!==d.id);records.push(d);res.end(JSON.stringify(d))}else if(req.url==='/api/records'){await sleep(180);res.end(JSON.stringify(records))}else if(req.url.startsWith('/oracle?'))res.end(JSON.stringify(records.find(r=>r.name===new URL(req.url,BASE).searchParams.get('name'))||{}));else{res.setHeader('Content-Type','text/html');res.end(fixture)}});await new Promise(r=>server.listen(WEB,'127.0.0.1',r));
+ let records=[];if(process.env.RESUME){for(const kind of ['ab','playwright'])for(let i=0;i<24;i++)records.push({id:String(records.length+1),name:`order-${kind}-0-${i}`,email:'owner@example.test',description:'Reviewed and approved.',team:'Engineering',priority:'Normal',budget:'3200',customName:'Tracking code',customValue:'final-'+i,notify:false,approved:true});console.log('RESUMED server records',records.length)}const server=createWorkOrderServer({records});await new Promise(r=>server.listen(WEB,'127.0.0.1',r));
  try{for(const[block,order]of (process.env.BENCH_PILOT?[[process.env.PILOT_KIND||'ab']]:[['ab','playwright','puppeteer'],['playwright','puppeteer','ab'],['puppeteer','ab','playwright']]).entries())for(const kind of order){
   if(process.env.RESUME&&block===0&&['ab','playwright'].includes(kind))continue;
   const profile=mkdtempSync(ROOT+'/sustained-profile-');const chrome=spawn(process.env.CHROME_PATH||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',['--headless=new',`--remote-debugging-port=${PORT}`,`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check','--window-size=1280,800','about:blank'],{stdio:'ignore'});
