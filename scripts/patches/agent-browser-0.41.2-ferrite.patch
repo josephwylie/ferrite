@@ -553,3 +553,41 @@ index 3e62122..d6b08ac 100644
      #[test]
      fn test_resolve_idle_timeout_unset_applies_default() {
          let t = resolve_idle_timeout(None).expect("default should apply when unset");
+diff --git a/cli/src/native/element.rs b/cli/src/native/element.rs
+index 41e4f88..1065009 100644
+--- a/cli/src/native/element.rs
++++ b/cli/src/native/element.rs
+@@ -68,7 +68,10 @@ impl RefMap {
+                 nth,
+                 selector: None,
+                 frame_id: frame_id.map(|s| s.to_string()),
+-                allow_role_fallback: true,
++                // Ferrite exposes references as exact observed nodes. A new
++                // node with the same accessible name is not that reference.
++                allow_role_fallback: std::env::var("FERRITE_AGENT_BROWSER").as_deref()
++                    != Ok("1"),
+             },
+         );
+     }
+@@ -438,6 +441,10 @@ pub async fn resolve_element_center(
+         let effective_session_id =
+             resolve_frame_session(entry.frame_id.as_deref(), session_id, iframe_sessions);
+ 
++        if !entry.allow_role_fallback && entry.backend_node_id.is_none() {
++            return Err(format!("Element ref {ref_id} has no exact node"));
++        }
++
+         // Try cached backend_node_id first (fast path)
+         if let Some(backend_node_id) = entry.backend_node_id {
+             scroll_node_into_view(client, effective_session_id, backend_node_id).await;
+@@ -708,6 +715,10 @@ pub async fn resolve_element_object_id(
+         let effective_session_id =
+             resolve_frame_session(entry.frame_id.as_deref(), session_id, iframe_sessions);
+ 
++        if !entry.allow_role_fallback && entry.backend_node_id.is_none() {
++            return Err(format!("Element ref {ref_id} has no exact node"));
++        }
++
+         // Try cached backend_node_id first (fast path)
+         if let Some(backend_node_id) = entry.backend_node_id {
+             let result: Result<DomResolveNodeResult, String> = client

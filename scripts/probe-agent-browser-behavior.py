@@ -62,6 +62,30 @@ def stale_replacement(service):
     return {"stale_click_rejected": True, "stale_fill_rejected": True, "fresh_reference_works": True}
 
 
+def scoped_diagnostics(service):
+    service.command("navigate", url="data:text/html,<title>Thread A</title><p>A</p>")
+    first = [tab for tab in service.command("tab_list")["tabs"] if "Thread A" == tab.get("title")][0]["tabId"]
+    service.command("console", clear=True)
+    service.command("errors", clear=True)
+    service.command("requests", clear=True)
+    evaluate(service, "console.log('ONLY_THREAD_A'); setTimeout(()=>console.log('BACKGROUND_THREAD_A'),100)")
+    service.command("tab_new", url="data:text/html,<title>Thread B</title><p>B</p>")
+    second = [tab for tab in service.command("tab_list")["tabs"] if "Thread B" == tab.get("title")][0]["tabId"]
+    evaluate(service, "console.log('ONLY_THREAD_B')")
+    time.sleep(0.2)
+    messages = service.command("console")["messages"]
+    text = json.dumps(messages)
+    assert "ONLY_THREAD_B" in text and "THREAD_A" not in text, f"Thread B received another Thread's console: {messages}"
+    service.command("console", clear=True)
+    service.command("tab_switch", tabId=first)
+    text = json.dumps(service.command("console")["messages"])
+    assert "ONLY_THREAD_A" in text and "BACKGROUND_THREAD_A" in text and "THREAD_B" not in text, text
+    # Clearing B must not erase A; returning to B must not recover A's log.
+    service.command("tab_switch", tabId=second)
+    assert service.command("console")["messages"] == []
+    return {"console_target_isolation": True, "background_console_attributed": True, "clear_is_target_scoped": True}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("executable", type=Path)
@@ -82,7 +106,8 @@ def main():
             port, endpoint = port_file.read_text().splitlines()[:2]
             with NativeService(args.executable) as service:
                 service.command("launch", cdpUrl=f"ws://127.0.0.1:{port}{endpoint}")
-                print(json.dumps(stale_replacement(service)))
+                print(json.dumps(stale_replacement(service)), flush=True)
+                print(json.dumps(scoped_diagnostics(service)), flush=True)
         finally:
             browser.terminate()
             try:
