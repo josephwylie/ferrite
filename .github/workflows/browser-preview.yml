@@ -6,7 +6,7 @@ on:
       - 'crates/ferrite-core/**'
       - 'crates/ferrite-pane/**'
       - 'crates/ferrite-cockpit/**'
-      - '.github/workflows/browser-preview.yml' 
+      - '.github/workflows/browser-preview.yml'
   workflow_dispatch:
 concurrency:
   group: browser-preview-${{ github.ref }}

@@ -1058,7 +1058,7 @@ impl Browser {
             if let Some(page) = self.pages.get(&tab.id) {
                 let changed = page.document.replace(tab.document()) != tab.document();
                 if changed {
-                    page.manual.borrow_mut().finish();
+                    let _ = page.manual.borrow_mut().finish();
                 }
                 page.manual.borrow_mut().server_protection(tab.protected);
                 if changed && resample {
