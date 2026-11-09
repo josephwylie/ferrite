@@ -1,5 +1,7 @@
 //! Window realization of the Server's Thread-owned browser tabs.
 //! Native pages belong here, independently of whichever Preview is visible.
+mod manual;
+
 use super::*;
 use ferrite_core::browser::{Action, Document, Owner, PageState, State, TabId};
 use ferrite_pane::composer::{Composer, Role};
@@ -21,7 +23,30 @@ pub(super) struct Browsers {
     threads: BTreeMap<ThreadId, Browser>,
     events: Rc<RefCell<Vec<Event>>>,
     reveal: std::collections::BTreeSet<ThreadId>,
+    control_queue: std::collections::VecDeque<ControlRequest>,
+    #[cfg(feature = "cef")]
+    controller: Option<std::sync::Arc<ferrite_pane::visual::browser_control::native::Worker>>,
+    #[cfg(feature = "cef")]
+    running_control: Option<RunningControl>,
 }
+
+struct ControlRequest {
+    request: u64,
+    thread: ThreadId,
+    owner: Owner,
+    document: Document,
+    revision: u64,
+    control: ferrite_core::browser::Control,
+}
+#[cfg(feature = "cef")]
+struct RunningControl {
+    request: ControlRequest,
+    native_generation: u64,
+    epoch: u64,
+    manual: Rc<RefCell<manual::Manual>>,
+    answer: std::sync::mpsc::Receiver<ferrite_core::browser::Outcome>,
+}
+
 struct Browser {
     state: State,
     owner: Option<Owner>,
@@ -38,6 +63,7 @@ struct Page {
     document: Rc<Cell<Document>>,
     acknowledged: Cell<Option<(Document, u64)>>,
     pending_navigation: RefCell<Option<PendingNavigation>>,
+    manual: Rc<RefCell<manual::Manual>>,
 }
 struct PendingNavigation {
     generation: u64,
@@ -66,7 +92,8 @@ impl PendingNavigation {
 
 enum Event {
     Restore(ThreadId, TabId),
-    Input(ThreadId, Owner, Document, Option<u64>, Input),
+    Input(ThreadId, Owner, Document, Option<u64>, u64, Input),
+    SettledInput(ThreadId, Owner, Document, u64),
     Changed(ThreadId, Owner, PageState, Option<u64>),
 }
 
@@ -139,7 +166,33 @@ impl CockpitView {
                 }
             }
         }
-        match self.cockpit.browser(thread, action) {
+        let recovery_tab = match &action {
+            Action::Close { tab } => Some(*tab),
+            Action::Reload { document } => Some(document.tab),
+            _ => None,
+        };
+        let recovery = recovery_tab.and_then(|tab| {
+            self.browsers
+                .threads
+                .get(&thread)
+                .and_then(|browser| browser.pages.get(&tab))
+                .map(|page| page.manual.clone())
+        });
+        if let Some(manual) = &recovery {
+            let settled = manual.borrow_mut().retire_for_action();
+            if let (Some((document, revision)), Some(owner)) =
+                (settled, self.browsers.threads[&thread].owner)
+            {
+                let _ = self
+                    .cockpit
+                    .browser_settled(thread, owner, document, revision);
+            }
+        }
+        let result = self.cockpit.browser(thread, action);
+        if let Some(manual) = &recovery {
+            manual.borrow().restore_pause();
+        }
+        match result {
             Ok(state) => {
                 let browser = self.browsers.threads.get_mut(&thread).unwrap();
                 browser.state = state;
@@ -233,18 +286,16 @@ impl CockpitView {
                     owner,
                     document,
                     revision,
-                    ..
+                    control,
                 } => {
-                    self.cockpit.browser_reply(
+                    self.browsers.control_queue.push_back(ControlRequest {
                         request,
                         thread,
                         owner,
                         document,
                         revision,
-                        ferrite_core::browser::Outcome::Failed {
-                            error: "Browser agent control is not available in this build".into(),
-                        },
-                    );
+                        control,
+                    });
                     continue;
                 }
                 other => other,
@@ -358,7 +409,12 @@ impl CockpitView {
                         self.browser_action(thread, Action::Select { tab }, cx);
                     }
                 }
-                Event::Input(thread, owner, document, generation, input) => {
+                Event::SettledInput(thread, owner, document, revision) => {
+                    let _ = self
+                        .cockpit
+                        .browser_settled(thread, owner, document, revision);
+                }
+                Event::Input(thread, owner, document, generation, sequence, input) => {
                     let Some(browser) = self
                         .browsers
                         .threads
@@ -367,15 +423,35 @@ impl CockpitView {
                     else {
                         continue;
                     };
-                    let Some(page) = browser.pages.get(&document.tab).filter(|page| {
-                        page.document.get() == document
-                            && generation == Some(page.native.state().document_generation)
-                    }) else {
+                    let Some(page) = browser.pages.get(&document.tab) else {
                         continue;
                     };
+                    if page.document.get() != document
+                        || generation != Some(page.native.state().document_generation)
+                        || !page.manual.borrow().valid(sequence)
+                    {
+                        let settled = page.manual.borrow_mut().discard(sequence);
+                        if let Some((document, revision)) = settled {
+                            let _ = self
+                                .cockpit
+                                .browser_settled(thread, owner, document, revision);
+                        }
+                        continue;
+                    }
                     match self.cockpit.browser_input(thread, owner, document) {
-                        Ok(_) => page.native.input(input),
+                        Ok(revision) => {
+                            page.manual
+                                .borrow_mut()
+                                .acknowledge(sequence, document, revision);
+                            page.native.input(input);
+                        }
                         Err(error) => {
+                            let settled = page.manual.borrow_mut().discard(sequence);
+                            if let Some((document, revision)) = settled {
+                                let _ = self
+                                    .cockpit
+                                    .browser_settled(thread, owner, document, revision);
+                            }
                             self.browsers.threads.get_mut(&thread).unwrap().error =
                                 Some(error.to_string());
                             cx.notify();
@@ -544,6 +620,8 @@ impl CockpitView {
             let native_generation = Rc::new(Cell::new(None));
             let input_generation = native_generation.clone();
             let input_document = document.clone();
+            let manual = Rc::new(RefCell::new(manual::Manual::default()));
+            let input_manual = manual.clone();
             let web = WebView::browser(
                 engine,
                 &tab.url,
@@ -553,13 +631,24 @@ impl CockpitView {
                     scale: 1.,
                 },
                 Rc::new(move |input| {
-                    input_events.borrow_mut().push(Event::Input(
-                        thread,
-                        owner,
-                        input_document.get(),
-                        input_generation.get(),
-                        input,
-                    ))
+                    if matches!(input, Input::Leave) {
+                        // Lifecycle Leave cancels, never begins, intervention.
+                        let settled = input_manual.borrow_mut().finish();
+                        if let Some((document, revision)) = settled {
+                            input_events
+                                .borrow_mut()
+                                .push(Event::SettledInput(thread, owner, document, revision));
+                        }
+                    } else if let Some(sequence) = input_manual.borrow_mut().capture(&input) {
+                        input_events.borrow_mut().push(Event::Input(
+                            thread,
+                            owner,
+                            input_document.get(),
+                            input_generation.get(),
+                            sequence,
+                            input,
+                        ));
+                    }
                 }),
                 Rc::new(move |state: &BrowserState| {
                     let changed_generation = native_generation
@@ -608,7 +697,8 @@ impl CockpitView {
                         .read(cx)
                         .browser_handle()
                         .expect("browser host has its native page");
-                    native.set_protected(tab.protected);
+                    manual.borrow_mut().native = Some(native.clone());
+                    manual.borrow_mut().server_protection(tab.protected);
                     let pending_navigation =
                         (native.state().document_generation == 0).then(|| PendingNavigation {
                             generation: 0,
@@ -624,6 +714,7 @@ impl CockpitView {
                             document,
                             acknowledged: Cell::new(None),
                             pending_navigation: RefCell::new(pending_navigation),
+                            manual,
                         },
                     );
                     browser.error = None;
@@ -641,9 +732,188 @@ impl CockpitView {
             }
         }
         self.tend_browser_pages(cx);
+        self.pump_browser_controls(cx);
+    }
+
+    fn reply_browser_control(
+        &mut self,
+        request: ControlRequest,
+        outcome: ferrite_core::browser::Outcome,
+    ) {
+        self.cockpit.browser_reply(
+            request.request,
+            request.thread,
+            request.owner,
+            request.document,
+            request.revision,
+            outcome,
+        );
+    }
+
+    fn pump_browser_controls(&mut self, cx: &mut Context<Self>) {
+        use ferrite_core::browser::Outcome;
+        #[cfg(feature = "cef")]
+        if let Some(running) = self.browsers.running_control.take() {
+            let result = match running.answer.try_recv() {
+                Ok(outcome) => Some(outcome),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Outcome::Uncertain {
+                    error: "Browser worker disconnected; observe the page before continuing".into(),
+                }),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            };
+            if let Some(mut outcome) = result {
+                let current = self
+                    .browsers
+                    .threads
+                    .get(&running.request.thread)
+                    .filter(|browser| browser.owner == Some(running.request.owner))
+                    .and_then(|browser| browser.pages.get(&running.request.document.tab));
+                let unchanged = current.is_some_and(|page| {
+                    page.document.get() == running.request.document
+                        && page.native.state().document_generation == running.native_generation
+                        && page.native.control_epoch() == running.epoch
+                });
+                if !unchanged {
+                    outcome = if running.request.control.observation() {
+                        Outcome::Failed { error: "The page or operator state changed during observation; observe again".into() }
+                    } else {
+                        Outcome::Uncertain { error: "The page or operator state changed while input was in flight; observe the result and do not replay the write".into() }
+                    };
+                }
+                running.manual.borrow_mut().release_local();
+                self.reply_browser_control(running.request, outcome);
+            } else {
+                self.browsers.running_control = Some(running);
+                return;
+            }
+        }
+        loop {
+            let Some(request) = self.browsers.control_queue.pop_front() else {
+                return;
+            };
+            let page = self
+                .browsers
+                .threads
+                .get(&request.thread)
+                .filter(|browser| browser.owner == Some(request.owner))
+                .and_then(|browser| browser.pages.get(&request.document.tab));
+            let valid = page.is_some_and(|page| {
+                page.document.get() == request.document
+                    && page.pending_navigation.borrow().is_none()
+                    && page.manual.borrow().revision == request.revision
+                    && (request.control.observation() || !page.manual.borrow().active)
+            });
+            if !valid {
+                self.reply_browser_control(request, Outcome::Failed { error: "The owned browser document or operator revision changed before dispatch; obtain fresh State and Observe".into() });
+                continue;
+            }
+            #[cfg(not(feature = "cef"))]
+            {
+                let _ = cx;
+                self.reply_browser_control(
+                    request,
+                    Outcome::Failed {
+                        error: "Browser agent control is not available in this build".into(),
+                    },
+                );
+            }
+            #[cfg(feature = "cef")]
+            {
+                let endpoint = match Visuals::engine(cx) {
+                    Availability::Ready(engine) => engine.controller(),
+                    _ => Err("The owning browser engine is unavailable".into()),
+                };
+                let endpoint = match endpoint {
+                    Ok(endpoint) => endpoint,
+                    Err(error) => {
+                        self.reply_browser_control(request, Outcome::Failed { error });
+                        continue;
+                    }
+                };
+                let page = page.unwrap();
+                let Some(target) = page.native.target_id() else {
+                    self.reply_browser_control(
+                        request,
+                        Outcome::Failed {
+                            error: "The exact live browser target is not ready; observe again"
+                                .into(),
+                        },
+                    );
+                    continue;
+                };
+                let worker = self.browsers.controller.get_or_insert_with(
+                    ferrite_pane::visual::browser_control::native::Worker::shared,
+                );
+                let generation = page.native.state().document_generation;
+                let epoch = page.native.control_epoch();
+                // This direct edge precedes dispatch and cannot disappear in a
+                // coalesced Server state update.
+                page.manual.borrow_mut().protect_local();
+                let answer = worker.try_start(
+                    endpoint,
+                    target,
+                    request.document,
+                    request.revision,
+                    epoch,
+                    request.control.clone(),
+                );
+                if let Some(answer) = answer {
+                    self.browsers.running_control = Some(RunningControl {
+                        request,
+                        native_generation: generation,
+                        epoch,
+                        manual: page.manual.clone(),
+                        answer,
+                    });
+                } else {
+                    page.manual.borrow_mut().release_local();
+                    self.browsers.control_queue.push_front(request);
+                }
+                return;
+            }
+        }
+    }
+
+    fn finish_browser_interaction(&mut self, thread: ThreadId, owner: Owner, tab: TabId) {
+        let Some(browser) = self
+            .browsers
+            .threads
+            .get(&thread)
+            .filter(|browser| browser.owner == Some(owner))
+        else {
+            return;
+        };
+        let Some(page) = browser.pages.get(&tab) else {
+            return;
+        };
+        let settled = page.manual.borrow_mut().finish();
+        if let Some((document, revision)) = settled {
+            let _ = self
+                .cockpit
+                .browser_settled(thread, owner, document, revision);
+        }
     }
 
     fn tend_browser_pages(&mut self, cx: &mut Context<Self>) {
+        let mut settled = Vec::new();
+        for (thread, browser) in &self.browsers.threads {
+            let Some(owner) = browser.owner else {
+                continue;
+            };
+            for (tab, page) in &browser.pages {
+                let manual = page.manual.borrow();
+                if manual.active
+                    && (manual.due()
+                        || !page.web.read(cx).browser_visible()
+                        || !self.cockpit.window_active())
+                {
+                    settled.push((*thread, owner, *tab));
+                }
+            }
+        }
+        for (thread, owner, tab) in settled {
+            self.finish_browser_interaction(thread, owner, tab);
+        }
         // Visibility comes from the actual host, including selected tabs in
         // Threads that are no longer on screen. Selection is not visibility.
         let mut visibility = Vec::new();
@@ -1005,8 +1275,12 @@ impl Browser {
     fn sync_documents(&self, cx: &mut Context<CockpitView>, resample: bool) {
         for tab in &self.state.tabs {
             if let Some(page) = self.pages.get(&tab.id) {
-                page.native.set_protected(tab.protected);
-                if page.document.replace(tab.document()) != tab.document() && resample {
+                let changed = page.document.replace(tab.document()) != tab.document();
+                if changed {
+                    let _ = page.manual.borrow_mut().finish();
+                }
+                page.manual.borrow_mut().server_protection(tab.protected);
+                if changed && resample {
                     page.web.update(cx, |web, cx| web.refresh_browser_state(cx));
                 }
             }

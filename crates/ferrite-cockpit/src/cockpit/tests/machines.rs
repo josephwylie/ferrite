@@ -1444,6 +1444,39 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
         let state = view.cockpit.browser_attach(thread).unwrap();
         state.tabs[1].url == "http://localhost:5173/delayed#section" && !state.tabs[1].loading
     }));
+    let wait_protection = |cx: &mut gpui::VisualTestContext, expected: bool, stage: &str| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        until(cx, |cx| {
+            let (state, active) = view.update(cx, |view, _| {
+                (view.cockpit.browser_attach(thread).unwrap(), view.cockpit.window_active())
+            });
+            assert!(std::time::Instant::now() < deadline,
+                "{stage}: expected protected={expected}, active={active}, state={state:?}");
+            state.tabs.iter().any(|tab| tab.protected) == expected
+        });
+    };
+    let viewport = cx.debug_bounds("browser-preview").unwrap();
+    let page_point = viewport.center();
+    cx.simulate_mouse_down(page_point, gpui::MouseButton::Left, gpui::Modifiers::none());
+    wait_protection(cx, true, "held pointer begins");
+    for _ in 0..3 { tick(cx); }
+    assert!(view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap().tabs.iter().any(|tab| tab.protected)),
+        "a held gesture must not settle between pointer events");
+    cx.simulate_mouse_up(viewport.origin - gpui::point(px(10.), px(10.)), gpui::MouseButton::Left, gpui::Modifiers::none());
+    wait_protection(cx, false, "outside pointer release settles");
+    cx.simulate_click(page_point, gpui::Modifiers::none());
+    cx.simulate_keystrokes("a");
+    tick(cx);
+    cx.simulate_keystrokes("b");
+    tick(cx);
+    assert!(view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap().tabs.iter().any(|tab| tab.protected)),
+        "a typing burst must remain protected between keys");
+    wait_protection(cx, false, "typing burst settles");
+    cx.simulate_mouse_down(page_point, gpui::MouseButton::Left, gpui::Modifiers::none());
+    wait_protection(cx, true, "second gesture begins");
+    let add_tab = cx.debug_bounds("browser-new-tab").unwrap().center();
+    cx.simulate_click(add_tab, gpui::Modifiers::none());
+    wait_protection(cx, false, "focus loss settles");
 }
 
 #[gpui::test]

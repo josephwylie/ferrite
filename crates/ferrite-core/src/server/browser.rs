@@ -152,6 +152,60 @@ impl Server {
         action: Action,
     ) -> Result<Option<Done>, WireError> {
         self.browser_window(id, thread)?;
+        let state = self.browser.state(thread);
+        let owner = state
+            .owner
+            .filter(|owner| owner.window == id)
+            .ok_or_else(|| {
+                failed("Attach this Thread's browser in this Ferrite window before using it")
+            })?;
+        let recovery = match &action {
+            Action::Reload { document } => {
+                self.browser
+                    .check_document(thread, *document)
+                    .map_err(failed)?;
+                Some(document.tab)
+            }
+            Action::Close { tab } => Some(*tab),
+            _ => None,
+        };
+        if let Some(tab) = recovery {
+            let retired = self
+                .browser
+                .retire_commands(thread, owner, tab)
+                .map_err(failed)?;
+            let requests: Vec<_> = self
+                .browser_pending
+                .iter()
+                .filter(|(_, pending)| pending.thread == thread && retired.contains(&pending.lease))
+                .map(|(request, _)| *request)
+                .collect();
+            for request in requests {
+                let pending = self
+                    .browser_pending
+                    .remove(&request)
+                    .expect("selected pending command");
+                let _ = pending.reply.send(Err("The operator closed or reloaded this tab. The previous action's completion is uncertain and may already have applied; observe the page before continuing and do not retry writes automatically".into()));
+            }
+            if self
+                .browser_uncertain
+                .get(&thread)
+                .is_some_and(|lease| retired.contains(lease))
+            {
+                self.browser_uncertain.remove(&thread);
+            }
+            self.browser_observed.remove(&thread);
+        }
+        self.apply_browser_action(id, thread, action)
+    }
+
+    fn apply_browser_action(
+        &mut self,
+        id: ClientId,
+        thread: ThreadId,
+        action: Action,
+    ) -> Result<Option<Done>, WireError> {
+        self.browser_window(id, thread)?;
         let mut next = self.browser.clone();
         let state = next.apply(thread, id, action.clone()).map_err(failed)?;
         // Metadata is durable before realizing a page. A failed disk write is
@@ -291,6 +345,9 @@ impl Server {
         action: Action,
         observation: Option<crate::browser::Observation>,
     ) -> Result<crate::browser::Response, String> {
+        if self.browser.operator_active(thread) {
+            return Err("The operator is interacting with this page; wait for that gesture to settle, then observe fresh state".into());
+        }
         if self
             .browser_pending
             .values()
@@ -326,7 +383,7 @@ impl Server {
                 return Err("Observe the current page before navigating, switching or closing it; operator input invalidates earlier observations".into());
             }
         }
-        self.browser_action(owner.window, thread, action)
+        self.apply_browser_action(owner.window, thread, action)
             .map_err(|error| error.message)?;
         Ok(self.browser_response(thread, None))
     }
@@ -370,6 +427,9 @@ impl Server {
                         {
                             return Err("Another agent is using this Thread's browser; wait for its command to finish".into());
                         }
+                        if !control.observation() && self.browser.operator_active(thread) {
+                            return Err("The operator is interacting with this page; wait for that gesture to settle, then observe fresh state".into());
+                        }
                         if !control.observation()
                             && (revision != self.browser.operator_revision(thread)
                                 || !self.browser_observation_current(
@@ -386,6 +446,8 @@ impl Server {
                             return Err("The previous action's completion is uncertain; observe the current page before continuing, and do not retry the write automatically".into());
                         }
                         let lease = if let Some(lease) = self.browser_uncertain.get(&thread) {
+                            self.browser
+                                .check_exclusive_command(thread, owner, *lease)?;
                             *lease
                         } else {
                             self.browser.protect(
@@ -412,7 +474,8 @@ impl Server {
                                     revision,
                                     lease,
                                     observation: control.observation(),
-                                    refreshes: matches!(control, crate::browser::Control::Observe),
+                                    refreshes: matches!(control, crate::browser::Control::Observe)
+                                        && !self.browser.operator_active(thread),
                                     recovering,
                                     deadline: Instant::now() + Duration::from_secs(45),
                                     reply: request.reply,
@@ -486,19 +549,21 @@ impl Server {
             .expect("checked request");
         let current = self.browser.check_owner(thread, owner)
             .and_then(|_| self.browser.check_document(thread, document))
+            .and_then(|_| self.browser.check_exclusive_command(thread, owner, pending.lease))
             .and_then(|_| if self.browser.state(thread).active == Some(document.tab) { Ok(()) } else { Err("The selected tab changed; select and observe it before continuing".into()) })
             .and_then(|_| if revision == self.browser.operator_revision(thread) { Ok(()) }
                 else { Err("The operator interacted with this page; observe fresh state before continuing".into()) });
-        let (result, uncertain) = match (current, outcome) {
+        let refreshes = pending.refreshes && !self.browser.operator_active(thread);
+        let (mut result, uncertain) = match (current, outcome) {
             (Err(error), _) => (Err(error), !pending.observation || pending.recovering),
             (Ok(()), crate::browser::Outcome::Success { value }) => {
                 let mut response = self.browser_response(thread, Some(value));
-                if pending.refreshes {
+                if refreshes {
                     let receipt = crate::browser::Observation::new(format!("{}:{request}", self.engine.boot_id()));
                     self.browser_observed.insert(thread, (document, revision, receipt.clone()));
                     response.observation = Some(receipt);
                 }
-                (Ok(response), pending.recovering && !pending.refreshes)
+                (Ok(response), pending.recovering && !refreshes)
             },
             (Ok(()), crate::browser::Outcome::Failed { error }) => (Err(error), pending.recovering),
             (Ok(()), crate::browser::Outcome::Uncertain { error }) => (Err(format!("Action completion is uncertain: {error}. Observe current page state; do not retry writes automatically")), true),
@@ -506,12 +571,49 @@ impl Server {
         if uncertain {
             self.browser_observed.remove(&thread);
             self.browser_uncertain.insert(thread, pending.lease);
+            if let Err(error) =
+                self.browser
+                    .command_finished_uncertain(thread, owner, pending.lease)
+            {
+                crate::log!(
+                    "browser terminal command could not retain its completion state: {error}"
+                );
+            }
         } else {
             self.browser_uncertain.remove(&thread);
             let _ = self.browser.release(thread, owner, pending.lease);
         }
+        if let Ok(response) = &mut result {
+            response.state = self.browser.state(thread);
+        }
+        if pending.reply.send(result).is_err() && !pending.observation {
+            // The native action finished, but its caller timed out or went
+            // away before receiving completion. Keep that write uncertain
+            // from the caller's perspective; an old receipt cannot retry it.
+            self.browser_observed.remove(&thread);
+            if !uncertain {
+                match self.browser.protect(
+                    thread,
+                    owner,
+                    document,
+                    crate::browser::Protection::Command,
+                ) {
+                    Ok(lease) => {
+                        self.browser_uncertain.insert(thread, lease);
+                        if let Err(error) = self
+                            .browser
+                            .command_finished_uncertain(thread, owner, lease)
+                        {
+                            crate::log!("browser undelivered completion could not retain its terminal state: {error}");
+                        }
+                    }
+                    Err(error) => crate::log!(
+                        "browser undelivered completion could not retain protection: {error}"
+                    ),
+                }
+            }
+        }
         self.publish_browser(thread, None);
-        let _ = pending.reply.send(result);
     }
 
     pub(super) fn browser_owner_gone(&mut self, window: ClientId) {

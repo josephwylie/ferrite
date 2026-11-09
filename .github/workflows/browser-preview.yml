@@ -1,7 +1,12 @@
 name: Browser preview GPUI
 on:
   push:
-    branches: ['feat/browser-193-ui']
+    branches: ['feat/browser-193-ui', 'feat/browser-194']
+    paths:
+      - 'crates/ferrite-core/**'
+      - 'crates/ferrite-pane/**'
+      - 'crates/ferrite-cockpit/**'
+      - '.github/workflows/browser-preview.yml'
   workflow_dispatch:
 concurrency:
   group: browser-preview-${{ github.ref }}
