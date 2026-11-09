@@ -207,6 +207,7 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
     ));
     let attach = |name: &str| {
         let mut core = Cockpit::attach(Attach {
+            browser: false,
             store: dir.join(name).join("threads"),
             server: Endpoint::Machine(bridge.clone()),
             client: ferrite_core::protocol::Peer {
@@ -503,6 +504,7 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
         ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default())))
             .unwrap();
     let mut core = Cockpit::attach(Attach {
+            browser: false,
         store: dir.join("window").join("threads"),
         server: Endpoint::Machine(std::sync::Arc::new(Bridge::new(
             "box",
@@ -1352,4 +1354,76 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
         ],
         "a commit's lines take comments as the uncommitted work's do"
     );
+}
+
+/// The public Server/window path must show its exact native page, including
+/// provider-initiated opens and navigation that finishes before the next paint.
+#[gpui::test]
+fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx: &mut TestAppContext) {
+    use ferrite_core::browser::Action;
+    use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
+    use ferrite_pane::visual::{engine::Visuals, web::fake::{Call, FakeEngine}};
+    let dir = scratch("browser-preview");
+    let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
+    let bridge = std::sync::Arc::new(Bridge::new("box", dir.join("bridge.sock"), dial));
+    let mut core = Cockpit::attach(Attach {
+        store: dir.join("window"), server: Endpoint::Machine(bridge),
+        client: ferrite_core::protocol::Peer { name: "browser-preview".into(), version: "0".into() },
+        renderer: None, browser: true, discovery: Box::new(Fake::default()),
+    }).unwrap();
+    ferrite_core::doorbell::until("browser window did not attach", || {
+        core.pump(); matches!(core.server(), Some(ServerState::Attached { .. }))
+    });
+    let thread = core.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() }).unwrap();
+    core.browser_attach(thread).unwrap();
+    let opened = core.browser(thread, Action::Open { url: "http://localhost:5173/start".into() }).unwrap();
+    let document = opened.tabs[0].document();
+    bind_production_keys(cx);
+    let engine = std::rc::Rc::new(FakeEngine::new());
+    cx.update(|cx| Visuals::install(engine.clone(), cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    until(cx, |cx| engine.live_views() == 1 && cx.debug_bounds("browser-preview").is_some());
+    view.update(cx, |view, _| {
+        let state = view.cockpit.browser(thread, Action::Navigate { document, url: "http://localhost:5173/first".into() }).unwrap();
+        view.cockpit.browser(thread, Action::Navigate { document: state.tabs[0].document(), url: "http://localhost:5173/final".into() }).unwrap();
+    });
+    until(cx, |cx| view.update(cx, |view, _| {
+        let state = view.cockpit.browser_attach(thread).unwrap();
+        state.tabs[0].url == "http://localhost:5173/final" && !state.tabs[0].loading
+    }));
+    assert_eq!(engine.live_views(), 1, "navigation retains the page displayed by the preview");
+    assert!(engine.journal().contains(&Call::BrowserNavigate("http://localhost:5173/final".into())));
+    let new_tab = cx.debug_bounds("browser-new-tab").unwrap();
+    cx.simulate_click(new_tab.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_input("http://localhost:5173/second");
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap().tabs.len() == 2));
+    let state = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
+    assert_eq!(state.tabs[0].url, "http://localhost:5173/final", "new tab does not navigate the existing page");
+    assert_eq!(state.tabs[1].url, "http://localhost:5173/second");
+    engine.defer_browser_navigation(true);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("http://localhost:5173/delayed");
+    cx.simulate_keystrokes("enter");
+    until(cx, |_| engine.journal().contains(&Call::BrowserNavigate("http://localhost:5173/delayed".into())));
+    tick(cx);
+    let pending = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
+    assert_eq!(pending.tabs[1].url, "http://localhost:5173/delayed", "old native metadata must not overwrite an accepted navigation intent");
+    assert!(pending.tabs[1].loading);
+    assert_eq!(pending.tabs[1].dirty, ferrite_core::browser::Dirty::Unknown);
+    engine.finish_browser_navigations();
+    until(cx, |cx| view.update(cx, |view, _| {
+        let state = view.cockpit.browser_attach(thread).unwrap();
+        state.tabs[1].url == "http://localhost:5173/delayed" && !state.tabs[1].loading
+    }));
+    engine.defer_browser_navigation(false);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("http://localhost:5173/delayed#section");
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| view.update(cx, |view, _| {
+        let state = view.cockpit.browser_attach(thread).unwrap();
+        state.tabs[1].url == "http://localhost:5173/delayed#section" && !state.tabs[1].loading
+    }));
 }

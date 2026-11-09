@@ -222,26 +222,16 @@ fn a_page_card_opens_the_page_beside_the_transcript(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn a_local_server_opens_as_a_page_it_cannot_draw(cx: &mut TestAppContext) {
+fn a_local_server_uses_the_thread_browser_preview(cx: &mut TestAppContext) {
     let (view, _, cx) = turn("output-address-card", cx);
     hide_panel(&view, cx);
-    let address = PageSource::Address("http://localhost:5173/".into());
     view.update_in(cx, |view, window, _| {
-        view.panes[0].preview.open_page(address.clone(), window)
+        view.panes[0].preview.open_page(PageSource::Address("http://localhost:5173/".into()), window)
     });
     tick(cx);
-    assert!(
-        cx.debug_bounds("preview-unshown").is_some(),
-        "an address is never drawn here"
-    );
-    let title = cx.debug_bounds("preview-page-title").unwrap();
-    cx.simulate_click(title.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert_eq!(
-        menu_labels(&view, cx),
-        ["Open in browser", "Copy address"],
-        "nothing to reload"
-    );
+    assert!(cx.debug_bounds("browser-preview").is_some(), "local addresses use the browser controls");
+    assert!(cx.debug_bounds("preview-page").is_none(), "the sealed HTML host is reserved for files");
+    assert!(cx.debug_bounds("preview-expand").is_some());
 }
 
 /// A settled `ReportFindings` call, opened, draws its findings grouped by
