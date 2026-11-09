@@ -142,3 +142,47 @@ fn closing_the_visible_tab_realizes_its_dormant_successor() {
         "the owning preview must display the newly selected page"
     );
 }
+
+#[test]
+fn a_loading_page_is_retained_even_when_its_form_is_clean() {
+    use ferrite_core::browser::{Dirty, PageState};
+    let thread = ThreadId::new(1);
+    let mut browser = Service::default();
+    let owner = browser.attach(thread, 7).unwrap();
+    let first = browser
+        .apply(
+            thread,
+            7,
+            Action::Open {
+                url: "https://example.com/first".into(),
+            },
+        )
+        .unwrap();
+    browser
+        .update(
+            thread,
+            owner,
+            PageState {
+                navigation: false,
+                document: first.tabs[0].document(),
+                url: first.tabs[0].url.clone(),
+                loading: true,
+                can_back: false,
+                can_forward: false,
+                error: None,
+                dirty: Dirty::Clean,
+            },
+        )
+        .unwrap();
+    browser
+        .apply(
+            thread,
+            7,
+            Action::Open {
+                url: "https://example.com/second".into(),
+            },
+        )
+        .unwrap();
+    assert!(!browser.reclaim(thread, owner, first.tabs[0].id).unwrap());
+    assert!(browser.state(thread).tabs[0].live);
+}
