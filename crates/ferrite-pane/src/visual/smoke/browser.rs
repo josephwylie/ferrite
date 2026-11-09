@@ -143,6 +143,9 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
     let initial = one.state().document_generation;
     let next = format!("http://{address}/next");
     one.navigate(&next)?;
+    if !one.state().loading || one.state().dirty != crate::visual::web::BrowserDirty::Unknown {
+        return Err("Accepted navigation retained pre-command clean/loading state".into());
+    }
     wait_browser(engine, one.as_ref(), |state| {
         !state.loading && state.url == next && state.can_back && state.document_generation > initial
     })?;
@@ -158,6 +161,23 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
     one.reload()?;
     wait_browser(engine, one.as_ref(), |state| {
         !state.loading && state.document_generation > before_reload
+    })?;
+    let same_document = one.state().document_generation;
+    let fragment = format!("{next}#section");
+    one.navigate(&fragment)?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading && state.url == fragment
+    })?;
+    if one.state().document_generation != same_document {
+        return Err("Fragment navigation replaced the document identity".into());
+    }
+    one.back()?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading && state.url == next && state.can_forward
+    })?;
+    one.forward()?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading && state.url == fragment
     })?;
     one.navigate(&format!("http://{address}/error"))?;
     wait_browser(engine, one.as_ref(), |state| {
