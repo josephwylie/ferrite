@@ -122,6 +122,21 @@ wrap_browser_process_handler! {
     }
 }
 
+/// Disk-backed contexts initialize asynchronously, unlike the old in-memory
+/// context. Never call CreateBrowserSync before CEF acknowledges readiness.
+pub(super) fn website_context(ready: Arc<std::sync::atomic::AtomicBool>) -> RequestContextHandler {
+    WebsiteContext::new(ready)
+}
+
+wrap_request_context_handler! {
+    struct WebsiteContext { ready: Arc<std::sync::atomic::AtomicBool> }
+    impl RequestContextHandler {
+        fn on_request_context_initialized(&self, _context: Option<&mut RequestContext>) {
+            self.ready.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Per-view client.
 

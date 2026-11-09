@@ -266,6 +266,7 @@ impl Dormant {
                     && std::env::var_os("FERRITE_CEF_EXTRA_SWITCHES").is_none(),
                 control: RefCell::new(None),
                 browser_context: RefCell::new(None),
+                browser_context_ready: Arc::new(AtomicBool::new(false)),
                 profile,
                 _app: app,
                 _library: library,
@@ -430,6 +431,7 @@ struct EngineInner {
     browser_isolated: bool,
     control: RefCell<Option<control::Control>>,
     browser_context: RefCell<Option<cef::RequestContext>>,
+    browser_context_ready: Arc<AtomicBool>,
     profile: profile::Profile,
     _app: cef::App,
     _library: platform::Library,
@@ -452,13 +454,14 @@ impl Engine for CefEngine {
         }
         if self.inner.browser_context.borrow().is_none() {
             // One shared website context, separate from every sealed visual.
+            let mut handler = handlers::website_context(self.inner.browser_context_ready.clone());
             let context = cef::request_context_create_context(
                 Some(&cef::RequestContextSettings {
                     cache_path: path_string(&self.inner.profile.websites()?),
                     persist_session_cookies: 1,
                     ..Default::default()
                 }),
-                None,
+                Some(&mut handler),
             )
             .ok_or("CEF could not create an isolated website context")?;
             *self.inner.browser_context.borrow_mut() = Some(context);
@@ -725,7 +728,10 @@ impl ViewInner {
 
     /// Visible and without a browser: never created yet, or released.
     fn wants_browser(&self) -> bool {
-        self.visible.get() && !self.failed.get() && self.browser.borrow().is_none()
+        self.visible.get()
+            && !self.failed.get()
+            && self.browser.borrow().is_none()
+            && (!self.doc.external || self._engine.browser_context_ready.load(Ordering::SeqCst))
     }
 
     /// Load the page in a fresh browser. The view's geometry (including the
