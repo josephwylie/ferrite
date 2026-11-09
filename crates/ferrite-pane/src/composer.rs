@@ -2183,6 +2183,65 @@ mod tests {
     }
 
     #[gpui::test]
+    fn browser_annotations_collect_remove_send_and_restore(cx: &mut TestAppContext) {
+        use ferrite_core::browser::{Document, TabId};
+        use ferrite_core::browser_annotations::{self, Capture, Selection, Viewport};
+        let root =
+            std::env::temp_dir().join(format!("ferrite-composer-browser-{}", std::process::id()));
+        let capture = Capture {
+            document: Document {
+                tab: TabId(9),
+                generation: 4,
+            },
+            native_generation: 2,
+            url: "https://example.test/settings".into(),
+            viewport: Viewport {
+                width_css: 1.0,
+                height_css: 1.0,
+                device_scale: 1.0,
+            },
+            selection: Selection::Region {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+        };
+        let png = include_bytes!("../../ferrite-core/tests/fixtures/browser-original.png");
+        let first =
+            browser_annotations::retain(&root, capture.clone(), png, "First".into(), vec![])
+                .unwrap();
+        let second =
+            browser_annotations::retain(&root, capture, png, "Second".into(), vec![]).unwrap();
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        let sent = composer.update(cx, |composer, cx| {
+            composer.set("Change these".into(), cx);
+            composer.add_browser_annotation(first.clone(), cx);
+            composer.add_browser_annotation(second.clone(), cx);
+            assert_eq!(composer.attachment_count(), 2);
+            composer.remove_browser_annotation(first.id(), cx);
+            assert_eq!(composer.attachment_count(), 1);
+            let sent = composer.take(cx);
+            assert!(composer.is_empty());
+            sent
+        });
+        let (words, files, annotations) = browser_annotations::split(sent.clone());
+        assert_eq!(words, "Change these");
+        assert!(files.is_empty());
+        assert_eq!(annotations, [second.clone()]);
+        composer.update(cx, |composer, cx| {
+            composer.set(sent, cx);
+            assert_eq!(composer.text(), "Change these");
+            assert_eq!(composer.browser_annotations(), &[second.clone()]);
+            assert_eq!(composer.attachment_count(), 1);
+            assert_eq!(browser_annotations::split(composer.editable()).2, [second]);
+        });
+        assert_eq!(std::fs::read(first.original()).unwrap(), png);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[gpui::test]
     fn paste_attaches_clipboard_files_without_inserting_their_paths(cx: &mut TestAppContext) {
         let (host, cx) = host(cx);
         let composer = composer(&host, cx);

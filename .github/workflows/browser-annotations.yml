@@ -21,3 +21,5 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p ferrite-core --locked --test browser_annotations
+      - name: Browser annotation collection and send
+        run: cargo test -p ferrite-pane --locked --lib browser_annotations_collect_remove_send_and_restore
