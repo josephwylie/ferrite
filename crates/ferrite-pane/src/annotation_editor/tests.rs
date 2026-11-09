@@ -92,7 +92,7 @@ fn annotation_editor_pointer_feedback_preserves_capture(cx: &mut TestAppContext)
     let width = cx.debug_bounds("annotation-width-6").unwrap();
     cx.simulate_click(width.center(), Modifiers::none());
     for name in ["Pen", "Line", "Arrow", "Ellipse", "Steps"] {
-        let tool = cx.debug_bounds(format!("annotation-tool-{name}")).unwrap();
+        let tool = cx.debug_bounds(&format!("annotation-tool-{name}")).unwrap();
         cx.simulate_click(tool.center(), Modifiers::none());
         let bounds = editor.read_with(cx, |editor, _| editor.picture_bounds().unwrap());
         let from = bounds.origin + point(bounds.size.width * 0.25, bounds.size.height * 0.25);
