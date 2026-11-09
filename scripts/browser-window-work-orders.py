@@ -10,7 +10,7 @@ def plan(name):
     def select(label, value): return ('select', 'combobox', label, {'values':[value]})
     def check(label, value): return ('check', 'checkbox', label, {'checked':value})
     def wait(selector): return ('wait', None, None, {'selector':selector, 'state':'attached'})
-    return [click('Work orders'), wait('#create'), click('Create order'), wait('#name'),
+    return [('navigate',None,None,{}), click('Work orders'), wait('#create'), click('Create order'), wait('#name'),
         fill('Name', name), fill('Owner email', 'owner@example.test'),
         fill('Description', 'Inspect subsystem and confirm quality.'),
         select('Team', 'Design'), select('Priority', 'High'), check('Notify owner', True),
@@ -19,7 +19,7 @@ def plan(name):
         ('fill', 'spinbutton', 'Budget', {'value':'2400'}), check('Approve this order', True),
         click('Save order'), wait('#status[data-saved]'), click('Work orders'), wait('#search'),
         fill('Search orders', name), wait('[data-id]'), click('Open order'), wait('#name'),
-        fill('Description', ''), ('type','textbox','Description',{'text':'Reviewed and approved.'}),
+        fill('Description', ''), ('click','textbox','Description',{}), ('type','textbox','Description',{'text':'Reviewed and approved.'}),
         select('Team','Engineering'), select('Priority','Normal'), check('Notify owner',False),
         ('fill','spinbutton','Budget',{'value':'3200'}), fill('Custom field value','final-0'),
         click('Save order'), wait('#status[data-saved]'), click('Overview'), click('Work orders'),
@@ -38,6 +38,7 @@ class WorkOrder:
         self.steps = plan(name)
         self.index = 0
         self.trace = []
+        self.loading_polls = 0
 
     def begin(self):
         self.call('work-state', {'kind':'state'})
@@ -51,15 +52,28 @@ class WorkOrder:
             state = json.loads(next(item['text'] for item in answer['content'] if 'text' in item))
             tab = next(tab for tab in state['state']['tabs'] if tab['id']==state['state']['active'])
             identity = {'document':{'tab':tab['id'],'generation':tab['generation']}, 'revision':state['revision']}
+            if request == 'work-action':
+                self.index += 1
+            if tab['loading'] or not tab['live']:
+                self.loading_polls += 1
+                if self.loading_polls > 20:
+                    raise ValueError('The public service did not acknowledge the navigated live page')
+                self.call('work-state', {'kind':'state'})
+                return
+            self.loading_polls = 0
             if request == 'work-observe':
                 kind, role, label, fields = self.steps[self.index]
+                receipt = state['observation']
+                if not isinstance(receipt,str) or not receipt:
+                    raise ValueError('Work-order Observe did not authorize this action')
+                if kind == 'navigate':
+                    self.call('work-action', {'kind':'action','observation':receipt,
+                        'action':{'kind':'navigate','document':identity['document'],'url':tab['url']}})
+                    return
                 matches = [ref for ref, data in state['value']['refs'].items()
                            if data.get('role')==role and data.get('name')==label]
                 if len(matches)!=1:
                     raise ValueError(f'Expected one current {role} {label!r}; got {len(matches)}')
-                receipt = state['observation']
-                if not isinstance(receipt,str) or not receipt:
-                    raise ValueError('Work-order Observe did not authorize this action')
                 self.call('work-action', {'kind':'control',**identity,'observation':receipt,
                     'control':{'kind':kind,'reference':matches[0],**fields}})
                 return
@@ -67,8 +81,6 @@ class WorkOrder:
                 self.validate(state)
                 self.finish(answer)
                 return
-            if request == 'work-action':
-                self.index += 1
             if self.index == len(self.steps):
                 self.call('work-final', {'kind':'control',**identity,'control':{'kind':'observe'}})
             else:
