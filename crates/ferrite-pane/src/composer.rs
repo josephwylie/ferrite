@@ -21,7 +21,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use ferrite_core::prompt_files;
+use ferrite_core::browser_annotations::{self, Annotation};
 use ferrite_reviewr::model::{Comment as ReviewComment, CommentStore};
 
 use gpui::prelude::*;
@@ -148,6 +148,7 @@ pub struct Composer {
     /// Review comments gathered from the Review beside this Pane (ADR
     /// 0021): one attachment on the shelf, sent after the line's text.
     review: CommentStore,
+    browser_annotations: Vec<Annotation>,
     /// Tokens the operator picked from a menu — an `@` mention's
     /// `@rel/path`, a `/` command's `/name`: any occurrence still standing
     /// whole in the text paints as a chip, whichever provider serves the
@@ -230,6 +231,7 @@ impl Composer {
             files: Vec::new(),
             replies: Vec::new(),
             review: CommentStore::new(),
+            browser_annotations: Vec::new(),
             chips: Vec::new(),
             commands: Default::default(),
             menu_open: false,
@@ -306,7 +308,30 @@ impl Composer {
     /// How many attachments the draft holds: its files, and its review
     /// comments as one.
     pub fn attachment_count(&self) -> usize {
-        self.files.len() + self.replies.len() + usize::from(!self.review.is_empty())
+        self.files.len()
+            + self.replies.len()
+            + self.browser_annotations.len()
+            + usize::from(!self.review.is_empty())
+    }
+
+    pub fn browser_annotations(&self) -> &[Annotation] {
+        &self.browser_annotations
+    }
+
+    pub fn add_browser_annotation(&mut self, annotation: Annotation, cx: &mut Context<Self>) {
+        if !self
+            .browser_annotations
+            .iter()
+            .any(|item| item.id() == annotation.id())
+        {
+            self.browser_annotations.push(annotation);
+            self.edited(cx);
+        }
+    }
+
+    pub fn remove_browser_annotation(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.browser_annotations.retain(|item| item.id() != id);
+        self.edited(cx);
     }
 
     /// The review comments waiting for the next send, each with an id
@@ -340,10 +365,12 @@ impl Composer {
         let files = composer.files.clone();
         let replies = composer.replies.clone();
         let comments = composer.review.len();
+        let annotations = composer.browser_annotations.clone();
         let focus = composer.files_focus.clone();
         let remove_file = entity.downgrade();
         let remove_reply = entity.downgrade();
         let drop_review = entity.downgrade();
+        let remove_annotation = entity.downgrade();
         Some(
             div()
                 .id("pending-attachment-tray")
@@ -353,6 +380,13 @@ impl Composer {
                 .child(
                     crate::attachments::Attachments::new("prompt-attachments", files, preview)
                         .review(comments)
+                        .annotations(annotations)
+                        .on_remove_annotation(move |id, window, cx| {
+                            let _ = remove_annotation.update(cx, |composer, cx| {
+                                composer.remove_browser_annotation(id, cx);
+                                composer.focus_handle.focus(window, cx);
+                            });
+                        })
                         .replies(replies)
                         .in_island()
                         .on_remove_reply(move |index, window, cx| {
@@ -441,9 +475,10 @@ impl Composer {
     /// Put a line back into the Composer, ready to edit at its end. The
     /// review comments stay as they are: they are not part of the line.
     pub fn set(&mut self, text: String, cx: &mut Context<Self>) {
-        let (text, files) = prompt_files::split(text);
+        let (text, files, annotations) = browser_annotations::split(text);
         let (replies, text) = crate::quote::split(&text);
         self.files = files;
+        self.browser_annotations = annotations;
         self.line.set(text.to_string());
         self.replies = replies;
         self.edited(cx);
@@ -456,6 +491,7 @@ impl Composer {
         self.files.clear();
         self.replies.clear();
         self.review.take_all();
+        self.browser_annotations.clear();
         self.chips.clear();
         self.edited(cx);
         text
@@ -468,9 +504,10 @@ impl Composer {
     }
 
     pub fn prompt(&self) -> String {
-        prompt_files::compose(
+        browser_annotations::compose(
             &ferrite_reviewr::ferrite::attach(&self.quoted_line(), &self.review),
             &self.files,
+            &self.browser_annotations,
         )
     }
 
@@ -478,7 +515,7 @@ impl Composer {
     /// takes back, so a round trip through history or a merged held
     /// prompt neither repeats the comments nor writes them into the line.
     pub fn editable(&self) -> String {
-        prompt_files::compose(&self.quoted_line(), &self.files)
+        browser_annotations::compose(&self.quoted_line(), &self.files, &self.browser_annotations)
     }
 
     /// The line with its quotes ahead of it.
