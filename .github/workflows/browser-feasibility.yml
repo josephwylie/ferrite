@@ -78,10 +78,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          target/debug/ferrite.exe --visual-smoke
-          if ($LASTEXITCODE -eq 0) { throw 'Naked executable bypassed the sandbox bootstrap' }
-          target/debug/bundle/windows/Ferrite/ferrite.exe --visual-smoke
-          if ($LASTEXITCODE -ne 0) { throw 'Packaged CEF smoke failed' }
+          $naked = Start-Process -FilePath (Resolve-Path target/debug/ferrite.exe) -ArgumentList @('--visual-smoke') -NoNewWindow -Wait -PassThru
+          if ($naked.ExitCode -eq 0) { throw 'Naked executable bypassed the sandbox bootstrap' }
+          # CEF's bootstrap is a GUI executable: explicitly wait for its own
+          # completion rather than reading a previous command's LASTEXITCODE.
+          $packaged = Start-Process -FilePath (Resolve-Path target/debug/bundle/windows/Ferrite/ferrite.exe) -ArgumentList @('--visual-smoke') -NoNewWindow -Wait -PassThru
+          if ($packaged.ExitCode -ne 0) { throw "Packaged CEF smoke failed ($($packaged.ExitCode))" }
       - name: macOS packaged browser smoke
         if: runner.os == 'macOS'
         run: target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite --visual-smoke
@@ -92,8 +94,8 @@ jobs:
           FERRITE_BROWSER_UNSAFE_SMOKE: '1'
         run: |
           foreach ($unsafeSwitch in @('--no-sandbox', '--no-sandbox=0', '/NO-SANDBOX=0', '/DISABLE-WEB-SECURITY=0', '-disable-site-isolation-trials=0', '/DISABLE-FEATURES=SitePerProcess')) {
-            target/debug/bundle/windows/Ferrite/ferrite.exe --visual-smoke $unsafeSwitch
-            if ($LASTEXITCODE -ne 0) { throw "Unsafe configuration did not preserve sealed-only behavior: $unsafeSwitch" }
+            $smoke = Start-Process -FilePath (Resolve-Path target/debug/bundle/windows/Ferrite/ferrite.exe) -ArgumentList @('--visual-smoke', $unsafeSwitch) -NoNewWindow -Wait -PassThru
+            if ($smoke.ExitCode -ne 0) { throw "Unsafe configuration did not preserve sealed-only behavior: $unsafeSwitch ($($smoke.ExitCode))" }
           }
       - name: macOS unsafe startup smoke
         if: runner.os == 'macOS'

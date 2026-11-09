@@ -106,9 +106,9 @@ jobs:
           $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
           $built = Join-Path $metadata.target_directory "debug"
           # The ordinary Rust executable must refuse CEF without the broker.
-          & (Join-Path $built "ferrite.exe") --visual-smoke
-          if ($LASTEXITCODE -eq 0) { throw "Unpackaged executable rendered without the Windows sandbox bootstrap" }
+          $naked = Start-Process -FilePath (Join-Path $built "ferrite.exe") -ArgumentList @('--visual-smoke') -NoNewWindow -Wait -PassThru
+          if ($naked.ExitCode -eq 0) { throw "Unpackaged executable rendered without the Windows sandbox bootstrap" }
           $stage = Join-Path $built "bundle\windows\Ferrite"
           scripts/stage-windows.ps1 -BuildDirectory $built -Destination $stage
-          & (Join-Path $stage "ferrite.exe") --visual-smoke
-          if ($LASTEXITCODE -ne 0) { throw "Packaged Windows visuals smoke failed" }
+          $packaged = Start-Process -FilePath (Join-Path $stage "ferrite.exe") -ArgumentList @('--visual-smoke') -NoNewWindow -Wait -PassThru
+          if ($packaged.ExitCode -ne 0) { throw "Packaged Windows visuals smoke failed ($($packaged.ExitCode))" }
