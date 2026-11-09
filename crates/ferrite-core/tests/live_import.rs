@@ -166,6 +166,7 @@ fn an_imported_codex_session_continues_on_the_next_prompt() {
         sandbox: Some("read-only".into()),
         resume: None,
         visuals: None,
+        browser: None,
         env: Vec::new(),
         launcher: Vec::new(),
         args: Vec::new(),
