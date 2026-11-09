@@ -270,7 +270,11 @@ wrap_display_handler! {
             if frame.is_some_and(|frame| frame.is_main() != 0) {
                 if let Some(url) = url { self.state.navigation(self.generation, |state| {
                     state.url = url.to_string();
-                    if browser.as_ref().is_some_and(|browser| browser.is_loading() == 0) { state.loading = false; }
+                    if let Some(browser) = browser.as_ref() {
+                        state.loading = browser.is_loading() != 0;
+                        state.can_back = browser.can_go_back() != 0;
+                        state.can_forward = browser.can_go_forward() != 0;
+                    }
                 }); }
             }
         }
