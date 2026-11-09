@@ -45,7 +45,11 @@ independent `oracle.json`. Provider mode adds the actual host protocol and
 peer result. Private controller credentials are not part of the peer protocol.
 
 Initial missing-driver red run:
-https://github.com/josephwylie/ferrite/actions/runs/42561582036 .
+https://github.com/josephwylie/ferrite/actions/runs/42561582036 . The macOS
+packaged probe failed as expected after 90 seconds without a scenario result;
+its application and signed package built successfully. This establishes the
+missing-driver red, not a passing UI/rendering outcome. The superseding driver
+run is the actual two-platform GUI capability check.
 Until a completed run proves otherwise, availability of the native GPUI window,
 renderer readback and pointer input on both hosted runner platforms is unknown.
 The existing headless CEF Engine/View feasibility results do not prove this
