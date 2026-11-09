@@ -18,6 +18,7 @@ on:
       - 'scripts/native_browser_service.py'
       - 'scripts/browser_processes.py'
       - 'scripts/probe-embedded-browser.py'
+      - 'scripts/probe-browser-keychain.py'
       - 'scripts/patches/agent-browser*'
       - 'scripts/test_package_agent_browser.py'
       - '.github/workflows/browser-feasibility.yml'
