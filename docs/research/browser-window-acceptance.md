@@ -2,9 +2,10 @@
 
 The [first macOS packaged operator slice](browser-window-2026-11-09/macos-0abd8f1b/README.md)
 passed rendering/input and produced the actual Claude Observe-unavailable red.
-The [Windows startup diagnosis](browser-window-2026-11-09/windows-65d33368/README.md)
-reproduced a main-thread stack overflow; its larger-stack candidate is pending
-packaged verification. This is the first vertical slice of
+The [Windows operator slice](browser-window-2026-11-09/windows-9080268e/README.md)
+now also passes after increasing both executable stack reserves to 8 MiB. Its
+actual provider Observe reaches a new attachment failure: the native controller
+attempts `Target.createTarget`, which the embedded endpoint denies. This is the first vertical slice of
 #196, not complete browser/annotation acceptance.
 
 The opt-in `browser-smoke` application feature installs a bounded scenario in
@@ -81,8 +82,9 @@ run is the actual two-platform GUI capability check.
 Native GPUI window rendering/readback and pointer input are now proven on the
 macOS hosted runner by the retained evidence. Windows reached the actual production CockpitView/native Window before
 exiting with `0xC00000FD`; both packaged and naked executables reserved 1 MiB.
-The naked log explicitly reports a main-thread stack overflow. The candidate
-raises both reserves to 8 MiB; it is not a passing Windows result until verified. A failure-only naked
+The naked log explicitly reports a main-thread stack overflow. The next packaged run verified both reserves at 8 MiB and passed the actual
+Windows operator Preview/render/input scenario. Its subsequent actual provider
+Observe failed at native attachment; the endpoint denied `Target.createTarget`. A failure-only naked
 startup comparison is explicitly diagnostic and cannot pass browser acceptance.
 The existing headless CEF Engine/View feasibility results do not prove this
 window path. Neither the initial operator slice nor a successful single-button provider
