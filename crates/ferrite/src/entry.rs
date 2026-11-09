@@ -38,7 +38,17 @@ fn stop_browser_smoke_server() -> i32 {
     use ferrite_core::protocol::{self, ClientMessage, Op, Peer, When};
     use std::time::{Duration, Instant};
     let stop = || -> std::io::Result<()> {
-        let address = link::address(&store_dir());
+        let store = store_dir();
+        let temporary = std::env::temp_dir().canonicalize()?;
+        let isolated = store.parent().and_then(|path| path.canonicalize().ok());
+        if std::env::var_os("FERRITE_STORE").is_none()
+            || !isolated.is_some_and(|path| path.starts_with(&temporary))
+        {
+            return Err(std::io::Error::other(
+                "explicit isolated temporary Store required",
+            ));
+        }
+        let address = link::address(&store);
         let mut attached = Client::attach(
             &address,
             ClientMessage::Hello {

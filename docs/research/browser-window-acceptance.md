@@ -1,7 +1,9 @@
 # Packaged Conversation browser window probe (#196)
 
-Runtime validation is pending. This is the first vertical slice of #196,
-not complete browser/annotation acceptance.
+The [first macOS packaged operator slice](browser-window-2026-11-09/macos-0abd8f1b/README.md)
+passed rendering/input and produced the actual Claude Observe-unavailable red.
+Windows window startup is under diagnosis. This is the first vertical slice of
+#196, not complete browser/annotation acceptance.
 
 The opt-in `browser-smoke` application feature installs a bounded scenario in
 Ferrite's ordinary native GPUI window. The window still uses production
@@ -50,8 +52,11 @@ packaged probe failed as expected after 90 seconds without a scenario result;
 its application and signed package built successfully. This establishes the
 missing-driver red, not a passing UI/rendering outcome. The superseding driver
 run is the actual two-platform GUI capability check.
-Until a completed run proves otherwise, availability of the native GPUI window,
-renderer readback and pointer input on both hosted runner platforms is unknown.
+Native GPUI window rendering/readback and pointer input are now proven on the
+macOS hosted runner by the retained evidence. Windows exited before producing
+a window result; exact exit, bootstrap/naked PE stack sizes and startup
+checkpoints are collected by the next diagnostic revision. A failure-only naked
+startup comparison is explicitly diagnostic and cannot pass browser acceptance.
 The existing headless CEF Engine/View feasibility results do not prove this
 window path. Neither this initial scenario nor a successful Observe establishes
 full controller interactions, both-provider parity, annotations, Composer
