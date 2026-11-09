@@ -20,6 +20,7 @@ gpui::actions!(browser, [Go]);
 pub(super) struct Browsers {
     threads: BTreeMap<ThreadId, Browser>,
     events: Rc<RefCell<Vec<Event>>>,
+    reveal: std::collections::BTreeSet<ThreadId>,
 }
 struct Browser {
     state: State,
@@ -38,6 +39,7 @@ struct Page {
     suppress_navigation: Rc<Cell<bool>>,
 }
 enum Event {
+    Restore(ThreadId, TabId),
     Input(ThreadId, Owner, Document, Option<u64>, Input),
     Changed(ThreadId, Owner, PageState),
 }
@@ -95,9 +97,7 @@ impl CockpitView {
     ) {
         self.ensure_browser(thread, cx);
         if matches!(action, Action::Open { .. }) {
-            if let Some(index) = self.pane_for(thread) {
-                self.panes[index].preview.show_browser();
-            }
+            self.browsers.reveal.insert(thread);
         }
         if self.browsers.threads[&thread].owner.is_none() {
             match self.cockpit.browser_attach(thread) {
@@ -155,28 +155,57 @@ impl CockpitView {
             }
         }
         for message in self.cockpit.take_browser_messages() {
+            let message = match message {
+                ferrite_core::protocol::ServerMessage::BrowserRequest {
+                    request,
+                    thread,
+                    owner,
+                    document,
+                    revision,
+                    ..
+                } => {
+                    self.cockpit.browser_reply(
+                        request,
+                        thread,
+                        owner,
+                        document,
+                        revision,
+                        ferrite_core::browser::Outcome::Failed {
+                            error: "Browser agent control is not available in this build".into(),
+                        },
+                    );
+                    continue;
+                }
+                other => other,
+            };
             let ferrite_core::protocol::ServerMessage::Browser {
                 thread,
                 owner,
                 state,
                 action,
+                owned,
             } = message
             else {
                 continue;
             };
             self.ensure_browser(thread, cx);
             if matches!(action, Some(Action::Open { .. } | Action::Select { .. })) {
-                if let Some(index) = self.pane_for(thread) {
-                    self.panes[index].preview.show_browser();
-                }
+                self.browsers.reveal.insert(thread);
             }
             let browser = self.browsers.threads.get_mut(&thread).unwrap();
             browser.state = state;
-            browser.sync_documents(cx, action.is_none());
-            if browser.owner != owner {
+            if !owned
+                || browser
+                    .owner
+                    .is_some_and(|previous| Some(previous) != owner)
+            {
                 browser.pages.clear();
+            }
+            browser.owner = if owned { owner } else { None };
+            if !owned {
                 continue;
             }
+            browser.sync_documents(cx, action.is_none());
             browser.pages.retain(|id, _| {
                 browser
                     .state
@@ -214,9 +243,16 @@ impl CockpitView {
             }
             cx.notify();
         }
-        let events = std::mem::take(&mut *self.browsers.events.borrow_mut());
-        for event in events {
+        let mut events = std::mem::take(&mut *self.browsers.events.borrow_mut())
+            .into_iter()
+            .peekable();
+        while let Some(event) = events.next() {
             match event {
+                Event::Restore(thread, tab) => {
+                    if self.browsers.threads.get(&thread).is_some_and(|browser| browser.state.tabs.iter().any(|page| page.id == tab && !page.live)) {
+                        self.browser_action(thread, Action::Select { tab }, cx);
+                    }
+                }
                 Event::Input(thread, owner, document, generation, input) => {
                     let Some(browser) = self
                         .browsers
@@ -232,7 +268,7 @@ impl CockpitView {
                     }) else {
                         continue;
                     };
-                    match self.cockpit.browser_input(thread, owner) {
+                    match self.cockpit.browser_input(thread, owner, document) {
                         Ok(_) => page.native.input(input),
                         Err(error) => {
                             self.browsers.threads.get_mut(&thread).unwrap().error =
@@ -241,9 +277,57 @@ impl CockpitView {
                         }
                     }
                 }
-                Event::Changed(thread, owner, page) => {
-                    self.cockpit.browser_page(thread, owner, page)
+                Event::Changed(thread, owner, mut page) => {
+                    while let Some(Event::Changed(next_thread, next_owner, next_page)) =
+                        events.peek()
+                    {
+                        if *next_thread != thread
+                            || *next_owner != owner
+                            || next_page.document != page.document
+                        {
+                            break;
+                        }
+                        let Some(Event::Changed(_, _, mut next)) = events.next() else {
+                            unreachable!()
+                        };
+                        next.navigation |= page.navigation;
+                        page = next;
+                    }
+                    let Some(browser) = self
+                        .browsers
+                        .threads
+                        .get(&thread)
+                        .filter(|browser| browser.owner == Some(owner))
+                    else {
+                        continue;
+                    };
+                    if !browser
+                        .state
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.document() == page.document)
+                    {
+                        continue;
+                    }
+                    match self.cockpit.browser_page(thread, owner, page) {
+                        Ok(state) => {
+                            let browser = self.browsers.threads.get_mut(&thread).unwrap();
+                            browser.state = state;
+                            browser.sync_documents(cx, true);
+                        }
+                        Err(error) => {
+                            self.browsers.threads.get_mut(&thread).unwrap().error =
+                                Some(error.to_string())
+                        }
+                    }
                 }
+            }
+        }
+        for thread in std::mem::take(&mut self.browsers.reveal) {
+            if let Some(index) = self.pane_for(thread) {
+                self.panes[index].preview.show_browser();
+            } else {
+                self.browsers.reveal.insert(thread);
             }
         }
         // Only the selected live tab is realized. Restored metadata does not
@@ -430,6 +514,9 @@ impl CockpitView {
             .tabs
             .iter()
             .find(|tab| Some(tab.id) == browser.state.active);
+        if let Some(tab) = active.filter(|tab| !tab.live) {
+            self.browsers.events.borrow_mut().push(Event::Restore(thread, tab.id));
+        }
         let tabs = browser.state.tabs.iter().map(|tab| {
             let id = tab.id;
             let title = url::Url::parse(&tab.url)
@@ -600,6 +687,7 @@ impl Browser {
     fn sync_documents(&self, cx: &mut Context<CockpitView>, resample: bool) {
         for tab in &self.state.tabs {
             if let Some(page) = self.pages.get(&tab.id) {
+                page.native.set_protected(tab.protected);
                 if page.document.replace(tab.document()) != tab.document() && resample {
                     page.web.update(cx, |web, cx| web.refresh_browser_state(cx));
                 }

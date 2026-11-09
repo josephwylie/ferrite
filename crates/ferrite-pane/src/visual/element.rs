@@ -171,6 +171,11 @@ impl WebView {
         self.inner.browser.borrow().clone()
     }
 
+    /// Whether the browser host is currently painted in a window.
+    pub fn browser_visible(&self) -> bool {
+        self.inner.browser.borrow().is_some() && self.inner.visible.get()
+    }
+
     /// Resample after the Server acknowledges a new document generation.
     /// A native page may already have finished loading without another wake.
     pub fn refresh_browser_state(&mut self, cx: &mut Context<Self>) {
