@@ -526,3 +526,20 @@ fn bounded(value: Value) -> Value {
         json!({"truncated":true,"message":"Diagnostics exceeded the response limit"})
     }
 }
+
+/// Decode only the bounded PNG produced by the owned screenshot command.
+pub fn screenshot_bytes(value: &Value) -> Result<Vec<u8>, String> {
+    let encoded = value["png_base64"]
+        .as_str()
+        .ok_or("Browser screenshot did not contain PNG data")?;
+    if encoded.len() > 16 * 1024 * 1024 * 4 / 3 + 4 {
+        return Err("Browser screenshot exceeded its bound".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| "Browser screenshot contained invalid image data")?;
+    if bytes.len() > 16 * 1024 * 1024 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("Browser screenshot was not a bounded PNG".into());
+    }
+    Ok(bytes)
+}

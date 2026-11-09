@@ -1133,6 +1133,14 @@ impl BrowserView for CefView {
     fn target_id(&self) -> Option<String> {
         self.0.browser.borrow().as_ref().map(|_| self.0.target_id())
     }
+    fn browser_viewport(&self) -> Option<BrowserViewport> {
+        let geometry = self.0.state.geometry.lock().unwrap();
+        Some(BrowserViewport {
+            width: geometry.width,
+            height: geometry.height,
+            scale: geometry.scale,
+        })
+    }
     fn resize_browser(&self, viewport: BrowserViewport) {
         let changed = {
             let mut geometry = self.0.state.geometry.lock().unwrap();
