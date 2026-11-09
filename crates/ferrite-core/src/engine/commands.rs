@@ -253,7 +253,8 @@ impl Engine {
                 self.apply_input(*thread, Input::Notice(text.clone()));
                 Ok(None)
             }
-            Op::BrowserAttach { .. }
+            Op::BrowserInput { .. }
+            | Op::BrowserAttach { .. }
             | Op::Browser { .. }
             | Op::SettingsChanged
             | Op::Bootstrap { .. }

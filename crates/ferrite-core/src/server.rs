@@ -358,6 +358,7 @@ impl Server {
         defaults: Arc<Mutex<SessionDefaults>>,
         settings_dir: PathBuf,
     ) -> Self {
+        let browser = browser::load(engine.browser_store());
         Self {
             engine,
             info,
@@ -367,7 +368,7 @@ impl Server {
             told_watched: None,
             answered: BTreeMap::new(),
             renders,
-            browser: browser::load(&settings_dir),
+            browser,
             searches: Vec::new(),
             reads: Vec::new(),
             starting: HashMap::new(),
@@ -520,14 +521,11 @@ impl Server {
             } => {
                 if owner.window == id && self.browser_window(id, thread).is_ok() {
                     if self.browser.update(thread, owner, page).is_ok() {
-                        let _ = self.save_browser();
+                        if let Err(error) = self.save_browser() {
+                            crate::log!("browser metadata could not be saved: {error:?}");
+                        }
                         self.publish_browser(thread, None);
                     }
-                }
-            }
-            ClientMessage::BrowserInput { thread, owner } => {
-                if owner.window == id && self.browser_window(id, thread).is_ok() {
-                    let _ = self.browser.operator_input(thread, owner);
                 }
             }
             ClientMessage::Rendered {
@@ -581,6 +579,15 @@ impl Server {
 
     fn command(&mut self, id: ClientId, Command { id: request, op }: Command) {
         let executed = match &op {
+            Op::BrowserInput { thread, owner } => {
+                if owner.window != id {
+                    Err(failed("This browser belongs to another window"))
+                } else {
+                    self.browser_window(id, *thread)
+                        .and_then(|_| self.browser.operator_input(*thread, *owner).map_err(failed))
+                        .map(|revision| Some(Done::BrowserInput { revision }))
+                }
+            }
             Op::BrowserAttach { thread } => self.attach_browser(id, *thread),
             Op::Browser { thread, action } => self.browser_action(id, *thread, action.clone()),
             Op::SettingsChanged => match Settings::load(&self.settings_dir) {

@@ -279,9 +279,20 @@ impl Cockpit {
         }
     }
 
-    pub fn browser_input(&mut self, thread: ThreadId, owner: crate::browser::Owner) {
-        if let Ok(remote) = self.remote() {
-            remote.say(&crate::protocol::ClientMessage::BrowserInput { thread, owner });
+    pub fn browser_input(
+        &mut self,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+    ) -> io::Result<u64> {
+        match self
+            .remote()?
+            .execute(Op::BrowserInput { thread, owner })
+            .map_err(|e| io::Error::other(e.message))?
+        {
+            Some(Done::BrowserInput { revision }) => Ok(revision),
+            _ => Err(io::Error::other(
+                "The Server did not authorize browser input",
+            )),
         }
     }
 

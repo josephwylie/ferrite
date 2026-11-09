@@ -45,3 +45,49 @@ fn opening_requires_an_attached_window_and_cannot_duplicate_a_threads_live_tabs(
         .is_err());
     assert_eq!(browser.state(first).tabs.len(), 1);
 }
+
+#[test]
+fn restart_keeps_urls_and_selection_without_realizing_a_page() {
+    let root = std::env::temp_dir().join(format!("ferrite-browser-restore-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let store = ferrite_core::store::Store::open(&root).unwrap();
+    let thread = ThreadId::new(1);
+    let mut browser = Service::default();
+    browser.attach(thread, 3).unwrap();
+    let opened = browser
+        .apply(
+            thread,
+            3,
+            Action::Open {
+                url: "https://example.com/account".into(),
+            },
+        )
+        .unwrap();
+    store.save_browser(&browser.save()).unwrap();
+    let mut restored = Service::restore(store.load_browser().unwrap().unwrap()).unwrap();
+    let metadata = restored.state(thread);
+    assert_eq!(metadata.active, opened.active);
+    assert_eq!(metadata.tabs[0].url, "https://example.com/account");
+    assert!(!metadata.tabs[0].live);
+    assert!(metadata.owner.is_none());
+    restored.attach(thread, 4).unwrap();
+    let selected = restored
+        .apply(
+            thread,
+            4,
+            Action::Select {
+                tab: metadata.tabs[0].id,
+            },
+        )
+        .unwrap();
+    assert!(selected.tabs[0].live);
+    assert!(
+        restored
+            .check_document(thread, opened.tabs[0].document())
+            .is_err(),
+        "pre-restart references are stale"
+    );
+    store.quit(std::time::Duration::from_secs(1));
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}
