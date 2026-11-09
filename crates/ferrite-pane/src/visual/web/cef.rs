@@ -979,8 +979,11 @@ impl View for CefView {
                 host.send_mouse_move_event(Some(&input::mouse_event(x, y, flags)), 0);
             }
             Input::Leave => {
+                if view.pressed.replace(0) != 0 {
+                    host.send_capture_lost_event();
+                }
                 let (x, y) = view.pointer.get();
-                host.send_mouse_move_event(Some(&input::mouse_event(x, y, view.pressed.get())), 1);
+                host.send_mouse_move_event(Some(&input::mouse_event(x, y, 0)), 1);
             }
             Input::Down {
                 x,
