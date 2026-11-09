@@ -308,10 +308,22 @@ impl BrowserView for BrowserHandle {
             *self.navigation.pending.borrow_mut() = Some(url.into());
             (self.navigation.wake)();
         } else {
+            self.navigation.pending.borrow_mut().take();
+            let same_document = url::Url::parse(&self.navigation.url.borrow())
+                .and_then(|mut before| {
+                    let mut after = url::Url::parse(url)?;
+                    let fragment_changed = before.fragment() != after.fragment();
+                    before.set_fragment(None);
+                    after.set_fragment(None);
+                    Ok(fragment_changed && before == after)
+                })
+                .unwrap_or(false);
             *self.navigation.url.borrow_mut() = url.into();
-            self.navigation
-                .generation
-                .set(self.navigation.generation.get() + 1);
+            if !same_document {
+                self.navigation
+                    .generation
+                    .set(self.navigation.generation.get() + 1);
+            }
             self.view.set_html("");
         }
         Ok(())

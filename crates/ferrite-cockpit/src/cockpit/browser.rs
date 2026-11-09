@@ -37,8 +37,33 @@ struct Page {
     native: Rc<dyn BrowserView>,
     document: Rc<Cell<Document>>,
     acknowledged: Cell<Option<(Document, u64)>>,
-    pending_native_generation: Cell<Option<u64>>,
+    pending_navigation: RefCell<Option<PendingNavigation>>,
 }
+struct PendingNavigation {
+    generation: u64,
+    previous_url: String,
+    destination: Option<String>,
+    history: bool,
+}
+impl PendingNavigation {
+    fn settled(&self, state: &BrowserState) -> bool {
+        if state.document_generation != self.generation || state.error.is_some() {
+            return true;
+        }
+        if state.loading {
+            return false;
+        }
+        // Fragment/history navigation can settle without a new document. A
+        // different earlier intent settling must not complete this one.
+        match &self.destination {
+            Some(destination) => url::Url::parse(destination).is_ok_and(|destination| {
+                url::Url::parse(&state.url).is_ok_and(|url| url == destination)
+            }),
+            None => self.history && state.url != self.previous_url,
+        }
+    }
+}
+
 enum Event {
     Restore(ThreadId, TabId),
     Input(ThreadId, Owner, Document, Option<u64>, Input),
@@ -239,8 +264,16 @@ impl CockpitView {
                 };
                 if let Some(document) = document {
                     if let Some(page) = browser.pages.get(&document.tab) {
-                        page.pending_native_generation
-                            .set(Some(page.native.state().document_generation));
+                        let before = page.native.state();
+                        *page.pending_navigation.borrow_mut() = Some(PendingNavigation {
+                            generation: before.document_generation,
+                            previous_url: before.url,
+                            destination: match &action {
+                                Action::Navigate { url, .. } => Some(url.clone()),
+                                _ => None,
+                            },
+                            history: matches!(action, Action::Back { .. } | Action::Forward { .. }),
+                        });
                         let result = match action {
                             Action::Navigate { url, .. } => page.native.navigate(&url),
                             Action::Back { .. } => page.native.back(),
@@ -252,7 +285,7 @@ impl CockpitView {
                             browser.error = None;
                         }
                         if let Err(error) = result {
-                            page.pending_native_generation.set(None);
+                            page.pending_navigation.borrow_mut().take();
                             browser.error = Some(error.clone());
                             if let (Some(owner), Some(tab)) = (
                                 browser.owner,
@@ -359,17 +392,17 @@ impl CockpitView {
                                 .update(cx, |web, cx| web.refresh_browser_state(cx));
                             continue;
                         }
-                        if let Some(pending) = native.pending_native_generation.get() {
-                            if current.document_generation == pending
-                                && current.loading
-                                && current.error.is_none()
-                            {
-                                // The service has accepted an intent, but this
-                                // remains the old native document. Native marks
-                                // loading synchronously; same-document history
-                                // settles without advancing its generation.
-                                continue;
-                            }
+                        if native
+                            .pending_navigation
+                            .borrow()
+                            .as_ref()
+                            .is_some_and(|pending| !pending.settled(&current))
+                        {
+                            // Retain the service's loading/Unknown state while
+                            // the old native document is still on screen.
+                            continue;
+                        }
+                        if native.pending_navigation.borrow().is_some() {
                             page.url = current.url;
                             page.loading = current.loading;
                             page.can_back = current.can_back;
@@ -386,7 +419,7 @@ impl CockpitView {
                                     ferrite_core::browser::Dirty::Unknown
                                 }
                             };
-                            native.pending_native_generation.set(None);
+                            native.pending_navigation.borrow_mut().take();
                         }
                     }
                     page.visible = browser
@@ -544,8 +577,13 @@ impl CockpitView {
                         .browser_handle()
                         .expect("browser host has its native page");
                     native.set_protected(tab.protected);
-                    let pending_native_generation =
-                        (native.state().document_generation == 0).then_some(0);
+                    let pending_navigation =
+                        (native.state().document_generation == 0).then(|| PendingNavigation {
+                            generation: 0,
+                            previous_url: String::new(),
+                            destination: Some(tab.url.clone()),
+                            history: false,
+                        });
                     browser.pages.insert(
                         id,
                         Page {
@@ -553,7 +591,7 @@ impl CockpitView {
                             native,
                             document,
                             acknowledged: Cell::new(None),
-                            pending_native_generation: Cell::new(pending_native_generation),
+                            pending_navigation: RefCell::new(pending_navigation),
                         },
                     );
                     browser.error = None;

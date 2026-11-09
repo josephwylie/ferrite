@@ -1418,4 +1418,12 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
         let state = view.cockpit.browser_attach(thread).unwrap();
         state.tabs[1].url == "http://localhost:5173/delayed" && !state.tabs[1].loading
     }));
+    engine.defer_browser_navigation(false);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("http://localhost:5173/delayed#section");
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| view.update(cx, |view, _| {
+        let state = view.cockpit.browser_attach(thread).unwrap();
+        state.tabs[1].url == "http://localhost:5173/delayed#section" && !state.tabs[1].loading
+    }));
 }
