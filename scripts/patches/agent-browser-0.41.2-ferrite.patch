@@ -132,7 +132,7 @@ index 2d488de..5cf33f9 100644
      async fn cdp_url_without_browser_does_not_launch() {
          let mut state = super::DaemonState::new();
 diff --git a/cli/src/native/daemon.rs b/cli/src/native/daemon.rs
-index 3e62122..1378ab4 100644
+index 3e62122..d6b08ac 100644
 --- a/cli/src/native/daemon.rs
 +++ b/cli/src/native/daemon.rs
 @@ -23,7 +23,54 @@ use crate::session_files::{owns_session, remove_daemon_files, SessionFile};
@@ -406,15 +406,15 @@ index 3e62122..1378ab4 100644
 +        ));
 +        let (reader, mut writer) = tokio::io::split(client);
 +        let mut reader = BufReader::new(reader);
-+        // Invalid find actions fail validation before launching a browser.
-+        writer.write_all(b"{\"id\":\"first\",\"action\":\"find\",\"subaction\":\"invalid\",\"ferriteToken\":\"random-private-token\"}\n").await.unwrap();
++        // Session inspection needs no browser and leaves this connection open.
++        writer.write_all(b"{\"id\":\"first\",\"action\":\"session_info\",\"ferriteToken\":\"random-private-token\"}\n").await.unwrap();
 +        let mut line = String::new();
 +        tokio::time::timeout(Duration::from_secs(1), reader.read_line(&mut line))
 +            .await
 +            .unwrap()
 +            .unwrap();
 +        let first: Value = serde_json::from_str(&line).unwrap();
-+        assert_ne!(first["error"], "Unauthorized");
++        assert_eq!(first["success"], true);
 +        writer
 +            .write_all(b"{\"id\":\"second\",\"action\":\"launch\"}\n")
 +            .await
