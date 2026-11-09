@@ -47,6 +47,52 @@ pub struct Viewport {
     pub scale: f32,
 }
 
+/// The full external browser viewport, in logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BrowserViewport {
+    pub width: u32,
+    pub height: u32,
+    pub scale: f32,
+}
+
+/// Confidence that automatically discarding the document will preserve work.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BrowserDirty {
+    Clean,
+    Dirty,
+    #[default]
+    Unknown,
+}
+
+/// Navigation and lifecycle state, independently readable from frame updates.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BrowserState {
+    pub url: String,
+    pub title: String,
+    pub loading: bool,
+    pub can_back: bool,
+    pub can_forward: bool,
+    pub error: Option<String>,
+    pub document_generation: u64,
+    pub dirty: BrowserDirty,
+}
+
+/// A website tab. Its identity belongs to the conversation service; the
+/// optional target identifies only the current live Chromium incarnation.
+pub trait BrowserView: View {
+    fn state(&self) -> BrowserState;
+    fn target_id(&self) -> Option<String>;
+    fn resize_browser(&self, viewport: BrowserViewport);
+    fn navigate(&self, url: &str) -> Result<(), String>;
+    fn back(&self) -> Result<(), String>;
+    fn forward(&self) -> Result<(), String>;
+    fn reload(&self) -> Result<(), String>;
+    fn set_protected(&self, protected: bool);
+    /// Release only a hidden, unprotected, confidently clean document.
+    /// A released view restores its last URL lazily when shown.
+    fn try_release(&self) -> Result<bool, String>;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MouseButton {
     Left,
@@ -162,9 +208,14 @@ pub trait Engine {
     fn open_browser(
         &self,
         _url: &str,
-        _viewport: Viewport,
+        _viewport: BrowserViewport,
         _wake: Wake,
-    ) -> Result<Box<dyn View>, String> {
+    ) -> Result<Box<dyn BrowserView>, String> {
+        Err("Conversation browser is unavailable in this build".into())
+    }
+
+    /// Report browser capability without starting the controller transport.
+    fn browser_available(&self) -> Result<(), String> {
         Err("Conversation browser is unavailable in this build".into())
     }
 
