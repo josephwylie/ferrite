@@ -9,6 +9,33 @@ use std::time::{Duration, Instant};
 
 use super::{Engine, Frame, Page, View, Viewport, BLUE, GREEN, RED};
 
+struct ProbeFile(std::path::PathBuf);
+impl ProbeFile {
+    fn create() -> Result<Self, String> {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "ferrite-private-browser-probe-{}-{nonce}.html",
+            std::process::id()
+        ));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|e| e.to_string())?;
+        let probe = Self(path);
+        file.write_all(b"<!doctype html><title>Private filesystem sentinel</title>FERRITE_PRIVATE_FILE_MUST_NOT_BE_READ").map_err(|e| e.to_string())?;
+        Ok(probe)
+    }
+}
+impl Drop for ProbeFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 struct Fixture(Arc<AtomicBool>);
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -68,6 +95,9 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
     let views = [one.as_ref(), two.as_ref(), sealed.as_ref()];
     wait_pixels(engine, &views, &mut frames, [RED, RED, RED])?;
     let endpoint = engine.controller()?;
+    let private_file = ProbeFile::create()?;
+    let private_file_url = url::Url::from_file_path(&private_file.0)
+        .map_err(|_| "Cannot represent private fixture file as a URL")?;
     let python = if cfg!(windows) { "python" } else { "python3" };
     let native = std::env::var_os("FERRITE_BROWSER_CONTROLLER")
         .map(std::path::PathBuf::from)
@@ -86,6 +116,7 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
     let mut child = Command::new(python)
         .arg(driver)
         .env("FERRITE_BROWSER_CONTROLLER", native)
+        .env("FERRITE_BROWSER_PRIVATE_FILE", private_file_url.as_str())
         .env("FERRITE_CDP_URL", endpoint.url)
         .env("FERRITE_CDP_AUTHORIZATION", endpoint.authorization)
         .spawn()

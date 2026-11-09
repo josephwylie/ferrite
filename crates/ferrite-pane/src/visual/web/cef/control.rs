@@ -303,7 +303,15 @@ impl Control {
         else {
             return;
         };
-        if !id.is_i64() || !self.connections.contains_key(&peer) {
+        if !id.is_i64()
+            || self.overflow.load(Ordering::Relaxed)
+            || !self
+                .connections
+                .get(&peer)
+                .is_some_and(|connection| !connection.output.stop.load(Ordering::Relaxed))
+        {
+            // A queued command must not run after this peer disconnected or
+            // after an observation was lost earlier in the same pump.
             return;
         }
         let params = value.get("params").cloned().unwrap_or(json!({}));
