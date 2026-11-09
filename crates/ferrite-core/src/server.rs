@@ -29,6 +29,7 @@ use crate::ThreadId;
 
 pub mod agent;
 mod bridge;
+mod browser;
 mod calls;
 pub(crate) mod projects;
 mod render;
@@ -161,8 +162,10 @@ pub fn run(options: Options) -> i32 {
     });
     let defaults = Arc::new(Mutex::new(SessionDefaults::from_settings(&settings)));
     let (renderer, renders) = render::remote();
+    let (browser_client, browser_requests) = crate::browser::channel();
     let shipped = projects::find();
     let spawner = Spawn {
+        browser: Some(browser_client),
         api: api.is_some().then_some(api_address),
         projects: shipped.as_ref().map(projects::Shipped::program),
         ..Spawn::new(defaults.clone(), Some(Arc::new(renderer)))
@@ -191,6 +194,7 @@ pub fn run(options: Options) -> i32 {
         executable: std::env::current_exe().unwrap_or_default(),
     };
     let mut server = Server::new(engine, info, renders, defaults, options.settings_dir);
+    server.browser_requests = browser_requests;
     server.apply_settings(&settings);
     revive_launch(&mut server.engine, reopen);
     crate::log!(
@@ -287,6 +291,7 @@ struct Client {
     /// Said hello in a generation this Server speaks.
     welcomed: bool,
     renders_visuals: bool,
+    browser_capable: bool,
     watching: BTreeSet<ThreadId>,
 }
 
@@ -321,6 +326,13 @@ struct Server {
     /// Who answered each of them that an answer was delivered for.
     answered: BTreeMap<(ThreadId, WireHandle), ClientId>,
     renders: render::Renders,
+    browser: crate::browser::Service,
+    browser_requests: crate::browser::Requests,
+    browser_pending: BTreeMap<u64, browser::Pending>,
+    browser_next: u64,
+    browser_uncertain: BTreeMap<ThreadId, crate::browser::Lease>,
+    browser_observed:
+        BTreeMap<ThreadId, (crate::browser::Document, u64, crate::browser::Observation)>,
     searches: Vec<Search>,
     reads: Vec<Read>,
     /// First sends still starting, by the tag the Engine knows them by:
@@ -355,6 +367,7 @@ impl Server {
         defaults: Arc<Mutex<SessionDefaults>>,
         settings_dir: PathBuf,
     ) -> Self {
+        let browser = browser::load(engine.browser_store());
         Self {
             engine,
             info,
@@ -364,6 +377,12 @@ impl Server {
             told_watched: None,
             answered: BTreeMap::new(),
             renders,
+            browser,
+            browser_requests: Default::default(),
+            browser_pending: BTreeMap::new(),
+            browser_next: 0,
+            browser_uncertain: BTreeMap::new(),
+            browser_observed: BTreeMap::new(),
             searches: Vec::new(),
             reads: Vec::new(),
             starting: HashMap::new(),
@@ -411,6 +430,7 @@ impl Server {
             self.answer_searches();
             self.answer_reads();
             self.forward_renders();
+            self.forward_browser_requests();
             self.broadcast();
             let events = self.api.pump(&self.engine);
             let removed = self.engine.take_removed_worktrees();
@@ -448,6 +468,7 @@ impl Server {
                         connection,
                         welcomed: false,
                         renders_visuals: false,
+                        browser_capable: false,
                         watching: BTreeSet::new(),
                     },
                 );
@@ -456,6 +477,7 @@ impl Server {
                 self.clients.remove(&id);
                 self.engine.window_gone(id);
                 self.renders.client_gone(id);
+                self.browser_owner_gone(id, None);
             }
             Heard::Message(id, message) => self.message(id, message),
             Heard::Api(heard) => self.api_heard(heard),
@@ -491,6 +513,8 @@ impl Server {
                     };
                     client.welcomed = true;
                     client.renders_visuals = capabilities.contains(&Capability::RenderVisual);
+                    client.browser_capable =
+                        capabilities.contains(&Capability::ConversationBrowser);
                     let snapshot = self.engine.snapshot();
                     self.send(id, ServerMessage::Snapshot(snapshot));
                 }
@@ -501,8 +525,28 @@ impl Server {
             ClientMessage::Watch { thread, resume } => self.watch(id, thread, resume),
             ClientMessage::Unwatch { thread } => {
                 client.watching.remove(&thread);
+                self.browser_owner_gone(id, Some(thread));
             }
             ClientMessage::Command(command) => self.command(id, command),
+            ClientMessage::BrowserReply {
+                request,
+                thread,
+                owner,
+                document,
+                revision,
+                outcome,
+            } => {
+                self.answer_browser(id, request, thread, owner, document, revision, outcome);
+            }
+            ClientMessage::BrowserPage {
+                thread,
+                owner,
+                page,
+            } => {
+                // Kept for older window peers; new windows synchronously ACK
+                // the document generation through Op::BrowserPage.
+                let _ = self.browser_page(id, thread, owner, page);
+            }
             ClientMessage::Rendered {
                 request,
                 png,
@@ -549,10 +593,84 @@ impl Server {
         if let Some(client) = self.clients.get_mut(&id) {
             client.watching.insert(thread);
         }
+        self.publish_browser(thread, None);
     }
 
     fn command(&mut self, id: ClientId, Command { id: request, op }: Command) {
         let executed = match &op {
+            Op::BrowserProtect {
+                thread,
+                owner,
+                document,
+                protection,
+            } => self.browser_owned(id, *thread, *owner).and_then(|_| {
+                let lease = self
+                    .browser
+                    .protect(*thread, *owner, *document, *protection)
+                    .map_err(failed)?;
+                self.publish_browser(*thread, None);
+                Ok(Some(Done::BrowserProtection { lease }))
+            }),
+            Op::BrowserRelease {
+                thread,
+                owner,
+                lease,
+            } => self.browser_owned(id, *thread, *owner).and_then(|_| {
+                self.browser
+                    .release(*thread, *owner, *lease)
+                    .map_err(failed)?;
+                self.publish_browser(*thread, None);
+                Ok(None)
+            }),
+            Op::BrowserReclaim {
+                thread,
+                owner,
+                document,
+            } => self.browser_owned(id, *thread, *owner).and_then(|_| {
+                let lease = self
+                    .browser
+                    .begin_reclaim(*thread, *owner, *document)
+                    .map_err(failed)?;
+                Ok(Some(Done::BrowserReclaim { lease }))
+            }),
+            Op::BrowserReclaimed {
+                thread,
+                owner,
+                lease,
+                released,
+            } => self.browser_owned(id, *thread, *owner).and_then(|_| {
+                let state = self
+                    .browser
+                    .finish_reclaim(*thread, *owner, *lease, *released)
+                    .map_err(failed)?;
+                self.publish_browser(*thread, None);
+                Ok(Some(Done::Browser { state }))
+            }),
+            Op::BrowserPage {
+                thread,
+                owner,
+                page,
+            } => self.browser_page(id, *thread, *owner, page.clone()),
+            Op::BrowserInput {
+                thread,
+                owner,
+                document,
+            } => {
+                if owner.window != id {
+                    Err(failed("This browser belongs to another window"))
+                } else {
+                    self.browser_window(id, *thread)
+                        .and_then(|_| {
+                            self.browser
+                                .check_document(*thread, *document)
+                                .and_then(|_| self.browser.operator_input(*thread, *owner))
+                                .map_err(failed)
+                        })
+                        .map(|revision| Some(Done::BrowserInput { revision }))
+                }
+            }
+            Op::BrowserAttach { thread } => self.attach_browser(id, *thread),
+            Op::Browser { thread, action } => self.browser_action(id, *thread, action.clone()),
             Op::SettingsChanged => match Settings::load(&self.settings_dir) {
                 Ok(settings) => {
                     self.apply_settings(&settings);
