@@ -204,7 +204,7 @@ fn annotation_editor_retains_literal_initial_feedback(cx: &mut TestAppContext) {
     let (editor, cx) = cx.add_window_view(|_, cx| {
         AnnotationEditor::new(retained.clone(), retained.original().into(), cx)
     });
-    cx.simulate_resize(size(px(600.), px(700.)));
+    cx.simulate_resize(size(px(320.), px(480.)));
     let feedback = Rc::new(std::cell::RefCell::new(None));
     let captured = feedback.clone();
     let _subscription = editor.update(cx, |_, cx| {
@@ -215,7 +215,18 @@ fn annotation_editor_retains_literal_initial_feedback(cx: &mut TestAppContext) {
             }
         })
     });
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: point(px(160.), px(240.)),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-3000.))),
+        modifiers: Modifiers::none(),
+        touch_phase: gpui::TouchPhase::default(),
+    });
+    cx.run_until_parked();
     let add = cx.debug_bounds("annotation-add").unwrap();
+    assert!(
+        add.top() >= px(0.) && add.bottom() <= px(480.),
+        "Add remains reachable in a short narrow Panel: {add:?}"
+    );
     cx.simulate_click(add.center(), Modifiers::none());
     assert_eq!(feedback.borrow().as_ref(), Some(&literal));
     assert_eq!(retained.comment(), literal);
