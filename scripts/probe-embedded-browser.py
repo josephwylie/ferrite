@@ -150,6 +150,9 @@ def main():
                 assert set(selected) == set(expected), selected
                 assert len({tab["targetId"] for tab in tabs}) == 2
                 assert all(tab["targetId"].startswith("ferrite-browser-") for tab in tabs)
+                for path, tab in selected.items():
+                    service.command("tab_switch", tabId=tab["tabId"])
+                    assert service.command("evaluate", script="window.fixtureReady === true")["result"] is True, (path, "controller evaluated outside the page's main world")
                 return selected
 
             tabs = attach()
