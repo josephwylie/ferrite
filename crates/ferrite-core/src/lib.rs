@@ -61,3 +61,6 @@ pub use session_event::{
     SessionControl, SessionEvent, ToolResult, TurnOutcome, UsageDetails, UsageScope,
 };
 pub use thread::ThreadId;
+
+/// Conversation-owned website tabs and lifecycle.
+pub mod browser;

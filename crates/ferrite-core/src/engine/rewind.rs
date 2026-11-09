@@ -435,7 +435,11 @@ mod tests {
     #[test]
     fn a_rewind_names_the_prompt_as_sent_over_its_old_echo() {
         let mut transcript = crate::transcript::Transcript::default();
-        for (text, id) in [("earlier", "p0"), ("/skill-x just a test", "p1"), ("just a test", "p1")] {
+        for (text, id) in [
+            ("earlier", "p0"),
+            ("/skill-x just a test", "p1"),
+            ("just a test", "p1"),
+        ] {
             transcript.apply(Input::Prompt(text.into()));
             transcript.apply(Input::PromptObservation {
                 sent_at: "12:48 pm".into(),

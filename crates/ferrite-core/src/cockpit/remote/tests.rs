@@ -116,6 +116,7 @@ fn remote(store: &std::path::Path) -> Remote {
             version: "0".into(),
         },
         renderer: None,
+        browser: false,
         discovery: Box::new(NoDiscovery),
     });
     remote.attach_now();
@@ -242,6 +243,7 @@ fn a_machine_waiting_for_a_sign_in_is_not_asked_again_until_then() {
             version: "0".into(),
         },
         renderer: None,
+        browser: false,
         discovery: Box::new(NoDiscovery),
     });
     let attention = |remote: &Remote| {
