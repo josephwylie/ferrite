@@ -410,9 +410,9 @@ fn resumed_codex_browser_call_preserves_history_and_explains_legacy_tool_absence
 fn both_providers_report_unavailable_when_no_browser_window_is_attached() {
     for codex in [false, true] {
         let harness = start(if codex {
-            "codex-browser-unavailable"
+            "codex-browser-off"
         } else {
-            "claude-browser-unavailable"
+            "claude-browser-off"
         });
         let mut window = attach(&harness.address);
         let (thread, _provider) = open(&mut window, &harness);
