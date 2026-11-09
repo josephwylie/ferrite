@@ -71,9 +71,13 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
             } else {
                 "rgb(0, 255, 0)"
             };
-            let page = format!(
-                r#"<!doctype html><html style="background:rgb(255,0,0)"><head><title>Ferrite browser fixture</title></head><body style="margin:0;background:rgb(255,0,0)"><button id="paint" onclick="document.documentElement.style.background='{color}';document.body.style.background='{color}';this.textContent='Painted'">Paint</button><input id="value"><script>window.fixtureReady=true</script></body></html>"#
-            );
+            let page = if request.starts_with("GET /clean ") {
+                "<!doctype html><title>Clean lifecycle fixture</title><style>html,body{margin:0;background:rgb(255,0,0);height:100%}</style>".to_owned()
+            } else {
+                format!(
+                    r#"<!doctype html><html style="background:rgb(255,0,0)"><head><title>Ferrite browser fixture</title></head><body style="margin:0;background:rgb(255,0,0)"><button id="paint" onclick="document.documentElement.style.background='{color}';document.body.style.background='{color}';this.textContent='Painted'">Paint</button><input id="value"><script>window.fixtureReady=true</script></body></html>"#
+                )
+            };
             let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
             let _ = stream.write_all(response.as_bytes());
         }
@@ -145,6 +149,43 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
     wait_browser(engine, one.as_ref(), |state| {
         !state.loading && state.url.ends_with("/one")
     })?;
+    let clean = engine.open_browser(
+        &format!("http://{address}/clean"),
+        viewport,
+        Box::new(|| {}),
+    )?;
+    wait_browser(engine, clean.as_ref(), |state| {
+        !state.loading && state.dirty == crate::visual::web::BrowserDirty::Clean
+    })?;
+    let old_target = clean.target_id().ok_or("Clean page has no live target")?;
+    let old_generation = clean.state().document_generation;
+    clean.set_visible(false);
+    clean.set_protected(true);
+    if clean.try_release()? {
+        return Err("Protected page was reclaimed".into());
+    }
+    clean.set_protected(false);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if clean.try_release()? {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err("Clean inactive page was not reclaimed".into());
+        }
+        std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
+    }
+    if clean.target_id().is_some() {
+        return Err("Reclaimed page still has a live target".into());
+    }
+    clean.set_visible(true);
+    wait_browser(engine, clean.as_ref(), |state| {
+        !state.loading && state.document_generation > old_generation
+    })?;
+    if clean.target_id().as_deref() == Some(&old_target) {
+        return Err("Recreated page retained its retired target".into());
+    }
+    drop(clean);
     let endpoint = engine.controller()?;
     let private_file = ProbeFile::create()?;
     let private_file_url = url::Url::from_file_path(&private_file.0)
@@ -188,6 +229,15 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
         std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
     }
     wait_pixels(engine, &views, &mut frames, [BLUE, GREEN, RED])?;
+    wait_browser(engine, one.as_ref(), |state| {
+        state.dirty == crate::visual::web::BrowserDirty::Dirty
+    })?;
+    one.set_visible(false);
+    one.set_protected(false);
+    if one.try_release()? || one.target_id().is_none() {
+        return Err("Unfinished form was discarded".into());
+    }
+    one.set_visible(true);
     // The views are still alive here: the controller painted exactly the
     // displayed external pages, while the sealed page retained its own pixels.
     println!("PASS native controller: exact live view pixels blue/green, sealed visual unchanged");
