@@ -49,6 +49,8 @@ const INSPECT: &str = r#"(() => {
 
 #[derive(Clone, Copy)]
 enum Step {
+    EnablePage,
+    EnableRuntime,
     Install,
     Tree,
     World,
@@ -73,6 +75,7 @@ pub(super) struct Observation {
     next: i32,
     document: u64,
     context: Option<i64>,
+    enabled: bool,
     installed: bool,
     retained: bool,
     clean_at: Option<Instant>,
@@ -95,13 +98,14 @@ impl Observation {
             next: FIRST_ID,
             document: 0,
             context: None,
+            enabled: false,
             installed: false,
             retained: false,
             clean_at: None,
             pending: None,
             last: Instant::now() - INTERVAL,
         };
-        observation.send(browser, 0, Step::Install, "Page.addScriptToEvaluateOnNewDocument", json!({ "source": INSTALL, "worldName": "ferrite-work-observation", "runImmediately": true }));
+        observation.send(browser, 0, Step::EnablePage, "Page.enable", json!({}));
         Some(observation)
     }
 
@@ -150,11 +154,12 @@ impl Observation {
         if navigation.document_generation != self.document {
             self.document = navigation.document_generation;
             self.context = None;
-            if !self
-                .pending
-                .as_ref()
-                .is_some_and(|pending| matches!(pending.step, Step::Install))
-            {
+            if !self.pending.as_ref().is_some_and(|pending| {
+                matches!(
+                    pending.step,
+                    Step::Install | Step::EnablePage | Step::EnableRuntime
+                )
+            }) {
                 self.pending = None;
             }
             self.clean_at = None;
@@ -187,7 +192,10 @@ impl Observation {
                 continue;
             }
             let pending = self.pending.take().unwrap();
-            if (!matches!(pending.step, Step::Install) && pending.document != self.document)
+            if (!matches!(
+                pending.step,
+                Step::Install | Step::EnablePage | Step::EnableRuntime
+            ) && pending.document != self.document)
                 || response.get("error").is_some()
             {
                 self.retained = true;
@@ -196,6 +204,19 @@ impl Observation {
             }
             let result = &response["result"];
             match pending.step {
+                Step::EnablePage => {
+                    self.send(
+                        browser,
+                        self.document,
+                        Step::EnableRuntime,
+                        "Runtime.enable",
+                        json!({}),
+                    );
+                }
+                Step::EnableRuntime => {
+                    self.enabled = true;
+                    self.last = Instant::now() - INTERVAL;
+                }
                 Step::Install => {
                     self.installed = true;
                     self.last = Instant::now() - INTERVAL;
@@ -215,6 +236,11 @@ impl Observation {
                 }
                 Step::World => {
                     self.context = result["executionContextId"].as_i64();
+                    if !self.installed && self.context.is_some() {
+                        // The context must exist before runImmediately can
+                        // execute the document-start script on an idle page.
+                        self.send(browser, self.document, Step::Install, "Page.addScriptToEvaluateOnNewDocument", json!({ "source": INSTALL, "worldName": "ferrite-work-observation", "runImmediately": true }));
+                    }
                     self.last = Instant::now() - INTERVAL;
                 }
                 Step::Inspect => {
@@ -267,7 +293,7 @@ impl Observation {
                 }
             }
         }
-        if !self.installed
+        if !self.enabled
             || self.retained
             || navigation.loading
             || navigation.document_generation == 0
@@ -278,6 +304,9 @@ impl Observation {
             return;
         }
         if let Some(context) = self.context {
+            if !self.installed {
+                return;
+            }
             self.send(
                 browser,
                 self.document,
