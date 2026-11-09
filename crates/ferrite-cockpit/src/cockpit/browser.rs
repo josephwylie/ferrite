@@ -955,7 +955,7 @@ impl CockpitView {
                                     && page.native.state().document_generation
                                         == running.native_generation
                                     && page.native.control_epoch() == running.epoch
-                                    && page.manual.borrow().revision == running.request.revision
+                                    && page.manual.borrow().revision <= running.request.revision
                                     && (running.request.control.observation()
                                         || !page.manual.borrow().active)
                             });
@@ -1013,7 +1013,7 @@ impl CockpitView {
             let valid = page.is_some_and(|page| {
                 page.document.get() == request.document
                     && page.pending_navigation.borrow().is_none()
-                    && page.manual.borrow().revision == request.revision
+                    && page.manual.borrow().revision <= request.revision
                     && (request.control.observation() || !page.manual.borrow().active)
             });
             if !valid {
