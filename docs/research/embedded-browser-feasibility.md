@@ -1,284 +1,133 @@
 # Embedded controller feasibility gate (#192)
 
-The engine decision in [ADR 0036](../adr/0036-shared-browser-with-conversation-tabs.md)
-remains conditional. Neither the retained Chrome benchmarks nor controller
-packaging alone proves control of Ferrite's visible embedded pages.
+**Accepted on Windows x64 and macOS arm64.** [Packaged validation run
+42551085327](https://github.com/josephwylie/ferrite/actions/runs/42551085327)
+passed both platforms at commit `ff5a2fa13cc88a056f5bc974de1c5dd90e73b519`.
+This supplies ADR0036's attachment/isolation feasibility evidence for continuing
+with CEF and native agent-browser. Conversation service, preview, annotations
+and sustained resource/performance acceptance continue in the dependent tickets.
 
-## Recovered evidence
+## Packaged results
 
-The accepted ADR, six `browser-controller-*` research/raw-result files,
-`scripts/bench/browser-controllers/` harness and three benchmark screenshots
-were recovered from the local `ferrite-wt-1` design worktree without modifying
-that worktree. The original harness launches Chrome, requires Node for its
-benchmark orchestration and contains machine-specific defaults. It is retained
-as historical reproducible research, not shipped as the application controller
-or counted as Ferrite/CEF validation. Its lockfile retains the measured versions.
+| Observed outcome | macOS arm64 | Windows x64 |
+|---|---:|---:|
+| Embedded external targets, fixed throughout comparison | 2 | 2 |
+| Concurrent agent workers | 2 | 2 |
+| Browser process count, single / concurrent agents | 6 / 6 | 6 / 6 |
+| Controller processes serving either phase | 1 | 1 |
+| OS process samples, single / concurrent phase | 45 / 92 | 5 / 10 |
+| Native snapshot-reference clicks with verified pixels | 9 | 9 |
+| Unauthorized controller upgrade refusals | 3 | 3 |
+| Page privileged fetch/navigation refusals | 12 | 12 |
+| Page attempts to open controller WebSockets refused | 2 | 2 |
+| Unsafe startup configurations rejected while sealed smoke passes | 6 | 6 |
 
-## Native distribution and trust boundary
+Both jobs discovered only the two registered external targets, switched and
+operated them through the persistent native daemon, captured matching native
+screenshots, and restarted/reconnected the controller to the same target IDs
+and live page state. Rust independently verified blue/green pixels from those
+exact live `View`s and an unchanged red sealed third view. Target selection and
+operation were serialized, including concurrently requested work.
 
-Ferrite builds the native Rust agent-browser **0.41.2** controller from upstream
-commit `d52a5e90c372ec4710c69adc3837ac14bbd852aa` plus
-[`agent-browser-0.41.2-ferrite.patch`](../../scripts/patches/agent-browser-0.41.2-ferrite.patch).
-The packager verifies the source commit and exact patch, builds with the upstream
-Cargo lockfile and records the patch and executable SHA-256 in
-`agent-browser-build.json`. The package includes upstream's Apache-2.0 license. macOS keeps provenance and
-licenses in `Contents/Resources/agent-browser`, with only the executable in
-`Contents/MacOS`; code signing treats metadata in the latter as unsigned nested
-code. `--metadata-directory` selects this layout for staging/offline verification.
-Official unmodified upstream executables must not substitute for this hardened
-native distribution.
+Process evidence comes from actual OS descendant trees (`ps` / `Win32_Process`),
+with executable names and PIDs retained before controller startup, throughout
+single/two-agent work and after reconnect. The two phases assert identical tab
+identities. Periodic sampling is not an exhaustive trace of arbitrarily brief
+OS processes.
 
-The patch is necessary: upstream's native daemon unconditionally starts a
-loopback streaming WebSocket server. Its origin check accepts missing Origin,
-`file://` and localhost origins, and its input handler dispatches mouse and key
-commands to CDP. The Windows command daemon also uses unauthenticated loopback
-TCP. An authenticated CDP proxy or private Unix command socket alone would
-leave these alternate input paths open.
+Raw results, compiler/source provenance and complete sampled trees are retained
+in [macOS evidence](embedded-browser-macos-ff5a2fa1.json) and
+[Windows evidence](embedded-browser-windows-ff5a2fa1.json). The linked run also
+retains the actual fixture PNGs as platform artifacts. Windows independently
+verified a real renderer OS token: `restricted=True, integrity=0`, compared
+with the browser process `restricted=False, integrity=12288`. macOS helpers
+enter CEF's seatbelt sandbox before loading the framework; sandbox initialization
+asserts success. Both platforms additionally exercised actual page attempts to
+reach private files, Ferrite schemes and the controller endpoint.
 
-Ferrite mode requires `FERRITE_AGENT_BROWSER=1` and a fresh random
-`FERRITE_AGENT_BROWSER_TOKEN`. Every newline-delimited JSON request must carry
-that capability in `ferriteToken`; it is checked before command dispatch, state
-locking and idle activity. The capability is removed before action dispatch.
-The unused stream listener is completely disabled, including its dynamic enable
-command. Implicit browser launch and explicit launches without a CDP target are
-rejected in Ferrite mode; unavailable attachment cannot open unrelated Chrome. Ferrite must launch one
-persistent service in a private session directory and keep the capability out
-of page content, provider tools, logs and transcripts. Only the authorized
-conversation service may issue controller requests. A named agent-browser
-session is not a conversation ownership boundary and must not create one daemon
-or browser per agent.
+## Native distribution and authorization
 
-Do not turn on CEF's global remote debugging port: that would expose sealed
-inline visuals as well as browser tabs. The controller must attach through a
-private, authenticated bridge exposing only the service-authorized live page
-targets. Browser ownership and document generation remain service decisions.
-
-The pinned-source build needs git, Rust and Python >=3.9 at **build time**. The
-packaged application invokes the executable directly; no Node/npm runtime,
-per-action launcher or autonomous model loop is involved. Platform code signing changes executable bytes after staging, so the recorded
-executable digest describes the pre-sign build; the application signature authenticates the delivered bundle.
-
-## Private CEF bridge scope and remaining gates
-
-The `Engine::open_browser` seam registers external HTTP(S) views in a shared
-website request context, distinct from sealed inline visuals. The on-demand
-controller uses an ephemeral IPv4-loopback WebSocket requiring a random
-256-bit bearer capability at the HTTP upgrade; requests carrying any Origin or
-query string are rejected. The global CEF debugging switches are removed.
-Synthetic discovery includes only these explicit external views. Flattened page
-sessions route through each exact browser's CEF DevTools message observer.
-Browser-wide target creation, application shutdown and unrelated CDP domains
-are denied. The authorized local conversation service, still to be implemented
-under #193, must enforce conversation ownership and serialize target selection
-with its operation; the endpoint itself is not a conversation boundary.
-
-The protocol allowlist includes the DOM, Accessibility, Runtime, Page and Input
-commands used by native 0.41.2 snapshots and element-reference clicks, plus
-page-scoped diagnostics. The real fixture now snapshots the Paint button and
-clicks its returned element reference. It does not infer observation support
-from successful JavaScript evaluation alone. Transport queues and command
-counts are bounded; lost/oversized observations disconnect the controller,
-and commands still pending after 25 seconds return an explicit
-`completion: uncertain`, `retryable: false` error. A timeout or disconnection
-after dispatch never establishes that an action failed to occur.
-
-Cross-origin out-of-process iframe targets are **not implemented** in this
-initial bridge: `Target.setAutoAttach` is denied rather than exposing arbitrary
-CEF targets. Native 0.41.2 treats that optional enable failure as nonfatal, so
-simple top-level workflows remain testable, but successful top-level fixture
-runs cannot establish iframe workflow support. Before dependent delivery,
-review and implement scoped child-target routing and verify a real cross-origin
-iframe fixture through the same Engine/View boundary; do not weaken site
-isolation or silently claim full interactive-web coverage. The feasibility
-viewport is currently fixed at 600 logical pixels high; the later browser
-service must supply full viewport sizing and document-generation policy.
-
-The local CEF-enabled `cargo check` passed on macOS. Local packaged runtime
-validation was stopped for disk pressure before a complete new bundle existed;
-only CI packaged runs may establish the outstanding Windows/macOS runtime
-acceptance. No performance claim follows from compilation or native debug
-transport results.
-
-## Windows sandbox layout
-
-CEF's matching `bootstrap.exe` is packaged as `ferrite.exe` and loads
-`ferrite.dll`. Its broker context reaches all three CEF execute/initialize calls;
-a naked Cargo executable fails closed before initializing CEF. Signing must
-cover the executable, application DLL and `chrome_elf.dll` with one identity.
-The stage test checks file layout; it does not prove effective renderer token
-restrictions. Packaged runtime isolation, including external-page attempts to
-reach application operations, filesystem tools and sealed visuals, remains
-required on both platforms.
-
-## Local native validation (2026-11-09)
-
-On macOS 27.2/arm64, the retained patch's five Ferrite-specific Rust tests and
-all nineteen upstream native-daemon tests passed. The final native debug
-executable passed `probe-agent-browser-transport.py`: fail-closed startup,
-missing/wrong credentials on observation/close/internal shutdown, two authorized
-requests over separate connections to the same daemon, disabled stream startup
-and reactivation, and explicit no-CDP launch rejection. These are real native
-transport results, not CEF or Windows evidence. The native executable and provenance are retained separately from disposable
-compilation caches. Local release compilation was stopped when the operator
-reported low disk space; packaged release validation continues on CI.
-The patch SHA-256 is
-`034e4532e404a1c5e78102b219001c8a473f659a8111a089d1cdbda753c3f2ad`.
-
-The combined packaged smoke driver `probe-embedded-browser.py` additionally
-requires the private bridge supplied by the Engine fixture. It uses native
-clicks in two concurrently requested, serialized tabs, independently decodes
-controller screenshots and restarts the controller before rediscovering the
-same targets and page state. The Rust host separately verifies the actual live
-View pixels and that its sealed third page was not changed. After capturing those screenshots, each external page attempts both fetch and
-full-page navigation to an existing private filesystem sentinel, the sealed
-visual scheme and Ferrite's application scheme; all must be refused while its
-original HTTP location and painted state remain intact. Page JavaScript also
-attempts the private controller WebSocket and must receive a connection error.
-The workflow
-retains fixture screenshots and the native result manifest. Adding this driver
-does not claim that the packaged cross-platform run has passed.
-
-## Packaged native CI validation
-
-[Run 42540596906](https://github.com/josephwylie/ferrite/actions/runs/42540596906)
-passed on hosted Windows x64, macOS arm64 and macOS Intel. Every job built the
-pinned patched source in release mode, invoked the executable directly, passed
-the isolated persistent transport probe and reverified the packaged executable's
-SHA-256/provenance offline. [Retained raw manifests](browser-native-validation.json)
-include each executable digest, Rust compiler version and transport result.
-No browser was attached in these native-only jobs; this evidence does not close
-the separate packaged CEF attachment or effective-isolation gates.
-
-## Additional control-surface audit
-
-A subsequent audit found `inspect` can start a second unauthenticated CDP proxy
-and open the OS browser. The retained patch now rejects both `inspect` and
-`stream_enable` before action dispatch or browser diagnostics, and guards their
-direct handlers. The additional focused regression checks that rejection
-occurs without side effects even before a browser is attached. The public
-transport probe now also requires an explicit inspect-denied error.
-
-The current patch SHA-256 is
+Ferrite builds native Rust agent-browser **0.41.2**, upstream commit
+`d52a5e90c372ec4710c69adc3837ac14bbd852aa`, plus the retained
+[hardening patch](../../scripts/patches/agent-browser-0.41.2-ferrite.patch), SHA256
 `c9a6df0b0cf5f806cfd7eccedfe0f59b781ec02784abe042d36d427b40cc553c`.
-The original local and CI evidence above applies to the previous `034e4532`
-patch. The subsequent c9a validation below covers the inspector regression. Native CI uses the packager's
-`--test` option to execute all six focused Rust security regressions on every
-platform before packaging. Local Rust builds remain stopped for disk space.
+The packager verifies the source commit and exact patch, builds with the
+upstream lockfile, and records source/patch/compiler/platform/executable hashes
+in `agent-browser-build.json`. Apache-2.0 licensing is packaged alongside it.
 
-No other native action creates a listener or opens an external browser:
-recording uses existing CDP screencast and ffmpeg pipes; tracing/profiling use
-existing CDP IO streams. Standalone dashboard startup is outside daemon mode;
-the service's allowlisted environment selects daemon mode exclusively. Browser
-launch/provider/Safari/Appium paths remain behind the explicit-CDP requirement.
+[Native validation run 42551085354](https://github.com/josephwylie/ferrite/actions/runs/42551085354)
+passed Windows x64, macOS arm64 and macOS Intel: six focused Rust security
+regressions, six public packager CLI tests, direct native invocation, persistent
+service authorization/reconnect and offline artifact verification. Earlier
+[raw native manifests](browser-native-validation-c9a6df0b.json) retain the same
+hardening patch's independent all-platform validation. No Node/npm runtime,
+per-action launcher or autonomous model loop is used.
 
-## Final native hardening validation
+The upstream daemon unconditionally exposes a stream WebSocket server and uses
+unauthenticated loopback TCP for Windows commands. Ferrite mode instead requires
+`FERRITE_AGENT_BROWSER=1` and a fresh `FERRITE_AGENT_BROWSER_TOKEN`; every JSON
+request carries `ferriteToken`, checked before dispatch and stripped before
+execution. Streaming and the inspector's alternate CDP/browser-opener path are
+disabled. Implicit browser launch/recovery is rejected; explicit attachment is
+required. The service uses a private temporary namespace and one persistent
+daemon, never a default named session/browser per agent.
 
-[Run 42542183864](https://github.com/josephwylie/ferrite/actions/runs/42542183864)
-passed on Windows x64, macOS arm64 and macOS Intel for patch `c9a6df0b`.
-Each job passed all **six focused Rust security regressions**, built the native
-release executable, rejected inspector/stream activation and missing/wrong
-capabilities through the real persistent transport, and verified its packaged
-hash offline. [Raw build and transport results](browser-native-validation-c9a6df0b.json)
-retain compiler versions, executable hashes and completed job IDs. These results
-prove the current native hardening on all supported platforms; the packaged
-CEF bridge, OS isolation and unsafe-startup negative smokes remain separate.
+CEF's global debugging endpoint remains disabled: startup strips its debugging
+port/address/pipe switches. The private authenticated WebSocket exposes only
+registered external targets; sealed visuals cannot be discovered or attached.
+Missing/wrong capabilities and page Origin headers receive HTTP403 or a closed
+connection. The authorized native connection must subsequently complete the
+entire fixture, so a dead endpoint cannot pass as successful authorization.
 
-## Unsafe Chromium startup overrides
+## Platform isolation and packaging
 
-External browsing and its controller are unavailable when startup switches
-include `no-sandbox` or `single-process`, with or without `=value`. Chromium's
-switch presence semantics apply even to `=0` or `=false`; Windows also accepts
-case-insensitive slash prefixes. Matching honors Chromium's `--` argument
-terminator and platform switch prefixes. The existing environment escape hatch
-still allows sealed visuals, with general browsing unavailable.
+Windows packages matching CEF `bootstrap.exe` as `ferrite.exe`, loading
+`ferrite.dll` and propagating the broker context through all CEF entry points.
+A naked Cargo executable fails closed. The executable, client DLL and
+`chrome_elf.dll` require matching signatures (or all unsigned for development).
+PowerShell smoke checks explicitly wait for the GUI process and use its actual
+exit code. The Windows terminal's Unix-only teardown code was gated so the
+packaged application can compile with its native ConPTY backend.
 
-Packaged negative smoke cases use `FERRITE_BROWSER_UNSAFE_SMOKE=1` with plain,
-valued and platform-prefixed no-sandbox switches. They require external-view
-creation and controller access to reject the unsafe configuration, then run the
-ordinary sealed-visual pixel/input/idle checks. The intentionally unsandboxed
-negative runs do not claim renderer sandbox proof; the normal packaged smoke
-still requires the OS sandbox checks. These additions require CI validation.
+One normalized Chromium switch parser drives both sandbox configuration and
+external capability checks, including short prefixes, Windows slash/case,
+values and the `--` terminator. Sandbox, web-security, site-isolation and feature
+overrides make external browsing/controller access unavailable. Negative runs
+then exercise the full sealed-visual pixel/input checks; intentionally unsafe
+negative runs do not claim renderer sandbox proof. Normal Windows validation
+always requires the actual OS-token check.
 
-## Review verification updates
+macOS places only executable code in `Contents/MacOS`; controller provenance
+and licenses live in `Contents/Resources/agent-browser`. Code signing changes
+executable bytes, so the retained executable digest describes the **pre-sign
+source build**; the app signature authenticates delivered bundle bytes. No
+runtime consumer compares that pre-sign digest with the signed executable.
 
-One normalized Chromium switch parser now feeds both CEF sandbox settings and
-the external capability gate. Short prefixes, Windows slash/case variants and
-valued switches cannot bypass the web-security, site-isolation or feature
-override checks. Packaged negative smokes cover those families as well as the
-sandbox override while retaining sealed rendering/input tests.
+CI builds native once. `--from-stage` checks source, patch, platform,
+architecture and executable hash before any destination writes, then copies the
+original provenance/license without invoking git or Rust. Public tests verify
+this with build tools unavailable. This removed measured duplicate native LTO
+of 4–5 minutes during staging. Compiler caching mirrors primary CI because
+rust-cache alone excludes the vendored GPUI path dependencies.
 
-The Python tests exercise the **shipping packager** through its public offline
-CLI: tampered executable bytes, wrong source provenance, missing offline data,
-and the separate macOS resource metadata directory. The unused official-release
-verifier was removed.
-
-Process-count evidence comes from actual OS descendant trees (`ps` on macOS,
-`Win32_Process` on Windows), including executable names and PIDs. The fixture
-retains samples before controller startup, throughout single-agent work and
-throughout two concurrent workers, then after controller reconnect. Each active
-phase takes at least three samples while native page work continues. Both
-phases assert the same two target IDs; adding tabs cannot explain a process
-count difference. The recorded controller/browser counts are computed from
-these samples and the concurrent-agent phase must not increase browser process
-count over the single-agent baseline. Periodic sampling is not an exhaustive
-trace of arbitrarily short-lived OS processes. These updated fixture checks
-remain pending packaged CI execution.
-
-## Runtime harness and staging corrections
-
-Run 42546328290 exposed two harness failures: a Python local named `concurrent`
-shadowed its imported executor module, and PowerShell read a stale exit code
-before the Windows GUI bootstrap exited. The driver now imports the executor
-directly and uses distinct sample-list names; every Windows GUI smoke explicitly
-waits for its own process and inspects that process's exit code. A rejected
-upgrade may close/reset the socket on Windows before HTTP403 is read. Such a
-close is recorded as denial; the subsequent authorized native attachment must
-still complete the full live-page fixture.
-
-The same run measured redundant native compilation during staging: Windows
-built the release controller in 7m07 and recompiled it for 5m04 during staging;
-macOS built in 7m05 and recompiled for 4m04 during staging. The packager now has
-`--from-stage` to verify source commit, hardening patch, platform, architecture
-and executable hash before copying the unsigned build with its original
-provenance/license. CI builds once and stages that verified output. Public CLI
-tests prove staging with git/Rust unavailable and rejection before destination
-writes for incorrect source/patch/platform/architecture/hash. macOS retains the
-metadata under Resources and signs only after staging; the source-build digest
-is preserved.
-
-The independent workflows also mirror primary CI's sccache/debug-symbol setup.
-The primary workflow documents that rust-cache alone excludes the vendored GPUI
-path dependencies; compiler caching avoids repeatedly compiling that stack.
-Debug symbols are disabled for gate checks without changing debug assertions or
-the app's selected build profile. These corrections still require packaged CI.
-
-## Reproduction and acceptance status
+## Reproduction
 
 ```
-python3 scripts/package-agent-browser.py --destination target/browser-controller
+python3 scripts/package-agent-browser.py --destination target/browser-controller --test
 python3 scripts/package-agent-browser.py --destination target/browser-controller --offline
 python3 scripts/probe-agent-browser-transport.py target/browser-controller/agent-browser
 ```
 
-On Windows, use `python` and `agent-browser.exe`. The probe creates isolated
-state, never attaches to or starts a browser, rejects missing/wrong credentials,
-checks reconnect to one persistent native service and verifies the stream
-listener is disabled. It cannot prove embedded-page attachment, page pixels,
-concurrent target routing, browser process counts, renderer isolation or browser
-resource performance. The independent Native browser controller and Packaged
-browser feasibility workflows run without depending on core tests. GitHub has
-hosted Windows runners; the repository reported zero self-hosted runners during
-investigation. A macOS host is not a reason to waive Windows acceptance.
+Windows uses `python` and `agent-browser.exe`. Packaged cross-platform execution
+is automated by `.github/workflows/browser-feasibility.yml`. It uses isolated
+profiles and fixture pages. Native-only checks do not attach or start a browser.
+The packaged fixture controls the real embedded engine and verifies live pixels.
 
-Do not mark #192 complete until packaged Windows and macOS evidence demonstrates
-exact target discovery/attachment, concurrent routing/reconnect, same live page
-screenshots/actions, effective isolation and process-count behavior. A failing
-gate keeps external browsing unavailable; it requires an explicit engine/design
-review rather than substituting an external browser.
+## Recovered design evidence
 
-Primary source references (all pinned to 0.41.2):
-
-- [Native daemon transport](https://github.com/vercel-labs/agent-browser/blob/v0.41.2/cli/src/native/daemon.rs)
-- [Stream listener and origin rules](https://github.com/vercel-labs/agent-browser/blob/v0.41.2/cli/src/native/stream/mod.rs)
-- [WebSocket input dispatch](https://github.com/vercel-labs/agent-browser/blob/v0.41.2/cli/src/native/stream/websocket.rs)
-- [Authenticated CDP discovery headers](https://github.com/vercel-labs/agent-browser/blob/v0.41.2/cli/src/native/cdp/discovery.rs)
+[ADR0036](../adr/0036-shared-browser-with-conversation-tabs.md), the six
+`browser-controller-*` research/raw-result files, the
+`scripts/bench/browser-controllers/` harness and three original screenshots were
+recovered from the local design worktree without modifying it. That historical
+harness uses Chrome and Node for benchmark orchestration; its measurements are
+not Ferrite/CEF performance guarantees. ADR0013's sealed trust boundary remains.
