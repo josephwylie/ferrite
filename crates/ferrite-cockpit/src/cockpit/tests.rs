@@ -378,20 +378,6 @@ fn cockpit(name: &str, panes: usize) -> (Cockpit, Fake) {
     (cockpit, fake)
 }
 
-/// The Activity view's rows, as `activity` builds them: `Priority`'s,
-/// then those of every day.
-fn activity(
-    view: &Entity<CockpitView>,
-    cx: &mut gpui::VisualTestContext,
-) -> (Vec<ThreadId>, Vec<ThreadId>) {
-    view.read_with(cx, |view, _| {
-        let activity = view.activity(&view.nav_state());
-        let ids = |rows: &[nav::ActivityRow]| rows.iter().map(|entry| entry.row.thread).collect();
-        let days = activity.days.iter().flat_map(|(_, rows)| ids(rows)).collect();
-        (ids(&activity.priority), days)
-    })
-}
-
 // Match main: Root mounts the toolkit selection layer, menus and dialogs.
 // The window opens focused, as a launched one does; what is on screen
 // is seen from its first frame.

@@ -2215,6 +2215,17 @@ impl Cockpit {
         self.parked.prompt_title(thread).unwrap_or_else(numbered)
     }
 
+    pub fn snooze_thread(
+        &mut self,
+        thread: ThreadId,
+        until: Option<std::time::SystemTime>,
+    ) -> io::Result<()> {
+        self.act(
+            |engine| engine.snooze_thread(thread, until),
+            |server| run(server, Op::Snooze { thread, until }),
+        )
+    }
+
     pub fn rename_thread(&mut self, thread: ThreadId, title: &str) -> io::Result<()> {
         self.act(
             |engine| engine.rename_thread(thread, title),

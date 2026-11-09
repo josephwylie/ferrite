@@ -16,7 +16,11 @@ fn closing_a_pane_parks_the_thread_rather_than_losing_it(cx: &mut TestAppContext
 
     cx.simulate_keystrokes("cmd-w");
 
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
+        assert!(!view
+            .needs_you_rows(cx)
+            .iter()
+            .any(|row| row.thread == closed));
         assert_eq!(view.panes.len(), 1, "the Pane is gone");
         assert!(
             view.cockpit.thread(closed).is_none(),
@@ -48,7 +52,11 @@ fn reopening_brings_a_parked_thread_back_with_its_history(cx: &mut TestAppContex
 
     cx.simulate_keystrokes("cmd-o");
 
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
+        assert!(view
+            .needs_you_rows(cx)
+            .iter()
+            .any(|row| row.thread == closed));
         assert_eq!(view.panes.len(), 2, "the Pane is back");
         assert!(
             view.panes.iter().any(|pane| pane.thread() == Some(closed)),
