@@ -540,14 +540,9 @@ impl Server {
                 owner,
                 page,
             } => {
-                if owner.window == id && self.browser_window(id, thread).is_ok() {
-                    if self.browser.update(thread, owner, page).is_ok() {
-                        if let Err(error) = self.save_browser() {
-                            crate::log!("browser metadata could not be saved: {error:?}");
-                        }
-                        self.publish_browser(thread, None);
-                    }
-                }
+                // Kept for older window peers; new windows synchronously ACK
+                // the document generation through Op::BrowserPage.
+                let _ = self.browser_page(id, thread, owner, page);
             }
             ClientMessage::Rendered {
                 request,
@@ -600,12 +595,74 @@ impl Server {
 
     fn command(&mut self, id: ClientId, Command { id: request, op }: Command) {
         let executed = match &op {
-            Op::BrowserInput { thread, owner } => {
+            Op::BrowserProtect {
+                thread,
+                owner,
+                document,
+                protection,
+            } => self.browser_owned(id, *thread, *owner).and_then(|_| {
+                let lease = self
+                    .browser
+                    .protect(*thread, *owner, *document, *protection)
+                    .map_err(failed)?;
+                self.publish_browser(*thread, None);
+                Ok(Some(Done::BrowserProtection { lease }))
+            }),
+            Op::BrowserRelease {
+                thread,
+                owner,
+                lease,
+            } => self.browser_owned(id, *thread, *owner).and_then(|_| {
+                self.browser
+                    .release(*thread, *owner, *lease)
+                    .map_err(failed)?;
+                self.publish_browser(*thread, None);
+                Ok(None)
+            }),
+            Op::BrowserReclaim {
+                thread,
+                owner,
+                document,
+            } => self.browser_owned(id, *thread, *owner).and_then(|_| {
+                let lease = self
+                    .browser
+                    .begin_reclaim(*thread, *owner, *document)
+                    .map_err(failed)?;
+                Ok(Some(Done::BrowserReclaim { lease }))
+            }),
+            Op::BrowserReclaimed {
+                thread,
+                owner,
+                lease,
+                released,
+            } => self.browser_owned(id, *thread, *owner).and_then(|_| {
+                let state = self
+                    .browser
+                    .finish_reclaim(*thread, *owner, *lease, *released)
+                    .map_err(failed)?;
+                self.publish_browser(*thread, None);
+                Ok(Some(Done::Browser { state }))
+            }),
+            Op::BrowserPage {
+                thread,
+                owner,
+                page,
+            } => self.browser_page(id, *thread, *owner, page.clone()),
+            Op::BrowserInput {
+                thread,
+                owner,
+                document,
+            } => {
                 if owner.window != id {
                     Err(failed("This browser belongs to another window"))
                 } else {
                     self.browser_window(id, *thread)
-                        .and_then(|_| self.browser.operator_input(*thread, *owner).map_err(failed))
+                        .and_then(|_| {
+                            self.browser
+                                .check_document(*thread, *document)
+                                .and_then(|_| self.browser.operator_input(*thread, *owner))
+                                .map_err(failed)
+                        })
                         .map(|revision| Some(Done::BrowserInput { revision }))
                 }
             }

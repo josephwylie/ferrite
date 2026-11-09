@@ -29,6 +29,19 @@ impl Server {
             .ok_or_else(|| failed("Conversation browser unavailable: open this Thread in a browser-capable Ferrite window"))
     }
 
+    pub(super) fn browser_owned(
+        &self,
+        id: ClientId,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+    ) -> Result<(), WireError> {
+        if owner.window != id {
+            return Err(failed("This browser belongs to another window"));
+        }
+        self.browser_window(id, thread)?;
+        self.browser.check_owner(thread, owner).map_err(failed)
+    }
+
     pub(super) fn attach_browser(
         &mut self,
         id: ClientId,
@@ -62,6 +75,30 @@ impl Server {
         Ok(Some(Done::Browser { state }))
     }
 
+    pub(super) fn browser_page(
+        &mut self,
+        id: ClientId,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        page: crate::browser::PageState,
+    ) -> Result<Option<Done>, WireError> {
+        if owner.window != id {
+            return Err(failed("This browser belongs to another window"));
+        }
+        self.browser_window(id, thread)?;
+        self.browser.update(thread, owner, page).map_err(failed)?;
+        // The page already changed in the real engine: acknowledge its new
+        // identity even if the drive failed, retaining the live operator work.
+        if let Err(error) = self.save_browser() {
+            crate::log!("browser metadata could not be saved: {:?}", error);
+            self.browser.persistence_error(thread, &error.message);
+        }
+        self.publish_browser(thread, None);
+        Ok(Some(Done::Browser {
+            state: self.browser.state(thread),
+        }))
+    }
+
     pub(super) fn save_browser(&self) -> Result<(), WireError> {
         self.engine
             .browser_store()
@@ -83,6 +120,7 @@ impl Server {
                 receiver,
                 ServerMessage::Browser {
                     thread,
+                    owned: owner.is_some_and(|owner| owner.window == receiver),
                     owner,
                     state: state.clone(),
                     action: action
@@ -209,6 +247,7 @@ impl Server {
                                     reply: request.reply,
                                 },
                             );
+                            self.publish_browser(thread, None);
                             self.send(
                                 owner.window,
                                 ServerMessage::BrowserRequest {
@@ -289,6 +328,7 @@ impl Server {
             self.browser_uncertain.remove(&thread);
             let _ = self.browser.release(thread, owner, pending.lease);
         }
+        self.publish_browser(thread, None);
         let _ = pending.reply.send(result);
     }
 
