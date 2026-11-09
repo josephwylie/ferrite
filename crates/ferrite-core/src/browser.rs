@@ -3,6 +3,7 @@
 //! Only URL/order/selection survive restart. Capabilities and live state do not.
 
 mod control;
+pub mod tools;
 pub(crate) use control::{channel, Requests};
 pub use control::{
     Client, Control, Observation, Operation, Outcome, Response, ThreadClient, WaitState,
