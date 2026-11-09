@@ -98,6 +98,15 @@ impl Observation {
         Some(observation)
     }
 
+    pub(super) fn invalidate(&mut self, state: &ViewState) {
+        // A protected command may have written after any in-flight inspection.
+        // Its old result can never make the post-command document clean.
+        self.pending = None;
+        self.clean_at = None;
+        self.last = Instant::now() - INTERVAL;
+        Self::unknown(state);
+    }
+
     pub(super) fn release_ready(&self) -> bool {
         self.pending.is_none() && self.clean_at.is_some_and(|time| time.elapsed() < INTERVAL)
     }

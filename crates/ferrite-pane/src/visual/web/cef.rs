@@ -1181,7 +1181,11 @@ impl BrowserView for CefView {
         Ok(())
     }
     fn set_protected(&self, protected: bool) {
-        self.0.protected.set(protected);
+        if self.0.protected.replace(protected) && !protected {
+            if let Some(observation) = self.0.observation.borrow_mut().as_mut() {
+                observation.invalidate(&self.0.state);
+            }
+        }
     }
     fn try_release(&self) -> Result<bool, String> {
         let view = &self.0;
