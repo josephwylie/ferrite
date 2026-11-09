@@ -151,6 +151,8 @@ pub fn launch() {
     let settings_dir = settings_dir();
     ferrite_core::diagnostics::open(&settings_dir);
     let args: Vec<String> = std::env::args().collect();
+    let browser_smoke = cfg!(feature = "browser-smoke")
+        && args.iter().any(|arg| arg == "--browser-window-smoke");
     let load = args.iter().any(|arg| arg == "--load");
     let demo = load || args.iter().any(|arg| arg == "--demo");
     // One Ferrite updates itself: the first window, which holds the update
@@ -382,8 +384,8 @@ pub fn launch() {
                                     settings: settings.clone(),
                                     dir: settings_dir.clone(),
                                     defaults: defaults.clone(),
-                                    titler: true,
-                                    cli_updates: true,
+                                    titler: !browser_smoke,
+                                    cli_updates: !browser_smoke,
                                     ferrite_updates,
                                     whats_new: whats_new.clone(),
                                     unreadable: unreadable.clone(),
