@@ -102,6 +102,25 @@ jobs:
       - name: macOS packaged browser smoke
         if: runner.os == 'macOS'
         run: target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite --visual-smoke
+      - name: Windows durable profile and competing process smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          FERRITE_BROWSER_PROFILE: ${{ runner.temp }}/ferrite-browser-profile
+        run: |
+          foreach ($stage in @('write', 'read')) {
+            $env:FERRITE_BROWSER_PROFILE_SMOKE = $stage
+            $smoke = Start-Process -FilePath (Resolve-Path target/debug/bundle/windows/Ferrite/ferrite.exe) -ArgumentList @('--visual-smoke') -NoNewWindow -Wait -PassThru
+            if ($smoke.ExitCode -ne 0) { throw "Profile $stage smoke failed ($($smoke.ExitCode))" }
+          }
+      - name: macOS durable profile and competing process smoke
+        if: runner.os == 'macOS'
+        env:
+          FERRITE_BROWSER_PROFILE: ${{ runner.temp }}/ferrite-browser-profile
+        run: |
+          for stage in write read; do
+            FERRITE_BROWSER_PROFILE_SMOKE="$stage" target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite --visual-smoke
+          done
       - name: Windows unsafe startup smoke
         if: runner.os == 'Windows'
         shell: pwsh
