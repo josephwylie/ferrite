@@ -2,6 +2,10 @@
 //! engine pages; neither providers nor previews own an independent browser.
 //! Only URL/order/selection survive restart. Capabilities and live state do not.
 
+mod control;
+pub(crate) use control::{channel, Requests};
+pub use control::{Client, Control, Operation, Outcome, Response, ThreadClient};
+
 use crate::ThreadId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -147,23 +151,32 @@ impl Service {
         Ok(owner)
     }
 
-    pub fn detach_window(&mut self, window: u64) -> Vec<ThreadId> {
-        let mut detached = Vec::new();
-        for (thread, state) in &mut self.threads {
-            if state.owner.is_some_and(|owner| owner.window == window) {
-                state.owner = None;
-                for tab in &mut state.tabs {
-                    tab.live = false;
-                    tab.loading = false;
-                    tab.generation += 1;
-                    tab.dirty = Dirty::Unknown;
-                }
-                detached.push(*thread);
-            }
+    pub fn detach(&mut self, thread: ThreadId, window: u64) -> bool {
+        let Some(state) = self
+            .threads
+            .get_mut(&thread)
+            .filter(|state| state.owner.is_some_and(|owner| owner.window == window))
+        else {
+            return false;
+        };
+        state.owner = None;
+        for tab in &mut state.tabs {
+            tab.live = false;
+            tab.loading = false;
+            tab.generation += 1;
+            tab.dirty = Dirty::Unknown;
         }
-        self.protections
-            .retain(|_, (_, owner, _, _)| owner.window != window);
-        detached
+        self.protections.retain(|_, (id, _, _, _)| *id != thread);
+        self.manual.remove(&thread);
+        true
+    }
+
+    pub fn detach_window(&mut self, window: u64) -> Vec<ThreadId> {
+        let threads: Vec<_> = self.threads.keys().copied().collect();
+        threads
+            .into_iter()
+            .filter(|thread| self.detach(*thread, window))
+            .collect()
     }
 
     pub fn check_owner(&self, thread: ThreadId, owner: Owner) -> Result<()> {

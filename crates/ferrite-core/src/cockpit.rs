@@ -279,6 +279,27 @@ impl Cockpit {
         }
     }
 
+    pub fn browser_reply(
+        &mut self,
+        request: u64,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        revision: u64,
+        outcome: crate::browser::Outcome,
+    ) {
+        if let Ok(remote) = self.remote() {
+            remote.say(&crate::protocol::ClientMessage::BrowserReply {
+                request,
+                thread,
+                owner,
+                document,
+                revision,
+                outcome,
+            });
+        }
+    }
+
     pub fn browser_input(
         &mut self,
         thread: ThreadId,
@@ -669,7 +690,10 @@ impl Cockpit {
     }
 
     fn message(&mut self, message: ServerMessage, boot: Instant) {
-        if matches!(message, ServerMessage::Browser { .. }) {
+        if matches!(
+            message,
+            ServerMessage::Browser { .. } | ServerMessage::BrowserRequest { .. }
+        ) {
             self.browser_messages.push(message);
             return;
         }

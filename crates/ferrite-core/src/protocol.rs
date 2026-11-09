@@ -62,6 +62,14 @@ pub enum ClientMessage {
         thread: ThreadId,
     },
     Command(Command),
+    BrowserReply {
+        request: u64,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        revision: u64,
+        outcome: crate::browser::Outcome,
+    },
     BrowserPage {
         thread: ThreadId,
         owner: crate::browser::Owner,
@@ -755,6 +763,14 @@ pub enum NoticeAction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
+    BrowserRequest {
+        request: u64,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        revision: u64,
+        control: crate::browser::Control,
+    },
     Browser {
         thread: ThreadId,
         owner: Option<crate::browser::Owner>,

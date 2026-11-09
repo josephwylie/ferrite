@@ -162,8 +162,10 @@ pub fn run(options: Options) -> i32 {
     });
     let defaults = Arc::new(Mutex::new(SessionDefaults::from_settings(&settings)));
     let (renderer, renders) = render::remote();
+    let (browser_client, browser_requests) = crate::browser::channel();
     let shipped = projects::find();
     let spawner = Spawn {
+        browser: Some(browser_client),
         api: api.is_some().then_some(api_address),
         projects: shipped.as_ref().map(projects::Shipped::program),
         ..Spawn::new(defaults.clone(), Some(Arc::new(renderer)))
@@ -192,6 +194,7 @@ pub fn run(options: Options) -> i32 {
         executable: std::env::current_exe().unwrap_or_default(),
     };
     let mut server = Server::new(engine, info, renders, defaults, options.settings_dir);
+    server.browser_requests = browser_requests;
     server.apply_settings(&settings);
     revive_launch(&mut server.engine, reopen);
     crate::log!(
@@ -324,6 +327,10 @@ struct Server {
     answered: BTreeMap<(ThreadId, WireHandle), ClientId>,
     renders: render::Renders,
     browser: crate::browser::Service,
+    browser_requests: crate::browser::Requests,
+    browser_pending: BTreeMap<u64, browser::Pending>,
+    browser_next: u64,
+    browser_uncertain: BTreeMap<ThreadId, crate::browser::Lease>,
     searches: Vec<Search>,
     reads: Vec<Read>,
     /// First sends still starting, by the tag the Engine knows them by:
@@ -369,6 +376,10 @@ impl Server {
             answered: BTreeMap::new(),
             renders,
             browser,
+            browser_requests: Default::default(),
+            browser_pending: BTreeMap::new(),
+            browser_next: 0,
+            browser_uncertain: BTreeMap::new(),
             searches: Vec::new(),
             reads: Vec::new(),
             starting: HashMap::new(),
@@ -416,6 +427,7 @@ impl Server {
             self.answer_searches();
             self.answer_reads();
             self.forward_renders();
+            self.forward_browser_requests();
             self.broadcast();
             let events = self.api.pump(&self.engine);
             let removed = self.engine.take_removed_worktrees();
@@ -462,9 +474,7 @@ impl Server {
                 self.clients.remove(&id);
                 self.engine.window_gone(id);
                 self.renders.client_gone(id);
-                for thread in self.browser.detach_window(id) {
-                    self.publish_browser(thread, None);
-                }
+                self.browser_owner_gone(id, None);
             }
             Heard::Message(id, message) => self.message(id, message),
             Heard::Api(heard) => self.api_heard(heard),
@@ -512,8 +522,19 @@ impl Server {
             ClientMessage::Watch { thread, resume } => self.watch(id, thread, resume),
             ClientMessage::Unwatch { thread } => {
                 client.watching.remove(&thread);
+                self.browser_owner_gone(id, Some(thread));
             }
             ClientMessage::Command(command) => self.command(id, command),
+            ClientMessage::BrowserReply {
+                request,
+                thread,
+                owner,
+                document,
+                revision,
+                outcome,
+            } => {
+                self.answer_browser(id, request, thread, owner, document, revision, outcome);
+            }
             ClientMessage::BrowserPage {
                 thread,
                 owner,
