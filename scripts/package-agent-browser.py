@@ -36,6 +36,7 @@ def run(*args, **kwargs):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", required=True, type=Path)
+    parser.add_argument("--metadata-directory", type=Path, help="stage provenance/licenses outside the executable directory (macOS bundle Resources)")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--test", action="store_true", help="run the native Ferrite security regressions before packaging")
     mode.add_argument("--offline", action="store_true", help="verify the staged build without downloading or rebuilding")
@@ -45,7 +46,8 @@ def main():
     expected = {"version": VERSION, "source_commit": SOURCE_COMMIT,
                 "patch_sha256": patch_digest, "platform": platform.system(), "arch": platform.machine()}
     artifact = args.destination / name
-    provenance = args.destination / "agent-browser-build.json"
+    metadata = args.metadata_directory or args.destination
+    provenance = metadata / "agent-browser-build.json"
     if args.offline:
         try:
             existing = json.loads(provenance.read_text())
@@ -81,7 +83,8 @@ def main():
     built = build_target / "release" / name
     args.destination.mkdir(parents=True, exist_ok=True)
     shutil.copy2(built, artifact)
-    licenses = args.destination / "agent-browser-licenses"
+    metadata.mkdir(parents=True, exist_ok=True)
+    licenses = metadata / "agent-browser-licenses"
     licenses.mkdir(exist_ok=True)
     shutil.copy2(source / "LICENSE", licenses / "LICENSE")
     expected["ferrite_security_tests"] = "passed" if args.test else "not run by this invocation"

@@ -21,7 +21,10 @@ commit `d52a5e90c372ec4710c69adc3837ac14bbd852aa` plus
 [`agent-browser-0.41.2-ferrite.patch`](../../scripts/patches/agent-browser-0.41.2-ferrite.patch).
 The packager verifies the source commit and exact patch, builds with the upstream
 Cargo lockfile and records the patch and executable SHA-256 in
-`agent-browser-build.json`. The package includes upstream's Apache-2.0 license.
+`agent-browser-build.json`. The package includes upstream's Apache-2.0 license. macOS keeps provenance and
+licenses in `Contents/Resources/agent-browser`, with only the executable in
+`Contents/MacOS`; code signing treats metadata in the latter as unsigned nested
+code. `--metadata-directory` selects this layout for staging/offline verification.
 The original official native release digest verifier is retained separately as
 `verify-agent-browser-release.py`; **those unmodified executables must not be
 used by the Conversation browser**.
@@ -169,6 +172,22 @@ recording uses existing CDP screencast and ffmpeg pipes; tracing/profiling use
 existing CDP IO streams. Standalone dashboard startup is outside daemon mode;
 the service's allowlisted environment selects daemon mode exclusively. Browser
 launch/provider/Safari/Appium paths remain behind the explicit-CDP requirement.
+
+## Unsafe Chromium startup overrides
+
+External browsing and its controller are unavailable when startup switches
+include `no-sandbox` or `single-process`, with or without `=value`. Chromium's
+switch presence semantics apply even to `=0` or `=false`; Windows also accepts
+case-insensitive slash prefixes. Matching honors Chromium's `--` argument
+terminator and platform switch prefixes. The existing environment escape hatch
+still allows sealed visuals, with general browsing unavailable.
+
+Packaged negative smoke cases use `FERRITE_BROWSER_UNSAFE_SMOKE=1` with plain,
+valued and platform-prefixed no-sandbox switches. They require external-view
+creation and controller access to reject the unsafe configuration, then run the
+ordinary sealed-visual pixel/input/idle checks. The intentionally unsandboxed
+negative runs do not claim renderer sandbox proof; the normal packaged smoke
+still requires the OS sandbox checks. These additions require CI validation.
 
 ## Reproduction and acceptance status
 
