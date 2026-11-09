@@ -10,15 +10,33 @@ fn captured_feedback_survives_prompt_roundtrip_without_a_live_page() {
     let _ = std::fs::remove_dir_all(&root);
     let png = include_bytes!("fixtures/browser-original.png");
     let capture = Capture {
-        document: Document { tab: TabId(7), generation: 3 },
+        document: Document {
+            tab: TabId(7),
+            generation: 3,
+        },
         native_generation: 8,
         url: "https://example.test/form".into(),
-        viewport: Viewport { width: 1, height: 1, scale: 1.0 },
-        selection: Selection::Region { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+        viewport: Viewport {
+            width_css: 1.0,
+            height_css: 1.0,
+            device_scale: 1.0,
+        },
+        selection: Selection::Region {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        },
     };
-    let annotation = browser_annotations::retain(&root, capture, png, "Make this clearer".into(), vec![]).unwrap();
+    let annotation =
+        browser_annotations::retain(&root, capture, png, "Make this clearer".into(), vec![])
+            .unwrap();
     let path = annotation.original().to_path_buf();
-    let prompt = browser_annotations::compose("Fix this", &[PathBuf::from("/tmp/notes.txt")], &[annotation.clone()]);
+    let prompt = browser_annotations::compose(
+        "Fix this",
+        &[PathBuf::from("/tmp/notes.txt")],
+        &[annotation.clone()],
+    );
     assert!(prompt.contains("Make this clearer"));
     assert!(prompt.contains("https://example.test/form"));
     assert!(ferrite_core::prompt_files::paths(&prompt, None).contains(&path));

@@ -64,3 +64,4 @@ pub use thread::ThreadId;
 
 /// Conversation-owned website tabs and lifecycle.
 pub mod browser;
+pub mod browser_annotations;
