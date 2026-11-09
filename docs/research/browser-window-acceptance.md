@@ -1,94 +1,78 @@
-# Packaged Conversation browser window probe (#196)
+# Packaged Conversation browser acceptance (#196)
 
-The [first macOS packaged operator slice](browser-window-2026-11-09/macos-0abd8f1b/README.md)
-passed rendering/input and produced the actual Claude Observe-unavailable red.
-The [Windows operator slice](browser-window-2026-11-09/windows-9080268e/README.md)
-now also passes after increasing both executable stack reserves to 8 MiB. Its
-actual provider Observe reaches a new attachment failure: the native controller
-attempts `Target.createTarget`, which the embedded endpoint denies. This is the first vertical slice of
-#196, not complete browser/annotation acceptance.
+The last executed narrow action gate passed on **both platforms from f6461382**:
+[run42571982121](https://github.com/josephwylie/ferrite/actions/runs/42571982121).
+Retained [Windows](browser-window-2026-11-09/windows-f6461382/README.md) and
+[macOS](browser-window-2026-11-09/macos-f6461382/README.md) evidence shows actual
+ClaudeSession → bound service → native controller → the owning Preview, with
+opaque references/receipts, a blue native Window image and independent two-click
+HTTP oracle. The larger batch below is source-ready and awaits final validation;
+no passing outcome is claimed for unexecuted scenarios.
 
-The opt-in `browser-smoke` application feature installs a bounded scenario in
-Ferrite's ordinary native GPUI window. The window still uses production
-Machines, the actual Server and socket protocol, CockpitView, Preview and CEF.
-It imports one idle fixture Thread, routes a loopback URL through
-`Preview::open_url`, renders the complete native window, finds a known red
-fixture button in those pixels and dispatches a pointer click through the
-window's normal GPUI input path. The next window screenshot must contain the
-green button, and an independent local HTTP server must have received exactly
-one click. This does not test OS-level mouse injection.
+Run **one** `browser-window.yml` workflow at the fully integrated ref. It builds
+one packaged application per supported OS and reuses that executable for:
 
-`--provider claude` additionally starts a deterministic external CLI peer through
-normal production discovery and Session launch. A temporary PATH shim calls
-`scripts/browser-window-provider.py`, which implements the captured Claude SDK
-MCP transport. The peer checks the actual advertised tool definitions, requests
-State and Observe of the selected tab, then uses the returned exact element
-reference and observation receipt to click `Window fixture`. A fresh Observe
-must still describe that fixture. The same native Window must paint the button
-blue, and the independent HTTP oracle must count exactly two clicks: operator
-then provider. A successful tool acknowledgement alone cannot satisfy the probe.
-Fresh Observe polling is bounded when the initial operator gesture has not yet
-settled; it never retries a write. A unique per-run marker proves the intended
-peer received the response.
-It never fabricates a browser response, edits fixture data or calls a model.
-An unavailable response is a failure. Codex and broader provider scenarios are
-subsequent slices; the peer's Codex transport is not yet exercised by this probe.
+- Existing Engine/View pixel, input, idle-frame, isolation and native controller
+  checks, including a real operator HTML-select popup/option click. This explicit
+  `--visual-smoke` step uses mock keychain mode; production encryption/profile
+  evidence remains the separately retained native/keychain results.
+- Actual operator Preview input and both actual provider adapters. Codex starts
+  a fresh production Thread so dynamic tools are advertised at thread/start.
+- Two rotated blocks, Claude→Codex then Codex→Claude, each with two full tasks per
+  provider. Each block retains its first task for correctness and excludes it
+  from latency: **four tasks and two measured samples per provider in total**.
+  Each task contains the prescribed32 logical navigation/actions plus11 readiness
+  waits, fresh observations, two saves and independent reopened-field/audit checks.
+- Region and element annotation selection, all seven drawing tools, Blue ink/
+  six-pixel width, text/comment, collection/review/removal and actual Composer
+  batch send to both providers. Native image bytes must match retained hashes.
+  Navigation and last-tab close precede Add; a new Server/window then verifies
+  original history context, image bytes, review rendering and zero eager pages.
+- Actual provider/manual hold/release, stale/foreign-tab references, same-label
+  replacement, reload, concurrent request serialization, bounded partial-target
+  recovery and an actual committed write whose reply is withheld past the Server
+  deadline. The fixture independently checks no duplicate/replayed write.
+  Inactive clean-page reclamation and URL-only restoration are checked afterward.
+- Raw per-PID CPU time and RSS (macOS) or Working Set (Windows), with controller,
+  browser, application, Server/provider and harness separation; sealed baseline,
+  active work, quiet and shutdown phases; lifetime gaps and sampler cost. Native
+  process-ready, attachment and command timings are separate from provider
+  request/response times. These bounded samples cannot establish hours-long leak
+  absence, a numerical budget or strong latency percentiles.
 
-Run `.github/workflows/browser-window.yml` for staged Windows x64 and signed
-macOS arm64 builds. It is independent of the pre-existing primary-CI core test
-failures. The installer accepts `FERRITE_BUILD_FEATURES=browser-smoke` to append
-the opt-in feature while retaining CEF; ordinary packaging is unchanged.
+A separate single macOS job reuses its focused build for core/provider, native
+input, editor, annotation-host and preview regressions. The primary CI's known
+unrelated baseline failures remain visible; this workflow does not suppress them.
+Private controller endpoints/tokens never enter provider results or diagnostics.
+The optional compiler cache and exact native-stage cache do not relax checks.
 
-With an existing packaged smoke build, the narrow reproduction is:
+After integration, the root can initiate final validation with:
 
 ```
-python scripts/probe-browser-window.py <packaged-ferrite> --output <artifact-directory>
-python scripts/probe-browser-window.py <packaged-ferrite> --provider claude --output <artifact-directory>/claude
+gh workflow run browser-window.yml --ref <fully-integrated-ref>
 ```
 
-The probe creates a temporary Store, Settings and browser profile and disables
-Projects, titling and automatic update work. The actual Server has its own
-process handle and is stopped/reaped before cleanup. The normal native window
-must close within the bounded scenario; a hung or unsupported renderer fails.
-Artifacts include executable SHA-256 and platform provenance, `app.log`,
-diagnostics, `window-result.json`, a current failure screenshot where available,
-before/after PNGs and the independent `oracle.json`. Provider mode adds the
-actual host protocol, tool definitions, operation trace, peer result and blue
-Preview PNG. After ordinary app exit, an OS process check rejects surviving
-native controllers before cleanup. The public Stop request then stops the
-isolated Server. Private controller credentials are not part of the peer
-protocol. Existing completion markers are removed before a new invocation.
+The workflow has no special inputs. Individual reproduction with an existing
+packaged `browser-smoke` build uses `scripts/probe-browser-window.py`:
 
-The workflow reuses only an exact unsigned native stage keyed by OS,
-architecture, compiler and packager/patch hashes. The packager strictly checks
-provenance and the binary hash before reuse. Native-stage caching and optional
-compiler-cache fallback do not relax application builds or acceptance checks.
+```
+python scripts/probe-browser-window.py <app> --provider claude --work-orders --tasks 2 --output <artifacts>/block0-claude
+python scripts/probe-browser-window.py <app> --provider codex --annotations --output <artifacts>/annotations-codex
+python scripts/probe-browser-window.py <app> --provider claude --boundaries --output <artifacts>/boundaries-claude
+```
 
-The historical work-order benchmark and upcoming packaged scenario share
-`scripts/bench/browser-controllers/fixture-server.mjs`. Run it with
-`node scripts/bench/browser-controllers/fixture-server.mjs`; stdout reports its
-loopback URL. This starts only the HTTP fixture. GET `/oracle?name=...` reads
-persisted records and GET `/audit` reads successful save events; neither writes
-data. List/editor, custom-field and save delays remain 180, 150 and 250 ms.
-Persistence survives navigation, not a fixture-server restart. This extracted
-fixture is not yet exercised by the packaged provider scenario.
+The work-order HTTP server is the same module used by the historical sustained
+fixture. Only the page writes `/api/records`; the runner reads `/oracle` and
+`/audit`. Delays remain180ms list/editor,150ms custom field and250ms save.
+Persistence survives navigation, not fixture-server restart. Complete task
+outcomes, failed durations, observed payload bytes and operation timings remain
+in raw JSON; fast failures are never included as latency wins.
 
-Initial missing-driver red run:
-https://github.com/josephwylie/ferrite/actions/runs/42561582036 . The macOS
-packaged probe failed as expected after 90 seconds without a scenario result;
-its application and signed package built successfully. This establishes the
-missing-driver red, not a passing UI/rendering outcome. The superseding driver
-run is the actual two-platform GUI capability check.
-Native GPUI window rendering/readback and pointer input are now proven on the
-macOS hosted runner by the retained evidence. Windows reached the actual production CockpitView/native Window before
-exiting with `0xC00000FD`; both packaged and naked executables reserved 1 MiB.
-The naked log explicitly reports a main-thread stack overflow. The next packaged run verified both reserves at 8 MiB and passed the actual
-Windows operator Preview/render/input scenario. Its subsequent actual provider
-Observe failed at native attachment; the endpoint denied `Target.createTarget`. A failure-only naked
-startup comparison is explicitly diagnostic and cannot pass browser acceptance.
-The existing headless CEF Engine/View feasibility results do not prove this
-window path. Neither the initial operator slice nor a successful single-button provider
-scenario establishes full controller interactions, both-provider parity, annotations, Composer
-history, sustained work-order performance or resource acceptance. Those extend
-the same harness once their production features are available; the detailed
-preparation contract remains `/tmp/ferrite-browser-196-contract.md` during work.
+Remaining acceptance limitations must stay explicit: the new boundary scenario
+uses two tabs in one Thread. It does not replace actual two-conversation/shared-
+login, unavailable-owner, controller reconnect and multiwindow feature-level
+runs. Prior native/profile and core/GPUI tests cover lower seams of those cases.
+Real manual text/drag versus queued agent input and the complete annotation
+cancel/navigation/resize/failure matrix also require the final evidence audit.
+Consequently source assembly and the earlier action pass do not close all#196
+criteria or establish full release acceptance on their own.

@@ -122,6 +122,7 @@ def main():
     parser.add_argument('executable', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--provider', choices=['claude','codex'])
+    parser.add_argument('--boundaries',action='store_true',help='actual manual/stale/uncertain/recovery boundary scenario')
     parser.add_argument('--tasks',type=int,default=3,help='bounded work-order repetitions; first remains correctness-only warmup')
     parser.add_argument('--annotations',action='store_true',help='capture, edit, batch/send and restore real Browser annotations')
     parser.add_argument('--held-screenshot', action='store_true', help='request the first screenshot while a real pointer gesture remains held')
@@ -130,8 +131,9 @@ def main():
     parser.add_argument('--startup-only', action='store_true', help='diagnose native startup only; never browser acceptance')
     args = parser.parse_args()
     if not 1 <= args.tasks <= 10:parser.error('--tasks must be between 1 and10')
-    if sum((args.held_screenshot,args.work_orders,args.annotations))>1:
+    if sum((args.held_screenshot,args.work_orders,args.annotations,args.boundaries))>1:
         parser.error('Choose one feature scenario per isolated launch')
+    if args.boundaries and not args.provider:parser.error('--boundaries requires a provider')
     if args.annotations and not args.provider:
         parser.error('--annotations requires a provider')
     if args.held_screenshot and (args.provider != 'claude' or args.work_orders):
@@ -146,8 +148,8 @@ def main():
                  'provider-result.tmp', 'provider-trace.json', 'provider-definitions.json',
                  'provider-host.jsonl', 'provider-requests.jsonl', 'startup-comparison.json', 'oracle.json',
                  'work-order-oracle.json', 'work-order-oracle-at-exit.json', 'work-order-trace.json', 'work-order-results.json',
-                 'phase.json', 'phase-events.json', 'resources-raw.json', 'resources-report.json', 'annotation-before-send.json', 'window-annotations-sent.png', 'annotation-collected.png', 'annotation-review.png', 'browser-viewport.json',
-                 'window-work-order.png', 'window-work-order-before.png', 'provider-screenshot.png', 'window-held-screenshot.png', 'window-provider-error.png',
+                 'phase.json', 'phase-events.jsonl', 'controller-phases.jsonl', 'boundary-results.json', 'boundary-trace.json', 'boundary-ui-request.json', 'boundary-ui-answer.json', 'completion-gate-arm', 'completion-gate-dispatched', 'completion-gate-release', 'resources-raw.json', 'resources-report.json', 'annotation-before-send.json', 'window-annotations-sent.png', 'annotation-collected.png', 'annotation-review.png', 'browser-viewport.json',
+                 'window-work-order.png', 'window-work-order-before.png', 'provider-screenshot.png', 'window-held-screenshot.png', 'window-provider-error.png', 'window-boundaries.png', 'boundary-oracle-at-exit.json', 'lifecycle-before-restoration.json', 'lifecycle-restoration.json', 'window-restored.png',
                  'cleanup-error.txt', 'cleanup-processes.json', 'shutdown-samples.json', 'oracle-at-exit.json', 'window-before.png', 'window-after.png',
                  'window-provider.png', 'window-current.png'):
         (output/name).unlink(missing_ok=True)
@@ -178,15 +180,27 @@ def main():
             headers.append(pe_stack(args.compare_executable.resolve()))
         (output/'pe-headers.json').write_text(json.dumps(headers, indent=2), encoding='utf-8')
     clicked = []
+    boundary_fixture=None
+    if args.boundaries:
+        spec=importlib.util.spec_from_file_location('boundary_fixture',Path(__file__).with_name('browser-window-boundaries.py'))
+        boundary_module=importlib.util.module_from_spec(spec);spec.loader.exec_module(boundary_module)
+        boundary_fixture=boundary_module.Fixture()
 
     class Fixture(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
+            response=boundary_fixture.get(self.path) if boundary_fixture is not None else None
+            if response is not None:
+                status,kind,body=response;self.send_response(status);self.send_header('Content-Type',kind);self.end_headers();self.wfile.write(body);return
             self.send_response(200)
             self.send_header('Content-Type', 'text/html')
             self.end_headers()
             self.wfile.write(PAGE)
 
         def do_POST(self):
+            body=self.rfile.read(min(int(self.headers.get('Content-Length','0')),65536))
+            response=boundary_fixture.post(self.path,body) if boundary_fixture is not None else None
+            if response is not None:
+                status,kind,data=response;self.send_response(status);self.send_header('Content-Type',kind);self.end_headers();self.wfile.write(data);return
             if self.path != '/clicked':
                 self.send_error(404)
                 return
@@ -199,7 +213,7 @@ def main():
 
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Fixture)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    url = f'http://127.0.0.1:{server.server_port}/'
+    url = f'http://127.0.0.1:{server.server_port}/'+('boundaries' if args.boundaries else '')
     with tempfile.TemporaryDirectory(prefix='ferrite-window-') as temporary:
         root = Path(temporary)
         (root/'settings.json').write_text(json.dumps({'check_for_updates':False, 'start_at_login':False, 'auto_update_clis':False}), encoding='utf-8')
@@ -221,7 +235,9 @@ def main():
             env.update(PATH=str(binaries)+os.pathsep+env.get('PATH',''),
                 FERRITE_BROWSER_WINDOW_PROVIDER=args.provider,
                 FERRITE_BROWSER_WINDOW_PROBE=uuid.uuid4().hex)
-        if args.work_orders:
+        if args.boundaries:
+            env['FERRITE_BROWSER_WINDOW_SCENARIO']='boundaries'
+        elif args.work_orders:
             env['FERRITE_BROWSER_WINDOW_SCENARIO'] = 'work-orders'
             env['FERRITE_BROWSER_WINDOW_TASKS']=str(args.tasks)
         elif args.annotations:
@@ -299,7 +315,7 @@ def main():
                     }, indent=2), encoding='utf-8')
                     return
                 try:
-                    code = process.wait(timeout=max(270,args.tasks*180) if args.work_orders else (270 if args.annotations else 90))
+                    code = process.wait(timeout=max(270,args.tasks*180) if args.work_orders else (270 if (args.annotations or args.boundaries) else 90))
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
@@ -361,12 +377,12 @@ def main():
                 spec.loader.exec_module(embedded)
                 if embedded.screenshot_color(output/'provider-screenshot.png',point=(50,50)) != (23,173,91):
                     raise RuntimeError('Held-gesture provider screenshot does not show the live green fixture')
-            expected_clicks = 0 if args.work_orders else (1 if (args.held_screenshot or args.annotations) else (2 if args.provider else 1))
+            expected_clicks = 0 if args.work_orders else (1 if (args.held_screenshot or args.annotations or args.boundaries) else (2 if args.provider else 1))
             if len(clicked) != expected_clicks:
                 raise RuntimeError(f'Independent fixture oracle saw {len(clicked)} clicks, expected {expected_clicks}')
             screenshots = ['window-work-order.png'] if args.work_orders else ['window-before.png', 'window-after.png']
             if args.provider and not args.work_orders:
-                screenshots.append('window-annotations-sent.png' if args.annotations else ('window-held-screenshot.png' if args.held_screenshot else 'window-provider.png'))
+                screenshots.append('window-boundaries.png' if args.boundaries else ('window-annotations-sent.png' if args.annotations else ('window-held-screenshot.png' if args.held_screenshot else 'window-provider.png')))
             for name in screenshots:
                 if (output/name).stat().st_size < 100:
                     raise RuntimeError(f'Missing window screenshot: {name}')
@@ -425,6 +441,8 @@ def main():
             import shutil
             if (root/'logs').exists():
                 shutil.copytree(root/'logs', output/'diagnostics', dirs_exist_ok=True)
+            if boundary_fixture is not None:
+                (output/'boundary-oracle-at-exit.json').write_text(json.dumps(boundary_fixture.snapshot(),indent=2),encoding='utf-8')
             if work_fixture is not None:
                 try:
                     with urllib.request.urlopen(url+'api/records', timeout=5) as response:

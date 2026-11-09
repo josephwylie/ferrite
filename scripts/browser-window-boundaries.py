@@ -13,8 +13,8 @@ PAGE = b'''<!doctype html><meta charset="utf-8"><title>Browser boundaries</title
 <button onclick="document.querySelector('#target').outerHTML='<button id=target onclick=targetClick()>Boundary target</button>'">Replace target</button>
 <button onclick="document.querySelector('#concurrent-ready')?.remove();setTimeout(()=>{let n=document.createElement('div');n.id='concurrent-ready';document.body.append(n)},1500)">Start concurrent wait</button>
 <button onclick="fetch('/boundaries/save'+location.search,{method:'POST'}).then(()=>{let n=document.querySelector('#boundary-save');n.dataset.saved='true';n.textContent='Boundary write saved'})">Commit boundary write</button>
-<button style="position:absolute;left:12px;top:calc(100vh - 10px);height:80px;width:240px" onclick="fetch('/boundaries/recovery?mode=success',{method:'POST'})">Recoverable boundary target</button>
-<button style="position:fixed;left:300px;top:calc(100vh - 10px);height:80px;width:240px" onclick="fetch('/boundaries/recovery?mode=failed',{method:'POST'})">Fixed partial boundary target</button>
+<button style="margin:0;position:absolute;left:12px;top:calc(100vh - 10px);height:80px;width:240px" onclick="fetch('/boundaries/recovery?mode=success',{method:'POST'})">Recoverable boundary target</button>
+<button style="margin:0;position:fixed;left:300px;top:calc(100vh - 10px);height:80px;width:240px" onclick="fetch('/boundaries/recovery?mode=failed',{method:'POST'})">Fixed partial boundary target</button>
 <output id="boundary-save">No boundary write yet</output>
 <script>function targetClick(){fetch('/boundaries/click'+location.search,{method:'POST'})}</script>'''
 
@@ -112,8 +112,9 @@ class Boundary:
         self.operator('hold')
         self.control(state,{'kind':'screenshot'},self.held_image)
     def held_image(self,state,_,answer):
-        images=[item for item in answer.get('content',answer.get('contentItems',[])) if item.get('type')=='image']
-        if len(images)!=1 or not base64.b64decode(images[0]['data'],validate=True).startswith(b'\x89PNG\r\n\x1a\n'):raise ValueError('Held operator screenshot was not one real PNG')
+        images=[item for item in answer.get('content',answer.get('contentItems',[])) if item.get('type') in ('image','inputImage')]
+        encoded=images[0].get('data',images[0].get('imageUrl','').removeprefix('data:image/png;base64,')) if len(images)==1 else ''
+        if not encoded or not base64.b64decode(encoded,validate=True).startswith(b'\x89PNG\r\n\x1a\n'):raise ValueError('Held operator screenshot was not one real PNG')
         if state.get('observation') is not None:raise ValueError('Screenshot incorrectly minted readable Observe permission')
         self.control(self.a,{'kind':'click','reference':self.target},self.held_rejected,True)
     def held_rejected(self,*_):
@@ -135,7 +136,10 @@ class Boundary:
         self.send({'kind':'control',**wrong,'observation':state['observation'],'control':{'kind':'click','reference':self.ref(state,'Boundary target')}},self.wrong_rejected,True)
     def wrong_rejected(self,*_):
         self.checks.append('unowned tab id refused')
-        self.control(self.a,{'kind':'click','reference':self.ref(self.a,'Boundary target')},self.open_b)
+        self.observe(self.fresh_target_a)
+    def fresh_target_a(self,state,*_):
+        self.a=state
+        self.control(state,{'kind':'click','reference':self.ref(state,'Boundary target')},self.open_b)
     def open_b(self,*_):
         self.a_tab=self.identity(self.a)['document']['tab'];self.old_a=self.a
         self.action(self.a,{'kind':'open','url':self.base.split('?',1)[0]+'?tab=B'},lambda *_:self.observe(self.b_observed))
@@ -144,8 +148,12 @@ class Boundary:
         self.control(state,{'kind':'click','reference':self.ref(self.old_a,'Boundary target')},self.cross_tab_refused,True)
     def cross_tab_refused(self,*_):
         self.checks.append('other-tab opaque reference cannot target current tab')
-        self.control(self.b,{'kind':'click','reference':self.ref(self.b,'Start concurrent wait')},self.concurrent_start)
-    def concurrent_start(self,*_):
+        self.observe(self.start_concurrent_wait)
+    def start_concurrent_wait(self,state,*_):
+        self.b=state
+        self.control(state,{'kind':'click','reference':self.ref(state,'Start concurrent wait')},lambda *_:self.observe(self.concurrent_start))
+    def concurrent_start(self,state,*_):
+        self.b=state
         def waited(state,text,answer):
             self.concurrent['wait']=True;self.concurrent_done()
         def scrolled(state,text,answer):

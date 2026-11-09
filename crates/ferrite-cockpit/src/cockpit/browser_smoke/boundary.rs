@@ -136,7 +136,7 @@ impl Scenario {
             .map_err(|e| e.to_string())?
             .save(output.join(format!("boundary-{id}-{action}.png")))
             .map_err(|e| e.to_string())?;
-        let answer = serde_json::json!({"id":id,"action":action,"success":true,"state":state});
+        let answer = serde_json::json!({"id":id,"action":action,"success":true,"state":{"tabs":state.tabs,"active":state.active}});
         let temporary = output.join("boundary-ui-answer.tmp");
         std::fs::write(&temporary, serde_json::to_vec_pretty(&answer).unwrap())
             .map_err(|e| e.to_string())?;

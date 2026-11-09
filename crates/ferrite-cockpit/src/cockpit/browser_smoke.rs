@@ -2,6 +2,7 @@
 //! No test Engine, headless GPUI context or alternate browser manager is used.
 use super::*;
 mod annotations;
+mod boundary;
 use gpui::{point, App, Modifiers, PlatformInput};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -44,6 +45,8 @@ impl CockpitView {
             let mut ready_document = None;
             let mut scenario_thread = None;
             let codex = std::env::var("FERRITE_BROWSER_WINDOW_PROVIDER").ok().as_deref() == Some("codex");
+            let boundaries = std::env::var("FERRITE_BROWSER_WINDOW_SCENARIO").ok().as_deref() == Some("boundaries");
+            let mut boundary = boundary::Scenario::default();
             let history = std::env::var("FERRITE_BROWSER_WINDOW_SCENARIO").ok().as_deref() == Some("annotation-history");
             let mut history_stage = 0;
             let annotate = std::env::var("FERRITE_BROWSER_WINDOW_SCENARIO").ok().as_deref() == Some("annotations");
@@ -57,18 +60,44 @@ impl CockpitView {
             let mut viewport_last_adjustment = Instant::now() - Duration::from_secs(1);
             let mut baseline_started = None;
             let mut quiet_started = None;
+            let mut restoring_page: Option<(ferrite_core::browser::Document,String)> = None;
+            let mut reclamation_phase = false;
             let mut frames = 0u64;
             let mut last_error = String::new();
             let result = loop {
                 cx.background_executor().timer(Duration::from_millis(150)).await;
                 let step = handle.update(cx, |_, window, cx| -> Result<bool, String> {
+                    if boundaries {
+                        if let Some(thread)=scenario_thread { boundary.step(&view,thread,window,cx,&output)?; }
+                    }
                     if history {
                         frames += 1;
                         return annotations::history(&view,window,cx,&output,&mut history_stage);
                     }
                     if provider_started {
                         if let Some(quiet) = quiet_started {
-                            return Ok(Instant::now().duration_since(quiet)>=Duration::from_secs(3));
+                            if Instant::now().duration_since(quiet)<Duration::from_secs(3) { return Ok(false); }
+                            if !boundaries { return Ok(true); }
+                            if !reclamation_phase { phase(&output,"reclamation-and-restoration");reclamation_phase=true; }
+                            let thread=scenario_thread.expect("scenario Thread");
+                            let state=view.update(cx,|view,_|view.cockpit.browser_attach(thread)).map_err(|e|e.to_string())?;
+                            if let Some((document,ref url))=restoring_page {
+                                if let Some(tab)=state.tabs.iter().find(|tab|tab.id==document.tab && tab.live && !tab.loading && tab.error.is_none() && tab.url==*url) {
+                                    if tab.document()==document { return Err("Reclaimed page restoration reused stale document identity".into()); }
+                                    std::fs::write(output.join("lifecycle-restoration.json"),serde_json::to_vec_pretty(&serde_json::json!({"restored":tab,"previous_document":document,"urls_only_not_unsaved_form_restoration":true})).unwrap()).map_err(|e|e.to_string())?;
+                                    window.draw(cx);window.render_to_image().map_err(|e|e.to_string())?.save(output.join("window-restored.png")).map_err(|e|e.to_string())?;
+                                    return Ok(true);
+                                }
+                            } else {
+                                std::fs::write(output.join("lifecycle-before-restoration.json"),serde_json::to_vec_pretty(&state.tabs).unwrap()).map_err(|e|e.to_string())?;
+                                if let Some(tab)=state.tabs.iter().find(|tab|Some(tab.id)!=state.active && !tab.live) {
+                                    restoring_page=Some((tab.document(),tab.url.clone()));
+                                    view.update(cx,|view,_|view.cockpit.browser(thread,ferrite_core::browser::Action::Select{tab:tab.id})).map_err(|e|e.to_string())?;
+                                    phase(&output,"restored-page");quiet_started=Some(Instant::now());return Ok(false);
+                                }
+                            }
+                            if Instant::now().duration_since(quiet)>Duration::from_secs(15) { return Err("A clean inactive page was not reclaimed and restored in the bounded lifecycle scenario".into()); }
+                            return Ok(false);
                         }
                         let path = output.join("provider-result.json");
                         if !path.exists() { return Ok(false); }
@@ -84,6 +113,10 @@ impl CockpitView {
                         // Preview changed. Decode the actual native Window again.
                         window.draw(cx);
                         let image = window.render_to_image().map_err(|error| error.to_string())?;
+                        if boundaries {
+                            image.save(output.join("window-boundaries.png")).map_err(|e|e.to_string())?;
+                            phase(&output,"quiet-after-boundaries");quiet_started=Some(Instant::now());return Ok(false);
+                        }
                         if annotate {
                             image.save(output.join("window-annotations-sent.png")).map_err(|e|e.to_string())?;
                             phase(&output,"quiet-after-annotations"); quiet_started=Some(Instant::now());
@@ -140,7 +173,7 @@ impl CockpitView {
                     if frames == 1 || frames % 20 == 0 {
                         image.save(output.join("window-current.png")).map_err(|error| error.to_string())?;
                     }
-                    if (work_orders || annotate) && !controlled_viewport {
+                    if (work_orders || annotate || boundaries) && !controlled_viewport {
                         if !preview_expanded {
                             if annotations::click(window,cx,"preview-expand") { preview_expanded=true; }
                             return Ok(false);
@@ -253,7 +286,7 @@ impl CockpitView {
                     Err(error) => break Err(error.to_string()),
                     _ => {}
                 }
-                if started.elapsed() > Duration::from_secs(if work_orders { std::env::var("FERRITE_BROWSER_WINDOW_TASKS").ok().and_then(|value|value.parse::<u64>().ok()).unwrap_or(3).min(10)*180 } else if annotate || history { 240 } else { 60 }) {
+                if started.elapsed() > Duration::from_secs(if work_orders { std::env::var("FERRITE_BROWSER_WINDOW_TASKS").ok().and_then(|value|value.parse::<u64>().ok()).unwrap_or(3).min(10)*180 } else if boundaries { 180 } else if annotate || history { 240 } else { 60 }) {
                     break Err(format!("window fixture timed out: opened={opened}, clicked={clicked}, frames={frames}, last error={last_error}"));
                 }
             };
@@ -265,9 +298,9 @@ impl CockpitView {
                 "success": error.is_none(), "error": error,
                 "normal_native_window": true, "preview_operator_route": opened,
                 "window_pointer_input": clicked, "rendered_frames": frames,
-                "provider_requested": provider, "annotations": annotate, "annotation_history": history, "held_screenshot": held_screenshot, "scenario_thread": scenario_thread, "work_orders": work_orders, "provider_started": provider_started,
+                "provider_requested": provider, "annotations": annotate, "boundaries": boundaries, "annotation_history": history, "held_screenshot": held_screenshot, "scenario_thread": scenario_thread, "work_orders": work_orders, "provider_started": provider_started,
                 "elapsed_ms": started.elapsed().as_millis(),
-                "scope": if history { "restart and native history review of original annotation evidence with zero eager pages" } else if annotate { "actual annotation overlay, all drawing controls, review/remove/batch Composer send and native provider PNG delivery" } else if work_orders { "one prescribed work order through actual provider and owning Preview; annotations are not tested" } else if held_screenshot { "first provider Screenshot during a held operator gesture; no mutation receipt permitted" } else { "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested" },
+                "scope": if boundaries { "actual provider/manual/stale/uncertain/recovery boundaries with independent page oracle" } else if history { "restart and native history review of original annotation evidence with zero eager pages" } else if annotate { "actual annotation overlay, all drawing controls, review/remove/batch Composer send and native provider PNG delivery" } else if work_orders { "one prescribed work order through actual provider and owning Preview; annotations are not tested" } else if held_screenshot { "first provider Screenshot during a held operator gesture; no mutation receipt permitted" } else { "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested" },
             });
             let _ = std::fs::write(output.join("window-result.json"), serde_json::to_vec_pretty(&result).unwrap());
             let _ = cx.update(|cx| cx.quit());

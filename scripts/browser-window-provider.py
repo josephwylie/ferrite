@@ -15,6 +15,7 @@ if '--version' in sys.argv:
 
 output = Path(os.environ['FERRITE_BROWSER_WINDOW_OUTPUT'])
 probe = os.environ['FERRITE_BROWSER_WINDOW_PROBE']
+boundaries = os.environ.get('FERRITE_BROWSER_WINDOW_SCENARIO') == 'boundaries'
 annotations = os.environ.get('FERRITE_BROWSER_WINDOW_SCENARIO') == 'annotations'
 held_screenshot = os.environ.get('FERRITE_BROWSER_WINDOW_SCENARIO') == 'held-screenshot'
 work_orders = os.environ.get('FERRITE_BROWSER_WINDOW_SCENARIO') == 'work-orders'
@@ -64,6 +65,11 @@ def record(answer):
             (output/'provider-screenshot.png').write_bytes(png)
         result['observed_fixture'] = observed_fixture
         result['readonly_during_held_operator_gesture'] = True
+    if boundaries:
+        boundary_result=json.loads((output/'boundary-results.json').read_text())
+        observed_fixture=boundary_result.get('success') is True
+        result['observed_fixture']=observed_fixture
+        result['boundary_results']=boundary_result
     if work_orders and (output/'work-order-results.json').exists():
         result['task_results']=json.loads((output/'work-order-results.json').read_text())
     result['success'] = result['success'] and observed_fixture
@@ -77,6 +83,11 @@ started = False
 trace = []
 receipt_polls = 0
 codex_browser_advertised = False
+if boundaries:
+    spec=importlib.util.spec_from_file_location('boundary_peer',Path(__file__).with_name('browser-window-boundaries.py'))
+    boundary_peer=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(boundary_peer)
+    boundary=boundary_peer.Boundary(call,record,output,provider)
 if annotations:
     spec = importlib.util.spec_from_file_location('annotation_peer',Path(__file__).with_name('browser-window-annotations.py'))
     annotation_peer = importlib.util.module_from_spec(spec)
@@ -135,7 +146,7 @@ for line in sys.stdin:
                 if not codex_browser_advertised:
                     record({'success':False,'error':'Fresh Codex Thread did not advertise ferrite.browser'})
                 else:
-                    scenario.begin() if work_orders else call('browser-state', {'kind':'state'})
+                    boundary.begin() if boundaries else (scenario.begin() if work_orders else call('browser-state', {'kind':'state'}))
             continue
         name = frame.get('id')
         answer = frame.get('result')
@@ -146,7 +157,10 @@ for line in sys.stdin:
         if not {'browser','update_plan','wrap_up'} <= tools.keys() or not tools['browser'].get('inputSchema'):
             record({'isError':True, 'success':False, 'error':'Browser capability was not advertised beside plan/wrap_up'})
         else:
-            scenario.begin() if work_orders else call('browser-state', {'kind':'state'})
+            boundary.begin() if boundaries else (scenario.begin() if work_orders else call('browser-state', {'kind':'state'}))
+    if boundaries and isinstance(name,str) and name.startswith('boundary-') and answer is not None:
+        boundary.receive(name,answer)
+        continue
     if work_orders and isinstance(name,str) and name.startswith('work-') and answer is not None:
         scenario.receive(name, answer)
         continue
