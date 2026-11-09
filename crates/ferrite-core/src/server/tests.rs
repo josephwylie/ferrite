@@ -19,6 +19,8 @@ use crate::transcript::Body;
 use crate::{Decision, DecisionAnswer, SessionEvent};
 
 #[cfg(unix)]
+mod browser_providers;
+#[cfg(unix)]
 mod herdr;
 mod park;
 mod publish;
