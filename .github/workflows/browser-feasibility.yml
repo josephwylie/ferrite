@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - 'scripts/*agent-browser*'
+      - 'scripts/native_browser_service.py'
+      - 'scripts/probe-embedded-browser.py'
       - 'scripts/patches/agent-browser*'
       - 'scripts/test_package_agent_browser.py'
       - '.github/workflows/browser-feasibility.yml'
@@ -18,6 +20,10 @@ jobs:
     name: Packaged CEF sandbox (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
+    env:
+      FERRITE_BROWSER_SMOKE: '1'
+      FERRITE_BROWSER_SMOKE_DRIVER: ${{ github.workspace }}/scripts/probe-embedded-browser.py
+      FERRITE_BROWSER_EVIDENCE: ${{ github.workspace }}/target/browser-evidence
     strategy:
       matrix:
         os: [macos-latest, windows-latest]
@@ -43,6 +49,8 @@ jobs:
           cargo build -p ferrite --locked --features cef
           if ($LASTEXITCODE -ne 0) { throw 'CEF build failed' }
           scripts/stage-windows.ps1 -BuildDirectory target/debug -Destination target/debug/bundle/windows/Ferrite
+          python scripts/package-agent-browser.py --destination target/debug/bundle/windows/Ferrite
+          if ($LASTEXITCODE -ne 0) { throw 'Native controller packaging failed' }
           target/debug/ferrite.exe --visual-smoke
           if ($LASTEXITCODE -eq 0) { throw 'Naked executable bypassed the sandbox bootstrap' }
           target/debug/bundle/windows/Ferrite/ferrite.exe --visual-smoke
@@ -52,3 +60,9 @@ jobs:
         run: |
           scripts/install-app.sh --bundle-only
           target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite --visual-smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: embedded-browser-${{ runner.os }}-${{ runner.arch }}
+          path: target/browser-evidence
+          if-no-files-found: ignore
