@@ -103,6 +103,34 @@ pub fn init(cx: &mut App) {
     cx.set_global(Visuals { state });
 }
 
+/// Bind the production application's final quit to the web engine. Captures
+/// intentionally reuse one engine across several temporary GPUI applications.
+pub fn shutdown_on_quit(cx: &mut App) {
+    cx.on_app_quit(|cx| {
+        let engine = if cx.has_global::<Visuals>() {
+            let state = std::mem::replace(
+                &mut cx.global_mut::<Visuals>().state,
+                State::Unavailable("The application is closing".into()),
+            );
+            match state {
+                State::Ready(engine) => Some(engine),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        STARTED.with(|started| started.borrow_mut().take());
+        // GPUI first releases its windows, then polls this future on the main
+        // thread. No App/entity update is held while CEF drains close events.
+        async move {
+            if let Some(engine) = engine {
+                engine.shutdown();
+            }
+        }
+    })
+    .detach();
+}
+
 /// Start Chromium now, on this thread and without GPUI, from what [`boot`]
 /// found: the headless smoke test's way in (`visual::smoke`).
 #[cfg(feature = "cef")]

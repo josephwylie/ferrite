@@ -15,9 +15,12 @@ on:
   push:
     branches: [feat/browser-194]
     paths:
-      - 'scripts/*agent-browser*'
+      - 'scripts/package-agent-browser.py'
+      - 'scripts/patches/agent-browser-0.41.2-ferrite.patch'
       - 'scripts/native_browser_service.py'
-      - 'scripts/patches/agent-browser*'
+      - 'scripts/probe-agent-browser-behavior.py'
+      - 'scripts/probe-agent-browser-transport.py'
+      - 'scripts/test_package_agent_browser.py'
       - '.github/workflows/browser-controller.yml'
   pull_request:
     paths:
@@ -67,6 +70,13 @@ jobs:
           restore-keys: |
             native-cargo-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-rust.outputs.digest }}-
       - uses: mozilla-actions/sccache-action@v0.0.11
+        continue-on-error: true
+      - name: Continue without optional compiler cache when unavailable
+        shell: bash
+        run: |
+          if ! command -v sccache >/dev/null 2>&1; then
+            echo 'RUSTC_WRAPPER=' >> "$GITHUB_ENV"
+          fi
       - name: Reject untrusted artifacts
         run: python -m unittest discover -s scripts -p test_package_agent_browser.py
       - name: Stage hash-pinned native release
