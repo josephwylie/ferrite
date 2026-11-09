@@ -262,6 +262,8 @@ struct Controller {
     directory: PathBuf,
     token: String,
     endpoint: String,
+    authorization: String,
+    stopping: Arc<AtomicBool>,
     selected: Option<String>,
     refs: HashMap<String, Binding>,
     epochs: HashMap<String, u64>,
@@ -349,6 +351,8 @@ impl Controller {
             directory,
             token,
             endpoint: endpoint.url.clone(),
+            authorization: endpoint.authorization.clone(),
+            stopping: stop.clone(),
             selected: None,
             refs: HashMap::new(),
             epochs: HashMap::new(),
@@ -406,11 +410,27 @@ impl Controller {
         Ok(stream)
     }
     fn command(&mut self, mut value: Value) -> Result<Value, Error> {
+        if self.stopping.load(Ordering::Acquire) {
+            return Err(failure("browser owner is shutting down"));
+        }
         if Instant::now() >= self.deadline {
             return Err(failure(
                 "operation deadline expired before dispatch; observe again",
             ));
         }
+        let writes = matches!(
+            value["action"].as_str(),
+            Some(
+                "click"
+                    | "type"
+                    | "fill"
+                    | "select"
+                    | "check"
+                    | "uncheck"
+                    | "scroll"
+                    | "scrollintoview"
+            )
+        );
         value["ferriteToken"] = json!(self.token);
         let mut connection = self.connect().map_err(|error| {
             self.broken = true;
@@ -435,7 +455,7 @@ impl Controller {
                 message: format!(
                     "Browser controller transport failed; completion may be uncertain: {message}"
                 ),
-                uncertain: true,
+                uncertain: writes,
             }
         })?;
         if response["success"] != true {
@@ -445,10 +465,21 @@ impl Controller {
             let mut message: String = message.chars().take(4096).collect();
             // Never return credentials even if an upstream diagnostic includes
             // transport configuration.
-            message = message.replace(&self.token, "[private]");
+            message = message
+                .replace(&self.token, "[private]")
+                .replace(&self.authorization, "[private]")
+                .replace(&self.endpoint, "[private]")
+                .replace(self.directory.to_string_lossy().as_ref(), "[private]");
+            let selector = value["selector"].as_str().unwrap_or("");
+            let known_before_dispatch = message
+                == format!(
+                    "Element '{}' is outside the viewport, so the click would not reach it",
+                    selector
+                )
+                || message == format!("Element ref {} is stale", selector.trim_start_matches('@'));
             return Err(Error {
                 message,
-                uncertain: true,
+                uncertain: writes && !known_before_dispatch,
             });
         }
         Ok(response["data"].clone())
@@ -529,14 +560,34 @@ impl Controller {
             Control::Observe => {
                 let mut value = self.command(json!({"action":"snapshot", "interactive":true}))?;
                 self.refs.retain(|_, binding| binding.target != job.target);
+                // Closed pages cannot leave an unbounded reference history.
+                if self.refs.len() > 16384 {
+                    self.refs.clear();
+                }
                 let mut tree = value["snapshot"].as_str().unwrap_or("").to_owned();
                 let native_refs = value["refs"].as_object().cloned().unwrap_or_default();
                 let nonce = secret()?;
                 let mut refs = serde_json::Map::new();
+                let mut ref_bytes = 0usize;
+                let mut refs_truncated = false;
                 // Replace longest refs first so e1 cannot rewrite e10.
                 let mut native_refs: Vec<_> = native_refs.into_iter().collect();
                 native_refs.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
-                for (index, (native, metadata)) in native_refs.into_iter().take(4096).enumerate() {
+                for (index, (native, metadata)) in native_refs.into_iter().enumerate() {
+                    let bounded_field = |field: &str, limit: usize| {
+                        metadata[field]
+                            .as_str()
+                            .map(|text| text.chars().take(limit).collect::<String>())
+                    };
+                    let metadata =
+                        json!({"role":bounded_field("role",128),"name":bounded_field("name",1024)});
+                    let bytes = metadata.to_string().len() + 64;
+                    if index >= 4096 || ref_bytes + bytes > 64 * 1024 {
+                        refs_truncated = true;
+                        tree = tree.replace(&format!("[ref={native}]"), "[reference omitted]");
+                        continue;
+                    }
+                    ref_bytes += bytes;
                     let opaque = format!("f{}_{index}", &nonce[..24]);
                     tree = tree.replace(&format!("[ref={native}]"), &format!("[ref={opaque}]"));
                     self.refs.insert(
@@ -551,7 +602,7 @@ impl Controller {
                     );
                     refs.insert(opaque, metadata);
                 }
-                let truncated = tree.len() > TEXT;
+                let truncated = tree.len() > TEXT || refs_truncated;
                 while tree.len() > TEXT {
                     tree.pop();
                 }
@@ -562,8 +613,13 @@ impl Controller {
                 if let Some(point) = &job.point {
                     // Context is read on both sides of the screenshot on this
                     // exact target. Same-label replacement must not retarget it.
-                    let mut peer =
-                        ReadOnlyPage::open(&job.endpoint, &job.target, self.deadline).ok();
+                    let mut peer = ReadOnlyPage::open(
+                        &job.endpoint,
+                        &job.target,
+                        self.deadline,
+                        self.stopping.clone(),
+                    )
+                    .ok();
                     let before = peer.as_mut().and_then(|peer| peer.element(point).ok());
                     let mut value = self.screenshot()?;
                     let after = peer.as_mut().and_then(|peer| peer.element(point).ok());
@@ -671,12 +727,14 @@ struct ReadOnlyPage {
     frame: String,
     next: u64,
     deadline: Instant,
+    stopping: Arc<AtomicBool>,
 }
 impl ReadOnlyPage {
     fn open(
         endpoint: &ControllerEndpoint,
         target: &str,
         deadline: Instant,
+        stopping: Arc<AtomicBool>,
     ) -> Result<Self, String> {
         use tungstenite::client::IntoClientRequest;
         let url = url::Url::parse(&endpoint.url).map_err(|e| e.to_string())?;
@@ -715,6 +773,7 @@ impl ReadOnlyPage {
             frame: String::new(),
             next: 0,
             deadline,
+            stopping,
         };
         let attached = page.call(
             "Target.attachToTarget",
@@ -733,6 +792,9 @@ impl ReadOnlyPage {
         Ok(page)
     }
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        if self.stopping.load(Ordering::Acquire) {
+            return Err("Browser capture is shutting down".into());
+        }
         if Instant::now() >= self.deadline {
             return Err("Capture context deadline expired".into());
         }
@@ -775,7 +837,33 @@ impl ReadOnlyPage {
         {
             return Err("Invalid capture point".into());
         }
-        let location = self.call("DOM.getNodeForLocation", json!({"x":point.x.round() as i32,"y":point.y.round() as i32,"includeUserAgentShadowDOM":false}))?;
+        // Blink getNodeForLocation consumes document CSS coordinates; its
+        // getBoxModel border quad is already viewport CSS coordinates. See
+        // InspectorDOMAgent::getNodeForLocation and InspectorHighlight's
+        // BuildNodeQuads/FrameQuadToViewport in Chromium's primary source.
+        let metrics = self.call("Page.getLayoutMetrics", json!({}))?;
+        let viewport = &metrics["cssVisualViewport"];
+        let page_x = viewport["pageX"]
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .ok_or("Capture scroll position is unavailable")?;
+        let page_y = viewport["pageY"]
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .ok_or("Capture scroll position is unavailable")?;
+        if viewport["scale"].as_f64() != Some(1.0) {
+            return Err("Use region feedback while the page is pinch zoomed".into());
+        }
+        let document_x = point.x + page_x;
+        let document_y = point.y + page_y;
+        if document_x < i32::MIN as f64
+            || document_y < i32::MIN as f64
+            || document_x > i32::MAX as f64
+            || document_y > i32::MAX as f64
+        {
+            return Err("Capture coordinate is out of range".into());
+        }
+        let location = self.call("DOM.getNodeForLocation", json!({"x":document_x.round() as i32,"y":document_y.round() as i32,"includeUserAgentShadowDOM":false}))?;
         if location["frameId"].as_str() != Some(self.frame.as_str()) {
             return Err("Use region feedback for embedded frames".into());
         }
@@ -823,7 +911,13 @@ impl ReadOnlyPage {
         let y = ys.iter().copied().fold(f64::INFINITY, f64::min);
         let width = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max) - x;
         let height = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max) - y;
-        if width <= 0.0 || height <= 0.0 {
+        if width <= 0.0
+            || height <= 0.0
+            || point.x < x
+            || point.y < y
+            || point.x > x + width
+            || point.y > y + height
+        {
             return Err("Element has no visible bounds".into());
         }
         let ax = self
