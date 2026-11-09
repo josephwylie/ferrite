@@ -1816,11 +1816,11 @@ impl CockpitView {
         }
     }
 
-    /// Open the Thread's PR on the forge, in the browser on this computer.
+    /// Open the Thread's PR in its browser preview.
     pub(crate) fn open_pr(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let url = self.facts.pr(thread).and_then(|pr| pr.url.as_deref());
+        let url = self.facts.pr(thread).and_then(|pr| pr.url.clone());
         if let Some(url) = url {
-            cx.open_url(url);
+            self.browser_action(thread, ferrite_core::browser::Action::Open { url }, cx);
         }
     }
 
@@ -12486,13 +12486,12 @@ impl CockpitView {
             }
             let row = pane::check_row(index, run);
             card = card.child(match run.url.clone() {
-                // A press opens the run's log where the browser is, and
-                // closes the card: the answer is now in the other window.
+                // Keep the run's log with the Thread's other browser tabs.
                 Some(url) => row.on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
-                        cx.open_url(&url);
+                        view.browser_action(thread, ferrite_core::browser::Action::Open { url: url.clone() }, cx);
                         view.context_checks = None;
                         cx.notify();
                     }),

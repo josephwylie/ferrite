@@ -170,6 +170,13 @@ impl WebView {
         self.inner.browser.borrow().clone()
     }
 
+    /// Resample after the Server acknowledges a new document generation.
+    /// A native page may already have finished loading without another wake.
+    pub fn refresh_browser_state(&mut self, cx: &mut Context<Self>) {
+        self.inner.take_updates();
+        cx.notify();
+    }
+
     /// Restyle the live page.
     pub fn set_theme(&mut self, theme_css: String, cx: &mut Context<Self>) {
         if self.inner.page.borrow().theme_css == theme_css {

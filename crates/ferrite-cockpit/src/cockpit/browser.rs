@@ -38,7 +38,7 @@ struct Page {
     suppress_navigation: Rc<Cell<bool>>,
 }
 enum Event {
-    Input(ThreadId, Owner, TabId, Input),
+    Input(ThreadId, Owner, Document, Option<u64>, Input),
     Changed(ThreadId, Owner, PageState),
 }
 
@@ -94,6 +94,11 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.ensure_browser(thread, cx);
+        if matches!(action, Action::Open { .. }) {
+            if let Some(index) = self.pane_for(thread) {
+                self.panes[index].preview.show_browser();
+            }
+        }
         if self.browsers.threads[&thread].owner.is_none() {
             match self.cockpit.browser_attach(thread) {
                 Ok(state) => {
@@ -114,7 +119,7 @@ impl CockpitView {
                 browser.state = state;
                 browser.error = None;
                 browser.new_tab = false;
-                browser.sync_documents();
+                browser.sync_documents(cx, false);
             }
             Err(error) => {
                 self.browsers.threads.get_mut(&thread).unwrap().error = Some(error.to_string())
@@ -167,7 +172,7 @@ impl CockpitView {
             }
             let browser = self.browsers.threads.get_mut(&thread).unwrap();
             browser.state = state;
-            browser.sync_documents();
+            browser.sync_documents(cx, action.is_none());
             if browser.owner != owner {
                 browser.pages.clear();
                 continue;
@@ -212,7 +217,7 @@ impl CockpitView {
         let events = std::mem::take(&mut *self.browsers.events.borrow_mut());
         for event in events {
             match event {
-                Event::Input(thread, owner, tab, input) => {
+                Event::Input(thread, owner, document, generation, input) => {
                     let Some(browser) = self
                         .browsers
                         .threads
@@ -221,7 +226,10 @@ impl CockpitView {
                     else {
                         continue;
                     };
-                    let Some(page) = browser.pages.get(&tab) else {
+                    let Some(page) = browser.pages.get(&document.tab).filter(|page| {
+                        page.document.get() == document
+                            && generation == Some(page.native.state().document_generation)
+                    }) else {
                         continue;
                     };
                     match self.cockpit.browser_input(thread, owner) {
@@ -291,7 +299,9 @@ impl CockpitView {
             let changed_events = events.clone();
             let changed_document = document.clone();
             let last = RefCell::new(None);
-            let native_generation = Cell::new(None);
+            let native_generation = Rc::new(Cell::new(None));
+            let input_generation = native_generation.clone();
+            let input_document = document.clone();
             let suppress_navigation = Rc::new(Cell::new(false));
             let suppress = suppress_navigation.clone();
             let web = WebView::browser(
@@ -303,9 +313,13 @@ impl CockpitView {
                     scale: 1.,
                 },
                 Rc::new(move |input| {
-                    input_events
-                        .borrow_mut()
-                        .push(Event::Input(thread, owner, id, input))
+                    input_events.borrow_mut().push(Event::Input(
+                        thread,
+                        owner,
+                        input_document.get(),
+                        input_generation.get(),
+                        input,
+                    ))
                 }),
                 Rc::new(move |state: &BrowserState| {
                     let changed_generation = native_generation
@@ -583,10 +597,12 @@ impl CockpitView {
 }
 
 impl Browser {
-    fn sync_documents(&self) {
+    fn sync_documents(&self, cx: &mut Context<CockpitView>, resample: bool) {
         for tab in &self.state.tabs {
             if let Some(page) = self.pages.get(&tab.id) {
-                page.document.set(tab.document());
+                if page.document.replace(tab.document()) != tab.document() && resample {
+                    page.web.update(cx, |web, cx| web.refresh_browser_state(cx));
+                }
             }
         }
     }
