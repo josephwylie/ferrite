@@ -146,8 +146,34 @@ impl Updates {
 /// Called (on the main thread) whenever a view has new [`Updates`] to take.
 pub type Wake = Box<dyn Fn()>;
 
+/// Credentials for Ferrite's private controller. Never expose these to web content.
+/// The endpoint accepts a WebSocket upgrade only with this Authorization header.
+#[derive(Clone)]
+pub struct ControllerEndpoint {
+    pub url: String,
+    pub authorization: String,
+}
+
 /// A web engine. One per process, used from the main thread only.
 pub trait Engine {
+    /// Open a fixed-height external page, isolated from sealed inline visuals.
+    /// Browser views retain live state while hidden; the conversation service
+    /// must explicitly close them when safe to reclaim.
+    fn open_browser(
+        &self,
+        _url: &str,
+        _viewport: Viewport,
+        _wake: Wake,
+    ) -> Result<Box<dyn View>, String> {
+        Err("Conversation browser is unavailable in this build".into())
+    }
+
+    /// Start an authenticated controller transport on demand. Only external
+    /// browser views are discoverable; sealed visuals never enter its registry.
+    fn controller(&self) -> Result<ControllerEndpoint, String> {
+        Err("Conversation browser control is unavailable in this build".into())
+    }
+
     /// Start rendering `page` at `viewport`. `wake` is called whenever the view
     /// has updates; the first frame and content height follow shortly.
     fn open(&self, page: Page, viewport: Viewport, wake: Wake) -> Box<dyn View>;

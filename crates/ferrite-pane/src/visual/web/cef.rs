@@ -28,6 +28,7 @@
 //! - **Main-thread budget.** Browsers are created from `pump()`, at most one
 //!   per call, so a scroll that brings several views back staggers them.
 
+mod control;
 mod document;
 mod handlers;
 mod input;
@@ -56,7 +57,7 @@ use cef::{
     PaintElementType, RuntimeStyle, Settings, WindowInfo,
 };
 
-use super::{Cursor, Engine, Input, Page, Updates, View, Viewport, Wake};
+use super::{ControllerEndpoint, Cursor, Engine, Input, Page, Updates, View, Viewport, Wake};
 
 /// The custom scheme pages are served from (`ferrite-view://page/<n>`).
 const SCHEME: &str = "ferrite-view";
@@ -198,6 +199,18 @@ impl Dormant {
                 views: RefCell::new(Vec::new()),
                 next_id: Cell::new(1),
                 pumping: Cell::new(false),
+                sandboxed: !no_sandbox
+                    && std::env::var_os("FERRITE_CEF_EXTRA_SWITCHES").is_none()
+                    && !std::env::args().any(|arg| {
+                        arg.starts_with("--no-sandbox")
+                            || arg.starts_with("--disable-web-security")
+                            || arg.starts_with("--single-process")
+                            || arg.starts_with("--disable-features")
+                            || arg.starts_with("--enable-features")
+                            || arg.starts_with("--disable-site-isolation")
+                    }),
+                control: RefCell::new(None),
+                browser_context: RefCell::new(None),
                 profile,
                 _app: app,
                 _library: library,
@@ -282,6 +295,7 @@ fn now_ms() -> u64 {
 /// rendered bytes) so a theme change before load or a reload uses the latest.
 struct PageDoc {
     url: String,
+    external: bool,
     page: Mutex<Page>,
 }
 
@@ -302,6 +316,7 @@ struct Geometry {
 /// One view's state as the callbacks see it. It outlives the view's browsers:
 /// a released view keeps it, and the next browser picks up where it left off.
 struct ViewState {
+    external: bool,
     geometry: Mutex<Geometry>,
     updates: Mutex<Updates>,
     last_cursor: Mutex<Cursor>,
@@ -372,6 +387,9 @@ struct EngineInner {
     views: RefCell<Vec<Weak<ViewInner>>>,
     next_id: Cell<u64>,
     pumping: Cell<bool>,
+    sandboxed: bool,
+    control: RefCell<Option<control::Control>>,
+    browser_context: RefCell<Option<cef::RequestContext>>,
     profile: PathBuf,
     _app: cef::App,
     _library: platform::Library,
@@ -379,49 +397,58 @@ struct EngineInner {
 
 impl Engine for CefEngine {
     fn open(&self, page: Page, viewport: Viewport, wake: Wake) -> Box<dyn View> {
-        let engine = &self.inner;
-        let id = engine.next_id.get();
-        engine.next_id.set(id + 1);
+        self.open_view(page, viewport, wake, None)
+    }
 
-        let doc = Arc::new(PageDoc {
-            url: format!("{SCHEME}://page/{id}"),
-            page: Mutex::new(page),
-        });
-        let state = Arc::new(ViewState {
-            geometry: Mutex::new(Geometry {
-                width: viewport.width.max(1),
-                height: INITIAL_HEIGHT,
-                scale: viewport.scale.max(0.5),
-            }),
-            updates: Mutex::new(Updates::default()),
-            last_cursor: Mutex::new(Cursor::Arrow),
-            dirty: AtomicBool::new(false),
-            generation: AtomicU64::new(0),
-            loaded: AtomicBool::new(false),
-            visible: AtomicBool::new(true),
-            restyle_unpainted: AtomicBool::new(false),
-            trace: engine.global.trace.load(Ordering::SeqCst),
-        });
-        let view = Rc::new(ViewInner {
-            _engine: self.inner.clone(),
-            global: engine.global.clone(),
-            state,
-            doc,
-            browser: RefCell::new(None),
+    fn open_browser(
+        &self,
+        url: &str,
+        viewport: Viewport,
+        wake: Wake,
+    ) -> Result<Box<dyn View>, String> {
+        if !self.inner.sandboxed {
+            return Err("Conversation browsing requires the Chromium sandbox; remove FERRITE_CEF_NO_SANDBOX".into());
+        }
+        if !handlers::external_url(url) {
+            return Err("Conversation browser requires an http or https URL".into());
+        }
+        if self.inner.browser_context.borrow().is_none() {
+            // One shared website context, separate from every sealed visual.
+            let context = cef::request_context_create_context(
+                Some(&cef::RequestContextSettings::default()),
+                None,
+            )
+            .ok_or("CEF could not create an isolated website context")?;
+            *self.inner.browser_context.borrow_mut() = Some(context);
+        }
+        Ok(self.open_view(
+            Page {
+                html: String::new(),
+                theme_css: String::new(),
+            },
+            viewport,
             wake,
-            visible: Cell::new(true),
-            hidden_since: Cell::new(None),
-            released: Cell::new(false),
-            hide_deferred: Cell::new(false),
-            focused: Cell::new(false),
-            pressed: Cell::new(0),
-            pointer: Cell::new((0.0, 0.0)),
-            html_pending: Cell::new(false),
-            created_at: Cell::new(None),
-        });
-        engine.views.borrow_mut().push(Rc::downgrade(&view));
-        // The browser is created by the next pump (see `pump`).
-        Box::new(CefView(view))
+            Some(url),
+        ))
+    }
+
+    fn controller(&self) -> Result<ControllerEndpoint, String> {
+        if !self.inner.sandboxed {
+            return Err("Browser controller requires sandboxed Chromium".into());
+        }
+        let mut controller = self.inner.control.borrow_mut();
+        if controller.is_none() {
+            let mut created = control::Control::start()?;
+            for view in self.inner.live_views() {
+                if view.doc.external {
+                    if let Some(browser) = view.browser.borrow().clone() {
+                        created.register(view.target_id(), browser);
+                    }
+                }
+            }
+            *controller = Some(created);
+        }
+        Ok(controller.as_ref().unwrap().endpoint())
     }
 
     fn pump(&self) -> Duration {
@@ -434,8 +461,19 @@ impl Engine for CefEngine {
         let views = engine.live_views();
         for view in &views {
             view.finish_deferred_hide();
-            view.release_if_hidden_long_enough();
+            if !view.doc.external {
+                view.release_if_hidden_long_enough();
+            }
             view.retire_for_new_html();
+        }
+        if let Some(control) = engine.control.borrow_mut().as_mut() {
+            let ids = views
+                .iter()
+                .filter(|v| v.doc.external && v.browser.borrow().is_some())
+                .map(|v| v.target_id())
+                .collect();
+            control.retain(&ids);
+            control.pump();
         }
         // At most one browser per pump, and nothing else in that pump:
         // creating one costs the main thread a few ms (more under load), and
@@ -484,6 +522,69 @@ impl Engine for CefEngine {
     }
 }
 
+impl CefEngine {
+    fn open_view(
+        &self,
+        page: Page,
+        viewport: Viewport,
+        wake: Wake,
+        external_url: Option<&str>,
+    ) -> Box<dyn View> {
+        let engine = &self.inner;
+        let id = engine.next_id.get();
+        engine.next_id.set(id + 1);
+
+        let doc = Arc::new(PageDoc {
+            url: external_url
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("{SCHEME}://page/{id}")),
+            external: external_url.is_some(),
+            page: Mutex::new(page),
+        });
+        let state = Arc::new(ViewState {
+            external: external_url.is_some(),
+            geometry: Mutex::new(Geometry {
+                width: viewport.width.max(1),
+                height: if external_url.is_some() {
+                    600
+                } else {
+                    INITIAL_HEIGHT
+                },
+                scale: viewport.scale.max(0.5),
+            }),
+            updates: Mutex::new(Updates::default()),
+            last_cursor: Mutex::new(Cursor::Arrow),
+            dirty: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
+            loaded: AtomicBool::new(false),
+            visible: AtomicBool::new(true),
+            restyle_unpainted: AtomicBool::new(false),
+            trace: engine.global.trace.load(Ordering::SeqCst),
+        });
+        let view = Rc::new(ViewInner {
+            id,
+            _engine: self.inner.clone(),
+            global: engine.global.clone(),
+            state,
+            doc,
+            browser: RefCell::new(None),
+            wake,
+            visible: Cell::new(true),
+            hidden_since: Cell::new(None),
+            released: Cell::new(false),
+            hide_deferred: Cell::new(false),
+            focused: Cell::new(false),
+            pressed: Cell::new(0),
+            pointer: Cell::new((0.0, 0.0)),
+            html_pending: Cell::new(false),
+            created_at: Cell::new(None),
+        });
+        engine.views.borrow_mut().push(Rc::downgrade(&view));
+        // The browser is created by the next pump (see `pump`).
+        Box::new(CefView(view))
+    }
+}
+
 impl EngineInner {
     fn live_views(&self) -> Vec<Rc<ViewInner>> {
         let mut views = self.views.borrow_mut();
@@ -498,11 +599,14 @@ impl Drop for EngineInner {
     /// finished closing them before `cef_shutdown`, so pump until it has
     /// (bounded).
     fn drop(&mut self) {
+        // Release observers/browser references before CEF and its library.
+        self.control.get_mut().take();
         let deadline = Instant::now() + Duration::from_secs(2);
         while self.global.live_browsers.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
             do_message_loop_work();
             std::thread::sleep(Duration::from_millis(5));
         }
+        self.browser_context.get_mut().take();
         cef::shutdown();
         let _ = std::fs::remove_dir_all(&self.profile);
     }
@@ -514,6 +618,7 @@ impl Drop for EngineInner {
 struct CefView(Rc<ViewInner>);
 
 struct ViewInner {
+    id: u64,
     /// Keeps CEF up while any view lives, whatever order the host drops in.
     _engine: Rc<EngineInner>,
     global: Arc<Global>,
@@ -545,6 +650,14 @@ struct ViewInner {
 }
 
 impl ViewInner {
+    fn target_id(&self) -> String {
+        format!(
+            "ferrite-browser-{}-{}",
+            self.id,
+            self.state.generation.load(Ordering::SeqCst)
+        )
+    }
+
     /// Visible and without a browser: never created yet, or released.
     fn wants_browser(&self) -> bool {
         self.visible.get() && self.browser.borrow().is_none()
@@ -556,7 +669,7 @@ impl ViewInner {
     fn create_browser(&self) {
         let started = Instant::now();
         let generation = self.state.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        self.state.loaded.store(false, Ordering::SeqCst);
+        self.state.loaded.store(self.doc.external, Ordering::SeqCst);
         // The reloaded page has the latest theme built in.
         self.state.restyle_unpainted.store(false, Ordering::SeqCst);
         let mut client = handlers::client(
@@ -579,16 +692,28 @@ impl ViewInner {
             background_color: 0,
             ..Default::default()
         };
+        let mut context = if self.doc.external {
+            self._engine.browser_context.borrow().clone()
+        } else {
+            None
+        };
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
             Some(&mut client),
             Some(&self.doc.url.as_str().into()),
             Some(&settings),
             None,
-            None,
+            context.as_mut(),
         );
         if browser.is_none() {
             ferrite_core::log!("visuals: cef_browser_host_create_browser_sync returned null");
+        }
+        if self.doc.external {
+            if let (Some(control), Some(browser)) =
+                (self._engine.control.borrow_mut().as_mut(), browser.clone())
+            {
+                control.register(self.target_id(), browser);
+            }
         }
         *self.browser.borrow_mut() = browser;
         // The browser loads the document as it is now.
@@ -816,6 +941,9 @@ impl View for CefView {
 
     fn set_theme(&self, theme_css: &str) {
         let view = &self.0;
+        if view.doc.external {
+            return;
+        }
         view.doc.page.lock().unwrap().theme_css = theme_css.to_owned();
         let frame = view
             .browser
@@ -835,6 +963,9 @@ impl View for CefView {
 
     fn set_html(&self, html: &str) {
         let view = &self.0;
+        if view.doc.external {
+            return;
+        }
         {
             let mut page = view.doc.page.lock().unwrap();
             if page.html == html {
