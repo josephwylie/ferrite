@@ -267,3 +267,33 @@ fn hidden_selected_pages_release_only_after_native_acknowledgement() {
         .unwrap()
         .is_none());
 }
+
+#[test]
+fn malformed_website_authorities_never_create_tabs() {
+    let thread = ThreadId::new(1);
+    let mut browser = Service::default();
+    browser.attach(thread, 7).unwrap();
+    for url in [
+        "https://:443/",
+        "https://bad host/",
+        "https://[::1/",
+        "https://user@:443/",
+    ] {
+        assert!(
+            browser
+                .apply(thread, 7, Action::Open { url: url.into() })
+                .is_err(),
+            "invalid website authority: {url}"
+        );
+        assert!(browser.state(thread).tabs.is_empty());
+    }
+    browser
+        .apply(
+            thread,
+            7,
+            Action::Open {
+                url: "http://localhost:3000/page#section".into(),
+            },
+        )
+        .unwrap();
+}
