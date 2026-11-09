@@ -25,9 +25,8 @@ Cargo lockfile and records the patch and executable SHA-256 in
 licenses in `Contents/Resources/agent-browser`, with only the executable in
 `Contents/MacOS`; code signing treats metadata in the latter as unsigned nested
 code. `--metadata-directory` selects this layout for staging/offline verification.
-The original official native release digest verifier is retained separately as
-`verify-agent-browser-release.py`; **those unmodified executables must not be
-used by the Conversation browser**.
+Official unmodified upstream executables must not substitute for this hardened
+native distribution.
 
 The patch is necessary: upstream's native daemon unconditionally starts a
 loopback streaming WebSocket server. Its origin check accepts missing Origin,
@@ -161,9 +160,8 @@ transport probe now also requires an explicit inspect-denied error.
 
 The current patch SHA-256 is
 `c9a6df0b0cf5f806cfd7eccedfe0f59b781ec02784abe042d36d427b40cc553c`.
-The successful local and CI evidence above applies to the previous `034e4532`
-patch; the new inspect regression was added after those builds and must pass
-CI before the updated distribution is accepted. Native CI uses the packager's
+The original local and CI evidence above applies to the previous `034e4532`
+patch. The subsequent c9a validation below covers the inspector regression. Native CI uses the packager's
 `--test` option to execute all six focused Rust security regressions on every
 platform before packaging. Local Rust builds remain stopped for disk space.
 
@@ -172,6 +170,18 @@ recording uses existing CDP screencast and ffmpeg pipes; tracing/profiling use
 existing CDP IO streams. Standalone dashboard startup is outside daemon mode;
 the service's allowlisted environment selects daemon mode exclusively. Browser
 launch/provider/Safari/Appium paths remain behind the explicit-CDP requirement.
+
+## Final native hardening validation
+
+[Run 42542183864](https://github.com/josephwylie/ferrite/actions/runs/42542183864)
+passed on Windows x64, macOS arm64 and macOS Intel for patch `c9a6df0b`.
+Each job passed all **six focused Rust security regressions**, built the native
+release executable, rejected inspector/stream activation and missing/wrong
+capabilities through the real persistent transport, and verified its packaged
+hash offline. [Raw build and transport results](browser-native-validation-c9a6df0b.json)
+retain compiler versions, executable hashes and completed job IDs. These results
+prove the current native hardening on all supported platforms; the packaged
+CEF bridge, OS isolation and unsafe-startup negative smokes remain separate.
 
 ## Unsafe Chromium startup overrides
 
@@ -188,6 +198,31 @@ creation and controller access to reject the unsafe configuration, then run the
 ordinary sealed-visual pixel/input/idle checks. The intentionally unsandboxed
 negative runs do not claim renderer sandbox proof; the normal packaged smoke
 still requires the OS sandbox checks. These additions require CI validation.
+
+## Review verification updates
+
+One normalized Chromium switch parser now feeds both CEF sandbox settings and
+the external capability gate. Short prefixes, Windows slash/case variants and
+valued switches cannot bypass the web-security, site-isolation or feature
+override checks. Packaged negative smokes cover those families as well as the
+sandbox override while retaining sealed rendering/input tests.
+
+The Python tests exercise the **shipping packager** through its public offline
+CLI: tampered executable bytes, wrong source provenance, missing offline data,
+and the separate macOS resource metadata directory. The unused official-release
+verifier was removed.
+
+Process-count evidence comes from actual OS descendant trees (`ps` on macOS,
+`Win32_Process` on Windows), including executable names and PIDs. The fixture
+retains samples before controller startup, throughout single-agent work and
+throughout two concurrent workers, then after controller reconnect. Each active
+phase takes at least three samples while native page work continues. Both
+phases assert the same two target IDs; adding tabs cannot explain a process
+count difference. The recorded controller/browser counts are computed from
+these samples and the concurrent-agent phase must not increase browser process
+count over the single-agent baseline. Periodic sampling is not an exhaustive
+trace of arbitrarily short-lived OS processes. These updated fixture checks
+remain pending packaged CI execution.
 
 ## Reproduction and acceptance status
 

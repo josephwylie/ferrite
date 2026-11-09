@@ -12,11 +12,14 @@ import socket
 import shutil
 import struct
 import tempfile
+import threading
+import time
 import urllib.parse
 import zlib
 from pathlib import Path
 
 from native_browser_service import NativeService
+from browser_processes import sample_browser_processes
 
 
 def screenshot_color(path):
@@ -113,6 +116,18 @@ def main():
     forbidden_handshake(endpoint)
     forbidden_handshake(endpoint, "Bearer wrong")
     forbidden_handshake(endpoint, authorization, "http://127.0.0.1:3000")
+    browser_pid = os.getppid()
+    process_samples = {"before_controller": sample_browser_processes(browser_pid, executable)}
+    destination = Path(os.environ["FERRITE_BROWSER_EVIDENCE"]) if os.environ.get("FERRITE_BROWSER_EVIDENCE") else None
+    if destination is not None:
+        destination.mkdir(parents=True, exist_ok=True)
+
+    def retain_process_samples():
+        if destination is not None:
+            (destination / "process-samples.json").write_text(json.dumps(process_samples, indent=2) + "\n")
+
+    retain_process_samples()
+    operations = {"native_clicks": 0}
     expected = {"/one": ((0, 0, 255), "rgb(0, 0, 255)"),
                 "/two": ((0, 255, 0), "rgb(0, 255, 0)")}
     with tempfile.TemporaryDirectory(prefix="ferrite-cef-captures-") as captures:
@@ -129,6 +144,8 @@ def main():
 
             tabs = attach()
             first_pid = service.process.pid
+            fixed_targets = {tab["targetId"] for tab in tabs.values()}
+            process_samples["fixed_target_ids"] = sorted(fixed_targets)
 
             def work(path):
                 # The native controller has mutable active-tab state. Selecting
@@ -140,17 +157,75 @@ def main():
                     snapshot = service.command("snapshot", interactive=True)
                     assert "Paint" in snapshot["snapshot"], snapshot
                     buttons = [ref for ref, node in snapshot["refs"].items()
-                               if node["role"] == "button" and node["name"] == "Paint"]
+                               if node["role"] == "button" and node["name"] in ("Paint", "Painted")]
                     assert len(buttons) == 1, snapshot
                     service.command("click", selector="@" + buttons[0])
+                    operations["native_clicks"] += 1
                     color = service.command("evaluate", script="getComputedStyle(document.body).backgroundColor")["result"]
                     assert color == expected[path][1], (path, color)
                     capture = Path(captures) / (path[1:] + ".png")
                     service.command("screenshot", path=str(capture))
                     assert screenshot_color(capture) == expected[path][0], path
+                    if destination is not None:
+                        shutil.copy2(capture, destination / capture.name)
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as agents:
-                list(agents.map(work, expected))
+            def measure_agents(paths):
+                # Keep real native work active until at least one OS process
+                # query completes, including slower Windows CIM enumeration.
+                sampled = threading.Event()
+                barrier = threading.Barrier(len(paths) + 1)
+                guard = threading.Lock()
+                activity = {"active": 0, "peak": 0}
+                samples = []
+
+                def agent(path):
+                    with guard:
+                        activity["active"] += 1
+                        activity["peak"] = max(activity["peak"], activity["active"])
+                    barrier.wait(timeout=30)
+                    try:
+                        rounds = 0
+                        while rounds < 3 or not sampled.is_set():
+                            work(path)
+                            rounds += 1
+                    finally:
+                        with guard:
+                            activity["active"] -= 1
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=len(paths)) as agents:
+                    futures = [agents.submit(agent, path) for path in paths]
+                    barrier.wait(timeout=30)
+                    try:
+                        while not all(future.done() for future in futures):
+                            with guard:
+                                active = activity["active"]
+                            sample = sample_browser_processes(browser_pid, executable)
+                            sample["active_agent_workers_at_sample_start"] = active
+                            samples.append(sample)
+                            if len(samples) >= 3:
+                                sampled.set()
+                            time.sleep(0.05)
+                    finally:
+                        sampled.set()
+                    for future in futures:
+                        future.result()
+                assert len(samples) >= 3 and any(sample["active_agent_workers_at_sample_start"] for sample in samples)
+                observed_targets = {tab["targetId"] for tab in service.command("tab_list")["tabs"]}
+                assert observed_targets == fixed_targets, "Process comparison changed the target set"
+                return {"peak_active_agent_workers": activity["peak"], "samples": samples, "target_ids": sorted(observed_targets),
+                        "after": sample_browser_processes(browser_pid, executable)}
+
+            process_samples["single_agent"] = measure_agents(["/one"])
+            process_samples["concurrent_agents"] = measure_agents(list(expected))
+            retain_process_samples()
+            single = process_samples["single_agent"]["samples"] + [process_samples["single_agent"]["after"]]
+            concurrent = process_samples["concurrent_agents"]["samples"] + [process_samples["concurrent_agents"]["after"]]
+            single_browsers = max(sample["browser_process_count"] for sample in single)
+            concurrent_browsers = max(sample["browser_process_count"] for sample in concurrent)
+            controllers = [sample["controller_process_count"] for sample in single + concurrent]
+            assert all(count == 1 for count in controllers), process_samples
+            assert concurrent_browsers <= single_browsers, f"Browser processes scaled with agent count: single={single_browsers}, concurrent={concurrent_browsers}"
+            assert process_samples["concurrent_agents"]["peak_active_agent_workers"] == len(expected)
             assert service.process.pid == first_pid, "agents created another controller"
             # Both known-good screenshots already exist before hostile attempts.
             # Recheck location and state after every refusal, then let Rust
@@ -169,17 +244,19 @@ def main():
                 service.command("tab_switch", tabId=tabs[path]["tabId"])
                 color = service.command("evaluate", script="getComputedStyle(document.body).backgroundColor")["result"]
                 assert color == expected[path][1], "controller reconnect lost visible page state"
-            evidence = {"embedded_targets": 2, "concurrent_agents": 2,
-                              "controllers_per_active_service": 1, "screenshots_match_live_pages": True,
-                              "native_clicks": 2, "snapshot_reference_clicks": 2, "controller_restart_retains_targets": True,
+            process_samples["after_controller_reconnect"] = sample_browser_processes(browser_pid, executable)
+            retain_process_samples()
+            evidence = {"embedded_targets": len(tabs),
+                              "concurrent_agents": process_samples["concurrent_agents"]["peak_active_agent_workers"],
+                              "controllers_per_active_service": max(controllers),
+                              "browser_process_count_single_agent": single_browsers,
+                              "browser_process_count_concurrent_agents": concurrent_browsers,
+                              "process_samples": process_samples, "screenshots_match_live_pages": True,
+                              "native_clicks": operations["native_clicks"], "snapshot_reference_clicks": operations["native_clicks"], "controller_restart_retains_targets": True,
                               "unauthorized_cdp_handshakes_rejected": 3,
                               "sealed_visual_discovery": False, "page_privileged_fetches_and_navigations_rejected": 12,
                               "page_controller_websockets_rejected": 2}
-            if os.environ.get("FERRITE_BROWSER_EVIDENCE"):
-                destination = Path(os.environ["FERRITE_BROWSER_EVIDENCE"])
-                destination.mkdir(parents=True, exist_ok=True)
-                for screenshot in Path(captures).glob("*.png"):
-                    shutil.copy2(screenshot, destination / screenshot.name)
+            if destination is not None:
                 (destination / "native-results.json").write_text(json.dumps(evidence, indent=2) + "\n")
             print(json.dumps(evidence))
 
