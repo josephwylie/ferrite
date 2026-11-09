@@ -39,14 +39,14 @@ class Boundary:
     def __init__(self,call,finish,output,provider='claude'):
         self.call,self.finish,self.output,self.provider=call,finish,output,provider
         self.handlers={};self.number=0;self.ui=0;self.trace=[];self.checks=[];self.polls=0
-        self.concurrent={};self.last=None
+        self.concurrent={};self.last=None;self.failed=False
     def begin(self):self.observe(self.manual)
     def send(self,operation,callback,error=False):
         self.number+=1;name='boundary-'+str(self.number)
         self.handlers[name]=(callback,error,operation)
         self.call(name,operation)
     def receive(self,name,answer):
-        if name not in self.handlers:return
+        if self.failed or name not in self.handlers:return
         callback,expected_error,operation=self.handlers.pop(name)
         text='\n'.join(item.get('text','') for item in answer.get('content',answer.get('contentItems',[])))
         failed=answer.get('isError') is not False if self.provider=='claude' else answer.get('success') is not True
@@ -204,6 +204,8 @@ class Boundary:
         (self.output/'boundary-results.json').write_text(json.dumps({'success':True,'checks':self.checks,'oracle':oracle},indent=2))
         self.finish(answer)
     def fail(self,error):
+        if self.failed:return
+        self.failed=True
         (self.output/'completion-gate-release').write_text('failure cleanup')
         (self.output/'boundary-results.json').write_text(json.dumps({'success':False,'error':error,'checks':self.checks},indent=2))
         self.finish({'isError':True,'success':False,'content':[{'type':'text','text':error}],'contentItems':[{'type':'text','text':error}]})

@@ -56,7 +56,16 @@ impl Scenario {
                         return Ok(false);
                     };
                     // The fixture's top-left white margin contains no control.
-                    let position = bounds.origin + point(px(12.), px(12.));
+                    let Some(viewport) = view.read(cx).browser_smoke_viewport(thread) else {
+                        return Ok(false);
+                    };
+                    // browser-preview also contains tabs/address controls. Its
+                    // native content is bottom aligned, so use the real viewport.
+                    let position = bounds.origin
+                        + point(
+                            px(12.),
+                            bounds.size.height - px(viewport.height as f32) + px(12.),
+                        );
                     window.dispatch_event(
                         PlatformInput::MouseMove(MouseMoveEvent {
                             position,
