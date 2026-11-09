@@ -806,6 +806,11 @@ impl Client {
     pub fn send(&mut self, message: &ClientMessage) -> io::Result<()> {
         send(&mut self.writer, message)
     }
+
+    /// Capture uploads keep their place in this connection's command stream.
+    pub fn send_capture(&mut self, message: ClientMessage) -> io::Result<()> {
+        self.send(&message)
+    }
 }
 
 impl Drop for Client {
