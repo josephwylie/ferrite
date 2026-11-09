@@ -14,16 +14,20 @@ env:
 on:
   pull_request:
     paths:
-      - 'scripts/*agent-browser*'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/config.toml'
+      - 'crates/ferrite*/**'
+      - 'scripts/package-agent-browser.py'
+      - 'scripts/patches/agent-browser-0.41.2-ferrite.patch'
       - 'scripts/native_browser_service.py'
       - 'scripts/browser_processes.py'
       - 'scripts/probe-embedded-browser.py'
-      - 'scripts/patches/agent-browser*'
-      - 'scripts/test_package_agent_browser.py'
-      - '.github/workflows/browser-feasibility.yml'
-      - 'crates/ferrite*/**'
-      - 'scripts/*windows.ps1'
+      - 'scripts/probe-browser-keychain.py'
+      - 'scripts/stage-windows.ps1'
+      - 'scripts/copy-chromium-windows.ps1'
       - 'scripts/install-app.sh'
+      - '.github/workflows/browser-feasibility.yml'
   workflow_dispatch:
 
 concurrency:
@@ -37,6 +41,8 @@ jobs:
     timeout-minutes: 75
     env:
       FERRITE_BROWSER_SMOKE: '1'
+      # Ordinary/profile smoke uses isolated data; production encryption has its own probe.
+      FERRITE_BROWSER_SMOKE_MOCK_KEYCHAIN: '1'
       FERRITE_BROWSER_SMOKE_DRIVER: ${{ github.workspace }}/scripts/probe-embedded-browser.py
       FERRITE_BROWSER_EVIDENCE: ${{ github.workspace }}/target/browser-evidence
     strategy:
@@ -81,6 +87,7 @@ jobs:
           python -c "import shutil; shutil.rmtree('target/agent-browser-build', ignore_errors=True)"
           python scripts/package-agent-browser.py --destination target/browser-controller
       - name: Stage Windows package
+        id: package_windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -88,6 +95,7 @@ jobs:
           python scripts/package-agent-browser.py --destination target/debug/bundle/windows/Ferrite --from-stage target/browser-controller
           if ($LASTEXITCODE -ne 0) { throw 'Native controller staging failed' }
       - name: Stage and sign macOS bundle
+        id: package_macos
         if: runner.os == 'macOS'
         env:
           FERRITE_BROWSER_CONTROLLER_STAGE: ${{ github.workspace }}/target/browser-controller
@@ -105,8 +113,30 @@ jobs:
       - name: macOS packaged browser smoke
         if: runner.os == 'macOS'
         run: target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite --visual-smoke
+      - name: Windows durable profile and competing process smoke
+        if: always() && !cancelled() && runner.os == 'Windows' && steps.package_windows.outcome == 'success'
+        shell: pwsh
+        env:
+          FERRITE_BROWSER_PROFILE: ${{ runner.temp }}/ferrite-browser-profile
+        run: |
+          foreach ($stage in @('write', 'read')) {
+            $env:FERRITE_BROWSER_PROFILE_SMOKE = $stage
+            $smoke = Start-Process -FilePath (Resolve-Path target/debug/bundle/windows/Ferrite/ferrite.exe) -ArgumentList @('--visual-smoke') -NoNewWindow -Wait -PassThru
+            if ($smoke.ExitCode -ne 0) { throw "Profile $stage smoke failed ($($smoke.ExitCode))" }
+          }
+      - name: macOS durable profile and competing process smoke
+        if: always() && !cancelled() && runner.os == 'macOS' && steps.package_macos.outcome == 'success'
+        env:
+          FERRITE_BROWSER_PROFILE: ${{ runner.temp }}/ferrite-browser-profile
+        run: |
+          for stage in write read; do
+            FERRITE_BROWSER_PROFILE_SMOKE="$stage" target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite --visual-smoke
+          done
+      - name: macOS production OS keychain and encrypted cookie restart
+        if: always() && !cancelled() && runner.os == 'macOS' && steps.package_macos.outcome == 'success'
+        run: python scripts/probe-browser-keychain.py target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite
       - name: Windows unsafe startup smoke
-        if: runner.os == 'Windows'
+        if: always() && !cancelled() && runner.os == 'Windows' && steps.package_windows.outcome == 'success'
         shell: pwsh
         env:
           FERRITE_BROWSER_UNSAFE_SMOKE: '1'
@@ -116,7 +146,7 @@ jobs:
             if ($smoke.ExitCode -ne 0) { throw "Unsafe configuration did not preserve sealed-only behavior: $unsafeSwitch ($($smoke.ExitCode))" }
           }
       - name: macOS unsafe startup smoke
-        if: runner.os == 'macOS'
+        if: always() && !cancelled() && runner.os == 'macOS' && steps.package_macos.outcome == 'success'
         env:
           FERRITE_BROWSER_UNSAFE_SMOKE: '1'
         run: |
