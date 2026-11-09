@@ -340,11 +340,17 @@ pub fn launch() {
 
             // Who posts the system notifications (ADR 0017): the bundle's
             // identifier, and on Windows the AppUserModelID.
+            if browser_smoke {
+                ferrite_core::log!("browser window smoke: setting native app identity");
+            }
             cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite");
             if browser_smoke {
                 ferrite_core::log!("browser window smoke: opening native window; Threads {:?}", core.threads());
             }
             let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
+            if browser_smoke {
+                ferrite_core::log!("browser window smoke: native bounds computed");
+            }
             let mut cockpit_window = None;
             let window = cx
                 .open_window(

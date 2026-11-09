@@ -100,6 +100,9 @@ jobs:
       - name: Observe displayed fixture through actual Claude adapter
         run: |
           python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider claude --output target/browser-window-evidence/claude
+      - name: Diagnose Windows naked native startup after a packaged failure
+        if: failure() && runner.os == 'Windows'
+        run: python scripts/probe-browser-window.py target/debug/ferrite.exe --startup-only --output target/browser-window-evidence/naked-startup-diagnostic
       - uses: actions/upload-artifact@v4
         if: always()
         with:

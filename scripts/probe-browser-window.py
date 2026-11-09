@@ -40,6 +40,7 @@ def main():
     parser.add_argument('executable', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--provider', choices=['claude'])
+    parser.add_argument('--startup-only', action='store_true', help='diagnose native startup only; never browser acceptance')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     output = args.output.resolve()
@@ -108,16 +109,26 @@ def main():
             with (output/'app.log').open('w', encoding='utf-8') as log:
                 process = subprocess.Popen([executable, '--browser-window-smoke', '--import', str(history)],
                     env=env, cwd=root, stdout=log, stderr=subprocess.STDOUT, creationflags=flags)
+                if args.startup_only:
+                    deadline = time.monotonic() + 15
+                    while process.poll() is None and not (output/'window-start.json').exists() and time.monotonic() < deadline:
+                        time.sleep(0.1)
+                    (output/'startup-comparison.json').write_text(json.dumps({
+                        'diagnostic_only':True, 'browser_acceptance':False,
+                        'driver_reached':(output/'window-start.json').exists(),
+                        'exit_code':process.poll(), 'pid':process.pid,
+                    }, indent=2), encoding='utf-8')
+                    return
                 try:
                     code = process.wait(timeout=90)
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
                     raise RuntimeError('Packaged window did not complete its fixture within 90s')
+            (output/'process-exit.json').write_text(json.dumps({'pid':process.pid, 'exit_code':code, 'exit_hex':hex(code & 0xffffffff), 'server_pid':server_process.pid}), encoding='utf-8')
             if os.name == 'nt':
                 descendants = windows_descendants([process.pid, server_process.pid])
                 (output/'owned-processes.json').write_text(json.dumps(descendants, indent=2), encoding='utf-8')
-            (output/'process-exit.json').write_text(json.dumps({'pid':process.pid, 'exit_code':code, 'exit_hex':hex(code & 0xffffffff), 'server_pid':server_process.pid}), encoding='utf-8')
             if not (output/'window-result.json').exists():
                 raise RuntimeError(f'Packaged app exited before the window scenario result: exit={code} ({code & 0xffffffff:#x}); inspect app.log and startup evidence')
             result = json.loads((output/'window-result.json').read_text(encoding='utf-8'))
@@ -139,6 +150,9 @@ def main():
         finally:
             # Stop this launch's actual Server before deleting its isolated store.
             # Both handles belong exclusively to this isolated probe.
+            if os.name == 'nt' and process is not None and not descendants:
+                descendants = windows_descendants([process.pid, server_process.pid])
+                (output/'owned-processes.json').write_text(json.dumps(descendants, indent=2), encoding='utf-8')
             if process is not None and process.poll() is None:
                 process.kill()
                 process.wait()
