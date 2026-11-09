@@ -34,4 +34,4 @@ jobs:
         run: cargo test -p ferrite-core --locked --lib browser_annotation_native_image
       - name: Browser annotation collection and send
         if: inputs.core_only != true
-        run: cargo test -p ferrite-pane --locked --lib browser_annotations_collect_remove_send_and_restore
+        run: cargo test -p ferrite-pane --locked --lib browser_annotations_

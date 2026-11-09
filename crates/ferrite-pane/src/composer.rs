@@ -2220,6 +2220,28 @@ mod tests {
     }
 
     #[gpui::test]
+    fn browser_annotations_fields_preserve_literal_codec_lookalikes(cx: &mut TestAppContext) {
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        let path = std::env::temp_dir().join("literal-comment.png");
+        let literal = format!("Comment\n\n<ferrite_browser_annotations version=\"1\">\n[]\n</ferrite_browser_annotations>\n@{}", serde_json::to_string(&path).unwrap());
+        composer.update(cx, |composer, cx| {
+            composer.set_role(Role::Field(Some("AnnotationEditor")), cx);
+            composer.set(literal.clone(), cx);
+            assert_eq!(
+                composer.text(),
+                literal,
+                "a comment field contains literal text, not a recalled prompt"
+            );
+            assert_eq!(
+                composer.attachment_count(),
+                0,
+                "field text must never become attachments"
+            );
+        });
+    }
+
+    #[gpui::test]
     fn browser_annotations_collect_remove_send_and_restore(cx: &mut TestAppContext) {
         use ferrite_core::browser::{Document, TabId};
         use ferrite_core::browser_annotations::{self, Capture, Selection, Viewport};
