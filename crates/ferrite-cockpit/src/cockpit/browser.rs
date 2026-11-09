@@ -44,7 +44,7 @@ struct RunningControl {
     native_generation: u64,
     epoch: u64,
     manual: Rc<RefCell<manual::Manual>>,
-    answer: std::sync::mpsc::Receiver<ferrite_core::browser::Outcome>,
+    answer: std::sync::mpsc::Receiver<ferrite_pane::visual::browser_control::native::Event>,
 }
 
 struct Browser {
@@ -754,12 +754,39 @@ impl CockpitView {
         use ferrite_core::browser::Outcome;
         #[cfg(feature = "cef")]
         if let Some(running) = self.browsers.running_control.take() {
-            let result = match running.answer.try_recv() {
-                Ok(outcome) => Some(outcome),
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Outcome::Uncertain {
-                    error: "Browser worker disconnected; observe the page before continuing".into(),
-                }),
-                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            let result = loop {
+                match running.answer.try_recv() {
+                    Ok(ferrite_pane::visual::browser_control::native::Event::Ready(authorize)) => {
+                        let valid = self
+                            .browsers
+                            .threads
+                            .get(&running.request.thread)
+                            .filter(|browser| browser.owner == Some(running.request.owner))
+                            .and_then(|browser| browser.pages.get(&running.request.document.tab))
+                            .is_some_and(|page| {
+                                page.document.get() == running.request.document
+                                    && page.pending_navigation.borrow().is_none()
+                                    && page.native.state().document_generation
+                                        == running.native_generation
+                                    && page.native.control_epoch() == running.epoch
+                                    && page.manual.borrow().revision == running.request.revision
+                                    && (running.request.control.observation()
+                                        || !page.manual.borrow().active)
+                            });
+                        let _ = authorize.send(valid);
+                    }
+                    Ok(ferrite_pane::visual::browser_control::native::Event::Finished(outcome)) => {
+                        break Some(outcome)
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        break Some(Outcome::Uncertain {
+                            error:
+                                "Browser worker disconnected; observe the page before continuing"
+                                    .into(),
+                        })
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break None,
+                }
             };
             if let Some(mut outcome) = result {
                 let current = self
