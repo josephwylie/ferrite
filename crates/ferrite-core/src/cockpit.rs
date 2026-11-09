@@ -375,6 +375,24 @@ impl Cockpit {
         }
     }
 
+    pub fn browser_settled(
+        &mut self,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        revision: u64,
+    ) -> io::Result<()> {
+        self.remote()?
+            .execute(Op::BrowserSettled {
+                thread,
+                owner,
+                document,
+                revision,
+            })
+            .map_err(|error| io::Error::other(error.message))?;
+        Ok(())
+    }
+
     pub fn browser_input(
         &mut self,
         thread: ThreadId,

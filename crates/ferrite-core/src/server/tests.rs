@@ -5521,3 +5521,202 @@ fn browser_requests_reject_old_input_and_retain_unwatched_dirty_pages() {
     window.command(99, Op::Stop { when: When::Now });
     assert_eq!(harness.server.join().unwrap(), 0);
 }
+
+fn browser_test_observe(
+    client: &mut crate::link::Client,
+    agent: &crate::browser::ThreadClient,
+    document: crate::browser::Document,
+    revision: u64,
+) -> crate::browser::Response {
+    let answer = agent.submit(crate::browser::Operation::Control {
+        document,
+        revision,
+        observation: None,
+        control: crate::browser::Control::Observe,
+    });
+    browser_test_answer(
+        client,
+        crate::browser::Control::Observe,
+        crate::browser::Outcome::Success {
+            value: serde_json::json!({"text":"Current fixture page","references":["@save"]}),
+        },
+    );
+    answer
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap()
+}
+
+fn browser_test_input(
+    client: &mut crate::link::Client,
+    id: u64,
+    thread: ThreadId,
+    owner: crate::browser::Owner,
+    document: crate::browser::Document,
+) -> u64 {
+    let ServerMessage::Reply {
+        ok: Some(Done::BrowserInput { revision }),
+        error: None,
+        ..
+    } = browser_test_command(
+        client,
+        id,
+        Op::BrowserInput {
+            thread,
+            owner,
+            document,
+        },
+    )
+    else {
+        panic!("manual input must acknowledge its revision before native dispatch");
+    };
+    revision
+}
+
+#[test]
+fn browser_requests_wait_for_the_latest_manual_gesture_to_settle() {
+    use crate::browser::{Action, Control, Operation, Outcome};
+    let harness = start("browser-manual-gesture");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    let mut owner_window = browser_test_window(&harness, thread);
+    let agent = harness.browser.for_thread(thread);
+    let opened = agent
+        .submit(browser_test_action(Action::Open {
+            url: "https://example.com/form".into(),
+        }))
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    let owner = opened.state.owner.unwrap();
+    let document = opened.state.tabs[0].document();
+    let before = browser_test_observe(&mut owner_window, &agent, document, 0)
+        .observation
+        .unwrap();
+    let first = browser_test_input(&mut owner_window, 301, thread, owner, document);
+    let held = browser_test_observe(&mut owner_window, &agent, document, first);
+    assert!(
+        held.observation.is_none(),
+        "a readable snapshot during held input cannot authorize agent writes"
+    );
+    assert!(
+        agent
+            .submit(Operation::State)
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+            .state
+            .tabs[0]
+            .protected
+    );
+    let latest = browser_test_input(&mut owner_window, 302, thread, owner, document);
+    browser_test_command(
+        &mut owner_window,
+        303,
+        Op::BrowserSettled {
+            thread,
+            owner,
+            document,
+            revision: first,
+        },
+    );
+    assert!(
+        browser_test_observe(&mut owner_window, &agent, document, latest)
+            .observation
+            .is_none(),
+        "an older end event cannot settle a newer typing burst"
+    );
+    browser_test_command(
+        &mut owner_window,
+        304,
+        Op::BrowserSettled {
+            thread,
+            owner,
+            document,
+            revision: latest,
+        },
+    );
+    let fresh = browser_test_observe(&mut owner_window, &agent, document, latest);
+    assert!(
+        !fresh.state.tabs[0].protected,
+        "settled input and a completed read must release their transient protections"
+    );
+    let fresh = fresh.observation.unwrap();
+    assert_ne!(fresh, before);
+    let click = Control::Click {
+        reference: "@save".into(),
+    };
+    let write = agent.submit(Operation::Control {
+        document,
+        revision: latest,
+        observation: Some(fresh),
+        control: click.clone(),
+    });
+    browser_test_answer(
+        &mut owner_window,
+        click,
+        Outcome::Success {
+            value: serde_json::json!({"saved":true}),
+        },
+    );
+    write.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    let cancelled = browser_test_input(&mut owner_window, 305, thread, owner, document);
+    let ServerMessage::Reply {
+        ok: Some(Done::Browser { state }),
+        error: None,
+        ..
+    } = browser_test_command(
+        &mut owner_window,
+        306,
+        Op::Browser {
+            thread,
+            action: Action::Navigate {
+                document,
+                url: "https://example.com/next".into(),
+            },
+        },
+    )
+    else {
+        panic!("operator navigation must cancel the previous document's gesture");
+    };
+    let next_document = state.tabs[0].document();
+    assert!(
+        browser_test_observe(&mut owner_window, &agent, next_document, cancelled)
+            .observation
+            .is_some(),
+        "navigation must not leave the new document permanently paused"
+    );
+    let next = browser_test_input(&mut owner_window, 307, thread, owner, next_document);
+    browser_test_command(
+        &mut owner_window,
+        308,
+        Op::BrowserSettled {
+            thread,
+            owner,
+            document,
+            revision: cancelled,
+        },
+    );
+    assert!(
+        browser_test_observe(&mut owner_window, &agent, next_document, next)
+            .observation
+            .is_none()
+    );
+    browser_test_command(
+        &mut owner_window,
+        309,
+        Op::BrowserSettled {
+            thread,
+            owner,
+            document: next_document,
+            revision: next,
+        },
+    );
+    assert!(
+        browser_test_observe(&mut owner_window, &agent, next_document, next)
+            .observation
+            .is_some()
+    );
+    window.command(99, Op::Stop { when: When::Now });
+    assert_eq!(harness.server.join().unwrap(), 0);
+}

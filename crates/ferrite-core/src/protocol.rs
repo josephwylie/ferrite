@@ -162,6 +162,12 @@ pub enum Op {
         owner: crate::browser::Owner,
         page: crate::browser::PageState,
     },
+    BrowserSettled {
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        revision: u64,
+    },
     BrowserInput {
         thread: ThreadId,
         owner: crate::browser::Owner,
@@ -483,6 +489,7 @@ impl Op {
             | Op::BrowserReclaim { thread, .. }
             | Op::BrowserReclaimed { thread, .. }
             | Op::BrowserPage { thread, .. }
+            | Op::BrowserSettled { thread, .. }
             | Op::BrowserInput { thread, .. }
             | Op::BrowserAttach { thread }
             | Op::Browser { thread, .. }
