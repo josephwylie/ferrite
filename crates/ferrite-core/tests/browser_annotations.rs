@@ -47,3 +47,69 @@ fn captured_feedback_survives_prompt_roundtrip_without_a_live_page() {
     assert_eq!(std::fs::read(restored[0].original()).unwrap(), png);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn sent_annotation_reopens_through_the_thread_store() {
+    use ferrite_core::{
+        store::{Provider, Store},
+        transcript::Input,
+        workspace::WorkspaceBinding,
+    };
+    let root = std::env::temp_dir().join(format!("ferrite-browser-history-{}", std::process::id()));
+    let store = Store::open(&root).unwrap();
+    let capture = Capture {
+        document: Document {
+            tab: TabId(11),
+            generation: 9,
+        },
+        native_generation: 4,
+        url: "https://example.test/before-navigation".into(),
+        viewport: Viewport {
+            width_css: 1.0,
+            height_css: 1.0,
+            device_scale: 1.0,
+        },
+        selection: Selection::Region {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        },
+    };
+    let png = include_bytes!("fixtures/browser-original.png");
+    let annotation = browser_annotations::retain(
+        store.dir(),
+        capture,
+        png,
+        "Keep this feedback".into(),
+        vec![],
+    )
+    .unwrap();
+    let prompt = browser_annotations::compose("Update", &[], &[annotation.clone()]);
+    let (thread, mut writer) = store
+        .create(
+            Provider::Claude,
+            None,
+            WorkspaceBinding::Main {
+                checkout: root.clone(),
+            },
+        )
+        .unwrap();
+    writer.record_prompt(&prompt).unwrap();
+    writer.flush_fully().unwrap();
+    writer.close();
+    let replay = Store::reader(&root).unwrap().load(thread).unwrap().inputs();
+    let restored = replay
+        .into_iter()
+        .find_map(|input| match input {
+            Input::Prompt(text) => Some(text),
+            _ => None,
+        })
+        .unwrap();
+    let (words, _, annotations) = browser_annotations::split(restored);
+    assert_eq!(words, "Update");
+    assert_eq!(annotations, [annotation]);
+    assert_eq!(std::fs::read(annotations[0].original()).unwrap(), png);
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}

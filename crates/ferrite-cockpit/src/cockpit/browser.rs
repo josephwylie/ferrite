@@ -160,6 +160,38 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// Capture callers retain their Annotation lease through Server retention.
+    /// Results never borrow the live View or use its last OnPaint frame.
+    pub(super) fn capture_browser_page(
+        &mut self,
+        thread: ThreadId,
+        owner: Owner,
+        document: Document,
+        _lease: ferrite_core::browser::Lease,
+        _point: Option<ferrite_core::browser_annotations::Point>,
+        _cx: &mut Context<Self>,
+    ) -> std::sync::mpsc::Receiver<
+        Result<ferrite_pane::visual::browser_control::CapturedPage, String>,
+    > {
+        let (reply, answer) = std::sync::mpsc::sync_channel(1);
+        let available = self
+            .browsers
+            .threads
+            .get(&thread)
+            .filter(|browser| {
+                browser.owner == Some(owner) && browser.state.active == Some(document.tab)
+            })
+            .and_then(|browser| browser.pages.get(&document.tab))
+            .is_some_and(|page| page.document.get() == document);
+        let error = if available {
+            "Conversation browser capture is not available in this build"
+        } else {
+            "The selected browser document is no longer available; capture it again"
+        };
+        let _ = reply.send(Err(error.into()));
+        answer
+    }
+
     pub(super) fn pump_browsers(&mut self, cx: &mut Context<Self>) {
         if matches!(
             self.cockpit.server(),
