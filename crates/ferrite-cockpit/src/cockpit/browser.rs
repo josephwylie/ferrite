@@ -83,6 +83,7 @@ struct Browser {
     error: Option<String>,
     new_tab: bool,
     failed: BTreeMap<TabId, Document>,
+    native_peers: Rc<RefCell<manual::Peers>>,
 }
 struct Page {
     web: Entity<WebView>,
@@ -96,6 +97,8 @@ impl Drop for Page {
     fn drop(&mut self) {
         // Running work retains its local protection handle. Fence the native
         // attachment before that handle can outlive the owning page/window.
+        self.manual.borrow_mut().cancel();
+        self.manual.borrow_mut().capture_pause(false);
         self.native.set_agent_paused(true);
     }
 }
@@ -150,6 +153,7 @@ impl CockpitView {
                 error: None,
                 new_tab: false,
                 failed: BTreeMap::new(),
+                native_peers: Default::default(),
             });
     }
 
@@ -732,7 +736,9 @@ impl CockpitView {
                         .read(cx)
                         .browser_handle()
                         .expect("browser host has its native page");
-                    manual.borrow_mut().native = Some(native.clone());
+                    manual
+                        .borrow_mut()
+                        .join(browser.native_peers.clone(), id.0, native.clone());
                     manual.borrow_mut().server_protection(tab.protected);
                     let pending_navigation =
                         (native.state().document_generation == 0).then(|| PendingNavigation {
@@ -943,22 +949,36 @@ impl CockpitView {
             let result = loop {
                 match running.answer.try_recv() {
                     Ok(ferrite_pane::visual::browser_control::native::Event::Ready(authorize)) => {
-                        let valid = self
+                        let thread_idle = self
                             .browsers
                             .threads
                             .get(&running.request.thread)
-                            .filter(|browser| browser.owner == Some(running.request.owner))
-                            .and_then(|browser| browser.pages.get(&running.request.document.tab))
-                            .is_some_and(|page| {
-                                page.document.get() == running.request.document
-                                    && page.pending_navigation.borrow().is_none()
-                                    && page.native.state().document_generation
-                                        == running.native_generation
-                                    && page.native.control_epoch() == running.epoch
-                                    && page.manual.borrow().revision == running.request.revision
-                                    && (running.request.control.observation()
-                                        || !page.manual.borrow().active)
+                            .is_some_and(|browser| {
+                                browser.pages.values().all(|page| {
+                                    page.manual.borrow().revision <= running.request.revision
+                                        && (running.request.control.observation()
+                                            || !page.manual.borrow().active)
+                                })
                             });
+                        let valid = thread_idle
+                            && self
+                                .browsers
+                                .threads
+                                .get(&running.request.thread)
+                                .filter(|browser| browser.owner == Some(running.request.owner))
+                                .and_then(|browser| {
+                                    browser.pages.get(&running.request.document.tab)
+                                })
+                                .is_some_and(|page| {
+                                    page.document.get() == running.request.document
+                                        && page.pending_navigation.borrow().is_none()
+                                        && page.native.state().document_generation
+                                            == running.native_generation
+                                        && page.native.control_epoch() == running.epoch
+                                        && page.manual.borrow().revision <= running.request.revision
+                                        && (running.request.control.observation()
+                                            || !page.manual.borrow().active)
+                                });
                         let _ = authorize.send(valid);
                     }
                     Ok(ferrite_pane::visual::browser_control::native::Event::Finished(outcome)) => {
@@ -1010,12 +1030,23 @@ impl CockpitView {
                 .get(&request.thread)
                 .filter(|browser| browser.owner == Some(request.owner))
                 .and_then(|browser| browser.pages.get(&request.document.tab));
-            let valid = page.is_some_and(|page| {
-                page.document.get() == request.document
-                    && page.pending_navigation.borrow().is_none()
-                    && page.manual.borrow().revision == request.revision
-                    && (request.control.observation() || !page.manual.borrow().active)
-            });
+            let thread_idle = self
+                .browsers
+                .threads
+                .get(&request.thread)
+                .is_some_and(|browser| {
+                    browser.pages.values().all(|page| {
+                        page.manual.borrow().revision <= request.revision
+                            && (request.control.observation() || !page.manual.borrow().active)
+                    })
+                });
+            let valid = thread_idle
+                && page.is_some_and(|page| {
+                    page.document.get() == request.document
+                        && page.pending_navigation.borrow().is_none()
+                        && page.manual.borrow().revision <= request.revision
+                        && (request.control.observation() || !page.manual.borrow().active)
+                });
             if !valid {
                 self.reply_browser_control(request, Outcome::Failed { error: "The owned browser document or operator revision changed before dispatch; obtain fresh State and Observe".into() });
                 continue;
