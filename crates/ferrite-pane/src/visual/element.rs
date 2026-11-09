@@ -157,6 +157,7 @@ impl WebView {
         web.update(cx, |web, _| {
             let native: Rc<dyn BrowserView> =
                 Rc::from(engine.open_browser(url, viewport, web.inner.wake())?);
+            native.set_visible(false);
             *web.inner.browser.borrow_mut() = Some(native);
             web.inner.browser_viewport.set(Some(viewport));
             *web.inner.before_input.borrow_mut() = Some(before_input);
@@ -411,6 +412,14 @@ impl Inner {
     }
 
     fn input(&self, input: Input) {
+        // Pointer cleanup also happens when a preview leaves the element tree.
+        // It is not operator intervention and must not invalidate agent work.
+        if matches!(input, Input::Leave) {
+            if let Some(browser) = self.browser.borrow().as_ref() {
+                browser.input(input);
+                return;
+            }
+        }
         if let Some(before) = self.before_input.borrow().as_ref() {
             before(input);
             return;
@@ -1073,6 +1082,8 @@ mod tests {
         let engine = Rc::new(FakeEngine::new());
         let pending = Rc::new(RefCell::new(Vec::new()));
         let queue = pending.clone();
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let states = observed.clone();
         let (host, cx) = cx.add_window_view(|_, cx| Host {
             web: WebView::browser(
                 engine.clone(),
@@ -1083,7 +1094,7 @@ mod tests {
                     scale: 1.,
                 },
                 Rc::new(move |input| queue.borrow_mut().push(input)),
-                Rc::new(|_| {}),
+                Rc::new(move |state| states.borrow_mut().push(state.clone())),
                 cx,
             )
             .unwrap(),
@@ -1134,7 +1145,27 @@ mod tests {
             web.read_with(cx, |web, _| web.frames()) > before,
             "the exact page produces the updated frame"
         );
+        native.navigate("http://localhost:5173/first").unwrap();
+        native.navigate("http://localhost:5173/final").unwrap();
+        cx.run_until_parked();
+        let settled = observed.borrow().last().cloned().unwrap();
+        assert_eq!(settled.url, "http://localhost:5173/final");
+        assert!(
+            !settled.loading,
+            "rapid navigation publishes its settled state"
+        );
+        observed.borrow_mut().clear();
+        web.update(cx, |web, cx| web.refresh_browser_state(cx));
+        assert_eq!(
+            observed.borrow().last(),
+            Some(&settled),
+            "a service generation ACK can resample even after the native page has stopped waking"
+        );
         set_shown(&host, false, cx);
+        assert!(
+            pending.borrow().is_empty(),
+            "hiding the preview is not operator input"
+        );
         assert!(engine.journal().contains(&Call::Visible(false)));
     }
 }

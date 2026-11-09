@@ -21,7 +21,7 @@
 //! The engine also keeps a [`Call`] journal of everything the host told it, so
 //! tests can check what the host forwarded without reaching into the host.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
@@ -55,6 +55,7 @@ pub enum Call {
     Open(Viewport),
     BrowserOpen(String, BrowserViewport),
     BrowserResize(BrowserViewport),
+    BrowserNavigate(String),
     Resize(Viewport),
     Input(Input),
     Theme(String),
@@ -147,6 +148,10 @@ impl Engine for FakeEngine {
         self.open_view(page, viewport, wake, false)
     }
 
+    fn browser_available(&self) -> Result<(), String> {
+        Ok(())
+    }
+
     fn open_browser(
         &self,
         url: &str,
@@ -172,6 +177,7 @@ impl Engine for FakeEngine {
             view,
             journal: self.journal.clone(),
             url: RefCell::new(url.into()),
+            generation: Cell::new(1),
         }))
     }
 
@@ -210,6 +216,7 @@ struct BrowserHandle {
     view: Box<dyn View>,
     journal: Rc<RefCell<Vec<Call>>>,
     url: RefCell<String>,
+    generation: Cell<u64>,
 }
 impl View for BrowserHandle {
     fn resize(&self, viewport: Viewport) {
@@ -240,7 +247,7 @@ impl BrowserView for BrowserHandle {
             can_back: false,
             can_forward: false,
             error: None,
-            document_generation: 1,
+            document_generation: self.generation.get(),
             dirty: BrowserDirty::Unknown,
         }
     }
@@ -258,6 +265,11 @@ impl BrowserView for BrowserHandle {
     }
     fn navigate(&self, url: &str) -> Result<(), String> {
         *self.url.borrow_mut() = url.into();
+        self.generation.set(self.generation.get() + 1);
+        self.journal
+            .borrow_mut()
+            .push(Call::BrowserNavigate(url.into()));
+        self.view.set_html("");
         Ok(())
     }
     fn back(&self) -> Result<(), String> {
@@ -267,7 +279,8 @@ impl BrowserView for BrowserHandle {
         Err("No next page".into())
     }
     fn reload(&self) -> Result<(), String> {
-        Ok(())
+        let url = self.url.borrow().clone();
+        self.navigate(&url)
     }
     fn set_protected(&self, _: bool) {}
     fn try_release(&self) -> Result<bool, String> {

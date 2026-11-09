@@ -27,3 +27,5 @@ jobs:
         run: cargo test -p ferrite-cockpit --locked --lib cockpit::tests::output_cards
       - name: Preview shell behavior
         run: cargo test -p ferrite-cockpit --locked --lib cockpit::tests::panel_preview
+      - name: Service-backed preview and new tab flow
+        run: cargo test -p ferrite-cockpit --locked --lib conversation_browser_shares_the_live_preview
