@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 provider = sys.argv[sys.argv.index('--provider') + 1]
 if '--version' in sys.argv:
@@ -48,6 +49,7 @@ def record(answer):
 
 started = False
 trace = []
+receipt_polls = 0
 for line in sys.stdin:
     try:
         frame = json.loads(line)
@@ -112,7 +114,16 @@ for line in sys.stdin:
                                  if element.get('role') == 'button' and element.get('name') == 'Window fixture')
                 receipt = state['observation']
                 if not isinstance(receipt, str) or not receipt:
-                    raise ValueError('Readable Observe did not provide its receipt')
+                    # Native operator input has a bounded quiet interval. A read
+                    # during the active gesture cannot authorize a later write.
+                    # Request fresh readable state until the real service mints
+                    # evidence; never synthesize a receipt or retry a write.
+                    receipt_polls += 1
+                    if receipt_polls > 10:
+                        raise ValueError('Readable Observe did not provide its receipt after operator input settled')
+                    time.sleep(0.1)
+                    call('browser-observe', {'kind':'control', **identity, 'control':{'kind':'observe'}})
+                    continue
                 call('browser-click', {'kind':'control', **identity,
                      'observation':receipt, 'control':{'kind':'click','reference':reference}})
             else:
