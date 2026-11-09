@@ -803,6 +803,8 @@ impl CockpitView {
                     .is_some_and(|page| {
                         page.document.get() == running.request.document
                             && page.pending_navigation.borrow().is_none()
+                            && !page.native.state().loading
+                            && page.native.state().url == running.url
                             && page.native.state().document_generation == running.native_generation
                             && page.native.browser_viewport() == Some(running.viewport)
                             && page.native.control_epoch() == running.epoch
@@ -818,7 +820,11 @@ impl CockpitView {
                             screenshot_bytes(&value).map(|png| CapturedPage {
                                 document: running.request.document,
                                 native_generation: running.native_generation,
-                                url: running.url.clone(),
+                                url: value
+                                    .get("url")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or(&running.url)
+                                    .to_string(),
                                 viewport: ferrite_core::browser_annotations::Viewport {
                                     width_css: running.viewport.width as f64,
                                     height_css: running.viewport.height as f64,
@@ -871,6 +877,7 @@ impl CockpitView {
             .filter(|page| {
                 page.document.get() == request.document
                     && page.pending_navigation.borrow().is_none()
+                    && !page.native.state().loading
             });
         let Some(page) =
             page.filter(|_| request.queued.elapsed() < std::time::Duration::from_secs(35))
@@ -980,6 +987,10 @@ impl CockpitView {
                                         && page.native.state().document_generation
                                             == running.native_generation
                                         && page.native.control_epoch() == running.epoch
+                                        && (!matches!(
+                                            running.request.control,
+                                            ferrite_core::browser::Control::Screenshot
+                                        ) || !page.native.state().loading)
                                         && page.manual.borrow().revision <= running.request.revision
                                         && (running.request.control.observation()
                                             || !page.manual.borrow().active)
@@ -1010,6 +1021,10 @@ impl CockpitView {
                     page.document.get() == running.request.document
                         && page.native.state().document_generation == running.native_generation
                         && page.native.control_epoch() == running.epoch
+                        && (!matches!(
+                            running.request.control,
+                            ferrite_core::browser::Control::Screenshot
+                        ) || !page.native.state().loading)
                 });
                 if !unchanged {
                     outcome = if running.request.control.observation() {
@@ -1049,6 +1064,8 @@ impl CockpitView {
                 && page.is_some_and(|page| {
                     page.document.get() == request.document
                         && page.pending_navigation.borrow().is_none()
+                        && (!matches!(request.control, ferrite_core::browser::Control::Screenshot)
+                            || !page.native.state().loading)
                         && page.manual.borrow().revision <= request.revision
                         && (request.control.observation() || !page.manual.borrow().active)
                 });
@@ -1435,8 +1452,8 @@ impl CockpitView {
                     })),
             );
         }
-        let annotatable =
-            !browser.new_tab && active.is_some_and(|tab| browser.pages.contains_key(&tab.id));
+        let annotatable = !browser.new_tab
+            && active.is_some_and(|tab| !tab.loading && browser.pages.contains_key(&tab.id));
         toolbar = toolbar
             .when(annotatable, |toolbar| {
                 toolbar.child(
