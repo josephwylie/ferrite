@@ -37,6 +37,7 @@ struct Page {
     native: Rc<dyn BrowserView>,
     document: Rc<Cell<Document>>,
     acknowledged: Cell<Option<(Document, u64)>>,
+    pending_native_generation: Cell<Option<u64>>,
 }
 enum Event {
     Restore(ThreadId, TabId),
@@ -238,6 +239,8 @@ impl CockpitView {
                 };
                 if let Some(document) = document {
                     if let Some(page) = browser.pages.get(&document.tab) {
+                        page.pending_native_generation
+                            .set(Some(page.native.state().document_generation));
                         let result = match action {
                             Action::Navigate { url, .. } => page.native.navigate(&url),
                             Action::Back { .. } => page.native.back(),
@@ -249,6 +252,7 @@ impl CockpitView {
                             browser.error = None;
                         }
                         if let Err(error) = result {
+                            page.pending_native_generation.set(None);
                             browser.error = Some(error.clone());
                             if let (Some(owner), Some(tab)) = (
                                 browser.owner,
@@ -346,6 +350,44 @@ impl CockpitView {
                         .any(|tab| tab.document() == page.document)
                     {
                         continue;
+                    }
+                    if let Some(native) = browser.pages.get(&page.document.tab) {
+                        let current = native.native.state();
+                        if generation != Some(current.document_generation) {
+                            native
+                                .web
+                                .update(cx, |web, cx| web.refresh_browser_state(cx));
+                            continue;
+                        }
+                        if let Some(pending) = native.pending_native_generation.get() {
+                            if current.document_generation == pending
+                                && current.loading
+                                && current.error.is_none()
+                            {
+                                // The service has accepted an intent, but this
+                                // remains the old native document. Native marks
+                                // loading synchronously; same-document history
+                                // settles without advancing its generation.
+                                continue;
+                            }
+                            page.url = current.url;
+                            page.loading = current.loading;
+                            page.can_back = current.can_back;
+                            page.can_forward = current.can_forward;
+                            page.error = current.error;
+                            page.dirty = match current.dirty {
+                                ferrite_pane::visual::web::BrowserDirty::Clean => {
+                                    ferrite_core::browser::Dirty::Clean
+                                }
+                                ferrite_pane::visual::web::BrowserDirty::Dirty => {
+                                    ferrite_core::browser::Dirty::Dirty
+                                }
+                                ferrite_pane::visual::web::BrowserDirty::Unknown => {
+                                    ferrite_core::browser::Dirty::Unknown
+                                }
+                            };
+                            native.pending_native_generation.set(None);
+                        }
                     }
                     page.visible = browser
                         .pages
@@ -502,6 +544,8 @@ impl CockpitView {
                         .browser_handle()
                         .expect("browser host has its native page");
                     native.set_protected(tab.protected);
+                    let pending_native_generation =
+                        (native.state().document_generation == 0).then_some(0);
                     browser.pages.insert(
                         id,
                         Page {
@@ -509,6 +553,7 @@ impl CockpitView {
                             native,
                             document,
                             acknowledged: Cell::new(None),
+                            pending_native_generation: Cell::new(pending_native_generation),
                         },
                     );
                     browser.error = None;

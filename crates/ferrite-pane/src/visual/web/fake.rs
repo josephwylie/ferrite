@@ -74,6 +74,8 @@ pub struct FakeEngine {
     journal: Rc<RefCell<Vec<Call>>>,
     grace: Duration,
     views: RefCell<Vec<Weak<FakeView>>>,
+    defer_navigation: Rc<Cell<bool>>,
+    navigation: RefCell<Vec<Weak<BrowserNavigation>>>,
 }
 
 impl Default for FakeEngine {
@@ -93,6 +95,24 @@ impl FakeEngine {
             journal: Rc::default(),
             grace,
             views: RefCell::default(),
+            defer_navigation: Rc::default(),
+            navigation: RefCell::default(),
+        }
+    }
+
+    /// Hold browser navigation at the native pending-intent boundary.
+    pub fn defer_browser_navigation(&self, defer: bool) {
+        self.defer_navigation.set(defer);
+    }
+
+    /// Finish pending browser navigations without a wall-clock timer.
+    pub fn finish_browser_navigations(&self) {
+        for navigation in self.navigation.borrow().iter().filter_map(Weak::upgrade) {
+            if let Some(url) = navigation.pending.borrow_mut().take() {
+                *navigation.url.borrow_mut() = url;
+                navigation.generation.set(navigation.generation.get() + 1);
+                (navigation.wake)();
+            }
         }
     }
 
@@ -161,6 +181,8 @@ impl Engine for FakeEngine {
         self.journal
             .borrow_mut()
             .push(Call::BrowserOpen(url.into(), viewport));
+        let wake: Rc<dyn Fn()> = Rc::from(wake);
+        let frame_wake = wake.clone();
         let view = self.open_view(
             Page {
                 html: String::new(),
@@ -170,14 +192,23 @@ impl Engine for FakeEngine {
                 width: viewport.width,
                 scale: viewport.scale,
             },
-            wake,
+            Box::new(move || frame_wake()),
             true,
         );
+        let navigation = Rc::new(BrowserNavigation {
+            url: RefCell::new(url.into()),
+            generation: Cell::new(1),
+            pending: RefCell::new(None),
+            defer: self.defer_navigation.clone(),
+            wake,
+        });
+        self.navigation
+            .borrow_mut()
+            .push(Rc::downgrade(&navigation));
         Ok(Box::new(BrowserHandle {
             view,
             journal: self.journal.clone(),
-            url: RefCell::new(url.into()),
-            generation: Cell::new(1),
+            navigation,
         }))
     }
 
@@ -215,8 +246,14 @@ impl Engine for FakeEngine {
 struct BrowserHandle {
     view: Box<dyn View>,
     journal: Rc<RefCell<Vec<Call>>>,
+    navigation: Rc<BrowserNavigation>,
+}
+struct BrowserNavigation {
     url: RefCell<String>,
     generation: Cell<u64>,
+    pending: RefCell<Option<String>>,
+    defer: Rc<Cell<bool>>,
+    wake: Rc<dyn Fn()>,
 }
 impl View for BrowserHandle {
     fn resize(&self, viewport: Viewport) {
@@ -241,13 +278,13 @@ impl View for BrowserHandle {
 impl BrowserView for BrowserHandle {
     fn state(&self) -> BrowserState {
         BrowserState {
-            url: self.url.borrow().clone(),
+            url: self.navigation.url.borrow().clone(),
             title: String::new(),
-            loading: false,
+            loading: self.navigation.pending.borrow().is_some(),
             can_back: false,
             can_forward: false,
             error: None,
-            document_generation: self.generation.get(),
+            document_generation: self.navigation.generation.get(),
             dirty: BrowserDirty::Unknown,
         }
     }
@@ -264,12 +301,19 @@ impl BrowserView for BrowserHandle {
         });
     }
     fn navigate(&self, url: &str) -> Result<(), String> {
-        *self.url.borrow_mut() = url.into();
-        self.generation.set(self.generation.get() + 1);
         self.journal
             .borrow_mut()
             .push(Call::BrowserNavigate(url.into()));
-        self.view.set_html("");
+        if self.navigation.defer.get() {
+            *self.navigation.pending.borrow_mut() = Some(url.into());
+            (self.navigation.wake)();
+        } else {
+            *self.navigation.url.borrow_mut() = url.into();
+            self.navigation
+                .generation
+                .set(self.navigation.generation.get() + 1);
+            self.view.set_html("");
+        }
         Ok(())
     }
     fn back(&self) -> Result<(), String> {
@@ -279,7 +323,7 @@ impl BrowserView for BrowserHandle {
         Err("No next page".into())
     }
     fn reload(&self) -> Result<(), String> {
-        let url = self.url.borrow().clone();
+        let url = self.navigation.url.borrow().clone();
         self.navigate(&url)
     }
     fn set_protected(&self, _: bool) {}

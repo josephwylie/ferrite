@@ -1403,4 +1403,19 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
     let state = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
     assert_eq!(state.tabs[0].url, "http://localhost:5173/final", "new tab does not navigate the existing page");
     assert_eq!(state.tabs[1].url, "http://localhost:5173/second");
+    engine.defer_browser_navigation(true);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("http://localhost:5173/delayed");
+    cx.simulate_keystrokes("enter");
+    until(cx, |_| engine.journal().contains(&Call::BrowserNavigate("http://localhost:5173/delayed".into())));
+    tick(cx);
+    let pending = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
+    assert_eq!(pending.tabs[1].url, "http://localhost:5173/delayed", "old native metadata must not overwrite an accepted navigation intent");
+    assert!(pending.tabs[1].loading);
+    assert_eq!(pending.tabs[1].dirty, ferrite_core::browser::Dirty::Unknown);
+    engine.finish_browser_navigations();
+    until(cx, |cx| view.update(cx, |view, _| {
+        let state = view.cockpit.browser_attach(thread).unwrap();
+        state.tabs[1].url == "http://localhost:5173/delayed" && !state.tabs[1].loading
+    }));
 }
