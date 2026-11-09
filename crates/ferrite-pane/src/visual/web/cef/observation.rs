@@ -280,17 +280,17 @@ wrap_dev_tools_message_observer! {
     struct WorkObserver { inbox: Arc<Mutex<Inbox>> }
     impl DevToolsMessageObserver {
         fn on_dev_tools_message(&self, _browser: Option<&mut Browser>, message: Option<&[u8]>) -> ::std::os::raw::c_int {
-            let Some(bytes) = message else { return 0 };
+            let Some(bytes) = message else { return 1 };
             let mut inbox = self.inbox.lock().unwrap();
-            if bytes.len() > LIMIT { inbox.overflow = true; return 0; }
+            if bytes.len() > LIMIT { inbox.overflow = true; return 1; }
             if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
                 if value["id"].as_i64().is_some_and(|id| id >= FIRST_ID as i64) {
                     if inbox.messages.len() < 16 { inbox.messages.push_back(value); }
                     else { inbox.overflow = true; }
                 }
             }
-            // Other observers, including the exact-target controller, coexist.
-            0
+            // CEF invokes each observer independently; no typed callbacks here.
+            1
         }
     }
 }
