@@ -11,6 +11,9 @@
 //! idle page sends (next to) no frames. Exits 0 and prints PASS, or prints
 //! what it was waiting for and exits 1.
 
+#[cfg(feature = "cef")]
+mod browser;
+
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -58,6 +61,11 @@ fn smoke() -> Result<Duration, String> {
     let started = Instant::now();
     let engine = super::engine::start_now()?;
     println!("engine started: {:?}", started.elapsed());
+
+    #[cfg(feature = "cef")]
+    if std::env::var_os("FERRITE_BROWSER_SMOKE").is_some() {
+        browser::run(engine.as_ref())?;
+    }
 
     let wakes = Rc::new(Cell::new(0u32));
     let opened = Instant::now();
