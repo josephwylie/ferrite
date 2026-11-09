@@ -58,14 +58,6 @@ wrap_app! {
             ] {
                 command_line.append_switch(Some(&switch.into()));
             }
-            // Production website logins use the OS keychain. Only an explicit
-            // isolated packaged smoke opts into Chromium's mock implementation.
-            if cfg!(target_os = "macos")
-                && std::env::args().any(|argument| argument == "--visual-smoke")
-                && std::env::var("FERRITE_BROWSER_SMOKE_MOCK_KEYCHAIN").as_deref() == Ok("1")
-            {
-                command_line.append_switch(Some(&"use-mock-keychain".into()));
-            }
             // No pre-warmed spare renderer. Keep the network service in its
             // own sandboxed process: external views share this CEF runtime.
             command_line.append_switch_with_value(
@@ -88,6 +80,15 @@ wrap_app! {
                         None => command_line.append_switch(Some(&s.into())),
                     }
                 }
+            }
+            // Production website logins use the OS keychain. Only an explicit
+            // isolated packaged smoke opts into Chromium's mock implementation.
+            command_line.remove_switch(Some(&"use-mock-keychain".into()));
+            if cfg!(target_os = "macos")
+                && std::env::args().any(|argument| argument == "--visual-smoke")
+                && std::env::var("FERRITE_BROWSER_SMOKE_MOCK_KEYCHAIN").as_deref() == Ok("1")
+            {
+                command_line.append_switch(Some(&"use-mock-keychain".into()));
             }
             // No global debugging endpoint may expose sealed visuals, even
             // when a developer passed a Chromium switch on the command line.
