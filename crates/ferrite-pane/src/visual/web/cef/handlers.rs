@@ -654,6 +654,9 @@ fn without_fragment(url: &str) -> &str {
 /// Website pages have no access to Ferrite schemes, local files or arbitrary
 /// application protocols. CEF's default network loader handles only web URLs.
 pub(super) fn external_url(url: &str) -> bool {
+    if url.chars().any(char::is_control) {
+        return false;
+    }
     url::Url::parse(url).is_ok_and(|url| {
         matches!(url.scheme(), "http" | "https")
             && url.host_str().is_some()
