@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::{Engine, Frame, Page, View, Viewport, BLUE, GREEN, RED};
+use crate::visual::web::BrowserViewport;
 
 struct ProbeFile(std::path::PathBuf);
 impl ProbeFile {
@@ -77,10 +78,7 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
             let _ = stream.write_all(response.as_bytes());
         }
     });
-    let viewport = Viewport {
-        width: 400,
-        scale: 1.0,
-    };
+    let viewport = BrowserViewport { width: 400, height: 600, scale: 1.0 };
     let one = engine.open_browser(&format!("http://{address}/one"), viewport, Box::new(|| {}))?;
     let two = engine.open_browser(&format!("http://{address}/two"), viewport, Box::new(|| {}))?;
     let sealed = engine.open(
@@ -88,12 +86,21 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
             html: "<style>body{margin:0;height:600px;background:rgb(255,0,0)}</style>sealed".into(),
             theme_css: String::new(),
         },
-        viewport,
+        Viewport { width: viewport.width, scale: viewport.scale },
         Box::new(|| {}),
     );
     let mut frames = [None, None, None];
     let views = [one.as_ref(), two.as_ref(), sealed.as_ref()];
     wait_pixels(engine, &views, &mut frames, [RED, RED, RED])?;
+    one.resize_browser(BrowserViewport { width: 320, height: 240, scale: 2.0 });
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if one.take().frame.is_some_and(|frame| frame.width == 640 && frame.height == 480) { break; }
+        if Instant::now() >= deadline { return Err("Browser viewport resize did not produce 640x480 pixels".into()); }
+        std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
+    }
+    if one.navigate("file:///private/forbidden").is_ok() { return Err("Browser accepted forbidden navigation".into()); }
+    one.resize_browser(viewport);
     let endpoint = engine.controller()?;
     let private_file = ProbeFile::create()?;
     let private_file_url = url::Url::from_file_path(&private_file.0)
