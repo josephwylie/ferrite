@@ -91,7 +91,8 @@ def main():
     # mutated caches rather than silently build a different controller.
     if subprocess.run(["git", "apply", "--reverse", "--check", str(PATCH)], cwd=source, capture_output=True).returncode != 0:
         run("git", "apply", "--check", str(PATCH), cwd=source)
-        run("git", "apply", str(PATCH), cwd=source)
+        # Include newly introduced source files in the normalized patch check.
+        run("git", "apply", "--intent-to-add", str(PATCH), cwd=source)
     actual_patch = subprocess.check_output(["git", "diff", "--binary"], cwd=source)
     # git diff is normalized; compare it to a clean patch application, not a
     # stamp that could survive source edits.
