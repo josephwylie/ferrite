@@ -137,6 +137,14 @@ fn annotation_editor_pointer_feedback_preserves_capture(cx: &mut TestAppContext)
             );
         });
     }
+    let bounds = editor.read_with(cx, |editor, _| editor.picture_bounds().unwrap());
+    cx.simulate_click(bounds.center(), Modifiers::none());
+    editor.read_with(cx, |editor, _| {
+        assert!(matches!(
+            editor.drawings().last(),
+            Some(Drawing::Step { number: 2, .. })
+        ))
+    });
     let feedback = Rc::new(std::cell::RefCell::new(Vec::new()));
     let cancelled = Rc::new(Cell::new(false));
     let captured = feedback.clone();
@@ -164,9 +172,16 @@ fn annotation_editor_pointer_feedback_preserves_capture(cx: &mut TestAppContext)
     assert_eq!(feedback.borrow().len(), 1);
     let feedback = feedback.borrow();
     assert_eq!(feedback[0].0, "Make this clearer");
-    assert_eq!(feedback[0].1.len(), 7);
+    assert_eq!(feedback[0].1.len(), 8);
+    assert!(matches!(&feedback[0].1[0], Drawing::Rectangle { .. }));
+    assert!(matches!(&feedback[0].1[1], Drawing::Pen { .. }));
+    assert!(matches!(&feedback[0].1[2], Drawing::Line { .. }));
+    assert!(matches!(&feedback[0].1[3], Drawing::Arrow { .. }));
+    assert!(matches!(&feedback[0].1[4], Drawing::Ellipse { .. }));
+    assert!(matches!(&feedback[0].1[5], Drawing::Step { number: 1, .. }));
+    assert!(matches!(&feedback[0].1[6], Drawing::Step { number: 2, .. }));
     assert!(
-        matches!(&feedback[0].1[6], Drawing::Text { at, text, .. } if text == "Move this label" && (at.x - 400.).abs() < 0.001 && (at.y - 200.).abs() < 0.001)
+        matches!(&feedback[0].1[7], Drawing::Text { at, text, .. } if text == "Move this label" && (at.x - 400.).abs() < 0.001 && (at.y - 200.).abs() < 0.001)
     );
     let cancel = cx.debug_bounds("annotation-cancel").unwrap();
     cx.simulate_click(cancel.center(), Modifiers::none());
