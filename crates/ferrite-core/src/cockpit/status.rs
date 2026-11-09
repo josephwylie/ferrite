@@ -149,6 +149,10 @@ impl ServerStatus {
     }
 
     /// An open Thread's title, as far as it has one.
+    pub fn snooze(&self, thread: ThreadId) -> Option<crate::snooze::Snooze> {
+        self.states.get(&thread)?.snooze
+    }
+
     pub fn title(&self, thread: ThreadId) -> Option<&str> {
         self.states.get(&thread)?.title.as_deref()
     }

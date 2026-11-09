@@ -2936,12 +2936,6 @@ pub const NAV_PR_MARK: f32 = 12.0;
 pub const NAV_PR_DOT: f32 = 6.0;
 /// 36px — the foot: `Ferrite 0.5` and the gear, 8px under the tree.
 pub const NAV_FOOT_PAD_T: f32 = SPACE_2;
-/// The Activity view's row (Codex's): the title on `NAV_LINE` with its
-/// mark at the right, then the Project and `NAV_ACTIVITY_PREVIEW_LINES` of
-/// the last message on `LH_META`, all `FS_META` `INK_SUBTLE`, padded
-/// `NAV_ACTIVITY_PAD_Y` top and bottom.
-pub const NAV_ACTIVITY_PAD_Y: f32 = SPACE_1_5;
-pub const NAV_ACTIVITY_PREVIEW_LINES: usize = 2;
 /// The most characters a folded Project's branch takes before it is cut.
 pub const NAV_BRANCH_MAX_CH: usize = 24;
 /// 4px — a drop target that takes no layout of its own ("insert above this

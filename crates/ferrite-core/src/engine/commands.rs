@@ -37,6 +37,7 @@ impl Engine {
             op,
             Op::WorktreesListed { .. }
                 | Op::ShowSubject { .. }
+                | Op::Snooze { .. }
                 | Op::Rename { .. }
                 | Op::Delete { .. }
                 | Op::Unqueue { .. }
@@ -167,6 +168,10 @@ impl Engine {
                         model: model.clone(),
                     },
                 )
+                .map(|()| None)
+                .map_err(failed),
+            Op::Snooze { thread, until } => self
+                .snooze_thread(*thread, *until)
                 .map(|()| None)
                 .map_err(failed),
             Op::Rename { thread, title } => self

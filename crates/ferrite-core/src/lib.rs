@@ -37,6 +37,7 @@ pub mod self_update;
 pub mod server;
 pub mod session;
 pub mod settings;
+pub mod snooze;
 pub mod sound;
 pub mod spawn;
 pub mod spawner;

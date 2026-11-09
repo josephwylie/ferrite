@@ -171,3 +171,27 @@ transcript watch or Notice retention is required. Notification delivery
 and acknowledgment (ADRs 0005 and 0017) remain event based, so retaining a
 read Thread never rings again. Park/reopen retains existing Session,
 history, Group and focus behavior.
+
+## Amendment (2026-11-09): Snooze and compact Inbox shelves
+
+Subsequent operator feedback adds Snooze, which issue #198 originally left
+out of scope. Snooze is optional Thread metadata saved through the existing
+Store Facts and shared ThreadState contract. It does not change openness,
+Attention or Session lifetime. Park clears it; a new Decision or failed run,
+an operator send (including a queued follow-up), or reaching its deadline
+wakes the Thread. An existing Decision can be deferred; ordinary completion
+and Notice acknowledgment leave the reminder intact. Waking on a timer
+creates no Notice and never starts an agent.
+
+The default menu follows [T3's presets](https://github.com/pingdotgg/t3code/blob/main/packages/contracts/src/settings.ts#L124-L130):
+1 hour, 3 hours, today at 18:00, tomorrow at 09:00 and next Monday at 09:00,
+plus Custom for a local date/time or duration. Choices sort soonest first;
+today's choice disappears after its time. Weekdays mean the next occurrence
+after today. Custom input rejects past or ambiguous local times.
+
+Inbox stays visible when its rows open Main, a Subagent Decision or another
+Server. Typing returns to the selected Composer; Esc or toggling the mode
+still returns to the tree. Working and Snoozed start as collapsed headings
+with counts. Expanded rows use the existing one-line Thread component;
+the Activity preview renderer is removed. Custom Snooze editing ends when
+its Inbox surface is hidden, including the sidebar rail.

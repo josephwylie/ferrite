@@ -228,6 +228,15 @@ unread and blocked indicators keep their own meanings.
 _Avoid_: Settled (Parked is the existing finished disposition), Recent
 Notice membership (the former rule), Needs-you view (the former name).
 
+**Snooze**
+A temporary deferral of an open Thread until a chosen local time or duration.
+Snoozing keeps its history and agent execution intact. A new Decision, a
+failed run or an operator follow-up wakes it early; an ordinary completion
+or reading a Notice does not. Snoozed Threads stay out of Inbox and Working
+until they wake, and remain available under the collapsed Snoozed shelf.
+The Server saves Snooze for every window and restores it after a restart.
+_Avoid_: Park (the separate action for finished handling), stopped agent.
+
 **Attention list**
 The nav's always-on list, over `Projects`, of the Threads in flight by
 their Attention: `Needs you` (blocked, oldest request first), `Done` (a

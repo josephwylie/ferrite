@@ -600,6 +600,7 @@ fn box_thread(thread: ThreadId, title: &str) -> ferrite_core::protocol::ThreadSt
         model: None,
         effort: None,
         title: Some(title.into()),
+        snooze: None,
         workspace: None,
         session_project_root: None,
         first_prompt_sent: true,
@@ -935,7 +936,8 @@ fn a_system_notification_outlives_a_move(cx: &mut TestAppContext) {
         assert!(view.cockpit.machine().is_none(), "this computer");
         assert_eq!(
             view.landing.as_ref().map(|(landing, _)| match landing {
-                Landing::Alert(Alert { away, thread, .. }) => (away.clone(), *thread),
+                Landing::Alert(Alert { away, thread, .. })
+                | Landing::Inbox(Alert { away, thread, .. }) => (away.clone(), *thread),
             }),
             Some((None, here)),
             "on its Thread once it answers"

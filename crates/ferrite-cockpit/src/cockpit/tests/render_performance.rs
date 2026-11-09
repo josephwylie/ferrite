@@ -1998,7 +1998,7 @@ fn the_activity_view_at_rest_asks_for_no_frames(cx: &mut TestAppContext) {
     });
     tick(cx);
     let listed = view.read_with(cx, |view, _| {
-        let activity = view.activity(&view.nav_state());
+        let activity = view.inbox(&view.nav_state());
         activity.inbox.len() + activity.working.len()
     });
     // The untouched first Thread was opened today too.

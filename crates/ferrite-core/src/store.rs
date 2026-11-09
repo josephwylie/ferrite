@@ -237,6 +237,8 @@ struct Header {
     /// Schema 7+; absent means the generated `thread-NN` label.
     #[serde(default)]
     title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    snooze: Option<crate::snooze::Snooze>,
     /// Schema 8+; the reasoning effort this Thread chose. `None` — and
     /// every v1–v7 header — means the provider's default.
     #[serde(default)]
@@ -252,6 +254,7 @@ impl Header {
             model: self.model.clone(),
             project_id: self.project_id,
             title: self.title.clone(),
+            snooze: self.snooze,
             effort: self.effort.clone(),
         }
     }
@@ -265,6 +268,7 @@ impl Header {
             model: facts.model,
             project_id: facts.project_id,
             title: facts.title,
+            snooze: facts.snooze,
             effort: facts.effort,
         }
     }
@@ -286,6 +290,8 @@ struct Facts {
     project_id: Option<ProjectId>,
     #[serde(default)]
     title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    snooze: Option<crate::snooze::Snooze>,
     #[serde(default)]
     effort: Option<String>,
 }
@@ -299,6 +305,7 @@ impl Facts {
             model: self.model,
             project_id: self.project_id,
             title: self.title,
+            snooze: self.snooze,
             effort: self.effort,
             summary: None,
         }
@@ -2652,6 +2659,7 @@ impl Store {
             model,
             project_id: project,
             title: None,
+            snooze: None,
             // And on its default effort.
             effort: None,
         };
@@ -2709,6 +2717,7 @@ impl Store {
             })
             .map_or(0, |at| at + 1);
         let facts = Facts {
+            snooze: None,
             title: None,
             ..snapshot.facts()
         };
@@ -3327,6 +3336,15 @@ impl Store {
         Ok(())
     }
 
+    pub fn set_snooze(
+        &self,
+        id: ThreadId,
+        snooze: Option<crate::snooze::Snooze>,
+        writer: Option<&mut ThreadWriter>,
+    ) -> Result<(), LoadError> {
+        self.amend(id, writer, |facts| facts.snooze = snooze)
+    }
+
     pub fn set_title(
         &self,
         id: ThreadId,
@@ -3798,6 +3816,7 @@ pub struct ThreadMeta {
     /// binding's resolved paths still say where work happens.
     pub project_id: Option<ProjectId>,
     pub title: Option<String>,
+    pub snooze: Option<crate::snooze::Snooze>,
     /// `None` — including every pre-v8 log — means the provider's default
     /// reasoning effort.
     pub effort: Option<String>,
@@ -3890,6 +3909,7 @@ pub struct ThreadSnapshot {
     model: Option<String>,
     project_id: Option<ProjectId>,
     title: Option<String>,
+    snooze: Option<crate::snooze::Snooze>,
     effort: Option<String>,
     records: Vec<Record>,
 }
@@ -4013,6 +4033,7 @@ impl ThreadSnapshot {
             model: facts.model,
             project_id: facts.project_id,
             title: facts.title,
+            snooze: facts.snooze,
             effort: facts.effort,
             records,
         }
@@ -4026,6 +4047,7 @@ impl ThreadSnapshot {
             model: self.model.clone(),
             project_id: self.project_id,
             title: self.title.clone(),
+            snooze: self.snooze,
             effort: self.effort.clone(),
         }
     }
@@ -4058,6 +4080,10 @@ impl ThreadSnapshot {
     /// — including every log from before schema 6 — means unregistered.
     pub fn project_id(&self) -> Option<ProjectId> {
         self.project_id
+    }
+
+    pub fn snooze(&self) -> Option<crate::snooze::Snooze> {
+        self.snooze
     }
 
     pub fn title(&self) -> Option<&str> {
@@ -4999,6 +5025,7 @@ fn parse(id: ThreadId, bytes: &[u8]) -> Result<Parsed, LoadError> {
             model: facts.model,
             project_id: facts.project_id,
             title: facts.title,
+            snooze: facts.snooze,
             effort: facts.effort,
             records,
         },

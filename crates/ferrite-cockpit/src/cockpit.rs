@@ -19,6 +19,7 @@ pub(crate) mod panel;
 mod parts;
 mod server;
 mod side_chat;
+mod snooze;
 pub(crate) mod subagents;
 pub(crate) mod tools;
 mod transcript_glue;
@@ -496,6 +497,9 @@ pub struct CockpitView {
     /// the title cell *is* the editor, so two at once would need two rows
     /// to be the row you are looking at.
     rename: Option<(RenameTarget, Entity<ferrite_pane::composer::Composer>)>,
+    snooze_editor: Option<snooze::Editor>,
+    inbox_working_expanded: bool,
+    inbox_snoozed_expanded: bool,
     /// The right-click menu, if one is up: what it is about, where it was
     /// summoned, and which destructive row is armed for its second press.
     context_menu: Option<ContextMenu>,
@@ -682,6 +686,7 @@ pub struct GoToMachine {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Landing {
     Alert(crate::notifications::Alert),
+    Inbox(crate::notifications::Alert),
 }
 
 impl EventEmitter<GoToMachine> for CockpitView {}
@@ -1531,6 +1536,9 @@ impl CockpitView {
             repo_listing: None,
             asking_repo: None,
             rename: None,
+            snooze_editor: None,
+            inbox_working_expanded: false,
+            inbox_snoozed_expanded: false,
             context_menu: None,
             panel: Default::default(),
             history: Default::default(),
@@ -1646,6 +1654,9 @@ impl CockpitView {
 
     /// Open `open` once the Cockpit is attached, if it is by `until`.
     pub fn with_landing(mut self, open: Option<Landing>, until: std::time::Instant) -> Self {
+        if matches!(&open, Some(Landing::Inbox(_))) {
+            self.nav_view = nav::NavView::Inbox;
+        }
         self.landing = open.map(|open| (open, until));
         self
     }
@@ -5497,6 +5508,10 @@ impl CockpitView {
             }
             return;
         }
+        if self.snooze_editor.is_some() {
+            self.finish_snooze(true, cx);
+            return;
+        }
         if self.rename.is_some() {
             self.finish_rename(true, cx);
             return;
@@ -5654,6 +5669,10 @@ impl CockpitView {
         if self.close_project_editor(cx) {
             return;
         }
+        if self.snooze_editor.is_some() {
+            self.finish_snooze(false, cx);
+            return;
+        }
         if self.rename.is_some() {
             self.finish_rename(false, cx);
             return;
@@ -5730,6 +5749,7 @@ impl CockpitView {
         if self.settings_open
             || self.project_editor.is_some()
             || self.rename.is_some()
+            || self.snooze_editor.is_some()
             || self.popover.is_some()
         {
             return false;
@@ -6165,6 +6185,9 @@ impl CockpitView {
     fn toggle_nav_now(&mut self, cx: &mut Context<Self>) {
         if !self.nav_collapsed && self.nav_auto_rail.get() {
             self.nav_forced_open = !self.nav_forced_open;
+            if self.nav_railed() {
+                self.snooze_editor = None;
+            }
             cx.notify();
             return;
         }
@@ -6179,6 +6202,9 @@ impl CockpitView {
             return;
         }
         self.nav_collapsed = collapsed;
+        if collapsed {
+            self.snooze_editor = None;
+        }
         cx.notify();
     }
 
@@ -6585,6 +6611,7 @@ impl CockpitView {
         };
         !self.panes[index].has_tool_target()
             && self.rename.is_none()
+            && self.snooze_editor.is_none()
             && self.popover.is_none()
             && ((self.panes[index].is_main() && queued_to_take_back(&open).is_some())
                 || (open.has_prompt_history()
@@ -7327,6 +7354,9 @@ impl CockpitView {
         }
         if self.nav_view != view {
             self.nav_scroll.set_offset(gpui::point(px(0.), px(0.)));
+        }
+        if view != nav::NavView::Inbox {
+            self.snooze_editor = None;
         }
         self.nav_view = view;
         if view == nav::NavView::Inbox {
@@ -9173,7 +9203,7 @@ impl CockpitView {
 
     /// Inbox membership follows open Thread lifecycle, independently of Notices.
     /// Blockers precede work; every other open Thread awaits the operator.
-    pub(crate) fn activity(&self, state: &nav::NavState) -> nav::Activity {
+    pub(crate) fn inbox(&self, state: &nav::NavState) -> nav::Inbox {
         let mut rows: Vec<_> = state
             .pinned
             .iter()
@@ -9185,12 +9215,14 @@ impl CockpitView {
         let queue = self.cockpit.needs_you();
         let mut inbox = Vec::new();
         let mut working = Vec::new();
+        let mut snoozed = Vec::new();
         for row in rows {
-            let entry = nav::ActivityRow {
-                row: row.clone(),
-                preview: self.last_message(row.thread),
-            };
+            let entry = row.clone();
             let open = self.cockpit.thread(row.thread);
+            if open.and_then(|open| open.snooze()).is_some() {
+                snoozed.push(entry);
+                continue;
+            }
             if open.is_some_and(|open| open.pending_decisions().is_empty())
                 && open.is_some_and(|open| {
                     open.needs_queue() || open.background_work() || !open.queue().is_empty()
@@ -9205,7 +9237,7 @@ impl CockpitView {
             (
                 if self
                     .cockpit
-                    .thread(entry.row.thread)
+                    .thread(entry.thread)
                     .is_some_and(|open| !open.pending_decisions().is_empty())
                 {
                     0
@@ -9214,34 +9246,15 @@ impl CockpitView {
                 },
                 queue
                     .iter()
-                    .position(|id| *id == entry.row.thread)
+                    .position(|id| *id == entry.thread)
                     .unwrap_or(usize::MAX),
             )
         });
-        nav::Activity { inbox, working }
-    }
-
-    /// The opening of a Thread's last message, as an Activity row previews
-    /// it: the last prose line its wall card folded (`WallCard::lines`,
-    /// already cut to two rows of characters), its bullet and line break
-    /// dropped. `None` when the card holds no prose (a parked Thread's is
-    /// not folded).
-    fn last_message(&self, thread: ThreadId) -> Option<SharedString> {
-        let line = self
-            .facts
-            .get(thread)?
-            .wall
-            .lines
-            .iter()
-            .rev()
-            .find(|line| line.wraps)?;
-        let text = line
-            .text
-            .strip_prefix(ferrite_core::digest::BULLET)
-            .unwrap_or(&line.text)
-            .trim()
-            .replace('\n', " ");
-        (!text.is_empty()).then(|| text.into())
+        nav::Inbox {
+            inbox,
+            working,
+            snoozed,
+        }
     }
 
     /// Does the Project filter admit this Thread? `All projects` admits
@@ -9689,6 +9702,12 @@ impl CockpitView {
     /// to select, a tool row — took the keyboard away: pasted text or files
     /// go where the operator is about to type, and the keyboard follows.
     fn paste_into_composer(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(editor) = self.snooze_editor.as_ref() {
+            if let Some(item) = cx.read_from_clipboard() {
+                editor.line.update(cx, |line, cx| line.paste_item(item, cx));
+            }
+            return;
+        }
         // ⌘V in the palette pastes into its line.
         if let Some(palette) = self.floats.palette.clone() {
             if let Some(item) = cx.read_from_clipboard() {
@@ -10237,6 +10256,9 @@ impl CockpitView {
         }
         self.redirect_previews_to_files(cx);
         self.update_auto_rail(window);
+        if self.nav_railed() {
+            self.snooze_editor = None;
+        }
         self.nav_drag_live.set(cx.has_active_drag());
         self.present_cli_updates(window, cx);
         self.present_ferrite_update(window, cx);
@@ -10428,6 +10450,11 @@ impl CockpitView {
             .rename
             .as_ref()
             .map(|(_, editor)| editor.focus_handle(cx))
+            .or_else(|| {
+                self.snooze_editor
+                    .as_ref()
+                    .map(|editor| editor.line.focus_handle(cx))
+            })
             // An open Decision note (⇥) holds the keyboard until it closes.
             .or_else(|| self.decision_note_focus(cx))
             // The lightbox, over everything, keeps the keyboard its image
@@ -13022,9 +13049,17 @@ impl CockpitView {
     /// Back to the tree from a view (Esc, or opening what a row stands
     /// for), the keyboard to the board.
     pub(super) fn close_nav_view(&mut self, cx: &mut Context<Self>) {
+        self.snooze_editor = None;
         if self.nav_view != nav::NavView::Tree {
             self.nav_view = nav::NavView::Tree;
             cx.notify();
+        }
+    }
+
+    /// Opening work leaves Inbox visible; other temporary lists return to the tree.
+    fn finish_notice_navigation(&mut self, cx: &mut Context<Self>) {
+        if !self.needs_you_shown() {
+            self.close_nav_view(cx);
         }
     }
 
@@ -13053,7 +13088,7 @@ impl CockpitView {
                 if self.cockpit.open_notice(id).is_some() {
                     self.sync_panes(cx);
                 }
-                self.close_nav_view(cx);
+                self.finish_notice_navigation(cx);
             }
             Verb::Dismiss(id) => {
                 self.cockpit.dismiss_notice(id);
@@ -13088,7 +13123,7 @@ impl CockpitView {
                     self.land_on_thread(id.thread, cx);
                     self.select_subject_from_notice(id.thread, subject, cx);
                 }
-                self.close_nav_view(cx);
+                self.finish_notice_navigation(cx);
             }
             Verb::DismissDecision(id) => {
                 self.cockpit.dismiss_decision_notice(&id);
@@ -13103,7 +13138,7 @@ impl CockpitView {
             }
             Verb::Answer(..) => {}
             Verb::GoTo(alert) => {
-                self.close_nav_view(cx);
+                self.finish_notice_navigation(cx);
                 self.go_to_alert(alert, cx);
             }
         }
@@ -13453,17 +13488,17 @@ impl CockpitView {
     /// One row per open Thread awaiting handling, independent of Notices.
     /// Requests precede other rows, retaining each machine's attention order.
     pub(super) fn needs_you_rows(&self, cx: &gpui::App) -> Vec<NoticeRow> {
-        self.inbox_rows(&self.activity(&self.nav_state()), cx)
+        self.inbox_rows(&self.inbox(&self.nav_state()), cx)
     }
 
-    fn inbox_rows(&self, activity: &nav::Activity, cx: &gpui::App) -> Vec<NoticeRow> {
+    fn inbox_rows(&self, activity: &nav::Inbox, cx: &gpui::App) -> Vec<NoticeRow> {
         let now = ferrite_core::clock::system_time();
         let notifications = self.cockpit.notifications();
         let mut rows: Vec<_> = activity
             .inbox
             .iter()
             .map(|entry| {
-                let thread = entry.row.thread;
+                let thread = entry.thread;
                 if let Some(decision) = notifications.first_request(thread) {
                     self.decision_row(decision, now)
                 } else if let Some(notice) = notifications
@@ -13684,7 +13719,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let tree = nav::nav_tree(&self.nav_scroll);
-        let activity = self.activity(state);
+        let activity = self.inbox(state);
         let rows = self.inbox_rows(&activity, cx);
         let cursor = self
             .floats
@@ -13692,18 +13727,30 @@ impl CockpitView {
             .is_focused(window)
             .then(|| self.needs_you.cursor_at(&rows));
         let mut list = nav::view_list("nav-view-needs-you-list");
-        list = list.child(self.inbox_heading(rows.len(), cx));
+        list = list
+            .child(self.inbox_heading(rows.len(), cx))
+            .children(self.snooze_field())
+            .children(
+                self.group_error
+                    .as_ref()
+                    .map(|error| nav::notice(error.clone())),
+            );
         if rows.is_empty() {
             list = list.child(nav::note("nav-needs-you-empty", "Nothing needs you"));
         }
         for (index, row) in rows.iter().enumerate() {
             let local_request = row.away.is_none();
             let verb = row.open_verb();
-            let open = cx.listener(move |view, _: &ClickEvent, _, cx| {
+            let open = cx.listener(move |view, _: &ClickEvent, window, cx| {
                 cx.stop_propagation();
+                view.snooze_editor = None;
                 view.notice_verb(verb.clone(), cx);
+                window.blur(cx);
             });
-            let selected = cursor == Some(index);
+            let selected = cursor.map_or(
+                row.away.is_none() && self.focused_thread() == Some(row.thread),
+                |at| at == index,
+            );
             let element = if local_request {
                 let thread = nav::ThreadRow {
                     selected,
@@ -13747,17 +13794,101 @@ impl CockpitView {
             list = list.child(element);
         }
         if !activity.working.is_empty() {
-            list = list.child(nav::heading("nav-inbox-working", "Working"));
-            for entry in &activity.working {
-                let thread = entry.row.thread;
+            list = list.child(
+                nav::fold_heading(
+                    "nav-inbox-working",
+                    format!("Working · {}", activity.working.len()),
+                    !self.inbox_working_expanded,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.inbox_working_expanded ^= true;
+                        cx.notify();
+                    }),
+                ),
+            );
+            for entry in activity
+                .working
+                .iter()
+                .filter(|_| self.inbox_working_expanded)
+            {
+                let thread = entry.thread;
                 list = list.child(
-                    nav::activity_row(
+                    nav::thread_row_with_title(
                         entry,
+                        entry.name.clone(),
                         Some(self.activity_row_actions(thread, cx)),
+                        nav::RowPlace::Inbox,
+                        None,
+                        false,
                         &nav::Measure::Text(cx),
                     )
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.land_on_thread(thread, cx)
+                    .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                        view.snooze_editor = None;
+                        view.land_on_thread(thread, cx);
+                        window.blur(cx);
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
+                        }),
+                    ),
+                );
+            }
+        }
+        if !activity.snoozed.is_empty() {
+            list = list.child(
+                nav::fold_heading(
+                    "nav-inbox-snoozed",
+                    format!("Snoozed · {}", activity.snoozed.len()),
+                    !self.inbox_snoozed_expanded,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.inbox_snoozed_expanded ^= true;
+                        cx.notify();
+                    }),
+                ),
+            );
+            for entry in activity
+                .snoozed
+                .iter()
+                .filter(|_| self.inbox_snoozed_expanded)
+            {
+                let thread = entry.thread;
+                let wake = nav::row_action(
+                    format!("wake-thread-{}", thread.get()),
+                    ferrite_ui::icons::CLOSE,
+                )
+                .tooltip(ferrite_ui::menu::tooltip("Wake thread"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.snooze_thread(thread, None, cx);
+                    }),
+                )
+                .into_any_element();
+                list = list.child(
+                    nav::thread_row_with_title(
+                        entry,
+                        entry.name.clone(),
+                        Some(wake),
+                        nav::RowPlace::Inbox,
+                        None,
+                        false,
+                        &nav::Measure::Text(cx),
+                    )
+                    .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                        view.snooze_editor = None;
+                        view.land_on_thread(thread, cx);
+                        window.blur(cx);
                     }))
                     .on_mouse_down(
                         MouseButton::Right,
@@ -13770,7 +13901,11 @@ impl CockpitView {
             }
         }
         tree.track_focus(&self.floats.notice_focus)
-            .key_context("Notifications")
+            // The custom field inherits Submit/Escape from the cockpit;
+            // list navigation must not capture its Enter.
+            .when(self.snooze_editor.is_none(), |tree| {
+                tree.key_context("Notifications")
+            })
             .child(list)
     }
 

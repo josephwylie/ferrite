@@ -168,9 +168,9 @@ impl CockpitView {
         .on_action(
             cx.listener(|view, _: &notifications::SelectPrevious, _, cx| view.step_notices(-1, cx)),
         )
-        .on_action(
-            cx.listener(|view, _: &notifications::Open, _, cx| view.open_notice_at_cursor(cx)),
-        )
+        .on_action(cx.listener(|view, _: &notifications::Open, window, cx| {
+            view.open_notice_at_cursor(window, cx)
+        }))
         .on_action(
             cx.listener(|view, _: &notifications::Dismiss, _, cx| {
                 view.dismiss_notice_at_cursor(cx)
@@ -1377,15 +1377,15 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// ⏎ on the list: open the cursor's Thread (its request), and close.
-    fn open_notice_at_cursor(&mut self, cx: &mut Context<Self>) {
+    /// ⏎ on the list opens the cursor's Thread and preserves Inbox mode.
+    fn open_notice_at_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let rows = self.needs_you_rows(cx);
         let Some(row) = rows.get(self.needs_you.cursor_at(&rows)) else {
             return;
         };
         let verb = row.open_verb();
         self.notice_verb(verb, cx);
-        self.close_nav_view(cx);
+        window.blur(cx);
     }
 
     /// Dismiss only the Notice; its open Thread remains in Inbox.

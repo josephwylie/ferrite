@@ -102,7 +102,10 @@ fn notifications_scroll_to_and_open_the_oldest_row(cx: &mut TestAppContext) {
     cx.simulate_click(last.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {
-        assert!(!view.needs_you_shown(), "oldest Notice is clickable")
+        assert!(
+            view.needs_you_shown(),
+            "opening a Notice keeps Inbox visible"
+        )
     });
 }
 
@@ -263,7 +266,7 @@ fn a_finish_on_the_focused_pane_is_read_at_once_and_never_toasts(cx: &mut TestAp
 }
 
 /// Opening a Notice — a toast, or a row of the Inbox — lands the
-/// operator on its Pane and closes the panel.
+/// operator on its Pane and preserves Inbox mode.
 #[gpui::test]
 fn opening_a_notice_lands_on_its_pane_and_reads_it(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("open-notice", 4);
@@ -287,7 +290,7 @@ fn opening_a_notice_lands_on_its_pane_and_reads_it(cx: &mut TestAppContext) {
     });
     view.read_with(cx, |view, _| {
         assert_eq!(view.focused(), 2, "focus landed on the finished Pane");
-        assert!(!view.needs_you_shown());
+        assert!(view.needs_you_shown());
         assert!(view.cockpit.notifications().get(id).unwrap().read);
     });
     view.update(cx, |view, cx| view.notice_verb(Verb::Dismiss(id), cx));
@@ -800,7 +803,7 @@ fn inbox_empty_working_decision_and_keyboard_park(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.needs_you_rows(cx).is_empty());
-        assert_eq!(view.activity(&view.nav_state()).working.len(), 3);
+        assert_eq!(view.inbox(&view.nav_state()).working.len(), 3);
     });
     assert!(cx.debug_bounds("nav-needs-you-empty").is_some());
     assert!(cx.debug_bounds("nav-inbox-working").is_some());
@@ -826,7 +829,7 @@ fn inbox_empty_working_decision_and_keyboard_park(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.needs_you_rows(cx).is_empty());
-        assert_eq!(view.activity(&view.nav_state()).working.len(), 2);
+        assert_eq!(view.inbox(&view.nav_state()).working.len(), 2);
         assert_eq!(view.needs_you.cursor, 0);
     });
     assert!(cx.debug_bounds("nav-needs-you-empty").is_some());
@@ -932,7 +935,7 @@ fn stopped_failures_and_interruptions_remain_inbox(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.needs_you_rows(cx).len(), 2);
-        assert!(view.activity(&view.nav_state()).working.is_empty());
+        assert!(view.inbox(&view.nav_state()).working.is_empty());
     });
 }
 
@@ -1003,4 +1006,163 @@ fn inbox_completion_keeps_keyboard_park_on_the_selected_thread(cx: &mut TestAppC
             "completion cannot redirect Park to another Thread"
         );
     });
+}
+
+#[gpui::test]
+fn opening_inbox_rows_keeps_inbox_mode(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("inbox-stays-open", 2);
+    let threads = core.threads();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-i");
+    tick(cx);
+    let row = cx.debug_bounds("notice-row-1").unwrap();
+    cx.simulate_click(row.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.focused_thread(), Some(threads[1]));
+        assert!(
+            view.needs_you_shown(),
+            "opening an Inbox Thread keeps the queue visible"
+        );
+    });
+    fake.streams.borrow()[0]
+        .send(decision("stay-in-inbox"))
+        .unwrap();
+    tick(cx);
+    let row = cx.debug_bounds("notice-row-0").unwrap();
+    cx.simulate_click(row.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.focused_thread(), Some(threads[0]));
+        assert!(
+            view.needs_you_shown(),
+            "opening a Decision keeps the queue visible"
+        );
+    });
+}
+
+#[gpui::test]
+fn snooze_hides_a_thread_until_woken_and_new_decisions_wake_it(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("inbox-snooze", 2);
+    let threads = core.threads();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    view.update(cx, |view, _| {
+        view.cockpit
+            .snooze_thread(
+                threads[0],
+                Some(ferrite_core::clock::system_time() + Duration::from_secs(3600)),
+            )
+            .unwrap()
+    });
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert!(!view
+            .needs_you_rows(cx)
+            .iter()
+            .any(|row| row.thread == threads[0]));
+        assert_eq!(view.inbox(&view.nav_state()).snoozed.len(), 1);
+    });
+    fake.streams.borrow()[0]
+        .send(decision("wake-snoozed-thread"))
+        .unwrap();
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert!(view
+            .needs_you_rows(cx)
+            .iter()
+            .any(|row| row.thread == threads[0]));
+        assert!(view.inbox(&view.nav_state()).snoozed.is_empty());
+    });
+}
+
+#[gpui::test]
+fn working_shelf_starts_collapsed_and_expands_to_one_line_rows(cx: &mut TestAppContext) {
+    let (mut core, _) = cockpit("working-shelf", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "work".into());
+    bind_production_keys(cx);
+    let (_, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-i");
+    tick(cx);
+    let key: &'static str = format!("nav-thread-{}", thread.get()).leak();
+    assert!(
+        cx.debug_bounds(key).is_none(),
+        "Working is hidden by default"
+    );
+    let heading = cx.debug_bounds("nav-inbox-working").unwrap();
+    cx.simulate_click(heading.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(
+        cx.debug_bounds(key).unwrap().size.height,
+        px(ferrite_ui::theme::NAV_ROW_H)
+    );
+    let heading = cx.debug_bounds("nav-inbox-working").unwrap();
+    cx.simulate_click(heading.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds(key).is_none());
+}
+
+#[gpui::test]
+fn snooze_expiry_returns_threads_without_an_alert(cx: &mut TestAppContext) {
+    let clock = hold_wall_clock();
+    let (core, _) = cockpit("snooze-expiry", 1);
+    let thread = core.threads()[0];
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.cockpit
+            .snooze_thread(
+                thread,
+                Some(ferrite_core::clock::system_time() + Duration::from_secs(3600)),
+            )
+            .unwrap();
+        cx.notify();
+    });
+    tick(cx);
+    assert!(view.read_with(cx, |view, cx| view.needs_you_rows(cx).is_empty()));
+    clock.advance(Duration::from_secs(3601));
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.needs_you_rows(cx).len(), 1);
+        assert!(view.needs_you.toasts().is_empty());
+    });
+}
+
+#[gpui::test]
+fn custom_snooze_keeps_invalid_input_and_closes_when_leaving_inbox(cx: &mut TestAppContext) {
+    let (core, _) = cockpit("snooze-custom", 1);
+    let thread = core.threads()[0];
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    cx.update(|window, cx| view.update(cx, |view, cx| view.edit_snooze(thread, window, cx)));
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.snooze_editor
+            .as_ref()
+            .unwrap()
+            .line
+            .update(cx, |line, cx| line.set("nonsense".into(), cx));
+    });
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view
+        .snooze_editor
+        .as_ref()
+        .unwrap()
+        .error
+        .is_some()));
+    cx.simulate_keystrokes("cmd-b");
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.snooze_editor.is_none()));
+    cx.update(|window, cx| view.update(cx, |view, cx| view.edit_snooze(thread, window, cx)));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-i");
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.snooze_editor.is_none()));
 }

@@ -49,6 +49,9 @@ pub(super) enum MenuTarget {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum MenuVerb {
     Rename,
+    Snooze(ferrite_core::snooze::Preset),
+    SnoozeCustom,
+    Wake,
     /// List the Thread under the nav's `Pinned`, or no longer.
     Pin,
     Unpin,
@@ -114,6 +117,7 @@ pub(super) enum Submenu {
     OpenIn,
     /// The other Groups the Thread can move to.
     MoveToGroup,
+    Snooze,
     /// The Files menus' parent rows: `Copy ›` and `Tab size ›`.
     Files(tools::FilesSub),
     /// `Compare against ›`.
@@ -448,7 +452,15 @@ impl CockpitView {
         }
         rule(rows);
         // Park is Ferrite's archive: Claude's `A`.
-        if open.is_some() {
+        if let Some(open) = open {
+            rows.push(Some((
+                menu::Item::new("Snooze"),
+                MenuVerb::Submenu(Submenu::Snooze),
+            )));
+            if open.snooze().is_some() {
+                rows.push(Some((menu::Item::new("Wake thread"), MenuVerb::Wake)));
+            }
+
             rows.push(Some((key("Park thread", "A"), MenuVerb::Park)));
         }
         rows.push(Some((
@@ -480,6 +492,8 @@ impl CockpitView {
                 .into_iter()
                 .map(|(group, title)| (menu::Item::new(title), MenuVerb::JoinGroup(group)))
                 .collect(),
+            (Submenu::Snooze, MenuTarget::Thread(_) | MenuTarget::Pane(_)) => self.snooze_rows(),
+            (Submenu::Snooze, _) => Vec::new(),
             (Submenu::MoveToGroup, _) => Vec::new(),
             (Submenu::Files(sub), MenuTarget::File(thread) | MenuTarget::FilesMore(thread)) => {
                 self.files_sub_rows(thread, sub)
@@ -610,6 +624,20 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match (target, verb) {
+            (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Snooze(preset)) => {
+                if let Some(until) = preset.until(ferrite_core::clock::system_time()) {
+                    self.snooze_thread(thread, Some(until), cx);
+                } else {
+                    self.group_error =
+                        Some("That snooze time has passed. Choose another time.".into());
+                }
+            }
+            (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::SnoozeCustom) => {
+                self.edit_snooze(thread, window, cx)
+            }
+            (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Wake) => {
+                self.snooze_thread(thread, None, cx)
+            }
             (MenuTarget::Thread(thread), MenuVerb::Rename) => {
                 self.start_rename(RenameTarget::Thread(thread), cx)
             }
