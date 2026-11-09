@@ -223,6 +223,7 @@ pub fn launch() {
             motion::init(cx);
             register_fonts(cx);
             visual::init(cx);
+            visual::engine::shutdown_on_quit(cx);
             visual::diagram::init(settings.visuals != ferrite_core::visual::Level::Off, cx);
 
             // A refused key is said by the window (`cockpit::user_commands`).
