@@ -607,6 +607,7 @@ impl CefEngine {
             external: external_url.is_some(),
             navigation: Mutex::new(BrowserState {
                 url: external_url.unwrap_or_default().into(),
+                loading: external_url.is_some(),
                 ..Default::default()
             }),
             geometry: Mutex::new(Geometry {
@@ -1188,6 +1189,7 @@ impl BrowserView for CefView {
             self.0.navigation_intent();
             browser.reload();
         } else {
+            self.0.navigation_intent();
             self.0.visible.set(true);
             self.0.state.visible.store(true, Ordering::SeqCst);
         }
