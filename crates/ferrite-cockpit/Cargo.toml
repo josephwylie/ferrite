@@ -9,6 +9,7 @@ description = "Ferrite's Cockpit: the grid, the nav and the Roster glue"
 doctest = false
 
 [features]
+cef = ["ferrite-pane/cef"]
 # Opt-in native framebuffer artifacts (`cockpit::visual_reference`);
 # excluded from normal application builds. The app's own
 # `visual-reference` feature turns this on.

@@ -518,6 +518,7 @@ impl gpui::RenderOnce for Markdown {
         let chips = self.chips.clone();
         let skills = self.skills.clone();
         let link_cwd = cwd.clone();
+        let link_preview = preview.clone();
         let link_scope = scope.clone();
         let hang = theme::tx_cell(f32::from(base));
         // A ```mermaid fence draws as its diagram (`visual::diagram`); the
@@ -602,7 +603,9 @@ impl gpui::RenderOnce for Markdown {
                         .as_deref()
                         .and_then(|cwd| crate::file_links::issue_url(cwd, number))
                     {
-                        cx.open_url(&page);
+                        if !link_preview.as_ref().is_some_and(|preview| preview.open_url(&page, window)) {
+                            cx.open_url(&page);
+                        }
                     }
                     return;
                 }
@@ -620,7 +623,9 @@ impl gpui::RenderOnce for Markdown {
                         file.open(window, cx);
                     }
                 } else {
-                    cx.open_url(url);
+                    if !link_preview.as_ref().is_some_and(|preview| preview.open_url(url, window)) {
+                        cx.open_url(url);
+                    }
                 }
             })
             .when_some(diagrams, |view, source| {
