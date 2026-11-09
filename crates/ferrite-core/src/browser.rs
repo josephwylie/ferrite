@@ -11,7 +11,7 @@ pub use control::{
 
 use crate::ThreadId;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -131,6 +131,9 @@ pub struct Service {
     epoch: u64,
     next_lease: u64,
     protections: BTreeMap<u64, (ThreadId, Owner, Document, Protection)>,
+    /// A terminal native reply proves this retained command no longer writes,
+    /// although its effect remains uncertain to the agent.
+    finished_uncertain: BTreeSet<u64>,
     manual: BTreeMap<ThreadId, u64>,
     interactions: BTreeMap<ThreadId, (Owner, Document, u64)>,
 }
@@ -188,6 +191,8 @@ impl Service {
             tab.dirty = Dirty::Unknown;
         }
         self.protections.retain(|_, (id, _, _, _)| *id != thread);
+        self.finished_uncertain
+            .retain(|lease| self.protections.contains_key(lease));
         self.manual.remove(&thread);
         self.interactions.remove(&thread);
         true
@@ -409,7 +414,16 @@ impl Service {
         if kind == Protection::Reclaim {
             return Err("Use the page reclamation handshake to reserve an unload".into());
         }
-        if self.protections.values().any(|(id, _, _, _)| *id == thread) {
+        if self
+            .protections
+            .iter()
+            .any(|(lease, (id, _, _, existing))| {
+                *id == thread
+                    && !(kind == Protection::Annotation
+                        && *existing == Protection::Command
+                        && self.finished_uncertain.contains(lease))
+            })
+        {
             return Err(
                 "This Thread's browser is in use; finish its command or annotation capture first"
                     .into(),
@@ -426,10 +440,90 @@ impl Service {
         match self.protections.get(&lease.0) {
             Some((t, o, _, _)) if *t == thread && *o == owner => {
                 self.protections.remove(&lease.0);
+                self.finished_uncertain.remove(&lease.0);
                 Ok(())
             }
             _ => Err("This browser protection is no longer valid".into()),
         }
+    }
+
+    pub(crate) fn command_finished_uncertain(
+        &mut self,
+        thread: ThreadId,
+        owner: Owner,
+        lease: Lease,
+    ) -> Result<()> {
+        self.check_owner(thread, owner)?;
+        match self.protections.get(&lease.0) {
+            Some((id, candidate, _, Protection::Command))
+                if *id == thread && *candidate == owner =>
+            {
+                self.finished_uncertain.insert(lease.0);
+                Ok(())
+            }
+            _ => Err("This command protection is no longer valid".into()),
+        }
+    }
+
+    pub(crate) fn check_command_recovery(
+        &self,
+        thread: ThreadId,
+        owner: Owner,
+        lease: Lease,
+    ) -> Result<()> {
+        self.check_owner(thread, owner)?;
+        if !matches!(self.protections.get(&lease.0), Some((id, candidate, _, Protection::Command)) if *id == thread && *candidate == owner)
+        {
+            return Err("This command protection is no longer valid".into());
+        }
+        if self
+            .protections
+            .iter()
+            .any(|(key, (id, _, _, _))| *id == thread && *key != lease.0)
+        {
+            return Err(
+                "Finish the annotation capture before observing or controlling this browser".into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// A trusted operator's explicit Close/Reload may abandon only this tab's
+    /// commands after the window fences its native writer. Capture protection
+    /// is never discarded by that recovery path.
+    pub(crate) fn retire_commands(
+        &mut self,
+        thread: ThreadId,
+        owner: Owner,
+        tab: TabId,
+    ) -> Result<Vec<Lease>> {
+        self.check_owner(thread, owner)?;
+        if !self.state(thread).tabs.iter().any(|page| page.id == tab) {
+            return Err("No such tab in this Thread".into());
+        }
+        if self.protections.values().any(|(id, _, document, kind)| {
+            *id == thread && document.tab == tab && *kind == Protection::Annotation
+        }) {
+            return Err(
+                "Finish or cancel the annotation capture before closing or reloading this page"
+                    .into(),
+            );
+        }
+        let leases: Vec<_> = self
+            .protections
+            .iter()
+            .filter(|(_, (id, candidate, document, kind))| {
+                *id == thread
+                    && *candidate == owner
+                    && document.tab == tab
+                    && *kind == Protection::Command
+            })
+            .map(|(key, _)| Lease(*key))
+            .collect();
+        for lease in &leases {
+            self.release(thread, owner, *lease)?;
+        }
+        Ok(leases)
     }
 
     /// Begin/refresh a trusted operator gesture before forwarding its native

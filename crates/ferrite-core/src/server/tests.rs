@@ -5999,6 +5999,19 @@ fn browser_requests_allow_operator_recovery_without_discarding_annotation_protec
         panic!("operator feedback must remain available after the uncertain writer has drained");
     };
     assert!(
+        agent
+            .submit(Operation::Control {
+                document: next,
+                revision: 0,
+                observation: None,
+                control: Control::Observe
+            })
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .is_err(),
+        "read-only capture must not allow an agent observation to discharge uncertainty"
+    );
+    assert!(
         matches!(
             browser_test_command(
                 &mut owner_window,
