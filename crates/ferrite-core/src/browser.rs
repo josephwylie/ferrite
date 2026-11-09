@@ -180,7 +180,7 @@ impl Service {
             tab.live = false;
             tab.visible = false;
             tab.loading = false;
-            tab.generation += 1;
+            tab.generation = tab.generation.saturating_add(1);
             tab.dirty = Dirty::Unknown;
         }
         self.protections.retain(|_, (id, _, _, _)| *id != thread);
@@ -246,7 +246,9 @@ impl Service {
         let state = self.threads.get_mut(&thread).expect("checked owner");
         match action {
             Action::Open { url } => {
-                self.next += 1;
+                self.next = self.next.checked_add(1).ok_or(
+                    "Browser tab identities are exhausted; no identity can safely be reused",
+                )?;
                 let id = TabId(self.next);
                 state.tabs.push(Tab {
                     id,
@@ -278,9 +280,8 @@ impl Service {
                     .find(|item| item.id == tab)
                     .ok_or("No such tab in this Thread")?;
                 if !selected.live {
+                    begin_navigation(selected)?;
                     selected.live = true;
-                    selected.loading = true;
-                    selected.generation += 1;
                 }
                 state.active = Some(tab);
             }
@@ -297,6 +298,15 @@ impl Service {
                     .iter()
                     .position(|item| item.id == tab)
                     .ok_or("No such tab in this Thread")?;
+                if state.active == Some(tab) {
+                    let successor = state
+                        .tabs
+                        .get(at + 1)
+                        .or_else(|| at.checked_sub(1).and_then(|at| state.tabs.get(at)));
+                    if let Some(next) = successor.filter(|next| !next.live) {
+                        next_generation(next.generation)?;
+                    }
+                }
                 state.tabs.remove(at);
                 if state.active == Some(tab) {
                     state.active = state
@@ -309,8 +319,8 @@ impl Service {
                         .find(|tab| Some(tab.id) == state.active)
                     {
                         if !next.live {
+                            begin_navigation(next)?;
                             next.live = true;
-                            begin_navigation(next);
                         }
                     }
                 }
@@ -321,8 +331,8 @@ impl Service {
                     .iter_mut()
                     .find(|tab| tab.id == document.tab)
                     .expect("checked document");
+                begin_navigation(tab)?;
                 tab.url = url;
-                begin_navigation(tab);
             }
             Action::Back { document }
             | Action::Forward { document }
@@ -332,7 +342,7 @@ impl Service {
                     .iter_mut()
                     .find(|tab| tab.id == document.tab)
                     .expect("checked document");
-                begin_navigation(tab);
+                begin_navigation(tab)?;
             }
         }
         Ok(self.state(thread))
@@ -351,7 +361,7 @@ impl Service {
             .find(|tab| tab.id == page.document.tab)
             .expect("checked document");
         if page.navigation {
-            tab.generation += 1;
+            tab.generation = next_generation(tab.generation)?;
         }
         tab.url = page.url;
         tab.loading = page.loading;
@@ -449,10 +459,11 @@ impl Service {
         {
             return Ok(false);
         }
+        let generation = next_generation(page.generation)?;
         page.live = false;
         page.visible = false;
         page.loading = false;
-        page.generation += 1;
+        page.generation = generation;
         page.dirty = Dirty::Unknown;
         Ok(true)
     }
@@ -566,7 +577,7 @@ impl Service {
                 state.tabs.push(Tab {
                     id,
                     url,
-                    generation: generation + 1,
+                    generation: next_generation(generation)?,
                     loading: false,
                     can_back: false,
                     can_forward: false,
@@ -577,32 +588,46 @@ impl Service {
                     protected: false,
                 });
             }
-            state.active = saved
+            if saved
                 .active
-                .filter(|id| state.tabs.iter().any(|tab| tab.id == *id));
+                .is_some_and(|id| !state.tabs.iter().any(|tab| tab.id == id))
+            {
+                return Err("Browser selection does not identify a saved tab".into());
+            }
+            state.active = saved.active;
             service.threads.insert(thread, state);
         }
         Ok(service)
     }
 }
 
-fn begin_navigation(tab: &mut Tab) {
-    tab.generation += 1;
+fn next_generation(generation: u64) -> Result<u64> {
+    generation.checked_add(1).ok_or_else(|| {
+        "Browser document identity is exhausted; close this tab and open its URL in a new tab"
+            .into()
+    })
+}
+
+fn begin_navigation(tab: &mut Tab) -> Result<()> {
+    tab.generation = next_generation(tab.generation)?;
     tab.loading = true;
     tab.error = None;
     tab.dirty = Dirty::Unknown;
+    Ok(())
 }
 
 fn validate_url(url: &str) -> Result<()> {
-    // Do not allow app/file/javascript schemes into the external page surface.
-    if (url.starts_with("http://") || url.starts_with("https://"))
-        && !url.chars().any(|ch| ch.is_control())
-        && url
-            .split_once("://")
-            .is_some_and(|(_, rest)| !rest.is_empty() && !rest.starts_with('/'))
+    let parsed = url::Url::parse(url)
+        .map_err(|_| "Enter a valid http:// or https:// website address".to_string())?;
+    if matches!(parsed.scheme(), "http" | "https")
+        && parsed.host_str().is_some()
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && !url.chars().any(char::is_control)
+        && url.trim() == url
     {
         Ok(())
     } else {
-        Err("Enter an http:// or https:// website address".into())
+        Err("Enter a valid http:// or https:// website address".into())
     }
 }

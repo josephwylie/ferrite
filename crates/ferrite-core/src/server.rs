@@ -492,7 +492,7 @@ impl Server {
                 self.clients.remove(&id);
                 self.engine.window_gone(id);
                 self.renders.client_gone(id);
-                self.browser_owner_gone(id, None);
+                self.browser_owner_gone(id);
             }
             Heard::Message(id, message) => self.message(id, message),
             Heard::Api(heard) => self.api_heard(heard),
@@ -540,7 +540,6 @@ impl Server {
             ClientMessage::Watch { thread, resume } => self.watch(id, thread, resume),
             ClientMessage::Unwatch { thread } => {
                 client.watching.remove(&thread);
-                self.browser_owner_gone(id, Some(thread));
             }
             ClientMessage::Command(command) => self.command(id, command),
             ClientMessage::BrowserReply {
@@ -676,6 +675,11 @@ impl Server {
                 } else {
                     self.browser_window(id, *thread)
                         .and_then(|_| {
+                            if self.browser.state(*thread).active != Some(document.tab) {
+                                return Err(failed(
+                                    "The selected tab changed; this queued input was discarded",
+                                ));
+                            }
                             self.browser
                                 .check_document(*thread, *document)
                                 .and_then(|_| self.browser.operator_input(*thread, *owner))
@@ -1172,6 +1176,9 @@ impl Server {
     fn lagged(&mut self, id: ClientId) {
         crate::log!("server: client {id} fell too far behind");
         self.clients.remove(&id);
+        self.engine.window_gone(id);
+        self.renders.client_gone(id);
+        self.browser_owner_gone(id);
     }
 
     /// Flush every writer and end every Session without parking it: the
