@@ -20,8 +20,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
-      - name: Reproduce Codex visual-off transport ordering
+      - name: Verify Codex visual transport ordering
         run: |
           for attempt in $(seq 1 50); do
-            cargo test -p ferrite-core --locked --test visuals codex_without_visuals_offers_nothing_and_refuses_a_stray_call -- --exact
+            cargo test -p ferrite-core --locked --test visuals --quiet
           done
+      - run: cargo test -p ferrite-core --locked --test wrap_up
+      - run: cargo test -p ferrite-core --locked --lib server::tests::browser_providers
