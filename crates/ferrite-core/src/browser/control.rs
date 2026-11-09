@@ -117,12 +117,12 @@ pub(crate) struct Request {
     pub reply: mpsc::SyncSender<Result<Response, String>>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Client(Arc<Mutex<mpsc::Sender<Request>>>);
 
 /// A provider gets this bound handle, rather than accepting a Thread id from
 /// page content or a tool argument. #194 supplies it to provider adapters.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ThreadClient {
     client: Client,
     thread: ThreadId,

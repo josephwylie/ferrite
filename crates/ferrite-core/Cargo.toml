@@ -20,6 +20,8 @@ serde_json = { workspace = true }
 base64 = "0.22"
 chrono = "0.4.45"
 ureq = "3"
+# Shared with the UI: validate website authorities, including localhost/IPv6.
+url = "2"
 # Ferrite's own update is checked against the SHA-256 GitHub publishes
 # for the installer (`self_update`). Already in the tree via gpui.
 sha2 = "0.10"
