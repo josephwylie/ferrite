@@ -378,6 +378,13 @@ impl CockpitView {
             .pr(px(tools_inset() - PANEL_PAD_R))
             .mt(px(drop))
             .child(tabs.unwrap_or_else(|| div().flex_1()))
+            .children(owner.thread().map(|thread| {
+                ferrite_pane::preview::head_door("open-browser", "open-browser".into(), icons::GLOBE)
+                    .tooltip(ferrite_ui::menu::tooltip("Open browser"))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.open_browser(thread, cx);
+                    }))
+            }))
     }
 
     /// The `Overview` tab beside a preview's: the sections, the preview
