@@ -2,7 +2,9 @@
 
 The [first macOS packaged operator slice](browser-window-2026-11-09/macos-0abd8f1b/README.md)
 passed rendering/input and produced the actual Claude Observe-unavailable red.
-Windows window startup is under diagnosis. This is the first vertical slice of
+The [Windows startup diagnosis](browser-window-2026-11-09/windows-65d33368/README.md)
+reproduced a main-thread stack overflow; its larger-stack candidate is pending
+packaged verification. This is the first vertical slice of
 #196, not complete browser/annotation acceptance.
 
 The opt-in `browser-smoke` application feature installs a bounded scenario in
@@ -18,9 +20,15 @@ one click. This does not test OS-level mouse injection.
 `--provider claude` additionally starts a deterministic external CLI peer through
 normal production discovery and Session launch. A temporary PATH shim calls
 `scripts/browser-window-provider.py`, which implements the captured Claude SDK
-MCP transport. The peer requests State and then Observe of the selected tab;
-its actual response must describe the displayed `Window fixture` button.
-A unique per-run marker proves the intended peer received that response.
+MCP transport. The peer checks the actual advertised tool definitions, requests
+State and Observe of the selected tab, then uses the returned exact element
+reference and observation receipt to click `Window fixture`. A fresh Observe
+must still describe that fixture. The same native Window must paint the button
+blue, and the independent HTTP oracle must count exactly two clicks: operator
+then provider. A successful tool acknowledgement alone cannot satisfy the probe.
+Fresh Observe polling is bounded when the initial operator gesture has not yet
+settled; it never retries a write. A unique per-run marker proves the intended
+peer received the response.
 It never fabricates a browser response, edits fixture data or calls a model.
 An unavailable response is a failure. Codex and broader provider scenarios are
 subsequent slices; the peer's Codex transport is not yet exercised by this probe.
@@ -41,10 +49,28 @@ The probe creates a temporary Store, Settings and browser profile and disables
 Projects, titling and automatic update work. The actual Server has its own
 process handle and is stopped/reaped before cleanup. The normal native window
 must close within the bounded scenario; a hung or unsupported renderer fails.
-Artifacts include `app.log`, diagnostics, `window-result.json`, a current
-failure-diagnostic screenshot where available, before/after PNGs and the
-independent `oracle.json`. Provider mode adds the actual host protocol and
-peer result. Private controller credentials are not part of the peer protocol.
+Artifacts include executable SHA-256 and platform provenance, `app.log`,
+diagnostics, `window-result.json`, a current failure screenshot where available,
+before/after PNGs and the independent `oracle.json`. Provider mode adds the
+actual host protocol, tool definitions, operation trace, peer result and blue
+Preview PNG. After ordinary app exit, an OS process check rejects surviving
+native controllers before cleanup. The public Stop request then stops the
+isolated Server. Private controller credentials are not part of the peer
+protocol. Existing completion markers are removed before a new invocation.
+
+The workflow reuses only an exact unsigned native stage keyed by OS,
+architecture, compiler and packager/patch hashes. The packager strictly checks
+provenance and the binary hash before reuse. Native-stage caching and optional
+compiler-cache fallback do not relax application builds or acceptance checks.
+
+The historical work-order benchmark and upcoming packaged scenario share
+`scripts/bench/browser-controllers/fixture-server.mjs`. Run it with
+`node scripts/bench/browser-controllers/fixture-server.mjs`; stdout reports its
+loopback URL. This starts only the HTTP fixture. GET `/oracle?name=...` reads
+persisted records and GET `/audit` reads successful save events; neither writes
+data. List/editor, custom-field and save delays remain 180, 150 and 250 ms.
+Persistence survives navigation, not a fixture-server restart. This extracted
+fixture is not yet exercised by the packaged provider scenario.
 
 Initial missing-driver red run:
 https://github.com/josephwylie/ferrite/actions/runs/42561582036 . The macOS
@@ -53,13 +79,14 @@ its application and signed package built successfully. This establishes the
 missing-driver red, not a passing UI/rendering outcome. The superseding driver
 run is the actual two-platform GUI capability check.
 Native GPUI window rendering/readback and pointer input are now proven on the
-macOS hosted runner by the retained evidence. Windows exited before producing
-a window result; exact exit, bootstrap/naked PE stack sizes and startup
-checkpoints are collected by the next diagnostic revision. A failure-only naked
+macOS hosted runner by the retained evidence. Windows reached the actual production CockpitView/native Window before
+exiting with `0xC00000FD`; both packaged and naked executables reserved 1 MiB.
+The naked log explicitly reports a main-thread stack overflow. The candidate
+raises both reserves to 8 MiB; it is not a passing Windows result until verified. A failure-only naked
 startup comparison is explicitly diagnostic and cannot pass browser acceptance.
 The existing headless CEF Engine/View feasibility results do not prove this
-window path. Neither this initial scenario nor a successful Observe establishes
-full controller interactions, both-provider parity, annotations, Composer
+window path. Neither the initial operator slice nor a successful single-button provider
+scenario establishes full controller interactions, both-provider parity, annotations, Composer
 history, sustained work-order performance or resource acceptance. Those extend
 the same harness once their production features are available; the detailed
 preparation contract remains `/tmp/ferrite-browser-196-contract.md` during work.
