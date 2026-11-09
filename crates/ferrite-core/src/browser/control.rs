@@ -17,12 +17,13 @@ pub enum Control {
     Network,
     Wait {
         selector: String,
-        state: String,
+        state: WaitState,
     },
     Click {
         reference: String,
     },
     Type {
+        reference: String,
         text: String,
     },
     Fill {
@@ -42,6 +43,15 @@ pub enum Control {
         y: i32,
     },
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitState {
+    Visible,
+    Hidden,
+    Attached,
+    Detached,
+}
+
 impl Control {
     pub fn observation(&self) -> bool {
         matches!(
