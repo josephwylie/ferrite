@@ -32,13 +32,13 @@ enum Incoming {
 
 struct Connection {
     output: Output,
-    sessions: HashSet<String>,
+    sessions: HashMap<String, u64>,
     discover: bool,
 }
 
 struct Target {
     browser: Browser,
-    agent_paused: Arc<AtomicBool>,
+    agent_access: Arc<super::AgentAccess>,
     // Keeping the registration alive is what keeps CEF delivering messages.
     _registration: Registration,
 }
@@ -129,7 +129,12 @@ impl Control {
         self.endpoint.clone()
     }
 
-    pub(super) fn register(&mut self, id: String, browser: Browser, agent_paused: Arc<AtomicBool>) {
+    pub(super) fn register(
+        &mut self,
+        id: String,
+        browser: Browser,
+        agent_access: Arc<super::AgentAccess>,
+    ) {
         let Some(host) = browser.host() else { return };
         let mut observer = Observer::new(id.clone(), self.send.clone(), self.overflow.clone());
         let Some(registration) = host.add_dev_tools_message_observer(Some(&mut observer)) else {
@@ -139,7 +144,7 @@ impl Control {
             id.clone(),
             Target {
                 browser,
-                agent_paused,
+                agent_access,
                 _registration: registration,
             },
         );
@@ -164,7 +169,7 @@ impl Control {
         for id in removed {
             self.targets.remove(&id);
             for connection in self.connections.values_mut() {
-                if connection.sessions.remove(&id) {
+                if connection.sessions.remove(&id).is_some() {
                     emit(
                         &connection.output,
                         json!({"method":"Target.detachedFromTarget","params":{"sessionId":id,"targetId":id}}),
@@ -242,7 +247,7 @@ impl Control {
                         id,
                         Connection {
                             output,
-                            sessions: HashSet::new(),
+                            sessions: HashMap::new(),
                             discover: false,
                         },
                     );
@@ -269,7 +274,7 @@ impl Control {
                     } else {
                         value["sessionId"] = target.clone().into();
                         for connection in self.connections.values() {
-                            if connection.sessions.contains(&target) {
+                            if connection.sessions.contains_key(&target) {
                                 emit(&connection.output, value.clone());
                             }
                         }
@@ -322,16 +327,19 @@ impl Control {
             .and_then(Value::as_str)
             .map(str::to_owned);
         if let Some(session) = session {
-            if !self.connections[&peer].sessions.contains(&session)
+            if !self.connections[&peer].sessions.contains_key(&session)
                 || !self.targets.contains_key(&session)
             {
                 self.error(peer, id, "Unknown embedded target session");
                 return;
             }
-            if self.targets[&session].agent_paused.load(Ordering::SeqCst)
+            let access = &self.targets[&session].agent_access;
+            let stale_attachment =
+                self.connections[&peer].sessions[&session] != access.epoch.load(Ordering::SeqCst);
+            if (access.paused.load(Ordering::SeqCst) || stale_attachment)
                 && !read_only_while_paused(&method)
             {
-                self.output(peer, json!({"id":id,"error":{"code":-32000,"message":"Operator interaction has paused agent input. Wait for it to settle, then inspect fresh page state before continuing.","data":{"completion":"not_dispatched","reason":"manual_interaction"}}}));
+                self.output(peer, json!({"id":id,"error":{"code":-32000,"message":"Operator interaction invalidated this agent attachment. Wait for it to settle, reconnect, and inspect fresh page state before continuing.","data":{"completion":"not_dispatched","reason":"manual_interaction"}}}));
                 return;
             }
             // Never forward browser-wide/target-management commands. CEF's page
@@ -417,11 +425,13 @@ impl Control {
                     self.error(peer, id, "Unknown embedded target or non-flat session");
                     return;
                 }
-                self.connections
-                    .get_mut(&peer)
-                    .unwrap()
-                    .sessions
-                    .insert(target.into());
+                self.connections.get_mut(&peer).unwrap().sessions.insert(
+                    target.into(),
+                    self.targets[target]
+                        .agent_access
+                        .epoch
+                        .load(Ordering::SeqCst),
+                );
                 json!({"sessionId":target})
             }
             "Target.detachFromTarget" => {
@@ -450,7 +460,14 @@ impl Control {
                 };
                 // Selecting a controller session for a read-only capture must
                 // not steal the operator's native keyboard focus.
-                if !target.agent_paused.load(Ordering::SeqCst) {
+                let attached_epoch = self.connections[&peer]
+                    .sessions
+                    .get(params["targetId"].as_str().unwrap_or(""));
+                if !target.agent_access.paused.load(Ordering::SeqCst)
+                    && attached_epoch.is_none_or(|epoch| {
+                        *epoch == target.agent_access.epoch.load(Ordering::SeqCst)
+                    })
+                {
                     if let Some(host) = target.browser.host() {
                         host.set_focus(1);
                     }
