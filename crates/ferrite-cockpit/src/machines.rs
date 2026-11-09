@@ -361,6 +361,7 @@ impl Machines {
     fn attach(&mut self, index: usize) -> io::Result<Cockpit> {
         let (store, server) = self.endpoint(index);
         Cockpit::attach(Attach {
+            browser: cfg!(feature = "cef"),
             store,
             server,
             client: self.reach.client.clone(),

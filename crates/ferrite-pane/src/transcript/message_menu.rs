@@ -191,7 +191,9 @@ impl TranscriptView {
             }),
             (Verb::OpenLink, Target::Link { url, file }) => match file {
                 Some(file) => file.open(window, cx),
-                None => cx.open_url(url),
+                None => {
+                    if !self.input.preview.open_url(url, window) { cx.open_url(url); }
+                },
             },
             (Verb::CopyLink, Target::Link { url, .. }) => copy(url, cx),
             (Verb::OpenInFiles, Target::Link { file: Some(file), .. }) => {
