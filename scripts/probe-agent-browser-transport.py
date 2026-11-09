@@ -30,6 +30,8 @@ def main():
                     assert result.get("success") is False, result
             service.command("session_info")
             service.command("session_info")
+            inspection = service.raw({"action": "inspect", "ferriteToken": service.token})
+            assert inspection.get("success") is False and "disabled in Ferrite" in inspection.get("error", ""), inspection
             launch = service.raw({"action": "launch", "ferriteToken": service.token})
             streaming = service.raw({"action": "stream_enable", "ferriteToken": service.token})
             assert launch.get("success") is False and "explicit CDP connect required" in launch.get("error", ""), launch
@@ -41,7 +43,7 @@ def main():
                               "missing_command_capability_rejected": True,
                               "wrong_command_capability_rejected": True,
                               "authorized_reconnected_requests": 2, "service_processes": 1,
-                              "stream_listener_disabled": True, "external_browser_launch_rejected": True,
+                              "stream_listener_disabled": True, "inspect_listener_disabled": True, "external_browser_launch_rejected": True,
                               "browser_attached": False}))
     finally:
         service.stop()

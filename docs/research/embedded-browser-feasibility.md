@@ -147,6 +147,29 @@ include each executable digest, Rust compiler version and transport result.
 No browser was attached in these native-only jobs; this evidence does not close
 the separate packaged CEF attachment or effective-isolation gates.
 
+## Additional control-surface audit
+
+A subsequent audit found `inspect` can start a second unauthenticated CDP proxy
+and open the OS browser. The retained patch now rejects both `inspect` and
+`stream_enable` before action dispatch or browser diagnostics, and guards their
+direct handlers. The additional focused regression checks that rejection
+occurs without side effects even before a browser is attached. The public
+transport probe now also requires an explicit inspect-denied error.
+
+The current patch SHA-256 is
+`c9a6df0b0cf5f806cfd7eccedfe0f59b781ec02784abe042d36d427b40cc553c`.
+The successful local and CI evidence above applies to the previous `034e4532`
+patch; the new inspect regression was added after those builds and must pass
+CI before the updated distribution is accepted. Native CI uses the packager's
+`--test` option to execute all six focused Rust security regressions on every
+platform before packaging. Local Rust builds remain stopped for disk space.
+
+No other native action creates a listener or opens an external browser:
+recording uses existing CDP screencast and ffmpeg pipes; tracing/profiling use
+existing CDP IO streams. Standalone dashboard startup is outside daemon mode;
+the service's allowlisted environment selects daemon mode exclusively. Browser
+launch/provider/Safari/Appium paths remain behind the explicit-CDP requirement.
+
 ## Reproduction and acceptance status
 
 ```

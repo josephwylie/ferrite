@@ -30,10 +30,42 @@ index 58d3fe9..03ad887 100644
 +# Keep vendored native builds independent of the embedding workspace.
 +[workspace]
 diff --git a/cli/src/native/actions.rs b/cli/src/native/actions.rs
-index 2d488de..5cf33f9 100644
+index 2d488de..97b2bba 100644
 --- a/cli/src/native/actions.rs
 +++ b/cli/src/native/actions.rs
-@@ -4380,6 +4380,9 @@ async fn auto_launch(
+@@ -2849,7 +2849,31 @@ fn append_launch_policy_actions(
+     }
+ }
+ 
++/// Native actions that would expose another unauthenticated control surface.
++/// Keep this check ahead of all execution, policy, lifecycle, and diagnostics.
++fn ferrite_action_denial(action: &str) -> Option<&'static str> {
++    if env::var("FERRITE_AGENT_BROWSER").as_deref() != Ok("1") {
++        return None;
++    }
++    match action {
++        "inspect" => Some("DevTools inspect proxy is disabled in Ferrite"),
++        "stream_enable" => Some("Dashboard stream is disabled in Ferrite"),
++        _ => None,
++    }
++}
++
+ pub async fn execute_command(cmd: &Value, state: &mut DaemonState) -> Value {
++    let action = cmd
++        .get("action")
++        .and_then(Value::as_str)
++        .unwrap_or_default();
++    if let Some(error) = ferrite_action_denial(action) {
++        return error_response(
++            cmd.get("id").and_then(Value::as_str).unwrap_or_default(),
++            error,
++        );
++    }
++
+     let mut response = execute_command_inner(cmd, state).await;
+     let action = cmd.get("action").and_then(|v| v.as_str()).unwrap_or("");
+     if !skip_launch_action(action) {
+@@ -4380,6 +4404,9 @@ async fn auto_launch(
      state: &mut DaemonState,
      plugins: Vec<crate::plugins::PluginConfig>,
  ) -> Result<(), String> {
@@ -43,7 +75,7 @@ index 2d488de..5cf33f9 100644
      if state.attached_target.is_some() {
          return handle_launch(&json!({ "action": "launch", "plugins": plugins }), state)
              .await
-@@ -5164,6 +5167,16 @@ fn with_cdp_headers(target: Option<String>, cmd: &Value) -> Option<String> {
+@@ -5164,6 +5191,16 @@ fn with_cdp_headers(target: Option<String>, cmd: &Value) -> Option<String> {
      }
  }
  
@@ -60,7 +92,7 @@ index 2d488de..5cf33f9 100644
  async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
      handle_launch_with_deadline(cmd, state, BROWSER_USE_SETUP_DEADLINE).await
  }
-@@ -5173,6 +5186,13 @@ async fn handle_launch_with_deadline(
+@@ -5173,6 +5210,13 @@ async fn handle_launch_with_deadline(
      state: &mut DaemonState,
      deadline: std::time::Duration,
  ) -> Result<Value, String> {
@@ -74,21 +106,100 @@ index 2d488de..5cf33f9 100644
      let mut resolved = resolve_launch_target(cmd, state.attached_target.as_ref());
      if let Some(launch) = resolved.as_mut() {
          attach_saved_cdp_headers(launch, state);
-@@ -9750,6 +9770,10 @@ async fn current_stream_status(state: &DaemonState) -> Value {
+@@ -5982,6 +6026,10 @@ async fn handle_cdp_url(state: &DaemonState) -> Result<Value, String> {
+ }
+ 
+ async fn handle_inspect(state: &mut DaemonState) -> Result<Value, String> {
++    if let Some(error) = ferrite_action_denial("inspect") {
++        return Err(error.into());
++    }
++
+     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+ 
+     // Shut down any existing inspect server so we always target the current page
+@@ -9750,6 +9798,10 @@ async fn current_stream_status(state: &DaemonState) -> Value {
  }
  
  async fn handle_stream_enable(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
-+    if std::env::var("FERRITE_AGENT_BROWSER").as_deref() == Ok("1") {
-+        return Err("Dashboard stream is disabled in Ferrite".into());
++    if let Some(error) = ferrite_action_denial("stream_enable") {
++        return Err(error.into());
 +    }
 +
      if state.stream_server.is_some() {
          return Err("Streaming is already enabled for this session".to_string());
      }
-@@ -14311,6 +14335,45 @@ fn attach_tab_gone_data(resp: &mut Value, state: &DaemonState) {
+@@ -14311,6 +14363,113 @@ fn attach_tab_gone_data(resp: &mut Value, state: &DaemonState) {
  
  #[cfg(test)]
  mod tests {
++    #[tokio::test]
++    async fn ferrite_rejects_control_surfaces_before_any_command_side_effects() {
++        let guard = crate::test_utils::EnvGuard::new(&["FERRITE_AGENT_BROWSER"]);
++        guard.set("FERRITE_AGENT_BROWSER", "1");
++        let mut state = super::DaemonState::new();
++        let original_input_mode = state.input_mode.clone();
++        for action in ["inspect", "stream_enable"] {
++            let response = super::execute_command(
++                &serde_json::json!({
++                    "id":"unsupported", "action":action,
++                    "defaultInputMode":"human", "port":0,
++                }),
++                &mut state,
++            )
++            .await;
++            assert_eq!(response["id"], "unsupported");
++            assert_eq!(response["success"], false);
++            assert!(response["error"]
++                .as_str()
++                .unwrap()
++                .contains("disabled in Ferrite"));
++            assert_eq!(state.input_mode, original_input_mode);
++            assert!(state.browser.is_none());
++            assert!(state.inspect_server.is_none());
++            assert!(state.stream_server.is_none());
++            assert!(state.pending_confirmation.is_none());
++        }
++        // Direct internal handler use must not bypass the transport gate.
++        assert!(super::handle_inspect(&mut state)
++            .await
++            .unwrap_err()
++            .contains("disabled in Ferrite"));
++        assert!(
++            super::handle_stream_enable(&serde_json::json!({"port":0}), &mut state)
++                .await
++                .unwrap_err()
++                .contains("disabled in Ferrite")
++        );
++        for action in [
++            "snapshot",
++            "screenshot",
++            "click",
++            "console",
++            "errors",
++            "requests",
++            "request_detail",
++            "responsebody",
++            "har_start",
++            "har_stop",
++            "trace_start",
++            "trace_stop",
++            "profiler_start",
++            "profiler_stop",
++            "recording_start",
++            "recording_stop",
++            "recording_restart",
++            "video_start",
++            "video_stop",
++            "screencast_start",
++            "screencast_stop",
++        ] {
++            assert!(super::ferrite_action_denial(action).is_none(), "{}", action);
++        }
++        guard.remove("FERRITE_AGENT_BROWSER");
++        assert!(super::ferrite_action_denial("inspect").is_none());
++        assert!(super::ferrite_action_denial("stream_enable").is_none());
++    }
++
 +    #[tokio::test]
 +    async fn ferrite_never_launches_or_recovers_a_browser_implicitly() {
 +        let guard = crate::test_utils::EnvGuard::new(&["FERRITE_AGENT_BROWSER"]);
