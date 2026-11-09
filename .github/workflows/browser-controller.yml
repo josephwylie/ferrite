@@ -18,8 +18,9 @@ jobs:
     name: Verify native release (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [macos-14, macos-15-intel, windows-latest]
+        os: [macos-latest, macos-15-intel, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -52,4 +53,3 @@ jobs:
             target/browser-controller/version.txt
             target/browser-controller/transport.json
             target/browser-controller/agent-browser-build.json
-

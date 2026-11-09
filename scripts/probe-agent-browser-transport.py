@@ -69,7 +69,9 @@ def main():
             launch = command({"action": "launch", "ferriteToken": token})
             streaming = command({"action": "stream_enable", "ferriteToken": token})
             assert launch.get("success") is False, "controller launched an unrelated browser"
+            assert "explicit CDP connect required" in launch.get("error", ""), launch
             assert streaming.get("success") is False, "controller enabled an unauthenticated input path"
+            assert "disabled in Ferrite" in streaming.get("error", ""), streaming
             assert first.get("success") is True, first
             assert second.get("success") is True, second
             assert not list(directory.glob("*.stream")), "unauthenticated stream server is running"

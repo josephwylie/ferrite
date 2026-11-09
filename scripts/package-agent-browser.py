@@ -57,7 +57,7 @@ def main():
     source = cache / "source"
     if not source.exists():
         cache.mkdir(parents=True, exist_ok=True)
-        run("git", "-c", "core.autocrlf=false", "clone", "--depth", "1", "--branch", "v" + VERSION, SOURCE_URL, str(source))
+        run("git", "clone", "--config", "core.autocrlf=false", "--depth", "1", "--branch", "v" + VERSION, SOURCE_URL, str(source))
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip()
     if commit != SOURCE_COMMIT:
         parser.error(f"upstream tag/source mismatch: expected {SOURCE_COMMIT}, got {commit}")
