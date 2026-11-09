@@ -1541,7 +1541,7 @@ fn remote_inbox_uses_digests_and_follows_another_clients_park(cx: &mut TestAppCo
 fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(cx: &mut TestAppContext) {
     use ferrite_core::browser::Action;
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
-    use ferrite_pane::visual::{engine::Visuals, web::fake::FakeEngine};
+    use ferrite_pane::visual::{engine::Visuals, web::{fake::{Call, FakeEngine}, Input}};
     let dir = scratch("browser-preview");
     let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
     let bridge = std::sync::Arc::new(Bridge::new("box", dir.join("bridge.sock"), dial));
@@ -1562,7 +1562,10 @@ fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(c
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
     until(cx, |cx| engine.live_views() == 1 && cx.debug_bounds("browser-preview").is_some());
-    let before = engine.journal();
+    let activation = || engine.journal().into_iter().filter(|call| {
+        matches!(call, Call::Input(input) if !matches!(input, Input::Leave))
+    }).collect::<Vec<_>>();
+    let before = activation();
     let annotate = cx.debug_bounds("browser-annotate").expect("live browser offers annotation capture");
     cx.simulate_click(annotate.center(), gpui::Modifiers::none());
     until(cx, |cx| cx.debug_bounds("browser-annotation-overlay").is_some());
@@ -1573,5 +1576,24 @@ fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(c
     until(cx, |cx| cx.debug_bounds("browser-annotation-overlay").is_none());
     let released = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
     assert!(!released.tabs[0].protected, "cancel releases capture protection");
-    assert_eq!(engine.journal(), before, "annotation controls never forward page activation input");
+    let annotate = cx.debug_bounds("browser-annotate").unwrap();
+    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
+    until(cx, |cx| cx.debug_bounds("browser-annotation-element").is_some());
+    let element = cx.debug_bounds("browser-annotation-element").unwrap();
+    cx.simulate_click(element.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("escape");
+    until(cx, |cx| cx.debug_bounds("browser-annotation-overlay").is_none());
+    let annotate = cx.debug_bounds("browser-annotate").unwrap();
+    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
+    until(cx, |cx| cx.debug_bounds("browser-annotation-overlay").is_some());
+    let overlay = cx.debug_bounds("browser-annotation-overlay").unwrap();
+    let from = overlay.origin + gpui::point(px(20.), px(20.));
+    let to = from + gpui::point(px(80.), px(60.));
+    cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::none());
+    until(cx, |cx| cx.debug_bounds("browser-annotation-overlay").is_none());
+    let released = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
+    assert!(!released.tabs[0].protected, "unavailable capture releases protection");
+    assert_eq!(activation(), before, "annotation selection never forwards page activation input");
 }

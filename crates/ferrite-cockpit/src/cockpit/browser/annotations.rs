@@ -219,12 +219,20 @@ impl CockpitView {
                 };
                 let area = bounds.get()?;
                 let start = start.as_ref()?;
+                let width = f32::from(area.size.width);
+                let height = f32::from(area.size.height);
+                if width < 1. || height < 1. {
+                    return None;
+                }
+                // WebView rounds its native CSS viewport to whole pixels.
+                // Map the overlay's fractional layout bounds by that same
+                // transform rather than treating them as native CSS pixels.
                 let location = |at: gpui::Point<Pixels>| Point {
                     x: f64::from(
-                        f32::from(at.x - area.origin.x).clamp(0., f32::from(area.size.width)),
+                        f32::from(at.x - area.origin.x).clamp(0., width) / width * width.round(),
                     ),
                     y: f64::from(
-                        f32::from(at.y - area.origin.y).clamp(0., f32::from(area.size.height)),
+                        f32::from(at.y - area.origin.y).clamp(0., height) / height * height.round(),
                     ),
                 };
                 let from = location(*start);
@@ -248,8 +256,8 @@ impl CockpitView {
                     element.then_some(to),
                     region,
                     Viewport {
-                        width_css: f64::from(f32::from(area.size.width)),
-                        height_css: f64::from(f32::from(area.size.height)),
+                        width_css: f64::from(width.round()),
+                        height_css: f64::from(height.round()),
                         device_scale: f64::from(scale),
                     },
                 ))
@@ -516,14 +524,7 @@ impl CockpitView {
             .debug_selector(|| "browser-annotation-overlay".into())
             .absolute()
             .inset_0()
-            .occlude()
-            .track_focus(&session.focus)
-            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                cx.stop_propagation();
-                if event.keystroke.key == "escape" {
-                    this.close_browser_annotation(thread, cx);
-                }
-            }));
+            .occlude();
         if let Phase::Selecting {
             bounds,
             start,
@@ -582,6 +583,13 @@ impl CockpitView {
             }
         }
         div()
+            .track_focus(&session.focus)
+            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                cx.stop_propagation();
+                if event.keystroke.key == "escape" {
+                    this.close_browser_annotation(thread, cx);
+                }
+            }))
             .flex()
             .flex_col()
             .flex_1()
