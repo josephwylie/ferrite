@@ -52,6 +52,8 @@ pub enum Body {
     Text { text: Arc<Text>, line: Option<u32> },
     /// A page, drawn live where the engine can.
     Page(Arc<PageView>),
+    /// The Thread-owned browser; the window adapter supplies its exact live page.
+    Browser,
     /// A file the preview cannot show, and why.
     Unshown(Unshown),
 }
@@ -155,6 +157,7 @@ struct State {
     /// Counts every open, so the cockpit tells a new one from the last.
     opened: u64,
     lightbox: Option<Lightbox>,
+    browser_urls: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -215,6 +218,11 @@ impl Preview {
     /// its path, an address under its own name. Whatever was open gives
     /// way.
     pub fn open_page(&self, source: PageSource, window: &mut Window) {
+        if let PageSource::Address(url) = &source {
+            if self.open_url(url, window) {
+                return;
+            }
+        }
         let (path, name) = match &source {
             PageSource::File(path) => (path.clone(), None),
             PageSource::Address(address) => (PathBuf::from(address), Some(address.clone())),
@@ -225,6 +233,31 @@ impl Preview {
             body: Body::Page(PageView::new(source)),
         });
         window.refresh();
+    }
+
+    /// Route ordinary website links through the owning Thread's browser.
+    /// Explicit external-browser commands continue to use the OS URL opener.
+    pub fn open_url(&self, url: &str, window: &mut Window) -> bool {
+        if !url::Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "http" | "https")) {
+            return false;
+        }
+        self.state.lock().unwrap().browser_urls.push(url.to_owned());
+        self.show_browser();
+        window.refresh();
+        true
+    }
+
+    pub fn show_browser(&self) {
+        self.set(Document {
+            path: PathBuf::from("browser://tabs"),
+            name: Some("Browser".into()),
+            body: Body::Browser,
+        });
+    }
+
+    /// Requests retain their Pane's Thread identity when the window drains them.
+    pub fn take_browser_urls(&self) -> Vec<String> {
+        std::mem::take(&mut self.state.lock().unwrap().browser_urls)
     }
 
     /// Show text no file holds (a command's output) as if read from

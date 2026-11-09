@@ -333,6 +333,7 @@ impl CockpitView {
                 find.map(|find| &find.bar),
             )
             .into_any_element(),
+            Body::Browser => self.browser_body(pane.thread(), cx),
             Body::Unshown(why) => unshown(why, &document.path, cx),
             Body::Page(page) => match page.shown(cx) {
                 Shown::Live(web) => div()
@@ -388,7 +389,7 @@ impl CockpitView {
         // it, and open in its own app.
         let file = (document.name.is_none() && document.page().is_none())
             .then(|| (document.path.clone(), title.clone()));
-        let expand = document.page().is_some().then(|| self.expand_door(cx));
+        let expand = (document.page().is_some() || matches!(document.body, Body::Browser)).then(|| self.expand_door(cx));
         let doors = file
             .map(|(original, shown)| {
                 [
