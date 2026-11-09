@@ -185,9 +185,17 @@ def main():
             if process is not None and process.poll() is None:
                 process.kill()
                 process.wait()
-            if server_process.poll() is None:
+            stopped = subprocess.run([executable, '--browser-window-stop'], env=env, cwd=root,
+                stdout=server_log, stderr=subprocess.STDOUT, timeout=20, creationflags=flags)
+            cleanup_error = None
+            if stopped.returncode != 0:
+                cleanup_error = f'Isolated Server stop failed: exit={stopped.returncode}'
+            try:
+                server_process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
                 server_process.terminate()
-                server_process.wait(timeout=20)
+                server_process.wait(timeout=10)
+                cleanup_error = 'Isolated Server required forced termination'
             server_log.close()
             if os.name == 'nt':
                 for child in descendants:
@@ -205,6 +213,10 @@ def main():
             if (root/'logs').exists():
                 shutil.copytree(root/'logs', output/'diagnostics', dirs_exist_ok=True)
             server.shutdown()
+            if cleanup_error:
+                (output/'cleanup-error.txt').write_text(cleanup_error, encoding='utf-8')
+                if sys.exc_info()[0] is None:
+                    raise RuntimeError(cleanup_error)
 
 
 if __name__ == '__main__':

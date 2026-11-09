@@ -117,8 +117,9 @@ impl CockpitView {
                     break Err(format!("window fixture timed out: opened={opened}, clicked={clicked}, frames={frames}, last error={last_error}"));
                 }
             };
-            let stopped = view.update(cx, |view, _| view.cockpit.stop_server_and_wait(Duration::from_secs(10)));
-            let error = result.err().or_else(|| stopped.err().map(|error| format!("isolated Server did not stop: {error}")));
+            // The external owner stops the Server after this window exits;
+            // stopping here races the ordinary window's automatic reconnect.
+            let error = result.err();
             let result = serde_json::json!({
                 "success": error.is_none(), "error": error,
                 "normal_native_window": true, "preview_operator_route": opened,
