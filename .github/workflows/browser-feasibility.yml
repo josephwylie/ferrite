@@ -1,0 +1,54 @@
+name: Packaged browser feasibility
+
+# Keep the feasibility evidence independent of unrelated core test failures.
+on:
+  pull_request:
+    paths:
+      - 'scripts/*agent-browser*'
+      - 'scripts/patches/agent-browser*'
+      - 'scripts/test_package_agent_browser.py'
+      - '.github/workflows/browser-feasibility.yml'
+      - 'crates/ferrite*/**'
+      - 'scripts/*windows.ps1'
+      - 'scripts/install-app.sh'
+  workflow_dispatch:
+
+jobs:
+  packaged-cef:
+    name: Packaged CEF sandbox (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja
+      - name: Install Windows build tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja --no-progress -y }
+      - name: Windows packaged engine
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:CEF_PATH = Join-Path $HOME '.local\share\cef'
+          cargo build -p ferrite --locked --features cef
+          if ($LASTEXITCODE -ne 0) { throw 'CEF build failed' }
+          scripts/stage-windows.ps1 -BuildDirectory target/debug -Destination target/debug/bundle/windows/Ferrite
+          target/debug/ferrite.exe --visual-smoke
+          if ($LASTEXITCODE -eq 0) { throw 'Naked executable bypassed the sandbox bootstrap' }
+          target/debug/bundle/windows/Ferrite/ferrite.exe --visual-smoke
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged CEF smoke failed' }
+      - name: macOS packaged engine
+        if: runner.os == 'macOS'
+        run: |
+          scripts/install-app.sh --bundle-only
+          target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite --visual-smoke

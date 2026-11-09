@@ -102,3 +102,8 @@ pub(super) fn process_alive(pid: u32) -> bool {
 pub(super) fn real_path(dir: PathBuf) -> PathBuf {
     dir.canonicalize().unwrap_or(dir)
 }
+
+/// macOS enters its seatbelt sandbox in each helper; no Windows broker data.
+pub(super) fn sandbox_info() -> *mut u8 {
+    std::ptr::null_mut()
+}

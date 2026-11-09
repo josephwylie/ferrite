@@ -82,6 +82,18 @@ const STUCK_LOAD: Duration = Duration::from_secs(2);
 /// that scrolling past and back, or a quick look elsewhere, costs nothing.
 pub const RELEASE_AFTER: Duration = Duration::from_secs(2);
 
+/// Retain the Windows bootstrap's sandbox broker for all later CEF calls.
+///
+/// # Safety
+/// `sandbox_info` must be the pointer supplied to `RunWinMain` by CEF's
+/// bootstrap and remain valid until this process returns to that bootstrap.
+/// Call once, before any other CEF entry point, on the startup thread.
+#[cfg(windows)]
+pub unsafe fn windows_bootstrap(sandbox_info: *mut u8) {
+    // SAFETY: the bootstrap caller supplies the lifetime and ordering above.
+    unsafe { platform::set_sandbox_info(sandbox_info) };
+}
+
 /// What [`boot`] found this process to be.
 pub enum Boot {
     /// A CEF helper process ran to completion: exit with this code, now.
@@ -120,7 +132,11 @@ pub fn boot() -> Result<Boot, String> {
         let helper = platform::Helper::enter(&exe)?;
         let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
         let mut app = handlers::InlineApp::new(global);
-        let code = execute_process(Some(helper.args()), Some(&mut app), std::ptr::null_mut());
+        let code = execute_process(
+            Some(helper.args()),
+            Some(&mut app),
+            platform::sandbox_info(),
+        );
         // `app` drops first, then `helper` (what CEF ran on).
         return Ok(Boot::Subprocess(code));
     }
@@ -141,7 +157,7 @@ impl Dormant {
         let code = execute_process(
             Some(args.as_main_args()),
             Some(&mut app),
-            std::ptr::null_mut(),
+            platform::sandbox_info(),
         );
         if code >= 0 {
             return Err(format!(
@@ -170,7 +186,7 @@ impl Dormant {
             Some(args.as_main_args()),
             Some(&settings),
             Some(&mut app),
-            std::ptr::null_mut(),
+            platform::sandbox_info(),
         ) != 1
         {
             return Err("cef_initialize failed".into());
