@@ -85,8 +85,11 @@ def main():
                 'elapsed_seconds':time.monotonic()-started, 'window_result':result}, indent=2))
         finally:
             # Stop this launch's actual Server before deleting its isolated store.
-            subprocess.run([executable, 'server', 'stop'], env=env, cwd=root,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+            # The green driver stops its Server through Cockpit::stop_server_and_wait.
+            # On failed probes, terminate only this launch's process group below.
+            if process.poll() is None:
+                process.kill()
+                process.wait()
             server.shutdown()
 
 

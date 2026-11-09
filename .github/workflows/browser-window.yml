@@ -12,6 +12,8 @@ env:
   SCCACHE_GHA_ENABLED: 'true'
 
 on:
+  push:
+    branches: [feat/browser-196]
   pull_request:
     paths:
       - 'scripts/*agent-browser*'
