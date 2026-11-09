@@ -355,6 +355,9 @@ impl ClaudeSession {
         if mcp::Server::offered(config.visuals.as_ref()) {
             command.args(["--allowedTools", crate::visual::CLAUDE_NAME]);
         }
+        if config.browser.is_some() {
+            command.args(["--allowedTools", crate::browser::tools::CLAUDE_NAME]);
+        }
         command.args(&config.args);
         let mut child = command
             .stdin(Stdio::piped())
@@ -393,7 +396,11 @@ impl ClaudeSession {
         let skills = Arc::new(Mutex::new(skill_mentions::Skills::default()));
         let file_search = Arc::new(Mutex::new(file_search::Requests::default()));
         let rewinds = Arc::new(Mutex::new(rewind::Rewinds::default()));
-        let server = mcp::Server::new(config.visuals.clone(), Arc::clone(&stdin));
+        let server = mcp::Server::new(
+            config.visuals.clone(),
+            config.browser.clone(),
+            Arc::clone(&stdin),
+        );
         let capabilities = read_stdout(
             stdout,
             sender,
