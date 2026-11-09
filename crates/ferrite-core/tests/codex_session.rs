@@ -918,6 +918,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         sandbox: Some("workspace-write".into()),
         resume: None,
         visuals: None,
+        browser: None,
         env: Vec::new(),
         launcher: Vec::new(),
         args: vec!["-c".into(), "model_verbosity=low".into()],

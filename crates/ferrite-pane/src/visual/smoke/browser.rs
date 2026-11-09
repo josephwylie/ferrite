@@ -61,6 +61,7 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
                 std::thread::sleep(Duration::from_millis(5));
                 continue;
             };
+            let _ = stream.set_nonblocking(false);
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
             let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
             let mut request = [0; 4096];
@@ -136,8 +137,16 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
         }
         std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
     }
-    if one.navigate("file:///private/forbidden").is_ok() {
-        return Err("Browser accepted forbidden navigation".into());
+    for url in [
+        "file:///private/forbidden",
+        "https://:443/",
+        "http://127.0.0.1\n/",
+        " http://127.0.0.1/",
+        "http://user:password@127.0.0.1/",
+    ] {
+        if one.navigate(url).is_ok() {
+            return Err(format!("Browser accepted forbidden navigation: {url:?}"));
+        }
     }
     one.resize_browser(viewport);
     let initial = one.state().document_generation;
@@ -196,6 +205,15 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
         viewport,
         Box::new(|| {}),
     )?;
+    clean.set_protected(true);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while clean.target_id().is_none() {
+        if Instant::now() >= deadline {
+            return Err("Protected first-use tab did not become live".into());
+        }
+        std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
+    }
+    clean.set_protected(false);
     wait_browser(engine, clean.as_ref(), |state| {
         !state.loading && state.dirty == crate::visual::web::BrowserDirty::Clean
     })?;

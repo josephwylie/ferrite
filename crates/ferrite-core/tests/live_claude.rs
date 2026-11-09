@@ -29,6 +29,7 @@ fn live_config() -> ClaudeConfig {
         resume_drops: None,
         fork: false,
         visuals: None,
+        browser: None,
         env: Vec::new(),
         launcher: Vec::new(),
         args: Vec::new(),
