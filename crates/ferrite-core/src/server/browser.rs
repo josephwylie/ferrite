@@ -23,8 +23,15 @@ impl Server {
         if self.engine.thread(thread).is_none() {
             return Err(failed("No such open Thread"));
         }
+        // Transcript streaming follows attention; an existing browser lease
+        // survives its Unwatch, so unfinished forms are not silently retired.
+        let owns = self
+            .browser
+            .state(thread)
+            .owner
+            .is_some_and(|owner| owner.window == id);
         self.clients.get(&id)
-            .filter(|client| client.welcomed && client.browser_capable && client.watching.contains(&thread))
+            .filter(|client| client.welcomed && client.browser_capable && (owns || client.watching.contains(&thread)))
             .map(|_| ())
             .ok_or_else(|| failed("Conversation browser unavailable: open this Thread in a browser-capable Ferrite window"))
     }
@@ -112,7 +119,11 @@ impl Server {
         let receivers: Vec<_> = self
             .clients
             .iter()
-            .filter(|(_, client)| client.welcomed && client.watching.contains(&thread))
+            .filter(|(id, client)| {
+                client.welcomed
+                    && (client.watching.contains(&thread)
+                        || owner.is_some_and(|owner| owner.window == **id))
+            })
             .map(|(id, _)| *id)
             .collect();
         for receiver in receivers {
@@ -420,14 +431,11 @@ impl Server {
         let _ = pending.reply.send(result);
     }
 
-    pub(super) fn browser_owner_gone(&mut self, window: ClientId, thread: Option<ThreadId>) {
+    pub(super) fn browser_owner_gone(&mut self, window: ClientId) {
         let gone: Vec<_> = self
             .browser_pending
             .iter()
-            .filter(|(_, pending)| {
-                pending.owner.window == window
-                    && thread.is_none_or(|thread| pending.thread == thread)
-            })
+            .filter(|(_, pending)| pending.owner.window == window)
             .map(|(id, _)| *id)
             .collect();
         for id in gone {
@@ -435,15 +443,7 @@ impl Server {
             self.browser_uncertain.remove(&pending.thread);
             let _ = pending.reply.send(Err("Conversation browser owner disconnected; action completion may be uncertain. Reopen this Thread and observe its current page before continuing".into()));
         }
-        let detached = match thread {
-            Some(thread) => self
-                .browser
-                .detach(thread, window)
-                .then_some(thread)
-                .into_iter()
-                .collect(),
-            None => self.browser.detach_window(window),
-        };
+        let detached = self.browser.detach_window(window);
         for thread in detached {
             self.browser_uncertain.remove(&thread);
             self.browser_observed.remove(&thread);
