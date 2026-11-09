@@ -601,7 +601,7 @@ wrap_jsdialog_handler! {
             if let Some(callback) = callback {
                 callback.cont((!self.state.external) as i32, None);
                 if self.state.external {
-                    self.state.navigation(self.state.generation.load(Ordering::SeqCst), |state| { state.dirty = super::super::BrowserDirty::Dirty; state.error = Some("This page has unfinished work and prevented navigation. Save or discard changes on the page before leaving.".into()); });
+                    self.state.navigation(self.state.generation.load(Ordering::SeqCst), |state| { state.dirty = super::super::BrowserDirty::Dirty; state.loading = false; state.error = Some("This page has unfinished work and prevented navigation. Save or discard changes on the page before leaving.".into()); });
                 }
             }
             1

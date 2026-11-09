@@ -359,7 +359,11 @@ impl Control {
                 return;
             }
             let number = self.next_message;
-            self.next_message = self.next_message.checked_add(1).unwrap_or(1);
+            self.next_message = if self.next_message + 1 >= super::observation::FIRST_ID {
+                1
+            } else {
+                self.next_message + 1
+            };
             if self.pending.contains_key(&number) {
                 self.error(peer, id, "Controller message space exhausted");
                 return;

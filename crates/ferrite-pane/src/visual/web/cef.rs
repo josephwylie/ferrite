@@ -36,6 +36,7 @@ mod input;
 mod macos;
 #[cfg(target_os = "macos")]
 mod nsapp;
+mod observation;
 mod profile;
 #[cfg(windows)]
 mod windows;
@@ -508,6 +509,12 @@ impl Engine for CefEngine {
         let views = engine.live_views();
         for view in &views {
             view.finish_deferred_hide();
+            if let (Some(browser), Some(observation)) = (
+                view.browser.borrow().as_ref(),
+                view.observation.borrow_mut().as_mut(),
+            ) {
+                observation.pump(browser, &view.state);
+            }
             if !view.doc.external {
                 view.release_if_hidden_long_enough();
             }
@@ -616,6 +623,8 @@ impl CefEngine {
             state,
             doc,
             browser: RefCell::new(None),
+            observation: RefCell::new(None),
+            failed: Cell::new(false),
             protected: Cell::new(false),
             wake,
             visible: Cell::new(true),
@@ -676,6 +685,8 @@ struct ViewInner {
     /// None until the first pump after opening (CEF's context may not be
     /// initialised yet when the host opens), and again once released.
     browser: RefCell<Option<Browser>>,
+    observation: RefCell<Option<observation::Observation>>,
+    failed: Cell<bool>,
     protected: Cell<bool>,
     wake: Wake,
     visible: Cell<bool>,
@@ -710,7 +721,7 @@ impl ViewInner {
 
     /// Visible and without a browser: never created yet, or released.
     fn wants_browser(&self) -> bool {
-        self.visible.get() && self.browser.borrow().is_none()
+        self.visible.get() && !self.failed.get() && self.browser.borrow().is_none()
     }
 
     /// Load the page in a fresh browser. The view's geometry (including the
@@ -760,6 +771,7 @@ impl ViewInner {
             None,
             context.as_mut(),
         );
+        self.failed.set(browser.is_none());
         if browser.is_none() {
             ferrite_core::log!("visuals: cef_browser_host_create_browser_sync returned null");
             self.state.navigation(generation, |state| {
@@ -773,6 +785,10 @@ impl ViewInner {
             {
                 control.register(self.target_id(), browser);
             }
+        }
+        if self.doc.external {
+            *self.observation.borrow_mut() =
+                browser.as_ref().and_then(observation::Observation::new);
         }
         *self.browser.borrow_mut() = browser;
         // The browser loads the document as it is now.
@@ -888,6 +904,7 @@ impl ViewInner {
 
 impl Drop for ViewInner {
     fn drop(&mut self) {
+        self.observation.get_mut().take();
         if let Some(host) = self.host() {
             host.close_browser(1);
         }
@@ -918,6 +935,11 @@ impl View for CefView {
     fn input(&self, event: Input) {
         let view = &self.0;
         let Some(host) = view.host() else { return };
+        if view.doc.external && matches!(&event, Input::Down { .. } | Input::Key { down: true, .. })
+        {
+            view.state.navigation.lock().unwrap().dirty = BrowserDirty::Dirty;
+            view.state.dirty.store(true, Ordering::SeqCst);
+        }
         match event {
             Input::Move { x, y, modifiers } => {
                 view.pointer.set((x, y));
@@ -1096,12 +1118,7 @@ impl BrowserView for CefView {
         if !handlers::external_url(url) {
             return Err("Conversation browser requires an http or https URL".into());
         }
-        {
-            let mut state = self.0.state.navigation.lock().unwrap();
-            state.url = url.into();
-            state.error = None;
-            state.dirty = BrowserDirty::Unknown;
-        }
+        self.0.failed.set(false);
         if let Some(frame) = self
             .0
             .browser
@@ -1110,6 +1127,11 @@ impl BrowserView for CefView {
             .and_then(|browser| browser.main_frame())
         {
             frame.load_url(Some(&url.into()));
+        } else {
+            let mut state = self.0.state.navigation.lock().unwrap();
+            state.url = url.into();
+            state.error = None;
+            state.dirty = BrowserDirty::Unknown;
         }
         self.0.state.dirty.store(true, Ordering::SeqCst);
         Ok(())
@@ -1137,6 +1159,7 @@ impl BrowserView for CefView {
         Ok(())
     }
     fn reload(&self) -> Result<(), String> {
+        self.0.failed.set(false);
         if let Some(browser) = self.0.browser.borrow().as_ref() {
             browser.reload();
         } else {
@@ -1161,6 +1184,15 @@ impl BrowserView for CefView {
         if view.browser.borrow().is_none() {
             return Ok(true);
         }
+        if !view
+            .observation
+            .borrow()
+            .as_ref()
+            .is_some_and(|observation| observation.release_ready())
+        {
+            return Ok(false);
+        }
+        view.observation.borrow_mut().take();
         view.state.generation.fetch_add(1, Ordering::SeqCst);
         if let Some(host) = view
             .browser
