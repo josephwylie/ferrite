@@ -38,12 +38,15 @@ def windows_descendants(roots):
 
 
 def unix_group_processes(group):
-    output = subprocess.check_output(['ps', '-axww', '-o', 'pid=,pgid=,comm='], text=True, timeout=15)
+    sample_started = time.monotonic()
+    output = subprocess.check_output(['ps', '-axww', '-o', 'pid=,ppid=,pgid=,state=,etime=,comm='], text=True, timeout=15)
     processes = []
     for line in output.splitlines():
-        pid, process_group, executable = line.strip().split(None, 2)
+        pid, parent, process_group, state, elapsed, executable = line.strip().split(None, 5)
         if int(process_group) == group:
-            processes.append({'pid':int(pid), 'process_group':int(process_group), 'executable':executable})
+            processes.append({'pid':int(pid), 'parent_pid':int(parent), 'process_group':int(process_group),
+                'state':state, 'elapsed_process_time':elapsed, 'executable':executable,
+                'sample_started_monotonic':sample_started})
     return processes
 
 
@@ -91,7 +94,7 @@ def main():
                  'provider-host.jsonl', 'startup-comparison.json', 'oracle.json',
                  'work-order-oracle.json', 'work-order-oracle-at-exit.json', 'work-order-trace.json',
                  'window-work-order.png', 'window-work-order-before.png',
-                 'cleanup-error.txt', 'oracle-at-exit.json', 'window-before.png', 'window-after.png',
+                 'cleanup-error.txt', 'cleanup-processes.json', 'shutdown-samples.json', 'oracle-at-exit.json', 'window-before.png', 'window-after.png',
                  'window-provider.png', 'window-current.png'):
         (output/name).unlink(missing_ok=True)
     with args.executable.open('rb') as binary:
@@ -183,6 +186,7 @@ def main():
             stdout=server_log, stderr=subprocess.STDOUT, creationflags=flags)
         descendants = []
         work_fixture = None
+        shutdown_samples = []
         try:
             if args.work_orders:
                 ready = root/'fixture-ready.json'
@@ -227,6 +231,7 @@ def main():
                 surviving_controllers = [item for item in descendants if item['Name'].casefold() == 'agent-browser.exe']
             else:
                 remaining = unix_group_processes(process.pid)
+                shutdown_samples.append({'stage':'after-app-wait','seconds_since_launch':time.monotonic()-started,'processes':remaining})
                 (output/'owned-processes.json').write_text(json.dumps(remaining, indent=2), encoding='utf-8')
                 surviving_controllers = [item for item in remaining if Path(item['executable']).name == 'agent-browser']
             if surviving_controllers:
@@ -278,7 +283,15 @@ def main():
                 process.kill()
                 process.wait()
             if os.name != 'nt' and process is not None:
-                remaining = unix_group_processes(process.pid)
+                settle_started = time.monotonic()
+                while True:
+                    remaining = unix_group_processes(process.pid)
+                    shutdown_samples.append({'stage':'before-forced-cleanup','seconds_since_launch':time.monotonic()-started,
+                        'settle_seconds':time.monotonic()-settle_started,'processes':remaining})
+                    if not remaining or time.monotonic()-settle_started >= 2:
+                        break
+                    time.sleep(0.2)
+                (output/'shutdown-samples.json').write_text(json.dumps(shutdown_samples,indent=2),encoding='utf-8')
                 if remaining:
                     (output/'cleanup-processes.json').write_text(json.dumps(remaining, indent=2), encoding='utf-8')
                     try:
