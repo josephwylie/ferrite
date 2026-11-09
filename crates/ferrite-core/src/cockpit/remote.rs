@@ -585,6 +585,43 @@ impl Remote {
         })
     }
 
+    pub(crate) fn browser_capture(
+        &mut self,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        lease: crate::browser::Lease,
+        capture: crate::browser_annotations::Capture,
+        png: crate::protocol::WirePng,
+    ) -> io::Result<Receiver<io::Result<crate::browser_annotations::Annotation>>> {
+        self.ask(
+            Op::BrowserCapture {
+                thread,
+                owner,
+                lease,
+                capture,
+                png,
+            },
+            |done| match done {
+                Done::BrowserCapture { annotation } => Some(annotation),
+                _ => None,
+            },
+        )
+    }
+
+    pub(crate) fn browser_capture_image(
+        &mut self,
+        thread: ThreadId,
+        hash: String,
+    ) -> io::Result<Receiver<io::Result<crate::protocol::WirePng>>> {
+        self.ask(
+            Op::BrowserCaptureImage { thread, hash },
+            |done| match done {
+                Done::BrowserCaptureImage { png } => Some(png),
+                _ => None,
+            },
+        )
+    }
+
     pub(crate) fn read_review_file(
         &mut self,
         path: &Path,

@@ -122,6 +122,69 @@ impl Annotation {
         (self.pixel_width, self.pixel_height)
     }
 
+    /// A window can cache the image for display without replacing the Server
+    /// path serialized to providers and history.
+    pub fn cache_image(&self, png: &[u8]) -> io::Result<PathBuf> {
+        if png_size(png)? != self.pixel_size()
+            || format!("{:x}", Sha256::digest(png)) != self.original_sha256
+        {
+            return Err(io::Error::other(
+                "The retained capture could not be verified; reopen it to try again",
+            ));
+        }
+        let image = retain(
+            &std::env::temp_dir().join("ferrite-browser-capture-cache"),
+            self.capture.clone(),
+            png,
+            String::new(),
+            vec![],
+        )?;
+        Ok(image.original)
+    }
+
+    pub fn cached_image(&self) -> Option<PathBuf> {
+        if !valid_hash(&self.original_sha256) {
+            return None;
+        }
+        let path = std::env::temp_dir()
+            .join("ferrite-browser-capture-cache")
+            .join("browser-annotations")
+            .join(format!("{}.png", self.original_sha256));
+        path.is_file().then_some(path)
+    }
+
+    pub(crate) fn local_image(&self) -> io::Result<Vec<u8>> {
+        let parent = self.original.parent().filter(|parent| {
+            parent
+                .file_name()
+                .is_some_and(|name| name == "browser-annotations")
+        });
+        if self.original.file_name().is_none_or(|name| {
+            name != std::ffi::OsStr::new(&format!("{}.png", self.original_sha256))
+        }) {
+            return Err(io::Error::other("This browser capture is unavailable"));
+        }
+        let directory = parent
+            .and_then(Path::parent)
+            .ok_or_else(|| io::Error::other("This browser capture is unavailable"))?;
+        read_retained(directory, &self.original_sha256)
+    }
+
+    pub fn cache_wire_image(&self, png: &crate::protocol::WirePng) -> io::Result<PathBuf> {
+        use base64::Engine as _;
+        if png.base64.len() > ((MAX_CAPTURE_BYTES + 2) / 3) * 4
+            || (png.width, png.height) != self.pixel_size()
+        {
+            return Err(io::Error::other(
+                "The retained capture geometry could not be verified",
+            ));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&png.base64)
+            .map_err(io::Error::other)?;
+        self.cache_image(&bytes)
+    }
+
     /// Finalize feedback against the retained evidence. This never consults a
     /// live tab, so navigation after capture cannot reassign the annotation.
     pub fn with_feedback(&self, comment: String, drawings: Vec<Drawing>) -> io::Result<Self> {
@@ -300,14 +363,17 @@ fn validate_drawings(drawings: &[Drawing]) -> io::Result<()> {
     Ok(())
 }
 
+fn valid_hash(hash: &str) -> bool {
+    hash.len() == 64
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 /// Fetch only an existing retained PNG, addressed by content hash. A remote
 /// window never supplies a filesystem path to this boundary.
 pub fn read_retained(thread_directory: &Path, hash: &str) -> io::Result<Vec<u8>> {
-    if hash.len() != 64
-        || !hash
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if !valid_hash(hash) {
         return Err(io::Error::other("This browser capture is unavailable"));
     }
     let file = fs::File::open(

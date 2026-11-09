@@ -77,7 +77,12 @@ impl<'a> Work<'a> {
             ToolKind::WebSearch => return counted("Running", "Ran", "web search", "web searches"),
             ToolKind::Agent => return counted("Running", "Ran", "agent", "agents"),
             ToolKind::Findings => {
-                return counted("Reporting", "Reported", "findings report", "findings reports")
+                return counted(
+                    "Reporting",
+                    "Reported",
+                    "findings report",
+                    "findings reports",
+                )
             }
             ToolKind::Mcp(_) if running => "Calling",
             ToolKind::Mcp(_) => "Called",

@@ -62,7 +62,7 @@ fn browser_annotation_history_keeps_a_distinct_reviewable_capture(cx: &mut TestA
         .debug_bounds("browser-annotation-attachment")
         .expect("the sent message retains a distinct Browser annotation card");
     cx.simulate_click(card.center(), gpui::Modifiers::none());
-    tick(cx);
+    until(cx, |cx| cx.debug_bounds("annotation-stage").is_some());
     assert!(
         cx.debug_bounds("browser-annotation-review").is_some(),
         "review opens the retained capture and drawings without a live browser"

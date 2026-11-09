@@ -22,11 +22,7 @@ pub fn model_label(model: &str) -> SharedString {
 /// (`loading`) the model's name shimmers, as the working line's does: it is
 /// the provider's default until the Session says which model serves
 /// (Codex's skeleton chip).
-pub fn model_effort_chip(
-    model: SharedString,
-    effort: Option<SharedString>,
-    loading: bool,
-) -> Div {
+pub fn model_effort_chip(model: SharedString, effort: Option<SharedString>, loading: bool) -> Div {
     let model = if loading {
         components::shimmer(model, INK_STRONG)
     } else {
@@ -635,12 +631,9 @@ pub(super) fn composer_stack(attachments: Option<AnyElement>, boxed: bool) -> Di
     } else {
         theme::COMPACT_COMPOSER_INSET
     };
-    div()
-        .flex()
-        .flex_col()
-        .flex_shrink_0()
-        .min_w_0()
-        .when_some(attachments, |stack, attachments| {
+    div().flex().flex_col().flex_shrink_0().min_w_0().when_some(
+        attachments,
+        |stack, attachments| {
             let shelf = div()
                 .debug_selector(|| "composer-shelf".into())
                 .flex()
@@ -648,7 +641,8 @@ pub(super) fn composer_stack(attachments: Option<AnyElement>, boxed: bool) -> Di
                 .min_w_0()
                 .child(div().flex_1().min_w_0().child(attachments));
             stack.child(in_column(inset, boxed, shelf).pb(px(theme::SHELF_GAP)))
-        })
+        },
+    )
 }
 
 /// One row of the Composer stack, `inset` in from the card's sides — and in
@@ -696,13 +690,14 @@ pub(super) fn queue_card(
         .rev()
         .enumerate()
         .map(|(shown, (index, item, acts))| {
-            let steering = matches!(item.delivery, Delivery::Steering | Delivery::Folding).then(|| {
-                div()
-                    .debug_selector(move || format!("queued-steering-{index}"))
-                    .flex_shrink_0()
-                    .text_color(rgb(INK_SUBTLE))
-                    .child("Steering")
-            });
+            let steering =
+                matches!(item.delivery, Delivery::Steering | Delivery::Folding).then(|| {
+                    div()
+                        .debug_selector(move || format!("queued-steering-{index}"))
+                        .flex_shrink_0()
+                        .text_color(rgb(INK_SUBTLE))
+                        .child("Steering")
+                });
             let count_label = (shown == 0).then(|| {
                 components::tabular(
                     div()
@@ -964,8 +959,11 @@ impl RenderOnce for LineGhost {
                 .text_system()
                 .shape_line("/".into(), size, &[face.to_run(1)], None)
                 .width;
-            return ghost_row(Ghost::says(FILTER_HINT), f32::from(slash) + theme::PLACEHOLDER_GAP)
-                .into_any_element();
+            return ghost_row(
+                Ghost::says(FILTER_HINT),
+                f32::from(slash) + theme::PLACEHOLDER_GAP,
+            )
+            .into_any_element();
         }
         if self.empty {
             // Clear of the caret's bar, so it never touches `↵ to send`.
