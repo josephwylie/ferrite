@@ -1,5 +1,6 @@
 //! Window realization of the Server's Thread-owned browser tabs.
 //! Native pages belong here, independently of whichever Preview is visible.
+mod annotations;
 mod manual;
 
 use super::*;
@@ -81,6 +82,7 @@ struct Browser {
     error: Option<String>,
     new_tab: bool,
     failed: BTreeMap<TabId, Document>,
+    annotation: Option<annotations::Session>,
 }
 struct Page {
     web: Entity<WebView>,
@@ -148,6 +150,7 @@ impl CockpitView {
                 error: None,
                 new_tab: false,
                 failed: BTreeMap::new(),
+                annotation: None,
             });
     }
 
@@ -180,6 +183,7 @@ impl CockpitView {
         action: Action,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_browser_capture(thread, cx);
         self.ensure_browser(thread, cx);
         if matches!(action, Action::Open { .. }) {
             self.browsers.reveal.insert(thread);
@@ -278,6 +282,7 @@ impl CockpitView {
     }
 
     pub(super) fn pump_browsers(&mut self, cx: &mut Context<Self>) {
+        self.pump_browser_annotations(cx);
         if matches!(
             self.cockpit.server(),
             Some(ferrite_core::cockpit::ServerState::Detached { .. })
@@ -1392,6 +1397,15 @@ impl CockpitView {
             );
         }
         toolbar = toolbar
+            .child(
+                ferrite_ui::components::button("browser-annotate")
+                    .debug_selector(|| "browser-annotate".into())
+                    .tab_stop(true)
+                    .child("Annotate")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.begin_browser_annotation(thread, window, cx);
+                    })),
+            )
             .child(div().px(px(4.)).child("Address"))
             .child(
                 div()
@@ -1471,7 +1485,7 @@ impl CockpitView {
                 },
             )
             .when_some(body, |root, body| {
-                root.child(div().flex_1().min_h_0().child(body))
+                root.child(self.annotation_browser_body(thread, body, cx))
             })
             .into_any_element()
     }

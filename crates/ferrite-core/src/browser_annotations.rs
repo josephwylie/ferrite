@@ -252,6 +252,17 @@ pub fn retain(
 /// Fits inside the existing 64 MiB JSON-lines transport after base64 encoding.
 pub const MAX_CAPTURE_BYTES: usize = 32 * 1024 * 1024;
 
+/// Encode only a bounded PNG for the existing retained-capture transport.
+pub fn wire_png(png: &[u8]) -> io::Result<crate::protocol::WirePng> {
+    use base64::Engine as _;
+    let (width, height) = png_size(png)?;
+    Ok(crate::protocol::WirePng {
+        width,
+        height,
+        base64: base64::engine::general_purpose::STANDARD.encode(png),
+    })
+}
+
 pub(crate) fn png_size(png: &[u8]) -> io::Result<(u32, u32)> {
     if png.len() > MAX_CAPTURE_BYTES {
         return Err(io::Error::other(

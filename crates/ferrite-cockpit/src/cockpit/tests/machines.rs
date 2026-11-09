@@ -1541,7 +1541,7 @@ fn remote_inbox_uses_digests_and_follows_another_clients_park(cx: &mut TestAppCo
 fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(cx: &mut TestAppContext) {
     use ferrite_core::browser::Action;
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
-    use ferrite_pane::visual::{engine::Visuals, web::fake::{Call, FakeEngine}};
+    use ferrite_pane::visual::{engine::Visuals, web::fake::FakeEngine};
     let dir = scratch("browser-preview");
     let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
     let bridge = std::sync::Arc::new(Bridge::new("box", dir.join("bridge.sock"), dial));
@@ -1555,8 +1555,7 @@ fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(c
     });
     let thread = core.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() }).unwrap();
     core.browser_attach(thread).unwrap();
-    let opened = core.browser(thread, Action::Open { url: "http://localhost:5173/start".into() }).unwrap();
-    let document = opened.tabs[0].document();
+    core.browser(thread, Action::Open { url: "http://localhost:5173/start".into() }).unwrap();
     bind_production_keys(cx);
     let engine = std::rc::Rc::new(FakeEngine::new());
     cx.update(|cx| Visuals::install(engine.clone(), cx));
