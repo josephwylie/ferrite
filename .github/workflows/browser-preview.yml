@@ -33,6 +33,8 @@ jobs:
             echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
           fi
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Preview input, frames and full viewport
         run: cargo test -p ferrite-pane --locked --lib visual::element::tests
       - name: Local preview routing and sealed files
