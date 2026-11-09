@@ -93,7 +93,7 @@ cockpit its feel. It can:
    strict CSP (inline script and style only; no network, frames or workers
    from elsewhere); every other request, navigation, popup, dialog and context
    menu is refused; a throwaway profile per process; Chromium's sandbox on
-   (macOS; see Consequences for Windows).
+   (macOS seatbelt helpers; Windows packaged bootstrap broker).
    The only thing a page can reach besides itself is Ferrite's bundled face
    (`/font/*.ttf`), so visuals are set in Geist Mono like the transcript.
 6. **Pages are styled by Ferrite's theme.** The `--ferrite-*` token names
@@ -114,16 +114,14 @@ cockpit its feel. It can:
   a sort order) and reloads from scratch when it comes back.
 - One shared renderer: a page that spins or crashes the renderer freezes or
   drops every live visual until each reloads (no watchdog yet).
-- **No sandbox on Windows.** Since CEF 138 the Windows sandbox exists only
-  inside CEF's `bootstrap.exe`, which would have to be `ferrite.exe` itself
-  and load the app as a DLL (cef-rs's own example refuses to run sandboxed
-  otherwise). That would change how Ferrite is built, launched and signed on
-  Windows for one surface, so Chromium's processes run there with the user's
-  rights. Weighed: a page is written by an agent that already runs commands
-  as the user, and pages stay sealed (no network, navigation, popups or
-  files; CSP; the request filter), so an escape gains a hostile page little
-  the agent couldn't do directly. The bootstrap is the follow-up if visuals
-  ever show content an agent didn't write.
+- **Windows sandbox bootstrap (Conversation browser feasibility, #192).**
+  Packaged Windows builds now use CEF's matching `bootstrap.exe`, renamed
+  `ferrite.exe`, loading Ferrite as `ferrite.dll`. The bootstrap's broker
+  context reaches every CEF entry point. A naked Cargo executable cannot
+  start CEF. The executable, application DLL and `chrome_elf.dll` must have
+  matching signatures (or all remain unsigned for development). This fixes
+  the earlier unsandboxed layout; packaged cross-platform smoke and external
+  browsing isolation validation remain release gates under ADR 0036.
 - The Windows installer is ~130 MB bigger, and the release build needs
   cmake and ninja there too.
 - Known gaps, inherited from the spike: `<select>` popups aren't composited,
