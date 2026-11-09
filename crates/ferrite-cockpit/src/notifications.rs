@@ -9,6 +9,7 @@
 //! grammar (theme WP-E): the bar's need-you door and its badge (FL-17), the
 //! Inbox's rows (FL-16), and the toasts (FL-18).
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -41,6 +42,7 @@ pub enum QuickAnswer {
 pub enum Verb {
     /// Land on the Notice's Thread (a toast, a row, ⏎).
     Open(NoticeId),
+    OpenThread(ThreadId),
     /// Forget one Notice (⌫ on its row).
     Dismiss(NoticeId),
     /// Land on the exact live request the row represented.
@@ -62,6 +64,7 @@ pub type Handle = Rc<dyn Fn(Verb, &mut Window, &mut App)>;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RowTarget {
     Notice(NoticeId),
+    Thread(ThreadId),
     Decision(DecisionNoticeId),
 }
 
@@ -70,6 +73,7 @@ impl RowTarget {
     /// for a request still live and not dismissed.
     pub fn wants(&self, notifications: &Notifications) -> bool {
         match self {
+            RowTarget::Thread(_) => false,
             RowTarget::Notice(id) => notifications.get(*id).is_some_and(|notice| !notice.read),
             RowTarget::Decision(id) => notifications
                 .decision(id)
@@ -88,6 +92,8 @@ pub enum State {
     Failed,
     /// A turn that finished: `✓ done`.
     Done,
+    /// An open Thread awaiting handling with no completion Notice.
+    Idle,
 }
 
 /// What follows a row's title: what a request needs, what became of a
@@ -139,9 +145,6 @@ pub struct Row {
     /// minute — no surface prints `now`, theme rule 11).
     pub when: SharedString,
     pub read: bool,
-    /// The older Notices folded under this row; dismissing the row
-    /// dismisses them too.
-    pub folded: Vec<NoticeId>,
 }
 
 impl Row {
@@ -151,6 +154,7 @@ impl Row {
             State::NeedsYou(_) => words::NEEDS_YOU,
             State::Failed => words::FAILED,
             State::Done => words::DONE,
+            State::Idle => "idle",
         }
     }
 
@@ -167,12 +171,6 @@ impl Row {
             thread: self.thread,
         }
         .open_verb()
-    }
-
-    /// What dismissing the row does: nothing for a machine off screen,
-    /// whose Notices only its own windows change.
-    pub fn dismiss_verb(&self) -> Option<Verb> {
-        self.away.is_none().then(|| dismiss_verb(&self.target))
     }
 }
 
@@ -396,6 +394,7 @@ pub struct NeedsYou {
     /// The list's cursor row in the Inbox (`nav::NavView`),
     /// first on open.
     pub cursor: usize,
+    cursor_thread: RefCell<Option<(Option<MachineKey>, ThreadId)>>,
     /// Per machine; `None` is the one on screen.
     heard: HashMap<Option<MachineKey>, Heard>,
     /// Heard and waiting out `ALERT_DELAY`, one per Thread: the newest.
@@ -410,11 +409,36 @@ impl NeedsYou {
     pub fn new() -> Self {
         Self {
             cursor: 0,
+            cursor_thread: RefCell::new(None),
             heard: HashMap::new(),
             pending: Vec::new(),
             toasts: Vec::new(),
             posted: BTreeMap::new(),
         }
+    }
+
+    pub fn reset_cursor(&mut self) {
+        self.cursor = 0;
+        *self.cursor_thread.get_mut() = None;
+    }
+
+    /// Resolve the cursor by Thread identity when asynchronous updates move rows.
+    pub fn cursor_at(&self, rows: &[Row]) -> usize {
+        let mut selected = self.cursor_thread.borrow_mut();
+        let at = selected
+            .as_ref()
+            .and_then(|(away, thread)| {
+                rows.iter()
+                    .position(|row| row.away == *away && row.thread == *thread)
+            })
+            .unwrap_or(self.cursor.min(rows.len().saturating_sub(1)));
+        *selected = rows.get(at).map(|row| (row.away.clone(), row.thread));
+        at
+    }
+
+    pub fn select_cursor(&mut self, at: usize, rows: &[Row]) {
+        self.cursor = at;
+        *self.cursor_thread.get_mut() = rows.get(at).map(|row| (row.away.clone(), row.thread));
     }
 
     /// The Inbox of a window that went from machine `left` to `arrived`:
@@ -606,34 +630,8 @@ fn mark(state: State) -> Mark {
         State::NeedsYou(RequestKind::Question) => Mark("?", ATTENTION),
         State::Failed => Mark("\u{2717}", BLOCKED),
         State::Done => Mark("\u{2713}", INK_SUBTLE),
+        State::Idle => Mark("", INK_SUBTLE),
     }
-}
-
-/// Folds each Thread's completions into its newest (`rows` are newest
-/// first; a Thread is per machine): the survivor carries the older ids in
-/// `folded`, unread if any of them is. Requests are never folded — each is
-/// its own question.
-pub fn fold(rows: Vec<Row>) -> Vec<Row> {
-    let mut kept: Vec<Row> = Vec::with_capacity(rows.len());
-    let mut by_thread: HashMap<(Option<MachineKey>, ThreadId), usize> = HashMap::new();
-    for row in rows {
-        let RowTarget::Notice(id) = &row.target else {
-            kept.push(row);
-            continue;
-        };
-        let id = *id;
-        match by_thread.get(&(row.away.clone(), row.thread)) {
-            Some(&at) => {
-                kept[at].folded.push(id);
-                kept[at].read &= row.read;
-            }
-            None => {
-                by_thread.insert((row.away.clone(), row.thread), kept.len());
-                kept.push(row);
-            }
-        }
-    }
-    kept
 }
 
 // ---------------------------------------------------------------- toasts
@@ -850,15 +848,9 @@ pub fn toast_key(row: &Row) -> SharedString {
 
 pub fn target_verb(target: &RowTarget) -> Verb {
     match target {
+        RowTarget::Thread(thread) => Verb::OpenThread(*thread),
         RowTarget::Notice(id) => Verb::Open(*id),
         RowTarget::Decision(id) => Verb::OpenDecision(id.clone()),
-    }
-}
-
-pub fn dismiss_verb(target: &RowTarget) -> Verb {
-    match target {
-        RowTarget::Notice(id) => Verb::Dismiss(*id),
-        RowTarget::Decision(id) => Verb::DismissDecision(id.clone()),
     }
 }
 
@@ -878,7 +870,6 @@ mod tests {
             detail,
             when: "9m".into(),
             read: false,
-            folded: Vec::new(),
         }
     }
 
@@ -1013,38 +1004,6 @@ mod tests {
         );
         assert_eq!(mark(State::Done), Mark("\u{2713}", INK_SUBTLE));
         const { assert!(ROW_TEXT_CELLS >= 40) };
-    }
-
-    /// A Thread's completions fold into its newest; requests never fold;
-    /// the survivor is unread if any folded one is.
-    #[test]
-    fn completions_fold_per_thread_and_requests_stand_alone() {
-        let at = |id: u64, thread: u64, read: bool| Row {
-            target: RowTarget::Notice(NoticeId::from_u64(id)),
-            thread: ThreadId::new(thread),
-            read,
-            ..row(State::Done, Detail::None)
-        };
-        let asking = Row {
-            target: RowTarget::Decision(request(3, 9)),
-            state: State::NeedsYou(RequestKind::Question),
-            ..at(9, 3, false)
-        };
-        let folded = fold(vec![
-            asking,
-            at(5, 3, true),
-            at(4, 7, true),
-            at(3, 3, false),
-            at(2, 3, true),
-        ]);
-        assert_eq!(folded.len(), 3);
-        assert!(folded[0].request());
-        assert_eq!(
-            folded[1].folded,
-            vec![NoticeId::from_u64(3), NoticeId::from_u64(2)]
-        );
-        assert!(!folded[1].read, "unread if any folded Notice is");
-        assert!(folded[2].folded.is_empty());
     }
 
     /// ADR 0017: an event waits a second and is checked again before it

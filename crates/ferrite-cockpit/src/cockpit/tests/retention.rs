@@ -89,6 +89,7 @@ fn select(view: &Entity<CockpitView>, subject: Subject, cx: &mut gpui::VisualTes
 fn a_transcript_at_its_retention_cap_keeps_its_text_identity_as_it_streams(
     cx: &mut TestAppContext,
 ) {
+    let _clock = hold_wall_clock();
     let (core, fake) = cockpit("retention-cap-identity", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     // Past the 4 MiB of answer the display keeps.

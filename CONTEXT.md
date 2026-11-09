@@ -217,14 +217,25 @@ background, failed, parked) are faces within these.
 _Avoid_: status (too broad), unread (that is the Notice's).
 
 **Inbox**
-The nav's list of what wants the operator, shown in the tree's place: the
-blocked Threads oldest-first (the queue ⌘D walks), then the Notices under
-`Recent`. Opened from the nav's `Inbox` row, the Bar's count or ⌘I. It
-replaced the bell's list. Named apart from the state it lists: *needs you*
-is a Thread's word (the Attention list's `Needs you` section, a row's
-`needs you · approval`), the Inbox the place.
-_Avoid_: Needs-you view (its old name, which read as the section beside
-it), bell, needs-you strip (the strip in the tree is gone).
+The nav's queue of open Threads awaiting the operator, shown in the tree's
+place through the bell, the Bar or ⌘I. Pending Decisions come first,
+oldest request first. Otherwise, Threads executing Main, Subagent,
+background or queued work appear separately under Working; the remaining
+open Threads stay in Inbox until sent back to work or Parked. Reading or
+dismissing a Notice changes presentation, never queue membership. Inbox
+can be empty while Working remains populated. Inbox counts Threads;
+unread and blocked indicators keep their own meanings.
+_Avoid_: Settled (Parked is the existing finished disposition), Recent
+Notice membership (the former rule), Needs-you view (the former name).
+
+**Snooze**
+A temporary deferral of an open Thread until a chosen local time or duration.
+Snoozing keeps its history and agent execution intact. A new Decision, a
+failed run or an operator follow-up wakes it early; an ordinary completion
+or reading a Notice does not. Snoozed Threads stay out of Inbox and Working
+until they wake, and remain available under the collapsed Snoozed shelf.
+The Server saves Snooze for every window and restores it after a restart.
+_Avoid_: Park (the separate action for finished handling), stopped agent.
 
 **Attention list**
 The nav's always-on list, over `Projects`, of the Threads in flight by

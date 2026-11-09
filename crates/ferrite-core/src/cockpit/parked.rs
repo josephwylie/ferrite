@@ -61,6 +61,7 @@ impl Parked {
             return Err(unsaid(thread));
         };
         Ok(ThreadMeta {
+            snooze: None,
             provider,
             workspace: row
                 .workspace

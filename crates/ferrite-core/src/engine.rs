@@ -581,6 +581,7 @@ struct Thread {
     /// respawn, like the model.
     effort: Option<String>,
     title: Option<String>,
+    snooze: Option<crate::snooze::Snooze>,
     /// What waits for the Session to take it.
     awaiting: Awaiting,
     /// The Session was started for use (ADR 0032) rather than asked for:
@@ -709,6 +710,7 @@ impl Thread {
             model,
             effort,
             title: None,
+            snooze: None,
             awaiting: Awaiting::default(),
             woken: false,
             settled_at: None,
@@ -805,6 +807,7 @@ impl Thread {
             model: self.model.clone(),
             effort: self.effort.clone(),
             title: self.title.clone(),
+            snooze: self.snooze,
             workspace: self.workspace.as_ref().map(Into::into),
             session_project_root: self.session_project_root.clone(),
             first_prompt_sent: self.first_prompt_sent,
@@ -2250,6 +2253,13 @@ impl Engine {
     /// Close a Pane: the Session ends, the log is flushed, and the Thread
     /// keeps nothing in memory until it is opened again.
     pub fn park(&mut self, thread: ThreadId) -> io::Result<()> {
+        if self
+            .threads
+            .get(&thread)
+            .is_some_and(|state| state.snooze.is_some())
+        {
+            self.snooze_thread(thread, None)?;
+        }
         if let Some(pending) = self.bootstraps.remove(&thread) {
             self.rollback_bootstrap(thread)?;
             self.bootstrap_results.push(BootstrapResult {
@@ -2353,6 +2363,7 @@ impl Engine {
         let model = snapshot.model();
         let effort = snapshot.effort();
         let title = snapshot.title().map(str::to_string);
+        let snooze = snapshot.snooze();
         let resume = match &launch {
             Some(launch) => launch.resume.clone(),
             None => snapshot.resume_target().map(str::to_string),
@@ -2405,6 +2416,7 @@ impl Engine {
             self.store.dir().join(thread.to_string()),
         );
         state.title = title;
+        state.snooze = snooze;
         state.project = project;
         state.agent_args = agent_args;
         if let Some(error) = unreadable_args {
@@ -2497,6 +2509,15 @@ impl Engine {
     /// afresh on Main; one that ended unseen (ADR 0032) keeps what its
     /// window shows.
     pub fn send(&mut self, thread: ThreadId, text: String) {
+        if self
+            .threads
+            .get(&thread)
+            .is_some_and(|state| state.snooze.is_some())
+        {
+            if let Err(error) = self.snooze_thread(thread, None) {
+                crate::log!("thread {thread}: could not wake: {error}");
+            }
+        }
         if self.bootstraps.contains_key(&thread) {
             return;
         }
@@ -2996,6 +3017,52 @@ impl Engine {
         // Every record accepted is written before Ferrite goes (E1); only
         // the final syncs are bounded.
         self.store.quit(QUIT_SYNC_DEADLINE);
+    }
+
+    pub fn snooze_thread(
+        &mut self,
+        thread: ThreadId,
+        until: Option<std::time::SystemTime>,
+    ) -> io::Result<()> {
+        let now = crate::clock::system_time();
+        if until.is_some_and(|until| until <= now) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Snooze must end in the future",
+            ));
+        }
+        let snooze = until.map(|until| crate::snooze::Snooze {
+            started: now,
+            until,
+        });
+        let state = self
+            .threads
+            .get_mut(&thread)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Thread is not open"))?;
+        self.store
+            .set_snooze(thread, snooze, Some(&mut state.writer))
+            .map_err(io::Error::other)?;
+        state.history.clear();
+        state.snooze = snooze;
+        Ok(())
+    }
+
+    fn wake_snoozed(&mut self) {
+        let wake: Vec<_> = self
+            .threads
+            .iter()
+            .filter_map(|(&id, thread)| {
+                thread
+                    .snooze
+                    .filter(|snooze| snooze.should_wake(id, &self.notifications))
+                    .map(|_| id)
+            })
+            .collect();
+        for thread in wake {
+            if let Err(error) = self.snooze_thread(thread, None) {
+                crate::log!("thread {thread}: could not wake: {error}");
+            }
+        }
     }
 
     pub fn rename_thread(&mut self, thread: ThreadId, title: &str) -> io::Result<()> {
@@ -3616,6 +3683,15 @@ impl Engine {
     /// Submit immediately; the provider owns admission and execution.
     /// False leaves the caller's draft intact; no local fallback is installed.
     pub fn queue(&mut self, thread: ThreadId, text: String) -> bool {
+        if self
+            .threads
+            .get(&thread)
+            .is_some_and(|state| state.snooze.is_some())
+        {
+            if let Err(error) = self.snooze_thread(thread, None) {
+                crate::log!("thread {thread}: could not wake: {error}");
+            }
+        }
         let Some(state) = self.threads.get_mut(&thread) else {
             return false;
         };
@@ -4747,6 +4823,7 @@ impl Engine {
                 }
             }
         }
+        self.wake_snoozed();
         self.publish_digests();
         self.let_go_unused();
         #[cfg(debug_assertions)]
