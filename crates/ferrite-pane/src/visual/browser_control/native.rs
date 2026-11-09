@@ -266,6 +266,7 @@ struct Controller {
     stopping: Arc<AtomicBool>,
     selected: Option<String>,
     refs: HashMap<String, Binding>,
+    observed: HashMap<String, (Document, u64, u64)>,
     epochs: HashMap<String, u64>,
     broken: bool,
     deadline: Instant,
@@ -354,6 +355,7 @@ impl Controller {
             stopping: stop.clone(),
             selected: None,
             refs: HashMap::new(),
+            observed: HashMap::new(),
             epochs: HashMap::new(),
             broken: false,
             deadline,
@@ -481,7 +483,13 @@ impl Controller {
                 uncertain: writes && !known_before_dispatch,
             });
         }
-        Ok(response["data"].clone())
+        let mut data = response["data"].clone();
+        if let Some(data) = data.as_object_mut() {
+            // Upstream's generic launch claims do not describe the embedded
+            // CEF lifetime and may include private attachment configuration.
+            data.remove("lifecycle");
+        }
+        Ok(data)
     }
     fn select(&mut self, target: &str) -> Result<bool, Error> {
         let listed = self.command(json!({"action":"tab_list"}))?;
@@ -523,6 +531,11 @@ impl Controller {
         Ok(true)
     }
     fn perform_selected(&mut self, job: &Job, switched: bool) -> Result<Value, Error> {
+        if !job.control.observation()
+            && self.observed.get(&job.target) != Some(&(job.document, job.revision, job.epoch))
+        {
+            return Err(failure("The controller attachment changed; obtain a fresh readable observation before input"));
+        }
         let reference = match &job.control {
             Control::Click { reference }
             | Control::Type { reference, .. }
@@ -558,7 +571,7 @@ impl Controller {
         } else {
             None
         };
-        match &job.control {
+        let mut value = match &job.control {
             Control::Observe => {
                 let mut value = self.command(json!({"action":"snapshot", "interactive":true}))?;
                 self.refs.retain(|_, binding| binding.target != job.target);
@@ -609,6 +622,8 @@ impl Controller {
                     tree.pop();
                 }
                 value = json!({"snapshot":tree,"refs":refs,"truncated":truncated});
+                self.observed
+                    .insert(job.target.clone(), (job.document, job.revision, job.epoch));
                 Ok(value)
             }
             Control::Screenshot => {
@@ -679,7 +694,25 @@ impl Controller {
                 json!({"action":if *checked {"check"} else {"uncheck"},"selector":selector}),
             ),
             Control::Scroll { x, y } => self.command(json!({"action":"scroll","x":x,"y":y})),
+        }?;
+        if !job.control.observation() {
+            value["acknowledged"] = json!(true);
         }
+        if let (Some(reference), Some(selector)) = (reference, selector.as_ref()) {
+            for field in [
+                "clicked",
+                "filled",
+                "typed",
+                "selected",
+                "checked",
+                "unchecked",
+            ] {
+                if value[field].as_str() == Some(selector.as_str()) {
+                    value[field] = json!(reference.trim_start_matches('@'));
+                }
+            }
+        }
+        Ok(value)
     }
     fn screenshot(&mut self) -> Result<Value, Error> {
         let path = self.directory.join("capture.png");
