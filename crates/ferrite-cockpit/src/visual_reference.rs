@@ -1300,7 +1300,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let (scene, branches) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
-                view.show_nav_view(crate::nav::NavView::Activity, None, cx);
+                view.show_nav_view(crate::nav::NavView::Inbox, None, cx);
                 let notes = view
                     .cockpit
                     .threads()

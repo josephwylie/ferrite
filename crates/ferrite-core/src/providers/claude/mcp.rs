@@ -37,6 +37,7 @@ const PROTOCOL_VERSION: &str = "2025-11-25";
 
 pub(super) struct Server {
     visuals: Option<Visuals>,
+    browser: Option<crate::browser::ThreadClient>,
     stdin: Arc<Mutex<std::process::ChildStdin>>,
     plan: Mutex<Plan>,
 }
@@ -64,10 +65,12 @@ impl Server {
     /// `visuals` is `None` (or Off) for a Session that offers no visual.
     pub(super) fn new(
         visuals: Option<Visuals>,
+        browser: Option<crate::browser::ThreadClient>,
         stdin: Arc<Mutex<std::process::ChildStdin>>,
     ) -> Self {
         Self {
             visuals,
+            browser,
             stdin,
             plan: Mutex::default(),
         }
@@ -97,7 +100,8 @@ impl Server {
             Some("can_use_tool")
                 if request["tool_name"] == visual::CLAUDE_NAME
                     || request["tool_name"] == crate::wrap_up::CLAUDE_NAME
-                    || request["tool_name"] == update_plan::CLAUDE_NAME =>
+                    || request["tool_name"] == update_plan::CLAUDE_NAME
+                    || request["tool_name"] == crate::browser::tools::CLAUDE_NAME =>
             {
                 respond(
                     &self.stdin,
@@ -220,9 +224,18 @@ impl Server {
                         definition.input_schema.clone(),
                     )
                 });
+                let browser = self.browser.as_ref().map(|_| {
+                    let definition = crate::browser::tools::definition();
+                    (
+                        definition.name,
+                        definition.description,
+                        definition.input_schema,
+                    )
+                });
                 let tools: Vec<Value> = ours
                     .into_iter()
                     .chain(visual)
+                    .chain(browser)
                     .map(|(name, description, schema)| {
                         json!({
                             "name": name,
@@ -274,6 +287,32 @@ impl Server {
                         );
                     },
                 );
+                return;
+            }
+            ("tools/call", _) if message["params"]["name"] == crate::browser::tools::TOOL => {
+                let stdin = Arc::clone(&self.stdin);
+                let request_id = request_id.to_owned();
+                let respond = move |answer: crate::browser::tools::Answer| {
+                    let mut content = vec![json!({"type": "text", "text": answer.text})];
+                    if let Some(png) = answer.png_base64() {
+                        content
+                            .push(json!({"type": "image", "data": png, "mimeType": "image/png"}));
+                    }
+                    respond_mcp(
+                        &stdin,
+                        &request_id,
+                        id,
+                        Ok(json!({"content": content, "isError": answer.is_error})),
+                    );
+                };
+                match &self.browser {
+                    Some(browser) => crate::browser::tools::answer(
+                        browser,
+                        &message["params"]["arguments"],
+                        respond,
+                    ),
+                    None => respond(crate::browser::tools::Answer::unavailable()),
+                }
                 return;
             }
             ("tools/call", _) => Err((-32602, "unknown tool")),

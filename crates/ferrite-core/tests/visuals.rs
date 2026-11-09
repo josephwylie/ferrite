@@ -576,7 +576,12 @@ fn codex_without_visuals_offers_nothing_and_refuses_a_stray_call() {
         .find(|line| line["method"] == "thread/start")
         .unwrap();
     assert!(start["params"].get("dynamicTools").is_none());
-    assert!(start["params"].get("config").is_none());
+    assert!(start["params"]["config"].get("features").is_none());
+    assert_eq!(
+        start["params"]["config"]["tools"]["update_plan"]["enabled"],
+        true,
+        "planning remains available with Visuals off"
+    );
     let answer = lines.iter().find(|line| line["id"] == 0).unwrap();
     assert_eq!(answer["result"]["success"], false);
 }

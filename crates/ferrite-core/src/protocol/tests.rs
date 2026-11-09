@@ -246,6 +246,7 @@ fn state() -> ThreadState {
         model: Some("sonnet".into()),
         effort: Some("high".into()),
         title: Some("Fix the parser".into()),
+        snooze: None,
         workspace: Some(WireBinding::Worktree {
             repo: "/src/ferrite".into(),
             path: "/src/ferrite-wt/4".into(),
