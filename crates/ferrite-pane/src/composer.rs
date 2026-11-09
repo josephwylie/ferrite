@@ -475,12 +475,21 @@ impl Composer {
     /// Put a line back into the Composer, ready to edit at its end. The
     /// review comments stay as they are: they are not part of the line.
     pub fn set(&mut self, text: String, cx: &mut Context<Self>) {
-        let (text, files, annotations) = browser_annotations::split(text);
-        let (replies, text) = crate::quote::split(&text);
-        self.files = files;
-        self.browser_annotations = annotations;
-        self.line.set(text.to_string());
-        self.replies = replies;
+        if matches!(self.role, Role::Field(_)) {
+            // Fields hold literal values, including captured page text and
+            // comments. Only a prompt recalls attachment/reply context.
+            self.line.set(text);
+            self.files.clear();
+            self.replies.clear();
+            self.browser_annotations.clear();
+        } else {
+            let (text, files, annotations) = browser_annotations::split(text);
+            let (replies, text) = crate::quote::split(&text);
+            self.files = files;
+            self.browser_annotations = annotations;
+            self.line.set(text.to_string());
+            self.replies = replies;
+        }
         self.edited(cx);
     }
 
