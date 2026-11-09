@@ -187,6 +187,9 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
         return Err("Protected page was reclaimed".into());
     }
     clean.set_protected(false);
+    if clean.state().dirty != crate::visual::web::BrowserDirty::Unknown || clean.try_release()? {
+        return Err("Reclamation reused clean evidence from before a protected operation".into());
+    }
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if clean.try_release()? {
