@@ -13,6 +13,8 @@
 
 #[cfg(feature = "cef")]
 mod browser;
+#[cfg(feature = "cef")]
+mod browser_profile;
 
 #[cfg(windows)]
 mod windows;
@@ -64,6 +66,13 @@ fn smoke() -> Result<Duration, String> {
     let started = Instant::now();
     let engine = super::engine::start_now()?;
     println!("engine started: {:?}", started.elapsed());
+
+    #[cfg(feature = "cef")]
+    if std::env::var_os("FERRITE_BROWSER_PROFILE_SMOKE").is_some() {
+        browser_profile::run(engine.as_ref())?;
+        drop(engine);
+        return Ok(started.elapsed());
+    }
 
     let unsafe_configuration = std::env::var_os("FERRITE_BROWSER_UNSAFE_SMOKE").is_some();
     if unsafe_configuration {

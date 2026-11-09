@@ -36,6 +36,7 @@ mod input;
 mod macos;
 #[cfg(target_os = "macos")]
 mod nsapp;
+mod profile;
 #[cfg(windows)]
 mod windows;
 
@@ -45,7 +46,7 @@ use macos as platform;
 use windows as platform;
 
 use std::cell::{Cell, RefCell};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -224,7 +225,7 @@ impl Dormant {
             ));
         }
 
-        let profile = profile_dir();
+        let profile = profile::Profile::new();
         let overrides = isolation_overrides();
         // FERRITE_CEF_NO_SANDBOX=1 is the escape hatch if helpers won't start.
         let no_sandbox = !platform::SANDBOXED
@@ -236,9 +237,9 @@ impl Dormant {
             // GPUI owns the run loop; CEF is driven from Engine::pump.
             multi_threaded_message_loop: 0,
             external_message_pump: 1,
-            // Throwaway profile: nothing persists between runs.
-            root_cache_path: path_string(&profile),
-            cache_path: path_string(&profile.join("default")),
+            // Sealed visuals use a throwaway child of the fixed profile root.
+            root_cache_path: path_string(profile.root()),
+            cache_path: path_string(profile.sealed()),
             persist_session_cookies: 0,
             log_severity: cef::LogSeverity::WARNING,
             ..Default::default()
@@ -270,33 +271,6 @@ impl Dormant {
             }),
         })
     }
-}
-
-/// A fresh per-process profile under the temp dir; leftovers from processes
-/// that are gone are removed.
-fn profile_dir() -> PathBuf {
-    let base = std::env::temp_dir();
-    if let Ok(entries) = std::fs::read_dir(&base) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let Some(pid) = name
-                .to_str()
-                .and_then(|n| n.strip_prefix("ferrite-cef-profile-"))
-            else {
-                continue;
-            };
-            if pid
-                .parse::<u32>()
-                .map(|pid| !platform::process_alive(pid))
-                .unwrap_or(false)
-            {
-                let _ = std::fs::remove_dir_all(entry.path());
-            }
-        }
-    }
-    let dir = base.join(format!("ferrite-cef-profile-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    platform::real_path(dir)
 }
 
 fn path_string(path: &Path) -> CefString {
@@ -451,7 +425,7 @@ struct EngineInner {
     browser_isolated: bool,
     control: RefCell<Option<control::Control>>,
     browser_context: RefCell<Option<cef::RequestContext>>,
-    profile: PathBuf,
+    profile: profile::Profile,
     _app: cef::App,
     _library: platform::Library,
 }
@@ -468,16 +442,17 @@ impl Engine for CefEngine {
         wake: Wake,
     ) -> Result<Box<dyn BrowserView>, String> {
         self.browser_available()?;
-        if !self.inner.browser_isolated {
-            return Err("Conversation browsing requires the Chromium sandbox and web isolation; remove FERRITE_CEF_NO_SANDBOX and sandbox-disabling startup switches".into());
-        }
         if !handlers::external_url(url) {
             return Err("Conversation browser requires an http or https URL".into());
         }
         if self.inner.browser_context.borrow().is_none() {
             // One shared website context, separate from every sealed visual.
             let context = cef::request_context_create_context(
-                Some(&cef::RequestContextSettings::default()),
+                Some(&cef::RequestContextSettings {
+                    cache_path: path_string(&self.inner.profile.websites()?),
+                    persist_session_cookies: 1,
+                    ..Default::default()
+                }),
                 None,
             )
             .ok_or("CEF could not create an isolated website context")?;
@@ -502,14 +477,12 @@ impl Engine for CefEngine {
         if !self.inner.browser_isolated {
             return Err("Conversation browsing requires the Chromium sandbox and web isolation; remove FERRITE_CEF_NO_SANDBOX and sandbox-disabling startup switches".into());
         }
+        self.inner.profile.websites()?;
         Ok(())
     }
 
     fn controller(&self) -> Result<ControllerEndpoint, String> {
         self.browser_available()?;
-        if !self.inner.browser_isolated {
-            return Err("Browser controller requires sandboxed Chromium".into());
-        }
         let mut controller = self.inner.control.borrow_mut();
         if controller.is_none() {
             let mut created = control::Control::start()?;
@@ -684,7 +657,7 @@ impl Drop for EngineInner {
         }
         self.browser_context.get_mut().take();
         cef::shutdown();
-        let _ = std::fs::remove_dir_all(&self.profile);
+        // Profile cleanup and its exclusive lock outlive all CEF references.
     }
 }
 
