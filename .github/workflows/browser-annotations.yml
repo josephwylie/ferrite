@@ -24,14 +24,24 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.11
+        id: compiler-cache
+        continue-on-error: true
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+      - name: Continue without the optional compiler cache
+        if: steps.compiler-cache.outcome != 'success'
+        run: echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
       - run: cargo test -p ferrite-core --locked --test browser_annotations
       - name: Capture receipt and bounded remote image access
         run: cargo test -p ferrite-core --locked --lib browser_annotation_receipt
+      - name: Nonblocking ordered capture upload
+        run: cargo test -p ferrite-core --locked --lib browser_annotation_upload
       - name: Native provider image delivery
         run: cargo test -p ferrite-core --locked --lib browser_annotation_native_image
       - name: Browser annotation collection and send
         if: inputs.core_only != true
         run: cargo test -p ferrite-pane --locked --lib browser_annotations_
+      - name: Sent annotation history and review
+        if: inputs.core_only != true
+        run: cargo test -p ferrite-cockpit --locked --lib browser_annotation_

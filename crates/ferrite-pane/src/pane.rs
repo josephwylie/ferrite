@@ -25,7 +25,6 @@ mod usage;
 mod working;
 mod wrap_up;
 pub(crate) use agents::{is_agent, render_agent};
-pub(crate) use wrap_up::{render_wrap_up, Face as WrapUpFace};
 pub use agents::{AgentFace, AgentFaces, AgentRun};
 #[cfg(any(test, feature = "test-support"))]
 pub use composer::model_label;
@@ -49,6 +48,7 @@ pub use usage::{
 };
 pub(crate) use working::running_call;
 pub use working::{background_clock, background_link, working_tail, WorkingFacts};
+pub(crate) use wrap_up::{render_wrap_up, Face as WrapUpFace};
 #[cfg(test)]
 use {
     composer::{composer_fixed_height, composer_queue_height, queued_preview},
@@ -3235,7 +3235,7 @@ fn prompt_text_chipping(
     chips: fn(&std::path::Path) -> bool,
 ) -> (PromptText, Vec<std::path::PathBuf>) {
     let words = crate::quote::split(line).1;
-    let (text, files) = ferrite_core::prompt_files::split(String::from(words));
+    let (text, files, _) = ferrite_core::browser_annotations::split(String::from(words));
     let chipped: Vec<_> = files.iter().filter(|path| chips(path)).cloned().collect();
     let quotes_code = text
         .split('\n')
@@ -3499,7 +3499,10 @@ pub(crate) fn prompt_row(
     row_cx: &RowCx,
     actions: Option<AnyElement>,
 ) -> AnyElement {
-    let (text, files) = prompt_text(line, row_cx.skills);
+    let (words, other_files, annotations) =
+        ferrite_core::browser_annotations::split(line.to_owned());
+    let visible = ferrite_core::prompt_files::compose(&words, &other_files);
+    let (text, files) = prompt_text(&visible, row_cx.skills);
     let gallery = prompt_gallery(&files);
     // The passages it replied to, as their Quote rows (Claude's).
     let quotes: Vec<_> = crate::quote::split(line)
@@ -3542,6 +3545,16 @@ pub(crate) fn prompt_row(
                     .children(images),
             )
         })
+        .when(!annotations.is_empty(), |message| {
+            message.child(
+                crate::attachments::Attachments::new(
+                    "sent-browser-annotations",
+                    vec![],
+                    row_cx.preview,
+                )
+                .annotations(annotations),
+            )
+        })
         .children(quotes)
         .children(bubble);
     div()
@@ -3564,6 +3577,9 @@ pub(crate) fn prompt_row(
 /// part of the selection; the transcript makes it the way back to its turn.
 pub(crate) fn pinned_prompt(block: &Block, line: &str, row_cx: &RowCx, lines: usize) -> Div {
     let grid = row_cx.grid();
+    let annotation_count = ferrite_core::browser_annotations::split(line.to_owned())
+        .2
+        .len();
     let (text, files) = prompt_text_chipping(line, row_cx.skills, |_| true);
     let gallery = prompt_gallery(&files);
     // The chips close the prompt; their line stands taller, as the
@@ -3584,7 +3600,14 @@ pub(crate) fn pinned_prompt(block: &Block, line: &str, row_cx: &RowCx, lines: us
                 .min_w_0()
                 .max_h(px(lines as f32 * grid.line))
                 .overflow_hidden()
-                .children(words),
+                .children(words)
+                .when(annotation_count > 0, |words| {
+                    words.child(format!(
+                        "{} browser annotation{}",
+                        annotation_count,
+                        if annotation_count == 1 { "" } else { "s" }
+                    ))
+                }),
         )
 }
 
@@ -4165,7 +4188,12 @@ pub(crate) fn render_tool(
     // box makes room for it. A failed call's tag follows the cut, its lead
     // word in the failure ink (rule 6: colour on the word). Runs register
     // as they are built: the call line first, then its tag.
-    let run = |markdown: String| selection.markdown(block, markdown).ink(INK_SUBTLE).activity();
+    let run = |markdown: String| {
+        selection
+            .markdown(block, markdown)
+            .ink(INK_SUBTLE)
+            .activity()
+    };
     // One run on one line, or — for a call on a file — its path alone, after
     // the verb, which is chrome.
     let (verb, call, trail) = match text::call_pieces(tool) {
@@ -4222,7 +4250,9 @@ pub(crate) fn render_tool(
                 .children(trail)
                 .children(verdict)
                 .children(chevron);
-            activity_line(grid, None, words).children(overlay).child(rest)
+            activity_line(grid, None, words)
+                .children(overlay)
+                .child(rest)
         }
     }
     .id(SharedString::from(row_selector.clone()))
@@ -4893,7 +4923,10 @@ mod tests {
             cx.debug_bounds("shimmer")
                 .is_some_and(|shimmer| chip.contains(&shimmer.origin))
         };
-        assert!(shimmering("starting-chip", cx), "the starting chip shimmers");
+        assert!(
+            shimmering("starting-chip", cx),
+            "the starting chip shimmers"
+        );
         assert!(!shimmering("ready-chip", cx), "a ready one is plain");
     }
 

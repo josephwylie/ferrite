@@ -324,7 +324,10 @@ impl Render for AnnotationEditor {
         );
         div()
             .id("annotation-editor")
+            .debug_selector(|| "annotation-editor".into())
             .size_full()
+            .min_w_0()
+            .overflow_y_scroll()
             .key_context("AnnotationEditor")
             .on_action(cx.listener(|_, _: &Cancel, _, cx| {
                 cx.emit(EditorEvent::Cancelled);
@@ -347,6 +350,8 @@ impl Render for AnnotationEditor {
             .child(div().child("Browser annotation"))
             .child(
                 div()
+                    .min_w_0()
+                    .truncate()
                     .text_color(rgb(theme::INK_SUBTLE))
                     .child(self.retained.capture().url.clone()),
             )

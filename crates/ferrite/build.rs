@@ -6,6 +6,13 @@ fn main() {
     // loaded on the first CEF call, which `visual::boot` makes only once it
     // has seen the DLL there. CEF's own build delay-loads it the same way.
     let windows = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
+    if windows {
+        // The production Window overflows Windows' default 1 MiB main stack
+        // during its first layout (packaged run 42567297438, 0xC00000FD).
+        // Reserve address space without increasing the initial 4 KiB commit.
+        // The CEF bootstrap has its own EXE header, set during staging.
+        println!("cargo:rustc-link-arg-bin=ferrite=/STACK:8388608,4096");
+    }
     if windows && std::env::var_os("CARGO_FEATURE_CEF").is_some() {
         println!("cargo:rustc-link-arg=/DELAYLOAD:libcef.dll");
     }

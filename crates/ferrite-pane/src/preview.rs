@@ -54,6 +54,10 @@ pub enum Body {
     Page(Arc<PageView>),
     /// The Thread-owned browser; the window adapter supplies its exact live page.
     Browser,
+    BrowserAnnotation {
+        annotation: Arc<ferrite_core::browser_annotations::Annotation>,
+        image: Option<PathBuf>,
+    },
     /// A file the preview cannot show, and why.
     Unshown(Unshown),
 }
@@ -158,6 +162,7 @@ struct State {
     opened: u64,
     lightbox: Option<Lightbox>,
     browser_urls: Vec<String>,
+    annotation_requests: Vec<ferrite_core::browser_annotations::Annotation>,
 }
 
 #[derive(Clone)]
@@ -175,6 +180,70 @@ impl Preview {
             state: Arc::new(Mutex::new(State::default())),
             focus: cx.focus_handle(),
         }
+    }
+
+    pub fn review_annotation(
+        &self,
+        annotation: ferrite_core::browser_annotations::Annotation,
+        window: &mut Window,
+    ) {
+        self.state
+            .lock()
+            .unwrap()
+            .annotation_requests
+            .push(annotation);
+        window.refresh();
+    }
+
+    pub fn take_annotation_requests(&self) -> Vec<ferrite_core::browser_annotations::Annotation> {
+        std::mem::take(&mut self.state.lock().unwrap().annotation_requests)
+    }
+
+    pub fn loading_annotation(
+        &self,
+        annotation: ferrite_core::browser_annotations::Annotation,
+        window: &mut Window,
+    ) {
+        self.set(Document {
+            path: annotation.original().to_path_buf(),
+            name: Some("Browser annotation".into()),
+            body: Body::BrowserAnnotation {
+                annotation: Arc::new(annotation),
+                image: None,
+            },
+        });
+        window.refresh();
+    }
+
+    pub fn open_annotation(
+        &self,
+        annotation: ferrite_core::browser_annotations::Annotation,
+        image: PathBuf,
+        window: &mut Window,
+    ) {
+        self.set(Document {
+            path: annotation.original().to_path_buf(),
+            name: Some("Browser annotation".into()),
+            body: Body::BrowserAnnotation {
+                annotation: Arc::new(annotation),
+                image: Some(image),
+            },
+        });
+        window.refresh();
+    }
+
+    pub fn annotation_error(
+        &self,
+        annotation: &ferrite_core::browser_annotations::Annotation,
+        error: String,
+        window: &mut Window,
+    ) {
+        self.set(Document {
+            path: annotation.original().to_path_buf(),
+            name: Some("Browser annotation".into()),
+            body: Body::Unshown(Unshown::Unreadable(error.into())),
+        });
+        window.refresh();
     }
 
     /// Open `path` (F-14): the one way a file opens in the preview. An
