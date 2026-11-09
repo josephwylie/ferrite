@@ -5785,3 +5785,211 @@ fn snooze_is_shared_and_survives_server_restart_without_a_session() {
             .is_some_and(|open| open.snooze().is_none())
     });
 }
+
+#[test]
+fn browser_requests_allow_operator_recovery_without_discarding_annotation_protection() {
+    use crate::browser::{Action, Control, Operation, Outcome, Protection};
+    let harness = start("browser-operator-recovery");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    let mut owner_window = browser_test_window(&harness, thread);
+    let agent = harness.browser.for_thread(thread);
+    let opened = agent
+        .submit(browser_test_action(Action::Open {
+            url: "https://example.com/form".into(),
+        }))
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    let owner = opened.state.owner.unwrap();
+    let document = opened.state.tabs[0].document();
+    let receipt = browser_test_observe(&mut owner_window, &agent, document, 0)
+        .observation
+        .unwrap();
+    let pending = agent.submit(Operation::Control {
+        document,
+        revision: 0,
+        observation: Some(receipt.clone()),
+        control: Control::Type {
+            reference: "@save".into(),
+            text: "possibly written".into(),
+        },
+    });
+    let (number, revision) = loop {
+        if let ServerMessage::BrowserRequest {
+            request, revision, ..
+        } = owner_window
+            .messages
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+        {
+            break (request, revision);
+        }
+    };
+    assert!(
+        agent
+            .submit(Operation::Action {
+                action: Action::Reload { document },
+                observation: Some(receipt)
+            })
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .is_err(),
+        "agent operations cannot impersonate operator recovery"
+    );
+    // The trusted window has fenced its native writer before this explicit
+    // operator Reload. Its protocol intent can retire that command routing.
+    let ServerMessage::Reply {
+        ok: Some(Done::Browser { state }),
+        error: None,
+        ..
+    } = browser_test_command(
+        &mut owner_window,
+        501,
+        Op::Browser {
+            thread,
+            action: Action::Reload { document },
+        },
+    )
+    else {
+        panic!("the operator must recover without asking a running agent");
+    };
+    let next = state.tabs[0].document();
+    assert_ne!(next, document);
+    assert!(pending
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap_err()
+        .contains("uncertain"));
+    owner_window
+        .send(&ClientMessage::BrowserReply {
+            request: number,
+            thread,
+            owner,
+            document,
+            revision,
+            outcome: Outcome::Success {
+                value: serde_json::json!({"typed":true}),
+            },
+        })
+        .unwrap();
+    browser_test_command(&mut owner_window, 502, Op::SettingsChanged);
+    let receipt = browser_test_observe(&mut owner_window, &agent, next, 0)
+        .observation
+        .unwrap();
+    let uncertain = agent.submit(Operation::Control {
+        document: next,
+        revision: 0,
+        observation: Some(receipt),
+        control: Control::Click {
+            reference: "@save".into(),
+        },
+    });
+    browser_test_answer(
+        &mut owner_window,
+        Control::Click {
+            reference: "@save".into(),
+        },
+        Outcome::Uncertain {
+            error: "native writer stopped after dispatch".into(),
+        },
+    );
+    assert!(uncertain
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .is_err());
+    let ServerMessage::Reply {
+        ok: Some(Done::BrowserProtection { lease }),
+        error: None,
+        ..
+    } = browser_test_command(
+        &mut owner_window,
+        503,
+        Op::BrowserProtect {
+            thread,
+            owner,
+            document: next,
+            protection: Protection::Annotation,
+        },
+    )
+    else {
+        panic!("operator feedback must remain available after the uncertain writer has drained");
+    };
+    assert!(
+        agent
+            .submit(Operation::Control {
+                document: next,
+                revision: 0,
+                observation: None,
+                control: Control::Observe
+            })
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .is_err(),
+        "read-only capture must not allow an agent observation to discharge uncertainty"
+    );
+    assert!(
+        matches!(
+            browser_test_command(
+                &mut owner_window,
+                504,
+                Op::Browser {
+                    thread,
+                    action: Action::Reload { document: next }
+                }
+            ),
+            ServerMessage::Reply { error: Some(_), .. }
+        ),
+        "recovery cannot discard a live annotation capture"
+    );
+    browser_test_command(
+        &mut owner_window,
+        505,
+        Op::BrowserRelease {
+            thread,
+            owner,
+            lease,
+        },
+    );
+    let retained = agent
+        .submit(Operation::State)
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(
+        retained.state.tabs[0].protected,
+        "capture never discharges the command's uncertainty"
+    );
+    assert!(retained.observation.is_none());
+    assert!(agent
+        .submit(browser_test_action(Action::Close { tab: next.tab }))
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .is_err());
+    let ServerMessage::Reply {
+        ok: Some(Done::Browser { state }),
+        error: None,
+        ..
+    } = browser_test_command(
+        &mut owner_window,
+        506,
+        Op::Browser {
+            thread,
+            action: Action::Close { tab: next.tab },
+        },
+    )
+    else {
+        panic!("explicit operator Close must retire an abandoned uncertain command");
+    };
+    assert!(state.tabs.is_empty());
+    let reopened = agent
+        .submit(browser_test_action(Action::Open {
+            url: "https://example.com/next".into(),
+        }))
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert_ne!(reopened.state.tabs[0].id, next.tab);
+    window.command(99, Op::Stop { when: When::Now });
+    assert_eq!(harness.server.join().unwrap(), 0);
+}
