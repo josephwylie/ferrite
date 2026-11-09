@@ -64,13 +64,13 @@ def stale_replacement(service):
 
 def scoped_diagnostics(service):
     service.command("navigate", url="data:text/html,<title>Thread A</title><p>A</p>")
-    first = [tab for tab in service.command("tab_list")["tabs"] if "Thread A" == tab.get("title")][0]["tabId"]
+    first = [tab for tab in service.command("tab_list")["tabs"] if tab.get("active")][0]["tabId"]
     service.command("console", clear=True)
     service.command("errors", clear=True)
     service.command("requests", clear=True)
     evaluate(service, "console.log('ONLY_THREAD_A'); setTimeout(()=>console.log('BACKGROUND_THREAD_A'),100)")
     service.command("tab_new", url="data:text/html,<title>Thread B</title><p>B</p>")
-    second = [tab for tab in service.command("tab_list")["tabs"] if "Thread B" == tab.get("title")][0]["tabId"]
+    second = [tab for tab in service.command("tab_list")["tabs"] if tab.get("active")][0]["tabId"]
     evaluate(service, "console.log('ONLY_THREAD_B')")
     time.sleep(0.2)
     messages = service.command("console")["messages"]
