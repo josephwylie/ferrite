@@ -59,11 +59,19 @@ jobs:
           if ($LASTEXITCODE -eq 0) { throw 'Naked executable bypassed the sandbox bootstrap' }
           target/debug/bundle/windows/Ferrite/ferrite.exe --visual-smoke
           if ($LASTEXITCODE -ne 0) { throw 'Packaged CEF smoke failed' }
+          $env:FERRITE_BROWSER_UNSAFE_SMOKE = '1'
+          foreach ($unsafeSwitch in @('--no-sandbox', '--no-sandbox=0', '/NO-SANDBOX=0')) {
+            target/debug/bundle/windows/Ferrite/ferrite.exe --visual-smoke $unsafeSwitch
+            if ($LASTEXITCODE -ne 0) { throw "Unsafe configuration did not preserve sealed-only behavior: $unsafeSwitch" }
+          }
       - name: macOS packaged engine
         if: runner.os == 'macOS'
         run: |
           scripts/install-app.sh --bundle-only
           target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite --visual-smoke
+          for unsafe_switch in --no-sandbox --no-sandbox=0 -no-sandbox=0; do
+            FERRITE_BROWSER_UNSAFE_SMOKE=1 target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite --visual-smoke "$unsafe_switch"
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:

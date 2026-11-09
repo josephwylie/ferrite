@@ -65,8 +65,27 @@ fn smoke() -> Result<Duration, String> {
     let engine = super::engine::start_now()?;
     println!("engine started: {:?}", started.elapsed());
 
+    let unsafe_configuration = std::env::var_os("FERRITE_BROWSER_UNSAFE_SMOKE").is_some();
+    if unsafe_configuration {
+        if engine.controller().is_ok() {
+            return Err("Unsafe startup configuration exposed a browser controller".into());
+        }
+        match engine.open_browser(
+            "http://127.0.0.1:9/",
+            Viewport {
+                width: 400,
+                scale: 1.0,
+            },
+            Box::new(|| {}),
+        ) {
+            Err(error) if error.contains("requires the Chromium sandbox") => {}
+            _ => return Err("Unsafe startup configuration enabled external browsing".into()),
+        }
+        println!("PASS unsafe configuration: external browser/controller unavailable; checking sealed visuals");
+    }
+
     #[cfg(feature = "cef")]
-    if std::env::var_os("FERRITE_BROWSER_SMOKE").is_some() {
+    if !unsafe_configuration && std::env::var_os("FERRITE_BROWSER_SMOKE").is_some() {
         browser::run(engine.as_ref())?;
     }
 
@@ -100,7 +119,9 @@ fn smoke() -> Result<Duration, String> {
     })?;
     println!("laid-out frame: {:?} after open", opened.elapsed());
     #[cfg(windows)]
-    windows::assert_renderer_sandbox()?;
+    if !unsafe_configuration {
+        windows::assert_renderer_sandbox()?;
+    }
     probe.until("red/blue/green at y=10/350/550", |p| {
         p.pixel(10, 10) == Some(RED)
             && p.pixel(10, 350) == Some(BLUE)

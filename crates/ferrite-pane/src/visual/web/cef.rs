@@ -95,6 +95,44 @@ pub unsafe fn windows_bootstrap(sandbox_info: *mut u8) {
     unsafe { platform::set_sandbox_info(sandbox_info) };
 }
 
+/// Match Chromium's switch prefixes, optional values and `--` terminator.
+/// These switches disable the renderer isolation required for external pages,
+/// even when Settings::no_sandbox was not set by our environment escape hatch.
+fn unsafe_sandbox_switch() -> bool {
+    for mut argument in std::env::args().skip(1) {
+        if cfg!(windows) {
+            argument.make_ascii_lowercase();
+        }
+        let argument = if cfg!(windows) {
+            argument.trim()
+        } else {
+            argument.trim_matches([' ', '\t', '\r', '\n', '\u{b}', '\u{c}'])
+        };
+        if argument == "--" {
+            break;
+        }
+        let name = argument
+            .strip_prefix("--")
+            .or_else(|| argument.strip_prefix('-'))
+            .or_else(|| {
+                if cfg!(windows) {
+                    argument.strip_prefix('/')
+                } else {
+                    None
+                }
+            });
+        if name.is_some_and(|name| {
+            matches!(
+                name.split('=').next(),
+                Some("no-sandbox" | "single-process")
+            )
+        }) {
+            return true;
+        }
+    }
+    false
+}
+
 /// What [`boot`] found this process to be.
 pub enum Boot {
     /// A CEF helper process ran to completion: exit with this code, now.
@@ -168,8 +206,9 @@ impl Dormant {
 
         let profile = profile_dir();
         // FERRITE_CEF_NO_SANDBOX=1 is the escape hatch if helpers won't start.
-        let no_sandbox =
-            !platform::SANDBOXED || std::env::var_os("FERRITE_CEF_NO_SANDBOX").is_some();
+        let no_sandbox = !platform::SANDBOXED
+            || std::env::var_os("FERRITE_CEF_NO_SANDBOX").is_some()
+            || unsafe_sandbox_switch();
         let settings = Settings {
             no_sandbox: no_sandbox as i32,
             windowless_rendering_enabled: 1,
@@ -407,7 +446,7 @@ impl Engine for CefEngine {
         wake: Wake,
     ) -> Result<Box<dyn View>, String> {
         if !self.inner.sandboxed {
-            return Err("Conversation browsing requires the Chromium sandbox; remove FERRITE_CEF_NO_SANDBOX".into());
+            return Err("Conversation browsing requires the Chromium sandbox; remove FERRITE_CEF_NO_SANDBOX and sandbox-disabling startup switches".into());
         }
         if !handlers::external_url(url) {
             return Err("Conversation browser requires an http or https URL".into());
