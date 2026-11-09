@@ -126,6 +126,12 @@ def main():
                 server_process.terminate()
                 server_process.wait(timeout=20)
             server_log.close()
+            if os.name == 'nt':
+                query = "Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1001; StartTime=(Get-Date).AddMinutes(-5)} -ErrorAction SilentlyContinue | Where-Object { $_.Message -match 'ferrite' } | Select-Object -First 10 TimeCreated,Id,Message | ConvertTo-Json -Depth 3"
+                with (output/'windows-crash-events.json').open('w', encoding='utf-8') as events:
+                    subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',query],
+                        stdout=events, stderr=subprocess.STDOUT, timeout=20,
+                        creationflags=flags, check=False)
             import shutil
             if (root/'logs').exists():
                 shutil.copytree(root/'logs', output/'diagnostics', dirs_exist_ok=True)
