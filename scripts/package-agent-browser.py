@@ -33,12 +33,23 @@ def run(*args, **kwargs):
     subprocess.run(args, check=True, **kwargs)
 
 
+def verify_stage(directory, metadata, name, expected, parser):
+    try:
+        existing = json.loads((metadata / "agent-browser-build.json").read_text())
+        if any(existing.get(key) != value for key, value in expected.items()) or existing.get("binary_sha256") != digest(directory / name):
+            parser.error("staged native controller provenance or SHA-256 mismatch")
+    except (OSError, ValueError) as error:
+        parser.error(f"staged native controller unavailable: {error}")
+    return existing
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", required=True, type=Path)
     parser.add_argument("--metadata-directory", type=Path, help="stage provenance/licenses outside the executable directory (macOS bundle Resources)")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--test", action="store_true", help="run the native Ferrite security regressions before packaging")
+    mode.add_argument("--from-stage", type=Path, help="copy an unsigned verified build stage without invoking git or Rust")
     mode.add_argument("--offline", action="store_true", help="verify the staged build without downloading or rebuilding")
     args = parser.parse_args()
     name = "agent-browser.exe" if os.name == "nt" else "agent-browser"
@@ -49,12 +60,23 @@ def main():
     metadata = args.metadata_directory or args.destination
     provenance = metadata / "agent-browser-build.json"
     if args.offline:
-        try:
-            existing = json.loads(provenance.read_text())
-            if any(existing.get(key) != value for key, value in expected.items()) or existing.get("binary_sha256") != digest(artifact):
-                parser.error("staged native controller provenance or SHA-256 mismatch")
-        except (OSError, ValueError) as error:
-            parser.error(f"staged native controller unavailable: {error}")
+        print(json.dumps(verify_stage(args.destination, metadata, name, expected, parser)))
+        return
+    if args.from_stage is not None:
+        if args.from_stage.resolve() == args.destination.resolve():
+            parser.error("source and destination stages must differ; use --offline to verify an existing stage")
+        existing = verify_stage(args.from_stage, args.from_stage, name, expected, parser)
+        source_license = args.from_stage / "agent-browser-licenses" / "LICENSE"
+        if not source_license.is_file():
+            parser.error("verified native stage is missing its license")
+        # Validate everything before modifying the package destination. Preserve
+        # the original source-build hash/provenance; code signing happens later.
+        args.destination.mkdir(parents=True, exist_ok=True)
+        licenses = metadata / "agent-browser-licenses"
+        licenses.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(args.from_stage / name, artifact)
+        shutil.copy2(source_license, licenses / "LICENSE")
+        shutil.copy2(args.from_stage / "agent-browser-build.json", provenance)
         print(json.dumps(existing))
         return
     cache = ROOT / "target" / "agent-browser-build" / patch_digest[:16]

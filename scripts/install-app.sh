@@ -114,9 +114,11 @@ mkdir -p "$BUILT/Contents/MacOS" "$BUILT/Contents/Resources"
 cp "$BIN" "$BUILT/Contents/MacOS/ferrite"
 cp "$PROJECTS_BIN" "$BUILT/Contents/MacOS/ferrite-projects"
 # Native controller is staged only; browsing remains gated by #192 validation.
-/usr/bin/python3 "$ROOT/scripts/package-agent-browser.py" \
-  --destination "$BUILT/Contents/MacOS" \
-  --metadata-directory "$BUILT/Contents/Resources/agent-browser"
+CONTROLLER_ARGS=(--destination "$BUILT/Contents/MacOS" --metadata-directory "$BUILT/Contents/Resources/agent-browser")
+if [ -n "${FERRITE_BROWSER_CONTROLLER_STAGE:-}" ]; then
+  CONTROLLER_ARGS+=(--from-stage "$FERRITE_BROWSER_CONTROLLER_STAGE")
+fi
+/usr/bin/python3 "$ROOT/scripts/package-agent-browser.py" "${CONTROLLER_ARGS[@]}"
 
 # iconutil expects this exact set of filenames. Generate the platform resource
 # from the checked-in 1254px source so the Dock gets sharp 1x and 2x variants.

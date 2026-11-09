@@ -5,7 +5,7 @@ The Rust smoke owns/pumps the live views and independently checks their pixels
 when this driver finishes. This driver never opens another browser or target.
 """
 import base64
-import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import socket
@@ -76,9 +76,17 @@ def forbidden_handshake(endpoint, authorization=None, origin=None):
     if origin is not None:
         headers.append("Origin: " + origin)
     with socket.create_connection((url.hostname, url.port), timeout=5) as connection:
-        connection.sendall(("\r\n".join(headers) + "\r\n\r\n").encode())
-        status = connection.recv(1024).split(b"\r\n", 1)[0]
+        try:
+            connection.sendall(("\r\n".join(headers) + "\r\n\r\n").encode())
+            status = connection.recv(1024).split(b"\r\n", 1)[0]
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            # Windows may abort the rejected upgrade before HTTP403 is read.
+            # The subsequent authorized native attachment must still succeed.
+            return "connection closed"
+        if not status:
+            return "connection closed"
         assert b" 403 " in status, f"unauthorized CDP handshake accepted: {status!r}"
+        return "HTTP403"
 
 
 def assert_page_isolation(service, path, endpoint, private_file):
@@ -113,9 +121,11 @@ def main():
     authorization = os.environ["FERRITE_CDP_AUTHORIZATION"]
     executable = os.environ["FERRITE_BROWSER_CONTROLLER"]
     private_file = os.environ["FERRITE_BROWSER_PRIVATE_FILE"]
-    forbidden_handshake(endpoint)
-    forbidden_handshake(endpoint, "Bearer wrong")
-    forbidden_handshake(endpoint, authorization, "http://127.0.0.1:3000")
+    handshake_denials = [
+        {"case": "missing capability", "denial": forbidden_handshake(endpoint)},
+        {"case": "wrong capability", "denial": forbidden_handshake(endpoint, "Bearer wrong")},
+        {"case": "page origin", "denial": forbidden_handshake(endpoint, authorization, "http://127.0.0.1:3000")},
+    ]
     browser_pid = os.getppid()
     process_samples = {"before_controller": sample_browser_processes(browser_pid, executable)}
     destination = Path(os.environ["FERRITE_BROWSER_EVIDENCE"]) if os.environ.get("FERRITE_BROWSER_EVIDENCE") else None
@@ -192,7 +202,7 @@ def main():
                         with guard:
                             activity["active"] -= 1
 
-                with concurrent.futures.ThreadPoolExecutor(max_workers=len(paths)) as agents:
+                with ThreadPoolExecutor(max_workers=len(paths)) as agents:
                     futures = [agents.submit(agent, path) for path in paths]
                     barrier.wait(timeout=30)
                     try:
@@ -218,11 +228,11 @@ def main():
             process_samples["single_agent"] = measure_agents(["/one"])
             process_samples["concurrent_agents"] = measure_agents(list(expected))
             retain_process_samples()
-            single = process_samples["single_agent"]["samples"] + [process_samples["single_agent"]["after"]]
-            concurrent = process_samples["concurrent_agents"]["samples"] + [process_samples["concurrent_agents"]["after"]]
-            single_browsers = max(sample["browser_process_count"] for sample in single)
-            concurrent_browsers = max(sample["browser_process_count"] for sample in concurrent)
-            controllers = [sample["controller_process_count"] for sample in single + concurrent]
+            single_samples = process_samples["single_agent"]["samples"] + [process_samples["single_agent"]["after"]]
+            concurrent_samples = process_samples["concurrent_agents"]["samples"] + [process_samples["concurrent_agents"]["after"]]
+            single_browsers = max(sample["browser_process_count"] for sample in single_samples)
+            concurrent_browsers = max(sample["browser_process_count"] for sample in concurrent_samples)
+            controllers = [sample["controller_process_count"] for sample in single_samples + concurrent_samples]
             assert all(count == 1 for count in controllers), process_samples
             assert concurrent_browsers <= single_browsers, f"Browser processes scaled with agent count: single={single_browsers}, concurrent={concurrent_browsers}"
             assert process_samples["concurrent_agents"]["peak_active_agent_workers"] == len(expected)
@@ -253,7 +263,7 @@ def main():
                               "browser_process_count_concurrent_agents": concurrent_browsers,
                               "process_samples": process_samples, "screenshots_match_live_pages": True,
                               "native_clicks": operations["native_clicks"], "snapshot_reference_clicks": operations["native_clicks"], "controller_restart_retains_targets": True,
-                              "unauthorized_cdp_handshakes_rejected": 3,
+                              "unauthorized_cdp_handshakes_rejected": len(handshake_denials), "handshake_denials": handshake_denials,
                               "sealed_visual_discovery": False, "page_privileged_fetches_and_navigations_rejected": 12,
                               "page_controller_websockets_rejected": 2}
             if destination is not None:

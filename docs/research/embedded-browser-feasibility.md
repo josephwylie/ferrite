@@ -224,6 +224,34 @@ count over the single-agent baseline. Periodic sampling is not an exhaustive
 trace of arbitrarily short-lived OS processes. These updated fixture checks
 remain pending packaged CI execution.
 
+## Runtime harness and staging corrections
+
+Run 42546328290 exposed two harness failures: a Python local named `concurrent`
+shadowed its imported executor module, and PowerShell read a stale exit code
+before the Windows GUI bootstrap exited. The driver now imports the executor
+directly and uses distinct sample-list names; every Windows GUI smoke explicitly
+waits for its own process and inspects that process's exit code. A rejected
+upgrade may close/reset the socket on Windows before HTTP403 is read. Such a
+close is recorded as denial; the subsequent authorized native attachment must
+still complete the full live-page fixture.
+
+The same run measured redundant native compilation during staging: Windows
+built the release controller in 7m07 and recompiled it for 5m04 during staging;
+macOS built in 7m05 and recompiled for 4m04 during staging. The packager now has
+`--from-stage` to verify source commit, hardening patch, platform, architecture
+and executable hash before copying the unsigned build with its original
+provenance/license. CI builds once and stages that verified output. Public CLI
+tests prove staging with git/Rust unavailable and rejection before destination
+writes for incorrect source/patch/platform/architecture/hash. macOS retains the
+metadata under Resources and signs only after staging; the source-build digest
+is preserved.
+
+The independent workflows also mirror primary CI's sccache/debug-symbol setup.
+The primary workflow documents that rust-cache alone excludes the vendored GPUI
+path dependencies; compiler caching avoids repeatedly compiling that stack.
+Debug symbols are disabled for gate checks without changing debug assertions or
+the app's selected build profile. These corrections still require packaged CI.
+
 ## Reproduction and acceptance status
 
 ```
