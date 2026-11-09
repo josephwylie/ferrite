@@ -1,0 +1,30 @@
+{
+  "started_utc": "2026-11-09T06:23:31.922943+00:00",
+  "executable": "/Users/runner/work/ferrite/ferrite/target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite",
+  "sha256": "5e5b8b07bd616262e87961fc1ad2a9296f01eba89886e07b4805571712cfe0c4",
+  "application_components": [
+    {
+      "path": "/Users/runner/work/ferrite/ferrite/target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite",
+      "sha256": "5e5b8b07bd616262e87961fc1ad2a9296f01eba89886e07b4805571712cfe0c4"
+    },
+    {
+      "path": "/Users/runner/work/ferrite/ferrite/target/local/bundle/macos/Ferrite.app/Contents/MacOS/agent-browser",
+      "sha256": "5ca1c26a5e7e7caf38f30c3c906f8658560e08f3c1b1ff9ddf2d1d7d82f3860f"
+    }
+  ],
+  "native_build": {
+    "version": "0.41.2",
+    "source_commit": "d52a5e90c372ec4710c69adc3837ac14bbd852aa",
+    "patch_sha256": "3cdede7f2ee6b15e56f877e801d045c691c5ddf3e4564526e71cfc7165701e33",
+    "platform": "Darwin",
+    "arch": "arm64",
+    "ferrite_security_tests": "not run by this invocation",
+    "binary_sha256": "4bd469e99a93fe5aa9ab8262cc49aaa8ac78810ed3022c09054ba2ef5512771c",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "platform": "macOS-26.7.2-arm64-arm-64bit",
+  "architecture": "arm64",
+  "provider": "claude",
+  "diagnostic_only": false,
+  "profile_mode": "isolated temporary production profile"
+}
