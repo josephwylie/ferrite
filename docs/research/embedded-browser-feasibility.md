@@ -21,7 +21,10 @@ commit `d52a5e90c372ec4710c69adc3837ac14bbd852aa` plus
 [`agent-browser-0.41.2-ferrite.patch`](../../scripts/patches/agent-browser-0.41.2-ferrite.patch).
 The packager verifies the source commit and exact patch, builds with the upstream
 Cargo lockfile and records the patch and executable SHA-256 in
-`agent-browser-build.json`. The package includes upstream's Apache-2.0 license.
+`agent-browser-build.json`. The package includes upstream's Apache-2.0 license. macOS keeps provenance and
+licenses in `Contents/Resources/agent-browser`, with only the executable in
+`Contents/MacOS`; code signing treats metadata in the latter as unsigned nested
+code. `--metadata-directory` selects this layout for staging/offline verification.
 The original official native release digest verifier is retained separately as
 `verify-agent-browser-release.py`; **those unmodified executables must not be
 used by the Conversation browser**.

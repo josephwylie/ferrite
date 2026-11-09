@@ -29,6 +29,7 @@ jobs:
       FERRITE_BROWSER_SMOKE_DRIVER: ${{ github.workspace }}/scripts/probe-embedded-browser.py
       FERRITE_BROWSER_EVIDENCE: ${{ github.workspace }}/target/browser-evidence
     strategy:
+      fail-fast: false
       matrix:
         os: [macos-latest, windows-latest]
     steps:
