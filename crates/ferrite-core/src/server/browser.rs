@@ -172,7 +172,22 @@ impl Server {
             state: self.browser.state(thread),
             revision: self.browser.operator_revision(thread),
             value,
+            observation: None,
         }
+    }
+
+    fn browser_observation_current(
+        &self,
+        thread: ThreadId,
+        document: crate::browser::Document,
+        revision: u64,
+        receipt: Option<&crate::browser::Observation>,
+    ) -> bool {
+        self.browser_observed
+            .get(&thread)
+            .is_some_and(|(observed, version, expected)| {
+                *observed == document && *version == revision && receipt == Some(expected)
+            })
     }
 
     fn browser_agent_action(
@@ -180,6 +195,7 @@ impl Server {
         thread: ThreadId,
         owner: crate::browser::Owner,
         action: Action,
+        observation: Option<crate::browser::Observation>,
     ) -> Result<crate::browser::Response, String> {
         if self
             .browser_pending
@@ -190,6 +206,9 @@ impl Server {
             return Err("This Thread's browser has an active or uncertain command; observe its result before navigating, switching or closing pages".into());
         }
         let state = self.browser.state(thread);
+        if state.tabs.iter().any(|tab| tab.protected) {
+            return Err("This page is in use; finish its command or annotation capture before changing tabs".into());
+        }
         let revision = self.browser.operator_revision(thread);
         let target = match &action {
             Action::Navigate { document, .. }
@@ -209,7 +228,7 @@ impl Server {
             _ => None,
         };
         if let Some(document) = target {
-            if self.browser_observed.get(&thread) != Some(&(document, revision)) {
+            if !self.browser_observation_current(thread, document, revision, observation.as_ref()) {
                 return Err("Observe the current page before navigating, switching or closing it; operator input invalidates earlier observations".into());
             }
         }
@@ -231,15 +250,25 @@ impl Server {
             };
             let result = match request.operation {
                 Operation::State => Ok(self.browser_response(thread, None)),
-                Operation::Action(action) => self.browser_agent_action(thread, owner, action),
+                Operation::Action {
+                    action,
+                    observation,
+                } => self.browser_agent_action(thread, owner, action, observation),
                 Operation::Control {
                     document,
                     revision,
+                    observation,
                     control,
                 } => {
                     let prepare = (|| {
                         self.browser.check_owner(thread, owner)?;
                         self.browser.check_document(thread, document)?;
+                        if self.browser.state(thread).active != Some(document.tab) {
+                            return Err(
+                                "Select this Thread's tab before observing or controlling its page"
+                                    .into(),
+                            );
+                        }
                         if self
                             .browser_pending
                             .values()
@@ -249,8 +278,12 @@ impl Server {
                         }
                         if !control.observation()
                             && (revision != self.browser.operator_revision(thread)
-                                || self.browser_observed.get(&thread)
-                                    != Some(&(document, revision)))
+                                || !self.browser_observation_current(
+                                    thread,
+                                    document,
+                                    revision,
+                                    observation.as_ref(),
+                                ))
                         {
                             return Err("Observe the current page before continuing; operator input and page changes invalidate earlier observations".into());
                         }
@@ -327,6 +360,7 @@ impl Server {
                     .browser
                     .release(pending.thread, pending.owner, pending.lease);
             }
+            self.publish_browser(pending.thread, None);
             let _ = pending.reply.send(Err("Browser request timed out; action completion may be uncertain. Observe the page before continuing; do not retry writes automatically".into()));
         }
     }
@@ -358,13 +392,19 @@ impl Server {
             .expect("checked request");
         let current = self.browser.check_owner(thread, owner)
             .and_then(|_| self.browser.check_document(thread, document))
+            .and_then(|_| if self.browser.state(thread).active == Some(document.tab) { Ok(()) } else { Err("The selected tab changed; select and observe it before continuing".into()) })
             .and_then(|_| if revision == self.browser.operator_revision(thread) { Ok(()) }
                 else { Err("The operator interacted with this page; observe fresh state before continuing".into()) });
         let (result, uncertain) = match (current, outcome) {
             (Err(error), _) => (Err(error), !pending.observation || pending.recovering),
             (Ok(()), crate::browser::Outcome::Success { value }) => {
-                if pending.refreshes { self.browser_observed.insert(thread, (document, revision)); }
-                (Ok(self.browser_response(thread, Some(value))), pending.recovering && !pending.refreshes)
+                let mut response = self.browser_response(thread, Some(value));
+                if pending.refreshes {
+                    let receipt = crate::browser::Observation::new(format!("{}:{request}", self.engine.boot_id()));
+                    self.browser_observed.insert(thread, (document, revision, receipt.clone()));
+                    response.observation = Some(receipt);
+                }
+                (Ok(response), pending.recovering && !pending.refreshes)
             },
             (Ok(()), crate::browser::Outcome::Failed { error }) => (Err(error), pending.recovering),
             (Ok(()), crate::browser::Outcome::Uncertain { error }) => (Err(format!("Action completion is uncertain: {error}. Observe current page state; do not retry writes automatically")), true),
