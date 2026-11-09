@@ -579,15 +579,13 @@ impl Controller {
                 if self.refs.len() > 16384 {
                     self.refs.clear();
                 }
-                let mut tree = value["snapshot"].as_str().unwrap_or("").to_owned();
+                let tree = value["snapshot"].as_str().unwrap_or("");
                 let native_refs = value["refs"].as_object().cloned().unwrap_or_default();
                 let nonce = secret()?;
                 let mut refs = serde_json::Map::new();
+                let mut native_to_opaque = HashMap::new();
                 let mut ref_bytes = 0usize;
                 let mut refs_truncated = false;
-                // Replace longest refs first so e1 cannot rewrite e10.
-                let mut native_refs: Vec<_> = native_refs.into_iter().collect();
-                native_refs.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
                 for (index, (native, metadata)) in native_refs.into_iter().enumerate() {
                     let bounded_field = |field: &str, limit: usize| {
                         metadata[field]
@@ -599,12 +597,11 @@ impl Controller {
                     let bytes = metadata.to_string().len() + 64;
                     if index >= 4096 || ref_bytes + bytes > 64 * 1024 {
                         refs_truncated = true;
-                        tree = tree.replace(&format!("[ref={native}]"), "[reference omitted]");
                         continue;
                     }
                     ref_bytes += bytes;
                     let opaque = format!("f{}_{index}", &nonce[..24]);
-                    tree = tree.replace(&format!("[ref={native}]"), &format!("[ref={opaque}]"));
+                    native_to_opaque.insert(native.clone(), opaque.clone());
                     self.refs.insert(
                         opaque.clone(),
                         Binding {
@@ -617,10 +614,8 @@ impl Controller {
                     );
                     refs.insert(opaque, metadata);
                 }
-                let truncated = tree.len() > TEXT || refs_truncated;
-                while tree.len() > TEXT {
-                    tree.pop();
-                }
+                let (tree, tree_truncated) = rewrite_references(tree, &native_to_opaque);
+                let truncated = tree_truncated || refs_truncated;
                 value = json!({"snapshot":tree,"refs":refs,"truncated":truncated});
                 self.observed
                     .insert(job.target.clone(), (job.document, job.revision, job.epoch));
@@ -729,6 +724,76 @@ impl Controller {
         Ok(json!({"png_base64":base64::engine::general_purpose::STANDARD.encode(bytes)}))
     }
 }
+// References share a bracket with flags (`[required, ref=e12]`) and are
+// not necessarily the only attribute. Rewrite whole ref tokens outside quoted
+// page text; preserve required/selected/checked metadata verbatim.
+fn rewrite_references(tree: &str, refs: &HashMap<String, String>) -> (String, bool) {
+    let mut output = String::new();
+    let (mut index, mut bytes) = (0usize, 0usize);
+    let (mut quoted, mut escaped, mut attributes, mut truncated) = (false, false, false, false);
+    while index < tree.len() {
+        let remaining = &tree[index..];
+        let character = remaining.chars().next().unwrap();
+        if !quoted && attributes && remaining.starts_with("ref=") {
+            let suffix = &remaining[4..];
+            let length = suffix.bytes().take_while(u8::is_ascii_alphanumeric).count();
+            let native = &suffix[..length];
+            let boundary = suffix[length..].chars().next().is_none_or(|character| {
+                character == ']' || character == ',' || character.is_whitespace()
+            });
+            let preceding = index == 0
+                || tree.as_bytes()[index - 1] == b'['
+                || tree.as_bytes()[index - 1] == b','
+                || tree.as_bytes()[index - 1].is_ascii_whitespace();
+            if length > 0 && boundary && preceding {
+                let reference = match refs.get(native) {
+                    Some(reference) => reference.as_str(),
+                    None => {
+                        truncated = true;
+                        "unavailable"
+                    }
+                };
+                let token = format!("ref={reference}");
+                if bytes + token.len() > TEXT {
+                    return (output, true);
+                }
+                bytes += token.len();
+                output.push_str(&token);
+                index += 4 + length;
+                continue;
+            }
+        }
+        let encoded = match character {
+            '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+            character if character <= '\u{1f}' => 6,
+            character => character.len_utf8(),
+        };
+        if bytes + encoded > TEXT {
+            return (output, true);
+        }
+        output.push(character);
+        bytes += encoded;
+        index += character.len_utf8();
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                quoted = false;
+            }
+        } else {
+            match character {
+                '"' => quoted = true,
+                '[' => attributes = true,
+                ']' => attributes = false,
+                _ => {}
+            }
+        }
+    }
+    (output, truncated)
+}
+
 fn bounded(value: Value) -> Value {
     if value.to_string().len() <= TEXT {
         value
