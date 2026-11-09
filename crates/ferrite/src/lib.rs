@@ -2,7 +2,12 @@
 // (`main.rs`) dispatches the headless commands and calls `launch`; the
 // Cockpit the window shows is `ferrite_cockpit`'s, in the frame
 // `ferrite_frame` draws (ADR 0035).
+mod entry;
 mod menus;
+#[cfg(all(windows, feature = "cef"))]
+mod windows_bootstrap;
+
+pub use entry::run;
 
 use ferrite_cockpit::{cockpit, cockpit_window, demo, ferrite_update, machines};
 use ferrite_pane::visual;

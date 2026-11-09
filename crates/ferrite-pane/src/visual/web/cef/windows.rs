@@ -1,16 +1,8 @@
-//! Chromium on Windows: `libcef.dll` and its resources beside `ferrite.exe`.
-//!
-//! cef-dll-sys links the DLL through its import library, and copies the whole
-//! runtime next to the binaries it builds (`target/<profile>/`); the
-//! installer ships the same files (`scripts/package-windows.ps1`). The DLL is
-//! delay-loaded (`build.rs`), so a `ferrite.exe` without it still starts:
-//! [`Library::load`] looks for it before the first CEF call loads it.
-//!
-//! **No sandbox.** Since CEF 138 its Windows sandbox only runs inside CEF's
-//! `bootstrap.exe`, which would have to *be* `ferrite.exe` and load the app
-//! as a DLL. Ferrite isn't built that way, so Chromium's processes run
-//! unsandboxed here, with the user's rights (ADR 0013 weighs it).
+//! Chromium on Windows runs inside CEF's sandbox bootstrap, shipped as
+//! ferrite.exe. It loads ferrite.dll and supplies the sandbox broker context
+//! before Ferrite dispatches its app or Chromium helper entry.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
 use cef::args::Args;
@@ -20,13 +12,38 @@ use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
-pub(super) const SANDBOXED: bool = false;
+pub(super) const SANDBOXED: bool = true;
+
+thread_local! {
+    // CEF boot and initialization run on the entry/main thread. A plain
+    // Cargo-built executable has no broker and cannot render web content.
+    static SANDBOX_INFO: Cell<*mut u8> = const { Cell::new(std::ptr::null_mut()) };
+}
+
+/// # Safety
+/// The bootstrap owns this context and must keep it alive until the app exits.
+pub(super) unsafe fn set_sandbox_info(info: *mut u8) {
+    SANDBOX_INFO.with(|slot| slot.set(info));
+}
+
+pub(super) fn sandbox_info() -> *mut u8 {
+    SANDBOX_INFO.with(Cell::get)
+}
+
+fn require_sandbox() -> Result<(), String> {
+    if sandbox_info().is_null() {
+        Err("Visuals require Ferrite's packaged Windows sandbox bootstrap".into())
+    } else {
+        Ok(())
+    }
+}
 
 /// Nothing to hold: the DLL stays loaded for the life of the process.
 pub(super) struct Library;
 
 impl Library {
     pub(super) fn load(exe: &Path) -> Result<Self, String> {
+        require_sandbox()?;
         let dll = exe
             .parent()
             .ok_or("executable has no parent directory")?
@@ -49,6 +66,7 @@ pub(super) struct Helper {
 
 impl Helper {
     pub(super) fn enter(_exe: &Path) -> Result<Self, String> {
+        require_sandbox()?;
         Ok(Self { args: Args::new() })
     }
 

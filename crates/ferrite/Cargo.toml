@@ -9,6 +9,9 @@ description = "Ferrite: native multi-provider agent cockpit (GPUI app)"
 # tests compile the app once and the binary has none of its own.
 [lib]
 doctest = false
+# CEF's Windows sandbox bootstrap loads the application as ferrite.dll.
+# Keep rlib for the ordinary executable and application tests.
+crate-type = ["rlib", "cdylib"]
 
 [[bin]]
 name = "ferrite"

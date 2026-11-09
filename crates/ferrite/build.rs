@@ -1,6 +1,7 @@
 fn main() {
     // Visuals on Windows (ADR 0013): libcef.dll is linked through its import
-    // library, so without this an exe with no Chromium beside it (a lone
+    // library; both the app DLL and ordinary executable delay-load it.
+    // Without this, a build with no Chromium beside it (a lone
     // `cargo install` copy) would fail to start at all. Delay-loaded, it is
     // loaded on the first CEF call, which `visual::boot` makes only once it
     // has seen the DLL there. CEF's own build delay-loads it the same way.
