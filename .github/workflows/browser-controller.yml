@@ -21,16 +21,13 @@ on:
       - '.github/workflows/browser-controller.yml'
   pull_request:
     paths:
-      - 'scripts/*agent-browser*'
+      - 'scripts/package-agent-browser.py'
+      - 'scripts/patches/agent-browser-0.41.2-ferrite.patch'
       - 'scripts/native_browser_service.py'
-      - 'scripts/browser_processes.py'
-      - 'scripts/probe-embedded-browser.py'
-      - 'scripts/patches/agent-browser*'
+      - 'scripts/probe-agent-browser-behavior.py'
+      - 'scripts/probe-agent-browser-transport.py'
       - 'scripts/test_package_agent_browser.py'
       - '.github/workflows/browser-controller.yml'
-      - 'crates/ferrite*/**'
-      - 'scripts/*windows.ps1'
-      - 'scripts/install-app.sh'
   workflow_dispatch:
 
 concurrency:
