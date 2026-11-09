@@ -127,15 +127,23 @@ jobs:
           FERRITE_BUILD_FEATURES: browser-smoke
         run: scripts/install-app.sh --bundle-only
       - name: Probe Windows production window
+        id: window-windows
         if: runner.os == 'Windows'
         run: python scripts/probe-browser-window.py target/debug/bundle/windows/Ferrite/ferrite.exe --compare-executable target/debug/ferrite.exe --output target/browser-window-evidence
       - name: Probe macOS production window
+        id: window-mac
         if: runner.os == 'macOS'
         run: python scripts/probe-browser-window.py target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite --output target/browser-window-evidence
       - name: Observe displayed fixture through actual Claude adapter
+        if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
         run: |
           python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider claude --output target/browser-window-evidence/claude
+      - name: Operate the displayed fixture through a fresh actual Codex Thread
+        if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
+        run: |
+          python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider codex --output target/browser-window-evidence/codex
       - name: Complete one work order through the actual Claude adapter
+        if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
         run: |
           python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider claude --work-orders --output target/browser-window-evidence/work-order-claude
       - name: Diagnose Windows naked native startup after a packaged failure

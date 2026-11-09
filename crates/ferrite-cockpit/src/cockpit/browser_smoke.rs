@@ -41,6 +41,8 @@ impl CockpitView {
             let mut clicked = false;
             let mut provider_started = false;
             let mut ready_document = None;
+            let mut scenario_thread = None;
+            let codex = std::env::var("FERRITE_BROWSER_WINDOW_PROVIDER").ok().as_deref() == Some("codex");
             let work_orders = std::env::var("FERRITE_BROWSER_WINDOW_SCENARIO").ok().as_deref() == Some("work-orders");
             let provider = std::env::var_os("FERRITE_BROWSER_WINDOW_PROVIDER").is_some();
             let mut frames = 0u64;
@@ -69,16 +71,27 @@ impl CockpitView {
                         return Ok(true);
                     }
                     if !opened {
-                        opened = view.update(cx, |view, cx| {
-                            let Some(thread) = view.cockpit.threads().first().copied() else {
-                                return false;
+                        opened = view.update(cx, |view, cx| -> Result<bool, String> {
+                            let thread = if let Some(thread) = scenario_thread { thread }
+                            else if codex {
+                                // A fresh production Thread advertises dynamic
+                                // tools at thread/start. Imported Codex sessions
+                                // retain their original capabilities on resume.
+                                let thread = view.cockpit.open(ferrite_core::store::Provider::Codex,
+                                    ferrite_core::workspace::WorkspaceChoice::Main {
+                                        checkout: std::env::current_dir().map_err(|error| error.to_string())?,
+                                    }).map_err(|error| error.to_string())?;
+                                scenario_thread = Some(thread);
+                                return Ok(false);
+                            } else {
+                                let Some(thread) = view.cockpit.threads().first().copied() else { return Ok(false); };
+                                thread
                             };
-                            let Some(index) = view.pane_for(thread) else { return false; };
+                            scenario_thread = Some(thread);
+                            let Some(index) = view.pane_for(thread) else { return Ok(false); };
                             view.focus_thread(thread, cx);
-                            // The exact operator hyperlink/preview route, including
-                            // its real Server ownership and window realization.
-                            view.panes[index].preview.open_url(&url, window)
-                        });
+                            Ok(view.panes[index].preview.open_url(&url, window))
+                        })?;
                         return Ok(false);
                     }
                     // Draw through this native Window's renderer, as the app does.
@@ -91,7 +104,7 @@ impl CockpitView {
                     }
                     if work_orders {
                         let document = view.update(cx, |view, _| {
-                            let thread = view.cockpit.threads()[0];
+                            let thread = scenario_thread.expect("scenario Thread");
                             let state = view.cockpit.browser_attach(thread).map_err(|error| error.to_string())?;
                             Ok::<_, String>(state.tabs.iter().find(|tab| Some(tab.id) == state.active)
                                 .filter(|tab| tab.live && tab.visible && !tab.loading && tab.error.is_none() && tab.url == url)
@@ -102,7 +115,7 @@ impl CockpitView {
                         if !stable { return Ok(false); }
                         image.save(output.join("window-work-order-before.png")).map_err(|error| error.to_string())?;
                         view.update(cx, |view, _| {
-                            let thread = view.cockpit.threads()[0];
+                            let thread = scenario_thread.expect("scenario Thread");
                             view.cockpit.send(thread, "Complete the prescribed work order through browser tools".into());
                         });
                         provider_started = true;
@@ -126,7 +139,7 @@ impl CockpitView {
                         // Otherwise production correctly discards that gesture
                         // when its older document is superseded in the queue.
                         let document = view.update(cx, |view, _| {
-                            let thread = view.cockpit.threads()[0];
+                            let thread = scenario_thread.expect("scenario Thread");
                             let state = view.cockpit.browser_attach(thread).map_err(|error| error.to_string())?;
                             Ok::<_, String>(state.tabs.iter()
                                 .find(|tab| Some(tab.id) == state.active)
@@ -145,7 +158,7 @@ impl CockpitView {
                     if clicked {
                         if !provider { return Ok(true); }
                         view.update(cx, |view, _| {
-                            let thread = view.cockpit.threads()[0];
+                            let thread = scenario_thread.expect("scenario Thread");
                             view.cockpit.send(thread, "Observe the displayed fixture, click its button, and observe the result".into());
                         });
                         provider_started = true;
@@ -180,7 +193,7 @@ impl CockpitView {
                 "success": error.is_none(), "error": error,
                 "normal_native_window": true, "preview_operator_route": opened,
                 "window_pointer_input": clicked, "rendered_frames": frames,
-                "provider_requested": provider, "work_orders": work_orders, "provider_started": provider_started,
+                "provider_requested": provider, "scenario_thread": scenario_thread, "work_orders": work_orders, "provider_started": provider_started,
                 "elapsed_ms": started.elapsed().as_millis(),
                 "scope": if work_orders { "one prescribed work order through actual provider and owning Preview; annotations are not tested" } else { "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested" },
             });

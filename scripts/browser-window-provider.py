@@ -55,6 +55,7 @@ def record(answer):
 started = False
 trace = []
 receipt_polls = 0
+codex_browser_advertised = False
 if work_orders:
     spec = importlib.util.spec_from_file_location('work_orders', Path(__file__).with_name('browser-window-work-orders.py'))
     module = importlib.util.module_from_spec(spec)
@@ -88,13 +89,20 @@ for line in sys.stdin:
             if method in ('skills/list','model/list'):
                 result = {'data':[]}
             elif method in ('thread/start','thread/resume'):
+                namespaces = frame.get('params',{}).get('dynamicTools',[])
+                tools = [tool for namespace in namespaces if namespace.get('name')=='ferrite' for tool in namespace.get('tools',[])]
+                codex_browser_advertised = any(tool.get('name')=='browser' and tool.get('inputSchema') for tool in tools)
+                (output/'provider-definitions.json').write_text(json.dumps({'method':method,'dynamicTools':namespaces},indent=2),encoding='utf-8')
                 result = {'thread':{'id':'browser-window-peer'},'model':'fixture'}
             elif method == 'turn/start':
                 result = {'turn':{'id':'browser-window-turn'}}
             emit({'jsonrpc':'2.0','id':frame['id'],'result':result})
             if method == 'turn/start' and not started:
                 started = True
-                call('browser-state', {'kind':'state'})
+                if not codex_browser_advertised:
+                    record({'success':False,'error':'Fresh Codex Thread did not advertise ferrite.browser'})
+                else:
+                    call('browser-state', {'kind':'state'})
             continue
         name = frame.get('id')
         answer = frame.get('result')

@@ -78,7 +78,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('executable', type=Path)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--provider', choices=['claude'])
+    parser.add_argument('--provider', choices=['claude','codex'])
     parser.add_argument('--work-orders', action='store_true', help='complete one real work order through the provider')
     parser.add_argument('--compare-executable', type=Path, help='retain PE header diagnostics for a matching naked Windows build')
     parser.add_argument('--startup-only', action='store_true', help='diagnose native startup only; never browser acceptance')
