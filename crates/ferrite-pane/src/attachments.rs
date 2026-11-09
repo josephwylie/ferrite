@@ -279,6 +279,11 @@ fn annotation_card(
 ) -> gpui::AnyElement {
     use ferrite_ui::{pointer::Pointer as _, theme};
     let original = annotation.original().to_path_buf();
+    let image = if original.is_file() {
+        Some(original)
+    } else {
+        annotation.cached_image()
+    };
     let host = preview.clone();
     let id = annotation.id().to_owned();
     let comment = annotation.comment().to_owned();
@@ -294,29 +299,46 @@ fn annotation_card(
         .p(px(theme::SPACE_2))
         .rounded(px(theme::R_CARD))
         .bg(theme::paint::RAISED)
-        .cursor_pointer()
-        .hover_carried(format!("browser-annotation-{id}"))
-        .child(thumbnail(
-            ("browser-annotation-image", index),
-            &original,
-            (64.0, 48.0),
-        ))
         .child(
-            gpui::div()
+            ferrite_ui::components::button(("review-browser-annotation", index))
+                .tab_stop(true)
+                .key_context("PromptAttachment")
+                .accessibility_label("Review browser annotation")
+                .p_0()
                 .flex()
-                .flex_col()
+                .items_center()
+                .gap(px(theme::SPACE_2))
                 .min_w_0()
-                .font_family(theme::FONT_UI)
-                .text_size(px(theme::FS_META))
-                .text_color(gpui::rgb(theme::INK_SUBTLE))
-                .child("Browser annotation")
+                .cursor_pointer()
+                .hover_carried(format!("browser-annotation-{id}"))
+                .when_some(image, |card, image| {
+                    card.child(thumbnail(
+                        ("browser-annotation-image", index),
+                        &image,
+                        (64.0, 48.0),
+                    ))
+                })
                 .child(
                     gpui::div()
-                        .truncate()
-                        .text_color(gpui::rgb(theme::INK_STRONG))
-                        .child(comment),
+                        .flex()
+                        .flex_col()
+                        .min_w_0()
+                        .font_family(theme::FONT_UI)
+                        .text_size(px(theme::FS_META))
+                        .text_color(gpui::rgb(theme::INK_SUBTLE))
+                        .child("Browser annotation")
+                        .child(
+                            gpui::div()
+                                .truncate()
+                                .text_color(gpui::rgb(theme::INK_STRONG))
+                                .child(comment),
+                        )
+                        .child(gpui::div().truncate().child(url)),
                 )
-                .child(gpui::div().truncate().child(url)),
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    host.review_annotation(annotation.clone(), window);
+                }),
         )
         .when_some(remove, |card, remove| {
             card.child(
@@ -328,10 +350,6 @@ fn annotation_card(
                         remove(&id, window, cx);
                     }),
             )
-        })
-        .on_click(move |_, window, cx| {
-            cx.stop_propagation();
-            host.open(original.clone(), None, &[], window, cx);
         })
         .into_any_element()
 }

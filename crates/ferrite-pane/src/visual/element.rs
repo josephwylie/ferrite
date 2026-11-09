@@ -65,6 +65,7 @@ const MIN_PUMP: Duration = Duration::from_millis(1);
 pub struct WebView {
     inner: Rc<Inner>,
     _wake: gpui::Task<()>,
+    browser_blur: Option<gpui::Subscription>,
 }
 
 /// How close to the screen the host says the view is. A list knows; the view
@@ -133,7 +134,11 @@ impl WebView {
                     }
                 }
             });
-            WebView { inner, _wake: task }
+            WebView {
+                inner,
+                _wake: task,
+                browser_blur: None,
+            }
         })
     }
 
@@ -239,7 +244,7 @@ impl WebView {
 }
 
 impl Render for WebView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.inner.take_updates() {
             cx.emit(HeightChanged);
         }
@@ -248,6 +253,12 @@ impl Render for WebView {
         };
         if self.inner.browser.borrow().is_none() {
             return element.into_any_element();
+        }
+        if self.browser_blur.is_none() {
+            self.browser_blur = Some(cx.on_blur(&self.inner.focus, window, |view, _, _| {
+                view.inner.pressed.set(false);
+                view.inner.input(Input::Leave);
+            }));
         }
         let down = self.inner.clone();
         let up = self.inner.clone();
@@ -421,7 +432,10 @@ impl Inner {
         // It is not operator intervention and must not invalidate agent work.
         if matches!(input, Input::Leave) {
             if let Some(browser) = self.browser.borrow().as_ref() {
-                browser.input(input);
+                browser.input(input.clone());
+                if let Some(before) = self.before_input.borrow().as_ref() {
+                    before(input);
+                }
                 return;
             }
         }
@@ -652,8 +666,13 @@ impl Element for WebViewElement {
         let inner = self.inner.clone();
         let hb = hitbox.clone();
         window.on_mouse_event(move |event: &MouseUpEvent, phase, window, _| {
+            // Capture dispatch precedes Bubble. Clearing here during Capture
+            // loses an outside release before the Bubble handler can send it.
+            if phase != DispatchPhase::Bubble {
+                return;
+            }
             let captured = inner.pressed.replace(false);
-            if phase != DispatchPhase::Bubble || !(captured || hb.is_hovered(window)) {
+            if !(captured || hb.is_hovered(window)) {
                 return;
             }
             let Some(button) = button(event.button) else {
@@ -1168,8 +1187,11 @@ mod tests {
         );
         set_shown(&host, false, cx);
         assert!(
-            pending.borrow().is_empty(),
-            "hiding the preview is not operator input"
+            pending
+                .borrow()
+                .iter()
+                .all(|input| matches!(input, Input::Leave)),
+            "hiding only requests pointer/gesture cleanup, never new operator input"
         );
         assert!(engine.journal().contains(&Call::Visible(false)));
     }

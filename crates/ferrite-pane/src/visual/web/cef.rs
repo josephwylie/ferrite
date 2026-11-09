@@ -1136,6 +1136,14 @@ impl BrowserView for CefView {
     fn target_id(&self) -> Option<String> {
         self.0.browser.borrow().as_ref().map(|_| self.0.target_id())
     }
+    fn browser_viewport(&self) -> Option<BrowserViewport> {
+        let geometry = self.0.state.geometry.lock().unwrap();
+        Some(BrowserViewport {
+            width: geometry.width,
+            height: geometry.height,
+            scale: geometry.scale,
+        })
+    }
     fn resize_browser(&self, viewport: BrowserViewport) {
         let changed = {
             let mut geometry = self.0.state.geometry.lock().unwrap();
@@ -1219,6 +1227,9 @@ impl BrowserView for CefView {
                 observation.invalidate(&self.0.state);
             }
         }
+    }
+    fn control_epoch(&self) -> u64 {
+        self.0.agent_access.epoch.load(Ordering::SeqCst)
     }
     fn set_agent_paused(&self, paused: bool) {
         let changed = self.0.agent_access.paused.swap(paused, Ordering::SeqCst) != paused;

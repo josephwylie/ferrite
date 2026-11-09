@@ -215,6 +215,19 @@ pub fn fixture_machine(
     store: PathBuf,
     spawner: Box<dyn crate::engine::Spawner + Send>,
 ) -> io::Result<crate::machine::Dial> {
+    fixture_browser_machine(store, |_| spawner)
+}
+
+/// The same machine/Server fixture, with its real Thread-bound browser channel
+/// available to a Provider spawner. The Server owns the receiving end, exactly
+/// as production startup does; no test-only browser request router is involved.
+#[cfg(feature = "test-support")]
+pub fn fixture_browser_machine(
+    store: PathBuf,
+    spawner_factory: impl FnOnce(crate::browser::Client) -> Box<dyn crate::engine::Spawner + Send>,
+) -> io::Result<crate::machine::Dial> {
+    let (browser, browser_requests) = crate::browser::channel();
+    let spawner = spawner_factory(browser);
     /// The window's end: dropped, it hangs up, as ssh does.
     struct Upload(link::Stream);
     impl io::Write for Upload {
@@ -242,7 +255,9 @@ pub fn fixture_machine(
         };
         let (_, renders) = render::remote();
         let settings_dir = store.parent().unwrap_or(&store).to_path_buf();
-        Server::new(engine, info, renders, Arc::default(), settings_dir).serve(hear)
+        let mut server = Server::new(engine, info, renders, Arc::default(), settings_dir);
+        server.browser_requests = browser_requests;
+        server.serve(hear)
     });
     Ok(Box::new(move || {
         let stream = link::connect(&address)?;
@@ -660,29 +675,35 @@ impl Server {
                 owner,
                 page,
             } => self.browser_page(id, *thread, *owner, page.clone()),
+            Op::BrowserSettled {
+                thread,
+                owner,
+                document,
+                revision,
+            } => self.browser_owned(id, *thread, *owner).and_then(|_| {
+                if self
+                    .browser
+                    .operator_settled(*thread, *owner, *document, *revision)
+                    .map_err(failed)?
+                {
+                    self.browser_observed.remove(thread);
+                    self.publish_browser(*thread, None);
+                }
+                Ok(None)
+            }),
             Op::BrowserInput {
                 thread,
                 owner,
                 document,
-            } => {
-                if owner.window != id {
-                    Err(failed("This browser belongs to another window"))
-                } else {
-                    self.browser_window(id, *thread)
-                        .and_then(|_| {
-                            if self.browser.state(*thread).active != Some(document.tab) {
-                                return Err(failed(
-                                    "The selected tab changed; this queued input was discarded",
-                                ));
-                            }
-                            self.browser
-                                .check_document(*thread, *document)
-                                .and_then(|_| self.browser.operator_input(*thread, *owner))
-                                .map_err(failed)
-                        })
-                        .map(|revision| Some(Done::BrowserInput { revision }))
-                }
-            }
+            } => self.browser_owned(id, *thread, *owner).and_then(|_| {
+                let revision = self
+                    .browser
+                    .operator_input(*thread, *owner, *document)
+                    .map_err(failed)?;
+                self.browser_observed.remove(thread);
+                self.publish_browser(*thread, None);
+                Ok(Some(Done::BrowserInput { revision }))
+            }),
             Op::BrowserAttach { thread } => self.attach_browser(id, *thread),
             Op::Browser { thread, action } => self.browser_action(id, *thread, action.clone()),
             Op::SettingsChanged => match Settings::load(&self.settings_dir) {

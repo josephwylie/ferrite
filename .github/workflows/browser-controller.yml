@@ -14,6 +14,11 @@ env:
 on:
   push:
     branches: [feat/browser-194]
+    paths:
+      - 'scripts/*agent-browser*'
+      - 'scripts/native_browser_service.py'
+      - 'scripts/patches/agent-browser*'
+      - '.github/workflows/browser-controller.yml'
   pull_request:
     paths:
       - 'scripts/package-agent-browser.py'

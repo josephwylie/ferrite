@@ -1472,10 +1472,24 @@ impl CockpitView {
         if prefs.ferrite_updates {
             updating::schedule_checks(cx);
         }
-        cx.on_app_quit(|view, _cx| {
+        cx.on_app_quit(|view, cx| {
             view.save_drafts();
             view.cockpit.halt_sessions();
-            async {}
+            #[cfg(feature = "cef")]
+            let browser = view.browsers.controller.clone();
+            let executor = cx.background_executor().clone();
+            async move {
+                #[cfg(feature = "cef")]
+                if let Some(browser) = browser {
+                    executor
+                        .spawn(async move {
+                            browser.shutdown();
+                        })
+                        .await;
+                }
+                #[cfg(not(feature = "cef"))]
+                let _ = executor;
+            }
         })
         .detach();
 
@@ -1489,6 +1503,10 @@ impl CockpitView {
         #[cfg(test)]
         let launch_project = launch_project.or_else(|| cockpit.register_project(&here()).ok());
         cx.bind_keys([gpui::KeyBinding::new("enter", browser::Go, Some("BrowserAddress"))]);
+        cx.bind_keys([
+            gpui::KeyBinding::new("escape", browser::CancelAnnotation, Some("BrowserAnnotationCapture")),
+            gpui::KeyBinding::new("escape", ferrite_pane::annotation_editor::Cancel, Some("AnnotationEditor")),
+        ]);
         let mut view = Self {
             cockpit,
             browsers: Default::default(),
@@ -10468,6 +10486,13 @@ impl CockpitView {
             .or_else(|| {
                 let (index, _) = self.lightbox()?;
                 self.panes[index].preview.held_focus(window, cx)
+            })
+            .or_else(|| {
+                let index = self.focused();
+                if !self.preview_shown(index) { return None; }
+                let pane = self.panes.get(index)?;
+                if !pane.preview.document().is_some_and(|document| matches!(&document.body, ferrite_pane::preview::Body::Browser)) { return None; }
+                self.browser_annotation_focus(pane.thread()?, cx)
             })
             .or_else(|| {
                 self.panes

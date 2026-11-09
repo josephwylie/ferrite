@@ -271,39 +271,38 @@ impl Cockpit {
         lease: crate::browser::Lease,
         capture: crate::browser_annotations::Capture,
         png: crate::protocol::WirePng,
-    ) -> io::Result<crate::browser_annotations::Annotation> {
-        match self
-            .remote()?
-            .execute(Op::BrowserCapture {
-                thread,
-                owner,
-                lease,
-                capture,
-                png,
-            })
-            .map_err(|error| io::Error::other(error.message))?
-        {
-            Some(Done::BrowserCapture { annotation }) => Ok(annotation),
-            _ => Err(io::Error::other(
-                "The Server could not retain this browser capture",
-            )),
-        }
+    ) -> io::Result<Receiver<io::Result<crate::browser_annotations::Annotation>>> {
+        self.remote()?
+            .browser_capture(thread, owner, lease, capture, png)
     }
 
-    pub fn browser_capture_image(
+    /// Image reads share the existing asynchronous Server read path. The
+    /// returned display cache never replaces the Server-owned provider path.
+    pub fn browser_annotation_image(
         &mut self,
         thread: ThreadId,
-        hash: String,
-    ) -> io::Result<crate::protocol::WirePng> {
-        match self
-            .remote()?
-            .execute(Op::BrowserCaptureImage { thread, hash })
-            .map_err(|error| io::Error::other(error.message))?
-        {
-            Some(Done::BrowserCaptureImage { png }) => Ok(png),
-            _ => Err(io::Error::other(
-                "The Server could not load this browser capture",
-            )),
+        annotation: crate::browser_annotations::Annotation,
+    ) -> io::Result<Receiver<io::Result<PathBuf>>> {
+        match &mut self.link {
+            Link::Server(server) => {
+                let image =
+                    server.browser_capture_image(thread, annotation.original_hash().to_owned())?;
+                Ok(read_here(move || {
+                    let png = image
+                        .recv_timeout(std::time::Duration::from_secs(30))
+                        .map_err(|error| error.to_string())?
+                        .map_err(|error| error.to_string())?;
+                    annotation
+                        .cache_wire_image(&png)
+                        .map_err(|error| error.to_string())
+                }))
+            }
+            Link::InProcess(_) => Ok(read_here(move || {
+                annotation
+                    .local_image()
+                    .and_then(|bytes| annotation.cache_image(&bytes))
+                    .map_err(|error| error.to_string())
+            })),
         }
     }
 
@@ -416,6 +415,24 @@ impl Cockpit {
                 outcome,
             });
         }
+    }
+
+    pub fn browser_settled(
+        &mut self,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        document: crate::browser::Document,
+        revision: u64,
+    ) -> io::Result<()> {
+        self.remote()?
+            .execute(Op::BrowserSettled {
+                thread,
+                owner,
+                document,
+                revision,
+            })
+            .map_err(|error| io::Error::other(error.message))?;
+        Ok(())
     }
 
     pub fn browser_input(

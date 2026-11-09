@@ -1,7 +1,12 @@
 name: Browser preview GPUI
 on:
   push:
-    branches: ['feat/browser-193-ui']
+    branches: ['feat/browser-193-ui', 'feat/browser-194']
+    paths:
+      - 'crates/ferrite-core/**'
+      - 'crates/ferrite-pane/**'
+      - 'crates/ferrite-cockpit/**'
+      - '.github/workflows/browser-preview.yml'
   workflow_dispatch:
 concurrency:
   group: browser-preview-${{ github.ref }}
@@ -20,6 +25,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.11
+        continue-on-error: true
+      - name: Use direct compiler when sccache download is unavailable
+        shell: bash
+        run: |
+          if ! command -v sccache >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+          fi
       - uses: Swatinem/rust-cache@v2
       - name: Preview input, frames and full viewport
         run: cargo test -p ferrite-pane --locked --lib visual::element::tests
