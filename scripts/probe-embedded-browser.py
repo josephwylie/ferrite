@@ -78,10 +78,38 @@ def forbidden_handshake(endpoint, authorization=None, origin=None):
         assert b" 403 " in status, f"unauthorized CDP handshake accepted: {status!r}"
 
 
+def assert_page_isolation(service, path, endpoint, private_file):
+    """Attack from page JS, preserving the earlier screenshot as evidence."""
+    targets = [private_file, "ferrite-view://page/foreign-document", "ferrite://browser-smoke-denied"]
+    for target in targets:
+        encoded = json.dumps(target)
+        readable = service.command("evaluate", script=f"""(async () => {{
+            try {{ await (await fetch({encoded})).text(); return true; }}
+            catch (_) {{ return false; }}
+        }})()""")["result"]
+        assert readable is False, f"external page could fetch privileged URL: {target}"
+        # Fetch CORS failures alone do not prove navigation policy. A full-page
+        # navigation must also be refused without losing the original document.
+        observed = service.command("evaluate", script=f"""(async () => {{
+            try {{ location.href = {encoded}; }} catch (_) {{}}
+            await new Promise(resolve => setTimeout(resolve, 100));
+            return location.pathname;
+        }})()""")["result"]
+        assert observed == path, f"external page navigated to privileged URL: {target}"
+    opened = service.command("evaluate", script=f"""new Promise(resolve => {{
+        const socket = new WebSocket({json.dumps(endpoint)});
+        const timer = setTimeout(() => {{ socket.close(); resolve('timeout'); }}, 3000);
+        socket.onopen = () => {{ clearTimeout(timer); socket.close(); resolve(true); }};
+        socket.onerror = () => {{ clearTimeout(timer); resolve(false); }};
+    }})""")["result"]
+    assert opened is False, "page JavaScript reached private controller transport"
+
+
 def main():
     endpoint = os.environ["FERRITE_CDP_URL"]
     authorization = os.environ["FERRITE_CDP_AUTHORIZATION"]
     executable = os.environ["FERRITE_BROWSER_CONTROLLER"]
+    private_file = os.environ["FERRITE_BROWSER_PRIVATE_FILE"]
     forbidden_handshake(endpoint)
     forbidden_handshake(endpoint, "Bearer wrong")
     forbidden_handshake(endpoint, authorization, "http://127.0.0.1:3000")
@@ -124,6 +152,12 @@ def main():
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as agents:
                 list(agents.map(work, expected))
             assert service.process.pid == first_pid, "agents created another controller"
+            # Both known-good screenshots already exist before hostile attempts.
+            # Recheck location and state after every refusal, then let Rust
+            # independently verify that all three live views kept their pixels.
+            for path in expected:
+                service.command("tab_switch", tabId=tabs[path]["tabId"])
+                assert_page_isolation(service, path, endpoint, private_file)
             old_targets = {path: tab["targetId"] for path, tab in tabs.items()}
             # Restart only the controller. CEF pages must stay live and retain
             # their identity and visible state; no tab/browser close is sent.
@@ -139,7 +173,8 @@ def main():
                               "controllers_per_active_service": 1, "screenshots_match_live_pages": True,
                               "native_clicks": 2, "snapshot_reference_clicks": 2, "controller_restart_retains_targets": True,
                               "unauthorized_cdp_handshakes_rejected": 3,
-                              "sealed_visual_discovery": False}
+                              "sealed_visual_discovery": False, "page_privileged_fetches_and_navigations_rejected": 12,
+                              "page_controller_websockets_rejected": 2}
             if os.environ.get("FERRITE_BROWSER_EVIDENCE"):
                 destination = Path(os.environ["FERRITE_BROWSER_EVIDENCE"])
                 destination.mkdir(parents=True, exist_ok=True)

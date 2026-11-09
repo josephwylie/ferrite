@@ -127,7 +127,12 @@ requires the private bridge supplied by the Engine fixture. It uses native
 clicks in two concurrently requested, serialized tabs, independently decodes
 controller screenshots and restarts the controller before rediscovering the
 same targets and page state. The Rust host separately verifies the actual live
-View pixels and that its sealed third page was not changed. The workflow
+View pixels and that its sealed third page was not changed. After capturing those screenshots, each external page attempts both fetch and
+full-page navigation to an existing private filesystem sentinel, the sealed
+visual scheme and Ferrite's application scheme; all must be refused while its
+original HTTP location and painted state remain intact. Page JavaScript also
+attempts the private controller WebSocket and must receive a connection error.
+The workflow
 retains fixture screenshots and the native result manifest. Adding this driver
 does not claim that the packaged cross-platform run has passed.
 
