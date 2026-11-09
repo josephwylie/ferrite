@@ -80,6 +80,40 @@ fn annotation_editor_pointer_feedback_preserves_capture(cx: &mut TestAppContext)
         assert!(editor.drawings().is_empty());
         editor.redo(cx);
     });
+    let feedback = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let cancelled = Rc::new(Cell::new(false));
+    let captured = feedback.clone();
+    let cancellation = cancelled.clone();
+    let _subscription = editor.update(cx, |_, cx| {
+        cx.subscribe(&editor, move |_, _, event, _| match event {
+            EditorEvent::Added { comment, drawings } => captured
+                .borrow_mut()
+                .push((comment.clone(), drawings.clone())),
+            EditorEvent::Cancelled => cancellation.set(true),
+        })
+    });
+    let text = cx.debug_bounds("annotation-tool-Text").unwrap();
+    cx.simulate_click(text.center(), Modifiers::none());
+    let label = cx.debug_bounds("annotation-label").unwrap();
+    cx.simulate_click(label.center(), Modifiers::none());
+    cx.simulate_input("Move this label");
+    let bounds = editor.read_with(cx, |editor, _| editor.picture_bounds().unwrap());
+    cx.simulate_click(bounds.center(), Modifiers::none());
+    let comment = cx.debug_bounds("annotation-comment").unwrap();
+    cx.simulate_click(comment.center(), Modifiers::none());
+    cx.simulate_input("Make this clearer");
+    let add = cx.debug_bounds("annotation-add").unwrap();
+    cx.simulate_click(add.center(), Modifiers::none());
+    assert_eq!(feedback.borrow().len(), 1);
+    let feedback = feedback.borrow();
+    assert_eq!(feedback[0].0, "Make this clearer");
+    assert_eq!(feedback[0].1.len(), 2);
+    assert!(
+        matches!(&feedback[0].1[1], Drawing::Text { at, text, .. } if text == "Move this label" && (at.x - 400.).abs() < 0.001 && (at.y - 200.).abs() < 0.001)
+    );
+    let cancel = cx.debug_bounds("annotation-cancel").unwrap();
+    cx.simulate_click(cancel.center(), Modifiers::none());
+    assert!(cancelled.get());
     assert_eq!(retained, original);
     assert_eq!(std::fs::read(retained.original()).unwrap(), png);
     std::fs::remove_dir_all(root).unwrap();
