@@ -321,7 +321,6 @@ impl Controller {
             .env("AGENT_BROWSER_SESSION", "ferrite")
             .env("AGENT_BROWSER_SOCKET_DIR", &directory)
             .env("AGENT_BROWSER_IDLE_TIMEOUT_MS", "0")
-            .env("AGENT_BROWSER_PIN_TAB", "1")
             .env("FERRITE_AGENT_BROWSER", "1")
             .env("FERRITE_AGENT_BROWSER_TOKEN", &token)
             .stdin(Stdio::null())
@@ -501,7 +500,10 @@ impl Controller {
         }
         // A native switch can commit before a later setup failure. Quarantine
         // that process instead of trusting our old cached selection.
-        let switched = self.command(json!({"action":"tab_switch", "tabId":alias}));
+        // Upstream startup pin mode intentionally creates a fresh blank tab.
+        // Attach read-only first; pin and explicitly bind our trusted alias in
+        // the same serialized command before any provider action is admitted.
+        let switched = self.command(json!({"action":"tab_switch", "tabId":alias, "pinTab":true}));
         if switched
             .as_ref()
             .is_ok_and(|value| value["targetId"] != target)
