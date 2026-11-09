@@ -16,6 +16,7 @@ import uuid
 import hashlib
 import urllib.request
 import urllib.parse
+import importlib.util
 import platform
 from datetime import datetime, timezone
 import time
@@ -79,10 +80,13 @@ def main():
     parser.add_argument('executable', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--provider', choices=['claude','codex'])
+    parser.add_argument('--held-screenshot', action='store_true', help='request the first screenshot while a real pointer gesture remains held')
     parser.add_argument('--work-orders', action='store_true', help='complete one real work order through the provider')
     parser.add_argument('--compare-executable', type=Path, help='retain PE header diagnostics for a matching naked Windows build')
     parser.add_argument('--startup-only', action='store_true', help='diagnose native startup only; never browser acceptance')
     args = parser.parse_args()
+    if args.held_screenshot and (args.provider != 'claude' or args.work_orders):
+        parser.error('--held-screenshot requires Claude and a separate scenario')
     if args.work_orders and args.provider != 'claude':
         parser.error('--work-orders currently requires --provider claude')
     args.output.mkdir(parents=True, exist_ok=True)
@@ -93,7 +97,7 @@ def main():
                  'provider-result.tmp', 'provider-trace.json', 'provider-definitions.json',
                  'provider-host.jsonl', 'provider-requests.jsonl', 'startup-comparison.json', 'oracle.json',
                  'work-order-oracle.json', 'work-order-oracle-at-exit.json', 'work-order-trace.json',
-                 'window-work-order.png', 'window-work-order-before.png',
+                 'window-work-order.png', 'window-work-order-before.png', 'provider-screenshot.png', 'window-held-screenshot.png', 'window-provider-error.png',
                  'cleanup-error.txt', 'cleanup-processes.json', 'shutdown-samples.json', 'oracle-at-exit.json', 'window-before.png', 'window-after.png',
                  'window-provider.png', 'window-current.png'):
         (output/name).unlink(missing_ok=True)
@@ -168,6 +172,8 @@ def main():
                 FERRITE_BROWSER_WINDOW_PROBE=uuid.uuid4().hex)
         if args.work_orders:
             env['FERRITE_BROWSER_WINDOW_SCENARIO'] = 'work-orders'
+        elif args.held_screenshot:
+            env['FERRITE_BROWSER_WINDOW_SCENARIO'] = 'held-screenshot'
         # An imported, idle Thread exercises the real Server without calling a model.
         history = root/'thread.jsonl'
         history.write_text(json.dumps({'type':'user','sessionId':'browser-window-fixture',
@@ -262,12 +268,18 @@ def main():
                         raise RuntimeError(f'Independent work-order oracle mismatch {key}: {persisted}')
                 if len([entry for entry in audit if entry['name']==task]) != 2:
                     raise RuntimeError('Independent audit did not record exactly two saves')
-            expected_clicks = 0 if args.work_orders else (2 if args.provider else 1)
+            if args.held_screenshot:
+                spec = importlib.util.spec_from_file_location('embedded_probe',Path(__file__).with_name('probe-embedded-browser.py'))
+                embedded = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(embedded)
+                if embedded.screenshot_color(output/'provider-screenshot.png',point=(50,50)) != (23,173,91):
+                    raise RuntimeError('Held-gesture provider screenshot does not show the live green fixture')
+            expected_clicks = 0 if args.work_orders else (1 if args.held_screenshot else (2 if args.provider else 1))
             if len(clicked) != expected_clicks:
                 raise RuntimeError(f'Independent fixture oracle saw {len(clicked)} clicks, expected {expected_clicks}')
             screenshots = ['window-work-order.png'] if args.work_orders else ['window-before.png', 'window-after.png']
             if args.provider and not args.work_orders:
-                screenshots.append('window-provider.png')
+                screenshots.append('window-held-screenshot.png' if args.held_screenshot else 'window-provider.png')
             for name in screenshots:
                 if (output/name).stat().st_size < 100:
                     raise RuntimeError(f'Missing window screenshot: {name}')

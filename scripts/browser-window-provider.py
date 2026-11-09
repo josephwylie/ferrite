@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import time
 import importlib.util
+import base64
 
 provider = sys.argv[sys.argv.index('--provider') + 1]
 if '--version' in sys.argv:
@@ -14,6 +15,7 @@ if '--version' in sys.argv:
 
 output = Path(os.environ['FERRITE_BROWSER_WINDOW_OUTPUT'])
 probe = os.environ['FERRITE_BROWSER_WINDOW_PROBE']
+held_screenshot = os.environ.get('FERRITE_BROWSER_WINDOW_SCENARIO') == 'held-screenshot'
 work_orders = os.environ.get('FERRITE_BROWSER_WINDOW_SCENARIO') == 'work-orders'
 task_name = 'order-'+provider+'-'+probe[:8]+'-0'
 
@@ -46,6 +48,14 @@ def record(answer):
               'success':answer.get('isError') is False if provider == 'claude'
                         else answer.get('success') is True,
               'answer':answer, 'task_name':task_name if work_orders else None}
+    if held_screenshot:
+        images = [item for item in content if item.get('type')=='image' and item.get('mimeType')=='image/png']
+        png = base64.b64decode(images[0]['data'],validate=True) if len(images)==1 else b''
+        observed_fixture = png.startswith(b'\x89PNG\r\n\x1a\n')
+        if observed_fixture:
+            (output/'provider-screenshot.png').write_bytes(png)
+        result['observed_fixture'] = observed_fixture
+        result['readonly_during_held_operator_gesture'] = True
     result['success'] = result['success'] and observed_fixture
     temporary = output/'provider-result.tmp'
     temporary.write_text(json.dumps(result, indent=2), encoding='utf-8')
@@ -117,7 +127,7 @@ for line in sys.stdin:
     if work_orders and isinstance(name,str) and name.startswith('work-') and answer is not None:
         scenario.receive(name, answer)
         continue
-    if name in ('browser-state', 'browser-observe', 'browser-click', 'browser-after') and answer:
+    if name in ('browser-state', 'browser-observe', 'browser-click', 'browser-after', 'browser-screenshot') and answer:
         trace.append({'name':name, 'answer':answer, 'task_name':task_name if work_orders else None})
         try:
             if (provider == 'claude' and answer.get('isError') is not False) or (provider != 'claude' and answer.get('success') is not True):
@@ -126,9 +136,13 @@ for line in sys.stdin:
             active = next(tab for tab in state['state']['tabs'] if tab['id'] == state['state']['active'])
             identity = {'document':{'tab':active['id'],'generation':active['generation']},
                         'revision':state['revision']}
-            if name in ('browser-state', 'browser-click'):
-                call('browser-observe' if name == 'browser-state' else 'browser-after',
-                     {'kind':'control', **identity, 'control':{'kind':'observe'}})
+            if name == 'browser-screenshot':
+                if state.get('observation') is not None:
+                    raise ValueError('Screenshot minted mutation authorization during held input')
+                record(answer)
+            elif name in ('browser-state', 'browser-click'):
+                call('browser-screenshot' if held_screenshot else ('browser-observe' if name == 'browser-state' else 'browser-after'),
+                     {'kind':'control', **identity, 'control':{'kind':'screenshot' if held_screenshot else 'observe'}})
             elif name == 'browser-observe':
                 refs = state['value']['refs']
                 reference = next(ref for ref, element in refs.items()

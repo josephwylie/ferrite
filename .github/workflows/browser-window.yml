@@ -146,6 +146,10 @@ jobs:
         if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
         run: |
           python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider claude --work-orders --output target/browser-window-evidence/work-order-claude
+      - name: First provider screenshot during a held operator gesture
+        if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
+        run: |
+          python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider claude --held-screenshot --output target/browser-window-evidence/held-screenshot
       - name: Diagnose Windows naked native startup after a packaged failure
         if: failure() && runner.os == 'Windows'
         run: python scripts/probe-browser-window.py target/debug/ferrite.exe --startup-only --output target/browser-window-evidence/naked-startup-diagnostic

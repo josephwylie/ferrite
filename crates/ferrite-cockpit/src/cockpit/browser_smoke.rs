@@ -43,6 +43,7 @@ impl CockpitView {
             let mut ready_document = None;
             let mut scenario_thread = None;
             let codex = std::env::var("FERRITE_BROWSER_WINDOW_PROVIDER").ok().as_deref() == Some("codex");
+            let held_screenshot = std::env::var("FERRITE_BROWSER_WINDOW_SCENARIO").ok().as_deref() == Some("held-screenshot");
             let work_orders = std::env::var("FERRITE_BROWSER_WINDOW_SCENARIO").ok().as_deref() == Some("work-orders");
             let provider = std::env::var_os("FERRITE_BROWSER_WINDOW_PROVIDER").is_some();
             let mut frames = 0u64;
@@ -55,6 +56,10 @@ impl CockpitView {
                         if !path.exists() { return Ok(false); }
                         let answer: serde_json::Value = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
                         if answer["success"] != true {
+                            window.draw(cx);
+                            if let Ok(image) = window.render_to_image() {
+                                let _ = image.save(output.join("window-provider-error.png"));
+                            }
                             return Err(format!("actual provider browser action failed: {answer}"));
                         }
                         // Provider acknowledgements alone do not prove the owning
@@ -65,9 +70,10 @@ impl CockpitView {
                             image.save(output.join("window-work-order.png")).map_err(|error| error.to_string())?;
                             return Ok(true);
                         }
-                        let blue = image.pixels().filter(|pixel| pixel.0[..3] == [29, 97, 219]).count();
-                        if blue < 2000 { return Ok(false); }
-                        image.save(output.join("window-provider.png")).map_err(|error| error.to_string())?;
+                        let expected = if held_screenshot { [23, 173, 91] } else { [29, 97, 219] };
+                        let colored = image.pixels().filter(|pixel| pixel.0[..3] == expected).count();
+                        if colored < 2000 { return Ok(false); }
+                        image.save(output.join(if held_screenshot { "window-held-screenshot.png" } else { "window-provider.png" })).map_err(|error| error.to_string())?;
                         return Ok(true);
                     }
                     if !opened {
@@ -157,6 +163,13 @@ impl CockpitView {
                     image.save(output.join(name)).map_err(|error| error.to_string())?;
                     if clicked {
                         if !provider { return Ok(true); }
+                        if held_screenshot {
+                            // Keep a real operator gesture active through first
+                            // controller use. No synthetic unpause or mouse-up.
+                            let scale = window.scale_factor();
+                            let position = point(px(x_sum as f32 / count as f32 / scale), px(y_sum as f32 / count as f32 / scale));
+                            window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { position, button: MouseButton::Left, modifiers: Modifiers::default(), click_count: 1, first_mouse: false }), cx);
+                        }
                         view.update(cx, |view, _| {
                             let thread = scenario_thread.expect("scenario Thread");
                             view.cockpit.send(thread, "Observe the displayed fixture, click its button, and observe the result".into());
@@ -193,9 +206,9 @@ impl CockpitView {
                 "success": error.is_none(), "error": error,
                 "normal_native_window": true, "preview_operator_route": opened,
                 "window_pointer_input": clicked, "rendered_frames": frames,
-                "provider_requested": provider, "scenario_thread": scenario_thread, "work_orders": work_orders, "provider_started": provider_started,
+                "provider_requested": provider, "held_screenshot": held_screenshot, "scenario_thread": scenario_thread, "work_orders": work_orders, "provider_started": provider_started,
                 "elapsed_ms": started.elapsed().as_millis(),
-                "scope": if work_orders { "one prescribed work order through actual provider and owning Preview; annotations are not tested" } else { "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested" },
+                "scope": if work_orders { "one prescribed work order through actual provider and owning Preview; annotations are not tested" } else if held_screenshot { "first provider Screenshot during a held operator gesture; no mutation receipt permitted" } else { "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested" },
             });
             let _ = std::fs::write(output.join("window-result.json"), serde_json::to_vec_pretty(&result).unwrap());
             let _ = cx.update(|cx| cx.quit());

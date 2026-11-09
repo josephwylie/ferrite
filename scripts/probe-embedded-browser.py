@@ -22,7 +22,7 @@ from native_browser_service import NativeService
 from browser_processes import sample_browser_processes
 
 
-def screenshot_color(path):
+def screenshot_color(path, point=None):
     """Decode a known Chromium RGB/RGBA PNG and sample its center independently."""
     data = path.read_bytes()
     assert data[:8] == b"\x89PNG\r\n\x1a\n", "native screenshot is not PNG"
@@ -40,7 +40,9 @@ def screenshot_color(path):
         offset += size + 12
     raw, stride = zlib.decompress(compressed), width * channels
     previous = bytearray(stride)
-    for y in range(height // 2 + 1):
+    sample_x, sample_y = point if point is not None else (width // 2, height // 2)
+    assert 0 <= sample_x < width and 0 <= sample_y < height, "sample outside screenshot"
+    for y in range(sample_y + 1):
         start = y * (stride + 1)
         method, row = raw[start], bytearray(raw[start + 1:start + 1 + stride])
         for index in range(stride):
@@ -62,7 +64,7 @@ def screenshot_color(path):
                 predictor = 0
             row[index] = (row[index] + predictor) & 255
         previous = row
-    pixel = width // 2 * channels
+    pixel = sample_x * channels
     return tuple(previous[pixel:pixel + 3])
 
 
