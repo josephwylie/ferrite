@@ -56,6 +56,47 @@ packaged application invokes the executable directly; no Node/npm runtime,
 per-action launcher or autonomous model loop is involved. Platform code signing changes executable bytes after staging, so the recorded
 executable digest describes the pre-sign build; the application signature authenticates the delivered bundle.
 
+## Private CEF bridge scope and remaining gates
+
+The `Engine::open_browser` seam registers external HTTP(S) views in a shared
+website request context, distinct from sealed inline visuals. The on-demand
+controller uses an ephemeral IPv4-loopback WebSocket requiring a random
+256-bit bearer capability at the HTTP upgrade; requests carrying any Origin or
+query string are rejected. The global CEF debugging switches are removed.
+Synthetic discovery includes only these explicit external views. Flattened page
+sessions route through each exact browser's CEF DevTools message observer.
+Browser-wide target creation, application shutdown and unrelated CDP domains
+are denied. The authorized local conversation service, still to be implemented
+under #193, must enforce conversation ownership and serialize target selection
+with its operation; the endpoint itself is not a conversation boundary.
+
+The protocol allowlist includes the DOM, Accessibility, Runtime, Page and Input
+commands used by native 0.41.2 snapshots and element-reference clicks, plus
+page-scoped diagnostics. The real fixture now snapshots the Paint button and
+clicks its returned element reference. It does not infer observation support
+from successful JavaScript evaluation alone. Transport queues and command
+counts are bounded; lost/oversized observations disconnect the controller,
+and commands still pending after 25 seconds return an explicit
+`completion: uncertain`, `retryable: false` error. A timeout or disconnection
+after dispatch never establishes that an action failed to occur.
+
+Cross-origin out-of-process iframe targets are **not implemented** in this
+initial bridge: `Target.setAutoAttach` is denied rather than exposing arbitrary
+CEF targets. Native 0.41.2 treats that optional enable failure as nonfatal, so
+simple top-level workflows remain testable, but successful top-level fixture
+runs cannot establish iframe workflow support. Before dependent delivery,
+review and implement scoped child-target routing and verify a real cross-origin
+iframe fixture through the same Engine/View boundary; do not weaken site
+isolation or silently claim full interactive-web coverage. The feasibility
+viewport is currently fixed at 600 logical pixels high; the later browser
+service must supply full viewport sizing and document-generation policy.
+
+The local CEF-enabled `cargo check` passed on macOS. Local packaged runtime
+validation was stopped for disk pressure before a complete new bundle existed;
+only CI packaged runs may establish the outstanding Windows/macOS runtime
+acceptance. No performance claim follows from compilation or native debug
+transport results.
+
 ## Windows sandbox layout
 
 CEF's matching `bootstrap.exe` is packaged as `ferrite.exe` and loads

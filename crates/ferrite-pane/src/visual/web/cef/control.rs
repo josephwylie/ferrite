@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cef::*;
 use serde_json::{json, Value};
@@ -42,6 +42,13 @@ struct Target {
     _registration: Registration,
 }
 
+struct Pending {
+    peer: u64,
+    id: Value,
+    session: String,
+    since: Instant,
+}
+
 pub(super) struct Control {
     endpoint: ControllerEndpoint,
     stop: Arc<AtomicBool>,
@@ -50,7 +57,8 @@ pub(super) struct Control {
     targets: HashMap<String, Target>,
     connections: HashMap<u64, Connection>,
     next_message: i32,
-    pending: HashMap<i32, (u64, Value, String)>,
+    pending: HashMap<i32, Pending>,
+    overflow: Arc<AtomicBool>,
 }
 
 impl Control {
@@ -112,6 +120,7 @@ impl Control {
             connections: HashMap::new(),
             next_message: 1,
             pending: HashMap::new(),
+            overflow: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -121,7 +130,7 @@ impl Control {
 
     pub(super) fn register(&mut self, id: String, browser: Browser) {
         let Some(host) = browser.host() else { return };
-        let mut observer = Observer::new(id.clone(), self.send.clone());
+        let mut observer = Observer::new(id.clone(), self.send.clone(), self.overflow.clone());
         let Some(registration) = host.add_dev_tools_message_observer(Some(&mut observer)) else {
             return;
         };
@@ -169,16 +178,12 @@ impl Control {
             let abandoned: Vec<_> = self
                 .pending
                 .iter()
-                .filter(|(_, (_, _, target))| *target == id)
+                .filter(|(_, pending)| pending.session == id)
                 .map(|(key, _)| *key)
                 .collect();
             for key in abandoned {
-                if let Some((peer, message, _)) = self.pending.remove(&key) {
-                    self.error(
-                        peer,
-                        message,
-                        "Embedded target closed; action completion may be uncertain",
-                    );
+                if let Some(pending) = self.pending.remove(&key) {
+                    self.uncertain(pending, "Embedded target closed after dispatch; completion is uncertain. Inspect fresh page state before any retry.");
                 }
             }
         }
@@ -195,6 +200,31 @@ impl Control {
     }
 
     pub(super) fn pump(&mut self) {
+        // Any lost observation/result invalidates the controller's picture of
+        // the page. Disconnect; never continue using partially delivered state.
+        let overflowed = self.overflow.swap(false, Ordering::Relaxed);
+        if overflowed {
+            for connection in self.connections.values() {
+                connection.output.stop.store(true, Ordering::Relaxed);
+            }
+        }
+        self.connections
+            .retain(|_, connection| !connection.output.stop.load(Ordering::Relaxed));
+        self.pending
+            .retain(|_, pending| self.connections.contains_key(&pending.peer));
+        let expired: Vec<_> = self
+            .pending
+            .iter()
+            // Return before the pinned native CDP client's 30-second timeout,
+            // preserving an explicit uncertain-completion result for callers.
+            .filter(|(_, pending)| pending.since.elapsed() >= Duration::from_secs(25))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in expired {
+            if let Some(pending) = self.pending.remove(&id) {
+                self.uncertain(pending, "Embedded page command timed out after dispatch; completion is uncertain. Inspect fresh page state before any retry.");
+            }
+        }
         // Bound controller work so a client cannot starve rendering or input.
         for _ in 0..64 {
             let Ok(incoming) = self.receive.try_recv() else {
@@ -202,6 +232,10 @@ impl Control {
             };
             match incoming {
                 Incoming::Open(id, output) => {
+                    if overflowed || output.stop.load(Ordering::Relaxed) {
+                        output.stop.store(true, Ordering::Relaxed);
+                        continue;
+                    }
                     self.connections.insert(
                         id,
                         Connection {
@@ -213,15 +247,22 @@ impl Control {
                 }
                 Incoming::Closed(id) => {
                     self.connections.remove(&id);
-                    self.pending.retain(|_, (peer, _, _)| *peer != id);
+                    self.pending.retain(|_, pending| pending.peer != id);
                 }
                 Incoming::Command(id, value) => self.command(id, value),
                 Incoming::Page(target, mut value) => {
                     if let Some(id) = value.get("id").and_then(Value::as_i64) {
-                        if let Some((peer, original, session)) = self.pending.remove(&(id as i32)) {
-                            value["id"] = original;
-                            value["sessionId"] = session.into();
-                            self.output(peer, value);
+                        let key = i32::try_from(id).ok();
+                        if let Some(key) = key.filter(|key| {
+                            self.pending
+                                .get(key)
+                                .is_some_and(|pending| pending.session == target)
+                        }) {
+                            if let Some(pending) = self.pending.remove(&key) {
+                                value["id"] = pending.id;
+                                value["sessionId"] = pending.session.into();
+                                self.output(pending.peer, value);
+                            }
                         }
                     } else {
                         value["sessionId"] = target.clone().into();
@@ -246,6 +287,11 @@ impl Control {
             peer,
             json!({"id":id,"error":{"code":-32000,"message":message}}),
         );
+    }
+
+    fn uncertain(&self, pending: Pending, message: &str) {
+        self.output(pending.peer, json!({"id":pending.id,"sessionId":pending.session,
+            "error":{"code":-32000,"message":message,"data":{"completion":"uncertain","retryable":false}}}));
     }
 
     fn command(&mut self, peer: u64, mut value: Value) {
@@ -312,17 +358,25 @@ impl Control {
             }
             value["id"] = number.into();
             value.as_object_mut().unwrap().remove("sessionId");
-            self.pending.insert(number, (peer, id, session.clone()));
+            self.pending.insert(
+                number,
+                Pending {
+                    peer,
+                    id,
+                    session: session.clone(),
+                    since: Instant::now(),
+                },
+            );
             let bytes = value.to_string().into_bytes();
             let dispatched = self.targets[&session]
                 .browser
                 .host()
                 .is_some_and(|host| host.send_dev_tools_message(Some(&bytes)) == 1);
             if !dispatched {
-                if let Some((peer, original, _)) = self.pending.remove(&number) {
+                if let Some(pending) = self.pending.remove(&number) {
                     self.error(
-                        peer,
-                        original,
+                        pending.peer,
+                        pending.id,
                         "CEF rejected the embedded page command before dispatch",
                     );
                 }
@@ -369,20 +423,20 @@ impl Control {
                 json!({"targetInfo":self.info(target)})
             }
             "Target.activateTarget" => {
-                if !self
+                let Some(host) = self
                     .targets
-                    .contains_key(params["targetId"].as_str().unwrap_or(""))
-                {
+                    .get(params["targetId"].as_str().unwrap_or(""))
+                    .and_then(|target| target.browser.host())
+                else {
                     self.error(peer, id, "Unknown embedded target");
                     return;
-                }
+                };
+                host.set_focus(1);
                 json!({})
             }
             "Browser.getVersion" => {
                 json!({"protocolVersion":"1.3","product":"Ferrite/CEF","revision":"","userAgent":"Ferrite","jsVersion":""})
             }
-            // Session disposal must never quit Ferrite or close operator tabs.
-            "Browser.close" => json!({}),
             _ => {
                 self.error(
                     peer,
@@ -416,11 +470,12 @@ fn emit(output: &Output, value: Value) {
 }
 
 wrap_dev_tools_message_observer! {
-    struct Observer { target: String, send: mpsc::SyncSender<Incoming> }
+    struct Observer { target: String, send: mpsc::SyncSender<Incoming>, overflow: Arc<AtomicBool> }
     impl DevToolsMessageObserver {
         fn on_dev_tools_message(&self, _browser: Option<&mut Browser>, message: Option<&[u8]>) -> ::std::os::raw::c_int {
-            if let Some(value) = message.filter(|m| m.len() <= LIMIT).and_then(|m| serde_json::from_slice(m).ok()) {
-                let _ = self.send.try_send(Incoming::Page(self.target.clone(), value));
+            let value = message.filter(|m| m.len() <= LIMIT).and_then(|m| serde_json::from_slice(m).ok());
+            if value.is_none_or(|value| self.send.try_send(Incoming::Page(self.target.clone(), value)).is_err()) {
+                self.overflow.store(true, Ordering::Relaxed);
             }
             1
         }
@@ -448,10 +503,16 @@ fn serve(
             // a forged local Origin or a websocket from page JS to authorize control.
             let authenticated = request.uri().path() == "/ferrite"
                 && request.uri().query().is_none()
-                && request
-                    .headers()
-                    .get("authorization")
-                    .is_some_and(|h| h.as_bytes() == authorization.as_bytes())
+                && request.headers().get("authorization").is_some_and(|h| {
+                    let actual = h.as_bytes();
+                    let expected = authorization.as_bytes();
+                    actual.len() == expected.len()
+                        && actual
+                            .iter()
+                            .zip(expected)
+                            .fold(0u8, |different, (a, b)| different | (a ^ b))
+                            == 0
+                })
                 && !request.headers().contains_key("origin");
             if authenticated {
                 Ok(response)
@@ -486,6 +547,7 @@ fn serve(
             };
             queued_bytes.fetch_sub(value.len(), Ordering::Relaxed);
             if socket.send(Message::Text(value)).is_err() {
+                peer_stop.store(true, Ordering::Relaxed);
                 let _ = send.try_send(Incoming::Closed(id));
                 return;
             }
@@ -509,6 +571,7 @@ fn serve(
             Err(_) => break,
         }
     }
+    peer_stop.store(true, Ordering::Relaxed);
     let _ = socket.close(None);
     let _ = send.try_send(Incoming::Closed(id));
 }

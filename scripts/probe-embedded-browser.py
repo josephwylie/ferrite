@@ -109,7 +109,12 @@ def main():
                     service.command("tab_switch", tabId=tabs[path]["tabId"])
                     observed = service.command("evaluate", script="location.pathname")["result"]
                     assert observed == path, (path, observed)
-                    service.command("click", selector="#paint")
+                    snapshot = service.command("snapshot", interactive=True)
+                    assert "Paint" in snapshot["snapshot"], snapshot
+                    buttons = [ref for ref, node in snapshot["refs"].items()
+                               if node["role"] == "button" and node["name"] == "Paint"]
+                    assert len(buttons) == 1, snapshot
+                    service.command("click", selector="@" + buttons[0])
                     color = service.command("evaluate", script="getComputedStyle(document.body).backgroundColor")["result"]
                     assert color == expected[path][1], (path, color)
                     capture = Path(captures) / (path[1:] + ".png")
@@ -132,7 +137,7 @@ def main():
                 assert color == expected[path][1], "controller reconnect lost visible page state"
             evidence = {"embedded_targets": 2, "concurrent_agents": 2,
                               "controllers_per_active_service": 1, "screenshots_match_live_pages": True,
-                              "native_clicks": 2, "controller_restart_retains_targets": True,
+                              "native_clicks": 2, "snapshot_reference_clicks": 2, "controller_restart_retains_targets": True,
                               "unauthorized_cdp_handshakes_rejected": 3,
                               "sealed_visual_discovery": False}
             if os.environ.get("FERRITE_BROWSER_EVIDENCE"):
