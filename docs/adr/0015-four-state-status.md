@@ -143,3 +143,55 @@ the key is ignored.
   what happened. This rule lives in the nav, not in core: the Notice is
   read when it is seen, as ever, so the Bar, the Pane head, the toasts and
   ⌘D are unchanged.
+
+## Amendment (2026-11-09): Inbox retains read, unfinished Threads
+
+Issue #198 replaces the separate bell Activity and Recent-notice views
+with one Inbox mode of the existing nav. Membership follows authoritative
+open Threads: Parked is excluded; a pending Decision belongs to Inbox even
+while execution continues; otherwise Main, descendants, background and
+queued work belong to Working; remaining open Threads belong to Inbox.
+Blockers retain oldest-request-first order, with stable creation order for
+remaining rows. Pinning and former Activity section visibility settings
+cannot hide queue membership.
+
+Seen still acknowledges Notices and clears unread styling. Reading,
+dismissing a Notice, or moving focus does not finish handling a Thread.
+The operator sends a follow-up to return it to Working, or uses Park to
+finish handling it. In Inbox, ⌘W parks the selected Thread; Backspace
+continues to dismiss only its Notice. A watched completion stays in Inbox after focus leaves.
+The Inbox heading counts queue Threads, excluding Working and Parked.
+An empty Inbox can therefore coexist with visible Working Threads.
+
+This is a view classification, not a fifth Attention state or a new
+persisted disposition. Idle Session eviction (ADR 0032) leaves the Thread
+open and in Inbox. Digests and Server open/parked listings reconstruct the
+view across restarts, reconnects and other clients' Park operations; no
+transcript watch or Notice retention is required. Notification delivery
+and acknowledgment (ADRs 0005 and 0017) remain event based, so retaining a
+read Thread never rings again. Park/reopen retains existing Session,
+history, Group and focus behavior.
+
+## Amendment (2026-11-09): Snooze and compact Inbox shelves
+
+Subsequent operator feedback adds Snooze, which issue #198 originally left
+out of scope. Snooze is optional Thread metadata saved through the existing
+Store Facts and shared ThreadState contract. It does not change openness,
+Attention or Session lifetime. Park clears it; a new Decision or failed run,
+an operator send (including a queued follow-up), or reaching its deadline
+wakes the Thread. An existing Decision can be deferred; ordinary completion
+and Notice acknowledgment leave the reminder intact. Waking on a timer
+creates no Notice and never starts an agent.
+
+The default menu follows [T3's presets](https://github.com/pingdotgg/t3code/blob/main/packages/contracts/src/settings.ts#L124-L130):
+1 hour, 3 hours, today at 18:00, tomorrow at 09:00 and next Monday at 09:00,
+plus Custom for a local date/time or duration. Choices sort soonest first;
+today's choice disappears after its time. Weekdays mean the next occurrence
+after today. Custom input rejects past or ambiguous local times.
+
+Inbox stays visible when its rows open Main, a Subagent Decision or another
+Server. Typing returns to the selected Composer; Esc or toggling the mode
+still returns to the tree. Working and Snoozed start as collapsed headings
+with counts. Expanded rows use the existing one-line Thread component;
+the Activity preview renderer is removed. Custom Snooze editing ends when
+its Inbox surface is hidden, including the sidebar rail.

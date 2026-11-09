@@ -215,7 +215,10 @@ fn serve_in(
     let (relaunches, relaunched) = mpsc::channel();
     let (browser, browser_requests) = crate::browser::channel();
     let server = std::thread::spawn(move || {
-        let engine = Engine::try_new(Store::open(&store).unwrap(), Box::new(spawn)).unwrap();
+        let store = Store::open(&store).unwrap();
+        let reopen = launch_threads(&store);
+        let mut engine = Engine::try_new(store, Box::new(spawn)).unwrap();
+        revive_launch(&mut engine, reopen);
         let info = ServerInfo {
             version: "0.9.0".into(),
             executable: "/bin/ferrite".into(),
@@ -5804,4 +5807,64 @@ fn browser_requests_hold_uncertain_work_when_the_caller_misses_its_reply() {
     assert_eq!(opened.state.tabs.len(), 2);
     window.command(99, Op::Stop { when: When::Now });
     assert_eq!(harness.server.join().unwrap(), 0);
+}
+
+// The in-process restart harness releases Unix socket paths explicitly.
+#[cfg(unix)]
+#[test]
+fn snooze_is_shared_and_survives_server_restart_without_a_session() {
+    let harness = start("snooze-shared");
+    let mut first = cockpit(&harness);
+    let thread = first
+        .open(
+            Provider::Claude,
+            crate::workspace::WorkspaceChoice::Main {
+                checkout: harness.dir.clone(),
+            },
+        )
+        .unwrap();
+    harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    let until = crate::clock::system_time() + Duration::from_secs(3600);
+    first.snooze_thread(thread, Some(until)).unwrap();
+    pump_until(&mut first, |window| {
+        window
+            .thread(thread)
+            .and_then(|open| open.snooze())
+            .is_some()
+    });
+    let mut second = cockpit(&harness);
+    pump_until(&mut second, |window| {
+        window
+            .thread(thread)
+            .and_then(|open| open.snooze())
+            .is_some_and(|snooze| snooze.until == until)
+    });
+    let mut control = attach(&harness.address);
+    control.command(198, Op::Stop { when: When::Now });
+    assert_eq!(harness.server.join().unwrap(), 0);
+    // The in-process harness keeps listener threads alive after shutdown;
+    // a real exec closes these sockets before the successor listens.
+    gone(&harness.address);
+    gone(&harness.api);
+    let successor = serve_in(harness.dir.clone(), None, None);
+    let mut reopened = cockpit(&successor);
+    pump_until(&mut reopened, |window| {
+        window
+            .thread(thread)
+            .and_then(|open| open.snooze())
+            .is_some_and(|snooze| snooze.until == until)
+    });
+    assert!(
+        successor.sessions.try_recv().is_err(),
+        "listing Snooze starts no Session"
+    );
+    reopened.snooze_thread(thread, None).unwrap();
+    pump_until(&mut reopened, |window| {
+        window
+            .thread(thread)
+            .is_some_and(|open| open.snooze().is_none())
+    });
 }

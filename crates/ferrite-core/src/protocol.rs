@@ -303,6 +303,10 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
     },
+    Snooze {
+        thread: ThreadId,
+        until: Option<std::time::SystemTime>,
+    },
     Rename {
         thread: ThreadId,
         title: String,
@@ -509,6 +513,7 @@ impl Op {
             | Op::SetModel { thread, .. }
             | Op::SetEffort { thread, .. }
             | Op::SetProvider { thread, .. }
+            | Op::Snooze { thread, .. }
             | Op::Rename { thread, .. }
             | Op::Park { thread, .. }
             | Op::Revive { thread, .. }
@@ -1333,6 +1338,8 @@ pub struct ThreadState {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snooze: Option<crate::snooze::Snooze>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<WireBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
