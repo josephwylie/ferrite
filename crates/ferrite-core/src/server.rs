@@ -215,6 +215,19 @@ pub fn fixture_machine(
     store: PathBuf,
     spawner: Box<dyn crate::engine::Spawner + Send>,
 ) -> io::Result<crate::machine::Dial> {
+    fixture_browser_machine(store, |_| spawner)
+}
+
+/// The same machine/Server fixture, with its real Thread-bound browser channel
+/// available to a Provider spawner. The Server owns the receiving end, exactly
+/// as production startup does; no test-only browser request router is involved.
+#[cfg(feature = "test-support")]
+pub fn fixture_browser_machine(
+    store: PathBuf,
+    spawner_factory: impl FnOnce(crate::browser::Client) -> Box<dyn crate::engine::Spawner + Send>,
+) -> io::Result<crate::machine::Dial> {
+    let (browser, browser_requests) = crate::browser::channel();
+    let spawner = spawner_factory(browser);
     /// The window's end: dropped, it hangs up, as ssh does.
     struct Upload(link::Stream);
     impl io::Write for Upload {
@@ -242,7 +255,9 @@ pub fn fixture_machine(
         };
         let (_, renders) = render::remote();
         let settings_dir = store.parent().unwrap_or(&store).to_path_buf();
-        Server::new(engine, info, renders, Arc::default(), settings_dir).serve(hear)
+        let mut server = Server::new(engine, info, renders, Arc::default(), settings_dir);
+        server.browser_requests = browser_requests;
+        server.serve(hear)
     });
     Ok(Box::new(move || {
         let stream = link::connect(&address)?;
