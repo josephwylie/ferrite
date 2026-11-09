@@ -904,6 +904,17 @@ impl ViewInner {
         self.pressed.set(0);
     }
 
+    fn navigation_intent(&self) {
+        if let Some(observation) = self.observation.borrow_mut().as_mut() {
+            observation.invalidate(&self.state);
+        }
+        let mut state = self.state.navigation.lock().unwrap();
+        state.loading = true;
+        state.dirty = BrowserDirty::Unknown;
+        state.error = None;
+        self.state.dirty.store(true, Ordering::SeqCst);
+    }
+
     fn host(&self) -> Option<cef::BrowserHost> {
         self.browser
             .borrow()
@@ -1136,11 +1147,7 @@ impl BrowserView for CefView {
             .as_ref()
             .and_then(|browser| browser.main_frame())
         {
-            {
-                let mut state = self.0.state.navigation.lock().unwrap();
-                state.loading = true;
-                state.error = None;
-            }
+            self.0.navigation_intent();
             frame.load_url(Some(&url.into()));
         } else {
             let mut state = self.0.state.navigation.lock().unwrap();
@@ -1159,7 +1166,7 @@ impl BrowserView for CefView {
         if browser.can_go_back() == 0 {
             return Err("No previous page in this tab".into());
         }
-        self.0.state.navigation.lock().unwrap().loading = true;
+        self.0.navigation_intent();
         browser.go_back();
         Ok(())
     }
@@ -1171,14 +1178,14 @@ impl BrowserView for CefView {
         if browser.can_go_forward() == 0 {
             return Err("No next page in this tab".into());
         }
-        self.0.state.navigation.lock().unwrap().loading = true;
+        self.0.navigation_intent();
         browser.go_forward();
         Ok(())
     }
     fn reload(&self) -> Result<(), String> {
         self.0.failed.set(false);
         if let Some(browser) = self.0.browser.borrow().as_ref() {
-            self.0.state.navigation.lock().unwrap().loading = true;
+            self.0.navigation_intent();
             browser.reload();
         } else {
             self.0.visible.set(true);

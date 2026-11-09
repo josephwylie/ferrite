@@ -266,9 +266,12 @@ wrap_display_handler! {
     }
 
     impl DisplayHandler {
-        fn on_address_change(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, url: Option<&CefString>) {
+        fn on_address_change(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, url: Option<&CefString>) {
             if frame.is_some_and(|frame| frame.is_main() != 0) {
-                if let Some(url) = url { self.state.navigation(self.generation, |state| state.url = url.to_string()); }
+                if let Some(url) = url { self.state.navigation(self.generation, |state| {
+                    state.url = url.to_string();
+                    if browser.as_ref().is_some_and(|browser| browser.is_loading() == 0) { state.loading = false; }
+                }); }
             }
         }
         fn on_title_change(&self, _browser: Option<&mut Browser>, title: Option<&CefString>) {
