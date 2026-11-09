@@ -33,10 +33,14 @@ def call(name, arguments):
 def record(answer):
     # Only an actual tool response can produce this evidence. Discovery/version
     # processes cannot claim the Session reached the browser boundary.
+    content = answer.get('content', []) if provider == 'claude' else answer.get('contentItems', [])
+    observed_fixture = any('Window fixture' in item.get('text', '') for item in content)
     result = {'probe':probe,'provider':provider,'peer_pid':os.getpid(),
+              'observed_fixture':observed_fixture,
               'success':answer.get('isError') is False if provider == 'claude'
                         else answer.get('success') is True,
               'answer':answer}
+    result['success'] = result['success'] and observed_fixture
     temporary = output/'provider-result.tmp'
     temporary.write_text(json.dumps(result, indent=2), encoding='utf-8')
     temporary.replace(output/'provider-result.json')
