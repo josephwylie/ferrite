@@ -75,9 +75,7 @@ impl CockpitView {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         manual.borrow_mut().protect_local();
-        if let Some(native) = &manual.borrow().native {
-            native.set_agent_paused(true);
-        }
+        manual.borrow_mut().capture_pause(true);
         let protected = self
             .cockpit
             .browser_input(thread, owner, document)
@@ -120,6 +118,7 @@ impl CockpitView {
                 });
             }
             Err(error) => {
+                manual.borrow_mut().capture_pause(false);
                 manual.borrow_mut().release_local();
                 manual.borrow().restore_pause();
                 browser.error = Some(error.to_string());
@@ -136,6 +135,7 @@ impl CockpitView {
             let _ = self
                 .cockpit
                 .browser_release(thread, guard.owner, guard.lease);
+            guard.manual.borrow_mut().capture_pause(false);
             guard.manual.borrow_mut().release_local();
             guard.manual.borrow().restore_pause();
         }
