@@ -133,6 +133,8 @@ pub struct CodexConfig {
     /// tool (and description) it began with — so the level only shapes new
     /// threads; the renderer still answers a resumed thread's calls.
     pub visuals: Option<crate::visual::Visuals>,
+    /// Trusted browser capability bound to this Session's Thread.
+    pub browser: Option<crate::browser::ThreadClient>,
     /// Ferrite's caller context for the agent (`api::caller_environment`):
     /// set over whatever the CLI inherited, after the Thread's own
     /// (`thread.start --env`).
@@ -158,6 +160,7 @@ impl Default for CodexConfig {
             sandbox: None,
             resume: None,
             visuals: None,
+            browser: None,
             env: Vec::new(),
             launcher: Vec::new(),
             args: Vec::new(),
@@ -370,6 +373,7 @@ impl CodexSession {
             config.cwd.clone(),
             config.resume.is_some(),
             config.visuals.clone(),
+            config.browser.clone(),
         );
 
         let mut session = Self {
@@ -510,6 +514,11 @@ impl CodexSession {
             config.resume.is_none(),
         );
         wire::offer_plan(&mut params);
+        wire::offer_browser(
+            &mut params,
+            config.browser.as_ref(),
+            config.resume.is_none(),
+        );
         // Capture the CLI's default independently of Ferrite's override;
         // turn/start carries the chosen effort.
         self.write_line(&serde_json::json!({
@@ -967,6 +976,7 @@ fn read_stdout(
     cwd: Option<PathBuf>,
     resumed: bool,
     visuals: Option<crate::visual::Visuals>,
+    browser: Option<crate::browser::ThreadClient>,
 ) -> Receiver<Result<HandshakeStep, String>> {
     let (step_sender, steps) = sync_channel(2);
     thread::spawn(move || {
@@ -1095,7 +1105,9 @@ fn read_stdout(
             turns.observe(text);
             if let Ok(frame) = serde_json::from_str::<serde_json::Value>(text) {
                 if let Some(stdin) = stdin.upgrade() {
-                    if wire::answer_visual(&frame, visuals.as_ref(), stdin) {
+                    if wire::answer_browser(&frame, browser.as_ref(), Arc::clone(&stdin))
+                        || wire::answer_visual(&frame, visuals.as_ref(), stdin)
+                    {
                         continue;
                     }
                 }
