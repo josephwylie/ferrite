@@ -161,9 +161,8 @@ transport probe now also requires an explicit inspect-denied error.
 
 The current patch SHA-256 is
 `c9a6df0b0cf5f806cfd7eccedfe0f59b781ec02784abe042d36d427b40cc553c`.
-The successful local and CI evidence above applies to the previous `034e4532`
-patch; the new inspect regression was added after those builds and must pass
-CI before the updated distribution is accepted. Native CI uses the packager's
+The original local and CI evidence above applies to the previous `034e4532`
+patch. The subsequent c9a validation below covers the inspector regression. Native CI uses the packager's
 `--test` option to execute all six focused Rust security regressions on every
 platform before packaging. Local Rust builds remain stopped for disk space.
 
@@ -172,6 +171,18 @@ recording uses existing CDP screencast and ffmpeg pipes; tracing/profiling use
 existing CDP IO streams. Standalone dashboard startup is outside daemon mode;
 the service's allowlisted environment selects daemon mode exclusively. Browser
 launch/provider/Safari/Appium paths remain behind the explicit-CDP requirement.
+
+## Final native hardening validation
+
+[Run 42542183864](https://github.com/josephwylie/ferrite/actions/runs/42542183864)
+passed on Windows x64, macOS arm64 and macOS Intel for patch `c9a6df0b`.
+Each job passed all **six focused Rust security regressions**, built the native
+release executable, rejected inspector/stream activation and missing/wrong
+capabilities through the real persistent transport, and verified its packaged
+hash offline. [Raw build and transport results](browser-native-validation-c9a6df0b.json)
+retain compiler versions, executable hashes and completed job IDs. These results
+prove the current native hardening on all supported platforms; the packaged
+CEF bridge, OS isolation and unsafe-startup negative smokes remain separate.
 
 ## Unsafe Chromium startup overrides
 
