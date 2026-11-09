@@ -23,6 +23,7 @@
 //! the theme tokens a page is styled with ([`tokens`]), the engine's lazy
 //! lifecycle ([`engine`]) and the row's look ([`card`]).
 
+pub mod browser_control;
 mod card;
 pub mod diagram;
 pub mod element;
