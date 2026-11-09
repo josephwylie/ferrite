@@ -650,29 +650,35 @@ impl Server {
                 owner,
                 page,
             } => self.browser_page(id, *thread, *owner, page.clone()),
+            Op::BrowserSettled {
+                thread,
+                owner,
+                document,
+                revision,
+            } => self.browser_owned(id, *thread, *owner).and_then(|_| {
+                if self
+                    .browser
+                    .operator_settled(*thread, *owner, *document, *revision)
+                    .map_err(failed)?
+                {
+                    self.browser_observed.remove(thread);
+                    self.publish_browser(*thread, None);
+                }
+                Ok(None)
+            }),
             Op::BrowserInput {
                 thread,
                 owner,
                 document,
-            } => {
-                if owner.window != id {
-                    Err(failed("This browser belongs to another window"))
-                } else {
-                    self.browser_window(id, *thread)
-                        .and_then(|_| {
-                            if self.browser.state(*thread).active != Some(document.tab) {
-                                return Err(failed(
-                                    "The selected tab changed; this queued input was discarded",
-                                ));
-                            }
-                            self.browser
-                                .check_document(*thread, *document)
-                                .and_then(|_| self.browser.operator_input(*thread, *owner))
-                                .map_err(failed)
-                        })
-                        .map(|revision| Some(Done::BrowserInput { revision }))
-                }
-            }
+            } => self.browser_owned(id, *thread, *owner).and_then(|_| {
+                let revision = self
+                    .browser
+                    .operator_input(*thread, *owner, *document)
+                    .map_err(failed)?;
+                self.browser_observed.remove(thread);
+                self.publish_browser(*thread, None);
+                Ok(Some(Done::BrowserInput { revision }))
+            }),
             Op::BrowserAttach { thread } => self.attach_browser(id, *thread),
             Op::Browser { thread, action } => self.browser_action(id, *thread, action.clone()),
             Op::SettingsChanged => match Settings::load(&self.settings_dir) {

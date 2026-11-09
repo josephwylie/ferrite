@@ -208,6 +208,9 @@ impl Server {
         action: Action,
         observation: Option<crate::browser::Observation>,
     ) -> Result<crate::browser::Response, String> {
+        if self.browser.operator_active(thread) {
+            return Err("The operator is interacting with this page; wait for that gesture to settle, then observe fresh state".into());
+        }
         if self
             .browser_pending
             .values()
@@ -286,6 +289,9 @@ impl Server {
                             .any(|pending| pending.thread == thread)
                         {
                             return Err("Another agent is using this Thread's browser; wait for its command to finish".into());
+                        }
+                        if !control.observation() && self.browser.operator_active(thread) {
+                            return Err("The operator is interacting with this page; wait for that gesture to settle, then observe fresh state".into());
                         }
                         if !control.observation()
                             && (revision != self.browser.operator_revision(thread)
@@ -406,16 +412,17 @@ impl Server {
             .and_then(|_| if self.browser.state(thread).active == Some(document.tab) { Ok(()) } else { Err("The selected tab changed; select and observe it before continuing".into()) })
             .and_then(|_| if revision == self.browser.operator_revision(thread) { Ok(()) }
                 else { Err("The operator interacted with this page; observe fresh state before continuing".into()) });
-        let (result, uncertain) = match (current, outcome) {
+        let refreshes = pending.refreshes && !self.browser.operator_active(thread);
+        let (mut result, uncertain) = match (current, outcome) {
             (Err(error), _) => (Err(error), !pending.observation || pending.recovering),
             (Ok(()), crate::browser::Outcome::Success { value }) => {
                 let mut response = self.browser_response(thread, Some(value));
-                if pending.refreshes {
+                if refreshes {
                     let receipt = crate::browser::Observation::new(format!("{}:{request}", self.engine.boot_id()));
                     self.browser_observed.insert(thread, (document, revision, receipt.clone()));
                     response.observation = Some(receipt);
                 }
-                (Ok(response), pending.recovering && !pending.refreshes)
+                (Ok(response), pending.recovering && !refreshes)
             },
             (Ok(()), crate::browser::Outcome::Failed { error }) => (Err(error), pending.recovering),
             (Ok(()), crate::browser::Outcome::Uncertain { error }) => (Err(format!("Action completion is uncertain: {error}. Observe current page state; do not retry writes automatically")), true),
@@ -426,6 +433,9 @@ impl Server {
         } else {
             self.browser_uncertain.remove(&thread);
             let _ = self.browser.release(thread, owner, pending.lease);
+        }
+        if let Ok(response) = &mut result {
+            response.state = self.browser.state(thread);
         }
         self.publish_browser(thread, None);
         let _ = pending.reply.send(result);

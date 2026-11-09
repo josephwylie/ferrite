@@ -258,6 +258,7 @@ impl Engine {
             | Op::BrowserReclaim { .. }
             | Op::BrowserReclaimed { .. }
             | Op::BrowserPage { .. }
+            | Op::BrowserSettled { .. }
             | Op::BrowserInput { .. }
             | Op::BrowserAttach { .. }
             | Op::Browser { .. }

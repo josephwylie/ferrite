@@ -5646,9 +5646,12 @@ fn browser_requests_wait_for_the_latest_manual_gesture_to_settle() {
             revision: latest,
         },
     );
-    let fresh = browser_test_observe(&mut owner_window, &agent, document, latest)
-        .observation
-        .unwrap();
+    let fresh = browser_test_observe(&mut owner_window, &agent, document, latest);
+    assert!(
+        !fresh.state.tabs[0].protected,
+        "settled input and a completed read must release their transient protections"
+    );
+    let fresh = fresh.observation.unwrap();
     assert_ne!(fresh, before);
     let click = Control::Click {
         reference: "@save".into(),

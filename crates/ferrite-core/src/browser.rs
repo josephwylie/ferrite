@@ -131,6 +131,7 @@ pub struct Service {
     next_lease: u64,
     protections: BTreeMap<u64, (ThreadId, Owner, Document, Protection)>,
     manual: BTreeMap<ThreadId, u64>,
+    interactions: BTreeMap<ThreadId, (Owner, Document, u64)>,
 }
 
 type Result<T> = std::result::Result<T, String>;
@@ -141,7 +142,10 @@ impl Service {
         for tab in &mut state.tabs {
             tab.protected = self.protections.values().any(|(id, _, document, kind)| {
                 *id == thread && document.tab == tab.id && *kind != Protection::Reclaim
-            });
+            }) || self
+                .interactions
+                .get(&thread)
+                .is_some_and(|(_, document, _)| document.tab == tab.id);
         }
         state
     }
@@ -184,6 +188,7 @@ impl Service {
         }
         self.protections.retain(|_, (id, _, _, _)| *id != thread);
         self.manual.remove(&thread);
+        self.interactions.remove(&thread);
         true
     }
 
@@ -344,6 +349,7 @@ impl Service {
                 begin_navigation(tab)?;
             }
         }
+        self.expire_interaction(thread);
         Ok(self.state(thread))
     }
 
@@ -369,7 +375,8 @@ impl Service {
         tab.can_forward = page.can_forward;
         tab.error = page.error;
         tab.dirty = page.dirty;
-        Ok(state.clone())
+        self.expire_interaction(thread);
+        Ok(self.state(thread))
     }
 
     pub(crate) fn persistence_error(&mut self, thread: ThreadId, error: &str) {
@@ -424,13 +431,63 @@ impl Service {
         }
     }
 
-    /// Call before forwarding manual input. Every observation from before this
-    /// revision is stale, so queued agent input must obtain fresh state.
-    pub fn operator_input(&mut self, thread: ThreadId, owner: Owner) -> Result<u64> {
+    /// Begin/refresh a trusted operator gesture before forwarding its native
+    /// input. The ACK revision identifies the latest burst, not just its page.
+    pub fn operator_input(
+        &mut self,
+        thread: ThreadId,
+        owner: Owner,
+        document: Document,
+    ) -> Result<u64> {
         self.check_owner(thread, owner)?;
+        self.check_document(thread, document)?;
+        if self.state(thread).active != Some(document.tab) {
+            return Err("The selected tab changed; this queued input was discarded".into());
+        }
         let revision = self.manual.entry(thread).or_default();
-        *revision += 1;
-        Ok(*revision)
+        *revision = revision
+            .checked_add(1)
+            .ok_or("Operator input revision exhausted; reconnect this browser")?;
+        let revision = *revision;
+        self.interactions
+            .insert(thread, (owner, document, revision));
+        Ok(revision)
+    }
+
+    /// An old key-up, quiet-period callback or cancelled document cannot end a
+    /// newer gesture. Stale settlement is harmless and deliberately idempotent.
+    pub fn operator_settled(
+        &mut self,
+        thread: ThreadId,
+        owner: Owner,
+        document: Document,
+        revision: u64,
+    ) -> Result<bool> {
+        self.check_owner(thread, owner)?;
+        if self.interactions.get(&thread) == Some(&(owner, document, revision)) {
+            self.interactions.remove(&thread);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub fn operator_active(&self, thread: ThreadId) -> bool {
+        self.interactions.contains_key(&thread)
+    }
+
+    fn expire_interaction(&mut self, thread: ThreadId) {
+        let invalid = self
+            .interactions
+            .get(&thread)
+            .is_some_and(|(owner, document, _)| {
+                self.check_owner(thread, *owner).is_err()
+                    || self.check_document(thread, *document).is_err()
+                    || self.state(thread).active != Some(document.tab)
+            });
+        if invalid {
+            self.interactions.remove(&thread);
+        }
     }
 
     pub fn operator_revision(&self, thread: ThreadId) -> u64 {
@@ -451,6 +508,10 @@ impl Service {
             || page.loading
             || page.visible
             || page.dirty != Dirty::Clean
+            || self
+                .interactions
+                .get(&thread)
+                .is_some_and(|(_, document, _)| document.tab == tab)
             || self
                 .protections
                 .values()
@@ -486,6 +547,7 @@ impl Service {
         if page.visible
             || page.loading
             || page.dirty != Dirty::Clean
+            || page.protected
             || self.protections.values().any(|(id, _, _, _)| *id == thread)
         {
             return Ok(None);
