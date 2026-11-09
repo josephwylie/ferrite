@@ -164,6 +164,7 @@ struct Harness {
     sessions: Receiver<Sender<SessionEvent>>,
     answers: Answers,
     queued: Queued,
+    browser: crate::browser::Client,
 }
 
 fn start(name: &str) -> Harness {
@@ -210,6 +211,7 @@ fn serve_in(
     };
     let settings_dir = dir.clone();
     let (relaunches, relaunched) = mpsc::channel();
+    let (browser, browser_requests) = crate::browser::channel();
     let server = std::thread::spawn(move || {
         let engine = Engine::try_new(Store::open(&store).unwrap(), Box::new(spawn)).unwrap();
         let info = ServerInfo {
@@ -219,6 +221,7 @@ fn serve_in(
         let (_, renders) = render::remote();
         let defaults = Arc::new(Mutex::new(SessionDefaults::default()));
         let mut server = Server::new(engine, info, renders, defaults, settings_dir);
+        server.browser_requests = browser_requests;
         server.projects = projects;
         server.relaunch = Box::new(move |executable: &Path| {
             relaunches.send(executable.to_owned()).unwrap();
@@ -238,6 +241,7 @@ fn serve_in(
         sessions: started,
         answers,
         queued,
+        browser,
     }
 }
 
@@ -1223,6 +1227,7 @@ fn cockpit(harness: &Harness) -> crate::cockpit::Cockpit {
             version: "0".into(),
         },
         renderer: None,
+        browser: false,
         discovery: Box::new(NoDiscovery),
     })
     .unwrap()
@@ -2595,6 +2600,7 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
         server: crate::cockpit::Endpoint::Machine(bridge(&harness, &sent)),
         client: peer(),
         renderer: None,
+        browser: false,
         discovery: Box::new(NoDiscovery),
     })
     .unwrap();
@@ -4937,4 +4943,374 @@ fn a_restart_not_back_in_time_reads_failed_until_it_is() {
             Some(ServerRestart::Restarted { .. })
         )
     });
+}
+
+#[test]
+fn browser_requests_use_an_attached_thread_window_without_a_synthetic_client() {
+    use crate::browser::{Action, Operation};
+    let harness = start("browser-request-routing");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    window.watch(thread, None);
+    let request = || {
+        browser_test_action(Action::Open {
+            url: "https://example.com/account".into(),
+        })
+    };
+    let unavailable = harness.browser.for_thread(thread).submit(request());
+    assert!(unavailable
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .is_err());
+    let Attached { mut client, .. } = Client::attach(
+        &harness.address,
+        ClientMessage::Hello {
+            generation: 1,
+            client: Peer {
+                name: "browser-owner".into(),
+                version: "0".into(),
+            },
+            capabilities: vec![Capability::ConversationBrowser],
+        },
+    )
+    .unwrap();
+    client
+        .send(&ClientMessage::Watch {
+            thread,
+            resume: None,
+        })
+        .unwrap();
+    // The synchronous command also orders Watch ahead of the agent request.
+    client
+        .send(&ClientMessage::Command(Command {
+            id: 4,
+            op: Op::SettingsChanged,
+        }))
+        .unwrap();
+    loop {
+        if matches!(
+            client
+                .messages
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+            ServerMessage::Reply { id: 4, .. }
+        ) {
+            break;
+        }
+    }
+    let reply = harness.browser.for_thread(thread).submit(request());
+    let result = reply.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    assert_eq!(result.state.tabs[0].url, "https://example.com/account");
+    let mut realized = false;
+    while !realized {
+        if let ServerMessage::Browser {
+            thread: got,
+            state,
+            action: Some(Action::Open { .. }),
+            ..
+        } = client
+            .messages
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+        {
+            assert_eq!(got, thread);
+            assert_eq!(state.tabs[0].id, result.state.tabs[0].id);
+            realized = true;
+        }
+    }
+    window.command(99, Op::Stop { when: When::Now });
+    assert_eq!(harness.server.join().unwrap(), 0);
+}
+
+fn browser_test_action(action: crate::browser::Action) -> crate::browser::Operation {
+    crate::browser::Operation::Action {
+        action,
+        observation: None,
+    }
+}
+
+fn browser_test_window(harness: &Harness, thread: ThreadId) -> crate::link::Client {
+    let Attached { mut client, .. } = Client::attach(
+        &harness.address,
+        ClientMessage::Hello {
+            generation: 1,
+            client: Peer {
+                name: "browser-owner".into(),
+                version: "0".into(),
+            },
+            capabilities: vec![Capability::ConversationBrowser],
+        },
+    )
+    .unwrap();
+    client
+        .send(&ClientMessage::Watch {
+            thread,
+            resume: None,
+        })
+        .unwrap();
+    client
+        .send(&ClientMessage::Command(Command {
+            id: 77,
+            op: Op::SettingsChanged,
+        }))
+        .unwrap();
+    loop {
+        if matches!(
+            client
+                .messages
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+            ServerMessage::Reply { id: 77, .. }
+        ) {
+            return client;
+        }
+    }
+}
+
+fn browser_test_answer(
+    client: &mut crate::link::Client,
+    expected: crate::browser::Control,
+    outcome: crate::browser::Outcome,
+) {
+    loop {
+        if let ServerMessage::BrowserRequest {
+            request,
+            thread,
+            owner,
+            document,
+            revision,
+            control,
+        } = client
+            .messages
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+        {
+            assert_eq!(control, expected);
+            client
+                .send(&ClientMessage::BrowserReply {
+                    request,
+                    thread,
+                    owner,
+                    document,
+                    revision,
+                    outcome,
+                })
+                .unwrap();
+            return;
+        }
+    }
+}
+
+#[test]
+fn browser_requests_require_readable_observation_after_operator_or_uncertain_input() {
+    use crate::browser::{Action, Control, Operation, Outcome};
+    let harness = start("browser-input-arbitration");
+    let mut window = attach(&harness.address);
+    let (thread, _provider) = open(&mut window, &harness);
+    let mut owner_window = browser_test_window(&harness, thread);
+    let agent = harness.browser.for_thread(thread);
+    let opened = agent
+        .submit(browser_test_action(Action::Open {
+            url: "https://example.com/form".into(),
+        }))
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    let owner = opened.state.owner.unwrap();
+    let document = opened.state.tabs[0].document();
+    owner_window
+        .send(&ClientMessage::Command(Command {
+            id: 78,
+            op: Op::BrowserInput {
+                thread,
+                owner,
+                document,
+            },
+        }))
+        .unwrap();
+    let revision = loop {
+        if let ServerMessage::Reply {
+            id: 78,
+            ok: Some(Done::BrowserInput { revision }),
+            error: None,
+        } = owner_window
+            .messages
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+        {
+            break revision;
+        }
+    };
+    let click = Control::Click {
+        reference: "@e1".into(),
+    };
+    let paused = agent.submit(Operation::Control {
+        observation: None,
+        document,
+        revision,
+        control: click.clone(),
+    });
+    assert!(paused
+        .recv_timeout(Duration::from_secs(2))
+        .expect("manual input must reject a queued agent input immediately")
+        .is_err());
+    let shot = agent.submit(Operation::Control {
+        observation: None,
+        document,
+        revision,
+        control: Control::Screenshot,
+    });
+    browser_test_answer(
+        &mut owner_window,
+        Control::Screenshot,
+        Outcome::Success {
+            value: serde_json::json!({"png":"fixture"}),
+        },
+    );
+    shot.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    assert!(agent
+        .submit(Operation::Control {
+            observation: None,
+            document,
+            revision,
+            control: click.clone()
+        })
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .is_err());
+    assert!(agent
+        .submit(browser_test_action(Action::Navigate {
+            document,
+            url: "https://example.com/other".into()
+        }))
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .is_err());
+    let observe = agent.submit(Operation::Control {
+        observation: None,
+        document,
+        revision,
+        control: Control::Observe,
+    });
+    browser_test_answer(
+        &mut owner_window,
+        Control::Observe,
+        Outcome::Success {
+            value: serde_json::json!({"text":"Save button","references":["@e1"]}),
+        },
+    );
+    let fresh = observe
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap()
+        .observation
+        .expect("only a readable observation mints a receipt");
+    let other_agent = harness.browser.for_thread(thread);
+    let state = other_agent
+        .submit(Operation::State)
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(
+        state.observation.is_none(),
+        "State must never reveal another agent's receipt"
+    );
+    assert!(other_agent
+        .submit(Operation::Control {
+            document,
+            revision: state.revision,
+            observation: None,
+            control: click.clone()
+        })
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .is_err());
+    assert!(other_agent
+        .submit(browser_test_action(Action::Navigate {
+            document,
+            url: "https://example.com/other".into()
+        }))
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .is_err());
+    let write = agent.submit(Operation::Control {
+        observation: Some(fresh.clone()),
+        document,
+        revision,
+        control: click.clone(),
+    });
+    browser_test_answer(
+        &mut owner_window,
+        click.clone(),
+        Outcome::Uncertain {
+            error: "connection lost after click dispatch".into(),
+        },
+    );
+    assert!(write.recv_timeout(Duration::from_secs(5)).unwrap().is_err());
+    assert!(agent
+        .submit(browser_test_action(Action::Open {
+            url: "https://example.com/other".into()
+        }))
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .is_err());
+    let shot = agent.submit(Operation::Control {
+        observation: None,
+        document,
+        revision,
+        control: Control::Screenshot,
+    });
+    browser_test_answer(
+        &mut owner_window,
+        Control::Screenshot,
+        Outcome::Success {
+            value: serde_json::json!({"png":"fixture"}),
+        },
+    );
+    shot.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    assert!(agent
+        .submit(Operation::Control {
+            observation: None,
+            document,
+            revision,
+            control: click.clone()
+        })
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .is_err());
+    let observe = agent.submit(Operation::Control {
+        observation: None,
+        document,
+        revision,
+        control: Control::Observe,
+    });
+    browser_test_answer(
+        &mut owner_window,
+        Control::Observe,
+        Outcome::Success {
+            value: serde_json::json!({"text":"Saved"}),
+        },
+    );
+    let fresh = observe
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap()
+        .observation
+        .expect("only a readable observation mints a receipt");
+    let write = agent.submit(Operation::Control {
+        observation: Some(fresh.clone()),
+        document,
+        revision,
+        control: click.clone(),
+    });
+    browser_test_answer(
+        &mut owner_window,
+        click,
+        Outcome::Success {
+            value: serde_json::json!({"clicked":true}),
+        },
+    );
+    write.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    window.command(99, Op::Stop { when: When::Now });
+    assert_eq!(harness.server.join().unwrap(), 0);
 }

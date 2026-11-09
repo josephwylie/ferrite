@@ -66,6 +66,8 @@ impl SessionDefaults {
 /// How the app starts Sessions: the Thread's stored choice becomes a
 /// provider CLI process working in its binding.
 pub struct Spawn {
+    /// Thread-bound browser channel; provider adaptation is installed by #194.
+    pub browser: Option<crate::browser::Client>,
     pub defaults: Arc<Mutex<SessionDefaults>>,
     /// What answers an agent's `show_visual` with a screenshot (the app's
     /// off-screen browser, `visual::renderer`). `None`: the tool isn't offered.
@@ -86,6 +88,7 @@ impl Spawn {
         Self {
             defaults,
             renderer,
+            browser: None,
             api: None,
             projects: None,
         }

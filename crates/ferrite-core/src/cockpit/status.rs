@@ -59,6 +59,7 @@ impl ServerStatus {
             server,
             client,
             renderer: None,
+            browser: false,
             discovery: Box::new(NoDiscovery),
         });
         Self {

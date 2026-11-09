@@ -66,6 +66,8 @@ pub struct Attach {
     /// Draws the Visuals the Server's agents ask for; none, and this window
     /// does not offer to.
     pub renderer: Option<Arc<dyn Renderer>>,
+    /// This window can realize general website pages.
+    pub browser: bool,
     /// What the window finds on its own: CLI session files to adopt, a
     /// workspace's commands. It spawns no Session.
     pub discovery: Box<dyn crate::engine::Spawner>,
@@ -749,7 +751,7 @@ impl Remote {
         }
     }
 
-    fn say(&mut self, message: &ClientMessage) {
+    pub(super) fn say(&mut self, message: &ClientMessage) {
         let Some(attachment) = &mut self.attachment else {
             return;
         };
@@ -1066,6 +1068,9 @@ fn hello(attach: &Attach) -> ClientMessage {
     let mut capabilities = Vec::new();
     if attach.renderer.is_some() {
         capabilities.push(Capability::RenderVisual);
+    }
+    if attach.browser {
+        capabilities.push(Capability::ConversationBrowser);
     }
     capabilities.push(Capability::ParkedThreads);
     ClientMessage::Hello {
