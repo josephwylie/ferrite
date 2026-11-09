@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   core:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     env:
       CARGO_PROFILE_TEST_DEBUG: 0
       CARGO_PROFILE_DEV_DEBUG: 0
@@ -20,7 +20,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p ferrite-core --locked --test browser_conversations
-      - run: cargo test -p ferrite-core --locked --lib server::tests::browser_requests
-      - run: cargo test -p ferrite-core --locked --lib server::tests::browser_providers
-      - run: cargo test -p ferrite-core --locked --test visuals --test wrap_up
+      - name: Reproduce Codex visual-off transport ordering
+        run: |
+          for attempt in $(seq 1 50); do
+            cargo test -p ferrite-core --locked --test visuals codex_without_visuals_offers_nothing_and_refuses_a_stray_call -- --exact
+          done

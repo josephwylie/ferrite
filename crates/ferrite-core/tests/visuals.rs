@@ -574,7 +574,7 @@ fn codex_without_visuals_offers_nothing_and_refuses_a_stray_call() {
     let start = lines
         .iter()
         .find(|line| line["method"] == "thread/start")
-        .unwrap();
+        .unwrap_or_else(|| panic!("[DEBUG-visual-order] host frames before thread/start: {lines:?}"));
     assert!(start["params"].get("dynamicTools").is_none());
     assert!(start["params"]["config"].get("features").is_none());
     assert_eq!(
