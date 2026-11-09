@@ -57,6 +57,11 @@ pub struct AnnotationEditor {
     picture: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 impl EventEmitter<EditorEvent> for AnnotationEditor {}
+impl gpui::Focusable for AnnotationEditor {
+    fn focus_handle(&self, cx: &App) -> gpui::FocusHandle {
+        self.comment.read(cx).focus_handle(cx)
+    }
+}
 impl AnnotationEditor {
     pub fn new(retained: Annotation, local_image: PathBuf, cx: &mut Context<Self>) -> Self {
         let comment = cx.new(|cx| {
