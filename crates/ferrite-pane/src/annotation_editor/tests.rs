@@ -5,9 +5,8 @@ use ferrite_core::{
 };
 use gpui::{Modifiers, TestAppContext};
 
-#[gpui::test]
-fn annotation_editor_pointer_feedback_preserves_capture(cx: &mut TestAppContext) {
-    let root = std::env::temp_dir().join(format!("ferrite-editor-{}", std::process::id()));
+fn evidence(name: &str) -> (PathBuf, Annotation, Vec<u8>) {
+    let root = std::env::temp_dir().join(format!("ferrite-editor-{name}-{}", std::process::id()));
     let mut png = std::io::Cursor::new(Vec::new());
     image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
         1000,
@@ -43,6 +42,12 @@ fn annotation_editor_pointer_feedback_preserves_capture(cx: &mut TestAppContext)
         vec![],
     )
     .unwrap();
+    (root, retained, png)
+}
+
+#[gpui::test]
+fn annotation_editor_pointer_feedback_preserves_capture(cx: &mut TestAppContext) {
+    let (root, retained, png) = evidence("drawing-tools");
     let original = retained.clone();
     let (editor, cx) = cx.add_window_view(|_, cx| {
         AnnotationEditor::new(retained.clone(), retained.original().into(), cx)
@@ -187,6 +192,33 @@ fn annotation_editor_pointer_feedback_preserves_capture(cx: &mut TestAppContext)
     cx.simulate_click(cancel.center(), Modifiers::none());
     assert!(cancelled.get());
     assert_eq!(retained, original);
+    assert_eq!(std::fs::read(retained.original()).unwrap(), png);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui::test]
+fn annotation_editor_retains_literal_initial_feedback(cx: &mut TestAppContext) {
+    let (root, retained, png) = evidence("literal-comment");
+    let literal = browser_annotations::compose("Comment", &[], &[retained.clone()]);
+    let retained = retained.with_feedback(literal.clone(), vec![]).unwrap();
+    let (editor, cx) = cx.add_window_view(|_, cx| {
+        AnnotationEditor::new(retained.clone(), retained.original().into(), cx)
+    });
+    cx.simulate_resize(size(px(600.), px(700.)));
+    let feedback = Rc::new(std::cell::RefCell::new(None));
+    let captured = feedback.clone();
+    let _subscription = editor.update(cx, |_, cx| {
+        cx.subscribe(&editor, move |_, _, event, _| {
+            if let EditorEvent::Added { comment, drawings } = event {
+                assert!(drawings.is_empty(), "Selection-only feedback is addable");
+                *captured.borrow_mut() = Some(comment.clone());
+            }
+        })
+    });
+    let add = cx.debug_bounds("annotation-add").unwrap();
+    cx.simulate_click(add.center(), Modifiers::none());
+    assert_eq!(feedback.borrow().as_ref(), Some(&literal));
+    assert_eq!(retained.comment(), literal);
     assert_eq!(std::fs::read(retained.original()).unwrap(), png);
     std::fs::remove_dir_all(root).unwrap();
 }
