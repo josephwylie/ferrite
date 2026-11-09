@@ -39,6 +39,8 @@ jobs:
     timeout-minutes: 75
     env:
       FERRITE_BROWSER_SMOKE: '1'
+      # This workflow's ordinary/profile smoke uses only isolated test data.
+      FERRITE_BROWSER_SMOKE_MOCK_KEYCHAIN: '1'
       FERRITE_BROWSER_SMOKE_DRIVER: ${{ github.workspace }}/scripts/probe-embedded-browser.py
       FERRITE_BROWSER_EVIDENCE: ${{ github.workspace }}/target/browser-evidence
     strategy:
@@ -121,6 +123,9 @@ jobs:
           for stage in write read; do
             FERRITE_BROWSER_PROFILE_SMOKE="$stage" target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite --visual-smoke
           done
+      - name: macOS production OS keychain and encrypted cookie restart
+        if: runner.os == 'macOS'
+        run: python scripts/probe-browser-keychain.py target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite
       - name: Windows unsafe startup smoke
         if: runner.os == 'Windows'
         shell: pwsh

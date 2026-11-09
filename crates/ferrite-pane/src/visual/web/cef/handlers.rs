@@ -48,7 +48,6 @@ wrap_app! {
                 "no-startup-window",
                 "noerrdialogs",
                 "hide-crash-restore-bubble",
-                "use-mock-keychain",
                 "no-first-run",
                 // No traffic Chromium would make on its own behalf.
                 "disable-background-networking",
@@ -58,6 +57,14 @@ wrap_app! {
                 "disable-extensions",
             ] {
                 command_line.append_switch(Some(&switch.into()));
+            }
+            // Production website logins use the OS keychain. Only an explicit
+            // isolated packaged smoke opts into Chromium's mock implementation.
+            if cfg!(target_os = "macos")
+                && std::env::args().any(|argument| argument == "--visual-smoke")
+                && std::env::var("FERRITE_BROWSER_SMOKE_MOCK_KEYCHAIN").as_deref() == Ok("1")
+            {
+                command_line.append_switch(Some(&"use-mock-keychain".into()));
             }
             // No pre-warmed spare renderer. Keep the network service in its
             // own sandboxed process: external views share this CEF runtime.
