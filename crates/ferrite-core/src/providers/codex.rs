@@ -133,6 +133,8 @@ pub struct CodexConfig {
     /// tool (and description) it began with — so the level only shapes new
     /// threads; the renderer still answers a resumed thread's calls.
     pub visuals: Option<crate::visual::Visuals>,
+    /// Trusted browser capability bound to this Session's Thread.
+    pub browser: Option<crate::browser::ThreadClient>,
     /// Ferrite's caller context for the agent (`api::caller_environment`):
     /// set over whatever the CLI inherited, after the Thread's own
     /// (`thread.start --env`).
@@ -158,6 +160,7 @@ impl Default for CodexConfig {
             sandbox: None,
             resume: None,
             visuals: None,
+            browser: None,
             env: Vec::new(),
             launcher: Vec::new(),
             args: Vec::new(),

@@ -22,7 +22,10 @@ fn lines_until(path: &Path, done: impl Fn(&Value) -> bool) -> Vec<Value> {
         if lines.iter().any(&done) {
             return lines;
         }
-        assert!(Instant::now() < deadline, "provider never answered: {lines:?}");
+        assert!(
+            Instant::now() < deadline,
+            "provider never answered: {lines:?}"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -51,13 +54,23 @@ fn claude_browser_opens_the_bound_threads_tab_with_visuals_off() {
         program,
         browser: Some(harness.browser.for_thread(thread)),
         ..Default::default()
-    }).unwrap();
-    let lines = lines_until(&host, |line| line["response"]["request_id"] == "browser-open");
-    let answer = lines.iter().find(|line| line["response"]["request_id"] == "browser-open").unwrap();
+    })
+    .unwrap();
+    let lines = lines_until(&host, |line| {
+        line["response"]["request_id"] == "browser-open"
+    });
+    let answer = lines
+        .iter()
+        .find(|line| line["response"]["request_id"] == "browser-open")
+        .unwrap();
     let result = &answer["response"]["response"]["mcp_response"]["result"];
     assert_eq!(result["isError"], false, "{answer}");
-    let value: Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(value["state"]["tabs"][0]["url"], "https://example.com/provider-owned");
+    let value: Value =
+        serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        value["state"]["tabs"][0]["url"],
+        "https://example.com/provider-owned"
+    );
     drop(session);
     window.command(99, Op::Stop { when: When::Now });
     assert_eq!(harness.server.join().unwrap(), 0);

@@ -119,6 +119,8 @@ pub struct ClaudeConfig {
     /// level and the app's renderer. `None`, or a level of Off, offers
     /// nothing. Fixed for the Session: the CLI lists its tools once.
     pub visuals: Option<crate::visual::Visuals>,
+    /// Trusted browser capability bound to this Session's Thread.
+    pub browser: Option<crate::browser::ThreadClient>,
     /// Ferrite's caller context for the agent (`api::caller_environment`):
     /// set over whatever the CLI inherited, after the Thread's own
     /// (`thread.start --env`).
@@ -146,6 +148,7 @@ impl Default for ClaudeConfig {
             resume_drops: None,
             fork: false,
             visuals: None,
+            browser: None,
             env: Vec::new(),
             launcher: Vec::new(),
             args: Vec::new(),
