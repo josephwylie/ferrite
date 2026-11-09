@@ -371,8 +371,12 @@ struct ViewState {
 impl ViewState {
     fn navigation(&self, generation: u64, f: impl FnOnce(&mut BrowserState)) {
         if self.external && self.is_current(generation) {
-            f(&mut self.navigation.lock().unwrap());
-            self.dirty.store(true, Ordering::SeqCst);
+            let mut navigation = self.navigation.lock().unwrap();
+            let before = navigation.clone();
+            f(&mut navigation);
+            if *navigation != before {
+                self.dirty.store(true, Ordering::SeqCst);
+            }
         }
     }
 

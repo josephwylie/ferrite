@@ -104,10 +104,10 @@ impl Observation {
 
     fn unknown(state: &ViewState) {
         let mut navigation = state.navigation.lock().unwrap();
-        if navigation.dirty != BrowserDirty::Dirty {
+        if navigation.dirty == BrowserDirty::Clean {
             navigation.dirty = BrowserDirty::Unknown;
+            state.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
         }
-        state.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn send(&mut self, browser: &Browser, document: u64, step: Step, method: &str, params: Value) {
@@ -234,12 +234,15 @@ impl Observation {
                         && navigation.dirty != BrowserDirty::Dirty
                     {
                         self.clean_at = (!uncertain).then(Instant::now);
-                        navigation.dirty = if uncertain {
+                        let dirty = if uncertain {
                             BrowserDirty::Unknown
                         } else {
                             BrowserDirty::Clean
                         };
-                        state.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
+                        if navigation.dirty != dirty {
+                            navigation.dirty = dirty;
+                            state.dirty.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
                     }
                 }
             }
