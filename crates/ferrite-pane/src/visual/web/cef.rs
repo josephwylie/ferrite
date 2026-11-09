@@ -95,10 +95,16 @@ pub unsafe fn windows_bootstrap(sandbox_info: *mut u8) {
     unsafe { platform::set_sandbox_info(sandbox_info) };
 }
 
-/// Match Chromium's switch prefixes, optional values and `--` terminator.
-/// These switches disable the renderer isolation required for external pages,
-/// even when Settings::no_sandbox was not set by our environment escape hatch.
-fn unsafe_sandbox_switch() -> bool {
+/// One Chromium-compatible switch parser feeds CEF configuration and the
+/// external-page capability gate, including short/slash prefixes and values.
+#[derive(Default)]
+struct IsolationOverrides {
+    disable_sandbox: bool,
+    disable_external: bool,
+}
+
+fn isolation_overrides() -> IsolationOverrides {
+    let mut overrides = IsolationOverrides::default();
     for mut argument in std::env::args().skip(1) {
         if cfg!(windows) {
             argument.make_ascii_lowercase();
@@ -120,17 +126,28 @@ fn unsafe_sandbox_switch() -> bool {
                 } else {
                     None
                 }
-            });
-        if name.is_some_and(|name| {
-            matches!(
-                name.split('=').next(),
-                Some("no-sandbox" | "single-process")
-            )
-        }) {
-            return true;
+            })
+            .and_then(|name| name.split('=').next());
+        match name {
+            Some("no-sandbox" | "single-process") => {
+                overrides.disable_sandbox = true;
+                overrides.disable_external = true;
+            }
+            Some(
+                "disable-web-security"
+                | "disable-gpu-sandbox"
+                | "disable-features"
+                | "enable-features",
+            ) => {
+                overrides.disable_external = true;
+            }
+            Some(name) if name.starts_with("disable-site-isolation") => {
+                overrides.disable_external = true;
+            }
+            _ => {}
         }
     }
-    false
+    overrides
 }
 
 /// What [`boot`] found this process to be.
@@ -205,10 +222,11 @@ impl Dormant {
         }
 
         let profile = profile_dir();
+        let overrides = isolation_overrides();
         // FERRITE_CEF_NO_SANDBOX=1 is the escape hatch if helpers won't start.
         let no_sandbox = !platform::SANDBOXED
             || std::env::var_os("FERRITE_CEF_NO_SANDBOX").is_some()
-            || unsafe_sandbox_switch();
+            || overrides.disable_sandbox;
         let settings = Settings {
             no_sandbox: no_sandbox as i32,
             windowless_rendering_enabled: 1,
@@ -238,16 +256,9 @@ impl Dormant {
                 views: RefCell::new(Vec::new()),
                 next_id: Cell::new(1),
                 pumping: Cell::new(false),
-                sandboxed: !no_sandbox
-                    && std::env::var_os("FERRITE_CEF_EXTRA_SWITCHES").is_none()
-                    && !std::env::args().any(|arg| {
-                        arg.starts_with("--no-sandbox")
-                            || arg.starts_with("--disable-web-security")
-                            || arg.starts_with("--single-process")
-                            || arg.starts_with("--disable-features")
-                            || arg.starts_with("--enable-features")
-                            || arg.starts_with("--disable-site-isolation")
-                    }),
+                browser_isolated: !no_sandbox
+                    && !overrides.disable_external
+                    && std::env::var_os("FERRITE_CEF_EXTRA_SWITCHES").is_none(),
                 control: RefCell::new(None),
                 browser_context: RefCell::new(None),
                 profile,
@@ -426,7 +437,7 @@ struct EngineInner {
     views: RefCell<Vec<Weak<ViewInner>>>,
     next_id: Cell<u64>,
     pumping: Cell<bool>,
-    sandboxed: bool,
+    browser_isolated: bool,
     control: RefCell<Option<control::Control>>,
     browser_context: RefCell<Option<cef::RequestContext>>,
     profile: PathBuf,
@@ -445,8 +456,8 @@ impl Engine for CefEngine {
         viewport: Viewport,
         wake: Wake,
     ) -> Result<Box<dyn View>, String> {
-        if !self.inner.sandboxed {
-            return Err("Conversation browsing requires the Chromium sandbox; remove FERRITE_CEF_NO_SANDBOX and sandbox-disabling startup switches".into());
+        if !self.inner.browser_isolated {
+            return Err("Conversation browsing requires the Chromium sandbox and web isolation; remove FERRITE_CEF_NO_SANDBOX and sandbox-disabling startup switches".into());
         }
         if !handlers::external_url(url) {
             return Err("Conversation browser requires an http or https URL".into());
@@ -472,7 +483,7 @@ impl Engine for CefEngine {
     }
 
     fn controller(&self) -> Result<ControllerEndpoint, String> {
-        if !self.inner.sandboxed {
+        if !self.inner.browser_isolated {
             return Err("Browser controller requires sandboxed Chromium".into());
         }
         let mut controller = self.inner.control.borrow_mut();

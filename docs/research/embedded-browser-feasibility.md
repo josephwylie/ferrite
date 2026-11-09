@@ -25,9 +25,8 @@ Cargo lockfile and records the patch and executable SHA-256 in
 licenses in `Contents/Resources/agent-browser`, with only the executable in
 `Contents/MacOS`; code signing treats metadata in the latter as unsigned nested
 code. `--metadata-directory` selects this layout for staging/offline verification.
-The original official native release digest verifier is retained separately as
-`verify-agent-browser-release.py`; **those unmodified executables must not be
-used by the Conversation browser**.
+Official unmodified upstream executables must not substitute for this hardened
+native distribution.
 
 The patch is necessary: upstream's native daemon unconditionally starts a
 loopback streaming WebSocket server. Its origin check accepts missing Origin,
@@ -199,6 +198,31 @@ creation and controller access to reject the unsafe configuration, then run the
 ordinary sealed-visual pixel/input/idle checks. The intentionally unsandboxed
 negative runs do not claim renderer sandbox proof; the normal packaged smoke
 still requires the OS sandbox checks. These additions require CI validation.
+
+## Review verification updates
+
+One normalized Chromium switch parser now feeds both CEF sandbox settings and
+the external capability gate. Short prefixes, Windows slash/case variants and
+valued switches cannot bypass the web-security, site-isolation or feature
+override checks. Packaged negative smokes cover those families as well as the
+sandbox override while retaining sealed rendering/input tests.
+
+The Python tests exercise the **shipping packager** through its public offline
+CLI: tampered executable bytes, wrong source provenance, missing offline data,
+and the separate macOS resource metadata directory. The unused official-release
+verifier was removed.
+
+Process-count evidence comes from actual OS descendant trees (`ps` on macOS,
+`Win32_Process` on Windows), including executable names and PIDs. The fixture
+retains samples before controller startup, throughout single-agent work and
+throughout two concurrent workers, then after controller reconnect. Each active
+phase takes at least three samples while native page work continues. Both
+phases assert the same two target IDs; adding tabs cannot explain a process
+count difference. The recorded controller/browser counts are computed from
+these samples and the concurrent-agent phase must not increase browser process
+count over the single-agent baseline. Periodic sampling is not an exhaustive
+trace of arbitrarily short-lived OS processes. These updated fixture checks
+remain pending packaged CI execution.
 
 ## Reproduction and acceptance status
 
