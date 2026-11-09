@@ -112,7 +112,11 @@ impl Observation {
     pub(super) fn invalidate(&mut self, state: &ViewState) {
         // A protected command may have written after any in-flight inspection.
         // Its old result can never make the post-command document clean.
-        self.pending = None;
+        // Bootstrap does not certify cleanliness. Preserve its acknowledgements
+        // when a first-use protection ends before inspection is installed.
+        if self.installed {
+            self.pending = None;
+        }
         self.clean_at = None;
         self.retained = false;
         self.last = Instant::now() - INTERVAL;
