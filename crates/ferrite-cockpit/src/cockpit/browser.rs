@@ -36,7 +36,6 @@ struct Page {
     web: Entity<WebView>,
     native: Rc<dyn BrowserView>,
     document: Rc<Cell<Document>>,
-    suppress_navigation: Rc<Cell<bool>>,
     acknowledged: Cell<Option<(Document, u64)>>,
 }
 enum Event {
@@ -229,7 +228,6 @@ impl CockpitView {
                         if let Some(tab) = browser.state.tabs.iter().find(|tab| tab.id == id) {
                             page.document.set(tab.document());
                         }
-                        page.suppress_navigation.set(true);
                         let result = match kind {
                             0 => page.native.navigate(url.as_deref().unwrap()),
                             1 => page.native.back(),
@@ -408,8 +406,6 @@ impl CockpitView {
             let native_generation = Rc::new(Cell::new(None));
             let input_generation = native_generation.clone();
             let input_document = document.clone();
-            let suppress_navigation = Rc::new(Cell::new(false));
-            let suppress = suppress_navigation.clone();
             let web = WebView::browser(
                 engine,
                 &tab.url,
@@ -431,7 +427,10 @@ impl CockpitView {
                     let changed_generation = native_generation
                         .replace(Some(state.document_generation))
                         .is_some_and(|generation| generation != state.document_generation);
-                    let navigation = changed_generation && !suppress.replace(false);
+                    // Every observed native commit invalidates prior page
+                    // references, including a commit after a service intent.
+                    // Extra generations are safer than hiding a link navigation.
+                    let navigation = changed_generation;
                     let page = PageState {
                         visible: false,
                         navigation,
@@ -477,7 +476,6 @@ impl CockpitView {
                             web,
                             native,
                             document,
-                            suppress_navigation,
                             acknowledged: Cell::new(None),
                         },
                     );
