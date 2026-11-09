@@ -1435,8 +1435,8 @@ impl CockpitView {
                     })),
             );
         }
-        let annotatable =
-            !browser.new_tab && active.is_some_and(|tab| browser.pages.contains_key(&tab.id));
+        let annotatable = !browser.new_tab
+            && active.is_some_and(|tab| !tab.loading && browser.pages.contains_key(&tab.id));
         toolbar = toolbar
             .when(annotatable, |toolbar| {
                 toolbar.child(

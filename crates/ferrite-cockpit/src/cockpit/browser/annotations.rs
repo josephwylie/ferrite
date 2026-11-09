@@ -80,13 +80,14 @@ impl CockpitView {
             let owner = browser.owner?;
             let tab = browser.state.active?;
             let page = browser.pages.get(&tab)?;
-            if !page.web.read(cx).browser_visible() {
+            let state = page.native.state();
+            if !page.web.read(cx).browser_visible() || state.loading {
                 return None;
             }
             Some((
                 owner,
                 page.document.get(),
-                page.native.state().document_generation,
+                state.document_generation,
                 page.manual.clone(),
             ))
         });
