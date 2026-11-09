@@ -38,6 +38,7 @@ struct Connection {
 
 struct Target {
     browser: Browser,
+    agent_paused: Arc<AtomicBool>,
     // Keeping the registration alive is what keeps CEF delivering messages.
     _registration: Registration,
 }
@@ -128,7 +129,7 @@ impl Control {
         self.endpoint.clone()
     }
 
-    pub(super) fn register(&mut self, id: String, browser: Browser) {
+    pub(super) fn register(&mut self, id: String, browser: Browser, agent_paused: Arc<AtomicBool>) {
         let Some(host) = browser.host() else { return };
         let mut observer = Observer::new(id.clone(), self.send.clone(), self.overflow.clone());
         let Some(registration) = host.add_dev_tools_message_observer(Some(&mut observer)) else {
@@ -138,6 +139,7 @@ impl Control {
             id.clone(),
             Target {
                 browser,
+                agent_paused,
                 _registration: registration,
             },
         );
@@ -326,6 +328,12 @@ impl Control {
                 self.error(peer, id, "Unknown embedded target session");
                 return;
             }
+            if self.targets[&session].agent_paused.load(Ordering::SeqCst)
+                && !read_only_while_paused(&method)
+            {
+                self.output(peer, json!({"id":id,"error":{"code":-32000,"message":"Operator interaction has paused agent input. Wait for it to settle, then inspect fresh page state before continuing.","data":{"completion":"not_dispatched","reason":"manual_interaction"}}}));
+                return;
+            }
             // Never forward browser-wide/target-management commands. CEF's page
             // observer otherwise permits discovery outside this view's scope.
             let domain = method.split('.').next().unwrap_or("");
@@ -435,15 +443,18 @@ impl Control {
                 json!({"targetInfo":self.info(target)})
             }
             "Target.activateTarget" => {
-                let Some(host) = self
-                    .targets
-                    .get(params["targetId"].as_str().unwrap_or(""))
-                    .and_then(|target| target.browser.host())
+                let Some(target) = self.targets.get(params["targetId"].as_str().unwrap_or(""))
                 else {
                     self.error(peer, id, "Unknown embedded target");
                     return;
                 };
-                host.set_focus(1);
+                // Selecting a controller session for a read-only capture must
+                // not steal the operator's native keyboard focus.
+                if !target.agent_paused.load(Ordering::SeqCst) {
+                    if let Some(host) = target.browser.host() {
+                        host.set_focus(1);
+                    }
+                }
                 json!({})
             }
             "Browser.getVersion" => {
@@ -460,6 +471,52 @@ impl Control {
         };
         self.output(peer, json!({"id":id,"result":result}));
     }
+}
+
+/// Conservatively deny anything that can execute page JS or change the page.
+/// Observations and capture setup remain usable while the operator owns input.
+fn read_only_while_paused(method: &str) -> bool {
+    matches!(
+        method,
+        "Page.captureScreenshot"
+            | "Page.getLayoutMetrics"
+            | "Page.getFrameTree"
+            | "Page.enable"
+            | "Page.disable"
+            | "Page.setLifecycleEventsEnabled"
+            | "Runtime.enable"
+            | "Runtime.disable"
+            | "DOM.enable"
+            | "DOM.disable"
+            | "DOM.getDocument"
+            | "DOM.describeNode"
+            | "DOM.getBoxModel"
+            | "DOM.getContentQuads"
+            | "DOM.getNodeForLocation"
+            | "DOM.getOuterHTML"
+            | "DOM.querySelector"
+            | "DOM.querySelectorAll"
+            | "DOM.resolveNode"
+            | "DOM.requestNode"
+            | "DOM.getAttributes"
+            | "DOMSnapshot.captureSnapshot"
+            | "Accessibility.enable"
+            | "Accessibility.disable"
+            | "Accessibility.getFullAXTree"
+            | "Accessibility.getPartialAXTree"
+            | "Accessibility.getAXNodeAndAncestors"
+            | "Accessibility.getChildAXNodes"
+            | "Accessibility.getRootAXNode"
+            | "Accessibility.queryAXTree"
+            | "CSS.getComputedStyleForNode"
+            | "CSS.getMatchedStylesForNode"
+            | "Network.enable"
+            | "Network.disable"
+            | "Network.getResponseBody"
+            | "Log.enable"
+            | "Log.disable"
+            | "Performance.getMetrics"
+    )
 }
 
 impl Drop for Control {
