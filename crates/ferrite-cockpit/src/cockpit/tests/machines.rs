@@ -1465,9 +1465,13 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
     cx.simulate_mouse_up(viewport.origin - gpui::point(px(10.), px(10.)), gpui::MouseButton::Left, gpui::Modifiers::none());
     wait_protection(cx, false, "outside pointer release settles");
     cx.simulate_click(page_point, gpui::Modifiers::none());
+    // GPUI's keystroke helper emits only KeyDown. Real typing also releases
+    // each key; held keys deliberately keep manual interaction active.
     cx.simulate_keystrokes("a");
+    cx.simulate_event(gpui::KeyUpEvent { keystroke: gpui::Keystroke::parse("a").unwrap() });
     tick(cx);
     cx.simulate_keystrokes("b");
+    cx.simulate_event(gpui::KeyUpEvent { keystroke: gpui::Keystroke::parse("b").unwrap() });
     tick(cx);
     assert!(view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap().tabs.iter().any(|tab| tab.protected)),
         "a typing burst must remain protected between keys");
