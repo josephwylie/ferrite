@@ -61,6 +61,7 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
                 std::thread::sleep(Duration::from_millis(5));
                 continue;
             };
+            let _ = stream.set_nonblocking(false);
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
             let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
             let mut request = [0; 4096];
