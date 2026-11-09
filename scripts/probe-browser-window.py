@@ -84,14 +84,25 @@ def main():
     for name in ('window-start.json', 'window-result.json', 'provider-result.json',
                  'provider-result.tmp', 'provider-trace.json', 'provider-definitions.json',
                  'provider-host.jsonl', 'startup-comparison.json', 'oracle.json',
-                 'cleanup-error.txt', 'window-before.png', 'window-after.png',
+                 'cleanup-error.txt', 'oracle-at-exit.json', 'window-before.png', 'window-after.png',
                  'window-provider.png', 'window-current.png'):
         (output/name).unlink(missing_ok=True)
     with args.executable.open('rb') as binary:
         executable_digest = hashlib.file_digest(binary, 'sha256').hexdigest()
+    components = []
+    for component in (args.executable.resolve(), args.executable.resolve().with_name('ferrite.dll'),
+                      args.executable.resolve().with_name('agent-browser.exe' if os.name == 'nt' else 'agent-browser')):
+        if component.is_file():
+            with component.open('rb') as binary:
+                components.append({'path':str(component), 'sha256':hashlib.file_digest(binary, 'sha256').hexdigest()})
+    controller_metadata = args.executable.resolve().with_name('agent-browser-build.json')
+    if sys.platform == 'darwin':
+        controller_metadata = args.executable.resolve().parents[1]/'Resources'/'agent-browser'/'agent-browser-build.json'
+    native_build = json.loads(controller_metadata.read_text()) if controller_metadata.is_file() else None
     (output/'provenance.json').write_text(json.dumps({
         'started_utc':datetime.now(timezone.utc).isoformat(),
         'executable':str(args.executable.resolve()), 'sha256':executable_digest,
+        'application_components':components, 'native_build':native_build,
         'platform':platform.platform(), 'architecture':platform.machine(),
         'provider':args.provider, 'diagnostic_only':args.startup_only,
         'profile_mode':'isolated temporary production profile',
@@ -264,6 +275,12 @@ def main():
             if (root/'logs').exists():
                 shutil.copytree(root/'logs', output/'diagnostics', dirs_exist_ok=True)
             server.shutdown()
+            # Retain independent page activation even when rendering/input or
+            # provider setup fails before the success-only oracle is written.
+            (output/'oracle-at-exit.json').write_text(json.dumps({
+                'clicks':len(clicked), 'click_seconds':[stamp-started for stamp in clicked],
+                'elapsed_seconds':time.monotonic()-started,
+            }, indent=2), encoding='utf-8')
             if cleanup_error:
                 (output/'cleanup-error.txt').write_text(cleanup_error, encoding='utf-8')
                 if sys.exc_info()[0] is None:
