@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::{Engine, Frame, Page, View, Viewport, BLUE, GREEN, RED};
+use crate::visual::web::BrowserViewport;
 
 struct ProbeFile(std::path::PathBuf);
 impl ProbeFile {
@@ -52,6 +53,8 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let fixture = Fixture(Arc::new(AtomicBool::new(false)));
     let stop = fixture.0.clone();
+    let edited = Arc::new(AtomicBool::new(false));
+    let observed_edit = edited.clone();
     std::thread::spawn(move || {
         while !stop.load(Ordering::Relaxed) {
             let Ok((mut stream, _)) = listener.accept() else {
@@ -65,20 +68,28 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
                 continue;
             };
             let request = String::from_utf8_lossy(&request[..length]);
+            if request.starts_with("GET /dirty?value=x ") {
+                observed_edit.store(true, Ordering::SeqCst);
+            }
             let color = if request.starts_with("GET /one ") {
                 "rgb(0, 0, 255)"
             } else {
                 "rgb(0, 255, 0)"
             };
-            let page = format!(
-                r#"<!doctype html><html style="background:rgb(255,0,0)"><head><title>Ferrite browser fixture</title></head><body style="margin:0;background:rgb(255,0,0)"><button id="paint" onclick="document.documentElement.style.background='{color}';document.body.style.background='{color}';this.textContent='Painted'">Paint</button><input id="value"><script>window.fixtureReady=true</script></body></html>"#
-            );
+            let page = if request.starts_with("GET /clean ") {
+                "<!doctype html><title>Clean lifecycle fixture</title><style>html,body{margin:0;background:rgb(255,0,0);height:100%}</style>".to_owned()
+            } else {
+                format!(
+                    r#"<!doctype html><html style="background:rgb(255,0,0)"><head><title>Ferrite browser fixture</title></head><body style="margin:0;background:rgb(255,0,0)"><button id="paint" onclick="document.documentElement.style.background='{color}';document.body.style.background='{color}';this.textContent='Painted'">Paint</button><input id="value" oninput="fetch('/dirty?value='+encodeURIComponent(this.value))"><script>window.fixtureReady=true</script></body></html>"#
+                )
+            };
             let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
             let _ = stream.write_all(response.as_bytes());
         }
     });
-    let viewport = Viewport {
+    let viewport = BrowserViewport {
         width: 400,
+        height: 600,
         scale: 1.0,
     };
     let one = engine.open_browser(&format!("http://{address}/one"), viewport, Box::new(|| {}))?;
@@ -88,12 +99,98 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
             html: "<style>body{margin:0;height:600px;background:rgb(255,0,0)}</style>sealed".into(),
             theme_css: String::new(),
         },
-        viewport,
+        Viewport {
+            width: viewport.width,
+            scale: viewport.scale,
+        },
         Box::new(|| {}),
     );
     let mut frames = [None, None, None];
-    let views = [one.as_ref(), two.as_ref(), sealed.as_ref()];
+    let views: [&dyn View; 3] = [one.as_ref(), two.as_ref(), sealed.as_ref()];
     wait_pixels(engine, &views, &mut frames, [RED, RED, RED])?;
+    one.resize_browser(BrowserViewport {
+        width: 320,
+        height: 240,
+        scale: 2.0,
+    });
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if one
+            .take()
+            .frame
+            .is_some_and(|frame| frame.width == 640 && frame.height == 480)
+        {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err("Browser viewport resize did not produce 640x480 pixels".into());
+        }
+        std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
+    }
+    if one.navigate("file:///private/forbidden").is_ok() {
+        return Err("Browser accepted forbidden navigation".into());
+    }
+    one.resize_browser(viewport);
+    let initial = one.state().document_generation;
+    let next = format!("http://{address}/next");
+    one.navigate(&next)?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading && state.url == next && state.can_back && state.document_generation > initial
+    })?;
+    one.back()?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading && state.url.ends_with("/one") && state.can_forward
+    })?;
+    one.forward()?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading && state.url == next
+    })?;
+    let before_reload = one.state().document_generation;
+    one.reload()?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading && state.document_generation > before_reload
+    })?;
+    one.navigate(&format!("http://{address}/one"))?;
+    wait_browser(engine, one.as_ref(), |state| {
+        !state.loading && state.url.ends_with("/one")
+    })?;
+    let clean = engine.open_browser(
+        &format!("http://{address}/clean"),
+        viewport,
+        Box::new(|| {}),
+    )?;
+    wait_browser(engine, clean.as_ref(), |state| {
+        !state.loading && state.dirty == crate::visual::web::BrowserDirty::Clean
+    })?;
+    let old_target = clean.target_id().ok_or("Clean page has no live target")?;
+    let old_generation = clean.state().document_generation;
+    clean.set_visible(false);
+    clean.set_protected(true);
+    if clean.try_release()? {
+        return Err("Protected page was reclaimed".into());
+    }
+    clean.set_protected(false);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if clean.try_release()? {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err("Clean inactive page was not reclaimed".into());
+        }
+        std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
+    }
+    if clean.target_id().is_some() {
+        return Err("Reclaimed page still has a live target".into());
+    }
+    clean.set_visible(true);
+    wait_browser(engine, clean.as_ref(), |state| {
+        !state.loading && state.document_generation > old_generation
+    })?;
+    if clean.target_id().as_deref() == Some(&old_target) {
+        return Err("Recreated page retained its retired target".into());
+    }
+    drop(clean);
     let endpoint = engine.controller()?;
     let private_file = ProbeFile::create()?;
     let private_file_url = url::Url::from_file_path(&private_file.0)
@@ -137,6 +234,42 @@ pub(super) fn run(engine: &dyn Engine) -> Result<(), String> {
         std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
     }
     wait_pixels(engine, &views, &mut frames, [BLUE, GREEN, RED])?;
+    one.input(crate::visual::web::Input::Down {
+        x: 100.0,
+        y: 10.0,
+        button: crate::visual::web::MouseButton::Left,
+        clicks: 1,
+        modifiers: Default::default(),
+    });
+    one.input(crate::visual::web::Input::Up {
+        x: 100.0,
+        y: 10.0,
+        button: crate::visual::web::MouseButton::Left,
+        clicks: 1,
+        modifiers: Default::default(),
+    });
+    one.input(crate::visual::web::Input::Key {
+        key: "x".into(),
+        text: Some("x".into()),
+        down: true,
+        modifiers: Default::default(),
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !edited.load(Ordering::SeqCst) {
+        if Instant::now() >= deadline {
+            return Err("Native form input was not confirmed by fixture HTTP oracle".into());
+        }
+        std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
+    }
+    wait_browser(engine, one.as_ref(), |state| {
+        state.dirty == crate::visual::web::BrowserDirty::Dirty
+    })?;
+    one.set_visible(false);
+    one.set_protected(false);
+    if one.try_release()? || one.target_id().is_none() {
+        return Err("Unfinished form was discarded".into());
+    }
+    one.set_visible(true);
     // The views are still alive here: the controller painted exactly the
     // displayed external pages, while the sealed page retained its own pixels.
     println!("PASS native controller: exact live view pixels blue/green, sealed visual unchanged");
@@ -172,6 +305,24 @@ fn wait_pixels(
             return Err(format!(
                 "Embedded view pixel agreement timed out; expected {colors:?}"
             ));
+        }
+        std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
+    }
+}
+
+fn wait_browser(
+    engine: &dyn Engine,
+    view: &dyn crate::visual::web::BrowserView,
+    ready: impl Fn(&crate::visual::web::BrowserState) -> bool,
+) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let state = view.state();
+        if ready(&state) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("Browser navigation timed out: {state:?}"));
         }
         std::thread::sleep(engine.pump().min(Duration::from_millis(5)));
     }
