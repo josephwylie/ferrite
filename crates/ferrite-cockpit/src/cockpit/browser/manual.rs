@@ -2,15 +2,39 @@
 //! Pointer holds end on release/cancel; typing/wheel/hover settle after quiet.
 use ferrite_core::browser::Document;
 use ferrite_pane::visual::web::{BrowserView, Input};
+use std::cell::RefCell;
 use std::collections::BTreeSet;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
 const QUIET: Duration = Duration::from_millis(350);
 
 #[derive(Default)]
+pub(super) struct Peers {
+    views: Vec<Weak<dyn BrowserView>>,
+    active: BTreeSet<u64>,
+    captures: BTreeSet<u64>,
+}
+impl Peers {
+    fn paused(&self) -> bool {
+        !self.active.is_empty() || !self.captures.is_empty()
+    }
+    fn sync(&mut self) {
+        let paused = self.paused();
+        self.views.retain(|view| {
+            if let Some(view) = view.upgrade() {
+                view.set_agent_paused(paused);
+                true
+            } else {
+                false
+            }
+        });
+    }
+}
+#[derive(Default)]
 pub(super) struct Manual {
     pub native: Option<Rc<dyn BrowserView>>,
+    peers: Option<(Rc<RefCell<Peers>>, u64)>,
     sequence: u64,
     canceled_through: u64,
     pub active: bool,
@@ -24,6 +48,36 @@ pub(super) struct Manual {
     local_protections: usize,
 }
 impl Manual {
+    pub fn join(&mut self, peers: Rc<RefCell<Peers>>, key: u64, native: Rc<dyn BrowserView>) {
+        peers.borrow_mut().views.push(Rc::downgrade(&native));
+        self.native = Some(native);
+        self.peers = Some((peers.clone(), key));
+        peers.borrow_mut().sync();
+    }
+    pub fn capture_pause(&mut self, paused: bool) {
+        if let Some((peers, key)) = &self.peers {
+            let mut peers = peers.borrow_mut();
+            if paused {
+                peers.captures.insert(*key);
+            } else {
+                peers.captures.remove(key);
+            }
+            peers.sync();
+        } else if let Some(native) = &self.native {
+            native.set_agent_paused(paused || self.active);
+        }
+    }
+    fn mark_active(&self, active: bool) {
+        if let Some((peers, key)) = &self.peers {
+            let mut peers = peers.borrow_mut();
+            if active {
+                peers.active.insert(*key);
+            } else {
+                peers.active.remove(key);
+            }
+            peers.sync();
+        }
+    }
     /// Called by the actual input callback, before queuing or any Server RPC.
     pub fn capture(&mut self, input: &Input) -> Option<u64> {
         if matches!(input, Input::Leave) {
@@ -31,6 +85,7 @@ impl Manual {
         }
         self.sequence += 1;
         self.active = true;
+        self.mark_active(true);
         self.pending = true;
         match input {
             Input::Down { .. } => self.held = true,
@@ -87,9 +142,8 @@ impl Manual {
         self.held = false;
         self.keys.clear();
         self.quiet_until = None;
-        if let Some(native) = &self.native {
-            native.set_agent_paused(false);
-        }
+        self.mark_active(false);
+        self.restore_pause();
         self.sync_protection();
     }
     pub fn server_protection(&mut self, protected: bool) {
@@ -121,6 +175,7 @@ impl Manual {
         self.held = false;
         self.keys.clear();
         self.quiet_until = None;
+        self.mark_active(false);
         if let Some(native) = &self.native {
             native.set_agent_paused(true);
         }
@@ -129,7 +184,13 @@ impl Manual {
     }
     pub fn restore_pause(&self) {
         if let Some(native) = &self.native {
-            native.set_agent_paused(self.active);
+            native.set_agent_paused(
+                self.active
+                    || self
+                        .peers
+                        .as_ref()
+                        .is_some_and(|(peers, _)| peers.borrow().paused()),
+            );
         }
     }
 
