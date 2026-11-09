@@ -88,6 +88,9 @@ pub trait BrowserView: View {
     fn forward(&self) -> Result<(), String>;
     fn reload(&self) -> Result<(), String>;
     fn set_protected(&self, protected: bool);
+    /// Stop further controller writes at dispatch while operator input owns the
+    /// page. Manual `View::input` and read-only captures remain available.
+    fn set_agent_paused(&self, _paused: bool) {}
     /// Release only a hidden, unprotected, confidently clean document.
     /// A released view restores its last URL lazily when shown.
     fn try_release(&self) -> Result<bool, String>;

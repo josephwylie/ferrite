@@ -497,7 +497,7 @@ impl Engine for CefEngine {
             for view in self.inner.live_views() {
                 if view.doc.external {
                     if let Some(browser) = view.browser.borrow().clone() {
-                        created.register(view.target_id(), browser);
+                        created.register(view.target_id(), browser, view.agent_paused.clone());
                     }
                 }
             }
@@ -633,6 +633,7 @@ impl CefEngine {
             browser: RefCell::new(None),
             observation: RefCell::new(None),
             failed: Cell::new(false),
+            agent_paused: Arc::new(AtomicBool::new(false)),
             protected: Cell::new(false),
             wake,
             visible: Cell::new(true),
@@ -695,6 +696,7 @@ struct ViewInner {
     browser: RefCell<Option<Browser>>,
     observation: RefCell<Option<observation::Observation>>,
     failed: Cell<bool>,
+    agent_paused: Arc<AtomicBool>,
     protected: Cell<bool>,
     wake: Wake,
     visible: Cell<bool>,
@@ -794,7 +796,7 @@ impl ViewInner {
             if let (Some(control), Some(browser)) =
                 (self._engine.control.borrow_mut().as_mut(), browser.clone())
             {
-                control.register(self.target_id(), browser);
+                control.register(self.target_id(), browser, self.agent_paused.clone());
             }
         }
         if self.doc.external {
@@ -1202,11 +1204,19 @@ impl BrowserView for CefView {
             }
         }
     }
+    fn set_agent_paused(&self, paused: bool) {
+        if self.0.agent_paused.swap(paused, Ordering::SeqCst) != paused {
+            if let Some(observation) = self.0.observation.borrow_mut().as_mut() {
+                observation.invalidate(&self.0.state);
+            }
+        }
+    }
     fn try_release(&self) -> Result<bool, String> {
         let view = &self.0;
         let state = self.state();
         if view.visible.get()
             || view.protected.get()
+            || view.agent_paused.load(Ordering::SeqCst)
             || state.loading
             || state.dirty != BrowserDirty::Clean
         {
