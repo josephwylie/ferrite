@@ -4,7 +4,9 @@
 
 mod control;
 pub(crate) use control::{channel, Requests};
-pub use control::{Client, Control, Operation, Outcome, Response, ThreadClient, WaitState};
+pub use control::{
+    Client, Control, Observation, Operation, Outcome, Response, ThreadClient, WaitState,
+};
 
 use crate::ThreadId;
 use serde::{Deserialize, Serialize};

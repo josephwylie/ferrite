@@ -65,10 +65,14 @@ impl Control {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Operation {
     State,
-    Action(Action),
+    Action {
+        action: Action,
+        observation: Option<Observation>,
+    },
     Control {
         document: Document,
         revision: u64,
+        observation: Option<Observation>,
         control: Control,
     },
 }
@@ -88,11 +92,23 @@ pub enum Outcome {
     },
 }
 
+/// Opaque receipt minted only after a readable observation. A revision from
+/// State is not evidence that this caller has seen the current page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Observation(String);
+impl Observation {
+    pub(crate) fn new(value: String) -> Self {
+        Self(value)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Response {
     pub state: State,
     pub revision: u64,
     pub value: Option<Value>,
+    pub observation: Option<Observation>,
 }
 
 pub(crate) struct Request {
