@@ -108,11 +108,7 @@ impl CockpitView {
                 }
             };
             let stopped = view.update(cx, |view, _| view.cockpit.stop_server_and_wait(Duration::from_secs(10)));
-            let error = result.err().or_else(|| match stopped {
-                Ok(Ok(())) => None,
-                Ok(Err(error)) => Some(format!("isolated Server did not stop: {error}")),
-                Err(error) => Some(error.to_string()),
-            });
+            let error = result.err().or_else(|| stopped.err().map(|error| format!("isolated Server did not stop: {error}")));
             let result = serde_json::json!({
                 "success": error.is_none(), "error": error,
                 "normal_native_window": true, "preview_operator_route": opened,
