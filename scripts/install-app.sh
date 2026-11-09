@@ -113,6 +113,8 @@ rm -rf "$BUILT"
 mkdir -p "$BUILT/Contents/MacOS" "$BUILT/Contents/Resources"
 cp "$BIN" "$BUILT/Contents/MacOS/ferrite"
 cp "$PROJECTS_BIN" "$BUILT/Contents/MacOS/ferrite-projects"
+# Native controller is staged only; browsing remains gated by #192 validation.
+/usr/bin/python3 "$ROOT/scripts/package-agent-browser.py" --destination "$BUILT/Contents/MacOS"
 
 # iconutil expects this exact set of filenames. Generate the platform resource
 # from the checked-in 1254px source so the Dock gets sharp 1x and 2x variants.
@@ -241,6 +243,7 @@ if [ "$SIGNING_IDENTITY" = "-" ]; then
   # Its helpers are signed too (and become copies), so they carry it.
   LOCAL="${MACOS_LOCAL_IDENTITY:--}"
   codesign --force --sign "$LOCAL" "$BUILT/Contents/MacOS/ferrite-projects"
+  codesign --force --sign "$LOCAL" "$BUILT/Contents/MacOS/agent-browser"
   if [ -n "${FEATURES[*]:-}" ]; then
     codesign --force --sign "$LOCAL" "$BUILT/Contents/Frameworks/$FRAMEWORK_NAME"
     if [ -n "$DMG" ] || [ "$LOCAL" != "-" ]; then
@@ -280,6 +283,8 @@ PLIST
   fi
   codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
     "$BUILT/Contents/MacOS/ferrite-projects"
+  codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
+    "$BUILT/Contents/MacOS/agent-browser"
   codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$BUILT"
   codesign --verify --deep --strict --verbose=2 "$BUILT"
 fi

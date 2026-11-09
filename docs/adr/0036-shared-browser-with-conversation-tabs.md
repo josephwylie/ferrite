@@ -10,4 +10,3 @@ Ferrite will manage an on-demand browser service shared across conversations on 
 Conversations share website login state while retaining separate tabs. Signing out or changing a site's shared session can therefore affect other conversations. Remember logins and tab URLs across restarts, loading restored pages only when needed. Inactive pages may unload to save memory, protecting tabs agents are using and unfinished forms; reloaded pages may lose temporary state.
 
 The user approved investigating extension and optimization of the existing CEF engine, revising the earlier Chromium exclusion for this investigation. Final adoption depends on resource measurements and proper isolation for external browsing on both platforms. This does not mean one renderer process for arbitrary sites, and does not supersede ADR 0013's sealed-visual policy. Suspension, control handoff, and headless behavior remain unresolved.
-

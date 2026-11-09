@@ -1,0 +1,444 @@
+diff --git a/cli/Cargo.lock b/cli/Cargo.lock
+index c37c66d..9c11c96 100644
+--- a/cli/Cargo.lock
++++ b/cli/Cargo.lock
+@@ -67,6 +67,7 @@ dependencies = [
+  "sha2",
+  "similar",
+  "socket2",
++ "subtle",
+  "tempfile",
+  "time",
+  "tokio",
+diff --git a/cli/Cargo.toml b/cli/Cargo.toml
+index 58d3fe9..03ad887 100644
+--- a/cli/Cargo.toml
++++ b/cli/Cargo.toml
+@@ -27,6 +27,7 @@ uuid = { version = "1", features = ["v4"] }
+ image = "0.25"
+ reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "stream"] }
+ sha2 = "0.10"
++subtle = "2.6"
+ aes-gcm = "0.10"
+ async-trait = "0.1"
+ socket2 = "0.6"
+@@ -69,3 +70,6 @@ opt-level = 3
+ 
+ [profile.dev.package.png]
+ opt-level = 3
++
++# Keep vendored native builds independent of the embedding workspace.
++[workspace]
+diff --git a/cli/src/native/actions.rs b/cli/src/native/actions.rs
+index 2d488de..5cf33f9 100644
+--- a/cli/src/native/actions.rs
++++ b/cli/src/native/actions.rs
+@@ -4380,6 +4380,9 @@ async fn auto_launch(
+     state: &mut DaemonState,
+     plugins: Vec<crate::plugins::PluginConfig>,
+ ) -> Result<(), String> {
++    if std::env::var("FERRITE_AGENT_BROWSER").as_deref() == Ok("1") {
++        return Err("Ferrite browser unavailable; explicit CDP connect required".into());
++    }
+     if state.attached_target.is_some() {
+         return handle_launch(&json!({ "action": "launch", "plugins": plugins }), state)
+             .await
+@@ -5164,6 +5167,16 @@ fn with_cdp_headers(target: Option<String>, cmd: &Value) -> Option<String> {
+     }
+ }
+ 
++fn ferrite_explicit_cdp_target(cmd: &Value) -> bool {
++    cmd.get("cdpUrl")
++        .and_then(Value::as_str)
++        .is_some_and(|url| !url.is_empty())
++        || cmd
++            .get("cdpPort")
++            .and_then(Value::as_u64)
++            .is_some_and(|port| port > 0 && port <= u16::MAX as u64)
++}
++
+ async fn handle_launch(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+     handle_launch_with_deadline(cmd, state, BROWSER_USE_SETUP_DEADLINE).await
+ }
+@@ -5173,6 +5186,13 @@ async fn handle_launch_with_deadline(
+     state: &mut DaemonState,
+     deadline: std::time::Duration,
+ ) -> Result<Value, String> {
++    // Ferrite owns its browser. Never discover, spawn, or silently recover
++    // another browser; only an explicit CDP endpoint may attach.
++    if std::env::var("FERRITE_AGENT_BROWSER").as_deref() == Ok("1")
++        && !ferrite_explicit_cdp_target(cmd)
++    {
++        return Err("Ferrite browser unavailable; explicit CDP connect required".into());
++    }
+     let mut resolved = resolve_launch_target(cmd, state.attached_target.as_ref());
+     if let Some(launch) = resolved.as_mut() {
+         attach_saved_cdp_headers(launch, state);
+@@ -9750,6 +9770,10 @@ async fn current_stream_status(state: &DaemonState) -> Value {
+ }
+ 
+ async fn handle_stream_enable(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
++    if std::env::var("FERRITE_AGENT_BROWSER").as_deref() == Ok("1") {
++        return Err("Dashboard stream is disabled in Ferrite".into());
++    }
++
+     if state.stream_server.is_some() {
+         return Err("Streaming is already enabled for this session".to_string());
+     }
+@@ -14311,6 +14335,45 @@ fn attach_tab_gone_data(resp: &mut Value, state: &DaemonState) {
+ 
+ #[cfg(test)]
+ mod tests {
++    #[tokio::test]
++    async fn ferrite_never_launches_or_recovers_a_browser_implicitly() {
++        let guard = crate::test_utils::EnvGuard::new(&["FERRITE_AGENT_BROWSER"]);
++        guard.set("FERRITE_AGENT_BROWSER", "1");
++        let mut state = super::DaemonState::new();
++        state.policy = None;
++        state.confirm_actions = None;
++        assert!(
++            super::handle_stream_enable(&serde_json::json!({"port":0}), &mut state)
++                .await
++                .unwrap_err()
++                .contains("disabled in Ferrite")
++        );
++        assert!(state.stream_server.is_none());
++        for command in [
++            serde_json::json!({"action":"navigate", "url":"https://example.com"}),
++            serde_json::json!({"action":"launch"}),
++            serde_json::json!({"action":"launch", "autoConnect":true}),
++            serde_json::json!({"action":"launch", "provider":"browserbase"}),
++        ] {
++            let response = super::execute_command(&command, &mut state).await;
++            assert_eq!(response["success"], false);
++            assert!(response["error"]
++                .as_str()
++                .unwrap()
++                .contains("explicit CDP connect required"));
++            assert!(state.browser.is_none());
++        }
++        assert!(super::ferrite_explicit_cdp_target(
++            &serde_json::json!({"cdpPort":9222})
++        ));
++        assert!(super::ferrite_explicit_cdp_target(
++            &serde_json::json!({"cdpUrl":"ws://127.0.0.1/devtools/browser/test"})
++        ));
++        assert!(!super::ferrite_explicit_cdp_target(
++            &serde_json::json!({"cdpUrl":""})
++        ));
++    }
++
+     #[tokio::test]
+     async fn cdp_url_without_browser_does_not_launch() {
+         let mut state = super::DaemonState::new();
+diff --git a/cli/src/native/daemon.rs b/cli/src/native/daemon.rs
+index 3e62122..1378ab4 100644
+--- a/cli/src/native/daemon.rs
++++ b/cli/src/native/daemon.rs
+@@ -23,7 +23,54 @@ use crate::session_files::{owns_session, remove_daemon_files, SessionFile};
+ use crate::session_settings::{IdleTimeout, Running, DEFAULT_IDLE_TIMEOUT_MS};
+ use crate::validation::{is_valid_session_name, session_name_error};
+ 
++/// Ferrite uses a private command transport and never exposes the dashboard stream.
++/// An explicit mode marker makes a missing credential a startup error.
++#[derive(Clone, Default)]
++struct FerriteAuth(Option<Arc<str>>);
++
++impl FerriteAuth {
++    fn from_env() -> Result<Self, String> {
++        if env::var_os("FERRITE_AGENT_BROWSER").is_none() {
++            return Ok(Self::default());
++        }
++        if env::var("FERRITE_AGENT_BROWSER").as_deref() != Ok("1") {
++            return Err("FERRITE_AGENT_BROWSER must be 1".into());
++        }
++        let token = env::var("FERRITE_AGENT_BROWSER_TOKEN")
++            .map_err(|_| "FERRITE_AGENT_BROWSER_TOKEN is required")?;
++        if token.is_empty() {
++            return Err("FERRITE_AGENT_BROWSER_TOKEN must not be empty".into());
++        }
++        Ok(Self(Some(token.into())))
++    }
++
++    fn stream_enabled(&self) -> bool {
++        self.0.is_none()
++    }
++
++    fn accepts(&self, command: &Value) -> bool {
++        use subtle::ConstantTimeEq;
++        let Some(expected) = &self.0 else {
++            return true;
++        };
++        let Some(actual) = command.get("ferriteToken").and_then(Value::as_str) else {
++            return false;
++        };
++        // The token has a fixed random length. Equality is constant-time for
++        // equal-length credentials; length itself is not secret.
++        bool::from(expected.as_bytes().ct_eq(actual.as_bytes()))
++    }
++}
++
+ pub async fn run_daemon(session: &str) {
++    let auth = match FerriteAuth::from_env() {
++        Ok(auth) => auth,
++        Err(error) => {
++            eprintln!("{}", error);
++            process::exit(1);
++        }
++    };
++
+     if !is_valid_session_name(session) {
+         eprintln!("{}", session_name_error(session));
+         process::exit(1);
+@@ -112,23 +159,25 @@ pub async fn run_daemon(session: &str) {
+         .ok()
+         .and_then(|s| s.parse::<u16>().ok())
+         .unwrap_or(0);
+-    match StreamServer::start_without_client(
+-        preferred_port,
+-        session.to_string(),
+-        true,
+-        idle_activity.clone(),
+-    )
+-    .await
+-    {
+-        Ok((stream_server, client_slot)) => {
+-            stream_client = Some(client_slot.clone());
+-            if let Err(e) = fs::write(&stream_path, stream_server.port().to_string()) {
+-                let _ = writeln!(std::io::stderr(), "Failed to write .stream file: {}", e);
++    if auth.stream_enabled() {
++        match StreamServer::start_without_client(
++            preferred_port,
++            session.to_string(),
++            true,
++            idle_activity.clone(),
++        )
++        .await
++        {
++            Ok((stream_server, client_slot)) => {
++                stream_client = Some(client_slot.clone());
++                if let Err(e) = fs::write(&stream_path, stream_server.port().to_string()) {
++                    let _ = writeln!(std::io::stderr(), "Failed to write .stream file: {}", e);
++                }
++                stream_server_instance = Some(Arc::new(stream_server));
++            }
++            Err(e) => {
++                let _ = writeln!(std::io::stderr(), "Stream server failed to start: {}", e);
+             }
+-            stream_server_instance = Some(Arc::new(stream_server));
+-        }
+-        Err(e) => {
+-            let _ = writeln!(std::io::stderr(), "Stream server failed to start: {}", e);
+         }
+     }
+ 
+@@ -148,6 +197,7 @@ pub async fn run_daemon(session: &str) {
+         idle_activity,
+         idle_timeout,
+         autosave_interval_ms,
++        auth,
+     )
+     .await;
+ 
+@@ -185,6 +235,7 @@ async fn run_socket_server(
+     idle_activity: Arc<IdleActivity>,
+     idle_timeout: Option<IdleTimeout>,
+     autosave_interval_ms: u64,
++    auth: FerriteAuth,
+ ) -> Result<(), String> {
+     use tokio::net::UnixListener;
+ 
+@@ -221,8 +272,9 @@ async fn run_socket_server(
+                         let state = state.clone();
+                         let idle_activity = idle_activity.clone();
+                         let close = close.clone();
++                        let auth = auth.clone();
+                         tokio::spawn(async move {
+-                            handle_connection(stream, state, idle_activity, close).await;
++                            handle_connection(stream, state, idle_activity, close, auth).await;
+                         });
+                     }
+                     Err(e) => {
+@@ -318,6 +370,7 @@ async fn run_socket_server(
+     idle_activity: Arc<IdleActivity>,
+     idle_timeout: Option<IdleTimeout>,
+     autosave_interval_ms: u64,
++    auth: FerriteAuth,
+ ) -> Result<(), String> {
+     use tokio::net::TcpListener;
+ 
+@@ -369,8 +422,9 @@ async fn run_socket_server(
+                         let state = state.clone();
+                         let idle_activity = idle_activity.clone();
+                         let close = close.clone();
++                        let auth = auth.clone();
+                         tokio::spawn(async move {
+-                            handle_connection(stream, state, idle_activity, close).await;
++                            handle_connection(stream, state, idle_activity, close, auth).await;
+                         });
+                     }
+                     Err(e) => {
+@@ -512,6 +566,7 @@ async fn handle_connection<S>(
+     state: std::sync::Arc<tokio::sync::Mutex<DaemonState>>,
+     idle_activity: Arc<IdleActivity>,
+     close: Arc<CloseHandshake>,
++    auth: FerriteAuth,
+ ) where
+     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+ {
+@@ -533,7 +588,7 @@ async fn handle_connection<S>(
+                     break;
+                 }
+ 
+-                let cmd: Value = match serde_json::from_str(trimmed) {
++                let mut cmd: Value = match serde_json::from_str(trimmed) {
+                     Ok(v) => v,
+                     Err(e) => {
+                         let err = serde_json::json!({
+@@ -547,6 +602,27 @@ async fn handle_connection<S>(
+                     }
+                 };
+ 
++                // Authenticate before execution, state locking, shutdown, or
++                // activity updates. Recheck every command on a connection.
++                if !auth.accepts(&cmd) {
++                    let response = serde_json::json!({
++                        "id": cmd.get("id").cloned().unwrap_or(Value::Null),
++                        "success": false,
++                        "error": "Unauthorized",
++                    });
++                    let mut response = response.to_string();
++                    response.push('\n');
++                    let _ = writer.write_all(response.as_bytes()).await;
++                    return;
++                }
++
++                // Credentials are transport-only: never forward them to
++                // actions, plugins, browser commands, or command logging.
++                if auth.0.is_some() {
++                    if let Some(command) = cmd.as_object_mut() {
++                        command.remove("ferriteToken");
++                    }
++                }
+                 idle_activity.mark();
+ 
+                 let action = cmd
+@@ -689,6 +765,118 @@ mod tests {
+     use super::*;
+     use crate::session_settings::resolve_idle_timeout;
+ 
++    #[test]
++    fn ferrite_mode_requires_token_and_disables_stream() {
++        let guard = crate::test_utils::EnvGuard::new(&[
++            "FERRITE_AGENT_BROWSER",
++            "FERRITE_AGENT_BROWSER_TOKEN",
++        ]);
++        guard.remove("FERRITE_AGENT_BROWSER");
++        guard.remove("FERRITE_AGENT_BROWSER_TOKEN");
++        assert!(FerriteAuth::from_env().unwrap().stream_enabled());
++        guard.set("FERRITE_AGENT_BROWSER", "1");
++        assert!(FerriteAuth::from_env().is_err());
++        guard.set("FERRITE_AGENT_BROWSER_TOKEN", "");
++        assert!(FerriteAuth::from_env().is_err());
++        guard.set("FERRITE_AGENT_BROWSER_TOKEN", "random-private-token");
++        assert!(!FerriteAuth::from_env().unwrap().stream_enabled());
++    }
++
++    #[tokio::test]
++    async fn ferrite_auth_precedes_execution_shutdown_and_idle_activity() {
++        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
++        for token in [None, Some("wrong-private-token"), Some("")] {
++            for action in ["close", INTERNAL_DAEMON_SHUTDOWN_ACTION, "launch"] {
++                let state = Arc::new(tokio::sync::Mutex::new(DaemonState::new()));
++                // Authentication must not even wait for the command state lock.
++                let _held = state.lock().await;
++                let activity = Arc::new(IdleActivity::new());
++                tokio::time::sleep(Duration::from_millis(5)).await;
++                let close = Arc::new(CloseHandshake::default());
++                let (mut client, server) = tokio::io::duplex(4096);
++                let task = tokio::spawn(handle_connection(
++                    server,
++                    state.clone(),
++                    activity.clone(),
++                    close.clone(),
++                    FerriteAuth(Some(Arc::from("random-private-token"))),
++                ));
++                let mut command = serde_json::json!({"id":"auth-test", "action":action});
++                if let Some(token) = token {
++                    command["ferriteToken"] = token.into();
++                }
++                client
++                    .write_all(format!("{}\n", command).as_bytes())
++                    .await
++                    .unwrap();
++                let mut response = String::new();
++                tokio::time::timeout(
++                    Duration::from_secs(1),
++                    BufReader::new(client).read_line(&mut response),
++                )
++                .await
++                .unwrap()
++                .unwrap();
++                let response: Value = serde_json::from_str(&response).unwrap();
++                assert_eq!(response["error"], "Unauthorized");
++                assert_eq!(response["id"], "auth-test");
++                assert!(activity.elapsed() >= Duration::from_millis(5));
++                assert!(
++                    tokio::time::timeout(Duration::from_millis(1), close.requested.notified())
++                        .await
++                        .is_err()
++                );
++                task.await.unwrap();
++            }
++        }
++    }
++
++    #[tokio::test]
++    async fn ferrite_auth_is_checked_again_after_authenticated_command() {
++        let (client, server) = tokio::io::duplex(4096);
++        let state = Arc::new(tokio::sync::Mutex::new(DaemonState::new()));
++        let task = tokio::spawn(handle_connection(
++            server,
++            state.clone(),
++            Arc::new(IdleActivity::new()),
++            Arc::new(CloseHandshake::default()),
++            FerriteAuth(Some(Arc::from("random-private-token"))),
++        ));
++        let (reader, mut writer) = tokio::io::split(client);
++        let mut reader = BufReader::new(reader);
++        // Invalid find actions fail validation before launching a browser.
++        writer.write_all(b"{\"id\":\"first\",\"action\":\"find\",\"subaction\":\"invalid\",\"ferriteToken\":\"random-private-token\"}\n").await.unwrap();
++        let mut line = String::new();
++        tokio::time::timeout(Duration::from_secs(1), reader.read_line(&mut line))
++            .await
++            .unwrap()
++            .unwrap();
++        let first: Value = serde_json::from_str(&line).unwrap();
++        assert_ne!(first["error"], "Unauthorized");
++        writer
++            .write_all(b"{\"id\":\"second\",\"action\":\"launch\"}\n")
++            .await
++            .unwrap();
++        line.clear();
++        tokio::time::timeout(Duration::from_secs(1), reader.read_line(&mut line))
++            .await
++            .unwrap()
++            .unwrap();
++        let second: Value = serde_json::from_str(&line).unwrap();
++        assert_eq!(second["error"], "Unauthorized");
++        task.await.unwrap();
++        assert!(state.lock().await.browser.is_none());
++    }
++
++    #[test]
++    fn ferrite_auth_requires_matching_string_on_every_command() {
++        let auth = FerriteAuth(Some(Arc::from("random-private-token")));
++        assert!(auth.accepts(&serde_json::json!({"ferriteToken":"random-private-token"})));
++        assert!(!auth.accepts(&serde_json::json!({"ferriteToken":42})));
++        assert!(!auth.accepts(&serde_json::json!({})));
++        assert!(FerriteAuth::default().accepts(&serde_json::json!({})));
++    }
++
+     #[test]
+     fn test_resolve_idle_timeout_unset_applies_default() {
+         let t = resolve_idle_timeout(None).expect("default should apply when unset");
