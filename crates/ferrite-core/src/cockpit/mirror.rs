@@ -48,6 +48,7 @@ struct Facts {
     model: Option<String>,
     effort: Option<String>,
     title: Option<String>,
+    snooze: Option<crate::snooze::Snooze>,
     workspace: Option<WorkspaceBinding>,
     session_project_root: Option<PathBuf>,
     first_prompt_sent: bool,
@@ -93,6 +94,7 @@ impl From<ThreadState> for Facts {
             model: state.model,
             effort: state.effort,
             title: state.title,
+            snooze: state.snooze,
             workspace: state
                 .workspace
                 .as_ref()
@@ -614,6 +616,10 @@ impl<'a> ThreadView<'a> {
     /// its Wall card, counts and finish — as the Server last sent it, else
     /// folded here from the Activity: a Server too old to send digests
     /// mirrors every open Thread whole.
+    pub fn snooze(&self) -> Option<crate::snooze::Snooze> {
+        self.facts.snooze
+    }
+
     pub fn digest(&self) -> Cow<'a, Digest> {
         match self.digest {
             Some(digest) => Cow::Borrowed(digest),

@@ -178,7 +178,7 @@ fn par_keeps_two_commands_and_the_parked_thread(cx: &mut TestAppContext) {
             .iter()
             .find(|row| row.name.as_ref() == "Park thread")
             .unwrap();
-        assert_eq!(park.keys.as_deref(), Some("cmd-\u{232b}"), "⌘⌫");
+        assert_eq!(park.keys.as_deref(), Some("cmd-W"), "existing Park binding");
     });
 }
 
@@ -457,7 +457,7 @@ fn the_shortcuts_sheet_filters_as_the_operator_types(cx: &mut TestAppContext) {
         })
     };
     let shown = labels(cx);
-    assert_eq!(shown.first(), Some(&"Park thread"), "{shown:?}");
+    assert!(shown.contains(&"Park thread"), "{shown:?}");
     assert!(shown.contains(&"Show parked"));
     assert!(!shown.contains(&"New thread"));
     assert_eq!(resolves("down", cx), Some("shortcuts::ScrollDown"));
@@ -566,7 +566,7 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
         "in the nav, in the tree's place: {list:?} / {column:?}"
     );
     let rows = view.read_with(cx, |view, cx| view.needs_you_rows(cx));
-    assert_eq!(rows.len(), 5);
+    assert_eq!(rows.len(), 6, "idle open Thread is also in Inbox");
     assert!(rows[0].request() && rows[1].request(), "requests first");
     assert_eq!(
         rows[0].detail.text(),
@@ -577,7 +577,7 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
     tick(cx);
     assert_eq!(
         view.read_with(cx, |view, _| view.needs_you.cursor),
-        4,
+        5,
         "↑ wraps"
     );
     cx.simulate_keystrokes("down");
@@ -591,8 +591,8 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
     tick(cx);
     assert_eq!(
         view.read_with(cx, |view, cx| view.needs_you_rows(cx).len()),
-        4,
-        "⌫ dismisses"
+        6,
+        "⌫ dismisses the Notice, retaining its Thread"
     );
     cx.simulate_keystrokes("escape");
     tick(cx);
@@ -609,7 +609,7 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
         let notifications = view.cockpit.notifications();
         assert_eq!(notifications.unread(), 0);
         assert_eq!(notifications.unread_requests(), 0);
-        assert_eq!(view.needs_you_rows(cx).len(), 4, "nothing is removed");
+        assert_eq!(view.needs_you_rows(cx).len(), 6, "reading removes nothing");
     });
     assert!(
         cx.debug_bounds("notifications-badge").is_none(),

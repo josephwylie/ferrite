@@ -476,8 +476,8 @@ mod tests {
         assert_eq!(find(Place::Threads, "New thread"), "cmd-N");
         assert_eq!(
             find(Place::Threads, "Park thread"),
-            "cmd-\u{232b}",
-            "the empty line's ⌘⌫ is the first spelling"
+            "cmd-W",
+            "Park follows the existing close-thread binding"
         );
         assert_eq!(
             find(Place::Board, "Focus pane 1\u{2013}9"),
@@ -522,14 +522,17 @@ mod tests {
                 .collect()
         };
         assert_eq!(labels("").len(), rows.len());
-        assert!(labels("park").starts_with(&["Park thread"]));
+        assert_eq!(labels("park"), ["Show parked", "Park thread"]);
         assert!(
             labels("wall").contains(&"Always allow"),
             "a section matches"
         );
         assert!(labels("cmd-k").contains(&"Commands"), "a chord matches");
         assert!(labels("zzzz").is_empty());
-        let (_, lit) = filter(&rows, "park").remove(0);
+        let (_, lit) = filter(&rows, "park")
+            .into_iter()
+            .find(|(row, _)| row.label == "Park thread")
+            .unwrap();
         assert_eq!(lit, vec![0..4]);
     }
 
