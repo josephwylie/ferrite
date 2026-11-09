@@ -25,7 +25,8 @@ pub(super) struct Browsers {
     reveal: std::collections::BTreeSet<ThreadId>,
     control_queue: std::collections::VecDeque<ControlRequest>,
     #[cfg(feature = "cef")]
-    pub(super) controller: Option<std::sync::Arc<ferrite_pane::visual::browser_control::native::Worker>>,
+    pub(super) controller:
+        Option<std::sync::Arc<ferrite_pane::visual::browser_control::native::Worker>>,
     #[cfg(feature = "cef")]
     running_control: Option<RunningControl>,
     #[cfg(feature = "cef")]
@@ -60,6 +61,7 @@ struct CaptureRequest {
         Result<ferrite_pane::visual::browser_control::CapturedPage, String>,
     >,
     queued: std::time::Instant,
+    point: Option<ferrite_core::browser_annotations::Point>,
 }
 #[cfg(feature = "cef")]
 struct RunningCapture {
@@ -253,7 +255,7 @@ impl CockpitView {
         owner: Owner,
         document: Document,
         _lease: ferrite_core::browser::Lease,
-        _point: Option<ferrite_core::browser_annotations::Point>,
+        point: Option<ferrite_core::browser_annotations::Point>,
         _cx: &mut Context<Self>,
     ) -> std::sync::mpsc::Receiver<
         Result<ferrite_pane::visual::browser_control::CapturedPage, String>,
@@ -266,10 +268,11 @@ impl CockpitView {
             document,
             reply,
             queued: std::time::Instant::now(),
+            point,
         });
         #[cfg(not(feature = "cef"))]
         {
-            let _ = (thread, owner, document);
+            let _ = (thread, owner, document, point);
             let _ = reply.send(Err(
                 "Conversation browser capture is not available in this build".into(),
             ));
@@ -813,7 +816,10 @@ impl CockpitView {
                                 png,
                                 // Without exact hit-tested DOM evidence the
                                 // editor offers region feedback explicitly.
-                                element: None,
+                                element: value
+                                    .get("element")
+                                    .cloned()
+                                    .and_then(|value| serde_json::from_value(value).ok()),
                             })
                         } else {
                             Err(
@@ -897,6 +903,7 @@ impl CockpitView {
             page.manual.borrow().revision,
             epoch,
             Control::Screenshot,
+            request.point.clone(),
         );
         if let Some(answer) = answer {
             self.browsers.running_capture = Some(RunningCapture {
@@ -1062,6 +1069,7 @@ impl CockpitView {
                     request.revision,
                     epoch,
                     request.control.clone(),
+                    None,
                 );
                 if let Some(answer) = answer {
                     self.browsers.running_control = Some(RunningControl {
