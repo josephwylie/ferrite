@@ -47,6 +47,17 @@ enum Phase {
 }
 
 impl CockpitView {
+    #[cfg(feature = "browser-smoke")]
+    pub(in crate::cockpit) fn browser_smoke_viewport(&self, thread: ThreadId) -> Option<BrowserViewport> {
+        let browser=self.browsers.threads.get(&thread)?;
+        browser.pages.get(&browser.state.active?)?.native.browser_viewport()
+    }
+    #[cfg(feature = "browser-smoke")]
+    pub(in crate::cockpit) fn browser_smoke_annotation_picture(&self, thread: ThreadId, cx: &gpui::App) -> Option<gpui::Bounds<Pixels>> {
+        let session=self.browsers.threads.get(&thread)?.annotation.as_ref()?;
+        match &session.phase { Phase::Editing(editor)=>editor.read(cx).picture_bounds(), _=>None }
+    }
+
     pub(in crate::cockpit) fn browser_annotation_focus(
         &self,
         thread: ThreadId,

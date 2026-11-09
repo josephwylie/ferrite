@@ -146,6 +146,17 @@ jobs:
         if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
         run: |
           python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider claude --work-orders --output target/browser-window-evidence/work-order-claude
+      - name: Complete repeated work orders through the actual Codex adapter
+        if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
+        run: |
+          python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider codex --work-orders --tasks 3 --output target/browser-window-evidence/work-order-codex
+      - name: Capture, draw, send and restore annotations through both actual providers
+        if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
+        shell: bash
+        run: |
+          executable="${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }}"
+          python scripts/probe-browser-window.py "$executable" --provider claude --annotations --output target/browser-window-evidence/annotations-claude
+          python scripts/probe-browser-window.py "$executable" --provider codex --annotations --output target/browser-window-evidence/annotations-codex
       - name: First provider screenshot during a held operator gesture
         if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
         run: |
@@ -159,3 +170,42 @@ jobs:
           name: browser-window-${{ runner.os }}-${{ runner.arch }}
           path: target/browser-window-evidence
           if-no-files-found: warn
+
+  focused-regressions:
+    name: Focused browser, provider and GPUI regressions
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        continue-on-error: true
+      - name: Keep compiler cache optional
+        shell: bash
+        run: |
+          if ! command -v sccache >/dev/null 2>&1; then echo 'RUSTC_WRAPPER=' >> "$GITHUB_ENV"; fi
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: browser-focused
+          cache-on-failure: true
+      - name: Compile the focused packages once
+        id: focused-build
+        run: cargo test -p ferrite-core -p ferrite-pane -p ferrite-cockpit --locked --features ferrite-core/test-support --no-run
+      - name: Public browser, ownership, unknown-wire and annotation service regressions
+        if: always() && steps.focused-build.outcome == 'success'
+        run: cargo test -p ferrite-core --locked --features test-support browser
+      - name: Actual provider serialization regressions
+        if: always() && steps.focused-build.outcome == 'success'
+        run: cargo test -p ferrite-core --locked --features test-support --test visuals --test claude_session --test codex_session
+      - name: Native view input and full viewport regressions
+        if: always() && steps.focused-build.outcome == 'success'
+        run: cargo test -p ferrite-pane --locked --lib visual::element::tests
+      - name: All annotation editor controls
+        if: always() && steps.focused-build.outcome == 'success'
+        run: cargo test -p ferrite-pane --locked --lib annotation_editor
+      - name: Actual Cockpit annotation and browser host regressions
+        if: always() && steps.focused-build.outcome == 'success'
+        run: cargo test -p ferrite-cockpit --locked --lib browser
+      - name: Existing preview shell regression boundary
+        if: always() && steps.focused-build.outcome == 'success'
+        run: cargo test -p ferrite-cockpit --locked --lib cockpit::tests::panel_preview

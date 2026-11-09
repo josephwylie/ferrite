@@ -1,6 +1,7 @@
 //! A bounded acceptance scenario in the ordinary native application window.
 //! No test Engine, headless GPUI context or alternate browser manager is used.
 use super::*;
+mod annotations;
 use gpui::{point, App, Modifiers, PlatformInput};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -43,15 +44,32 @@ impl CockpitView {
             let mut ready_document = None;
             let mut scenario_thread = None;
             let codex = std::env::var("FERRITE_BROWSER_WINDOW_PROVIDER").ok().as_deref() == Some("codex");
+            let history = std::env::var("FERRITE_BROWSER_WINDOW_SCENARIO").ok().as_deref() == Some("annotation-history");
+            let mut history_stage = 0;
+            let annotate = std::env::var("FERRITE_BROWSER_WINDOW_SCENARIO").ok().as_deref() == Some("annotations");
+            let mut annotation = annotations::Scenario::default();
             let held_screenshot = std::env::var("FERRITE_BROWSER_WINDOW_SCENARIO").ok().as_deref() == Some("held-screenshot");
             let work_orders = std::env::var("FERRITE_BROWSER_WINDOW_SCENARIO").ok().as_deref() == Some("work-orders");
             let provider = std::env::var_os("FERRITE_BROWSER_WINDOW_PROVIDER").is_some();
+            let mut preview_expanded = false;
+            let mut viewport_adjustments = 0;
+            let mut controlled_viewport = false;
+            let mut viewport_last_adjustment = Instant::now() - Duration::from_secs(1);
+            let mut baseline_started = None;
+            let mut quiet_started = None;
             let mut frames = 0u64;
             let mut last_error = String::new();
             let result = loop {
                 cx.background_executor().timer(Duration::from_millis(150)).await;
                 let step = handle.update(cx, |_, window, cx| -> Result<bool, String> {
+                    if history {
+                        frames += 1;
+                        return annotations::history(&view,window,cx,&output,&mut history_stage);
+                    }
                     if provider_started {
+                        if let Some(quiet) = quiet_started {
+                            return Ok(Instant::now().duration_since(quiet)>=Duration::from_secs(3));
+                        }
                         let path = output.join("provider-result.json");
                         if !path.exists() { return Ok(false); }
                         let answer: serde_json::Value = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
@@ -66,15 +84,23 @@ impl CockpitView {
                         // Preview changed. Decode the actual native Window again.
                         window.draw(cx);
                         let image = window.render_to_image().map_err(|error| error.to_string())?;
+                        if annotate {
+                            image.save(output.join("window-annotations-sent.png")).map_err(|e|e.to_string())?;
+                            phase(&output,"quiet-after-annotations"); quiet_started=Some(Instant::now());
+                            return Ok(false);
+                        }
                         if work_orders {
                             image.save(output.join("window-work-order.png")).map_err(|error| error.to_string())?;
-                            return Ok(true);
+                            phase(&output,"quiet-after-work-orders"); quiet_started=Some(Instant::now());
+                            return Ok(false);
                         }
                         let expected = if held_screenshot { [23, 173, 91] } else { [29, 97, 219] };
                         let colored = image.pixels().filter(|pixel| pixel.0[..3] == expected).count();
                         if colored < 2000 { return Ok(false); }
                         image.save(output.join(if held_screenshot { "window-held-screenshot.png" } else { "window-provider.png" })).map_err(|error| error.to_string())?;
-                        return Ok(true);
+                        if held_screenshot { return Ok(true); }
+                        phase(&output,"quiet-after-provider-action"); quiet_started=Some(Instant::now());
+                        return Ok(false);
                     }
                     if !opened {
                         opened = view.update(cx, |view, cx| -> Result<bool, String> {
@@ -96,6 +122,12 @@ impl CockpitView {
                             scenario_thread = Some(thread);
                             let Some(index) = view.pane_for(thread) else { return Ok(false); };
                             view.focus_thread(thread, cx);
+                            if baseline_started.is_none() {
+                                baseline_started=Some(Instant::now()); phase(&output,"sealed-window-baseline");
+                            }
+                            window.draw(cx);
+                            if baseline_started.unwrap().elapsed()<Duration::from_secs(3) { return Ok(false); }
+                            phase(&output,"first-browser-use");
                             Ok(view.panes[index].preview.open_url(&url, window))
                         })?;
                         return Ok(false);
@@ -107,6 +139,32 @@ impl CockpitView {
                     frames += 1;
                     if frames == 1 || frames % 20 == 0 {
                         image.save(output.join("window-current.png")).map_err(|error| error.to_string())?;
+                    }
+                    if (work_orders || annotate) && !controlled_viewport {
+                        if !preview_expanded {
+                            if annotations::click(window,cx,"preview-expand") { preview_expanded=true; }
+                            return Ok(false);
+                        }
+                        let viewport=view.read(cx).browser_smoke_viewport(scenario_thread.expect("scenario Thread"));
+                        let Some(viewport)=viewport else{return Ok(false);};
+                        if viewport.width!=1280 || viewport.height!=713 {
+                            if viewport_last_adjustment.elapsed()<Duration::from_millis(500) { return Ok(false); }
+                            viewport_last_adjustment=Instant::now();
+                            viewport_adjustments+=1;
+                            if viewport_adjustments>12 { return Err(format!("The actual content viewport could not reach 1280x713: {viewport:?}")); }
+                            let current=window.viewport_size();
+                            window.resize(gpui::size(current.width+px(1280.-viewport.width as f32),current.height+px(713.-viewport.height as f32)));
+                            return Ok(false);
+                        }
+                        std::fs::write(output.join("browser-viewport.json"),serde_json::to_vec_pretty(&serde_json::json!({"width_css":viewport.width,"height_css":viewport.height,"device_scale":viewport.scale})).unwrap()).map_err(|e|e.to_string())?;
+                        controlled_viewport=true;
+                    }
+                    if annotate && clicked {
+                        let ready=annotation.started() || image.pixels().filter(|pixel|pixel.0[..3]==[23,173,91]).count()>=2000;
+                        if ready && annotation.step(&view,scenario_thread.expect("scenario Thread"),window,cx,&output)? {
+                            provider_started=true;
+                        }
+                        return Ok(false);
                     }
                     if work_orders {
                         let document = view.update(cx, |view, _| {
@@ -195,10 +253,11 @@ impl CockpitView {
                     Err(error) => break Err(error.to_string()),
                     _ => {}
                 }
-                if started.elapsed() > Duration::from_secs(if work_orders { 180 } else { 60 }) {
+                if started.elapsed() > Duration::from_secs(if work_orders { std::env::var("FERRITE_BROWSER_WINDOW_TASKS").ok().and_then(|value|value.parse::<u64>().ok()).unwrap_or(3).min(10)*180 } else if annotate || history { 240 } else { 60 }) {
                     break Err(format!("window fixture timed out: opened={opened}, clicked={clicked}, frames={frames}, last error={last_error}"));
                 }
             };
+            phase(&output,"app-shutdown");
             // The external owner stops the Server after this window exits;
             // stopping here races the ordinary window's automatic reconnect.
             let error = result.err();
@@ -206,12 +265,17 @@ impl CockpitView {
                 "success": error.is_none(), "error": error,
                 "normal_native_window": true, "preview_operator_route": opened,
                 "window_pointer_input": clicked, "rendered_frames": frames,
-                "provider_requested": provider, "held_screenshot": held_screenshot, "scenario_thread": scenario_thread, "work_orders": work_orders, "provider_started": provider_started,
+                "provider_requested": provider, "annotations": annotate, "annotation_history": history, "held_screenshot": held_screenshot, "scenario_thread": scenario_thread, "work_orders": work_orders, "provider_started": provider_started,
                 "elapsed_ms": started.elapsed().as_millis(),
-                "scope": if work_orders { "one prescribed work order through actual provider and owning Preview; annotations are not tested" } else if held_screenshot { "first provider Screenshot during a held operator gesture; no mutation receipt permitted" } else { "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested" },
+                "scope": if history { "restart and native history review of original annotation evidence with zero eager pages" } else if annotate { "actual annotation overlay, all drawing controls, review/remove/batch Composer send and native provider PNG delivery" } else if work_orders { "one prescribed work order through actual provider and owning Preview; annotations are not tested" } else if held_screenshot { "first provider Screenshot during a held operator gesture; no mutation receipt permitted" } else { "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested" },
             });
             let _ = std::fs::write(output.join("window-result.json"), serde_json::to_vec_pretty(&result).unwrap());
             let _ = cx.update(|cx| cx.quit());
         }).detach();
     }
+}
+
+fn phase(output:&std::path::Path,name:&str) {
+    let value=serde_json::json!({"phase":name,"emitted_unix_ms":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()});
+    if std::fs::write(output.join("phase.tmp"),value.to_string()).is_ok() { let _=std::fs::rename(output.join("phase.tmp"),output.join("phase.json")); }
 }

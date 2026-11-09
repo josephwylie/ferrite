@@ -15,6 +15,7 @@ if '--version' in sys.argv:
 
 output = Path(os.environ['FERRITE_BROWSER_WINDOW_OUTPUT'])
 probe = os.environ['FERRITE_BROWSER_WINDOW_PROBE']
+annotations = os.environ.get('FERRITE_BROWSER_WINDOW_SCENARIO') == 'annotations'
 held_screenshot = os.environ.get('FERRITE_BROWSER_WINDOW_SCENARIO') == 'held-screenshot'
 work_orders = os.environ.get('FERRITE_BROWSER_WINDOW_SCENARIO') == 'work-orders'
 task_name = 'order-'+provider+'-'+probe[:8]+'-0'
@@ -38,6 +39,13 @@ def call(name, arguments):
             'callId':name,'arguments':arguments}})
 
 
+def complete(success):
+    if provider=='claude':
+        emit({'type':'result','subtype':'success' if success else 'error_during_execution','is_error':not success,'result':'Fixture checks completed.' if success else 'Fixture checks failed.'})
+    else:
+        emit({'jsonrpc':'2.0','method':'turn/completed','params':{'threadId':'browser-window-peer','turn':{'id':'browser-window-turn','status':'completed' if success else 'failed'}}})
+
+
 def record(answer):
     # Only an actual tool response can produce this evidence. Discovery/version
     # processes cannot claim the Session reached the browser boundary.
@@ -56,21 +64,28 @@ def record(answer):
             (output/'provider-screenshot.png').write_bytes(png)
         result['observed_fixture'] = observed_fixture
         result['readonly_during_held_operator_gesture'] = True
+    if work_orders and (output/'work-order-results.json').exists():
+        result['task_results']=json.loads((output/'work-order-results.json').read_text())
     result['success'] = result['success'] and observed_fixture
     temporary = output/'provider-result.tmp'
     temporary.write_text(json.dumps(result, indent=2), encoding='utf-8')
     temporary.replace(output/'provider-result.json')
+    complete(result['success'])
 
 
 started = False
 trace = []
 receipt_polls = 0
 codex_browser_advertised = False
+if annotations:
+    spec = importlib.util.spec_from_file_location('annotation_peer',Path(__file__).with_name('browser-window-annotations.py'))
+    annotation_peer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(annotation_peer)
 if work_orders:
     spec = importlib.util.spec_from_file_location('work_orders', Path(__file__).with_name('browser-window-work-orders.py'))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    scenario = module.WorkOrder(task_name, call, record, output)
+    scenario = module.WorkOrder(task_name, call, record, output, provider,int(os.environ.get("FERRITE_BROWSER_WINDOW_TASKS","3")))
 for line in sys.stdin:
     try:
         frame = json.loads(line)
@@ -85,6 +100,10 @@ for line in sys.stdin:
             continue
         if frame.get('type') == 'user' and not started:
             started = True
+            if annotations:
+                annotation_peer.receive(provider,frame.get('message',{}).get('content',[]),output,probe)
+                complete(json.loads((output/'provider-result.json').read_text())['success'])
+                continue
             emit({'type':'control_request','request_id':'browser-definitions','request':{
                 'subtype':'mcp_message','server_name':'ferrite','message':{
                     'jsonrpc':'2.0','id':'browser-definitions','method':'tools/list','params':{}}}})
@@ -109,10 +128,14 @@ for line in sys.stdin:
             emit({'jsonrpc':'2.0','id':frame['id'],'result':result})
             if method == 'turn/start' and not started:
                 started = True
+                if annotations:
+                    annotation_peer.receive(provider,frame.get('params',{}).get('input',[]),output,probe)
+                    complete(json.loads((output/'provider-result.json').read_text())['success'])
+                    continue
                 if not codex_browser_advertised:
                     record({'success':False,'error':'Fresh Codex Thread did not advertise ferrite.browser'})
                 else:
-                    call('browser-state', {'kind':'state'})
+                    scenario.begin() if work_orders else call('browser-state', {'kind':'state'})
             continue
         name = frame.get('id')
         answer = frame.get('result')

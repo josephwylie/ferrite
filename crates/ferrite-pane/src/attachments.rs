@@ -301,6 +301,7 @@ fn annotation_card(
         .bg(theme::paint::RAISED)
         .child(
             ferrite_ui::components::button(("review-browser-annotation", index))
+                .debug_selector(move || format!("review-browser-annotation-{index}"))
                 .tab_stop(true)
                 .key_context("PromptAttachment")
                 .accessibility_label("Review browser annotation")
@@ -343,6 +344,7 @@ fn annotation_card(
         .when_some(remove, |card, remove| {
             card.child(
                 remove_button(("remove-browser-annotation", index))
+                    .debug_selector(move || format!("remove-browser-annotation-{index}"))
                     .accessibility_label("Remove browser annotation")
                     .tooltip_builder(ferrite_ui::menu::tooltip("Remove browser annotation"))
                     .on_click(move |_, window, cx| {
