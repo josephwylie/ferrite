@@ -101,11 +101,13 @@ impl ServerStatus {
         self.remote.retry();
     }
 
-    /// Every open Thread, in the Roster's order. A Server that went keeps
-    /// the rows it last had.
+    /// Every open Thread of the operator's own, in the Roster's order: an
+    /// owned one (ADR 0037) is its owner's to list. A Server that went
+    /// keeps the rows it last had.
     pub fn rows(&self) -> Vec<StatusRow> {
         self.open
             .iter()
+            .filter(|thread| self.operators(**thread))
             .map(|thread| {
                 let state = self.states.get(thread);
                 StatusRow {
@@ -147,6 +149,14 @@ impl ServerStatus {
         if let Err(error) = self.remote.execute(Op::Notice { action }) {
             crate::log!("a notice act did not reach the server: {}", error.message);
         }
+    }
+
+    /// Whether an open Thread is the operator's own, not a Worker's or a
+    /// Coordinator's (ADR 0037), as far as its state says.
+    pub fn operators(&self, thread: ThreadId) -> bool {
+        self.states
+            .get(&thread)
+            .is_none_or(|state| state.owner.is_none())
     }
 
     /// An open Thread's title, as far as it has one.

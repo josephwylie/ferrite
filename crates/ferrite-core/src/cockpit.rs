@@ -2073,14 +2073,30 @@ impl Cockpit {
         )
     }
 
-    /// The Threads not open, in creation order, as the Server published
-    /// them.
+    /// The operator's Threads not open, in creation order, as the Server
+    /// published them: an owned Thread (ADR 0037) is its owner's to list.
     pub fn parked(&self) -> io::Result<Vec<ThreadId>> {
         Ok(self
             .parked
             .thread_ids()
-            .filter(|thread| self.thread(*thread).is_none())
+            .filter(|thread| self.thread(*thread).is_none() && self.parked.owner(*thread).is_none())
             .collect())
+    }
+
+    /// Whose `thread` is when not the operator's (ADR 0037), open or
+    /// parked: a Worker's Task, a Coordinator's Factory.
+    pub fn owner(&self, thread: ThreadId) -> Option<crate::ThreadOwner> {
+        match self.thread(thread) {
+            Some(open) => open.owner().cloned(),
+            None => self.parked.owner(thread),
+        }
+    }
+
+    /// Whether `thread` is the operator's own: what the nav, the palette's
+    /// Thread search, the Inbox, the Attention list and the alerts list.
+    /// An owned Thread is reached through its owner instead.
+    pub fn operators(&self, thread: ThreadId) -> bool {
+        self.owner(thread).is_none()
     }
 
     /// Whether some Thread's binding waits on a fresh worktree listing:
@@ -2509,6 +2525,8 @@ impl Cockpit {
     /// notification record yet queues behind the rest, in Thread order.
     pub fn needs_you(&self) -> Vec<ThreadId> {
         let mut queue = self.blocked();
+        // An owned Thread's Decision is answered through its owner.
+        queue.retain(|thread| self.operators(*thread));
         queue.sort_by_key(|thread| {
             (
                 self.shared
@@ -2625,6 +2643,23 @@ impl Cockpit {
     /// The free bytes a fixture world stands in for the volume, if any.
     pub fn free_disk_fixture(&self) -> Option<u64> {
         self.free_disk_fixture
+    }
+
+    /// A fixture world's owned Thread (ADR 0037): one a Task or a
+    /// Factory started, as the Server's API starts one for it.
+    pub fn fixture_open_owned(
+        &mut self,
+        provider: Provider,
+        workspace: WorkspaceChoice,
+        owner: crate::ThreadOwner,
+    ) -> io::Result<ThreadId> {
+        let launch = crate::engine::Launch {
+            owner: Some(owner),
+            ..Default::default()
+        };
+        let opened = self.in_process().open_with(provider, workspace, launch);
+        self.settle();
+        opened
     }
 
     pub fn fixture_notice(&mut self, thread: ThreadId, outcome: crate::TurnOutcome) {

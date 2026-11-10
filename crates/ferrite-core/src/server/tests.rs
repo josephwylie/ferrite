@@ -21,6 +21,7 @@ use crate::{Decision, DecisionAnswer, SessionEvent};
 mod browser_annotations;
 #[cfg(unix)]
 mod browser_providers;
+mod owned;
 mod park;
 mod publish;
 

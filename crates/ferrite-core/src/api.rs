@@ -202,6 +202,9 @@ pub struct ThreadInfo {
     /// The worktree it works in, when it works in one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<PathBuf>,
+    /// Whose it is when not the operator's (ADR 0037).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<schema::Owner>,
     /// The branch of that worktree, when Ferrite made it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
@@ -234,7 +237,16 @@ pub fn thread_info(engine: &Engine, thread: ThreadId) -> Option<ThreadInfo> {
         branch: worktree
             .and_then(|path| engine.registry().branch_for(path))
             .map(Into::into),
+        owner: view.owner().map(owner),
     })
+}
+
+/// A Thread's owner as the API spells it.
+pub fn owner(owner: &crate::ThreadOwner) -> schema::Owner {
+    match owner {
+        crate::ThreadOwner::Task(task) => schema::Owner::Task(task.clone()),
+        crate::ThreadOwner::Factory(project) => schema::Owner::Factory(project_id(*project)),
+    }
 }
 
 /// A Project's id as the API spells it: a string, as Herdr's workspace

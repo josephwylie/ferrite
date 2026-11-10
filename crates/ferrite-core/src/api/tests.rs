@@ -395,6 +395,7 @@ fn thread_start() -> ThreadStartParams {
         resume: None,
         env: Default::default(),
         launcher: Vec::new(),
+        owner: None,
     }
 }
 
@@ -470,7 +471,30 @@ fn later_samples() -> Vec<(&'static str, Request)> {
                 ..thread_start()
             })),
         ),
+        (
+            "thread_start_owner",
+            request(Method::ThreadStart(ThreadStartParams {
+                worktree: false,
+                owner: Some(Owner::Task("t-1".into())),
+                ..thread_start()
+            })),
+        ),
     ]
+}
+
+/// `thread start --owner`: a Worker's Task or a Coordinator's Factory,
+/// written as JSON (#219).
+#[test]
+fn an_owner_is_given_as_json() {
+    for (written, owner) in [
+        (r#"{"task":"t-1"}"#, Owner::Task("t-1".into())),
+        (r#"{"factory":"3"}"#, Owner::Factory("3".into())),
+    ] {
+        match parse("thread.start", &["--owner", written]) {
+            Ok(Method::ThreadStart(params)) => assert_eq!(params.owner, Some(owner)),
+            other => panic!("{other:?}"),
+        }
+    }
 }
 
 /// A later parameter freezes as its own fixture: what a script sends with
@@ -577,6 +601,7 @@ fn answers_refusals_and_events_keep_their_shape() {
         draft: true,
         worktree: Some(PathBuf::from("/work/.worktrees/app/invoices")),
         branch: Some("hp/billing/invoices".into()),
+        owner: None,
     };
     let answer = Response::Result {
         id: "1".into(),

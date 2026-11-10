@@ -175,6 +175,7 @@ fn parked_row() -> ParkedThread {
         last_used_ms: Some(1_759_990_000_000),
         turns: Some(11),
         subagents: Some(2),
+        owner: None,
     }
 }
 
@@ -247,6 +248,7 @@ fn state() -> ThreadState {
         effort: Some("high".into()),
         title: Some("Fix the parser".into()),
         snooze: None,
+        owner: None,
         workspace: Some(WireBinding::Worktree {
             repo: "/src/ferrite".into(),
             path: "/src/ferrite-wt/4".into(),
@@ -1567,6 +1569,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         last_used_ms: Some(1_760_000_000_000),
                         turns: None,
                         subagents: None,
+                        owner: None,
                     },
                 ],
             }),

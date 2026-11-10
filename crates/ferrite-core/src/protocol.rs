@@ -1082,6 +1082,9 @@ pub struct ParkedThread {
     pub turns: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagents: Option<usize>,
+    /// Whose it is when not the operator's (ADR 0037).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<crate::ThreadOwner>,
 }
 
 /// One pending Decision, as the snapshot lists them.
@@ -1359,6 +1362,10 @@ pub struct ThreadState {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snooze: Option<crate::snooze::Snooze>,
+    /// Whose it is when not the operator's (ADR 0037): the operator's own
+    /// lists leave it out. A Server older than it sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<crate::ThreadOwner>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<WireBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

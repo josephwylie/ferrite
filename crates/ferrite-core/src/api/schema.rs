@@ -202,6 +202,24 @@ pub struct ThreadStartParams {
     /// runs it where `<tree>` cannot be written.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub launcher: Vec<String>,
+    /// Whose the Thread is, when not the operator's: `{"task": "<id>"}`
+    /// for a Worker, `{"factory": "<project>"}` for a Project's
+    /// Coordinator. An owned Thread is left out of the window's lists and
+    /// alerts; the API lists it, naming its owner. Kept for its life.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<Owner>,
+}
+
+/// Whose a Thread is when not the operator's (ADR 0037), as the API
+/// spells it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Owner {
+    /// A Worker: the Task it runs a Step for, by the Task's id.
+    Task(String),
+    /// A Coordinator: the Project whose Factory it directs, by
+    /// `project.list`'s `id`.
+    Factory(String),
 }
 
 /// A parked Thread started again (Herdr's `agent start` in the pane whose

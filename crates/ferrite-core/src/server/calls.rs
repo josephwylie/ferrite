@@ -241,6 +241,13 @@ impl Server {
             }
             None => (params.cwd, None),
         };
+        let owner = match params.owner {
+            None => None,
+            Some(api::schema::Owner::Task(task)) => Some(crate::ThreadOwner::Task(task)),
+            Some(api::schema::Owner::Factory(project)) => {
+                Some(crate::ThreadOwner::Factory(self.project(&project)?))
+            }
+        };
         let workspace = workspace_choice(checkout, params.worktree, params.branch, params.base)?;
         let launch = Launch {
             launch_provider: params.provider,
@@ -249,6 +256,7 @@ impl Server {
             launcher: params.launcher,
             resume: params.resume,
             project,
+            owner,
         };
         let thread = self
             .engine
@@ -295,6 +303,7 @@ impl Server {
             launcher: params.launcher,
             resume: params.resume,
             project: None,
+            owner: None,
         };
         self.engine
             .revive_with(thread, launch)

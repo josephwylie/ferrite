@@ -78,6 +78,9 @@ pub struct Launch {
     /// one rather than one of its roots (`thread.start --project --cwd`, as
     /// Herdr starts a tab in its cwd); `None` is the checkout's own Project.
     pub project: Option<ProjectId>,
+    /// Whose the Thread is when not the operator's (ADR 0037): written
+    /// with it at its start. A revive keeps the one it has.
+    pub owner: Option<crate::ThreadOwner>,
 }
 
 /// Everything one spawn needs, in one struct: every path that starts a
@@ -585,6 +588,8 @@ struct Thread {
     effort: Option<String>,
     title: Option<String>,
     snooze: Option<crate::snooze::Snooze>,
+    /// Whose the Thread is when not the operator's (ADR 0037).
+    owner: Option<crate::ThreadOwner>,
     /// What waits for the Session to take it.
     awaiting: Awaiting,
     /// The Session was started for use (ADR 0032) rather than asked for:
@@ -715,6 +720,7 @@ impl Thread {
             effort,
             title: None,
             snooze: None,
+            owner: None,
             awaiting: Awaiting::default(),
             woken: false,
             settled_at: None,
@@ -812,6 +818,7 @@ impl Thread {
             effort: self.effort.clone(),
             title: self.title.clone(),
             snooze: self.snooze,
+            owner: self.owner.clone(),
             workspace: self.workspace.as_ref().map(Into::into),
             session_project_root: self.session_project_root.clone(),
             first_prompt_sent: self.first_prompt_sent,
@@ -1567,7 +1574,10 @@ impl Engine {
         let first_args = launch_args::LaunchArgs::of(provider, &launch);
         let agent_args = first_args.clone().and_then(launch_args::LaunchArgs::later);
         let Launch {
-            resume, project, ..
+            resume,
+            project,
+            owner,
+            ..
         } = launch;
         let root =
             match &workspace {
@@ -1615,9 +1625,13 @@ impl Engine {
                 (WorkspaceBinding::Worktree { repo, path }, None)
             }
         };
-        let created =
-            self.store
-                .create_with_model(provider, model.clone(), Some(project), binding.clone());
+        let created = self.store.create_owned(
+            provider,
+            model.clone(),
+            Some(project),
+            binding.clone(),
+            owner.clone(),
+        );
         let (id, mut writer) = match created {
             Ok(created) => created,
             Err(error) => {
@@ -1700,6 +1714,7 @@ impl Engine {
         if let Some(state) = self.threads.get_mut(&id) {
             state.agent_args = agent_args;
             state.project = Some(project);
+            state.owner = owner;
         }
         self.note_open(id);
         Ok(id)
@@ -2364,6 +2379,7 @@ impl Engine {
         let effort = snapshot.effort();
         let title = snapshot.title().map(str::to_string);
         let snooze = snapshot.snooze();
+        let owner = snapshot.owner().cloned();
         let resume = match &launch {
             Some(launch) => launch.resume.clone(),
             None => snapshot.resume_target().map(str::to_string),
@@ -2418,6 +2434,7 @@ impl Engine {
         );
         state.title = title;
         state.snooze = snooze;
+        state.owner = owner;
         state.project = project;
         state.agent_args = agent_args;
         if let Some(error) = unreadable_args {
@@ -5296,6 +5313,11 @@ impl<'a> ThreadView<'a> {
         self.state.title.as_deref()
     }
 
+    /// Whose the Thread is when not the operator's (ADR 0037).
+    pub fn owner(&self) -> Option<&'a crate::ThreadOwner> {
+        self.state.owner.as_ref()
+    }
+
     /// The follow-up predicted for this Thread's last response, if one has
     /// landed and survived the filter. What the Composer's idle line offers
     /// and what Tab accepts.
@@ -5998,6 +6020,7 @@ fn parked_rows(store: &Store, threads: Vec<ThreadId>) -> Vec<protocol::ParkedThr
                     last_used_ms,
                     turns: None,
                     subagents: None,
+                    owner: None,
                 };
             };
             let prompt_title = match meta.title {
@@ -6020,6 +6043,7 @@ fn parked_rows(store: &Store, threads: Vec<ThreadId>) -> Vec<protocol::ParkedThr
                 last_used_ms,
                 turns: summary.as_ref().map(|summary| summary.turns),
                 subagents: summary.and_then(|summary| summary.subagents),
+                owner: meta.owner,
             }
         })
         .collect()
