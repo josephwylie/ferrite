@@ -380,7 +380,9 @@ def main():
             expected_clicks = 0 if args.work_orders else (1 if (args.held_screenshot or args.annotations or args.boundaries) else (2 if args.provider else 1))
             if len(clicked) != expected_clicks:
                 raise RuntimeError(f'Independent fixture oracle saw {len(clicked)} clicks, expected {expected_clicks}')
-            screenshots = ['window-work-order.png'] if args.work_orders else ['window-before.png', 'window-after.png']
+            screenshots = ['window-work-order.png'] if args.work_orders else ['window-before.png']
+            if not (args.work_orders or args.annotations):
+                screenshots.append('window-after.png')
             if args.provider and not args.work_orders:
                 screenshots.append('window-boundaries.png' if args.boundaries else ('window-annotations-sent.png' if args.annotations else ('window-held-screenshot.png' if args.held_screenshot else 'window-provider.png')))
             for name in screenshots:
