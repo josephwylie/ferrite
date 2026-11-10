@@ -1343,7 +1343,7 @@ mod tests {
             - theme::MESSAGE_ACTION
     }
 
-    /// Claude's rhythm (`docs/research/craft/geometry.md`, at the 21 line):
+    /// Claude's rhythm (at the 21 line):
     /// a prompt stands 40 over what answers it and 56 under the turn before
     /// (its answer's actions row counted in); a turn's calls read as one
     /// list, half a line apart, its prose 22 from them; every other block

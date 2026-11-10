@@ -8,7 +8,7 @@ date: 2026-10-15
 ADR 0005 decides *when* a Thread wants the operator: a Notice when its Main
 finished for good, a live request when a Decision waits. This decision is
 about how the window tells them, following Herdr's notifications
-(docs/research/herdr-benchmark-2026-10-15.md, #4).
+(#4).
 
 **Seen means looked at.** A Notice or request is read when its Thread is
 on screen *while the window has the system's focus*. The window tells the

@@ -803,7 +803,7 @@ pub const TX_GROUP_STEP: f32 = 0.0;
 /// How much larger a Solo transcript is set than the reading size: none —
 /// 14/21 at Standard. The references measure there: Codex sets 14px SF on
 /// a 22 pitch, and Claude's larger non-SF face matches SF 14's x-height on
-/// a 21 pitch (`docs/research/craft/typecolour.md`).
+/// a 21 pitch.
 pub const TX_SOLO_STEP: f32 = 0.0;
 /// How much smaller a diff or a code fence is set than the transcript
 /// around it: one step of the scale (13 at Standard).
@@ -1478,7 +1478,7 @@ pub fn tx_half(line: f32) -> f32 {
 }
 
 /// **The transcript's turn rhythm** at a line of `line` (21 at Standard),
-/// as Claude spaces it (`docs/research/craft/geometry.md`), scaling with the
+/// as Claude spaces it, scaling with the
 /// reading size: 40 from a prompt's bubble to whatever answers it, 22
 /// between a turn's prose and its calls (either way), 56 from a turn's last
 /// block to the next prompt.
@@ -2974,7 +2974,7 @@ pub const NAV_AUTO_RAIL_HYSTERESIS: f32 = 24.0;
 // Edit values and append tokens only inside this section.
 //
 // **Motion is a budget, not a garnish.** The numbers are Claude Desktop's,
-// read from its source (`docs/research/craft/motion-claude-source.md`, the
+// read from its source (the
 // authority wherever it and the recordings disagree): its duration scale
 // (`MOTION_DUR_*`, Claude's `--cds-dur-*`) and its curves
 // (`MOTION_EASE_*`, `--cds-ease-*`). `motion.rs` maps each entry to the
@@ -3195,7 +3195,7 @@ pub const MOTION_SCROLLBAR_FADE_MS: u64 = 100;
 pub const MOTION_PULSE_TICK_MS: u64 = 33;
 /// 2.5s — one loop of the working mark (`components::working_mark`):
 /// four orbs, one diagonal pair swapping corners every quarter, as Claude
-/// Desktop's four-dot glyph does (`docs/research/craft/working-glyph-claude.md`).
+/// Desktop's four-dot glyph does.
 /// Drawn at the display's rate, never stepped.
 pub const MOTION_WORKING_MARK_MS: u64 = 2_500;
 /// 2.4s — one sweep of the shimmer's crest across the working caption,

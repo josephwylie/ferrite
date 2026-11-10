@@ -59,7 +59,7 @@ line retains the complete text in its disclosure. Short blocks with no additiona
 text stay visible and selectable without a chevron. Codex turns request detailed
 reasoning summaries so compact presentation does not limit the supplied detail.
 Streaming preserves these independent choices.
-Commentary separates groups. No parallel-execution claim is inferred. See [Claude CLI research](../research/claude-code-tool-grouping.md).
+Commentary separates groups. No parallel-execution claim is inferred.
 
 Questions share one GPUI form across Main and child subjects: `RadioGroup`,
 `Checkbox`, `Input`, and `Button` inside a `GroupBox` above the composer. The
@@ -72,8 +72,8 @@ blocking tool, while Codex's structured async agent message produces a nonblocki
 request. Codex replies use `turn/steer` with the observed active turn ID, or
 `turn/start` when idle. Shared activity retains a submitting form until the
 adapter reports acknowledgement, and preserves its draft on rejection. Neither
-an async question nor its acknowledgement changes execution status. See
-[provider research](../research/provider-transcript-status.md).
+an async question nor its acknowledgement changes execution status.
+
 
 ## Consequences
 

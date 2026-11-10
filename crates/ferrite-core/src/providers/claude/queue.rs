@@ -153,7 +153,7 @@ mod tests {
     #[test]
     fn native_batch_fixture_consumes_each_uuid_independently_of_results() {
         let fixture = include_str!(
-            "../../../../../docs/research/fixtures/claude-native-queue-batch-2.1.263.jsonl"
+            "../../../tests/fixtures/claude-native-queue-batch-2.1.263.jsonl"
         );
         let frames: Vec<Value> = fixture
             .lines()

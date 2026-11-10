@@ -5,8 +5,8 @@ date: 2026-10-15
 
 # One bar per window, and a titlebar that says nothing
 
-Follows the Herdr benchmark (`docs/research/herdr-benchmark-2026-10-15.md`,
-"UI cleanliness" items 1, 2, 3 and 6).
+Follows the Herdr benchmark
+("UI cleanliness" items 1, 2, 3 and 6).
 
 ## Context
 

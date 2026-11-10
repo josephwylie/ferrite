@@ -5,8 +5,8 @@ Status: accepted 2026-10-15 (Herdr benchmark, §6 Remote over SSH).
 ## Context
 
 ADR 0025 split the agents into a Server with a frozen generation-1
-client contract. The plan (`docs/research/herdr-benchmark-2026-10-15.md`,
-§6) asks for the same window on another computer's Server: `ferrite
+client contract. The plan
+(§6) asks for the same window on another computer's Server: `ferrite
 --remote <target>` runs `ssh <target> ferrited bridge`, bridged to a local
 socket as Herdr's `SshStdioBridge` does; saved machines appear in one nav;
 only the selected machine streams transcripts. `ferrited` must already be

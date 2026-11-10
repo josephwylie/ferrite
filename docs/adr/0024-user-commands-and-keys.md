@@ -5,8 +5,8 @@ date: 2026-10-15
 
 # The operator's own palette commands and keys
 
-Follows the Herdr benchmark (`docs/research/herdr-benchmark-2026-10-15.md`,
-"Custom palette commands and user keymap").
+Follows the Herdr benchmark
+("Custom palette commands and user keymap").
 
 ## Context
 

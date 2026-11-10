@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn native_snapshot_pages_and_change_race_reconcile_before_publishing() {
         let capture: Value = serde_json::from_str(include_str!(
-            "../../../../../docs/research/native-queues/codex-0.153.4.json"
+            "../../../tests/fixtures/codex-native-queue-0.153.4.json"
         ))
         .unwrap();
         let items = capture["after_process_restart"].as_array().unwrap();

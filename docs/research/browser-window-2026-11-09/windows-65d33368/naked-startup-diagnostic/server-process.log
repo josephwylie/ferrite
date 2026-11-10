@@ -1,6 +1,0 @@
-ferrite: server: Projects are off: no C:\Users\RUNNER~1\AppData\Local\Temp\ferrite-window-qzelr6tp\no-projects
-ferrite: server: 0.4.0 listening, boot 1b6c-18e64a1d219d8000
-ferrite: could not discover Claude models: program not found
-ferrite: could not discover Codex models: codex CLI not found: `codex`
-ferrite: server: stopping, as a window asked
-ferrite: quitting: 0 sessions ended

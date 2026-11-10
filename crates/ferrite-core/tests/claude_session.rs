@@ -1362,7 +1362,7 @@ fn read_lines(path: &std::path::Path, wanted: usize) -> Vec<String> {
 fn native_queue_admission_and_cancellation_use_the_existing_session_pipe() {
     use ferrite_core::QueueEvent;
     let frames: Vec<Value> =
-        include_str!("../../../docs/research/fixtures/claude-native-queue-cancel-2.1.263.jsonl")
+        include_str!("fixtures/claude-native-queue-cancel-2.1.263.jsonl")
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();

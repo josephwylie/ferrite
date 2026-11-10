@@ -1,8 +1,0 @@
-{
-  "diagnostic_only": true,
-  "browser_acceptance": false,
-  "driver_reached": true,
-  "exit_code": null,
-  "pid": 4160,
-  "alive_after_settle": true
-}

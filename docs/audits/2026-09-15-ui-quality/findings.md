@@ -126,7 +126,7 @@ These 22 findings extend the functional audit. They are ranked by present-day im
 
 **Trigger and impact:** Render ordinary `# Heading one`. It becomes bold, italic and underlined, while H2 uses a more restrained heading treatment; H3 through H6 share one size. The highest heading looks link-like and over-decorated, and deeper hierarchy collapses.
 
-**Evidence — F/S:** [Formatting capture](screenshots/formatting-wide.png); the [input fixture](../../research/cli-capture-2026-09-06/model-source/claude-formatting.md) contains plain heading syntax. [Vendor node.rs:2425](../../../vendor/gpui-base/src/text/node.rs#L2425) adds italic and underline to every H1; [rich.rs:330](../../../crates/ferrite/src/rich.rs#L330) assigns one size to H3–H6.
+**Evidence — F/S:** [Formatting capture](screenshots/formatting-wide.png); the [input fixture](../../../crates/ferrite-cockpit/fixtures/claude-formatting.md) contains plain heading syntax. [Vendor node.rs:2425](../../../vendor/gpui-base/src/text/node.rs#L2425) adds italic and underline to every H1; [rich.rs:330](../../../crates/ferrite/src/rich.rs#L330) assigns one size to H3–H6.
 
 **Refinement and acceptance:** Give H1 a clean weight/size hierarchy without unrequested italic/underline, reserving link styling for links. Differentiate deeper levels modestly through weight or spacing if needed. Test plain headings and explicitly authored emphasis separately so author intent is preserved.
 

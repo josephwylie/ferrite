@@ -1,6 +1,5 @@
 //! The working mark: four soft white orbs moving exactly as Claude
-//! Desktop's four-dot working glyph does (`code.loop`), decoded in
-//! `docs/research/craft/working-glyph-claude.md`.
+//! Desktop's four-dot working glyph does (`code.loop`).
 //!
 //! At rest the orbs sit on a square. Every 625ms one diagonal pair swaps
 //! corners: the two orbs turn half a revolution about the centre together,

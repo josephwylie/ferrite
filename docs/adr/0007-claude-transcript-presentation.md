@@ -5,7 +5,7 @@ date: 2026-09-06
 
 # Claude as the shared transcript design reference
 
-After reviewing the [captured CLI transcripts](../research/cli-transcript-visual-spec.md),
+After reviewing captured CLI transcripts,
 the operator chose Claude's design approach because its transcript is easier to
 use. Ferrite uses Claude as the primary presentation reference across **both
 Providers**, including Codex Threads. This supersedes the research recommendation
@@ -50,6 +50,3 @@ now bundles Geist Mono. Ordered markers
 use native measured widths, and overflowing tables use the existing horizontal
 scroll table layout. Headings are semibold with no italic or underline;
 H1 and H2 are enlarged relative to the answer size.
-
-The [final findings account](../research/ferrite-transcript-implementation-2026-09-06/README.md)
-records all F01–F60 dispositions, native artifacts and comparison limits.

@@ -11,8 +11,8 @@ date: 2026-10-15
 > `coordinators.json` any more, not even to migrate it; an old file is
 > left where it is.
 
-Follows the Herdr benchmark (`docs/research/herdr-benchmark-2026-10-15.md`,
-"Features taken from plugins" → Coordinator Threads), on the API of ADR
+Follows the Herdr benchmark
+("Features taken from plugins" → Coordinator Threads), on the API of ADR
 0027. The pattern is herdr-projects' (MIT): ideas only, no code.
 
 ## Context

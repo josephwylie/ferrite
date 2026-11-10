@@ -5,8 +5,8 @@ date: 2026-10-15
 
 # The Server's API, the `ferrite` CLI and the agent skill
 
-Follows the Herdr benchmark (`docs/research/herdr-benchmark-2026-10-15.md`,
-§2 "Socket API and `ferrite` CLI" and §3 "Bundled agent skill"), on the
+Follows the Herdr benchmark
+(§2 "Socket API and `ferrite` CLI" and §3 "Bundled agent skill"), on the
 Server of ADR 0025.
 
 ## Context

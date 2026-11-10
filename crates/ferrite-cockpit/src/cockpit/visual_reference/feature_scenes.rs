@@ -485,7 +485,7 @@ fn reply_card() -> (Scene, Setup) {
             composer.add_files(
                 &[std::path::PathBuf::from(concat!(
                     env!("CARGO_MANIFEST_DIR"),
-                    "/../../docs/research/craft/claude/selection-pill.png"
+                    "/fixtures/selection-pill.png"
                 ))],
                 cx,
             );
@@ -810,7 +810,7 @@ fn lightbox() -> (Scene, Setup) {
     let shots = scene.root.join("shots");
     std::fs::create_dir_all(&shots).unwrap();
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/research/ferrite-transcript-implementation-2026-09-06");
+        .join("fixtures");
     let gallery: Vec<std::path::PathBuf> = ["approval-wide", "decision-wide", "edges-wide"]
         .iter()
         .map(|name| {

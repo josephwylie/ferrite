@@ -12,7 +12,7 @@ ends every agent, and the at-launch self-update (ADR 0023) has to run
 before any Session exists for the same reason. A second Ferrite gets a
 read-only Store.
 
-The plan (`docs/research/herdr-benchmark-2026-10-15.md`, §1) asks for
+The plan (§1) asks for
 Herdr's split: a background server owns the agents, the app attaches to
 it, and the agents keep running when it goes. It also settles the upgrade
 path: restart the server when the agents are idle and resume each Thread,

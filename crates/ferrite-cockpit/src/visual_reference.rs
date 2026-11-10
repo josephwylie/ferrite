@@ -1398,7 +1398,7 @@ fn legacy(state: &str) -> (Scene, Setup) {
         )
         .ok("read", "Read the formatting fixture.");
     let source = match state {
-        "formatting" => include_str!("../../../docs/research/cli-capture-2026-09-06/model-source/claude-formatting.md").to_string(),
+        "formatting" => include_str!("../fixtures/claude-formatting.md").to_string(),
         "edges" => format!("# Heading emphasis\n\n## Second heading\n\n**bold**, *italic*; `one  two` [label](https://example.com/exact?q=a%20b).\n\n9. Nine\n10. Ten with a wrapped continuation of several words\n\nSeparate list:\n\n100. One hundred with a wrapped continuation\n\n> First quote line\n> Second quote line\n>\n> > Nested quote\n\n```text\n    one  two\n\n\tthree   four  \n```\n\n```python\nprint(\"one  two\") # comment\nvalue = 42\n```\n\n| Name | Number | Long token |\n| :--- | ---: | :--- |\n| double  space | 12 | {} |\n| CJK 漢字 | 100 | é NBSP text |\n\n{}", "X".repeat(80), "W".repeat(124)),
         "live" => "I am checking the supplied fixture.\n\n## Streaming heading\n\n- First item\n- Second item\n\n```rust\nlet count = 2;".into(),
         "decision" => "The decision below preserves exact command and answer text.".into(),
@@ -1534,7 +1534,7 @@ fn running_turn(done: bool) -> Scene {
         "Launch 2 parallel subagents: one counts .rs files under crates/ferrite-ui, the other counts .md files under docs. Report both numbers.".into(),
     );
     feed.boot(Provider::Claude, 64_000)
-        .text("Both subagents finished, counting recursively with `find`:\n\n- `.rs` files under `crates/ferrite-ui`: 15\n- `.md` files under `docs`: 77. This includes the untracked `docs/research/` files.")
+        .text("Both subagents finished, counting recursively with `find`:\n\n- `.rs` files under `crates/ferrite-ui`: 15\n- `.md` files under `docs`: 77.")
         .end(0.21);
     scene.core.pump();
     clock.set(at(now) - Duration::from_secs(27));
@@ -2411,7 +2411,7 @@ fn composer() -> (Scene, Setup) {
     let shot = scene.root.join("queued-rows.png");
     let _ = std::fs::copy(
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../docs/research/ferrite-transcript-implementation-2026-09-06/wide.png"),
+            .join("fixtures/wide.png"),
         &shot,
     );
     scene.core.send(
@@ -2627,7 +2627,7 @@ fn prose() -> Scene {
 /// framebuffer; then again with the palette open over it, its caret
 /// blinking on the float. Writes `loops-parity.json` (the palette pass under
 /// `palette`) and, for any instant that differs, both shots.
-/// The working mark's preview (`docs/research/craft/working-orbs.mp4`):
+/// The working mark's preview:
 /// the real element at 16pt and 48pt on `#191919`, its loop held at each
 /// 60fps instant of two loops, one PNG a frame (`orbs-0000.png` …) for
 /// ffmpeg to join.
@@ -2909,7 +2909,7 @@ fn loops_frames(
 /// the executor's clock at 60fps, the pointer driven through the window's
 /// real event path: the sent bubble's pop, a tooltip after its delay, the
 /// approval card's settle, the palette in and out, a nav fold, a button's
-/// press and release. Joined, they are `docs/research/craft/motion-preview.mp4`.
+/// press and release.
 pub fn motion_preview(output: String) {
     use ferrite_ui::{components, motion, theme};
     use gpui::{
@@ -3302,8 +3302,7 @@ pub fn motion_preview(output: String) {
     }
 }
 
-/// The working line's token count rolling (`docs/research/craft/
-/// token-roll.mp4`): the real working line (`pane::working_tail`) over a
+/// The working line's token count rolling: the real working line (`pane::working_tail`) over a
 /// turn fed as a provider streams it — thinking, its estimate climbing,
 /// then text and a tool call, a usage report snapping the count up past
 /// 1.0k — drawn on the executor's clock at each 60fps instant, one PNG a

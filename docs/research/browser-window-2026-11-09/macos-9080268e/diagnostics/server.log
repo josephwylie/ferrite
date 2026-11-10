@@ -1,6 +1,0 @@
-2026-11-09 06:03:25.444 server: Projects are off: no /var/folders/h5/t85nd63d71x27_8gl5gw3l_w0000gn/T/ferrite-window-_ikxgha_/no-projects
-2026-11-09 06:03:25.457 server: 0.4.0 listening, boot 4eed-18e64b38006725c8
-2026-11-09 06:03:25.459 could not discover Codex models: codex CLI not found: `codex`
-2026-11-09 06:03:25.461 could not discover Claude models: Provider closed during command discovery
-2026-11-09 06:03:31.041 server: stopping, as a window asked
-2026-11-09 06:03:31.041 quitting: 0 sessions ended

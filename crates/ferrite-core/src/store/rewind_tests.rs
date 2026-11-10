@@ -1,4 +1,4 @@
-//! A rewind in the log (schema 15, docs/research/edit-rewind.md): what it
+//! A rewind in the log (schema 15): what it
 //! takes out of recall and the turn count, where the next Session resumes,
 //! and the fork it can become.
 

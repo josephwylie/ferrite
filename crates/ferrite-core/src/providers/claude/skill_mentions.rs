@@ -6,7 +6,7 @@
 //! a user-only skill (`disable-model-invocation`) is never mentioned to the
 //! model over stdin. The Skill tool still runs one whose `/name` the turn's
 //! text contains, so the note is the whole gap; Ferrite writes it, in the
-//! CLI's own words. See docs/research/claude-inline-skill-mentions.md.
+//! CLI's own words.
 use serde_json::Value;
 
 /// The CLI's skills, kept current from the lines that announce its menu.

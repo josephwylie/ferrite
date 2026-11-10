@@ -1,4 +1,4 @@
-//! Rewind and fork over Codex's app-server (docs/research/edit-rewind.md).
+//! Rewind and fork over Codex's app-server.
 //!
 //! Codex names turns, not prompts, so every prompt goes out under
 //! Ferrite's id as `clientUserMessageId`, and its `userMessage` item keeps

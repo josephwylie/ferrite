@@ -306,8 +306,7 @@ pub enum TranscriptEvent {
     Send(String),
 }
 
-/// What a sent prompt's actions ask of its Thread
-/// (docs/research/edit-rewind.md).
+/// What a sent prompt's actions ask of its Thread.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PromptAction {
     /// Back to before it, its words back in the Composer.
@@ -1424,7 +1423,7 @@ impl TranscriptView {
         }
         if let Body::Prompt(line) = &block.body {
             // Its send time, Edit, Rewind, Fork and `Copy`, under the
-            // bubble's right edge (docs/research/edit-rewind.md). The three
+            // bubble's right edge. The three
             // that cut need the id it was sent as and an agent that can.
             let cuts = block
                 .prompt_id

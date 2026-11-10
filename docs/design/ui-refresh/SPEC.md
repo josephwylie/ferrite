@@ -964,8 +964,7 @@ Full width. `BAR` ground, a `BAR_TOP` line, padding 0 14, gap 18, Geist
 
 ### 5.8 Palette (command search)
 
-Measured off the Claude app's own ⌘K search at 1x (2026-11-03,
-`docs/research/craft/DENSITY.md`), which replaces the mockup's numbers.
+Measured off the Claude app's own ⌘K search at 1x (2026-11-03), which replaces the mockup's numbers.
 
 - **Dialog.** 670 wide (`PALETTE_W`), `PALETTE_TOP` 56,
   over a `VEIL` scrim. `FLOAT` ground, radius 12, a 1px `HAIRLINE_STRONG`

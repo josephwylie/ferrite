@@ -91,7 +91,7 @@ mod rewind_tests;
 /// - **14** — `tool_summary` records (a provider's summary of the calls it
 ///   names). A v1–v13 log loads with no summaries, which is what it
 ///   recorded.
-/// - **15** — rewinds (docs/research/edit-rewind.md): a prompt's
+/// - **15** — rewinds: a prompt's
 ///   observation carries the id it was sent under; a `rewind` record cuts
 ///   the conversation back to before the prompt it names, replay dropping
 ///   that prompt and everything after it; a `resume_at` record points the

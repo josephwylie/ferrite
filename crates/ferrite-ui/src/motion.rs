@@ -1,5 +1,5 @@
-//! The motion kit: Claude Desktop's motion, read from its source
-//! (`docs/research/craft/motion-claude-source.md`), as one-shot elements on
+//! The motion kit: Claude Desktop's motion, read from its source,
+//! as one-shot elements on
 //! the executor's clock ([`Played`]), plus the clocks gpui does not give
 //! us — a throttled, shared pulse for loops, a hover blend for colour, and
 //! interruptible tweens. Every clock asks for its frames through the view

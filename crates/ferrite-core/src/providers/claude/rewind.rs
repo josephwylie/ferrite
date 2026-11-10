@@ -1,5 +1,4 @@
-//! Rewind and fork over Claude's control protocol
-//! (docs/research/edit-rewind.md).
+//! Rewind and fork over Claude's control protocol.
 //!
 //! A rewind is one or two control requests, answered on the reader thread:
 //! `rewind_files` first when the files are to come back (the checkpoint is

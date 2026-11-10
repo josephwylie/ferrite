@@ -279,7 +279,7 @@ impl ClaudeSession {
 
         let mut command = super::launched(&config.launcher, &program);
         // Print mode emits these only when asked; the SDK sets them for its
-        // hosts (docs/research/provider-options-audit.md). Set first so a
+        // hosts. Set first so a
         // Thread's own env can override them.
         // The CLI's own checklist tools stay as the CLI decides (off for
         // current models in print mode, verified on 2.1.318): the plan is
@@ -287,7 +287,7 @@ impl ClaudeSession {
         command.envs([
             ("CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES", "1"),
             ("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS", "1"),
-            // File checkpoints for rewind (docs/research/edit-rewind.md):
+            // File checkpoints for rewind:
             // on from now so later rewinds can restore files.
             ("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "1"),
         ]);

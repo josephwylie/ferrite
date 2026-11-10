@@ -1,4 +1,4 @@
-//! Rewind, Edit and Fork (docs/research/edit-rewind.md): back to before a
+//! Rewind, Edit and Fork: back to before a
 //! prompt, in place, or as a new Thread — which may also take the whole
 //! conversation. The agent is asked; its answer, read on the pump, cuts the
 //! transcript and the log, hands an Edit's prompt back to the Composer, or

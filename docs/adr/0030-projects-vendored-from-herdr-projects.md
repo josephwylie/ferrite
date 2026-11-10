@@ -10,7 +10,7 @@ supersedes: 0028
 > 0.2.34, and what this ADR built leaves with it. ADR 0031 is itself
 > superseded: Projects were removed on 2026-11-03.
 
-Follows the Herdr benchmark (`docs/research/herdr-benchmark-2026-10-15.md`)
+Follows the Herdr benchmark
 and replaces Ferrite's own Coordinator Threads (ADR 0028). Builds on the
 Server (ADR 0025) and its API and CLI (ADR 0027).
 

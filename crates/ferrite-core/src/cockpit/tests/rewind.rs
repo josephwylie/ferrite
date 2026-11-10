@@ -1,4 +1,4 @@
-//! Edit, Rewind and Fork end to end (docs/research/edit-rewind.md): every
+//! Edit, Rewind and Fork end to end: every
 //! prompt goes out under an id, the agent is asked by it, and its answer
 //! cuts the transcript, recall and the log, or opens a fork.
 

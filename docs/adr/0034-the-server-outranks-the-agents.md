@@ -5,10 +5,6 @@ date: 2026-10-26
 
 # The Server outranks the agents
 
-The facts this rests on, with their sources (XNU, libpthread, system_cmds,
-launchd.plist(5), Microsoft Learn, man7) and the local experiments that
-confirmed them, are in `docs/research/process-qos-and-priority-inheritance.md`.
-
 ## Context
 
 Every act of a window waits for the Server's reply (ADR 0025), so the

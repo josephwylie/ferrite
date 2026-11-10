@@ -1,4 +1,0 @@
-#!/bin/zsh
-# cap APP NAME : raw 1x capture of APP's window (Claude | ChatGPT) into craft/<claude|codex>/NAME.png
-C=${0:A:h:h}; W=$("$C/.tools/wid" "$1" | cut -d' ' -f1); D=$([[ $1 == Claude ]] && echo claude || echo codex)
-screencapture -x -o -l "$W" "$C/$D/$2.png" && echo "$D/$2.png"

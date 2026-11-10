@@ -5,7 +5,7 @@ date: 2026-10-15
 
 # Session import is a palette scope; allowance warnings are crossings
 
-From the Herdr benchmark (docs/research/herdr-benchmark-2026-10-15.md):
+From the Herdr benchmark:
 search past Claude/Codex sessions and resume one, and warn when the
 5-hour or weekly allowance runs low.
 

@@ -5,7 +5,7 @@ date: 2026-10-15
 
 # The Review slot: herdr-reviewr's review, vendored, beside the Thread
 
-The Herdr benchmark (`docs/research/herdr-benchmark-2026-10-15.md`, "Features
+The Herdr benchmark ("Features
 taken from plugins") asks for herdr-reviewr's review: a diff beside the
 Thread, scoped to the uncommitted work, the branch or the last turn, whose
 line comments become prompt context. Ferrite already had a compare (⌘⇧D):
