@@ -173,7 +173,7 @@ impl CockpitView {
                     if frames == 1 || frames % 20 == 0 {
                         image.save(output.join("window-current.png")).map_err(|error| error.to_string())?;
                     }
-                    if (work_orders || annotate || boundaries) && !controlled_viewport {
+                    if (annotate || boundaries) && !controlled_viewport {
                         if !preview_expanded {
                             if annotations::click(window,cx,"preview-expand") { preview_expanded=true; }
                             return Ok(false);
