@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::activity::{
-    Activity, ActivityInput, ActivityView, DecisionHandle, PendingDecision, Subject, ToolTiming,
+    Activity, ActivityInput, ActivityLimits, ActivityView, DecisionHandle, PendingDecision,
+    Subject, ToolTiming,
 };
 use crate::digest::{Digest, Turn};
 use crate::engine::{event_changes_content, Delivery, PaneUpdate, QueueItem};
@@ -21,6 +22,8 @@ use crate::{ControlKind, Decision, ModelInfo, PermissionModeChoice, SessionComma
 
 pub(crate) struct Mirror {
     activity: Activity,
+    /// What its Activity retains: the Engine's.
+    limits: ActivityLimits,
     /// The Session generation the last `Connect` named: what attributed
     /// inputs are applied under, as the Engine applied them.
     generation: u64,
@@ -182,9 +185,10 @@ impl HeldDigest {
 }
 
 impl Mirror {
-    fn new() -> Self {
+    fn new(limits: ActivityLimits) -> Self {
         Self {
-            activity: Activity::default(),
+            activity: Activity::new(limits),
+            limits,
             generation: 0,
             seq: 0,
             facts: None,
@@ -199,7 +203,7 @@ impl Mirror {
     /// An empty Activity: what a history rebuilds from, and what a window
     /// holds of a Thread it lets go.
     fn start_over(&mut self) {
-        self.activity = Activity::default();
+        self.activity = Activity::new(self.limits);
         self.generation = 0;
     }
 
@@ -250,11 +254,27 @@ pub(crate) struct Mirrors {
     /// Whether the Engine sends digests: only then can a window hold less
     /// than every open Thread whole.
     digested: bool,
+    /// What each mirror's Activity retains: what the Engine's does, or the
+    /// mirrors drift from it.
+    limits: ActivityLimits,
 }
 
 impl Mirrors {
+    /// No mirrors yet, each to retain what `limits` allow.
+    pub(crate) fn retaining(limits: ActivityLimits) -> Self {
+        Self {
+            limits,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn limits(&self) -> ActivityLimits {
+        self.limits
+    }
+
     /// Apply one message. `boot` is the Engine's clock zero on this side.
     pub(crate) fn receive(&mut self, message: ServerMessage, boot: Instant) {
+        let limits = self.limits;
         match message {
             ServerMessage::History { thread, .. }
             | ServerMessage::HistoryEnd { thread, .. }
@@ -269,7 +289,10 @@ impl Mirrors {
                 after,
                 inputs,
             } => {
-                let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
+                let mirror = self
+                    .threads
+                    .entry(thread)
+                    .or_insert_with(|| Mirror::new(limits));
                 if after == 0 {
                     mirror.arriving = Some(Vec::new());
                 }
@@ -281,7 +304,10 @@ impl Mirrors {
                 }
             }
             ServerMessage::HistoryEnd { thread, seq, live } => {
-                let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
+                let mirror = self
+                    .threads
+                    .entry(thread)
+                    .or_insert_with(|| Mirror::new(limits));
                 if let Some(history) = mirror.arriving.take() {
                     mirror.start_over();
                     self.restarted.push(thread);
@@ -302,7 +328,10 @@ impl Mirrors {
                 at_ms,
                 input,
             } => {
-                let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
+                let mirror = self
+                    .threads
+                    .entry(thread)
+                    .or_insert_with(|| Mirror::new(limits));
                 mirror.seq = seq;
                 mirror.loaded = true;
                 let update = updated(&mut self.updates, thread);
@@ -314,7 +343,10 @@ impl Mirrors {
                 name,
                 input,
             } => {
-                let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
+                let mirror = self
+                    .threads
+                    .entry(thread)
+                    .or_insert_with(|| Mirror::new(limits));
                 let update = updated(&mut self.updates, thread);
                 mirror.apply(
                     ActivityInput::Main {
@@ -326,7 +358,10 @@ impl Mirrors {
             }
             ServerMessage::Thread { state, .. } => {
                 let thread = state.thread;
-                let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
+                let mirror = self
+                    .threads
+                    .entry(thread)
+                    .or_insert_with(|| Mirror::new(limits));
                 let facts = Facts::from(state);
                 self.models_changed |= mirror
                     .facts
@@ -336,13 +371,19 @@ impl Mirrors {
                 updated(&mut self.updates, thread).activity_changed = true;
             }
             ServerMessage::Digest { thread, digest } => {
-                let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
+                let mirror = self
+                    .threads
+                    .entry(thread)
+                    .or_insert_with(|| Mirror::new(limits));
                 mirror.digest = Some(HeldDigest::of(digest, boot));
                 self.digested = true;
                 updated(&mut self.updates, thread).activity_changed = true;
             }
             ServerMessage::Decision { thread, handle, .. } => {
-                let mirror = self.threads.entry(thread).or_insert_with(Mirror::new);
+                let mirror = self
+                    .threads
+                    .entry(thread)
+                    .or_insert_with(|| Mirror::new(limits));
                 let handle: DecisionHandle = (&handle).into();
                 mirror
                     .decision_handles

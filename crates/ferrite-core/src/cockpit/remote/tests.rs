@@ -40,7 +40,8 @@ fn server_answering(
                 let Ok(stream) = listener.accept() else {
                     return;
                 };
-                if Connection::serve(id, stream, heard.clone()).is_err() {
+                if Connection::serve(id, stream, heard.clone(), crate::link::LAGGED_BYTES).is_err()
+                {
                     return;
                 }
             }

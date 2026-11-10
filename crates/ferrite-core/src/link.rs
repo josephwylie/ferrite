@@ -123,10 +123,12 @@ pub fn relay(from: &mut dyn Read, to: &mut dyn Write) -> io::Result<()> {
 // -------------------------------------------------------------- outbox
 
 /// What a connection has yet to be sent.
-#[derive(Default)]
 pub struct Outbox {
     queue: VecDeque<Waiting>,
     bytes: usize,
+    /// How far behind the client may fall: [`LAGGED_BYTES`], or a test's
+    /// smaller limit.
+    lag_bytes: usize,
     /// The last thing sent was a history's piece: a waiting message goes
     /// next, so neither starves the other.
     piece_last: bool,
@@ -139,7 +141,7 @@ pub struct Outbox {
 
 /// A Thread's history, made on a thread of its own: read from its log and
 /// handed over in pieces, each message in turn. What it sends never counts
-/// against [`LAGGED_BYTES`].
+/// against the lag limit.
 pub type Deferred =
     Box<dyn FnOnce(&mut dyn FnMut(ServerMessage) -> io::Result<()>) -> io::Result<()> + Send>;
 
@@ -265,7 +267,7 @@ impl Drop for Wake {
     }
 }
 
-/// The connection fell more than [`LAGGED_BYTES`] behind.
+/// The connection fell more than its lag limit behind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Lagged;
 
@@ -298,7 +300,26 @@ fn slot(message: &ServerMessage) -> Option<Slot> {
     })
 }
 
+impl Default for Outbox {
+    fn default() -> Self {
+        Self::new(LAGGED_BYTES)
+    }
+}
+
 impl Outbox {
+    /// An empty outbox whose client is closed `lagged` past `lag_bytes`.
+    pub fn new(lag_bytes: usize) -> Self {
+        Self {
+            queue: VecDeque::new(),
+            bytes: 0,
+            lag_bytes,
+            piece_last: false,
+            lagged: false,
+            closed: false,
+            finished: false,
+        }
+    }
+
     /// Queue a message: a state message drops its waiting kind and joins
     /// the back, so it never overtakes what was queued before it; a delta
     /// merges into the one before it; anything else waits its turn. `Err(Lagged)` once the client is too far behind — the
@@ -361,7 +382,7 @@ impl Outbox {
     }
 
     fn check(&mut self) -> Result<(), Lagged> {
-        if self.bytes > LAGGED_BYTES {
+        if self.bytes > self.lag_bytes {
             self.lagged = true;
             self.queue.clear();
             self.bytes = 0;
@@ -553,12 +574,18 @@ pub struct Connection {
 impl Connection {
     /// Serve a stream: the Connection is handed to `heard` (the pump's
     /// channel), then its reader thread hands over each message the client
-    /// sends, and its writer thread sends what is queued on it.
-    pub fn serve<S>(id: ClientId, stream: S, heard: Sender<Heard>) -> io::Result<()>
+    /// sends, and its writer thread sends what is queued on it. The client
+    /// is closed `lagged` once it falls `lag_bytes` behind.
+    pub fn serve<S>(
+        id: ClientId,
+        stream: S,
+        heard: Sender<Heard>,
+        lag_bytes: usize,
+    ) -> io::Result<()>
     where
         S: Read + Write + Send + 'static + TryClone,
     {
-        let shared = Arc::new((Mutex::new(Outbox::default()), Condvar::new()));
+        let shared = Arc::new((Mutex::new(Outbox::new(lag_bytes)), Condvar::new()));
         let mut writer = stream.try_clone()?;
         let outbox = Arc::clone(&shared);
         std::thread::Builder::new()
@@ -698,15 +725,17 @@ impl Drop for Connection {
 }
 
 /// Serve every connection `listener` accepts, numbered from 1, for as
-/// long as the pump listens.
-pub fn accept_all(listener: Listener, heard: Sender<Heard>) -> io::Result<()> {
+/// long as the pump listens, each lagged past `lag_bytes`
+/// ([`LAGGED_BYTES`] but in tests).
+pub fn accept_all(listener: Listener, heard: Sender<Heard>, lag_bytes: usize) -> io::Result<()> {
     std::thread::Builder::new()
         .name("ferrite-server-accept".into())
         .spawn(move || {
             for id in 1.. {
                 match listener.accept() {
                     Ok(stream) => {
-                        if let Err(error) = Connection::serve(id, stream, heard.clone()) {
+                        if let Err(error) = Connection::serve(id, stream, heard.clone(), lag_bytes)
+                        {
                             crate::log!("server: a connection could not be served: {error}");
                         }
                     }

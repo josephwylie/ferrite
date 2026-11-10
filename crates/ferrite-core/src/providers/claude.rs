@@ -130,6 +130,12 @@ pub struct ClaudeConfig {
     pub launcher: Vec<String>,
     /// Extra arguments, after Ferrite's own (`thread.start --args`).
     pub args: Vec<String>,
+    /// How long spawn waits for the initialize answer: five seconds,
+    /// shorter in a test.
+    pub handshake_timeout: Duration,
+    /// How long spawn waits for the CLI to accept the Thread's effort:
+    /// thirty seconds, shorter in a test.
+    pub effort_ack_timeout: Duration,
 }
 
 impl Default for ClaudeConfig {
@@ -152,6 +158,8 @@ impl Default for ClaudeConfig {
             env: Vec::new(),
             launcher: Vec::new(),
             args: Vec::new(),
+            handshake_timeout: HANDSHAKE_TIMEOUT,
+            effort_ack_timeout: EFFORT_ACK_TIMEOUT,
         }
     }
 }
@@ -465,7 +473,7 @@ impl ClaudeSession {
             "request": initialize,
         }));
         session.capabilities = capabilities
-            .recv_timeout(HANDSHAKE_TIMEOUT)
+            .recv_timeout(config.handshake_timeout)
             .unwrap_or_default();
         // Use the same override layer at startup and later: a CLI --effort
         // flag would survive clearing effortLevel back to Default. Startup
@@ -476,7 +484,7 @@ impl ClaudeSession {
         if config.effort.is_some() {
             session
                 .set_effort(config.effort.as_deref())
-                .and_then(|ack| match ack.recv_timeout(EFFORT_ACK_TIMEOUT) {
+                .and_then(|ack| match ack.recv_timeout(config.effort_ack_timeout) {
                     Ok(answer) => answer,
                     Err(RecvTimeoutError::Timeout) => Ok(()),
                     Err(RecvTimeoutError::Disconnected) => {

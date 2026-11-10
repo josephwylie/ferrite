@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 
 pub use crate::activity::ToolTiming;
 use crate::activity::{
-    Activity, ActivityEvent, ActivityInput, ActivityUpdate, ActivityView, AgentKey, DecisionHandle,
-    PendingDecision, Subject,
+    Activity, ActivityEvent, ActivityInput, ActivityLimits, ActivityUpdate, ActivityView, AgentKey,
+    DecisionHandle, PendingDecision, Subject,
 };
 use crate::digest::Digest;
 use crate::groups::{
@@ -502,6 +502,8 @@ pub struct BootstrapResult {
 /// the precision the wire carries, so a mirror applies exactly it.
 struct Journaled {
     activity: Activity,
+    /// What each Activity it makes retains: the Store's.
+    limits: ActivityLimits,
     boot: Instant,
     applied: Vec<ActivityInput>,
     /// The Activity was replaced since the last publish: mirrors start over.
@@ -510,9 +512,10 @@ struct Journaled {
 
 impl Journaled {
     /// A new Activity: its mirrors start from nothing.
-    fn new(boot: Instant) -> Self {
+    fn new(boot: Instant, limits: ActivityLimits) -> Self {
         Self {
-            activity: Activity::default(),
+            activity: Activity::new(limits),
+            limits,
             boot,
             applied: Vec::new(),
             reset: true,
@@ -541,7 +544,7 @@ impl Journaled {
     /// Forget the Activity without telling the mirrors: a Thread let go to
     /// its digest (`Engine::let_go_unused`).
     fn forget(&mut self) {
-        self.activity = Activity::default();
+        self.activity = Activity::new(self.limits);
         self.applied.clear();
         self.reset = false;
     }
@@ -554,7 +557,7 @@ impl Journaled {
 
     /// A fresh Activity, for a Session that starts the conversation over.
     fn replace(&mut self) {
-        self.activity = Activity::default();
+        self.activity = Activity::new(self.limits);
         self.applied.clear();
         self.reset = true;
     }
@@ -684,6 +687,7 @@ impl Thread {
     /// Transcript afterwards.
     fn fresh(
         boot: Instant,
+        limits: ActivityLimits,
         session: Option<SessionLifecycle>,
         writer: ThreadWriter,
         provider: Provider,
@@ -695,7 +699,7 @@ impl Thread {
         dir: PathBuf,
     ) -> Self {
         let generation = next_generation();
-        let mut activity = Journaled::new(boot);
+        let mut activity = Journaled::new(boot, limits);
         activity.apply(ActivityInput::Connect { generation });
         let mut state = Self {
             activity,
@@ -1681,6 +1685,7 @@ impl Engine {
             id,
             Thread::fresh(
                 self.boot,
+                self.store.activity_limits(),
                 Some(session),
                 writer,
                 provider,
@@ -2400,6 +2405,7 @@ impl Engine {
 
         let mut state = Thread::fresh(
             self.boot,
+            self.store.activity_limits(),
             None,
             writer,
             provider,

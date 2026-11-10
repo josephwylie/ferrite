@@ -211,6 +211,10 @@ impl Cockpit {
     }
 
     fn with(link: Link, logs: Option<Store>, dir: &Path) -> Self {
+        let limits = logs
+            .as_ref()
+            .map(Store::activity_limits)
+            .unwrap_or_default();
         Self {
             link,
             shared: shared::Shared::new(dir, logs.is_some()),
@@ -218,7 +222,7 @@ impl Cockpit {
             logs,
             roster: Roster::default(),
             synced: Vec::new(),
-            mirrors: mirror::Mirrors::default(),
+            mirrors: mirror::Mirrors::retaining(limits),
             bootstrap_results: Vec::new(),
             browser_messages: Vec::new(),
             allowance_warnings: Vec::new(),
@@ -718,7 +722,7 @@ impl Cockpit {
                 remote::Arrival::Attached { snapshot, new_boot } => {
                     self.told = None;
                     if new_boot {
-                        self.mirrors = mirror::Mirrors::default();
+                        self.mirrors = mirror::Mirrors::retaining(self.mirrors.limits());
                     }
                     self.shared.attached(&snapshot);
                     self.parked.attached(&snapshot);

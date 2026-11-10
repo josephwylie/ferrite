@@ -94,9 +94,19 @@ fn parking_syncs_the_log_through_the_drive_cache() {
 /// holds, even when the history is longer than what Activity retains.
 #[test]
 fn invariant_a_hand_over_after_revive_carries_the_whole_history() {
-    let (mut cockpit, fake) = cockpit("invariant-carry");
+    // A small world: Activity retains 64 KiB of a Thread, not 4 MiB.
+    let limits = crate::activity::ActivityLimits {
+        content_bytes_per_subject: 64 * 1024,
+        ..Default::default()
+    };
+    let fake = Fake::default();
+    let store = Store::open(scratch("invariant-carry"))
+        .unwrap()
+        .scaled(16 * 1024, limits);
+    let mut cockpit = Cockpit::new(store, Box::new(fake.clone()));
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    let answer = |n: usize| format!("answer {n} {}", "z".repeat(700_000));
+    let answer = |n: usize| format!("answer {n} {}", "z".repeat(20_000));
+    assert!(8 * answer(0).len() > limits.content_bytes_per_subject);
     let mut exchanges = Vec::new();
     for n in 0..8 {
         cockpit.send(thread, format!("question {n}"));
@@ -421,7 +431,12 @@ fn what_quitting_cannot_write_is_kept_and_reported() {
 /// carry still holds the whole history (invariant 3).
 #[test]
 fn a_switch_on_a_long_thread_reads_its_carry_off_the_ui_thread() {
-    let (mut cockpit, fake) = cockpit("switch-async");
+    let hold = std::sync::Arc::new(std::sync::Mutex::new(()));
+    let fake = Fake::default();
+    let store = Store::open(scratch("switch-async"))
+        .unwrap()
+        .hold_exchange_reads(hold.clone());
+    let mut cockpit = Cockpit::new(store, Box::new(fake.clone()));
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
     let mut exchanges = Vec::new();
     for n in 0..4 {
@@ -433,6 +448,7 @@ fn a_switch_on_a_long_thread_reads_its_carry_off_the_ui_thread() {
         exchanges.push((format!("question {n}"), answer));
     }
     let old = live(&fake);
+    let held = hold.lock().unwrap();
     cockpit
         .set_provider(
             thread,
@@ -452,6 +468,9 @@ fn a_switch_on_a_long_thread_reads_its_carry_off_the_ui_thread() {
         model: "claude-opus-5".into(),
     })
     .unwrap();
+    cockpit.pump();
+    assert!(cockpit.thread(thread).unwrap().starting(), "still reading");
+    drop(held);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while cockpit.thread(thread).unwrap().starting() {
         assert!(

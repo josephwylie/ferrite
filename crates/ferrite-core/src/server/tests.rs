@@ -18,9 +18,9 @@ use crate::store::Provider;
 use crate::transcript::Body;
 use crate::{Decision, DecisionAnswer, SessionEvent};
 
+mod browser_annotations;
 #[cfg(unix)]
 mod browser_providers;
-mod browser_annotations;
 mod park;
 mod publish;
 
@@ -184,8 +184,28 @@ fn serve(name: &str, gate: Option<Arc<Mutex<Receiver<()>>>>) -> Harness {
     serve_in(scratch(name), gate)
 }
 
+/// What a test Server is built with that production fixes: smaller, so a
+/// test reaches the limit without megabytes through a debug build.
+#[derive(Clone, Copy)]
+struct Tuning {
+    /// How far a window may fall behind ([`link::LAGGED_BYTES`]).
+    lag_bytes: usize,
+}
+
+impl Default for Tuning {
+    fn default() -> Self {
+        Self {
+            lag_bytes: link::LAGGED_BYTES,
+        }
+    }
+}
+
 /// `serve`, on the Store already in `dir`: a restart's successor.
 fn serve_in(dir: PathBuf, gate: Option<Arc<Mutex<Receiver<()>>>>) -> Harness {
+    serve_tuned(dir, gate, Tuning::default())
+}
+
+fn serve_tuned(dir: PathBuf, gate: Option<Arc<Mutex<Receiver<()>>>>, tuning: Tuning) -> Harness {
     let store = dir.join("threads");
     let address = link::address(&store);
     let listener = link::listen(&address).unwrap();
@@ -226,7 +246,7 @@ fn serve_in(dir: PathBuf, gate: Option<Arc<Mutex<Receiver<()>>>>) -> Harness {
         });
         let (heard, hear) = mpsc::channel();
         crate::api::accept_all(api_listener, heard.clone()).unwrap();
-        link::accept_all(listener, heard).unwrap();
+        link::accept_all(listener, heard, tuning.lag_bytes).unwrap();
         server.serve(hear)
     });
     Harness {
@@ -825,7 +845,8 @@ fn a_decision_closes_for_every_window_with_why() {
 /// connection's own thread and crosses in pieces that never count as lag.
 #[test]
 fn a_history_larger_than_the_lag_limit_still_arrives() {
-    let harness = start("large");
+    let tuning = Tuning { lag_bytes: 1 << 20 };
+    let harness = serve_tuned(scratch("large"), None, tuning);
     let mut steady = attach(&harness.address);
     let (thread, provider) = open(&mut steady, &harness);
     steady.watch(thread, None);
@@ -840,8 +861,8 @@ fn a_history_larger_than_the_lag_limit_still_arrives() {
             })
         }
     };
-    let turn = "x".repeat(1 << 20);
-    let turns = link::LAGGED_BYTES / turn.len() + 4;
+    let turn = "x".repeat(64 << 10);
+    let turns = tuning.lag_bytes / turn.len() + 4;
     for nth in 0..turns {
         provider.send(text(&format!("{turn} turn {nth}"))).unwrap();
         provider
@@ -856,9 +877,8 @@ fn a_history_larger_than_the_lag_limit_still_arrives() {
 
     let mut late = attach(&harness.address);
     late.watch(thread, None);
-    // Tens of megabytes through a debug build: seconds, more on a busy machine.
     late.until_within(
-        Duration::from_secs(120),
+        Duration::from_secs(30),
         shows_turn(format!("turn {}", turns - 1)),
     );
     assert!(late.replies.is_empty(), "{:?}", late.replies);
@@ -3677,10 +3697,7 @@ fn projects_are_opened_renamed_and_closed() {
     );
     assert_eq!(
         nested["result"]["thread"]["cwd"],
-        dunce::canonicalize(&inside)
-            .unwrap()
-            .display()
-            .to_string(),
+        dunce::canonicalize(&inside).unwrap().display().to_string(),
         "{nested}"
     );
     let elsewhere = caller.answer(

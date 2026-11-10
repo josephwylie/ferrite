@@ -369,19 +369,27 @@ mod tests {
             })
         };
         let started = Instant::now();
+        // The background job names itself before the shell is stopped.
         let ran = command(Run::Shell(
-            "echo up; (sleep 1; touch survived) & sleep 60".into(),
+            "sh -c 'echo $$ > job.pid; exec sleep 60' & while [ ! -s job.pid ]; do :; done; echo up; sleep 60"
+                .into(),
         ))
         .run(&dir, ThreadId::new(1), &stop);
         stopper.join().unwrap();
         assert!(!ran.ok);
         assert_eq!(ran.output, "up\nstopped");
         assert!(started.elapsed() < Duration::from_secs(5));
-        thread::sleep(Duration::from_millis(1500));
-        assert!(
-            !dir.join("survived").exists(),
-            "the background job lived on"
-        );
+        let job: libc::pid_t = std::fs::read_to_string(dir.join("job.pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // SAFETY: signal 0 only asks whether the process exists.
+        while unsafe { libc::kill(job, 0) } == 0 {
+            assert!(Instant::now() < deadline, "the background job lived on");
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// Only the end of a long output is kept, from its first whole line.

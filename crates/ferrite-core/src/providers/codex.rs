@@ -146,6 +146,9 @@ pub struct CodexConfig {
     /// leaves of a Thread's launch arguments, a `-c key=value` override,
     /// say.
     pub args: Vec<String>,
+    /// How long spawn waits for each local handshake step, `initialize`
+    /// and `skills/list`: five seconds, shorter in a test.
+    pub handshake_timeout: Duration,
 }
 
 impl Default for CodexConfig {
@@ -164,6 +167,7 @@ impl Default for CodexConfig {
             env: Vec::new(),
             launcher: Vec::new(),
             args: Vec::new(),
+            handshake_timeout: HANDSHAKE_TIMEOUT,
         }
     }
 }
@@ -458,7 +462,7 @@ impl CodexSession {
             "params": {"capabilities":{"experimentalApi":true}, "clientInfo": {"name": "ferrite", "version": env!("CARGO_PKG_VERSION")}},
         }))
         .map_err(|e| format!("could not write initialize: {e}"))?;
-        match await_step(steps, "initialize", HANDSHAKE_TIMEOUT)? {
+        match await_step(steps, "initialize", config.handshake_timeout)? {
             HandshakeStep::Initialized => {}
             HandshakeStep::Thread(_) => return Err("thread answered before initialize".into()),
         }
@@ -481,7 +485,7 @@ impl CodexSession {
         }))
         .map_err(|error| format!("could not request skills: {error}"))?;
         skills_ready
-            .recv_timeout(HANDSHAKE_TIMEOUT)
+            .recv_timeout(config.handshake_timeout)
             .map_err(|error| format!("skills/list did not complete: {error}"))??;
 
         let id = self.take_request_id();
