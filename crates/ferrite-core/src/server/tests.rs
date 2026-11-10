@@ -169,24 +169,6 @@ struct Harness {
     browser_disk: browser::DiskControl,
 }
 
-impl Harness {
-    /// The client id of the first prompt the provider queued, once it has:
-    /// the queue is filled off the pump, after the API has answered.
-    fn first_queued(&self) -> String {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if let Some(first) = self.queued.lock().unwrap().first() {
-                return first.clone();
-            }
-            assert!(
-                Instant::now() < deadline,
-                "nothing reached the provider's queue"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-}
-
 fn start(name: &str) -> Harness {
     serve(name, None)
 }
@@ -3113,7 +3095,14 @@ fn a_starting_session_holds_one_prompt_and_queues_another() {
         serde_json::json!({ "thread": thread, "until": "working" }),
     );
     assert!(working.get("result").is_some(), "{working}");
-    harness.first_queued();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while harness.queued.lock().unwrap().is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "the second never reached the provider's queue"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(harness.queued.lock().unwrap().len(), 1);
     let read = caller.answer("5", "agent.read", serde_json::json!({ "thread": thread }));
     let text = read["result"]["text"].as_str().unwrap();
