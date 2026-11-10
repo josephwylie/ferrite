@@ -1546,7 +1546,7 @@ fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(c
     use ferrite_core::browser::Action;
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
     use ferrite_pane::visual::{engine::Visuals, web::{fake::{Call, FakeEngine}, Input}};
-    let dir = scratch("browser-preview");
+    let dir = scratch("browser-annotation-host");
     let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
     let bridge = std::sync::Arc::new(Bridge::new("box", dir.join("bridge.sock"), dial));
     let mut core = Cockpit::attach(Attach {

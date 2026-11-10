@@ -1,13 +1,17 @@
 # Packaged Conversation browser acceptance (#196)
 
-The last executed narrow action gate passed on **both platforms from f6461382**:
+Current delivery status and completed validation results are recorded in
+[PR #197](https://github.com/josephwylie/ferrite/pull/197). This document describes
+the bounded packaged acceptance run and the coverage that remains deferred.
+
+The earlier narrow action gate passed on **both platforms from f6461382**:
 [run42571982121](https://github.com/josephwylie/ferrite/actions/runs/42571982121).
 Retained [Windows](browser-window-2026-11-09/windows-f6461382/README.md) and
 [macOS](browser-window-2026-11-09/macos-f6461382/README.md) evidence shows actual
 ClaudeSession → bound service → native controller → the owning Preview, with
 opaque references/receipts, a blue native Window image and independent two-click
-HTTP oracle. The larger batch below is source-ready and awaits final validation;
-no passing outcome is claimed for unexecuted scenarios.
+HTTP oracle. The PR's evidence section links the later integrated runs; use their
+individual job outcomes for the executed scenarios below.
 
 Run **one** `browser-window.yml` workflow at the fully integrated ref. It builds
 one packaged application per supported OS and reuses that executable for:
@@ -72,6 +76,6 @@ uses two tabs in one Thread. It does not replace actual two-conversation/shared-
 login, unavailable-owner, controller reconnect and multiwindow feature-level
 runs. Prior native/profile and core/GPUI tests cover lower seams of those cases.
 Real manual text/drag versus queued agent input and the complete annotation
-cancel/navigation/resize/failure matrix also require the final evidence audit.
-Consequently source assembly and the earlier action pass do not close all#196
-criteria or establish full release acceptance on their own.
+cancel/navigation/resize/failure matrix also remain outside this bounded run.
+Those deferred checks and repeated performance measurements keep #196 open;
+the completed checks do not establish full release acceptance on their own.
