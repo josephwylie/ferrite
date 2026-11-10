@@ -18,9 +18,8 @@ one packaged application per supported OS and reuses that executable for:
   evidence remains the separately retained native/keychain results.
 - Actual operator Preview input and both actual provider adapters. Codex starts
   a fresh production Thread so dynamic tools are advertised at thread/start.
-- Two rotated blocks, Claude→Codex then Codex→Claude, each with two full tasks per
-  provider. Each block retains its first task for correctness and excludes it
-  from latency: **four tasks and two measured samples per provider in total**.
+- One full work-order task per provider for correctness. Repeated performance
+  blocks are deferred; this run does not establish warm latency percentiles.
   Each task contains the prescribed32 logical navigation/actions plus11 readiness
   waits, fresh observations, two saves and independent reopened-field/audit checks.
 - Region and element annotation selection, all seven drawing tools, Blue ink/
@@ -56,7 +55,7 @@ The workflow has no special inputs. Individual reproduction with an existing
 packaged `browser-smoke` build uses `scripts/probe-browser-window.py`:
 
 ```
-python scripts/probe-browser-window.py <app> --provider claude --work-orders --tasks 2 --output <artifacts>/block0-claude
+python scripts/probe-browser-window.py <app> --provider claude --work-orders --tasks 1 --output <artifacts>/work-orders-claude
 python scripts/probe-browser-window.py <app> --provider codex --annotations --output <artifacts>/annotations-codex
 python scripts/probe-browser-window.py <app> --provider claude --boundaries --output <artifacts>/boundaries-claude
 ```

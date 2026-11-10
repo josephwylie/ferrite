@@ -164,22 +164,14 @@ jobs:
         if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
         run: |
           python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider codex --output target/browser-window-evidence/codex
-      - name: Work orders block 1 (claude; one warmup and one measured task)
+      - name: Complete one work order through the claude adapter
         if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
         run: |
-          python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider claude --work-orders --tasks 2 --output target/browser-window-evidence/work-orders/block0-claude
-      - name: Work orders block 1 (codex; one warmup and one measured task)
+          python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider claude --work-orders --tasks 1 --output target/browser-window-evidence/work-orders/claude
+      - name: Complete one work order through the codex adapter
         if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
         run: |
-          python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider codex --work-orders --tasks 2 --output target/browser-window-evidence/work-orders/block0-codex
-      - name: Work orders block 2 (codex; one warmup and one measured task)
-        if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
-        run: |
-          python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider codex --work-orders --tasks 2 --output target/browser-window-evidence/work-orders/block1-codex
-      - name: Work orders block 2 (claude; one warmup and one measured task)
-        if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
-        run: |
-          python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider claude --work-orders --tasks 2 --output target/browser-window-evidence/work-orders/block1-claude
+          python scripts/probe-browser-window.py ${{ runner.os == 'Windows' && 'target/debug/bundle/windows/Ferrite/ferrite.exe' || 'target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite' }} --provider codex --work-orders --tasks 1 --output target/browser-window-evidence/work-orders/codex
       - name: Actual claude annotation capture, drawing, batch delivery and restarted history
         if: always() && !cancelled() && (steps.window-windows.outcome == 'success' || steps.window-mac.outcome == 'success')
         run: |
