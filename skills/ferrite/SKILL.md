@@ -244,6 +244,26 @@ owns, `owner: {"task": "t-1"}`) does it. Start one only when the user asks.
 Task; its worktree is removed only when clean (otherwise it stays and the
 answer says why), and its branch always stays.
 
+A **Workflow** is the user's own process for a Project: ordered **Steps**,
+each an agent with a name, instructions, skills, provider, model, effort,
+and routes for "finished" and "unable" (`next`, `step:<id>`, `complete`,
+`human`, `coordinator`). Change one only when the user asks; saving makes
+a numbered version and starts nothing, and a draft with problems is
+refused with every problem listed. A Task started on a Workflow
+(`task start … --workflow w-1`) keeps the version it started with.
+
+```bash
+"$F" workflow create --template issue_to_reviewed_pr --project 3
+"$F" workflow list --project 3
+"$F" workflow get w-1
+"$F" workflow rename w-1 "Docs fixes"
+"$F" step add w-1 --after s-2
+"$F" step edit w-1 s-3 --name Reviewer --instructions "Review the PR" --skills code-review --on-unable step:s-2 --fresh
+"$F" step move w-1 s-3 0
+"$F" step delete w-1 s-3
+"$F" workflow save w-1
+```
+
 If you are a Worker, report your Task's outcome with one command when you
 are done; your Task is known from your environment, and your outcome is
 read only from it:

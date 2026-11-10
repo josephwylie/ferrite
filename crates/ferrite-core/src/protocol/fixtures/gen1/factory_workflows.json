@@ -1,0 +1,1 @@
+{"type":"factory","revision":4,"board":{"tasks":[],"workflows":[{"id":"w-1","project":2,"draft":{"name":"Docs fixes","steps":[{"id":"s-1","name":"Writer","instructions":"Fix the docs","skills":["docs"],"provider":"codex","model":"gpt-5.5","effort":"high","on_finished":"complete","on_unable":"human","fresh":false}]},"versions":[],"next_step":2}]}}

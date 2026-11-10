@@ -146,13 +146,13 @@ impl Workflow {
     }
 }
 
-/// What a new Workflow starts from.
+/// What a new Workflow starts from: `blank`, one Step to fill in, or
+/// `issue_to_reviewed_pr`, Triager, Explorer, Implementer and Reviewer as
+/// an example to edit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Template {
-    /// One Step to fill in.
     Blank,
-    /// Triager, Explorer, Implementer and Reviewer, as an example to edit.
     IssueToReviewedPr,
 }
 
@@ -326,9 +326,9 @@ impl Catalog {
 
     /// The model `value` names, when its Provider's list is known.
     pub fn model(&self, provider: Provider, value: &str) -> Option<&ModelInfo> {
-        self.models(provider)?.iter().find(|model| {
-            model.value == value || model.resolved.as_deref() == Some(value)
-        })
+        self.models(provider)?
+            .iter()
+            .find(|model| model.value == value || model.resolved.as_deref() == Some(value))
     }
 }
 
@@ -415,10 +415,7 @@ impl Definition {
 
     /// What a route picker offers for one of `from`'s routes, in order.
     pub fn route_options(&self, from: &str, kind: RouteKind) -> Vec<Destination> {
-        let next = self
-            .after(from)
-            .map(|_| Destination::Next)
-            .into_iter();
+        let next = self.after(from).map(|_| Destination::Next).into_iter();
         let others = self
             .steps
             .iter()
@@ -448,9 +445,7 @@ impl Definition {
                 Some("points to the next agent, but none follows it")
             }
             Destination::Step(id) if id == from => Some("points back to the same agent"),
-            Destination::Step(id) if self.step(id).is_none() => {
-                Some("points to a deleted agent")
-            }
+            Destination::Step(id) if self.step(id).is_none() => Some("points to a deleted agent"),
             _ => None,
         }
     }

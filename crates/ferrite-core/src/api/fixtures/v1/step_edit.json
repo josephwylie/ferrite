@@ -1,0 +1,1 @@
+{"id":"1","method":"step.edit","params":{"workflow":"w-1","step":"s-2","name":"Reviewer","instructions":"Review the PR","skills":["code-review"],"provider":"claude","model":"claude-opus-4","effort":"high","on_finished":"complete","on_unable":"step:s-1","fresh":true}}

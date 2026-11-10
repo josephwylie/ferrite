@@ -40,17 +40,6 @@ fn names(factory: &Factory, id: &str) -> Vec<String> {
         .collect()
 }
 
-fn step_id(factory: &Factory, id: &str, name: &str) -> StepId {
-    workflow(factory, id)
-        .draft
-        .steps
-        .iter()
-        .find(|step| step.name == name)
-        .unwrap_or_else(|| panic!("no step {name}"))
-        .id
-        .clone()
-}
-
 fn edit(factory: &mut Factory, id: &str, step: &str, change: StepChange) {
     factory
         .command(
@@ -234,7 +223,10 @@ fn workflows_are_made_blank_or_from_the_template_renamed_and_several_per_project
         names(&factory, &example),
         ["Triager", "Explorer", "Implementer", "Reviewer"]
     );
-    assert_eq!(workflow(&factory, &example).draft.name, "Issue to reviewed PR");
+    assert_eq!(
+        workflow(&factory, &example).draft.name,
+        "Issue to reviewed PR"
+    );
     factory
         .command(
             Command::RenameWorkflow {
@@ -260,10 +252,17 @@ fn next_follows_the_outline_after_a_reorder() {
     let mut factory = Factory::in_memory();
     let (id, steps) = saved(
         &mut factory,
-        &[("Plan", "Plan it"), ("Build", "Build it"), ("Check", "Check it")],
+        &[
+            ("Plan", "Plan it"),
+            ("Build", "Build it"),
+            ("Check", "Check it"),
+        ],
     );
     let draft = &workflow(&factory, &id).draft;
-    assert_eq!(draft.route_label(&steps[0], &Destination::Next), "Next agent \u{b7} Build");
+    assert_eq!(
+        draft.route_label(&steps[0], &Destination::Next),
+        "Next agent \u{b7} Build"
+    );
     factory
         .command(
             Command::MoveStep {
@@ -276,9 +275,15 @@ fn next_follows_the_outline_after_a_reorder() {
         .unwrap();
     assert_eq!(names(&factory, &id), ["Plan", "Check", "Build"]);
     let draft = &workflow(&factory, &id).draft;
-    assert_eq!(draft.route_label(&steps[0], &Destination::Next), "Next agent \u{b7} Check");
+    assert_eq!(
+        draft.route_label(&steps[0], &Destination::Next),
+        "Next agent \u{b7} Check"
+    );
     // Check's next is now Build.
-    assert_eq!(draft.route_label(&steps[2], &Destination::Next), "Next agent \u{b7} Build");
+    assert_eq!(
+        draft.route_label(&steps[2], &Destination::Next),
+        "Next agent \u{b7} Build"
+    );
 }
 
 /// A route to a deleted Step stays and is flagged; the draft lists every
@@ -286,7 +291,10 @@ fn next_follows_the_outline_after_a_reorder() {
 #[test]
 fn a_draft_with_problems_lists_them_all_and_cannot_be_saved_or_run() {
     let mut factory = Factory::in_memory();
-    let (id, steps) = saved(&mut factory, &[("Build", "Build it"), ("Review", "Review it")]);
+    let (id, steps) = saved(
+        &mut factory,
+        &[("Build", "Build it"), ("Review", "Review it")],
+    );
     edit(
         &mut factory,
         &id,
@@ -307,14 +315,21 @@ fn a_draft_with_problems_lists_them_all_and_cannot_be_saved_or_run() {
         .unwrap();
     let new = add(&mut factory, &id, "", "");
     let route = workflow(&factory, &id).draft.steps[0].on_unable.clone();
-    assert_eq!(route, Destination::Step(steps[0].clone()), "kept, not rewired");
+    assert_eq!(
+        route,
+        Destination::Step(steps[0].clone()),
+        "kept, not rewired"
+    );
     assert_eq!(
         workflow(&factory, &id).draft.route_label(&steps[1], &route),
         "Deleted agent"
     );
 
     let catalog = Catalog {
-        models: vec![(Provider::Claude, vec![crate::ModelInfo::bare("claude-other")])],
+        models: vec![(
+            Provider::Claude,
+            vec![crate::ModelInfo::bare("claude-other")],
+        )],
         skills: vec![(Provider::Claude, vec!["review".into()])],
     };
     edit(
@@ -377,7 +392,11 @@ fn a_draft_with_problems_lists_them_all_and_cannot_be_saved_or_run() {
         )
         .unwrap_err();
     assert_eq!(refused.code, RefusalCode::Invalid);
-    assert!(refused.message.contains("Name this agent."), "{}", refused.message);
+    assert!(
+        refused.message.contains("Name this agent."),
+        "{}",
+        refused.message
+    );
     assert_eq!(workflow(&factory, &id).versions.len(), 1, "still version 1");
 }
 
@@ -457,17 +476,27 @@ fn a_task_runs_its_steps_in_order_with_their_context() {
     assert!(prompt.contains("Release notes for 2.0"), "{prompt}");
     assert!(prompt.contains("Scout"), "{prompt}");
     started(&mut factory, &task, FIRST);
-    assert_eq!(factory.task(&task).unwrap().step.as_deref(), Some(steps[0].as_str()));
+    assert_eq!(
+        factory.task(&task).unwrap().step.as_deref(),
+        Some(steps[0].as_str())
+    );
 
     let effects = finished(&mut factory, FIRST, "Found three modules");
     assert!(notified(&effects).is_empty(), "silent between Steps");
     let [(with, tree, prompt)] = starts(&effects).try_into().unwrap();
     assert_eq!(with, codex());
-    assert_eq!(tree, Some("/repo/.worktrees/factory/t-1".into()), "the same worktree");
+    assert_eq!(
+        tree,
+        Some("/repo/.worktrees/factory/t-1".into()),
+        "the same worktree"
+    );
     assert!(prompt.contains("Write the changelog"), "{prompt}");
     assert!(prompt.contains("changelog"), "{prompt}");
     assert!(prompt.contains("Release notes for 2.0"), "{prompt}");
-    assert!(prompt.contains("Found three modules"), "earlier result: {prompt}");
+    assert!(
+        prompt.contains("Found three modules"),
+        "earlier result: {prompt}"
+    );
     assert_eq!(status(&factory, &task), Status::Working);
     assert_eq!(factory.task(&task).unwrap().agent, codex());
     started(&mut factory, &task, SECOND);
@@ -495,7 +524,10 @@ fn a_task_runs_its_steps_in_order_with_their_context() {
 #[test]
 fn a_running_task_keeps_its_version() {
     let mut factory = Factory::in_memory();
-    let (id, steps) = saved(&mut factory, &[("Build", "Build it"), ("Check", "Check it")]);
+    let (id, steps) = saved(
+        &mut factory,
+        &[("Build", "Build it"), ("Check", "Check it")],
+    );
     let task = run(&mut factory, &id, "Do it");
     factory.step(7, &BTreeMap::new());
     started(&mut factory, &task, FIRST);
@@ -523,7 +555,10 @@ fn a_running_task_keeps_its_version() {
 #[test]
 fn a_returning_task_continues_or_starts_fresh() {
     let mut factory = Factory::in_memory();
-    let (id, steps) = saved(&mut factory, &[("Build", "Build it"), ("Review", "Review it")]);
+    let (id, steps) = saved(
+        &mut factory,
+        &[("Build", "Build it"), ("Review", "Review it")],
+    );
     edit(
         &mut factory,
         &id,
@@ -554,14 +589,26 @@ fn a_returning_task_continues_or_starts_fresh() {
     let effects = unable(&mut factory, SECOND, "The flag has no test");
     assert!(starts(&effects).is_empty(), "no new Worker: {effects:?}");
     assert_eq!(factory.task(&task).unwrap().worker, Some(FIRST));
-    let effects = factory.step(10, &BTreeMap::from([(FIRST, Seen { busy: false, turns: 1 })]));
+    let effects = factory.step(
+        10,
+        &BTreeMap::from([(
+            FIRST,
+            Seen {
+                busy: false,
+                turns: 1,
+            },
+        )]),
+    );
     let told = prompts(&effects);
     assert_eq!(told.len(), 1, "{effects:?}");
     assert!(told[0].contains("The flag has no test"), "{}", told[0]);
 
     // Build finishes again: Review starts fresh, its old Worker parked.
     let effects = finished(&mut factory, FIRST, "Added the test");
-    assert!(effects.contains(&Effect::Park { thread: SECOND }), "{effects:?}");
+    assert!(
+        effects.contains(&Effect::Park { thread: SECOND }),
+        "{effects:?}"
+    );
     let [(_, _, prompt)] = starts(&effects).try_into().unwrap();
     assert!(prompt.contains("Review it"), "{prompt}");
     assert!(prompt.contains("Added the test"), "{prompt}");
@@ -575,7 +622,10 @@ fn a_returning_task_continues_or_starts_fresh() {
 #[test]
 fn human_and_coordinator_routes_wait_for_the_operator() {
     let mut factory = Factory::in_memory();
-    let (id, steps) = saved(&mut factory, &[("Build", "Build it"), ("Check", "Check it")]);
+    let (id, steps) = saved(
+        &mut factory,
+        &[("Build", "Build it"), ("Check", "Check it")],
+    );
     edit(
         &mut factory,
         &id,
@@ -618,7 +668,10 @@ fn human_and_coordinator_routes_wait_for_the_operator() {
 #[test]
 fn deleting_a_task_parks_all_its_workers() {
     let mut factory = Factory::in_memory();
-    let (id, _) = saved(&mut factory, &[("Build", "Build it"), ("Check", "Check it")]);
+    let (id, _) = saved(
+        &mut factory,
+        &[("Build", "Build it"), ("Check", "Check it")],
+    );
     let task = run(&mut factory, &id, "Do it");
     factory.step(7, &BTreeMap::new());
     started(&mut factory, &task, FIRST);
@@ -632,8 +685,14 @@ fn deleting_a_task_parks_all_its_workers() {
         .command(Command::Delete { task: task.clone() }, 12)
         .unwrap();
     let effects = factory.step(13, &BTreeMap::new());
-    assert!(effects.contains(&Effect::Park { thread: FIRST }), "{effects:?}");
-    assert!(effects.contains(&Effect::Park { thread: SECOND }), "{effects:?}");
+    assert!(
+        effects.contains(&Effect::Park { thread: FIRST }),
+        "{effects:?}"
+    );
+    assert!(
+        effects.contains(&Effect::Park { thread: SECOND }),
+        "{effects:?}"
+    );
 }
 
 /// Workflows are written with the Factory and read back.
@@ -648,6 +707,10 @@ fn workflows_survive_a_reload() {
     let reread = Factory::load(&path).unwrap();
     assert_eq!(reread.workflow(&id), factory.workflow(&id));
     let mut reread = reread;
-    assert_ne!(create(&mut reread, Template::Blank), id, "ids are never given twice");
+    assert_ne!(
+        create(&mut reread, Template::Blank),
+        id,
+        "ids are never given twice"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }

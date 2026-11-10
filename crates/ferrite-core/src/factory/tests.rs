@@ -119,6 +119,7 @@ fn a_task_starts_one_worker_with_its_instructions() {
         project: in_project,
         agent: with,
         branch,
+        worktree: None,
         prompt,
     }] = effects.as_slice()
     else {

@@ -1,0 +1,1 @@
+{"type":"command","id":22,"op":"workflow","action":{"kind":"edit_step","workflow":"w-1","step":"s-2","change":{"instructions":"Review the PR","on_unable":"step:s-1","fresh":true}}}

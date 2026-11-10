@@ -940,6 +940,7 @@ fn a_report_names_the_worker_it_runs_in() {
             instructions: "Fix it".into(),
             project: None,
             cwd: Some(PathBuf::from("/work/app")),
+            workflow: None,
         }))
     );
 }
