@@ -4555,7 +4555,13 @@ impl CockpitView {
                 // The group names the provider: `Claude › Model`.
                 "Model",
                 "",
-                settings::model_options(self.cockpit.model_catalog(provider), chosen.as_deref()),
+                settings::model_options(
+                    ferrite_core::providers::models::menu(
+                        self.cockpit.model_catalog(provider),
+                        chosen.as_deref(),
+                    ),
+                    chosen.as_deref(),
+                ),
                 self.setting_change(cx, move |settings, value| {
                     settings.set_model_for(provider, value)
                 }),
@@ -6960,7 +6966,10 @@ impl CockpitView {
                 active: false,
                 consequence: Consequence::Inert,
             });
-            let mut catalog = self.cockpit.model_catalog(provider);
+            let mut catalog = ferrite_core::providers::models::menu(
+                self.cockpit.model_catalog(provider),
+                chosen.filter(|_| provider == current),
+            );
             if provider == current {
                 if let Some(chosen) = chosen {
                     if !catalog.iter().any(|row| row.is(chosen)) {

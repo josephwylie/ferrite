@@ -17,8 +17,7 @@ use crate::ModelInfo;
 mod cache;
 pub(crate) use cache::ModelCache;
 
-/// The effort ladder every Claude model but Haiku takes, as the CLI
-/// announces it.
+/// The effort ladder every Claude model takes, as the CLI announces it.
 const CLAUDE_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 /// The Codex ladders, as `model/list` announced them (0.156.0).
 const CODEX_EFFORTS_ULTRA: &[&str] = &["low", "medium", "high", "xhigh", "max", "ultra"];
@@ -54,8 +53,8 @@ pub fn fallback(provider: Provider) -> Vec<ModelInfo> {
             ),
             (
                 "fable",
-                Some("claude-fable-5-1"),
-                "Fable 5.1",
+                Some("claude-fable-5-2"),
+                "Fable 5.2",
                 "most capable, for the hardest work",
                 CLAUDE_EFFORTS,
                 None,
@@ -78,10 +77,10 @@ pub fn fallback(provider: Provider) -> Vec<ModelInfo> {
             ),
             (
                 "haiku",
-                Some("claude-haiku-4-5-20251001"),
-                "Haiku 4.5",
+                Some("claude-haiku-5-5"),
+                "Haiku 5.5",
                 "fastest, for quick answers",
-                &[],
+                CLAUDE_EFFORTS,
                 None,
             ),
         ],
@@ -95,12 +94,12 @@ pub fn fallback(provider: Provider) -> Vec<ModelInfo> {
                 Some("medium"),
             ),
             (
-                "gpt-6-sol",
+                "gpt-6.1-sol",
                 None,
-                "GPT-6 Sol",
+                "GPT-6.1 Sol",
                 "workhorse for coding",
                 CODEX_EFFORTS_ULTRA,
-                Some("medium"),
+                Some("low"),
             ),
             (
                 "gpt-6-luna",
@@ -126,13 +125,77 @@ pub fn fallback(provider: Provider) -> Vec<ModelInfo> {
         .collect()
 }
 
-/// The rows a picker shows for `provider`: what its adapter announced
-/// when any did, else the fallback catalog.
+/// The models `provider` offers: what its adapter announced when any
+/// did, else the fallback catalog. Every row, superseded ones included,
+/// so a Thread pinned to an older model still finds its name and ladder.
 pub fn catalog(provider: Provider, announced: &[ModelInfo]) -> Vec<ModelInfo> {
     if announced.is_empty() {
         fallback(provider)
     } else {
         announced.to_vec()
+    }
+}
+
+/// The rows a model picker shows: `rows` without any a newer version of
+/// the same line replaces (`gpt-6-sol` once `gpt-6.1-sol` is listed,
+/// `claude-fable-5-1` beside `fable` → `claude-fable-5-2`). A row is its
+/// resolved id's line — family, suffix words and context tag — so `Sol`
+/// never replaces `Luna` and `(1M)` never replaces the plain window. The
+/// provider's default (the first row) and the `chosen` model always stay.
+pub fn menu(rows: Vec<ModelInfo>, chosen: Option<&str>) -> Vec<ModelInfo> {
+    let lineages: Vec<_> = rows
+        .iter()
+        .map(|row| Lineage::of(row.resolved.as_deref().unwrap_or(&row.value)))
+        .collect();
+    let superseded = |at: usize| {
+        let Some(own) = &lineages[at] else {
+            return false;
+        };
+        lineages
+            .iter()
+            .flatten()
+            .any(|other| other.line == own.line && other.version > own.version)
+    };
+    rows.into_iter()
+        .enumerate()
+        .filter(|(at, row)| *at == 0 || chosen.is_some_and(|c| row.is(c)) || !superseded(*at))
+        .map(|(_, row)| row)
+        .collect()
+}
+
+/// A model id split into the line it belongs to and its version on that
+/// line: `gpt-6.1-sol` is line (`gpt`, `sol`) at 6.1; `claude-opus-5-5[1m]`
+/// is line (`opus`, `[1m]`) at 5.5. `None` for an id with no version
+/// (`opus`, `default`), which no other row can replace.
+struct Lineage {
+    line: (String, Vec<String>, &'static str),
+    version: Vec<u32>,
+}
+
+impl Lineage {
+    fn of(id: &str) -> Option<Self> {
+        let parts = Parts::of(id)?;
+        let version = parts
+            .version
+            .iter()
+            .flat_map(|token| token.split('.'))
+            .map(|number| number.parse().ok())
+            .collect::<Option<Vec<u32>>>()?;
+        if version.is_empty() {
+            return None;
+        }
+        Some(Self {
+            line: (
+                parts.family.to_ascii_lowercase(),
+                parts
+                    .words
+                    .iter()
+                    .map(|word| word.to_ascii_lowercase())
+                    .collect(),
+                parts.context,
+            ),
+            version,
+        })
     }
 }
 
@@ -201,7 +264,7 @@ pub fn groom_detail(detail: &str) -> String {
 
 /// The name to show for `model` — a chosen value or an Init's full id:
 /// the announced row's own display when one matches, else the fallback
-/// catalog's for a value it lists (`fable` → `Fable 5.1`), else groomed
+/// catalog's for a value it lists (`fable` → `Fable 5.2`), else groomed
 /// from the id.
 pub fn label(model: &str, announced: &[ModelInfo]) -> String {
     announced
@@ -257,57 +320,74 @@ pub fn cli_default_model(provider: Provider) -> &'static str {
 /// `Default`. Unknown shapes come back capitalized, never blank.
 pub fn display_name(model: &str) -> String {
     let model = model.trim();
-    if model.is_empty() {
-        return String::new();
-    }
-    // A context-window tag rides the end of a Claude alias or id.
-    let (id, context) = match model.strip_suffix("[1m]") {
-        Some(id) => (id, " (1M)"),
-        None => (model, ""),
-    };
-    let id = id
-        .strip_prefix("claude-")
-        .or_else(|| id.strip_prefix("codex-"))
-        .unwrap_or(id);
-    let mut tokens = id.split('-').filter(|token| !token.is_empty());
-    let Some(family) = tokens.next() else {
+    let Some(parts) = Parts::of(model) else {
         return model.to_string();
     };
-    let family = match family {
+    let family = match parts.family {
         "gpt" => "GPT".to_string(),
         other => capitalize(other),
     };
-    // Version digits gather into one dotted number; an eight-digit date
-    // stamp is dropped; anything else is a suffix word.
-    let mut version: Vec<&str> = Vec::new();
-    let mut words: Vec<String> = Vec::new();
-    for token in tokens {
-        let numeric = token.chars().all(|c| c.is_ascii_digit() || c == '.');
-        if numeric && token.len() >= 8 {
-            continue;
-        }
-        if numeric && words.is_empty() {
-            version.push(token);
-        } else {
-            words.push(capitalize(token));
-        }
-    }
     let mut name = family.clone();
-    if !version.is_empty() {
-        let joined = version.join(".");
-        if family == "GPT" {
-            name.push('-');
-        } else {
-            name.push(' ');
-        }
-        name.push_str(&joined);
+    if !parts.version.is_empty() {
+        name.push(if family == "GPT" { '-' } else { ' ' });
+        name.push_str(&parts.version.join("."));
     }
-    for word in words {
+    for word in parts.words {
         name.push(' ');
-        name.push_str(&word);
+        name.push_str(&capitalize(word));
     }
-    name.push_str(context);
+    if !parts.context.is_empty() {
+        name.push_str(" (1M)");
+    }
     name
+}
+
+/// A raw model id or alias in pieces: `claude-opus-5-5-20251101[1m]` is
+/// family `opus`, version `5`, `5`, no words, context `[1m]`;
+/// `gpt-5.3-codex-spark` is family `gpt`, version `5.3`, words `codex`,
+/// `spark`. Version digits come before any word; an eight-digit date
+/// stamp is dropped. `None` for a blank id.
+struct Parts<'a> {
+    family: &'a str,
+    version: Vec<&'a str>,
+    words: Vec<&'a str>,
+    /// The context-window tag a Claude alias or id ends with, else empty.
+    context: &'static str,
+}
+
+impl<'a> Parts<'a> {
+    fn of(model: &'a str) -> Option<Self> {
+        let model = model.trim();
+        let (id, context) = match model.strip_suffix("[1m]") {
+            Some(id) => (id, "[1m]"),
+            None => (model, ""),
+        };
+        let id = id
+            .strip_prefix("claude-")
+            .or_else(|| id.strip_prefix("codex-"))
+            .unwrap_or(id);
+        let mut tokens = id.split('-').filter(|token| !token.is_empty());
+        let family = tokens.next()?;
+        let mut version = Vec::new();
+        let mut words = Vec::new();
+        for token in tokens {
+            let numeric = token.chars().all(|c| c.is_ascii_digit() || c == '.');
+            if numeric && token.len() >= 8 {
+                continue;
+            }
+            if numeric && words.is_empty() {
+                version.push(token);
+            } else {
+                words.push(token);
+            }
+        }
+        Some(Self {
+            family,
+            version,
+            words,
+            context,
+        })
+    }
 }
 
 /// A provider's one-line description with the model's own name struck
@@ -371,6 +451,68 @@ mod tests {
         assert_eq!(footer_name(Provider::Codex, None, &[]), "GPT-6 Astra");
     }
 
+    /// The menus the CLIs announced on 2026-11-10, trimmed to what
+    /// nothing newer replaces; a pinned older model keeps its row.
+    #[test]
+    fn a_menu_drops_models_a_newer_version_replaces() {
+        let row = |value: &str, resolved: Option<&str>| ModelInfo {
+            resolved: resolved.map(str::to_string),
+            ..ModelInfo::bare(value)
+        };
+        let values = |rows: Vec<ModelInfo>| -> Vec<String> {
+            rows.into_iter().map(|row| row.value).collect()
+        };
+        let codex: Vec<ModelInfo> = [
+            "gpt-6.1-sol",
+            "gpt-6-astra",
+            "gpt-6.1-terra",
+            "gpt-6-sol",
+            "gpt-6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.3-codex-spark",
+        ]
+        .into_iter()
+        .map(ModelInfo::bare)
+        .collect();
+        assert_eq!(
+            values(menu(codex.clone(), None)),
+            [
+                "gpt-6.1-sol",
+                "gpt-6-astra",
+                "gpt-6.1-terra",
+                "gpt-6-luna",
+                "gpt-5.3-codex-spark"
+            ]
+        );
+        assert!(values(menu(codex, Some("gpt-5.6-luna"))).contains(&"gpt-5.6-luna".to_string()));
+
+        let claude = vec![
+            row("default", Some("claude-opus-5-5")),
+            row("opus", Some("claude-opus-5-5")),
+            row("opus[1m]", Some("claude-opus-5-5[1m]")),
+            row("fable", Some("claude-fable-5-2")),
+            row("haiku", Some("claude-haiku-5-5")),
+            row("claude-fable-5-1", None),
+            row("claude-haiku-4-5-20251001", None),
+            row("claude-opus-5", None),
+            row("claude-opus-4-8", None),
+            row("claude-sonnet-4-6", None),
+        ];
+        assert_eq!(
+            values(menu(claude, None)),
+            [
+                "default",
+                "opus",
+                "opus[1m]",
+                "fable",
+                "haiku",
+                "claude-sonnet-4-6"
+            ]
+        );
+    }
+
     #[test]
     fn raw_ids_become_names_a_person_would_say() {
         for (id, name) in [
@@ -426,12 +568,12 @@ mod tests {
     fn the_fallback_names_are_versioned_and_labels_agree_with_them() {
         for (value, display) in [
             ("default", "default"),
-            ("fable", "Fable 5.1"),
+            ("fable", "Fable 5.2"),
             ("opus[1m]", "Opus 5.5 (1M)"),
             ("sonnet", "Sonnet 5.5"),
-            ("haiku", "Haiku 4.5"),
+            ("haiku", "Haiku 5.5"),
             ("gpt-6-astra", "GPT-6 Astra"),
-            ("gpt-6-sol", "GPT-6 Sol"),
+            ("gpt-6.1-sol", "GPT-6.1 Sol"),
             ("gpt-6-luna", "GPT-6 Luna"),
         ] {
             let provider = if value.starts_with("gpt") {
@@ -447,6 +589,7 @@ mod tests {
             assert_eq!(label(value, &[]), display, "{value}");
         }
         for (id, display) in [
+            ("claude-fable-5-2", "Fable 5.2"),
             ("claude-fable-5-1", "Fable 5.1"),
             ("claude-opus-5-5[1m]", "Opus 5.5 (1M)"),
             ("claude-opus-5-5", "Opus 5.5"),
@@ -474,17 +617,17 @@ mod tests {
             rows(Provider::Claude),
             vec![
                 pair("default", "the CLI's own default"),
-                pair("Fable 5.1", "most capable, for the hardest work"),
+                pair("Fable 5.2", "most capable, for the hardest work"),
                 pair("Opus 5.5 (1M)", "1M context, for long sessions"),
                 pair("Sonnet 5.5", "efficient for routine tasks"),
-                pair("Haiku 4.5", "fastest, for quick answers"),
+                pair("Haiku 5.5", "fastest, for quick answers"),
             ]
         );
         assert_eq!(
             rows(Provider::Codex),
             vec![
                 pair("GPT-6 Astra", "frontier, for the hardest tasks"),
-                pair("GPT-6 Sol", "workhorse for coding"),
+                pair("GPT-6.1 Sol", "workhorse for coding"),
                 pair("GPT-6 Luna", "fast and affordable"),
             ]
         );
@@ -508,7 +651,10 @@ mod tests {
             cli_default_effort(Provider::Claude, Some("opus[1m]")),
             Some("high")
         );
-        assert_eq!(cli_default_effort(Provider::Claude, Some("haiku")), None);
+        assert_eq!(
+            cli_default_effort(Provider::Claude, Some("haiku")),
+            Some("high")
+        );
         assert_eq!(
             cli_default_effort(Provider::Codex, Some("gpt-6-luna")),
             Some("medium")
@@ -548,18 +694,13 @@ mod tests {
         assert!(ModelInfo::bare("sonnet").efforts.is_empty());
     }
 
-    /// The fallback ladders are the probed ones: every Claude model but
-    /// Haiku takes five levels; Codex's Astra and Sol add `ultra`, Luna
-    /// stops at `max`.
+    /// The fallback ladders are the probed ones: every Claude model takes
+    /// five levels; Codex's Astra and Sol add `ultra`, Luna stops at `max`.
     #[test]
     fn the_fallback_carries_each_models_effort_ladder() {
         let claude = fallback(Provider::Claude);
         for row in &claude {
-            if row.value == "haiku" {
-                assert!(row.efforts.is_empty(), "haiku takes no effort");
-            } else {
-                assert_eq!(row.efforts, CLAUDE_EFFORTS, "{}", row.value);
-            }
+            assert_eq!(row.efforts, CLAUDE_EFFORTS, "{}", row.value);
             assert_eq!(row.default_effort, None);
         }
         let codex = fallback(Provider::Codex);
@@ -572,7 +713,7 @@ mod tests {
                 .clone()
         };
         assert_eq!(ladder("gpt-6-astra"), CODEX_EFFORTS_ULTRA);
-        assert_eq!(ladder("gpt-6-sol"), CODEX_EFFORTS_ULTRA);
+        assert_eq!(ladder("gpt-6.1-sol"), CODEX_EFFORTS_ULTRA);
         assert_eq!(ladder("gpt-6-luna"), CODEX_EFFORTS_MAX);
         assert_eq!(codex[0].default_effort.as_deref(), Some("medium"));
     }
@@ -591,8 +732,10 @@ mod tests {
             efforts_for(Provider::Claude, Some("sonnet"), &[]),
             CLAUDE_EFFORTS
         );
-        assert!(efforts_for(Provider::Claude, Some("haiku"), &[]).is_empty());
-        assert!(efforts_for(Provider::Claude, Some("claude-haiku-4-5-20251001"), &[]).is_empty());
+        assert_eq!(
+            efforts_for(Provider::Claude, Some("haiku"), &[]),
+            CLAUDE_EFFORTS
+        );
         assert_eq!(
             efforts_for(Provider::Codex, Some("gpt-6-luna"), &[]),
             CODEX_EFFORTS_MAX
