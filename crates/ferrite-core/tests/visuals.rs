@@ -597,6 +597,8 @@ fn codex_without_visuals_offers_nothing_and_refuses_a_stray_call() {
         .find(|line| line["method"] == "thread/start")
         .expect("the fixture captured thread/start before completing");
     assert!(start["params"].get("dynamicTools").is_none());
+    // The config still turns Codex's plan tool on; it names no Ferrite
+    // tool namespace.
     assert!(start["params"]["config"].get("features").is_none());
     assert_eq!(
         start["params"]["config"]["tools"]["update_plan"]["enabled"], true,

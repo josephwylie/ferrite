@@ -119,7 +119,7 @@ pub(super) struct Shipped {
 /// This executable, links resolved, so a `ferrite` linked onto `PATH`
 /// finds its sibling; and the shipped program it finds (`program`).
 fn located() -> std::io::Result<(PathBuf, PathBuf)> {
-    let exe = std::env::current_exe().map(|exe| std::fs::canonicalize(&exe).unwrap_or(exe))?;
+    let exe = std::env::current_exe().map(|exe| dunce::canonicalize(&exe).unwrap_or(exe))?;
     let program = program(std::env::var_os("FERRITE_PROJECTS_BIN"), &exe);
     Ok((exe, program))
 }

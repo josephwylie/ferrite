@@ -12,6 +12,8 @@ use super::*;
 pub(super) enum MenuTarget {
     /// A nav row.
     Thread(ThreadId),
+    /// A nav row's Snooze button: the reminder choices directly.
+    Snooze(ThreadId),
     /// A Pane — the same Thread, but the rename opens in the head.
     Pane(ThreadId),
     Group(GroupId),
@@ -209,6 +211,7 @@ impl CockpitView {
             // The nav row: where a Thread lives in the roster — open it,
             // park it, move it between Groups, delete it.
             MenuTarget::Thread(thread) => self.thread_rows(thread, &mut rows),
+            MenuTarget::Snooze(_) => rows.extend(self.snooze_rows().into_iter().map(Some)),
             // The transcript: what is on screen — copy it, name it, size
             // it, and the Pane's own park/close. Deleting a Thread is the
             // nav's act; the transcript never offers it.
@@ -624,7 +627,10 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match (target, verb) {
-            (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Snooze(preset)) => {
+            (
+                MenuTarget::Thread(thread) | MenuTarget::Pane(thread) | MenuTarget::Snooze(thread),
+                MenuVerb::Snooze(preset),
+            ) => {
                 if let Some(until) = preset.until(ferrite_core::clock::system_time()) {
                     self.snooze_thread(thread, Some(until), cx);
                 } else {
@@ -632,7 +638,10 @@ impl CockpitView {
                         Some("That snooze time has passed. Choose another time.".into());
                 }
             }
-            (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::SnoozeCustom) => {
+            (
+                MenuTarget::Thread(thread) | MenuTarget::Pane(thread) | MenuTarget::Snooze(thread),
+                MenuVerb::SnoozeCustom,
+            ) => {
                 self.edit_snooze(thread, window, cx)
             }
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Wake) => {
@@ -760,9 +769,9 @@ impl CockpitView {
             }
             (_, MenuVerb::NewThread) => {
                 let project = match target {
-                    MenuTarget::Thread(thread) | MenuTarget::Pane(thread) => {
-                        self.cockpit.project_id(thread)
-                    }
+                    MenuTarget::Thread(thread)
+                    | MenuTarget::Pane(thread)
+                    | MenuTarget::Snooze(thread) => self.cockpit.project_id(thread),
                     MenuTarget::Group(group) => self
                         .cockpit
                         .groups()

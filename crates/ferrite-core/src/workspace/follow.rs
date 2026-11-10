@@ -25,7 +25,6 @@
 //! listing carries when it was taken, so one read before a creation
 //! finished can never stand in for the one that would have named it.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -294,7 +293,7 @@ fn mentions(hint: &str, path: &Path) -> bool {
 /// not exist yet resolves through its nearest standing ancestor, so a file
 /// about to be written still names its checkout.
 pub fn canonical(path: &Path) -> PathBuf {
-    if let Ok(resolved) = fs::canonicalize(path) {
+    if let Ok(resolved) = dunce::canonicalize(path) {
         return resolved;
     }
     match (path.parent(), path.file_name()) {
@@ -307,6 +306,7 @@ pub fn canonical(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::fs;
 
     fn scratch(name: &str) -> PathBuf {
         let dir =

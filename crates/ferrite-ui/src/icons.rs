@@ -143,6 +143,7 @@ icons![
     "list",
     "code",
     "pin",
+    "clock",
     // (end UI refresh)
 ];
 
@@ -304,6 +305,7 @@ pub const LIST: &str = "icons/list.svg";
 pub const CODE: &str = "icons/code.svg";
 /// A pinned Thread: the bell's row action.
 pub const PIN: &str = "icons/pin.svg";
+pub const CLOCK: &str = "icons/clock.svg";
 // (end UI refresh)
 
 pub struct Assets;

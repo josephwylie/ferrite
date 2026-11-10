@@ -222,7 +222,7 @@ pub fn check(provider: Provider) -> io::Result<Status> {
             current: located.version,
         });
     }
-    let real = std::fs::canonicalize(&located.path).unwrap_or_else(|_| located.path.clone());
+    let real = dunce::canonicalize(&located.path).unwrap_or_else(|_| located.path.clone());
     let upgrade = channel(provider, &located.path, &real)
         .and_then(|channel| upgrade(provider, &located, &channel));
     Ok(Status::Available {

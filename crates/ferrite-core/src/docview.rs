@@ -92,8 +92,11 @@ impl Instruments {
                     instruments.running_call = Some(tool.call.clone());
                 }
                 // The newest run wins: a Pane flying a stale red flag is
-                // worse than one flying none.
-                ToolState::Unavailable if is_test_run(tool) => instruments.tests = None,
+                // worse than one flying none, and a run that never finished
+                // (stopped, or its stream ended) passed nothing.
+                ToolState::Unavailable | ToolState::Stopped if is_test_run(tool) => {
+                    instruments.tests = None
+                }
                 state if is_test_run(tool) => {
                     instruments.tests =
                         Some(match state {

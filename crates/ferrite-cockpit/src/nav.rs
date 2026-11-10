@@ -1491,6 +1491,29 @@ fn title_face(row: &ThreadRow) -> (u32, FontWeight) {
     }
 }
 
+/// Hover controls and the title space they occupy.
+pub struct RowActions {
+    element: AnyElement,
+    width: f32,
+}
+
+impl RowActions {
+    pub fn single(element: AnyElement) -> Self {
+        Self {
+            element,
+            width: RIGHT_ROOM,
+        }
+    }
+
+    /// A strip of row buttons without the single button's trailing inset.
+    pub fn strip(element: AnyElement, count: usize) -> Self {
+        Self {
+            element,
+            width: count as f32 * NAV_LINE + NAV_MARK_GAP,
+        }
+    }
+}
+
 /// The one Thread row builder, with the title leaf supplied by the caller
 /// — see `group_row_with_title`. Every row is one quiet line (§5.1.5),
 /// the title and nothing else, as Claude's and Codex's lists: where a
@@ -1503,7 +1526,7 @@ fn title_face(row: &ThreadRow) -> (u32, FontWeight) {
 pub fn thread_row_with_title(
     row: &ThreadRow,
     title: impl IntoElement,
-    action: Option<AnyElement>,
+    action: Option<RowActions>,
     place: RowPlace,
     group: Option<GroupId>,
     editing: bool,
@@ -1527,7 +1550,10 @@ pub fn thread_row_with_title(
     let mark = (!editing && action.is_none())
         .then(|| state_mark(row.status))
         .flatten();
-    let title_w = title_w(place, action.is_some() || mark.is_some());
+    let title_w = match action.as_ref() {
+        Some(action) => place.text_w() - action.width,
+        None => title_w(place, mark.is_some()),
+    };
     let ground = (!editing)
         .then(|| {
             let ground = row_ground(&key, filled);
@@ -1555,7 +1581,7 @@ pub fn thread_row_with_title(
                 .into_any_element(),
         )
     }))
-    .children(action.map(at_right))
+    .children(action.map(|action| at_right(action.element)))
 }
 
 /// What a row says at its right, where its `⋯` stands under the pointer —

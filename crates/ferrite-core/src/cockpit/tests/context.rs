@@ -360,10 +360,16 @@ fn quitting_writes_every_accepted_record() {
         .last()
         .unwrap()
         .starts_with(r#"{"type":"mark""#));
-    assert!(
-        cockpit.engine().store.syncs().1 > full,
-        "synced through the drive's cache"
-    );
+    // Quit waits on the final syncs only so long (QUIT_SYNC_DEADLINE); a
+    // slow drive finishes the full sync after it.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while cockpit.engine().store.syncs().1 <= full {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "synced through the drive's cache"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     assert_eq!(
         cockpit.engine().store.open_threads().unwrap(),
         vec![thread],

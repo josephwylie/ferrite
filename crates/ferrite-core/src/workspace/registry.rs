@@ -292,7 +292,7 @@ impl Registry {
     /// machine. Preserve and register that durable CWD instead of rejecting
     /// otherwise readable history; interactive registration remains strict.
     pub(crate) fn register_recorded(&mut self, root: &Path) -> io::Result<ProjectId> {
-        let root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        let root = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         self.register_resolved(root)
     }
 
@@ -685,10 +685,10 @@ pub fn adoption_check(repo: &Path, path: &Path) -> Result<(), GitError> {
     let registered = super::worktree_paths(repo)?;
     // Compared canonicalized: git prints resolved paths, and the registry
     // stores what it was handed.
-    let canonical = fs::canonicalize(path).map_err(GitError::Io)?;
+    let canonical = dunce::canonicalize(path).map_err(GitError::Io)?;
     if registered
         .iter()
-        .any(|worktree| fs::canonicalize(worktree).ok().as_deref() == Some(&canonical))
+        .any(|worktree| dunce::canonicalize(worktree).ok().as_deref() == Some(&canonical))
     {
         return Ok(());
     }
@@ -705,7 +705,7 @@ pub fn adoption_check(repo: &Path, path: &Path) -> Result<(), GitError> {
 /// out for this computer — a window on a machine sends the path as typed
 /// (ADR 0026) — then canonicalized.
 fn canonical_root(root: &Path) -> io::Result<PathBuf> {
-    fs::canonicalize(super::expand_home(root))
+    dunce::canonicalize(super::expand_home(root))
 }
 
 /// A root's leaf name, for selector rows.
@@ -791,7 +791,7 @@ mod tests {
         // Spelling the raw temp path here fails wherever canonicalizing
         // rewrites it: the `\\?\` prefix on Windows, `/private/var` on macOS.
         let canonical = reopened.project(project).unwrap().root.clone();
-        assert_eq!(canonical, repo.canonicalize().unwrap());
+        assert_eq!(canonical, dunce::canonicalize(&repo).unwrap());
         assert_eq!(
             reopened.worktrees(project),
             [WorktreeEntry {
@@ -946,7 +946,7 @@ mod tests {
         assert_eq!(registry.project(first), None);
         assert_eq!(
             registry.project(second).unwrap().root,
-            repo.canonicalize().unwrap()
+            dunce::canonicalize(&repo).unwrap()
         );
 
         // The counter persisted past the removal: a reopen deals on, too.
@@ -1095,13 +1095,13 @@ mod tests {
         assert_eq!(
             roots,
             [
-                replacement.canonicalize().unwrap(),
-                extra.canonicalize().unwrap()
+                dunce::canonicalize(&replacement).unwrap(),
+                dunce::canonicalize(&extra).unwrap()
             ]
         );
         assert_eq!(
             reopened.worktrees(project)[0].repo,
-            primary.canonicalize().unwrap(),
+            dunce::canonicalize(&primary).unwrap(),
             "changing the primary root must not retarget an existing worktree"
         );
         assert_eq!(reopened.worktrees(project)[0].path, old_worktree.path);

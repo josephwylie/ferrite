@@ -3557,9 +3557,10 @@ impl CockpitView {
     /// A Thread's effective cwd. A Group has no cwd.
     fn target_path(&self, target: MenuTarget) -> Option<std::path::PathBuf> {
         match target {
-            MenuTarget::Thread(thread) | MenuTarget::Pane(thread) | MenuTarget::Tools(thread) => {
-                self.thread_path(thread)
-            }
+            MenuTarget::Thread(thread)
+            | MenuTarget::Pane(thread)
+            | MenuTarget::Tools(thread)
+            | MenuTarget::Snooze(thread) => self.thread_path(thread),
             MenuTarget::Project(project) => self
                 .cockpit
                 .registry()
@@ -13626,17 +13627,17 @@ impl CockpitView {
         )
     }
 
-    /// The pin and archive a bell row shows under the pointer (Codex's):
-    /// pin or unpin the Thread, and park it.
-    fn activity_row_actions(&self, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
+    /// An Inbox row's hover controls: pin, snooze, and park the Thread.
+    fn activity_row_actions(&self, thread: ThreadId, cx: &mut Context<Self>) -> nav::RowActions {
         let pinned = self.prefs.settings.pinned_threads.contains(&thread);
         let button = |key: String, glyph: &'static str, tip: &'static str| {
             nav::row_action(key, glyph)
                 .mr(px(0.))
                 .tooltip(ferrite_ui::menu::tooltip(tip))
         };
-        div()
+        let actions = div()
             .flex()
+            .flex_shrink_0()
             .items_center()
             .child(
                 button(
@@ -13654,6 +13655,21 @@ impl CockpitView {
             )
             .child(
                 button(
+                    format!("nav-activity-snooze-{}", thread.get()),
+                    ferrite_ui::icons::CLOCK,
+                    "Snooze",
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.open_context_menu(MenuTarget::Snooze(thread), event.position, cx);
+                    }),
+                )
+                .on_click(|_, _, cx| cx.stop_propagation()),
+            )
+            .child(
+                button(
                     format!("nav-activity-archive-{}", thread.get()),
                     ferrite_ui::icons::ARCHIVE,
                     "Park",
@@ -13666,7 +13682,8 @@ impl CockpitView {
                     }),
                 ),
             )
-            .into_any_element()
+            .into_any_element();
+        nav::RowActions::strip(actions, 3)
     }
 
     /// Park each of `threads` (reversible: the Parked view holds them).
@@ -13910,7 +13927,7 @@ impl CockpitView {
                     nav::thread_row_with_title(
                         entry,
                         entry.name.clone(),
-                        Some(wake),
+                        Some(nav::RowActions::single(wake)),
                         nav::RowPlace::Inbox,
                         None,
                         false,
@@ -14667,7 +14684,7 @@ impl CockpitView {
         let head = nav::thread_row_with_title(
             row,
             title,
-            action,
+            action.map(nav::RowActions::single),
             place,
             group,
             editing,
