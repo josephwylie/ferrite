@@ -158,11 +158,11 @@ impl CockpitView {
                             if baseline_started.is_none() {
                                 baseline_started=Some(Instant::now()); phase(&output,"sealed-window-baseline");
                             }
-                            window.draw(cx);
                             if baseline_started.unwrap().elapsed()<Duration::from_secs(3) { return Ok(false); }
                             phase(&output,"first-browser-use");
                             Ok(view.panes[index].preview.open_url(&url, window))
                         })?;
+                        window.draw(cx);
                         return Ok(false);
                     }
                     // Draw through this native Window's renderer, as the app does.
