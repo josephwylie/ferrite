@@ -124,8 +124,7 @@ mod tests {
         }
     }
 
-    /// The Coordinator's start (herdr-projects' `start_args`): the
-    /// conversation's id is the first Session's alone; the rest stays.
+    /// The conversation's id is the first Session's alone; the rest stays.
     #[test]
     fn a_later_claude_session_does_not_name_the_conversation_again() {
         for args in [

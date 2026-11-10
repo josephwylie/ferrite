@@ -30,7 +30,6 @@ use crate::ThreadId;
 pub mod agent;
 mod bridge;
 mod calls;
-pub(crate) mod projects;
 mod render;
 mod signals;
 
@@ -96,12 +95,11 @@ pub fn ferrited(args: &[String]) -> i32 {
         }),
         Some("api-bridge") => bridge::api(&store_dir()),
         Some("bridge") => bridge::run(&store_dir(), &executable),
-        Some("projects") => projects::passthrough(&store_dir(), &args[2..]),
         #[cfg(target_os = "linux")]
         Some("service") => agent::service(&executable, args.get(2).map(String::as_str)),
         _ => {
             eprintln!(
-                "usage: ferrited server | ferrited bridge | ferrited api-bridge | ferrited projects <args…>{USAGE_SERVICE}"
+                "usage: ferrited server | ferrited bridge | ferrited api-bridge{USAGE_SERVICE}"
             );
             2
         }
@@ -161,10 +159,8 @@ pub fn run(options: Options) -> i32 {
     });
     let defaults = Arc::new(Mutex::new(SessionDefaults::from_settings(&settings)));
     let (renderer, renders) = render::remote();
-    let shipped = projects::find();
     let spawner = Spawn {
         api: api.is_some().then_some(api_address),
-        projects: shipped.as_ref().map(projects::Shipped::program),
         ..Spawn::new(defaults.clone(), Some(Arc::new(renderer)))
     };
     let mut engine = match Engine::try_new(store, Box::new(spawner)) {
@@ -198,7 +194,6 @@ pub fn run(options: Options) -> i32 {
         server.info.version,
         server.engine.boot_id()
     );
-    server.projects = shipped.map(|shipped| shipped.start(&options.store));
     server.serve(hear)
 }
 
@@ -342,9 +337,6 @@ struct Server {
     relaunch: Box<Relaunch>,
     /// The self-hosted forges a review's pull request is read from.
     forge: ferrite_reviewr::config::PluginConfig,
-    /// herdr-projects 1.0's hooks, run as herdr runs them; none when its
-    /// program is not there (ADR 0031).
-    projects: Option<projects::Projects>,
 }
 
 impl Server {
@@ -377,7 +369,6 @@ impl Server {
             default_provider: Provider::Claude,
             relaunch: Box::new(relaunch),
             forge: Default::default(),
-            projects: None,
         }
     }
 
@@ -412,11 +403,7 @@ impl Server {
             self.answer_reads();
             self.forward_renders();
             self.broadcast();
-            let events = self.api.pump(&self.engine);
-            let removed = self.engine.take_removed_worktrees();
-            if let Some(projects) = &mut self.projects {
-                projects.heard(&self.engine, &events, &removed);
-            }
+            self.api.pump(&self.engine);
             if let Some(why) = signals::stop_requested() {
                 crate::log!("server: stopping: {why}");
                 self.stop();

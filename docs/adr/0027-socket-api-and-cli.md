@@ -89,7 +89,9 @@ it (ADR 0025).
 | `events.subscribe` | snapshot, then `thread_opened`, `thread_closed`, `attention`, `decision_requested`, `decision_closed` |
 | `notification.show` | `notification {title, body}` to every window, drawn as a toast |
 
-Added for Projects (ADR 0030), each what herdr-projects asks of Herdr:
+Added for Projects (ADR 0030), each what herdr-projects asks of Herdr.
+Projects were removed on 2026-11-03 (ADR 0031's note); these operations
+stay, as any agent driving others uses them:
 
 | Operation | Does |
 |---|---|

@@ -1,2 +1,0 @@
-# Vendored herdr-projects keeps upstream formatting so upstream updates merge cleanly.
-disable_all_formatting = true
