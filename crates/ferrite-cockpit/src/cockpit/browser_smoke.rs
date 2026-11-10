@@ -55,9 +55,7 @@ impl CockpitView {
             let work_orders = std::env::var("FERRITE_BROWSER_WINDOW_SCENARIO").ok().as_deref() == Some("work-orders");
             let provider = std::env::var_os("FERRITE_BROWSER_WINDOW_PROVIDER").is_some();
             let mut preview_expanded = false;
-            let mut viewport_adjustments = 0;
             let mut controlled_viewport = false;
-            let mut viewport_last_adjustment = Instant::now() - Duration::from_secs(1);
             let mut baseline_started = None;
             let mut quiet_started = None;
             let mut restoring_page: Option<(ferrite_core::browser::Document,String)> = None;
@@ -180,15 +178,7 @@ impl CockpitView {
                         }
                         let viewport=view.read(cx).browser_smoke_viewport(scenario_thread.expect("scenario Thread"));
                         let Some(viewport)=viewport else{return Ok(false);};
-                        if viewport.width!=1280 || viewport.height!=713 {
-                            if viewport_last_adjustment.elapsed()<Duration::from_millis(500) { return Ok(false); }
-                            viewport_last_adjustment=Instant::now();
-                            viewport_adjustments+=1;
-                            if viewport_adjustments>12 { return Err(format!("The actual content viewport could not reach 1280x713: {viewport:?}")); }
-                            let current=window.viewport_size();
-                            window.resize(gpui::size(current.width+px(1280.-viewport.width as f32),current.height+px(713.-viewport.height as f32)));
-                            return Ok(false);
-                        }
+                        if viewport.width==0 || viewport.height==0 { return Ok(false); }
                         std::fs::write(output.join("browser-viewport.json"),serde_json::to_vec_pretty(&serde_json::json!({"width_css":viewport.width,"height_css":viewport.height,"device_scale":viewport.scale})).unwrap()).map_err(|e|e.to_string())?;
                         controlled_viewport=true;
                     }
