@@ -23,6 +23,7 @@ mod parts;
 mod server;
 mod side_chat;
 mod snooze;
+mod surfaces;
 pub(crate) mod subagents;
 pub(crate) mod tools;
 mod transcript_glue;
