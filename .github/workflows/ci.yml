@@ -43,14 +43,22 @@ jobs:
       - name: CEF version
         id: cef
         run: echo "version=$(sed -n '/^name = "cef"$/{n;s/^version = ".*+\(.*\)"$/\1/p;}' Cargo.lock)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: cef-cache
         with:
           path: ~/.local/share/cef
           key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
       - name: Install CEF build tools
         run: brew install cmake ninja
       - name: Build app with visuals
+        id: visuals
         run: CEF_PATH="$HOME/.local/share/cef" cargo build -p ferrite --locked --features cef
+      # Saved once the build has fetched CEF, whatever comes after.
+      - uses: actions/cache/save@v4
+        if: always() && steps.visuals.outcome == 'success' && steps.cef-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.local/share/cef
+          key: ${{ steps.cef-cache.outputs.cache-primary-key }}
 
   windows:
     name: Windows (DirectX 11)
@@ -68,9 +76,8 @@ jobs:
         run: cargo test -p ferrite-core --locked -- --nocapture
       - name: Test the vendored review core
         run: cargo test -p ferrite-reviewr --locked
-      - name: Build app
-        run: cargo build -p ferrite --locked
-      # Visuals (ADR 0013): the app with Chromium, and proof that Chromium
+      # The app is built once, with visuals, as Windows ships it; macOS
+      # builds it without them too. Visuals (ADR 0013): the app with Chromium, and proof that Chromium
       # runs from it on Windows: `ferrite --visual-smoke` boots the engine
       # headless, opens a page and checks its frames' pixels, its content
       # height and a hover (crates/ferrite/src/visual/smoke.rs). CEF is a
@@ -81,7 +88,8 @@ jobs:
         id: cef
         shell: bash
         run: echo "version=$(sed -n '/^name = "cef"$/{n;s/^version = ".*+\(.*\)"$/\1/p;}' Cargo.lock)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: cef-cache
         with:
           path: ~/.local/share/cef
           key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
@@ -89,10 +97,17 @@ jobs:
         shell: pwsh
         run: if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja --no-progress -y }
       - name: Build app with visuals
+        id: visuals
         shell: pwsh
         run: |
           $env:CEF_PATH = Join-Path $HOME ".local\share\cef"
           cargo build -p ferrite --locked --features cef
+      # Saved once the build has fetched CEF, whatever comes after.
+      - uses: actions/cache/save@v4
+        if: always() && steps.visuals.outcome == 'success' && steps.cef-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.local/share/cef
+          key: ${{ steps.cef-cache.outputs.cache-primary-key }}
       - name: Visuals smoke
         shell: pwsh
         timeout-minutes: 5
