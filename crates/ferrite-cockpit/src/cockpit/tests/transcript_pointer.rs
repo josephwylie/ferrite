@@ -1153,7 +1153,11 @@ fn a_long_reply_grows_the_card_upward_to_a_few_rows(cx: &mut TestAppContext) {
         "it grows upward, its foot where it was: {one:?} -> {two:?}"
     );
     assert!(two.bottom() <= from.y, "never over the selection: {two:?}");
-    cx.simulate_input(&"more words to wrap ".repeat(30));
+    // Pasted, not typed: one edit, where typing it is 570 keystrokes.
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("more words to wrap ".repeat(30)))
+    });
+    cx.simulate_keystrokes("cmd-v");
     settle(cx);
     let many = cx.debug_bounds("reply-card").unwrap();
     let most = one.size.height
