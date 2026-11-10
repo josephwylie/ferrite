@@ -30,7 +30,8 @@ env:
 
 jobs:
   # What the run covers: `code` is false for a PR that changes only docs
-  # (Markdown, docs/); `full` is true on main and for a `full-ci` PR.
+  # (Markdown, docs/); `reviewr` is true when the vendored review core or
+  # the lockfile changes; `full` is true on main and for a `full-ci` PR.
   # A scope that fails to say runs everything (`!= 'false'` below), so a
   # broken scope never skips a check.
   scope:
@@ -39,6 +40,7 @@ jobs:
       pull-requests: read
     outputs:
       code: ${{ steps.scope.outputs.code }}
+      reviewr: ${{ steps.scope.outputs.reviewr }}
       full: ${{ steps.scope.outputs.full }}
     steps:
       - id: scope
@@ -50,6 +52,7 @@ jobs:
         run: |
           if [ "$EVENT" != pull_request ]; then
             echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "reviewr=true" >> "$GITHUB_OUTPUT"
             echo "full=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -58,6 +61,11 @@ jobs:
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+          if printf '%s\n' "$files" | grep -qE '^crates/ferrite-reviewr/|^Cargo\.lock$'; then
+            echo "reviewr=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "reviewr=false" >> "$GITHUB_OUTPUT"
           fi
           echo "full=$FULL_LABEL" >> "$GITHUB_OUTPUT"
 
@@ -78,6 +86,7 @@ jobs:
       - name: Test core
         run: cargo test -p ferrite-core --locked
       - name: Test the vendored review core
+        if: needs.scope.outputs.reviewr != 'false'
         run: cargo test -p ferrite-reviewr --locked
       - name: Build app
         run: cargo build -p ferrite --locked
@@ -118,15 +127,30 @@ jobs:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
+      # The runner's C: drive is slow for Cargo's many small files. Build on
+      # a ReFS Dev Drive instead: the workspace (and so target/), Cargo's
+      # registry and the toolchain all live there, so every step below runs
+      # from DEV_DRIVE_WORKSPACE.
+      - uses: samypr100/setup-dev-drive@v4
+        with:
+          drive-size: 40GB
+          workspace-copy: true
+          env-mapping: |
+            CARGO_HOME,{{ DEV_DRIVE }}/.cargo
+            RUSTUP_HOME,{{ DEV_DRIVE }}/.rustup
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
         with:
+          workspaces: ${{ env.DEV_DRIVE_WORKSPACE }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - name: Test core
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: cargo test -p ferrite-core --locked -- --nocapture
       - name: Test the vendored review core
+        if: needs.scope.outputs.reviewr != 'false'
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: cargo test -p ferrite-reviewr --locked
       # The app is built once, with visuals, as Windows ships it; macOS
       # builds it without them too. Visuals (ADR 0013): the app with
@@ -140,6 +164,7 @@ jobs:
       - name: CEF version
         id: cef
         shell: bash
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: echo "version=$(sed -n '/^name = "cef"$/{n;s/^version = ".*+\(.*\)"$/\1/p;}' Cargo.lock)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v4
         id: cef-cache
@@ -152,6 +177,7 @@ jobs:
       - name: Build app with visuals
         id: visuals
         shell: pwsh
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: |
           $env:CEF_PATH = Join-Path $HOME ".local\share\cef"
           cargo build -p ferrite --locked --features cef
@@ -163,9 +189,11 @@ jobs:
           key: ${{ steps.cef-cache.outputs.cache-primary-key }}
       - name: Windows staging contract
         shell: pwsh
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: scripts/tests/windows-stage.ps1
       - name: Packaged Windows visuals smoke
         shell: pwsh
+        working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         timeout-minutes: 5
         run: |
           $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
