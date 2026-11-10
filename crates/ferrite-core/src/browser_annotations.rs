@@ -242,7 +242,7 @@ pub fn retain(
     let hash = format!("{:x}", Sha256::digest(png));
     let directory = store.join("browser-annotations");
     fs::create_dir_all(&directory)?;
-    let original = fs::canonicalize(&directory)?.join(format!("{hash}.png"));
+    let original = dunce::canonicalize(&directory)?.join(format!("{hash}.png"));
     match fs::OpenOptions::new()
         .write(true)
         .create_new(true)

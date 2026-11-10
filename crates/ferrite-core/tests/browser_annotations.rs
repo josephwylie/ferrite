@@ -1,6 +1,5 @@
 use ferrite_core::browser::{Document, TabId};
 use ferrite_core::browser_annotations::{self, Capture, Selection, Viewport};
-use std::path::PathBuf;
 
 // A captured original survives leaving the page, and the exact annotation can
 // be restored from the same text the queue, providers and history receive.
@@ -32,9 +31,11 @@ fn captured_feedback_survives_prompt_roundtrip_without_a_live_page() {
         browser_annotations::retain(&root, capture, png, "Make this clearer".into(), vec![])
             .unwrap();
     let path = annotation.original().to_path_buf();
+    // Attachments are absolute; a Unix-style path is not one on Windows.
+    let notes = root.join("notes.txt");
     let prompt = browser_annotations::compose(
         "Fix this",
-        &[PathBuf::from("/tmp/notes.txt")],
+        std::slice::from_ref(&notes),
         &[annotation.clone()],
     );
     assert!(prompt.contains("Make this clearer"));
@@ -42,7 +43,7 @@ fn captured_feedback_survives_prompt_roundtrip_without_a_live_page() {
     assert!(ferrite_core::prompt_files::paths(&prompt, None).contains(&path));
     let (text, files, restored) = browser_annotations::split(prompt);
     assert_eq!(text, "Fix this");
-    assert_eq!(files, [PathBuf::from("/tmp/notes.txt")]);
+    assert_eq!(files, [notes]);
     assert_eq!(restored, [annotation]);
     assert_eq!(std::fs::read(restored[0].original()).unwrap(), png);
     std::fs::remove_dir_all(root).unwrap();

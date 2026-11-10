@@ -3011,7 +3011,15 @@ fn a_prompt_queued_behind_a_turn_waits_for_its_own() {
     caller.quiet();
     turn_ends(&provider);
     caller.quiet();
-    let client_id = harness.queued.lock().unwrap()[0].clone();
+    // The prompt reaches the provider's queue on the server's own thread.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let client_id = loop {
+        if let Some(id) = harness.queued.lock().unwrap().first() {
+            break id.clone();
+        }
+        assert!(Instant::now() < deadline, "the second prompt never queued");
+        std::thread::sleep(Duration::from_millis(10));
+    };
     provider
         .send(SessionEvent::Queue(crate::QueueEvent::Started {
             historical: false,
