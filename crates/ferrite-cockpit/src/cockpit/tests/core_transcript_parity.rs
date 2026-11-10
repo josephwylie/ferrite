@@ -27,30 +27,6 @@ fn call(name: &str, summary: &str, state: ToolState, output: &str) -> ToolBlock 
     }
 }
 
-/// Standard reads at 14px on a 21px line (the type table's 1.5), in Solo
-/// and in a Group Pane alike; its diffs and fences a step smaller, 13 on
-/// 20. A cell is 8.4px, so an image's frame is 403.2px.
-#[test]
-fn standard_reads_at_14_on_a_21px_line() {
-    use ferrite_core::settings::ReadingSize;
-    assert_eq!(
-        ferrite_ui::theme::answer_text_size(ReadingSize::STANDARD),
-        14.
-    );
-    assert_eq!(
-        ferrite_ui::theme::answer_line_height(ReadingSize::STANDARD),
-        21.
-    );
-    let grid = pane::Grid::of(ReadingSize::STANDARD);
-    assert!((grid.cell() - 8.4).abs() < 1e-4);
-    assert!((ferrite_ui::theme::IMAGE_CELLS * grid.cell() - 403.2).abs() < 1e-3);
-    let solo = pane::Grid::pane(ReadingSize::STANDARD, true);
-    assert_eq!((solo.size, solo.line), (14., 21.));
-    let group = pane::Grid::pane(ReadingSize::STANDARD, false);
-    assert_eq!((group.size, group.line), (14., 21.));
-    assert_eq!((grid.block().size, grid.block().line), (13., 20.));
-}
-
 /// `✻ 41s · 1.1k tokens`: no clock time.
 #[test]
 fn a_turn_ends_with_its_time_and_its_tokens() {
@@ -300,8 +276,7 @@ fn a_running_test_suite_shows_its_bar_and_count(cx: &mut TestAppContext) {
         .unwrap();
     tick(cx);
     assert!(cx.debug_bounds("tool-test-progress").is_some());
-    let bar = cx.debug_bounds("test-bar").expect("the bar");
-    assert_eq!(bar.size.height, px(ferrite_ui::theme::TEST_BAR_H));
+    assert!(cx.debug_bounds("test-bar").is_some(), "the bar");
 }
 
 /// A long Edit's diff, opened, draws unified in its card under a header

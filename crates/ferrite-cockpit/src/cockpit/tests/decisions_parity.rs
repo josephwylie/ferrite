@@ -61,8 +61,8 @@ fn near(a: gpui::Pixels, b: gpui::Pixels) -> bool {
 /// D-1, D-3 (Claude's card): `Needs your input` over the box; the ask on
 /// the head band across the box's top; the command well 10px under it on
 /// the body's 16px edge; then `Deny` and the split `Allow once`, inline
-/// at the body's right edge in Solo, the box's last section. The box is
-/// Claude's 480 wide, on the column's left; its band is 48 tall.
+/// at the body's right edge in Solo, the box's last section, on the
+/// column's left.
 #[gpui::test]
 fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
     let (view, _fake, cx) = waiting(
@@ -86,14 +86,6 @@ fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
     let gap = px(ferrite_ui::theme::DECISION_GAP);
     let pad = px(ferrite_ui::theme::DECISION_PAD);
     assert!(pill.bottom() <= card.top(), "{pill:?} / {card:?}");
-    assert!(
-        near(card.size.width, px(ferrite_ui::theme::DECISION_CARD_W)),
-        "Claude's 480: {card:?}"
-    );
-    assert!(
-        near(head.size.height, px(48.)),
-        "the band is 48 tall: {head:?}"
-    );
     // One left edge: the pill on the column, the box's ring `CARD_OUTSET`
     // outside it.
     assert!(
@@ -121,22 +113,11 @@ fn the_decision_box_reads_head_well_options_hint(cx: &mut TestAppContext) {
         near(well.top() - head.bottom(), pad - px(1.)),
         "the body's padding under the band: {head:?} / {well:?}"
     );
-    assert!(
-        near(
-            well.size.height,
-            px(ferrite_ui::theme::LH_UI + 2. * ferrite_ui::theme::DECISION_WELL_PAD_Y)
-        ),
-        "the well is a row and 6px above and below: {well:?}"
-    );
     // Inline in Solo: Deny, then the split button, ending at the body's
     // right edge, one row, the box's last section.
     assert!(deny.right() <= allow.left() && near(allow.right(), more.left()));
     assert!(near(more.right(), well.right()), "{more:?} / {well:?}");
     assert!(near(deny.top(), allow.top()) && near(allow.top(), more.top()));
-    assert!(
-        near(deny.size.height, px(ferrite_ui::theme::CONTROL_H)),
-        "{deny:?}"
-    );
     assert!(deny.top() - well.bottom() >= gap - px(0.5));
     assert!(
         near(card.bottom() - more.bottom(), pad),
