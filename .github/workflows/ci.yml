@@ -1,9 +1,10 @@
 name: CI
 
 # A PR runs the macOS checks only, and nothing when it changes docs alone.
-# Windows and the app with visuals run on main, and on a PR labelled
-# `full-ci`. A skipped job counts as passed for branch protection. Caches
-# are saved from main only, which every PR reads.
+# Windows tests run on main and on a PR labelled `full-ci`; the app with
+# visuals (Chromium) is built only on main. A skipped job counts as passed
+# for branch protection. Caches are saved from main only, which every PR
+# reads.
 on:
   push:
     branches: [main]
@@ -93,20 +94,20 @@ jobs:
       # The Chromium adapter is shared with Windows: keep it compiling here.
       # (Running it needs the .app bundle; see visual/smoke.rs.)
       - name: CEF version
-        if: needs.scope.outputs.full != 'false'
+        if: github.ref == 'refs/heads/main'
         id: cef
         run: echo "version=$(sed -n '/^name = "cef"$/{n;s/^version = ".*+\(.*\)"$/\1/p;}' Cargo.lock)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v4
-        if: needs.scope.outputs.full != 'false'
+        if: github.ref == 'refs/heads/main'
         id: cef-cache
         with:
           path: ~/.local/share/cef
           key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
       - name: Install CEF build tools
-        if: needs.scope.outputs.full != 'false'
+        if: github.ref == 'refs/heads/main'
         run: brew install cmake ninja
       - name: Build app with visuals
-        if: needs.scope.outputs.full != 'false'
+        if: github.ref == 'refs/heads/main'
         id: visuals
         run: CEF_PATH="$HOME/.local/share/cef" cargo build -p ferrite --locked --features cef
       # Saved from main once the build has fetched CEF, whatever comes after.
@@ -152,8 +153,8 @@ jobs:
         if: needs.scope.outputs.reviewr != 'false'
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: cargo test -p ferrite-reviewr --locked
-      # The app is built once, with visuals, as Windows ships it; macOS
-      # builds it without them too. Visuals (ADR 0013): the app with
+      # On main the app is built once, with visuals, as Windows ships it;
+      # macOS builds it without them too. Visuals (ADR 0013): the app with
       # Chromium, and proof that Chromium runs from it on Windows:
       # `ferrite --visual-smoke` boots the engine headless, opens a page and
       # checks its frames' pixels, its content height and a hover
@@ -162,19 +163,23 @@ jobs:
       # is installed for CEF's C++ wrapper. The runner has no GPU: Chromium
       # falls back to software on its own.
       - name: CEF version
+        if: github.ref == 'refs/heads/main'
         id: cef
         shell: bash
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: echo "version=$(sed -n '/^name = "cef"$/{n;s/^version = ".*+\(.*\)"$/\1/p;}' Cargo.lock)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v4
+        if: github.ref == 'refs/heads/main'
         id: cef-cache
         with:
           path: ~/.local/share/cef
           key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
       - name: Install ninja
+        if: github.ref == 'refs/heads/main'
         shell: pwsh
         run: if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja --no-progress -y }
       - name: Build app with visuals
+        if: github.ref == 'refs/heads/main'
         id: visuals
         shell: pwsh
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
@@ -192,6 +197,7 @@ jobs:
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: scripts/tests/windows-stage.ps1
       - name: Packaged Windows visuals smoke
+        if: github.ref == 'refs/heads/main'
         shell: pwsh
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         timeout-minutes: 5
