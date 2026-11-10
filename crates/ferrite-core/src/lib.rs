@@ -18,6 +18,7 @@ pub mod doorbell;
 pub mod draft;
 pub mod drafts;
 pub mod engine;
+pub mod factory;
 pub mod followup;
 pub mod groups;
 pub mod import;

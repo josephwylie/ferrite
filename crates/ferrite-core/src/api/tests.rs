@@ -192,6 +192,13 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "notification.show",
             "project.focus",
             "thread.revive",
+            "task.start",
+            "task.list",
+            "task.get",
+            "task.stop",
+            "task.resume",
+            "task.delete",
+            "report.outcome",
         ]
     );
 }
@@ -373,6 +380,23 @@ fn samples() -> Vec<Request> {
             launcher: Vec::new(),
             ready: true,
             timeout_ms: Some(60_000),
+        })),
+        request(Method::TaskStart(TaskStartParams {
+            instructions: "Fix the flaky login test".into(),
+            project: Some("3".into()),
+            cwd: Some(PathBuf::from("/work/app")),
+        })),
+        request(Method::TaskList(TaskListParams {
+            project: Some("3".into()),
+        })),
+        request(Method::TaskGet(TaskParams { task: "t-1".into() })),
+        request(Method::TaskStop(TaskParams { task: "t-1".into() })),
+        request(Method::TaskResume(TaskParams { task: "t-1".into() })),
+        request(Method::TaskDelete(TaskParams { task: "t-1".into() })),
+        request(Method::ReportOutcome(ReportOutcomeParams {
+            outcome: ReportedOutcome::Finished,
+            summary: "Fixed the race in the login fixture".into(),
+            worker: thread(),
         })),
     ]
 }
@@ -824,6 +848,34 @@ fn current_names_the_calling_thread_and_frees_its_position() {
     assert!(refused.contains("FERRITE_THREAD_ID"), "{refused}");
     let refused = cli::parse(op("thread.list"), &["--current"], &context()).unwrap_err();
     assert!(refused.contains("takes no Thread"), "{refused}");
+}
+
+/// A Worker's report names its own Thread from where it runs, so its Task
+/// is known without being named; outside a Thread it is refused.
+#[test]
+fn a_report_names_the_worker_it_runs_in() {
+    assert_eq!(
+        parse("report.outcome", &["unable", "Tried X; blocked on Y"]),
+        Ok(Method::ReportOutcome(ReportOutcomeParams {
+            outcome: ReportedOutcome::Unable,
+            summary: "Tried X; blocked on Y".into(),
+            worker: ThreadId::new(7),
+        }))
+    );
+    let outside = Context {
+        thread: None,
+        ..context()
+    };
+    let refused = cli::parse(op("report.outcome"), &["finished", "done"], &outside).unwrap_err();
+    assert!(refused.contains("FERRITE_THREAD_ID"), "{refused}");
+    assert_eq!(
+        parse("task.start", &["Fix it"]),
+        Ok(Method::TaskStart(TaskStartParams {
+            instructions: "Fix it".into(),
+            project: None,
+            cwd: Some(PathBuf::from("/work/app")),
+        }))
+    );
 }
 
 /// `--machine` is the CLI's own, anywhere before `--`; it never names a

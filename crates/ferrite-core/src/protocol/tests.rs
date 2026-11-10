@@ -740,6 +740,88 @@ fn samples() -> Vec<(&'static str, Sample)> {
             ),
         ),
         (
+            "command_task_start",
+            command(
+                21,
+                Op::Task {
+                    action: TaskAction::Start {
+                        project,
+                        instructions: "Fix the flaky login test".into(),
+                        request: Some("board-1".into()),
+                    },
+                },
+            ),
+        ),
+        (
+            "command_task_delete",
+            command(
+                21,
+                Op::Task {
+                    action: TaskAction::Delete { task: "t-1".into() },
+                },
+            ),
+        ),
+        (
+            "factory",
+            Sample::Server(ServerMessage::Factory {
+                revision: 3,
+                board: crate::factory::Board {
+                    tasks: vec![crate::factory::Task {
+                        id: "t-1".into(),
+                        project,
+                        title: "Fix the flaky login test".into(),
+                        instructions: "Fix the flaky login test".into(),
+                        status: crate::factory::Status::NeedsHuman,
+                        agent: crate::factory::Agent {
+                            provider: crate::store::Provider::Claude,
+                            model: Some("claude-opus-4".into()),
+                            effort: None,
+                        },
+                        branch: "factory/t-1".into(),
+                        worker: Some(thread),
+                        worktree: Some("/src/ferrite/.worktrees/factory/t-1".into()),
+                        result: None,
+                        reason: Some("No access to the staging database".into()),
+                        activity: vec![crate::factory::Entry {
+                            at_ms: 1_700_000_000_000,
+                            by: crate::factory::Actor::Agent,
+                            text: "Unable to finish: No access to the staging database".into(),
+                        }],
+                        created_ms: 1_700_000_000_000,
+                        request: None,
+                        watch: Default::default(),
+                    }],
+                },
+            }),
+        ),
+        (
+            "task_alert",
+            Sample::Server(ServerMessage::TaskAlert {
+                project,
+                task: "t-1".into(),
+                status: crate::factory::Status::Completed,
+                title: "Task completed: Fix the flaky login test".into(),
+            }),
+        ),
+        (
+            "reply_task",
+            Sample::Server(ServerMessage::Reply {
+                id: 21,
+                ok: Some(Done::Task { task: "t-1".into() }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_deleted_kept",
+            Sample::Server(ServerMessage::Reply {
+                id: 21,
+                ok: Some(Done::Deleted {
+                    kept: Some("The worktree has uncommitted changes, so it was left in place.".into()),
+                }),
+                error: None,
+            }),
+        ),
+        (
             "command_notice",
             command(
                 22,
@@ -965,6 +1047,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 }]),
                 parked: None,
                 digests: None,
+                factory: None,
             })),
         ),
         (
@@ -987,6 +1070,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     thread,
                     digest: digest(),
                 }]),
+                factory: None,
             })),
         ),
         (
@@ -1006,6 +1090,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 providers: None,
                 parked: Some(vec![parked_row()]),
                 digests: None,
+                factory: None,
             })),
         ),
         (

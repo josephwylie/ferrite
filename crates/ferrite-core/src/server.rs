@@ -31,6 +31,7 @@ pub mod agent;
 mod bridge;
 mod browser;
 mod calls;
+mod factory;
 mod render;
 mod signals;
 
@@ -368,6 +369,12 @@ struct Server {
     relaunch: Box<Relaunch>,
     /// The self-hosted forges a review's pull request is read from.
     forge: ferrite_reviewr::config::PluginConfig,
+    /// Every Project's Factory (ADR 0037), stepped once a pass.
+    factory: crate::factory::Factory,
+    /// The board revision the windows were last told.
+    told_factory: Option<u64>,
+    /// What a one-off Task's Worker runs on: the operator's defaults.
+    factory_agent: crate::factory::Agent,
 }
 
 impl Server {
@@ -380,6 +387,7 @@ impl Server {
     ) -> Self {
         let browser = browser::load(engine.browser_store());
         let browser_disk = browser::Disk::new(engine.browser_store().clone());
+        let factory = factory::load(engine.browser_store().dir());
         Self {
             engine,
             info,
@@ -412,6 +420,9 @@ impl Server {
             default_provider: Provider::Claude,
             relaunch: Box::new(relaunch),
             forge: Default::default(),
+            factory,
+            told_factory: None,
+            factory_agent: factory::default_agent(&Settings::default()),
         }
     }
 
@@ -437,6 +448,7 @@ impl Server {
             }
             self.tell_watched();
             self.engine.pump();
+            self.step_factory();
             if self.swept.elapsed() >= SWEEP_INTERVAL {
                 self.swept = Instant::now();
                 self.engine.sweep();
@@ -527,7 +539,8 @@ impl Server {
                     client.renders_visuals = capabilities.contains(&Capability::RenderVisual);
                     client.browser_capable =
                         capabilities.contains(&Capability::ConversationBrowser);
-                    let snapshot = self.engine.snapshot();
+                    let mut snapshot = self.engine.snapshot();
+                    snapshot.factory = Some(self.factory.board());
                     self.send(id, ServerMessage::Snapshot(snapshot));
                 }
             }
@@ -928,6 +941,7 @@ impl Server {
                 self.stopping = Some(*when);
                 Ok(None)
             }
+            Op::Task { action } => self.task_command(action),
             Op::Restart { when } => match self.successor() {
                 Ok(_) => {
                     self.restarting = Some(*when);
@@ -937,8 +951,14 @@ impl Server {
             },
             op => {
                 let executed = self.engine.execute(op);
-                if let (Op::Answer { thread, handle, .. }, Ok(_)) = (op, &executed) {
-                    self.answered.insert((*thread, handle.clone()), id);
+                match (op, &executed) {
+                    (Op::Answer { thread, handle, .. }, Ok(_)) => {
+                        self.answered.insert((*thread, handle.clone()), id);
+                    }
+                    (Op::Send { thread, text } | Op::Queue { thread, text }, Ok(_)) => {
+                        self.heard_operator(*thread, text);
+                    }
+                    _ => {}
                 }
                 executed
             }
@@ -987,6 +1007,7 @@ impl Server {
             .set_allowance_thresholds(settings.allowance_warnings.clone());
         self.default_provider = settings.default_provider;
         self.forge = settings.forge_hosts.review_config();
+        self.factory_agent = factory::default_agent(settings);
     }
 
     /// A first send that settled answers the command that started it.
@@ -1121,6 +1142,7 @@ impl Server {
     fn broadcast(&mut self) {
         let mut messages = self.engine.take_messages();
         messages.extend(self.decision_changes());
+        messages.extend(self.factory_changes());
         for message in messages {
             self.api.relay(&message);
             match &message {

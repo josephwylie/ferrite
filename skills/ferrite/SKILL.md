@@ -224,6 +224,35 @@ prompt was taken, rather than when the turn ends:
 `"$F" notification show "Ready" --sound done` rings a chime with the
 toast (`--important` keeps it up).
 
+## The Factory
+
+A Project's **Factory** runs **Tasks** the user hands off: each Task gets
+its own worktree and branch, and a **Worker** (an agent Thread the Task
+owns, `owner: {"task": "t-1"}`) does it. Start one only when the user asks.
+
+```bash
+"$F" task start "Fix the flaky login test" --project 3
+"$F" task list --project 3
+"$F" task get t-1
+"$F" task stop t-1
+"$F" task resume t-1
+"$F" task delete t-1
+```
+
+`task start` uses the Project holding the CLI's directory when no
+`--project` is given. `task delete` takes a Queued, Stopped or Completed
+Task; its worktree is removed only when clean (otherwise it stays and the
+answer says why), and its branch always stays.
+
+If you are a Worker, report your Task's outcome with one command when you
+are done; your Task is known from your environment, and your outcome is
+read only from it:
+
+```bash
+"$F" report outcome finished "Fixed the race in the login fixture"
+"$F" report outcome unable "Tried X and Y; blocked on Z"
+```
+
 ## Another machine
 
 Only when the user asks for work on one of their saved machines (Ferrite's

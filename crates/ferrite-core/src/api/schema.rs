@@ -20,6 +20,10 @@
 //! - `dirty_worktree_requires_force`: the worktree holds changes; nothing
 //!   was removed (there is no force).
 //! - `already_answered`, `invalid_answer`: a Decision's answer.
+//! - `unknown_task`: no Task has that id.
+//! - `not_a_worker`: `report` from a Thread that is no Task's Worker.
+//! - `not_now`: the Task's state does not allow it (delete a working
+//!   Task: stop it first).
 //! - `failed`: anything else, in its own words.
 //! - `server_unavailable`: the CLI's own, no Server answered.
 //!
@@ -135,6 +139,20 @@ operations! {
         "Land every Ferrite window on a Project's first open Thread.";
     ThreadRevive(ThreadReviveParams) => "thread.revive", ["thread"],
         "Start a parked Thread's agent again in place, keeping its id.";
+    TaskStart(TaskStartParams) => "task.start", ["instructions"],
+        "Hand a Project's Factory a one-off Task: one agent in its own worktree.";
+    TaskList(TaskListParams) => "task.list", [],
+        "The Factory's Tasks, of every Project or of one.";
+    TaskGet(TaskParams) => "task.get", ["task"],
+        "One Task: its state, activity, Worker and worktree.";
+    TaskStop(TaskParams) => "task.stop", ["task"],
+        "Stop a Task: its Worker is interrupted.";
+    TaskResume(TaskParams) => "task.resume", ["task"],
+        "Resume a stopped Task: its Worker carries on.";
+    TaskDelete(TaskParams) => "task.delete", ["task"],
+        "Delete a Queued, Stopped or Completed Task; its worktree only if clean.";
+    ReportOutcome(ReportOutcomeParams) => "report.outcome", ["outcome", "summary"],
+        "A Worker reports its Task finished, or unable to finish and what it tried.";
 }
 
 /// No parameters.
@@ -377,4 +395,48 @@ pub struct WorktreeCreateParams {
 pub struct WorktreeRemoveParams {
     /// The linked worktree's directory.
     pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskStartParams {
+    /// What the Worker is to do; its first line is the Task's title.
+    pub instructions: String,
+    /// The Project whose Factory takes it (`project.list`'s `id`); else
+    /// the Project holding `cwd`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// The CLI sends its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskListParams {
+    /// Only this Project's (`project.list`'s `id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskParams {
+    /// The Task's id, as `task.list` gives it (`t-1`).
+    pub task: String,
+}
+
+/// What a Worker reports: `finished` (`summary` says what it did) or
+/// `unable` to finish (`summary` says what it tried).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportedOutcome {
+    Finished,
+    Unable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReportOutcomeParams {
+    pub outcome: ReportedOutcome,
+    pub summary: String,
+    /// The reporting Worker's own Thread: the CLI sends
+    /// `FERRITE_THREAD_ID`, so its Task is known from where it runs.
+    pub worker: ThreadId,
 }

@@ -1544,6 +1544,18 @@ impl Engine {
         )
     }
 
+    /// `open_with`, on a chosen model and Effort from the start: a Factory
+    /// Step's Worker (ADR 0037).
+    pub fn open_tuned(
+        &mut self,
+        choice: ProviderChoice,
+        effort: Option<String>,
+        workspace: WorkspaceChoice,
+        launch: Launch,
+    ) -> io::Result<ThreadId> {
+        self.open_choice(choice, workspace, effort, launch)
+    }
+
     /// Make a worktree of `repo` on the new `branch`, from `base` (the
     /// repo's HEAD when none), placed and registered as the registry's own
     /// are; its Project and path. Git refuses a branch that already
@@ -4602,6 +4614,7 @@ impl Engine {
                     })
                     .collect(),
             ),
+            factory: None,
         }
     }
 

@@ -285,6 +285,13 @@ pub fn parse(op: &Operation, args: &[&str], context: &Context) -> Result<Request
             .ok_or_else(|| format!("`{arg}`: `{}` takes no more arguments", op.name))?;
         params.insert(name.into(), kind(&properties[name], defs).parse(arg)?);
     }
+    // A Worker's report names its own Thread, from where it runs.
+    if properties.contains_key("worker") && !params.contains_key("worker") {
+        let thread = context.thread.as_deref().ok_or(
+            "a report is a Worker's: run it from inside a Factory Worker (FERRITE_THREAD_ID)",
+        )?;
+        params.insert("worker".into(), Kind::Integer.parse(thread)?);
+    }
     if properties.contains_key("cwd") {
         let given = params.get("cwd").and_then(Value::as_str).map(PathBuf::from);
         let cwd = match (&context.cwd, given) {

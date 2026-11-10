@@ -173,6 +173,17 @@ impl Server {
                 self.api.subscribe(&self.engine, caller, id, params.threads);
                 return;
             }
+            Method::TaskStart(params) => self.api_task_start(params),
+            Method::TaskList(params) => self.api_task_list(params),
+            Method::TaskGet(params) => self.api_task_get(params),
+            Method::TaskStop(params) => {
+                self.api_task_change(crate::factory::Command::Stop { task: params.task })
+            }
+            Method::TaskResume(params) => {
+                self.api_task_change(crate::factory::Command::Resume { task: params.task })
+            }
+            Method::TaskDelete(params) => self.api_task_delete(params),
+            Method::ReportOutcome(params) => self.api_report(params),
             Method::NotificationShow(params) => {
                 self.say(ServerMessage::Notification {
                     title: params.title,

@@ -682,6 +682,7 @@ fn box_snapshot(
         providers: None,
         parked: None,
         digests: None,
+        factory: None,
     })
 }
 

@@ -23,7 +23,7 @@ fn failed(error: impl ToString) -> ApiError {
 
 impl Server {
     /// The Project `project.list` names `id`.
-    pub(super) fn project(&self, id: &str) -> Result<ProjectId, ApiError> {
+    pub(in crate::server) fn project(&self, id: &str) -> Result<ProjectId, ApiError> {
         self.engine
             .registry()
             .projects()
@@ -161,7 +161,7 @@ impl Server {
     /// and left whole; otherwise every open Thread in it is parked, the
     /// worktree removed, and its Threads bound to the repository's main
     /// checkout. The branch stays: it keeps the work reachable.
-    pub(super) fn remove_worktree(&mut self, path: &Path) -> Result<Value, ApiError> {
+    pub(in crate::server) fn remove_worktree(&mut self, path: &Path) -> Result<Value, ApiError> {
         let not_found = || {
             ApiError::new(
                 Code::WorktreeNotFound,

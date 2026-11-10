@@ -142,9 +142,29 @@ pub enum Code {
     ThreadClosed,
     AlreadyAnswered,
     InvalidAnswer,
+    /// No Task has that id.
+    UnknownTask,
+    /// A report from a Thread that is no Task's Worker.
+    NotAWorker,
+    /// The Task's state does not allow it.
+    NotNow,
     Failed,
     /// The CLI's own: no Server answers at the socket.
     ServerUnavailable,
+}
+
+impl From<crate::factory::Refusal> for ApiError {
+    fn from(refusal: crate::factory::Refusal) -> Self {
+        use crate::factory::RefusalCode;
+        let code = match refusal.code {
+            RefusalCode::UnknownTask => Code::UnknownTask,
+            RefusalCode::NotAWorker => Code::NotAWorker,
+            RefusalCode::NotNow => Code::NotNow,
+            RefusalCode::Invalid => Code::InvalidRequest,
+            RefusalCode::Failed => Code::Failed,
+        };
+        Self::new(code, refusal.message)
+    }
 }
 
 impl From<WireError> for ApiError {

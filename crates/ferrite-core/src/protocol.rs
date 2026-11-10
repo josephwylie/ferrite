@@ -350,6 +350,10 @@ pub enum Op {
     Project {
         action: ProjectAction,
     },
+    /// A Factory command (ADR 0037), as a window asks it.
+    Task {
+        action: TaskAction,
+    },
     Notice {
         action: NoticeAction,
     },
@@ -545,6 +549,7 @@ impl Op {
             | Op::Group { .. }
             | Op::Layout { .. }
             | Op::Project { .. }
+            | Op::Task { .. }
             | Op::Notice { .. }
             | Op::SettingsChanged
             | Op::CliReplaced { .. }
@@ -784,6 +789,31 @@ pub enum ProjectAction {
     Unknown,
 }
 
+/// What a window asks of a Project's Factory (ADR 0037).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TaskAction {
+    /// A one-off Task with these instructions. `request` names the ask,
+    /// so asking again is the same Task.
+    Start {
+        project: ProjectId,
+        instructions: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request: Option<String>,
+    },
+    Stop {
+        task: String,
+    },
+    Resume {
+        task: String,
+    },
+    Delete {
+        task: String,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum NoticeAction {
@@ -974,6 +1004,20 @@ pub enum ServerMessage {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         important: bool,
     },
+    /// Every Factory's Tasks (ADR 0037), whenever they change; latest
+    /// wins.
+    Factory {
+        revision: u64,
+        board: crate::factory::Board,
+    },
+    /// A Task needs the operator, stopped or completed: a toast, a chime
+    /// and a system notification.
+    TaskAlert {
+        project: ProjectId,
+        task: String,
+        status: crate::factory::Status,
+        title: String,
+    },
     /// The Server is about to restart: reconnect.
     Restarting {
         when: When,
@@ -1045,6 +1089,9 @@ pub struct Snapshot {
     /// open Thread whole to its windows, as generation 1 began.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digests: Option<Vec<ThreadDigest>>,
+    /// Every Factory's Tasks (ADR 0037).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factory: Option<crate::factory::Board>,
 }
 
 /// One open Thread's digest, as the snapshot lists them.
@@ -1154,6 +1201,15 @@ pub enum Done {
     },
     Project {
         project: ProjectId,
+    },
+    /// The Task a `task` start made, or was already.
+    Task {
+        task: String,
+    },
+    /// A Task deleted; `kept` says why its worktree was left.
+    Deleted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kept: Option<String>,
     },
     /// A prompt handed back to the Composer (`unqueue`), or the file a
     /// `read_file` read.

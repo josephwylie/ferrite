@@ -24,6 +24,10 @@ pub(crate) struct Shared {
     pub(crate) open: Vec<ThreadId>,
     /// A provider's models changed since the window last asked.
     models_changed: bool,
+    /// Every Factory's Tasks (ADR 0037), and whether they changed since
+    /// the window last asked.
+    pub(crate) factory: crate::factory::Board,
+    factory_changed: bool,
 }
 
 impl Shared {
@@ -39,6 +43,8 @@ impl Shared {
             providers: Vec::new(),
             open: Vec::new(),
             models_changed: false,
+            factory: Default::default(),
+            factory_changed: false,
         }
     }
 
@@ -61,6 +67,8 @@ impl Shared {
             self.providers = providers.clone();
             self.models_changed = true;
         }
+        self.factory = snapshot.factory.clone().unwrap_or_default();
+        self.factory_changed = true;
     }
 
     pub(crate) fn receive(&mut self, message: &ServerMessage) {
@@ -72,6 +80,10 @@ impl Shared {
             ServerMessage::Registry { registry, .. } => self.set_registry(registry),
             ServerMessage::Notices { notices, .. } => {
                 self.notifications = Notifications::from_wire(notices);
+            }
+            ServerMessage::Factory { board, .. } => {
+                self.factory = board.clone();
+                self.factory_changed = true;
             }
             ServerMessage::Providers { providers, .. } => {
                 let models = |providers: &[ProviderState]| -> Vec<Vec<ModelInfo>> {
@@ -126,5 +138,9 @@ impl Shared {
 
     pub(crate) fn take_models_changed(&mut self) -> bool {
         std::mem::take(&mut self.models_changed)
+    }
+
+    pub(crate) fn take_factory_changed(&mut self) -> bool {
+        std::mem::take(&mut self.factory_changed)
     }
 }

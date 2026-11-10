@@ -705,6 +705,11 @@ impl Cockpit {
         self.assert_mirrors_match();
     }
 
+    /// A message a fixture world's Server would have sent.
+    fn receive_fixture(&mut self, message: ServerMessage) {
+        self.arrive(vec![remote::Arrival::Message(message)]);
+    }
+
     fn arrive(&mut self, arrived: Vec<remote::Arrival>) {
         let open_before = self.shared.open.clone();
         let focused = self.focused_member();
@@ -873,6 +878,17 @@ impl Cockpit {
                 body: body.clone(),
                 sound: sound.sound(),
                 important: *important,
+            }),
+            ServerMessage::TaskAlert {
+                project,
+                task,
+                status,
+                title,
+            } => self.asked.push(Asked::TaskAlert {
+                project: *project,
+                task: task.clone(),
+                status: *status,
+                title: title.clone(),
             }),
             _ => {}
         }
@@ -2461,6 +2477,27 @@ impl Cockpit {
         std::mem::take(&mut self.asked)
     }
 
+    /// Every Factory's Tasks, as the Server last said them (ADR 0037).
+    pub fn factory(&self) -> &crate::factory::Board {
+        &self.shared.factory
+    }
+
+    /// Whether the Tasks changed since the last ask.
+    pub fn take_factory_changed(&mut self) -> bool {
+        self.shared.take_factory_changed()
+    }
+
+    /// A Factory command. The Factory runs in the Server: a window that
+    /// runs its agents itself has none.
+    pub fn task(&mut self, action: crate::protocol::TaskAction) -> io::Result<Option<Done>> {
+        let done = self
+            .remote()?
+            .execute(Op::Task { action })
+            .map_err(io::Error::from);
+        self.settle();
+        done
+    }
+
     /// Request workspace commands without creating a Thread or Session.
     pub fn discover_commands(
         &mut self,
@@ -2662,6 +2699,16 @@ impl Cockpit {
         opened
     }
 
+    /// A fixture world's Factory board, as a Server would say it.
+    pub fn fixture_factory(&mut self, board: crate::factory::Board) {
+        self.receive_fixture(ServerMessage::Factory { revision: 0, board });
+    }
+
+    /// A fixture world's Task alert, as a Server would say it.
+    pub fn fixture_task_alert(&mut self, alert: ServerMessage) {
+        self.receive_fixture(alert);
+    }
+
     pub fn fixture_notice(&mut self, thread: ThreadId, outcome: crate::TurnOutcome) {
         self.in_process().fixture_notice(thread, outcome);
         self.settle();
@@ -2719,6 +2766,14 @@ pub enum Asked {
         body: Option<String>,
         sound: Option<crate::sound::Sound>,
         important: bool,
+    },
+    /// A Task needs the operator, stopped or completed (ADR 0037): a
+    /// toast, a chime and a system notification.
+    TaskAlert {
+        project: ProjectId,
+        task: String,
+        status: crate::factory::Status,
+        title: String,
     },
 }
 

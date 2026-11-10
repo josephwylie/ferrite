@@ -255,6 +255,7 @@ fn a_client_attaches_and_both_sides_hear_each_other() {
                 providers: None,
                 parked: None,
                 digests: None,
+                factory: None,
             }))
             .unwrap();
         connection
@@ -516,6 +517,7 @@ fn browser_annotation_upload_does_not_wait_for_socket_and_keeps_following_messag
                 providers: None,
                 parked: None,
                 digests: None,
+                factory: None,
             }),
         )
         .unwrap();
