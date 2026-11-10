@@ -139,7 +139,7 @@ fn project_additional_directories(
     project: Option<ProjectId>,
     cwd: Option<&Path>,
 ) -> Vec<PathBuf> {
-    let cwd = cwd.map(|cwd| std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf()));
+    let cwd = cwd.map(|cwd| dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf()));
     project
         .and_then(|project| registry.project(project))
         .into_iter()

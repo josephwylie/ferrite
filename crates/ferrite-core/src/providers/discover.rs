@@ -81,7 +81,7 @@ pub fn candidates(program: &str, path: Option<&OsStr>) -> Vec<PathBuf> {
             if !candidate.is_file() {
                 continue;
             }
-            let real = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+            let real = dunce::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
             if seen.contains(&real) {
                 continue;
             }

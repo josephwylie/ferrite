@@ -231,7 +231,7 @@ impl Server {
         let (checkout, project) = match &params.project {
             Some(project) => {
                 let project = self.project(project)?;
-                let cwd = std::fs::canonicalize(&params.cwd)
+                let cwd = dunce::canonicalize(&params.cwd)
                     .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
                 let directory = self.directory_in(project, &cwd)?;
                 // As Herdr's tab starts in its cwd, the Thread works in
