@@ -184,6 +184,33 @@ impl Server {
             }
             Method::TaskDelete(params) => self.api_task_delete(params),
             Method::ReportOutcome(params) => self.api_report(params),
+            Method::WorkflowCreate(params) => self.api_workflow_create(params),
+            Method::WorkflowList(params) => self.api_workflow_list(params),
+            Method::WorkflowGet(params) => self.api_workflow_answer(&params.workflow, None),
+            Method::WorkflowRename(params) => self.api_author(crate::factory::Command::RenameWorkflow {
+                workflow: params.workflow,
+                name: params.name,
+            }),
+            Method::WorkflowSave(params) => self.api_workflow_save(params.workflow, Vec::new()),
+            Method::StepAdd(params) => self.api_author(crate::factory::Command::AddStep {
+                workflow: params.workflow,
+                after: params.after,
+                agent: self.factory_agent.clone(),
+            }),
+            Method::StepEdit(params) => self.api_author(crate::factory::Command::EditStep {
+                workflow: params.workflow,
+                step: params.step,
+                change: params.change,
+            }),
+            Method::StepMove(params) => self.api_author(crate::factory::Command::MoveStep {
+                workflow: params.workflow,
+                step: params.step,
+                to: params.to,
+            }),
+            Method::StepDelete(params) => self.api_author(crate::factory::Command::DeleteStep {
+                workflow: params.workflow,
+                step: params.step,
+            }),
             Method::NotificationShow(params) => {
                 self.say(ServerMessage::Notification {
                     title: params.title,

@@ -114,9 +114,13 @@ impl Session for Scripted {
     }
 }
 
+/// What each Session was started on: its Provider, model and Effort.
+type Launches = Arc<Mutex<Vec<(Provider, Option<String>, Option<String>)>>>;
+
 /// Each Session it starts hands the test the Sender that plays its provider.
 struct Spawn {
     sessions: Sender<Sender<SessionEvent>>,
+    launches: Launches,
     answers: Answers,
     queued: Queued,
     /// Sessions start only as the test lets each through; at once without.
@@ -126,6 +130,14 @@ struct Spawn {
 }
 
 impl Spawn {
+    fn launched(&self, request: &SpawnRequest) {
+        self.launches.lock().unwrap().push((
+            request.provider,
+            request.model.map(str::to_string),
+            request.effort.map(str::to_string),
+        ));
+    }
+
     fn scripted(&self) -> Scripted {
         let (provider, events) = mpsc::channel();
         self.sessions.send(provider).unwrap();
@@ -140,11 +152,15 @@ impl Spawn {
 }
 
 impl Spawner for Spawn {
-    fn spawn(&mut self, _: SpawnRequest) -> io::Result<Box<dyn crate::providers::Session>> {
+    fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn crate::providers::Session>> {
+        self.launched(&request);
         Ok(Box::new(self.scripted()))
     }
     fn start(&mut self, request: SpawnRequest) -> io::Result<crate::session::SessionLifecycle> {
         use crate::session::SessionLifecycle;
+        if self.gate.is_some() {
+            self.launched(&request);
+        }
         let Some(gate) = self.gate.clone() else {
             return self.spawn(request).map(SessionLifecycle::ready);
         };
@@ -165,6 +181,7 @@ struct Harness {
     /// The API's socket.
     api: PathBuf,
     sessions: Receiver<Sender<SessionEvent>>,
+    launches: Launches,
     answers: Answers,
     queued: Queued,
     browser: crate::browser::Client,
@@ -216,8 +233,10 @@ fn serve_tuned(dir: PathBuf, gate: Option<Arc<Mutex<Receiver<()>>>>, tuning: Tun
     let (sessions, started) = mpsc::channel();
     let answers = Answers::default();
     let queued = Queued::default();
+    let launches = Launches::default();
     let spawn = Spawn {
         sessions,
+        launches: launches.clone(),
         answers: answers.clone(),
         queued: queued.clone(),
         gate,
@@ -258,6 +277,7 @@ fn serve_tuned(dir: PathBuf, gate: Option<Arc<Mutex<Receiver<()>>>>, tuning: Tun
         address,
         api,
         sessions: started,
+        launches,
         answers,
         queued,
         browser,
@@ -1509,6 +1529,7 @@ pub(super) fn engine(dir: &Path, spawner: Box<dyn Spawner>) -> Engine {
 pub(super) fn spawn() -> (Box<dyn Spawner>, Receiver<Sender<SessionEvent>>) {
     let (sessions, providers) = mpsc::channel();
     let spawner = Spawn {
+        launches: Default::default(),
         sessions,
         answers: Answers::default(),
         queued: Queued::default(),
@@ -2072,6 +2093,7 @@ fn spawn_gated() -> (Box<dyn Spawner>, Receiver<Sender<SessionEvent>>, Sender<()
     let (sessions, providers) = mpsc::channel();
     let (gate, opens) = mpsc::channel();
     let spawner = Spawn {
+        launches: Default::default(),
         sessions,
         answers: Answers::default(),
         queued: Queued::default(),
@@ -2226,6 +2248,7 @@ fn asking_a_thread_without_its_agent_starts_it_and_asks_it() {
     let (gate, opens) = mpsc::channel();
     let controls = Controls::default();
     let spawner = Spawn {
+        launches: Default::default(),
         sessions,
         answers: Answers::default(),
         queued: Queued::default(),
@@ -2281,6 +2304,7 @@ fn prompts_queued_while_the_agent_starts_wait_for_it() {
     let (mut engine, thread) = restored(
         "restored-queue",
         Box::new(Spawn {
+            launches: Default::default(),
             sessions,
             answers: Answers::default(),
             queued: queued.clone(),
@@ -2318,6 +2342,7 @@ fn prompts_wait_for_a_provider_that_cannot_queue_yet() {
     let (mut engine, thread) = restored(
         "restored-cannot-queue",
         Box::new(Spawn {
+            launches: Default::default(),
             sessions,
             answers: Answers::default(),
             queued: queued.clone(),

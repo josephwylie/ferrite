@@ -144,6 +144,10 @@ pub enum Code {
     InvalidAnswer,
     /// No Task has that id.
     UnknownTask,
+    /// No Workflow has that id.
+    UnknownWorkflow,
+    /// The Workflow has no Step with that id.
+    UnknownStep,
     /// A report from a Thread that is no Task's Worker.
     NotAWorker,
     /// The Task's state does not allow it.
@@ -158,6 +162,8 @@ impl From<crate::factory::Refusal> for ApiError {
         use crate::factory::RefusalCode;
         let code = match refusal.code {
             RefusalCode::UnknownTask => Code::UnknownTask,
+            RefusalCode::UnknownWorkflow => Code::UnknownWorkflow,
+            RefusalCode::UnknownStep => Code::UnknownStep,
             RefusalCode::NotAWorker => Code::NotAWorker,
             RefusalCode::NotNow => Code::NotNow,
             RefusalCode::Invalid => Code::InvalidRequest,

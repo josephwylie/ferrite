@@ -354,6 +354,10 @@ pub enum Op {
     Task {
         action: TaskAction,
     },
+    /// A Workflow authoring command (ADR 0037, #221), as a window asks it.
+    Workflow {
+        action: WorkflowAction,
+    },
     Notice {
         action: NoticeAction,
     },
@@ -550,6 +554,7 @@ impl Op {
             | Op::Layout { .. }
             | Op::Project { .. }
             | Op::Task { .. }
+            | Op::Workflow { .. }
             | Op::Notice { .. }
             | Op::SettingsChanged
             | Op::CliReplaced { .. }
@@ -793,13 +798,16 @@ pub enum ProjectAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TaskAction {
-    /// A one-off Task with these instructions. `request` names the ask,
-    /// so asking again is the same Task.
+    /// A Task with these instructions: one-off, or on `workflow`'s
+    /// latest saved version. `request` names the ask, so asking again is
+    /// the same Task.
     Start {
         project: ProjectId,
         instructions: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workflow: Option<String>,
     },
     Stop {
         task: String,
@@ -809,6 +817,49 @@ pub enum TaskAction {
     },
     Delete {
         task: String,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+/// What a window asks of a Project's Workflows (ADR 0037, #221).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorkflowAction {
+    Create {
+        project: ProjectId,
+        template: crate::factory::Template,
+    },
+    Rename {
+        workflow: String,
+        name: String,
+    },
+    AddStep {
+        workflow: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<String>,
+    },
+    EditStep {
+        workflow: String,
+        step: String,
+        change: crate::factory::StepChange,
+    },
+    MoveStep {
+        workflow: String,
+        step: String,
+        to: usize,
+    },
+    DeleteStep {
+        workflow: String,
+        step: String,
+    },
+    /// Save the draft as the next version. `skills` are the ones this
+    /// window found installed, per Provider, so the Server can flag a
+    /// missing one too.
+    Save {
+        workflow: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skills: Vec<(crate::store::Provider, Vec<String>)>,
     },
     #[serde(other)]
     Unknown,
@@ -1205,6 +1256,18 @@ pub enum Done {
     /// The Task a `task` start made, or was already.
     Task {
         task: String,
+    },
+    /// The Workflow a `workflow` create made.
+    Workflow {
+        workflow: String,
+    },
+    /// The Step an `add_step` made.
+    Step {
+        step: String,
+    },
+    /// The version a save made, or the latest when nothing changed.
+    Version {
+        version: u32,
     },
     /// A Task deleted; `kept` says why its worktree was left.
     Deleted {

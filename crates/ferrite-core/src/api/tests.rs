@@ -199,6 +199,15 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "task.resume",
             "task.delete",
             "report.outcome",
+            "workflow.create",
+            "workflow.list",
+            "workflow.get",
+            "workflow.rename",
+            "workflow.save",
+            "step.add",
+            "step.edit",
+            "step.move",
+            "step.delete",
         ]
     );
 }
@@ -385,6 +394,7 @@ fn samples() -> Vec<Request> {
             instructions: "Fix the flaky login test".into(),
             project: Some("3".into()),
             cwd: Some(PathBuf::from("/work/app")),
+            workflow: None,
         })),
         request(Method::TaskList(TaskListParams {
             project: Some("3".into()),
@@ -397,6 +407,53 @@ fn samples() -> Vec<Request> {
             outcome: ReportedOutcome::Finished,
             summary: "Fixed the race in the login fixture".into(),
             worker: thread(),
+        })),
+        request(Method::WorkflowCreate(WorkflowCreateParams {
+            template: Some(crate::factory::Template::IssueToReviewedPr),
+            name: Some("Docs fixes".into()),
+            project: Some("3".into()),
+            cwd: Some(PathBuf::from("/work/app")),
+        })),
+        request(Method::WorkflowList(TaskListParams {
+            project: Some("3".into()),
+        })),
+        request(Method::WorkflowGet(WorkflowParams {
+            workflow: "w-1".into(),
+        })),
+        request(Method::WorkflowRename(WorkflowRenameParams {
+            workflow: "w-1".into(),
+            name: "Docs fixes".into(),
+        })),
+        request(Method::WorkflowSave(WorkflowParams {
+            workflow: "w-1".into(),
+        })),
+        request(Method::StepAdd(StepAddParams {
+            workflow: "w-1".into(),
+            after: Some("s-1".into()),
+        })),
+        request(Method::StepEdit(StepEditParams {
+            workflow: "w-1".into(),
+            step: "s-2".into(),
+            change: crate::factory::StepChange {
+                name: Some("Reviewer".into()),
+                instructions: Some("Review the PR".into()),
+                skills: Some(vec!["code-review".into()]),
+                provider: Some(Provider::Claude),
+                model: Some("claude-opus-4".into()),
+                effort: Some("high".into()),
+                on_finished: Some(crate::factory::Destination::Complete),
+                on_unable: Some(crate::factory::Destination::Step("s-1".into())),
+                fresh: Some(true),
+            },
+        })),
+        request(Method::StepMove(StepMoveParams {
+            workflow: "w-1".into(),
+            step: "s-2".into(),
+            to: 0,
+        })),
+        request(Method::StepDelete(StepParams {
+            workflow: "w-1".into(),
+            step: "s-2".into(),
         })),
     ]
 }
@@ -426,6 +483,15 @@ fn thread_start() -> ThreadStartParams {
 /// Requests a later parameter changed, frozen beside the operations' own.
 fn later_samples() -> Vec<(&'static str, Request)> {
     vec![
+        (
+            "task_start_workflow",
+            request(Method::TaskStart(TaskStartParams {
+                instructions: "Fix the flaky login test".into(),
+                project: Some("3".into()),
+                cwd: None,
+                workflow: Some("w-1".into()),
+            })),
+        ),
         (
             "thread_start_options",
             request(Method::ThreadStart(ThreadStartParams {
@@ -872,6 +938,56 @@ fn a_report_names_the_worker_it_runs_in() {
         parse("task.start", &["Fix it"]),
         Ok(Method::TaskStart(TaskStartParams {
             instructions: "Fix it".into(),
+            project: None,
+            cwd: Some(PathBuf::from("/work/app")),
+        }))
+    );
+}
+
+/// Every authoring act is a CLI command: a Step's routes and skills
+/// as flags, its place as a number.
+#[test]
+fn workflow_authoring_parses_from_the_cli() {
+    assert_eq!(
+        parse(
+            "step.edit",
+            &[
+                "w-1",
+                "s-2",
+                "--name",
+                "Reviewer",
+                "--skills",
+                "code-review",
+                "--on-unable",
+                "step:s-1",
+                "--fresh",
+            ]
+        ),
+        Ok(Method::StepEdit(StepEditParams {
+            workflow: "w-1".into(),
+            step: "s-2".into(),
+            change: crate::factory::StepChange {
+                name: Some("Reviewer".into()),
+                skills: Some(vec!["code-review".into()]),
+                on_unable: Some(crate::factory::Destination::Step("s-1".into())),
+                fresh: Some(true),
+                ..Default::default()
+            },
+        }))
+    );
+    assert_eq!(
+        parse("step.move", &["w-1", "s-2", "0"]),
+        Ok(Method::StepMove(StepMoveParams {
+            workflow: "w-1".into(),
+            step: "s-2".into(),
+            to: 0,
+        }))
+    );
+    assert_eq!(
+        parse("workflow.create", &["--template", "issue_to_reviewed_pr"]),
+        Ok(Method::WorkflowCreate(WorkflowCreateParams {
+            template: Some(crate::factory::Template::IssueToReviewedPr),
+            name: None,
             project: None,
             cwd: Some(PathBuf::from("/work/app")),
         }))

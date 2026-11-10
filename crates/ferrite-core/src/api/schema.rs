@@ -21,6 +21,8 @@
 //!   was removed (there is no force).
 //! - `already_answered`, `invalid_answer`: a Decision's answer.
 //! - `unknown_task`: no Task has that id.
+//! - `unknown_workflow`, `unknown_step`: no Workflow, or no Step in it,
+//!   has that id.
 //! - `not_a_worker`: `report` from a Thread that is no Task's Worker.
 //! - `not_now`: the Task's state does not allow it (delete a working
 //!   Task: stop it first).
@@ -153,6 +155,24 @@ operations! {
         "Delete a Queued, Stopped or Completed Task; its worktree only if clean.";
     ReportOutcome(ReportOutcomeParams) => "report.outcome", ["outcome", "summary"],
         "A Worker reports its Task finished, or unable to finish and what it tried.";
+    WorkflowCreate(WorkflowCreateParams) => "workflow.create", [],
+        "Make a Project's Workflow, Blank or from the issue_to_reviewed_pr template.";
+    WorkflowList(TaskListParams) => "workflow.list", [],
+        "The Factory's Workflows, of every Project or of one.";
+    WorkflowGet(WorkflowParams) => "workflow.get", ["workflow"],
+        "One Workflow: its draft, saved versions and the draft's problems.";
+    WorkflowRename(WorkflowRenameParams) => "workflow.rename", ["workflow", "name"],
+        "Rename a Workflow's draft.";
+    WorkflowSave(WorkflowParams) => "workflow.save", ["workflow"],
+        "Save a Workflow's draft as its next version. Starts nothing.";
+    StepAdd(StepAddParams) => "step.add", ["workflow"],
+        "Add a Step to a Workflow's draft, after a Step or last.";
+    StepEdit(StepEditParams) => "step.edit", ["workflow", "step"],
+        "Change a Step: name, instructions, skills, provider, model, effort, routes, fresh.";
+    StepMove(StepMoveParams) => "step.move", ["workflow", "step", "to"],
+        "Move a Step to a place in the outline (0 is first).";
+    StepDelete(StepParams) => "step.delete", ["workflow", "step"],
+        "Delete a Step; routes to it stay, flagged.";
 }
 
 /// No parameters.
@@ -408,6 +428,10 @@ pub struct TaskStartParams {
     /// The CLI sends its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
+    /// Run it through this Workflow's latest saved version (`w-1`);
+    /// else it is one-off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -439,4 +463,67 @@ pub struct ReportOutcomeParams {
     /// The reporting Worker's own Thread: the CLI sends
     /// `FERRITE_THREAD_ID`, so its Task is known from where it runs.
     pub worker: ThreadId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowCreateParams {
+    /// What it starts from: `blank` (the default) or
+    /// `issue_to_reviewed_pr`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<crate::factory::Template>,
+    /// Its name; the template's when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The Project (`project.list`'s `id`); else the Project holding `cwd`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// The CLI sends its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowParams {
+    /// The Workflow's id, as `workflow.list` gives it (`w-1`).
+    pub workflow: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowRenameParams {
+    pub workflow: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StepAddParams {
+    pub workflow: String,
+    /// The Step it goes after (`s-1`); else last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StepParams {
+    pub workflow: String,
+    /// The Step's id (`s-1`).
+    pub step: String,
+}
+
+/// Each change given is made; an empty model or effort is the
+/// Provider's default. Routes: `next`, `step:<id>`, `complete`, `human`
+/// or `coordinator`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StepEditParams {
+    pub workflow: String,
+    pub step: String,
+    #[serde(flatten)]
+    pub change: crate::factory::StepChange,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StepMoveParams {
+    pub workflow: String,
+    pub step: String,
+    /// Its place in the outline, 0 first.
+    pub to: usize,
 }

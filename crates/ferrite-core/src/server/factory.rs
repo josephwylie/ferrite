@@ -13,12 +13,12 @@ use serde_json::{json, Value};
 use super::Server;
 use crate::api::schema::{
     AgentPromptParams, ReportOutcomeParams, ReportedOutcome, TaskListParams, TaskParams,
-    TaskStartParams,
+    TaskStartParams, WorkflowCreateParams,
 };
 use crate::api::{ApiError, Code};
 use crate::engine::{Launch, ProviderChoice};
 use crate::factory::{self, Agent, Answer, Command, Effect, Outcome, Seen};
-use crate::protocol::{Done, ServerMessage, TaskAction, WireError};
+use crate::protocol::{Done, ServerMessage, TaskAction, WireError, WorkflowAction};
 use crate::settings::Settings;
 use crate::workspace::registry::ProjectId;
 use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
@@ -40,6 +40,17 @@ pub(super) fn load(store_dir: &std::path::Path) -> factory::Factory {
         );
         factory::Factory::in_memory()
     })
+}
+
+/// A Factory answer as a window's reply.
+fn done(answer: Answer) -> Done {
+    match answer {
+        Answer::Task(task) => Done::Task { task },
+        Answer::Changed(changed) => Done::Changed { changed },
+        Answer::Workflow(workflow) => Done::Workflow { workflow },
+        Answer::Step(step) => Done::Step { step },
+        Answer::Version(version) => Done::Version { version },
+    }
 }
 
 /// A one-off Task's Worker: the operator's default Provider, its model
@@ -112,9 +123,11 @@ impl Server {
                 project,
                 agent,
                 branch,
+                worktree,
                 prompt,
             } => {
-                let command = match self.start_worker(&task, project, agent, branch, prompt) {
+                let command = match self.start_worker(&task, project, agent, branch, worktree, prompt)
+                {
                     Ok((thread, worktree)) => Command::WorkerStarted {
                         task,
                         thread,
@@ -171,14 +184,16 @@ impl Server {
         None
     }
 
-    /// Open the Task's Worker in a new worktree of its Project on its
-    /// branch, owned by it, titled as it, and give it its first prompt.
+    /// Open the Task's Worker in its worktree (a new one of its Project on
+    /// its branch, when it has none yet), owned by it, titled as it and
+    /// its Step, and give it its first prompt.
     fn start_worker(
         &mut self,
         task: &str,
         project: ProjectId,
         agent: Agent,
         branch: String,
+        worktree: Option<std::path::PathBuf>,
         prompt: String,
     ) -> Result<(ThreadId, Option<std::path::PathBuf>), String> {
         let repo = self
@@ -187,7 +202,18 @@ impl Server {
             .project(project)
             .map(|project| project.root.clone())
             .ok_or("its Project is gone")?;
-        let title = self.factory.task(task).map(|task| task.title.clone());
+        let title = self.factory.task(task).map(|task| match task.current_step() {
+            Some(step) => format!("{} \u{b7} {}", task.title, step.name),
+            None => task.title.clone(),
+        });
+        let workspace = match worktree.filter(|path| path.exists()) {
+            Some(path) => WorkspaceChoice::ExistingWorktree { repo, path },
+            None => WorkspaceChoice::NamedWorktree {
+                repo,
+                branch,
+                base: None,
+            },
+        };
         let launch = Launch {
             project: Some(project),
             owner: Some(ThreadOwner::Task(task.to_string())),
@@ -201,11 +227,7 @@ impl Server {
                     model: agent.model,
                 },
                 agent.effort,
-                WorkspaceChoice::NamedWorktree {
-                    repo,
-                    branch,
-                    base: None,
-                },
+                workspace,
                 launch,
             )
             .map_err(|error| error.to_string())?;
@@ -293,17 +315,17 @@ impl Server {
                 project,
                 instructions,
                 request,
+                workflow,
             } => {
                 let start = Command::Start {
                     project,
                     instructions,
                     agent: self.factory_agent.clone(),
                     request,
+                    workflow,
                 };
-                match self.factory_command(start).map_err(wire)? {
-                    (Answer::Task(task), _) => Ok(Some(Done::Task { task })),
-                    (Answer::Changed(changed), _) => Ok(Some(Done::Changed { changed })),
-                }
+                let (answer, _) = self.factory_command(start).map_err(wire)?;
+                Ok(Some(done(answer)))
             }
             TaskAction::Stop { task } => self.task_changed(Command::Stop { task }).map_err(wire),
             TaskAction::Resume { task } => {
@@ -325,10 +347,71 @@ impl Server {
     }
 
     fn task_changed(&mut self, command: Command) -> Result<Option<Done>, ApiError> {
-        match self.factory_command(command)? {
-            (Answer::Changed(changed), _) => Ok(Some(Done::Changed { changed })),
-            (Answer::Task(task), _) => Ok(Some(Done::Task { task })),
+        let (answer, _) = self.factory_command(command)?;
+        Ok(Some(done(answer)))
+    }
+
+    /// What is known installed, for a save's check: each Provider's
+    /// models as its agents announced them, and the skills a window found.
+    fn catalog(&self, skills: Vec<(crate::store::Provider, Vec<String>)>) -> factory::Catalog {
+        factory::Catalog {
+            models: crate::store::Provider::ALL
+                .into_iter()
+                .map(|provider| (provider, self.engine.announced_models(provider)))
+                .collect(),
+            skills,
         }
+    }
+
+    /// A window's Workflow authoring command.
+    pub(super) fn workflow_command(
+        &mut self,
+        action: &WorkflowAction,
+    ) -> Result<Option<Done>, WireError> {
+        let wire = |error: ApiError| WireError {
+            code: crate::protocol::ErrorCode::Failed,
+            message: error.message,
+        };
+        let command = match action.clone() {
+            WorkflowAction::Create { project, template } => Command::CreateWorkflow {
+                project,
+                template,
+                agent: self.factory_agent.clone(),
+            },
+            WorkflowAction::Rename { workflow, name } => Command::RenameWorkflow { workflow, name },
+            WorkflowAction::AddStep { workflow, after } => Command::AddStep {
+                workflow,
+                after,
+                agent: self.factory_agent.clone(),
+            },
+            WorkflowAction::EditStep {
+                workflow,
+                step,
+                change,
+            } => Command::EditStep {
+                workflow,
+                step,
+                change,
+            },
+            WorkflowAction::MoveStep { workflow, step, to } => {
+                Command::MoveStep { workflow, step, to }
+            }
+            WorkflowAction::DeleteStep { workflow, step } => {
+                Command::DeleteStep { workflow, step }
+            }
+            WorkflowAction::Save { workflow, skills } => Command::SaveWorkflow {
+                workflow,
+                catalog: self.catalog(skills),
+            },
+            WorkflowAction::Unknown => {
+                return Err(WireError {
+                    code: crate::protocol::ErrorCode::Unsupported,
+                    message: "this server does not know that Workflow command".into(),
+                })
+            }
+        };
+        let (answer, _) = self.factory_command(command).map_err(wire)?;
+        Ok(Some(done(answer)))
     }
 
     // ------------------------------------------------------------ the API
@@ -341,8 +424,119 @@ impl Server {
     }
 
     pub(super) fn api_task_start(&mut self, params: TaskStartParams) -> Result<Value, ApiError> {
-        let project = match (&params.project, &params.cwd) {
-            (Some(project), _) => self.project(project)?,
+        let project = self.project_of(params.project.as_deref(), params.cwd.as_deref())?;
+        let start = Command::Start {
+            project,
+            instructions: params.instructions,
+            agent: self.factory_agent.clone(),
+            request: None,
+            workflow: params.workflow,
+        };
+        match self.factory_command(start)? {
+            (Answer::Task(task), _) => Ok(json!({ "task": self.task_json(&task)? })),
+            _ => Err(ApiError::new(Code::Failed, "no Task was made")),
+        }
+    }
+
+    pub(super) fn api_workflow_create(
+        &mut self,
+        params: WorkflowCreateParams,
+    ) -> Result<Value, ApiError> {
+        let project = self.project_of(params.project.as_deref(), params.cwd.as_deref())?;
+        let create = Command::CreateWorkflow {
+            project,
+            template: params.template.unwrap_or(factory::Template::Blank),
+            agent: self.factory_agent.clone(),
+        };
+        let (Answer::Workflow(workflow), _) = self.factory_command(create)? else {
+            return Err(ApiError::new(Code::Failed, "no Workflow was made"));
+        };
+        if let Some(name) = params.name {
+            self.factory_command(Command::RenameWorkflow {
+                workflow: workflow.clone(),
+                name,
+            })?;
+        }
+        self.api_workflow_answer(&workflow, None)
+    }
+
+    pub(super) fn api_workflow_list(&self, params: TaskListParams) -> Result<Value, ApiError> {
+        let project = params
+            .project
+            .as_deref()
+            .map(|project| self.project(project))
+            .transpose()?;
+        let board = self.factory.board();
+        let workflows: Vec<&factory::Workflow> = board
+            .workflows
+            .iter()
+            .filter(|workflow| project.is_none_or(|project| workflow.project == project))
+            .collect();
+        Ok(json!({ "workflows": workflows }))
+    }
+
+    /// A Workflow and its draft's problems, as far as the Server knows
+    /// what is installed; `extra` joins the answer.
+    pub(super) fn api_workflow_answer(
+        &self,
+        workflow: &str,
+        extra: Option<(&str, Value)>,
+    ) -> Result<Value, ApiError> {
+        let found = self.factory.workflow(workflow).ok_or_else(|| {
+            ApiError::new(Code::UnknownWorkflow, "no Workflow has that id")
+        })?;
+        let problems = found.draft.problems(&self.catalog(Vec::new()));
+        let mut answer = json!({ "workflow": found, "problems": problems });
+        if let Some((key, value)) = extra {
+            answer[key] = value;
+        }
+        Ok(answer)
+    }
+
+    /// An authoring command from the API, answered with the Workflow.
+    pub(super) fn api_author(&mut self, command: Command) -> Result<Value, ApiError> {
+        let workflow = match &command {
+            Command::RenameWorkflow { workflow, .. }
+            | Command::AddStep { workflow, .. }
+            | Command::EditStep { workflow, .. }
+            | Command::MoveStep { workflow, .. }
+            | Command::DeleteStep { workflow, .. } => workflow.clone(),
+            _ => unreachable!("only authoring commands"),
+        };
+        let (answer, _) = self.factory_command(command)?;
+        let extra = match answer {
+            Answer::Step(step) => Some(("step", json!(step))),
+            Answer::Changed(changed) => Some(("changed", json!(changed))),
+            _ => None,
+        };
+        self.api_workflow_answer(&workflow, extra)
+    }
+
+    pub(super) fn api_workflow_save(
+        &mut self,
+        workflow: String,
+        skills: Vec<(crate::store::Provider, Vec<String>)>,
+    ) -> Result<Value, ApiError> {
+        let save = Command::SaveWorkflow {
+            workflow: workflow.clone(),
+            catalog: self.catalog(skills),
+        };
+        let (answer, _) = self.factory_command(save)?;
+        let version = match answer {
+            Answer::Version(version) => version,
+            _ => 0,
+        };
+        self.api_workflow_answer(&workflow, Some(("version", json!(version))))
+    }
+
+    /// The Project named, or the one holding `cwd`.
+    fn project_of(
+        &self,
+        project: Option<&str>,
+        cwd: Option<&std::path::Path>,
+    ) -> Result<ProjectId, ApiError> {
+        match (project, cwd) {
+            (Some(project), _) => self.project(project),
             (None, Some(cwd)) => {
                 let cwd = dunce::canonicalize(cwd)
                     .map_err(|error| ApiError::new(Code::Failed, error.to_string()))?;
@@ -359,24 +553,12 @@ impl Server {
                             Code::ProjectNotFound,
                             "no Project holds that directory: open one with `project open`",
                         )
-                    })?
+                    })
             }
-            (None, None) => {
-                return Err(ApiError::new(
-                    Code::InvalidRequest,
-                    "name the Project, or a directory in it",
-                ))
-            }
-        };
-        let start = Command::Start {
-            project,
-            instructions: params.instructions,
-            agent: self.factory_agent.clone(),
-            request: None,
-        };
-        match self.factory_command(start)? {
-            (Answer::Task(task), _) => Ok(json!({ "task": self.task_json(&task)? })),
-            (Answer::Changed(_), _) => Err(ApiError::new(Code::Failed, "no Task was made")),
+            (None, None) => Err(ApiError::new(
+                Code::InvalidRequest,
+                "name the Project, or a directory in it",
+            )),
         }
     }
 

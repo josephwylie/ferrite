@@ -14,8 +14,10 @@
 //! effects that depend on it are handed out, and a change that cannot be
 //! written is not made. A repeated command or report changes nothing.
 //!
-//! This is the one-off slice (#220): a Task is a single Step run by one
-//! Worker on the operator's default Provider and model.
+//! A Task is one-off (a single Worker on the operator's default Provider
+//! and model, #220) or runs through the Steps of one saved version of a
+//! [`Workflow`] (#221), one Step at a time, each Step's Worker in the
+//! Task's one worktree.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -26,6 +28,13 @@ use serde::{Deserialize, Serialize};
 use crate::store::Provider;
 use crate::workspace::registry::ProjectId;
 use crate::ThreadId;
+
+mod workflow;
+
+pub use workflow::{
+    Catalog, Definition, Destination, Problem, Resolved, RouteKind, Step, StepChange, StepId,
+    Template, Version, Workflow, WorkflowId,
+};
 
 /// A Task's id: `t-<n>`, never given twice by one Server. A Worker's
 /// owner names it (`{"task": "t-1"}`).
@@ -162,6 +171,41 @@ pub struct Task {
     /// The at-rest rule's memory of the current turn.
     #[serde(default, skip_serializing_if = "Watch::is_fresh")]
     pub watch: Watch,
+    /// The Workflow version it runs, kept whole; none for a one-off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<Run>,
+    /// The Step it is at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<StepId>,
+    /// What each Step reported, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub results: Vec<StepResult>,
+    /// Each visited Step's Worker, which a return to it continues.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workers: Vec<StepWorker>,
+}
+
+/// The version of a Workflow a Task keeps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Run {
+    pub id: WorkflowId,
+    pub version: u32,
+    pub definition: Definition,
+}
+
+/// What one Step of a Task reported.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepResult {
+    pub step: StepId,
+    /// The Step's name when it reported.
+    pub name: String,
+    pub outcome: Outcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepWorker {
+    pub step: StepId,
+    pub thread: ThreadId,
 }
 
 /// What the at-rest rule remembers of a working Worker.
@@ -196,6 +240,9 @@ fn is_zero(count: &u64) -> bool {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Board {
     pub tasks: Vec<Task>,
+    /// Every Project's Workflows.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflows: Vec<Workflow>,
 }
 
 impl Board {
@@ -215,6 +262,16 @@ impl Board {
     pub fn task(&self, id: &str) -> Option<&Task> {
         self.tasks.iter().find(|task| task.id == id)
     }
+
+    pub fn workflows_of(&self, project: ProjectId) -> impl Iterator<Item = &Workflow> {
+        self.workflows
+            .iter()
+            .filter(move |workflow| workflow.project == project)
+    }
+
+    pub fn workflow(&self, id: &str) -> Option<&Workflow> {
+        self.workflows.iter().find(|workflow| workflow.id == id)
+    }
 }
 
 /// What a Worker reports.
@@ -228,13 +285,53 @@ pub enum Outcome {
 /// Every change, whoever asks.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
-    /// A one-off Task: one Worker on `agent`, with `instructions`.
-    /// `request`, when given, makes a repeat the same Task.
+    /// A Task with `instructions`: one-off (one Worker on `agent`), or on
+    /// `workflow`'s latest saved version. `request`, when given, makes a
+    /// repeat the same Task.
     Start {
         project: ProjectId,
         instructions: String,
         agent: Agent,
         request: Option<String>,
+        workflow: Option<WorkflowId>,
+    },
+    /// A new Workflow from `template`, its Steps on `agent`.
+    CreateWorkflow {
+        project: ProjectId,
+        template: Template,
+        agent: Agent,
+    },
+    RenameWorkflow {
+        workflow: WorkflowId,
+        name: String,
+    },
+    /// A new Step on `agent`, after `after` (else last).
+    AddStep {
+        workflow: WorkflowId,
+        after: Option<StepId>,
+        agent: Agent,
+    },
+    EditStep {
+        workflow: WorkflowId,
+        step: StepId,
+        change: StepChange,
+    },
+    /// Move a Step to index `to` of the outline.
+    MoveStep {
+        workflow: WorkflowId,
+        step: StepId,
+        to: usize,
+    },
+    /// Delete a Step; routes to it stay, flagged.
+    DeleteStep {
+        workflow: WorkflowId,
+        step: StepId,
+    },
+    /// Save the draft as the next version, if it has no problems against
+    /// `catalog`. Starts nothing.
+    SaveWorkflow {
+        workflow: WorkflowId,
+        catalog: Catalog,
     },
     /// The Server started the Worker a [`Effect::StartWorker`] asked for.
     WorkerStarted {
@@ -271,6 +368,10 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
     Task(TaskId),
+    Workflow(WorkflowId),
+    Step(StepId),
+    /// The version a save made, or the latest when nothing changed.
+    Version(u32),
     /// Whether the command changed anything: a repeat does not.
     Changed(bool),
 }
@@ -278,6 +379,8 @@ pub enum Answer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefusalCode {
     UnknownTask,
+    UnknownWorkflow,
+    UnknownStep,
     /// The Thread is no Task's Worker.
     NotAWorker,
     /// Not in the Task's current state.
@@ -322,13 +425,14 @@ pub struct Seen {
 /// What the Server carries out, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
-    /// Start an owned Thread for `task` on `agent`, in a new worktree on
-    /// `branch`, and send it `prompt`.
+    /// Start an owned Thread for `task` on `agent`, in its `worktree`, or
+    /// a new one on `branch` when it has none yet, and send it `prompt`.
     StartWorker {
         task: TaskId,
         project: ProjectId,
         agent: Agent,
         branch: String,
+        worktree: Option<PathBuf>,
         prompt: String,
     },
     Prompt {
@@ -362,6 +466,15 @@ struct State {
     /// The next Task's number.
     next: u64,
     tasks: Vec<Task>,
+    /// The next Workflow's number.
+    #[serde(default = "one")]
+    next_workflow: u64,
+    #[serde(default)]
+    workflows: Vec<Workflow>,
+}
+
+fn one() -> u64 {
+    1
 }
 
 pub struct Factory {
@@ -380,6 +493,8 @@ impl Factory {
                 version: SCHEMA_VERSION,
                 next: 1,
                 tasks: Vec::new(),
+                next_workflow: 1,
+                workflows: Vec::new(),
             },
             path: None,
             revision: 0,
@@ -458,7 +573,12 @@ impl Factory {
     pub fn board(&self) -> Board {
         Board {
             tasks: self.state.tasks.clone(),
+            workflows: self.state.workflows.clone(),
         }
+    }
+
+    pub fn workflow(&self, id: &str) -> Option<&Workflow> {
+        self.state.workflows.iter().find(|workflow| workflow.id == id)
     }
 
     pub fn revision(&self) -> u64 {
@@ -469,13 +589,17 @@ impl Factory {
         self.state.tasks.iter().find(|task| task.id == id)
     }
 
-    /// The Task `thread` is the Worker of.
+    /// The Task `thread` is (or was) a Worker of.
     pub fn task_of(&self, thread: ThreadId) -> Option<&Task> {
         self.state
             .tasks
             .iter()
-            .find(|task| task.worker == Some(thread))
+            .find(|task| task.had_worker(thread))
     }
+}
+
+fn unknown_step() -> Refusal {
+    Refusal::new(RefusalCode::UnknownStep, "the workflow has no Step with that id")
 }
 
 fn unknown_task() -> Refusal {
@@ -487,6 +611,16 @@ fn not_a_worker() -> Refusal {
 }
 
 impl Task {
+    /// `thread` is one of its Workers, current or not.
+    pub fn had_worker(&self, thread: ThreadId) -> bool {
+        self.worker == Some(thread) || self.workers.iter().any(|each| each.thread == thread)
+    }
+
+    /// The Step it is at, in the version it keeps.
+    pub fn current_step(&self) -> Option<&Step> {
+        self.workflow.as_ref()?.definition.step(self.step.as_deref()?)
+    }
+
     fn note(&mut self, at_ms: i64, by: Actor, text: impl Into<String>) {
         self.activity.push(Entry {
             at_ms,
@@ -526,8 +660,131 @@ impl State {
     fn worker_task(&mut self, worker: ThreadId) -> Result<&mut Task, Refusal> {
         self.tasks
             .iter_mut()
-            .find(|task| task.worker == Some(worker))
+            .find(|task| task.had_worker(worker))
             .ok_or_else(not_a_worker)
+    }
+
+    fn workflow_mut(&mut self, id: &str) -> Result<&mut Workflow, Refusal> {
+        self.workflows
+            .iter_mut()
+            .find(|workflow| workflow.id == id)
+            .ok_or_else(|| Refusal::new(RefusalCode::UnknownWorkflow, "no Workflow has that id"))
+    }
+
+    fn draft_step(&mut self, workflow: &str, step: &str) -> Result<&mut Step, Refusal> {
+        self.workflow_mut(workflow)?
+            .draft
+            .step_mut(step)
+            .ok_or_else(unknown_step)
+    }
+
+    /// A Workflow authoring command.
+    fn author(&mut self, command: Command, now_ms: i64) -> Result<Answer, Refusal> {
+        match command {
+            Command::CreateWorkflow {
+                project,
+                template,
+                agent,
+            } => {
+                let id = format!("w-{}", self.next_workflow);
+                self.next_workflow += 1;
+                let mut made = Workflow {
+                    id: id.clone(),
+                    project,
+                    draft: Definition {
+                        name: String::new(),
+                        steps: Vec::new(),
+                    },
+                    versions: Vec::new(),
+                    next_step: 1,
+                };
+                workflow::from_template(template, &mut made, &agent);
+                self.workflows.push(made);
+                Ok(Answer::Workflow(id))
+            }
+            Command::RenameWorkflow { workflow, name } => {
+                let draft = &mut self.workflow_mut(&workflow)?.draft;
+                let changed = draft.name != name;
+                draft.name = name;
+                Ok(Answer::Changed(changed))
+            }
+            Command::AddStep {
+                workflow,
+                after,
+                agent,
+            } => {
+                let made = self.workflow_mut(&workflow)?;
+                let at = match &after {
+                    Some(after) => {
+                        made.draft
+                            .steps
+                            .iter()
+                            .position(|step| step.id == *after)
+                            .ok_or_else(unknown_step)?
+                            + 1
+                    }
+                    None => made.draft.steps.len(),
+                };
+                let id = made.new_step_id();
+                made.draft
+                    .steps
+                    .insert(at, workflow::new_step(id.clone(), "New agent", agent));
+                Ok(Answer::Step(id))
+            }
+            Command::EditStep {
+                workflow,
+                step,
+                change,
+            } => {
+                let step = self.draft_step(&workflow, &step)?;
+                let before = step.clone();
+                change.apply(step);
+                Ok(Answer::Changed(*step != before))
+            }
+            Command::MoveStep { workflow, step, to } => {
+                let steps = &mut self.workflow_mut(&workflow)?.draft.steps;
+                let from = steps
+                    .iter()
+                    .position(|each| each.id == step)
+                    .ok_or_else(unknown_step)?;
+                let to = to.min(steps.len() - 1);
+                let moved = steps.remove(from);
+                steps.insert(to, moved);
+                Ok(Answer::Changed(from != to))
+            }
+            Command::DeleteStep { workflow, step } => {
+                let steps = &mut self.workflow_mut(&workflow)?.draft.steps;
+                let at = steps
+                    .iter()
+                    .position(|each| each.id == step)
+                    .ok_or_else(unknown_step)?;
+                steps.remove(at);
+                Ok(Answer::Changed(true))
+            }
+            Command::SaveWorkflow { workflow, catalog } => {
+                let made = self.workflow_mut(&workflow)?;
+                let problems = made.draft.problems(&catalog);
+                if !problems.is_empty() {
+                    let listed: Vec<String> =
+                        problems.into_iter().map(|problem| problem.message).collect();
+                    return Err(Refusal::new(
+                        RefusalCode::Invalid,
+                        format!("the workflow cannot be saved: {}", listed.join(" ")),
+                    ));
+                }
+                if !made.unsaved() {
+                    return Ok(Answer::Version(made.latest().map_or(0, |v| v.version)));
+                }
+                let version = made.latest().map_or(1, |latest| latest.version + 1);
+                made.versions.push(Version {
+                    version,
+                    saved_ms: now_ms,
+                    definition: made.draft.clone(),
+                });
+                Ok(Answer::Version(version))
+            }
+            _ => unreachable!("only authoring commands"),
+        }
     }
 
     fn command(
@@ -542,6 +799,7 @@ impl State {
                 instructions,
                 agent,
                 request,
+                workflow,
             } => {
                 if let Some(task) = request.as_ref().and_then(|request| {
                     self.tasks
@@ -557,6 +815,41 @@ impl State {
                         "a Task needs instructions",
                     ));
                 };
+                let run = match workflow {
+                    None => None,
+                    Some(id) => {
+                        let made = self
+                            .workflows
+                            .iter()
+                            .find(|made| made.id == id)
+                            .ok_or_else(|| {
+                                Refusal::new(
+                                    RefusalCode::UnknownWorkflow,
+                                    "no Workflow has that id",
+                                )
+                            })?;
+                        if made.project != project {
+                            return Err(Refusal::new(
+                                RefusalCode::Invalid,
+                                "that Workflow is another Project's",
+                            ));
+                        }
+                        let version = made.latest().ok_or_else(|| {
+                            Refusal::new(
+                                RefusalCode::Invalid,
+                                "the workflow has no saved version: save it first",
+                            )
+                        })?;
+                        Some(Run {
+                            id: made.id.clone(),
+                            version: version.version,
+                            definition: version.definition.clone(),
+                        })
+                    }
+                };
+                let first = run
+                    .as_ref()
+                    .and_then(|run| run.definition.steps.first().cloned());
                 let id = format!("t-{}", self.next);
                 self.next += 1;
                 let mut task = Task {
@@ -566,7 +859,7 @@ impl State {
                     project,
                     instructions,
                     status: Status::Queued,
-                    agent,
+                    agent: first.as_ref().map_or(agent, |step| step.agent.clone()),
                     worker: None,
                     worktree: None,
                     result: None,
@@ -575,8 +868,19 @@ impl State {
                     created_ms: now_ms,
                     request,
                     watch: Watch::default(),
+                    step: first.map(|step| step.id),
+                    workflow: run,
+                    results: Vec::new(),
+                    workers: Vec::new(),
                 };
-                task.note(now_ms, Actor::Operator, "Started the task");
+                let started = match &task.workflow {
+                    Some(run) => format!(
+                        "Started the task on {} (version {})",
+                        run.definition.name, run.version
+                    ),
+                    None => "Started the task".into(),
+                };
+                task.note(now_ms, Actor::Operator, started);
                 self.tasks.push(task);
                 Ok(Answer::Task(id))
             }
@@ -590,7 +894,13 @@ impl State {
                     return Ok(Answer::Changed(false));
                 }
                 task.worker = Some(thread);
-                task.worktree = worktree;
+                if task.worktree.is_none() {
+                    task.worktree = worktree;
+                }
+                if let Some(step) = task.step.clone() {
+                    task.workers.retain(|each| each.step != step);
+                    task.workers.push(StepWorker { step, thread });
+                }
                 Ok(Answer::Changed(true))
             }
             Command::WorkerFailed { task, why } => {
@@ -609,8 +919,14 @@ impl State {
             }
             Command::Report { worker, outcome } => {
                 let task = self.worker_task(worker)?;
-                if task.status != Status::Working {
+                // A Worker no longer at its Task's Step (one Step runs at
+                // a time) reports into the past.
+                if task.status != Status::Working || task.worker != Some(worker) {
                     return Ok(Answer::Changed(false));
+                }
+                if task.workflow.is_some() {
+                    route(task, outcome, now_ms, effects);
+                    return Ok(Answer::Changed(true));
                 }
                 match outcome {
                     Outcome::Finished { summary } => {
@@ -687,14 +1003,23 @@ impl State {
                     ));
                 }
                 let task = self.tasks.remove(at);
-                if let Some(thread) = task.worker {
-                    effects.push(Effect::Park { thread });
+                let mut parked = Vec::new();
+                for thread in task
+                    .worker
+                    .into_iter()
+                    .chain(task.workers.iter().map(|each| each.thread))
+                {
+                    if !parked.contains(&thread) {
+                        parked.push(thread);
+                        effects.push(Effect::Park { thread });
+                    }
                 }
                 if let Some(path) = task.worktree {
                     effects.push(Effect::RemoveWorktree { path });
                 }
                 Ok(Answer::Changed(true))
             }
+            authoring => self.author(authoring, now_ms),
         }
     }
 
@@ -702,18 +1027,24 @@ impl State {
         for task in &mut self.tasks {
             match task.status {
                 Status::Queued => {
-                    task.note(
-                        now_ms,
-                        Actor::Ferrite,
-                        format!("Started an agent on {}", agent_label(&task.agent)),
-                    );
-                    effects.push(Effect::StartWorker {
-                        task: task.id.clone(),
-                        project: task.project,
-                        agent: task.agent.clone(),
-                        branch: task.branch.clone(),
-                        prompt: first_prompt(task),
-                    });
+                    match task.current_step().cloned() {
+                        Some(step) => start_step(task, &step, now_ms, effects),
+                        None => {
+                            task.note(
+                                now_ms,
+                                Actor::Ferrite,
+                                format!("Started an agent on {}", agent_label(&task.agent)),
+                            );
+                            effects.push(Effect::StartWorker {
+                                task: task.id.clone(),
+                                project: task.project,
+                                agent: task.agent.clone(),
+                                branch: task.branch.clone(),
+                                worktree: task.worktree.clone(),
+                                prompt: first_prompt(task),
+                            });
+                        }
+                    }
                     task.enter(Status::Working, effects);
                 }
                 Status::Working => {
@@ -726,6 +1057,104 @@ impl State {
             }
         }
     }
+}
+
+/// A Workflow Task's Worker reported: record it and follow the Step's
+/// route. Moving on between Steps is silent; an end is told.
+fn route(task: &mut Task, outcome: Outcome, now_ms: i64, effects: &mut Vec<Effect>) {
+    let Some(step) = task.current_step().cloned() else {
+        return;
+    };
+    let (said, route, text) = match &outcome {
+        Outcome::Finished { summary } => ("finished", &step.on_finished, summary.clone()),
+        Outcome::Unable { tried } => ("could not finish", &step.on_unable, tried.clone()),
+    };
+    task.note(now_ms, Actor::Agent, format!("{} {said}: {text}", step.name));
+    task.results.push(StepResult {
+        step: step.id.clone(),
+        name: step.name.clone(),
+        outcome: outcome.clone(),
+    });
+    let definition = task
+        .workflow
+        .as_ref()
+        .map(|run| run.definition.clone())
+        .unwrap_or_else(|| Definition {
+            name: String::new(),
+            steps: Vec::new(),
+        });
+    match definition.resolve(&step.id, route) {
+        Resolved::Step(next) => {
+            let next = next.clone();
+            task.step = Some(next.id.clone());
+            task.agent = next.agent.clone();
+            task.reason = None;
+            task.watch = Watch::default();
+            let earlier = task
+                .workers
+                .iter()
+                .find(|each| each.step == next.id)
+                .map(|each| each.thread);
+            match earlier {
+                Some(thread) if !next.fresh => {
+                    task.note(
+                        now_ms,
+                        Actor::Ferrite,
+                        format!("Back to {}: its agent continues", next.name),
+                    );
+                    task.worker = Some(thread);
+                    task.watch.prompt = Some(return_prompt(task, &next));
+                }
+                Some(old) => {
+                    effects.push(Effect::Park { thread: old });
+                    task.workers.retain(|each| each.step != next.id);
+                    start_step(task, &next, now_ms, effects);
+                }
+                None => start_step(task, &next, now_ms, effects),
+            }
+        }
+        Resolved::Complete => {
+            task.result = Some(text);
+            task.reason = None;
+            task.enter(Status::Completed, effects);
+        }
+        Resolved::Human => {
+            task.reason = Some(text);
+            task.enter(Status::NeedsHuman, effects);
+        }
+        Resolved::Coordinator => {
+            task.reason = Some(format!(
+                "{} {said} and routes to the Coordinator, which this Ferrite does not run                  yet: {text}",
+                step.name
+            ));
+            task.enter(Status::NeedsHuman, effects);
+        }
+        Resolved::Broken => {
+            task.reason = Some(format!(
+                "{}'s route leads to an agent that is not in this version: {text}",
+                step.name
+            ));
+            task.enter(Status::NeedsHuman, effects);
+        }
+    }
+}
+
+/// Start a new Worker for `step` in the Task's worktree (or a new one).
+fn start_step(task: &mut Task, step: &Step, now_ms: i64, effects: &mut Vec<Effect>) {
+    task.worker = None;
+    task.note(
+        now_ms,
+        Actor::Ferrite,
+        format!("Started {} on {}", step.name, agent_label(&step.agent)),
+    );
+    effects.push(Effect::StartWorker {
+        task: task.id.clone(),
+        project: task.project,
+        agent: step.agent.clone(),
+        branch: task.branch.clone(),
+        worktree: task.worktree.clone(),
+        prompt: step_prompt(task, step),
+    });
 }
 
 /// A Worker is at rest when its turn has ended and nothing of its Session
@@ -804,6 +1233,64 @@ fn first_prompt(task: &Task) -> String {
         id = task.id,
         branch = task.branch,
         instructions = task.instructions,
+    )
+}
+
+const REPORTING: &str = "When you are done, report the outcome with one command:\n\n    \
+     \"${FERRITE_BIN:-ferrite}\" report outcome finished \"<one line: what you did>\"\n\nIf you \
+     cannot finish, report what you tried:\n\n    \"${FERRITE_BIN:-ferrite}\" report outcome \
+     unable \"<what you tried and what stopped you>\"\n\nThe outcome is read only from that \
+     command, never from your messages.";
+
+fn said(result: &StepResult) -> String {
+    match &result.outcome {
+        Outcome::Finished { summary } => format!("- {} finished: {summary}", result.name),
+        Outcome::Unable { tried } => format!("- {} could not finish: {tried}", result.name),
+    }
+}
+
+/// A Step's Worker's first prompt: who it is, its instructions and
+/// skills, the Task's request and what the Steps before it reported.
+fn step_prompt(task: &Task, step: &Step) -> String {
+    let mut prompt = format!(
+        "You are the \"{name}\" agent on Ferrite Factory task {id}, working in the task's own \
+         worktree on branch `{branch}`, which the task's other agents share.\n\n\
+         ## Your instructions\n\n{instructions}\n",
+        name = step.name,
+        id = task.id,
+        branch = task.branch,
+        instructions = step.instructions.trim(),
+    );
+    if !step.skills.is_empty() {
+        prompt.push_str(&format!(
+            "\n## Required skills\n\nUse these skills: {}\n",
+            step.skills.join(", ")
+        ));
+    }
+    prompt.push_str(&format!("\n## The task\n\n{}\n", task.instructions));
+    if !task.results.is_empty() {
+        let earlier: Vec<String> = task.results.iter().map(said).collect();
+        prompt.push_str(&format!("\n## Earlier results\n\n{}\n", earlier.join("\n")));
+    }
+    prompt.push('\n');
+    prompt.push_str(REPORTING);
+    prompt
+}
+
+/// What a continued Worker is told when the Task returns to its Step:
+/// what the other Steps reported since it last did.
+fn return_prompt(task: &Task, step: &Step) -> String {
+    let last_own = task
+        .results
+        .iter()
+        .rposition(|result| result.step == step.id)
+        .map_or(0, |at| at + 1);
+    let news: Vec<String> = task.results[last_own..].iter().map(said).collect();
+    format!(
+        "The task is back with you, \"{name}\". Since you last reported:\n\n{news}\n\n\
+         Continue with your instructions in light of that.\n\n{REPORTING}",
+        name = step.name,
+        news = news.join("\n"),
     )
 }
 

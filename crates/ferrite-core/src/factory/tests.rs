@@ -29,6 +29,7 @@ fn start(factory: &mut Factory, instructions: &str) -> TaskId {
             instructions: instructions.into(),
             agent: agent(),
             request: None,
+            workflow: None,
         },
         0,
     ) {
@@ -141,6 +142,7 @@ fn a_repeated_start_is_one_task() {
         instructions: "Fix it".into(),
         agent: agent(),
         request: Some("click-1".into()),
+        workflow: None,
     };
     let first = factory.command(ask(), 0).unwrap();
     let again = factory.command(ask(), 1).unwrap();
@@ -157,6 +159,7 @@ fn empty_instructions_start_nothing() {
             instructions: "  \n".into(),
             agent: agent(),
             request: None,
+            workflow: None,
         },
         0,
     );
@@ -493,3 +496,5 @@ fn the_board_counts_what_needs_the_operator() {
     assert_eq!(factory.board().needs_you(project()), 1);
     assert_eq!(factory.board().needs_you(project_id(2)), 0);
 }
+
+mod workflows;

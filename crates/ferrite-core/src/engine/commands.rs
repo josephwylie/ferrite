@@ -290,6 +290,7 @@ impl Engine {
             | Op::Restart { .. }
             | Op::Stop { .. }
             | Op::Task { .. }
+            | Op::Workflow { .. }
             | Op::Unknown => Err(unknown()),
         }
     }

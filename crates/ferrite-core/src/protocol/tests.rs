@@ -748,6 +748,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         project,
                         instructions: "Fix the flaky login test".into(),
                         request: Some("board-1".into()),
+                        workflow: None,
                     },
                 },
             ),
@@ -790,6 +791,95 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         created_ms: 1_700_000_000_000,
                         request: None,
                         watch: Default::default(),
+                        workflow: None,
+                        step: None,
+                        results: Vec::new(),
+                        workers: Vec::new(),
+                    }],
+                    workflows: Vec::new(),
+                },
+            }),
+        ),
+        (
+            "command_task_start_workflow",
+            command(
+                21,
+                Op::Task {
+                    action: TaskAction::Start {
+                        project,
+                        instructions: "Fix the flaky login test".into(),
+                        request: Some("board-2".into()),
+                        workflow: Some("w-1".into()),
+                    },
+                },
+            ),
+        ),
+        (
+            "command_workflow_edit_step",
+            command(
+                22,
+                Op::Workflow {
+                    action: WorkflowAction::EditStep {
+                        workflow: "w-1".into(),
+                        step: "s-2".into(),
+                        change: crate::factory::StepChange {
+                            instructions: Some("Review the PR".into()),
+                            on_unable: Some(crate::factory::Destination::Step("s-1".into())),
+                            fresh: Some(true),
+                            ..Default::default()
+                        },
+                    },
+                },
+            ),
+        ),
+        (
+            "command_workflow_save",
+            command(
+                22,
+                Op::Workflow {
+                    action: WorkflowAction::Save {
+                        workflow: "w-1".into(),
+                        skills: vec![(crate::store::Provider::Claude, vec!["code-review".into()])],
+                    },
+                },
+            ),
+        ),
+        (
+            "reply_version",
+            Sample::Server(ServerMessage::Reply {
+                id: 22,
+                ok: Some(Done::Version { version: 2 }),
+                error: None,
+            }),
+        ),
+        (
+            "factory_workflows",
+            Sample::Server(ServerMessage::Factory {
+                revision: 4,
+                board: crate::factory::Board {
+                    tasks: Vec::new(),
+                    workflows: vec![crate::factory::Workflow {
+                        id: "w-1".into(),
+                        project,
+                        draft: crate::factory::Definition {
+                            name: "Docs fixes".into(),
+                            steps: vec![crate::factory::Step {
+                                id: "s-1".into(),
+                                name: "Writer".into(),
+                                instructions: "Fix the docs".into(),
+                                skills: vec!["docs".into()],
+                                agent: crate::factory::Agent {
+                                    provider: crate::store::Provider::Codex,
+                                    model: Some("gpt-5.5".into()),
+                                    effort: Some("high".into()),
+                                },
+                                on_finished: crate::factory::Destination::Complete,
+                                on_unable: crate::factory::Destination::Human,
+                                fresh: false,
+                            }],
+                        },
+                        versions: Vec::new(),
+                        next_step: 2,
                     }],
                 },
             }),

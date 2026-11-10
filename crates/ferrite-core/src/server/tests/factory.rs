@@ -331,3 +331,138 @@ fn a_task_is_stopped_resumed_and_deleted_leaving_dirty_work_alone() {
             .is_empty()
     );
 }
+
+/// AC (#221): a Workflow authored wholly from the CLI, with custom Step
+/// names, is saved as version 1 and that starts nothing; a Task on it
+/// runs its Steps one at a time, each Worker on its own Step's Provider,
+/// model and Effort, told its instructions and skills, the Task's request
+/// and the earlier Steps' results, in the Task's one worktree. Editing
+/// and saving version 2 while it runs changes nothing for it, and the
+/// last Step's plain (non-PR) result completes it.
+#[test]
+fn a_workflow_task_runs_each_step_with_its_own_agent_and_context() {
+    let (harness, project, repo) = factory_project("factory-workflow");
+    let mut caller = call(&harness);
+    let author = |method: &str, params: serde_json::Value| {
+        let (status, said, refused) = cli(&harness.api, method, params);
+        assert_eq!((status, refused.len()), (0, 0), "{method}: {refused:?}");
+        said[0]["result"].clone()
+    };
+    let made = author(
+        "workflow.create",
+        serde_json::json!({ "project": project, "name": "Release notes" }),
+    );
+    let workflow = made["workflow"]["id"].as_str().unwrap().to_string();
+    assert_eq!(made["workflow"]["draft"]["name"], "Release notes", "{made}");
+    let scout = made["workflow"]["draft"]["steps"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    author(
+        "step.edit",
+        serde_json::json!({
+            "workflow": workflow, "step": scout, "name": "Scout",
+            "instructions": "Map the code", "on_finished": "next",
+        }),
+    );
+    let added = author("step.add", serde_json::json!({ "workflow": workflow }));
+    let writer = added["step"].as_str().unwrap().to_string();
+    let edited = author(
+        "step.edit",
+        serde_json::json!({
+            "workflow": workflow, "step": writer, "name": "Writer",
+            "instructions": "Write the changelog", "skills": ["changelog"],
+            "provider": "codex", "model": "gpt-test", "effort": "high",
+            "on_finished": "complete",
+        }),
+    );
+    assert_eq!(edited["problems"], serde_json::json!([]), "{edited}");
+    let saved = author("workflow.save", serde_json::json!({ "workflow": workflow }));
+    assert_eq!(saved["version"], 1, "{saved}");
+    assert!(harness.sessions.try_recv().is_err(), "saving starts nothing");
+
+    let (status, said, refused) = cli(
+        &harness.api,
+        "task.start",
+        serde_json::json!({
+            "instructions": "Release notes for 2.0", "cwd": repo, "workflow": workflow,
+        }),
+    );
+    assert_eq!((status, refused.len()), (0, 0), "{refused:?}");
+    let task = started(&said);
+    let _first = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .expect("Scout's Worker");
+    let scouting = worker_of(&mut caller, &task);
+    let told = read(&mut caller, scouting);
+    assert!(told.contains("Map the code"), "{told}");
+    assert!(told.contains("Release notes for 2.0"), "{told}");
+    assert!(harness.sessions.try_recv().is_err(), "one Step at a time");
+
+    author(
+        "step.edit",
+        serde_json::json!({
+            "workflow": workflow, "step": writer, "instructions": "Write it twice",
+        }),
+    );
+    let again = author("workflow.save", serde_json::json!({ "workflow": workflow }));
+    assert_eq!(again["version"], 2, "{again}");
+
+    let (status, _, refused) = cli(
+        &harness.api,
+        "report.outcome",
+        serde_json::json!({
+            "outcome": "finished", "summary": "Found three modules", "worker": scouting,
+        }),
+    );
+    assert_eq!((status, refused.len()), (0, 0), "{refused:?}");
+    let _second = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .expect("Writer's Worker");
+    let moved = task_until(&mut caller, &task, |task| {
+        task["worker"].is_u64() && task["worker"] != serde_json::json!(scouting)
+    });
+    assert_eq!(moved["status"], "working", "{moved}");
+    assert_eq!(moved["workflow"]["version"], 1, "it keeps its version");
+    let writing = ThreadId::new(moved["worker"].as_u64().unwrap());
+    let told = read(&mut caller, writing);
+    for expected in [
+        "Write the changelog",
+        "changelog",
+        "Release notes for 2.0",
+        "Found three modules",
+        "Writer",
+    ] {
+        assert!(told.contains(expected), "{expected}: {told}");
+    }
+    assert!(!told.contains("twice"), "version 1's instructions: {told}");
+    let launches = harness.launches.lock().unwrap().clone();
+    assert_eq!(
+        launches.last(),
+        Some(&(Provider::Codex, Some("gpt-test".into()), Some("high".into()))),
+        "{launches:?}"
+    );
+    let tree = |thread: ThreadId, caller: &mut Caller| {
+        caller.answer("t", "thread.get", serde_json::json!({ "thread": thread }))["result"]
+            ["thread"]["worktree"]
+            .clone()
+    };
+    assert_eq!(
+        tree(writing, &mut caller),
+        tree(scouting, &mut caller),
+        "one shared worktree"
+    );
+
+    cli(
+        &harness.api,
+        "report.outcome",
+        serde_json::json!({
+            "outcome": "finished", "summary": "Wrote CHANGELOG.md", "worker": writing,
+        }),
+    );
+    let done = task_until(&mut caller, &task, |task| task["status"] == "completed");
+    assert_eq!(done["result"], "Wrote CHANGELOG.md");
+    assert!(harness.sessions.try_recv().is_err(), "nothing more started");
+}

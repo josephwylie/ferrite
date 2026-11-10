@@ -942,6 +942,7 @@ impl Server {
                 Ok(None)
             }
             Op::Task { action } => self.task_command(action),
+            Op::Workflow { action } => self.workflow_command(action),
             Op::Restart { when } => match self.successor() {
                 Ok(_) => {
                     self.restarting = Some(*when);
