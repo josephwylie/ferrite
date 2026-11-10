@@ -704,7 +704,11 @@ fn a_silent_cli_leaves_its_capabilities_empty_rather_than_assumed() {
         "claude-mum",
         &format!("{VERSION_CASE}\nexec cat > /dev/null"),
     );
-    let session = ClaudeSession::spawn(config(program)).unwrap();
+    let session = ClaudeSession::spawn(ClaudeConfig {
+        handshake_timeout: Duration::from_millis(200),
+        ..config(program)
+    })
+    .unwrap();
     assert_eq!(session.capabilities(), &ClaudeCapabilities::default());
 }
 
@@ -760,8 +764,8 @@ fn a_cli_that_exits_at_start_explains_itself_with_stderr() {
 }
 
 /// A CLI slowed by a busy machine answers the start's effort late; past
-/// the old five-second limit, the start still succeeds rather than failing
-/// every turn the operator sends while the machine is loaded.
+/// the wait for it, the start still succeeds rather than failing every
+/// turn the operator sends while the machine is loaded.
 #[test]
 fn a_late_effort_answer_still_starts_the_session() {
     let program = stub(
@@ -770,13 +774,14 @@ fn a_late_effort_answer_still_starts_the_session() {
             r#"{PRELUDE}
 take
 take
-sleep 6
+sleep 0.3
 echo '{{"type":"control_response","response":{{"subtype":"success","request_id":"req_2","response":{{}}}}}}'
 cat >/dev/null"#
         ),
     );
     let started = ClaudeSession::spawn(ClaudeConfig {
         effort: Some("medium".into()),
+        effort_ack_timeout: Duration::from_millis(100),
         ..config(program)
     });
     assert!(started.is_ok(), "{:?}", started.err().map(|e| e.to_string()));
@@ -865,6 +870,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         env: Vec::new(),
         launcher: Vec::new(),
         args: vec!["--dangerously-skip-permissions".into()],
+        ..Default::default()
     })
     .unwrap();
     session.send("hi").unwrap();

@@ -429,6 +429,7 @@ impl Spawn {
                 env,
                 launcher,
                 args,
+                ..ClaudeConfig::default()
             }),
             Provider::Codex => {
                 // Written for Codex's terminal UI (ADR 0030); what they set
@@ -456,6 +457,7 @@ impl Spawn {
                     env,
                     launcher,
                     args: launch.args,
+                    ..CodexConfig::default()
                 })
             }
         }
