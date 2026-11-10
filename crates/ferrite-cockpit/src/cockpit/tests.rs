@@ -533,6 +533,7 @@ fn pr_with_checks() -> ferrite_core::workspace::PullRequest {
         state: PrState::Open,
         draft: false,
         url: Some("https://github.com/o/r/pull/48".into()),
+        title: None,
         checks: Some(CheckState::Failing),
         runs: vec![
             run(

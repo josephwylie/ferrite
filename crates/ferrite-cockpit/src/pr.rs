@@ -60,6 +60,7 @@ mod tests {
             state,
             draft: false,
             url: None,
+            title: None,
             checks,
             runs: Vec::new(),
         }

@@ -998,6 +998,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                         state: PrState::Open,
                         draft: false,
                         url: None,
+                        title: None,
                         checks: Some(CheckState::Failing),
                         runs: vec![
                             run(
@@ -1052,6 +1053,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                         state: PrState::Open,
                         draft: false,
                         url: None,
+                        title: None,
                         checks: Some(CheckState::Failing),
                         runs: vec![
                             run("test (windows-latest)", CheckState::Failing, "failure"),

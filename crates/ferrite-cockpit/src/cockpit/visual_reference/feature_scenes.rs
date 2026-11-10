@@ -610,6 +610,7 @@ fn nav_states() -> (Scene, Setup) {
                 state,
                 draft: false,
                 url: None,
+                title: None,
                 checks,
                 runs: Vec::new(),
             })
