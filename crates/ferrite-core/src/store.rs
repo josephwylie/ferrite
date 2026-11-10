@@ -2440,6 +2440,13 @@ impl Store {
         self
     }
 
+    /// Threads read from this store retain this much: small limits let a
+    /// test reach the retention caps cheaply.
+    pub fn with_activity_limits(mut self, limits: crate::activity::ActivityLimits) -> Self {
+        self.activity_limits = limits;
+        self
+    }
+
     /// What the Activity of a Thread read from this store retains.
     pub fn activity_limits(&self) -> crate::activity::ActivityLimits {
         self.activity_limits
