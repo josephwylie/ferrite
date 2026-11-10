@@ -52,6 +52,12 @@ pub enum Body {
     Text { text: Arc<Text>, line: Option<u32> },
     /// A page, drawn live where the engine can.
     Page(Arc<PageView>),
+    /// The Thread-owned browser; the window adapter supplies its exact live page.
+    Browser,
+    BrowserAnnotation {
+        annotation: Arc<ferrite_core::browser_annotations::Annotation>,
+        image: Option<PathBuf>,
+    },
     /// A file the preview cannot show, and why.
     Unshown(Unshown),
 }
@@ -155,6 +161,9 @@ struct State {
     /// Counts every open, so the cockpit tells a new one from the last.
     opened: u64,
     lightbox: Option<Lightbox>,
+    browser_urls: Vec<String>,
+    annotation_requests: Vec<ferrite_core::browser_annotations::Annotation>,
+    annotation_edits: Vec<ferrite_core::browser_annotations::Annotation>,
 }
 
 #[derive(Clone)]
@@ -172,6 +181,81 @@ impl Preview {
             state: Arc::new(Mutex::new(State::default())),
             focus: cx.focus_handle(),
         }
+    }
+
+    pub fn review_annotation(
+        &self,
+        annotation: ferrite_core::browser_annotations::Annotation,
+        window: &mut Window,
+    ) {
+        self.state
+            .lock()
+            .unwrap()
+            .annotation_requests
+            .push(annotation);
+        window.refresh();
+    }
+
+    /// Edit an already retained capture independently of its original live
+    /// page. The owning window resolves its immutable image asynchronously.
+    pub fn edit_annotation(&self, annotation: ferrite_core::browser_annotations::Annotation) {
+        self.state.lock().unwrap().annotation_edits.push(annotation);
+        self.show_browser();
+    }
+
+    pub fn take_annotation_edits(&self) -> Vec<ferrite_core::browser_annotations::Annotation> {
+        std::mem::take(&mut self.state.lock().unwrap().annotation_edits)
+    }
+
+    pub fn take_annotation_requests(&self) -> Vec<ferrite_core::browser_annotations::Annotation> {
+        std::mem::take(&mut self.state.lock().unwrap().annotation_requests)
+    }
+
+    pub fn loading_annotation(
+        &self,
+        annotation: ferrite_core::browser_annotations::Annotation,
+        window: &mut Window,
+    ) {
+        self.set(Document {
+            path: annotation.original().to_path_buf(),
+            name: Some("Browser annotation".into()),
+            body: Body::BrowserAnnotation {
+                annotation: Arc::new(annotation),
+                image: None,
+            },
+        });
+        window.refresh();
+    }
+
+    pub fn open_annotation(
+        &self,
+        annotation: ferrite_core::browser_annotations::Annotation,
+        image: PathBuf,
+        window: &mut Window,
+    ) {
+        self.set(Document {
+            path: annotation.original().to_path_buf(),
+            name: Some("Browser annotation".into()),
+            body: Body::BrowserAnnotation {
+                annotation: Arc::new(annotation),
+                image: Some(image),
+            },
+        });
+        window.refresh();
+    }
+
+    pub fn annotation_error(
+        &self,
+        annotation: &ferrite_core::browser_annotations::Annotation,
+        error: String,
+        window: &mut Window,
+    ) {
+        self.set(Document {
+            path: annotation.original().to_path_buf(),
+            name: Some("Browser annotation".into()),
+            body: Body::Unshown(Unshown::Unreadable(error.into())),
+        });
+        window.refresh();
     }
 
     /// Open `path` (F-14): the one way a file opens in the preview. An
@@ -215,6 +299,11 @@ impl Preview {
     /// its path, an address under its own name. Whatever was open gives
     /// way.
     pub fn open_page(&self, source: PageSource, window: &mut Window) {
+        if let PageSource::Address(url) = &source {
+            if self.open_url(url, window) {
+                return;
+            }
+        }
         let (path, name) = match &source {
             PageSource::File(path) => (path.clone(), None),
             PageSource::Address(address) => (PathBuf::from(address), Some(address.clone())),
@@ -225,6 +314,31 @@ impl Preview {
             body: Body::Page(PageView::new(source)),
         });
         window.refresh();
+    }
+
+    /// Route ordinary website links through the owning Thread's browser.
+    /// Explicit external-browser commands continue to use the OS URL opener.
+    pub fn open_url(&self, url: &str, window: &mut Window) -> bool {
+        if !url::Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "http" | "https")) {
+            return false;
+        }
+        self.state.lock().unwrap().browser_urls.push(url.to_owned());
+        self.show_browser();
+        window.refresh();
+        true
+    }
+
+    pub fn show_browser(&self) {
+        self.set(Document {
+            path: PathBuf::from("browser://tabs"),
+            name: Some("Browser".into()),
+            body: Body::Browser,
+        });
+    }
+
+    /// Requests retain their Pane's Thread identity when the window drains them.
+    pub fn take_browser_urls(&self) -> Vec<String> {
+        std::mem::take(&mut self.state.lock().unwrap().browser_urls)
     }
 
     /// Show text no file holds (a command's output) as if read from

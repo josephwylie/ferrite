@@ -1,0 +1,6 @@
+2026-11-09 06:10:17.301 server: Projects are off: no C:\Users\RUNNER~1\AppData\Local\Temp\ferrite-window-0zyq2_bd\no-projects
+2026-11-09 06:10:17.303 server: 0.4.0 listening, boot 141c-18e64b97e4b57144
+2026-11-09 06:10:17.313 could not discover Claude models: program not found
+2026-11-09 06:10:17.314 could not discover Codex models: codex CLI not found: `codex`
+2026-11-09 06:10:20.693 server: stopping, as a window asked
+2026-11-09 06:10:20.694 quitting: 0 sessions ended

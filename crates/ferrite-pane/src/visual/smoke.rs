@@ -11,6 +11,14 @@
 //! idle page sends (next to) no frames. Exits 0 and prints PASS, or prints
 //! what it was waiting for and exits 1.
 
+#[cfg(feature = "cef")]
+mod browser;
+#[cfg(feature = "cef")]
+mod browser_profile;
+
+#[cfg(windows)]
+mod windows;
+
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -22,6 +30,7 @@ const PAGE: &str = r#"
   body { margin: 0 }
   .a { height: 300px; background: rgb(255, 0, 0) }
   .a:hover { background: rgb(255, 0, 255) }
+  .a:active { background: rgb(255, 255, 0) }
   .b { height: 200px; background: rgb(0, 0, 255); cursor: pointer }
   .c { height: 100px; background: var(--ferrite-accent) }
 </style>
@@ -59,6 +68,38 @@ fn smoke() -> Result<Duration, String> {
     let engine = super::engine::start_now()?;
     println!("engine started: {:?}", started.elapsed());
 
+    #[cfg(feature = "cef")]
+    if std::env::var_os("FERRITE_BROWSER_PROFILE_SMOKE").is_some() {
+        browser_profile::run(engine.as_ref())?;
+        drop(engine);
+        return Ok(started.elapsed());
+    }
+
+    let unsafe_configuration = std::env::var_os("FERRITE_BROWSER_UNSAFE_SMOKE").is_some();
+    if unsafe_configuration {
+        if engine.controller().is_ok() {
+            return Err("Unsafe startup configuration exposed a browser controller".into());
+        }
+        match engine.open_browser(
+            "http://127.0.0.1:9/",
+            super::web::BrowserViewport {
+                width: 400,
+                height: 600,
+                scale: 1.0,
+            },
+            Box::new(|| {}),
+        ) {
+            Err(error) if error.contains("requires the Chromium sandbox") => {}
+            _ => return Err("Unsafe startup configuration enabled external browsing".into()),
+        }
+        println!("PASS unsafe configuration: external browser/controller unavailable; checking sealed visuals");
+    }
+
+    #[cfg(feature = "cef")]
+    if !unsafe_configuration && std::env::var_os("FERRITE_BROWSER_SMOKE").is_some() {
+        browser::run(engine.as_ref())?;
+    }
+
     let wakes = Rc::new(Cell::new(0u32));
     let opened = Instant::now();
     let view = engine.open(
@@ -88,6 +129,10 @@ fn smoke() -> Result<Duration, String> {
         p.frame_size() == Some((800, 1200))
     })?;
     println!("laid-out frame: {:?} after open", opened.elapsed());
+    #[cfg(windows)]
+    if !unsafe_configuration {
+        windows::assert_renderer_sandbox()?;
+    }
     probe.until("red/blue/green at y=10/350/550", |p| {
         p.pixel(10, 10) == Some(RED)
             && p.pixel(10, 350) == Some(BLUE)
@@ -107,6 +152,25 @@ fn smoke() -> Result<Duration, String> {
         p.pixel(10, 10) == Some(MAGENTA)
     })?;
     println!("hover -> pixel: {:?}", hover.elapsed());
+    view.input(Input::Down {
+        x: 10.0,
+        y: 10.0,
+        button: super::web::MouseButton::Left,
+        clicks: 1,
+        modifiers: Default::default(),
+    });
+    probe.until("held press turning the first block yellow", |p| {
+        p.pixel(10, 10) == Some(YELLOW)
+    })?;
+    view.input(Input::Leave);
+    view.input(Input::Move {
+        x: 10.0,
+        y: 10.0,
+        modifiers: Default::default(),
+    });
+    probe.until("capture loss clearing a held press before re-entry", |p| {
+        p.pixel(10, 10) == Some(MAGENTA)
+    })?;
     view.input(Input::Leave);
     probe.until("leave turning it red again", |p| {
         p.pixel(10, 10) == Some(RED)

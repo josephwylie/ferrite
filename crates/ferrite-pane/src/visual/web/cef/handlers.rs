@@ -48,7 +48,6 @@ wrap_app! {
                 "no-startup-window",
                 "noerrdialogs",
                 "hide-crash-restore-bubble",
-                "use-mock-keychain",
                 "no-first-run",
                 // No traffic Chromium would make on its own behalf.
                 "disable-background-networking",
@@ -59,16 +58,11 @@ wrap_app! {
             ] {
                 command_line.append_switch(Some(&switch.into()));
             }
-            // Fewer processes (measured in NOTES-cef.md): no pre-warmed spare
-            // renderer, and the network service (which only ever serves our
-            // in-memory page) in the browser process.
+            // No pre-warmed spare renderer. Keep the network service in its
+            // own sandboxed process: external views share this CEF runtime.
             command_line.append_switch_with_value(
                 Some(&"disable-features".into()),
                 Some(&"SpareRendererForSitePerProcess".into()),
-            );
-            command_line.append_switch_with_value(
-                Some(&"enable-features".into()),
-                Some(&"NetworkServiceInProcess2".into()),
             );
             // Every page is on the one site `ferrite-view://page`, so this
             // puts all views in a single renderer process instead of one each
@@ -86,6 +80,20 @@ wrap_app! {
                         None => command_line.append_switch(Some(&s.into())),
                     }
                 }
+            }
+            // Production website logins use the OS keychain. Only an explicit
+            // isolated packaged smoke opts into Chromium's mock implementation.
+            command_line.remove_switch(Some(&"use-mock-keychain".into()));
+            if cfg!(target_os = "macos")
+                && std::env::args().any(|argument| argument == "--visual-smoke")
+                && std::env::var("FERRITE_BROWSER_SMOKE_MOCK_KEYCHAIN").as_deref() == Ok("1")
+            {
+                command_line.append_switch(Some(&"use-mock-keychain".into()));
+            }
+            // No global debugging endpoint may expose sealed visuals, even
+            // when a developer passed a Chromium switch on the command line.
+            for switch in ["remote-debugging-port", "remote-debugging-address", "remote-debugging-pipe"] {
+                command_line.remove_switch(Some(&switch.into()));
             }
         }
 
@@ -122,6 +130,21 @@ wrap_browser_process_handler! {
     }
 }
 
+/// Disk-backed contexts initialize asynchronously, unlike the old in-memory
+/// context. Never call CreateBrowserSync before CEF acknowledges readiness.
+pub(super) fn website_context(ready: Arc<std::sync::atomic::AtomicBool>) -> RequestContextHandler {
+    WebsiteContext::new(ready)
+}
+
+wrap_request_context_handler! {
+    struct WebsiteContext { ready: Arc<std::sync::atomic::AtomicBool> }
+    impl RequestContextHandler {
+        fn on_request_context_initialized(&self, _context: Option<&mut RequestContext>) {
+            self.ready.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Per-view client.
 
@@ -134,11 +157,12 @@ pub(super) fn client(
 ) -> Client {
     ViewClient::new(
         ViewRender::new(state.clone(), generation),
-        ViewDisplay::new(state, generation),
+        ViewDisplay::new(state.clone(), generation),
+        ViewLoad::new(state.clone(), generation),
         ViewLifeSpan::new(global),
-        ViewRequests::new(page),
+        ViewRequests::new(page, state.clone(), generation),
         NoContextMenu::new(),
-        NoDialogs::new(),
+        NoDialogs::new(state, generation),
     )
 }
 
@@ -146,6 +170,7 @@ wrap_client! {
     struct ViewClient {
         render: RenderHandler,
         display: DisplayHandler,
+        load: LoadHandler,
         life_span: LifeSpanHandler,
         requests: RequestHandler,
         context_menu: ContextMenuHandler,
@@ -159,6 +184,7 @@ wrap_client! {
         fn display_handler(&self) -> Option<DisplayHandler> {
             Some(self.display.clone())
         }
+        fn load_handler(&self) -> Option<LoadHandler> { Some(self.load.clone()) }
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
             Some(self.life_span.clone())
         }
@@ -204,9 +230,27 @@ wrap_render_handler! {
             1
         }
 
+        fn on_popup_show(&self, _browser: Option<&mut Browser>, show: ::std::os::raw::c_int) {
+            if !self.state.external || !self.state.is_current(self.generation) { return; }
+            if show == 0 { self.state.clear_popup(); }
+            else if self.state.visible.load(Ordering::SeqCst) {
+                let mut layers = self.state.layers.lock().unwrap();
+                layers.shown = true;
+                layers.popup = None;
+            }
+        }
+
+        fn on_popup_size(&self, _browser: Option<&mut Browser>, rect: Option<&Rect>) {
+            if !self.state.external || !self.state.is_current(self.generation) { return; }
+            let Some(rect) = rect else { return };
+            let mut layers = self.state.layers.lock().unwrap();
+            layers.rect = rect.clone();
+            layers.popup = None;
+        }
+
         /// The CPU path: CEF hands over the whole view as BGRA in device
-        /// pixels. Copy it into the view's slot; a newer frame replaces an
-        /// untaken one. `<select>` popups (PET_POPUP) are not composited yet.
+        /// pixels. Website select popups are composited into the same bounded
+        /// frame; sealed Visuals retain their existing view-only paint path.
         fn on_paint(
             &self,
             _browser: Option<&mut Browser>,
@@ -216,7 +260,9 @@ wrap_render_handler! {
             width: ::std::os::raw::c_int,
             height: ::std::os::raw::c_int,
         ) {
-            if type_ != PaintElementType::VIEW || buffer.is_null() || width <= 0 || height <= 0 {
+            if (type_ != PaintElementType::VIEW
+                && !(self.state.external && type_ == PaintElementType::POPUP))
+                || buffer.is_null() || width <= 0 || height <= 0 {
                 return;
             }
             // A closing browser, or a page that hasn't laid itself out yet:
@@ -233,9 +279,20 @@ wrap_render_handler! {
             let len = width as usize * height as usize * 4;
             // SAFETY: CEF guarantees `width * height * 4` bytes for the call.
             let bgra = unsafe { std::slice::from_raw_parts(buffer, len) }.to_vec();
-            self.state.update(|updates| {
-                updates.frame = Some(WebFrame { width: width as u32, height: height as u32, bgra });
-            });
+            let frame = WebFrame { width: width as u32, height: height as u32, bgra };
+            let frame = if self.state.external {
+                let geometry = self.state.geometry();
+                let mut layers = self.state.layers.lock().unwrap();
+                if type_ == PaintElementType::VIEW {
+                    layers.view = Some(frame);
+                } else if layers.shown {
+                    layers.popup = Some(frame);
+                } else { return; }
+                layers.composite(geometry)
+            } else { Some(frame) };
+            if let Some(frame) = frame {
+                self.state.update(|updates| updates.frame = Some(frame));
+            }
             self.state.restyle_unpainted.store(false, Ordering::SeqCst);
         }
     }
@@ -248,6 +305,21 @@ wrap_display_handler! {
     }
 
     impl DisplayHandler {
+        fn on_address_change(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, url: Option<&CefString>) {
+            if frame.is_some_and(|frame| frame.is_main() != 0) {
+                if let Some(url) = url { self.state.navigation(self.generation, |state| {
+                    state.url = url.to_string();
+                    if let Some(browser) = browser.as_ref() {
+                        state.loading = browser.is_loading() != 0;
+                        state.can_back = browser.can_go_back() != 0;
+                        state.can_forward = browser.can_go_forward() != 0;
+                    }
+                }); }
+            }
+        }
+        fn on_title_change(&self, _browser: Option<&mut Browser>, title: Option<&CefString>) {
+            if let Some(title) = title { self.state.navigation(self.generation, |state| state.title = title.to_string()); }
+        }
         /// Carries the host script's height reports (see `document`).
         fn on_console_message(
             &self,
@@ -257,6 +329,7 @@ wrap_display_handler! {
             _source: Option<&CefString>,
             _line: ::std::os::raw::c_int,
         ) -> ::std::os::raw::c_int {
+            if self.state.external { return 0; }
             let Some(height) = message.and_then(|m| document::parse_height(&m.to_string())) else {
                 return 0;
             };
@@ -341,6 +414,8 @@ wrap_life_span_handler! {
 wrap_request_handler! {
     struct ViewRequests {
         page: Arc<PageDoc>,
+        state: Arc<ViewState>,
+        generation: u64,
     }
 
     impl RequestHandler {
@@ -355,7 +430,13 @@ wrap_request_handler! {
             _is_redirect: ::std::os::raw::c_int,
         ) -> ::std::os::raw::c_int {
             let url = request.map(|r| CefString::from(&r.url()).to_string()).unwrap_or_default();
-            (without_fragment(&url) != self.page.url) as i32
+            if self.page.external {
+                let blocked = !external_url(&url);
+                if blocked && _frame.is_some_and(|frame| frame.is_main() != 0) {
+                    self.state.navigation(self.generation, |state| { state.loading = false; state.error = Some("This tab can navigate only to http or https websites. Check the destination address.".into()); });
+                }
+                blocked as i32
+            } else { (without_fragment(&url) != self.page.url) as i32 }
         }
 
         fn on_open_urlfrom_tab(
@@ -402,6 +483,9 @@ wrap_resource_request_handler! {
         ) -> ReturnValue {
             let url = request.map(|r| CefString::from(&r.url()).to_string()).unwrap_or_default();
             let local = url.starts_with("data:") || url.starts_with("blob:");
+            if self.page.external {
+                return if local || external_url(&url) { ReturnValue::CONTINUE } else { ReturnValue::CANCEL };
+            }
             if local || without_fragment(&url) == self.page.url || font_of(&url).is_some() {
                 ReturnValue::CONTINUE
             } else {
@@ -416,6 +500,7 @@ wrap_resource_request_handler! {
             request: Option<&mut Request>,
         ) -> Option<ResourceHandler> {
             let url = request.map(|r| CefString::from(&r.url()).to_string()).unwrap_or_default();
+            if self.page.external { return None; }
             if let Some(font) = font_of(&url) {
                 return Some(PageResource::new(Arc::from(font), "font/ttf", Arc::new(Mutex::new(0))));
             }
@@ -519,8 +604,44 @@ wrap_context_menu_handler! {
     }
 }
 
+wrap_load_handler! {
+    struct ViewLoad { state: Arc<ViewState>, generation: u64 }
+    impl LoadHandler {
+        fn on_loading_state_change(&self, _browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, can_go_back: ::std::os::raw::c_int, can_go_forward: ::std::os::raw::c_int) {
+            self.state.navigation(self.generation, |state| {
+                state.loading = is_loading != 0;
+                state.can_back = can_go_back != 0;
+                state.can_forward = can_go_forward != 0;
+            });
+        }
+        fn on_load_start(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType) {
+            if frame.is_some_and(|frame| frame.is_main() != 0) {
+                if self.state.is_current(self.generation) { self.state.clear_popup(); }
+                self.state.navigation(self.generation, |state| {
+                    state.document_generation = state.document_generation.saturating_add(1);
+                    state.loading = true;
+                    state.error = None;
+                    state.dirty = super::super::BrowserDirty::Unknown;
+                });
+            }
+        }
+        fn on_load_end(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, http_status_code: ::std::os::raw::c_int) {
+            if frame.is_some_and(|frame| frame.is_main() != 0) && http_status_code >= 400 {
+                self.state.navigation(self.generation, |state| state.error = Some(format!("Website returned HTTP {http_status_code}. Reload or check the address.")));
+            }
+        }
+        fn on_load_error(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, error_code: Errorcode, error_text: Option<&CefString>, failed_url: Option<&CefString>) {
+            if !frame.is_some_and(|frame| frame.is_main() != 0) || error_code == Errorcode::ABORTED { return; }
+            self.state.navigation(self.generation, |state| {
+                state.loading = false;
+                state.error = Some(format!("Could not load {}: {}. Check the address and connection, then reload.", failed_url.map(|url| url.to_string()).unwrap_or_else(|| state.url.clone()), error_text.map(|error| error.to_string()).unwrap_or_else(|| "navigation failed".into())));
+            });
+        }
+    }
+}
+
 wrap_jsdialog_handler! {
-    struct NoDialogs;
+    struct NoDialogs { state: Arc<ViewState>, generation: u64 }
 
     impl JsdialogHandler {
         /// `alert`/`confirm`/`prompt`: suppressed (as if dismissed).
@@ -548,7 +669,10 @@ wrap_jsdialog_handler! {
             callback: Option<&mut JsdialogCallback>,
         ) -> ::std::os::raw::c_int {
             if let Some(callback) = callback {
-                callback.cont(1, None);
+                callback.cont((!self.state.external) as i32, None);
+                if self.state.external {
+                    self.state.navigation(self.generation, |state| { state.dirty = super::super::BrowserDirty::Dirty; state.loading = false; state.error = Some("This page has unfinished work and prevented navigation. Save or discard changes on the page before leaving.".into()); });
+                }
             }
             1
         }
@@ -565,4 +689,10 @@ fn font_of(url: &str) -> Option<&'static [u8]> {
 
 fn without_fragment(url: &str) -> &str {
     url.split('#').next().unwrap_or(url)
+}
+
+/// Website pages have no access to Ferrite schemes, local files or arbitrary
+/// application protocols. CEF's default network loader handles only web URLs.
+pub(super) fn external_url(url: &str) -> bool {
+    ferrite_core::browser::validate_url(url).is_ok()
 }

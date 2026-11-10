@@ -1,0 +1,26 @@
+[
+  {
+    "name": "browser-state",
+    "answer": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"state\":{\"tabs\":[{\"id\":1,\"url\":\"http://127.0.0.1:49351/\",\"generation\":2,\"loading\":false,\"can_back\":false,\"can_forward\":false,\"error\":null,\"live\":true,\"visible\":true,\"dirty\":\"dirty\",\"protected\":false}],\"active\":1},\"revision\":3,\"observation\":null,\"value\":null}"
+        }
+      ],
+      "isError": false
+    }
+  },
+  {
+    "name": "browser-observe",
+    "answer": {
+      "content": [
+        {
+          "type": "text",
+          "text": "CDP error (Target.createTarget): Browser command is outside the embedded target capability"
+        }
+      ],
+      "isError": true
+    }
+  }
+]

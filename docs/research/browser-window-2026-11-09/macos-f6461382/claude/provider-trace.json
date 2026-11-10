@@ -1,0 +1,50 @@
+[
+  {
+    "name": "browser-state",
+    "answer": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"state\":{\"tabs\":[{\"id\":1,\"url\":\"http://127.0.0.1:49285/\",\"generation\":2,\"loading\":false,\"can_back\":false,\"can_forward\":false,\"error\":null,\"live\":true,\"visible\":true,\"dirty\":\"dirty\",\"protected\":false}],\"active\":1},\"revision\":3,\"observation\":null,\"value\":null}"
+        }
+      ],
+      "isError": false
+    }
+  },
+  {
+    "name": "browser-observe",
+    "answer": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"state\":{\"tabs\":[{\"id\":1,\"url\":\"http://127.0.0.1:49285/\",\"generation\":2,\"loading\":false,\"can_back\":false,\"can_forward\":false,\"error\":null,\"live\":true,\"visible\":true,\"dirty\":\"dirty\",\"protected\":false}],\"active\":1},\"revision\":3,\"observation\":\"555a-18e64c592cd30ab0:1\",\"value\":{\"snapshot\":\"- button \\\"Window fixture\\\" [ref=fc85c374cdc178ea2e64131a7_0]\",\"refs\":{\"fc85c374cdc178ea2e64131a7_0\":{\"role\":\"button\",\"name\":\"Window fixture\"}},\"truncated\":false}}"
+        }
+      ],
+      "isError": false
+    }
+  },
+  {
+    "name": "browser-click",
+    "answer": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"state\":{\"tabs\":[{\"id\":1,\"url\":\"http://127.0.0.1:49285/\",\"generation\":2,\"loading\":false,\"can_back\":false,\"can_forward\":false,\"error\":null,\"live\":true,\"visible\":true,\"dirty\":\"dirty\",\"protected\":false}],\"active\":1},\"revision\":3,\"observation\":null,\"value\":{\"clicked\":\"@e1\",\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":3173930558089173512},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":true,\"saveStatus\":\"not_attempted\"}}}"
+        }
+      ],
+      "isError": false
+    }
+  },
+  {
+    "name": "browser-after",
+    "answer": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"state\":{\"tabs\":[{\"id\":1,\"url\":\"http://127.0.0.1:49285/\",\"generation\":2,\"loading\":false,\"can_back\":false,\"can_forward\":false,\"error\":null,\"live\":true,\"visible\":true,\"dirty\":\"dirty\",\"protected\":false}],\"active\":1},\"revision\":3,\"observation\":\"555a-18e64c592cd30ab0:3\",\"value\":{\"snapshot\":\"- button \\\"Window fixture\\\" [ref=fe6c9f635105c6ca1cfc2e185_0]\",\"refs\":{\"fe6c9f635105c6ca1cfc2e185_0\":{\"role\":\"button\",\"name\":\"Window fixture\"}},\"truncated\":false}}"
+        }
+      ],
+      "isError": false
+    }
+  }
+]

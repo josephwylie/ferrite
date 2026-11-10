@@ -44,13 +44,17 @@ use std::time::Duration;
 use futures::channel::mpsc;
 use futures::StreamExt;
 use gpui::{
-    fill, hsla, px, relative, size, App, AppContext, Bounds, Context, Corners, CursorStyle,
+    div, fill, hsla, px, relative, size, App, AppContext, Bounds, Context, Corners, CursorStyle,
     DispatchPhase, Element, ElementId, Entity, EventEmitter, GlobalElementId, Hitbox,
     HitboxBehavior, InspectorElementId, IntoElement, LayoutId, MouseDownEvent, MouseExitEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, RenderImage, Style, Window,
 };
 
-use crate::visual::web::{self, Cursor, Engine, Frame, Input, Page, View, Viewport};
+use crate::visual::web::{
+    self, BrowserState, BrowserView, BrowserViewport, Cursor, Engine, Frame, Input, Page, View,
+    Viewport,
+};
+use gpui::prelude::*;
 
 /// The element's height before the page has reported its own.
 pub const PLACEHOLDER_HEIGHT: f32 = 240.0;
@@ -61,6 +65,7 @@ const MIN_PUMP: Duration = Duration::from_millis(1);
 pub struct WebView {
     inner: Rc<Inner>,
     _wake: gpui::Task<()>,
+    browser_blur: Option<gpui::Subscription>,
 }
 
 /// How close to the screen the host says the view is. A list knows; the view
@@ -89,6 +94,11 @@ impl WebView {
             let (tx, mut rx) = mpsc::unbounded::<()>();
             let inner = Rc::new(Inner {
                 engine,
+                browser: RefCell::new(None),
+                browser_viewport: Cell::new(None),
+                before_input: RefCell::new(None),
+                changed: RefCell::new(None),
+                focus: cx.focus_handle(),
                 page: RefCell::new(page),
                 view: RefCell::new(None),
                 tx,
@@ -124,8 +134,58 @@ impl WebView {
                     }
                 }
             });
-            WebView { inner, _wake: task }
+            WebView {
+                inner,
+                _wake: task,
+                browser_blur: None,
+            }
         })
+    }
+
+    /// Realize one service-owned browser page and draw that exact native view.
+    pub fn browser(
+        engine: Rc<dyn Engine>,
+        url: &str,
+        viewport: BrowserViewport,
+        before_input: Rc<dyn Fn(Input)>,
+        changed: Rc<dyn Fn(&BrowserState)>,
+        cx: &mut App,
+    ) -> Result<Entity<Self>, String> {
+        let web = Self::new(
+            engine.clone(),
+            Page {
+                html: String::new(),
+                theme_css: String::new(),
+            },
+            cx,
+        );
+        web.update(cx, |web, _| {
+            let native: Rc<dyn BrowserView> =
+                Rc::from(engine.open_browser(url, viewport, web.inner.wake())?);
+            native.set_visible(false);
+            *web.inner.browser.borrow_mut() = Some(native);
+            web.inner.browser_viewport.set(Some(viewport));
+            *web.inner.before_input.borrow_mut() = Some(before_input);
+            *web.inner.changed.borrow_mut() = Some(changed);
+            Ok::<_, String>(())
+        })?;
+        Ok(web)
+    }
+
+    pub fn browser_handle(&self) -> Option<Rc<dyn BrowserView>> {
+        self.inner.browser.borrow().clone()
+    }
+
+    /// Whether the browser host is currently painted in a window.
+    pub fn browser_visible(&self) -> bool {
+        self.inner.browser.borrow().is_some() && self.inner.visible.get()
+    }
+
+    /// Resample after the Server acknowledges a new document generation.
+    /// A native page may already have finished loading without another wake.
+    pub fn refresh_browser_state(&mut self, cx: &mut Context<Self>) {
+        self.inner.take_updates();
+        cx.notify();
     }
 
     /// Restyle the live page.
@@ -184,18 +244,59 @@ impl WebView {
 }
 
 impl Render for WebView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.inner.take_updates() {
             cx.emit(HeightChanged);
         }
-        WebViewElement {
+        let element = WebViewElement {
             inner: self.inner.clone(),
+        };
+        if self.inner.browser.borrow().is_none() {
+            return element.into_any_element();
         }
+        if self.browser_blur.is_none() {
+            self.browser_blur = Some(cx.on_blur(&self.inner.focus, window, |view, _, _| {
+                view.inner.pressed.set(false);
+                view.inner.input(Input::Leave);
+            }));
+        }
+        let down = self.inner.clone();
+        let up = self.inner.clone();
+        div()
+            .size_full()
+            .min_h_0()
+            .overflow_hidden()
+            .track_focus(&self.inner.focus)
+            .on_key_down(move |event, _, cx| {
+                down.input(Input::Key {
+                    key: event.keystroke.key.clone(),
+                    text: event.keystroke.key_char.clone(),
+                    down: true,
+                    modifiers: modifiers(event.keystroke.modifiers),
+                });
+                cx.stop_propagation();
+            })
+            .on_key_up(move |event, _, cx| {
+                up.input(Input::Key {
+                    key: event.keystroke.key.clone(),
+                    text: None,
+                    down: false,
+                    modifiers: modifiers(event.keystroke.modifiers),
+                });
+                cx.stop_propagation();
+            })
+            .child(element)
+            .into_any_element()
     }
 }
 
 struct Inner {
     engine: Rc<dyn Engine>,
+    browser: RefCell<Option<Rc<dyn BrowserView>>>,
+    browser_viewport: Cell<Option<BrowserViewport>>,
+    before_input: RefCell<Option<Rc<dyn Fn(Input)>>>,
+    changed: RefCell<Option<Rc<dyn Fn(&BrowserState)>>>,
+    focus: gpui::FocusHandle,
     page: RefCell<Page>,
     view: RefCell<Option<Box<dyn View>>>,
     tx: mpsc::UnboundedSender<()>,
@@ -240,9 +341,18 @@ impl Inner {
 
     /// Take what the engine has; true if the content height changed.
     fn take_updates(&self) -> bool {
-        let updates = match self.view.borrow().as_ref() {
-            Some(view) => view.take(),
-            None => return false,
+        if let Some(browser) = self.browser.borrow().as_ref() {
+            if let Some(changed) = self.changed.borrow().as_ref() {
+                changed(&browser.state());
+            }
+        }
+        let browser = self.browser.borrow();
+        let updates = match browser.as_ref() {
+            Some(browser) => browser.take(),
+            None => match self.view.borrow().as_ref() {
+                Some(view) => view.take(),
+                None => return false,
+            },
         };
         let mut height_changed = false;
         if let Some(height) = updates.content_height {
@@ -254,7 +364,12 @@ impl Inner {
         if let Some(frame) = updates.frame {
             self.frames.set(self.frames.get() + 1);
             FRAMES_TAKEN.with(|n| n.set(n.get() + 1));
-            let scale = self.viewport.get().map_or(1.0, |v| v.scale);
+            let scale = self
+                .browser_viewport
+                .get()
+                .map(|v| v.scale)
+                .or_else(|| self.viewport.get().map(|v| v.scale))
+                .unwrap_or(1.0);
             let shown = Shown {
                 image: to_image(frame),
                 scale,
@@ -304,12 +419,30 @@ impl Inner {
         if !self.visible.replace(false) {
             return;
         }
+        if let Some(browser) = self.browser.borrow().as_ref() {
+            browser.set_visible(false);
+        }
         if let Some(view) = self.view.borrow().as_ref() {
             view.set_visible(false);
         }
     }
 
     fn input(&self, input: Input) {
+        // Pointer cleanup also happens when a preview leaves the element tree.
+        // It is not operator intervention and must not invalidate agent work.
+        if matches!(input, Input::Leave) {
+            if let Some(browser) = self.browser.borrow().as_ref() {
+                browser.input(input.clone());
+                if let Some(before) = self.before_input.borrow().as_ref() {
+                    before(input);
+                }
+                return;
+            }
+        }
+        if let Some(before) = self.before_input.borrow().as_ref() {
+            before(input);
+            return;
+        }
         let view = self.view.borrow();
         let Some(view) = view.as_ref() else { return };
         view.input(input);
@@ -368,7 +501,11 @@ impl Element for WebViewElement {
     ) -> (LayoutId, ()) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        style.size.height = px(self.inner.height()).into();
+        style.size.height = if self.inner.browser.borrow().is_some() {
+            relative(1.).into()
+        } else {
+            px(self.inner.height()).into()
+        };
         style.flex_shrink = 0.;
         (window.request_layout(style, [], cx), ())
     }
@@ -385,10 +522,24 @@ impl Element for WebViewElement {
         let width = f32::from(bounds.size.width).round();
         if width >= 1.0 {
             self.inner.painted.set(true);
-            self.inner.show_at(Viewport {
-                width: width as u32,
-                scale: window.scale_factor(),
-            });
+            if let Some(browser) = self.inner.browser.borrow().as_ref() {
+                let viewport = BrowserViewport {
+                    width: width as u32,
+                    height: f32::from(bounds.size.height).round().max(1.) as u32,
+                    scale: window.scale_factor(),
+                };
+                if self.inner.browser_viewport.replace(Some(viewport)) != Some(viewport) {
+                    browser.resize_browser(viewport);
+                }
+                if !self.inner.visible.replace(true) {
+                    browser.set_visible(true);
+                }
+            } else {
+                self.inner.show_at(Viewport {
+                    width: width as u32,
+                    scale: window.scale_factor(),
+                });
+            }
         }
         let weak = Rc::downgrade(&self.inner);
         window
@@ -443,6 +594,26 @@ impl Element for WebViewElement {
             (f32::from(p.x), f32::from(p.y))
         };
 
+        if self.inner.browser.borrow().is_some() {
+            let inner = self.inner.clone();
+            let hb = hitbox.clone();
+            window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble || !hb.is_hovered(window) {
+                    return;
+                }
+                let (x, y) = local(event.position);
+                let delta = event.delta.pixel_delta(window.line_height());
+                inner.input(Input::Wheel {
+                    x,
+                    y,
+                    dx: f32::from(delta.x),
+                    dy: f32::from(delta.y),
+                    modifiers: modifiers(event.modifiers),
+                });
+                cx.stop_propagation();
+            });
+        }
+
         let inner = self.inner.clone();
         let hb = hitbox.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, _| {
@@ -471,13 +642,16 @@ impl Element for WebViewElement {
 
         let inner = self.inner.clone();
         let hb = hitbox.clone();
-        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, _| {
+        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, _cx| {
             if phase != DispatchPhase::Bubble || !hb.is_hovered(window) {
                 return;
             }
             let Some(button) = button(event.button) else {
                 return;
             };
+            if inner.browser.borrow().is_some() {
+                window.focus(&inner.focus, _cx);
+            }
             inner.pressed.set(true);
             let (x, y) = local(event.position);
             inner.input(Input::Down {
@@ -492,8 +666,13 @@ impl Element for WebViewElement {
         let inner = self.inner.clone();
         let hb = hitbox.clone();
         window.on_mouse_event(move |event: &MouseUpEvent, phase, window, _| {
+            // Capture dispatch precedes Bubble. Clearing here during Capture
+            // loses an outside release before the Bubble handler can send it.
+            if phase != DispatchPhase::Bubble {
+                return;
+            }
             let captured = inner.pressed.replace(false);
-            if phase != DispatchPhase::Bubble || !(captured || hb.is_hovered(window)) {
+            if !(captured || hb.is_hovered(window)) {
                 return;
             }
             let Some(button) = button(event.button) else {
@@ -919,5 +1098,101 @@ mod tests {
         assert!(engine
             .journal()
             .contains(&Call::Resize(Viewport { width: 460, scale })));
+    }
+    #[gpui::test]
+    fn browser_preview_draws_the_service_handle_and_queues_input_before_dispatch(
+        cx: &mut TestAppContext,
+    ) {
+        let engine = Rc::new(FakeEngine::new());
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        let queue = pending.clone();
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let states = observed.clone();
+        let (host, cx) = cx.add_window_view(|_, cx| Host {
+            web: WebView::browser(
+                engine.clone(),
+                "http://localhost:5173/",
+                BrowserViewport {
+                    width: 1,
+                    height: 1,
+                    scale: 1.,
+                },
+                Rc::new(move |input| queue.borrow_mut().push(input)),
+                Rc::new(move |state| states.borrow_mut().push(state.clone())),
+                cx,
+            )
+            .unwrap(),
+            shown: true,
+        });
+        cx.simulate_resize(size(px(500.), px(700.)));
+        cx.run_until_parked();
+        let scale = cx.update(|window, _| window.scale_factor());
+        assert!(engine
+            .journal()
+            .contains(&Call::BrowserResize(BrowserViewport {
+                width: 460,
+                height: 650,
+                scale
+            })));
+        let web = host.read_with(cx, |host, _| host.web.clone());
+        let native = web.read_with(cx, |web, _| web.browser_handle().unwrap());
+        let before = web.read_with(cx, |web, _| web.frames());
+        assert_eq!(engine.live_views(), 1);
+        cx.simulate_mouse_move(
+            point(px(LEFT + 15.), px(TOP + 20.)),
+            None,
+            Modifiers::default(),
+        );
+        assert!(
+            inputs(&engine).is_empty(),
+            "input waits for the service authorization callback"
+        );
+        let queued = std::mem::take(&mut *pending.borrow_mut());
+        assert_eq!(
+            queued,
+            [Input::Move {
+                x: 15.,
+                y: 20.,
+                modifiers: web::Modifiers::default()
+            }]
+        );
+        for input in queued {
+            native.input(input);
+        }
+        cx.run_until_parked();
+        assert_eq!(
+            engine.live_views(),
+            1,
+            "dispatch uses the same page drawn by the preview"
+        );
+        assert!(
+            web.read_with(cx, |web, _| web.frames()) > before,
+            "the exact page produces the updated frame"
+        );
+        native.navigate("http://localhost:5173/first").unwrap();
+        native.navigate("http://localhost:5173/final").unwrap();
+        cx.run_until_parked();
+        let settled = observed.borrow().last().cloned().unwrap();
+        assert_eq!(settled.url, "http://localhost:5173/final");
+        assert!(
+            !settled.loading,
+            "rapid navigation publishes its settled state"
+        );
+        observed.borrow_mut().clear();
+        web.update(cx, |web, cx| web.refresh_browser_state(cx));
+        assert_eq!(
+            observed.borrow().last(),
+            Some(&settled),
+            "a service generation ACK can resample even after the native page has stopped waking"
+        );
+        set_shown(&host, false, cx);
+        assert!(
+            pending
+                .borrow()
+                .iter()
+                .all(|input| matches!(input, Input::Leave)),
+            "hiding only requests pointer/gesture cleanup, never new operator input"
+        );
+        assert!(engine.journal().contains(&Call::Visible(false)));
     }
 }

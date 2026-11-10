@@ -4,6 +4,7 @@ mod changes;
 mod checks;
 mod completion_checks;
 mod composer_chips;
+mod browser_annotations;
 mod composer_controls;
 mod composer_menus;
 mod core_transcript_parity;

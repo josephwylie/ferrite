@@ -851,7 +851,10 @@ fn opening_registers_the_project_and_places_the_worktree_inside_it() {
     // Inside the project, under .worktrees/: never a per-Thread store
     // directory.
     let project_root = &cockpit.registry().projects()[0].root;
-    assert!(path.starts_with(project_root.join(".worktrees")), "{path:?}");
+    assert!(
+        path.starts_with(project_root.join(".worktrees")),
+        "{path:?}"
+    );
     assert_eq!(path.file_name().unwrap(), "ferrite-wt-1");
     // The main checkout stays clean around it: excluded, not ignored.
     let status = std::process::Command::new("git")

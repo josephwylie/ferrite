@@ -258,7 +258,18 @@ impl Engine {
                 self.apply_input(*thread, Input::Notice(text.clone()));
                 Ok(None)
             }
-            Op::SettingsChanged
+            Op::BrowserCapture { .. }
+            | Op::BrowserCaptureImage { .. }
+            | Op::BrowserProtect { .. }
+            | Op::BrowserRelease { .. }
+            | Op::BrowserReclaim { .. }
+            | Op::BrowserReclaimed { .. }
+            | Op::BrowserPage { .. }
+            | Op::BrowserSettled { .. }
+            | Op::BrowserInput { .. }
+            | Op::BrowserAttach { .. }
+            | Op::Browser { .. }
+            | Op::SettingsChanged
             | Op::Bootstrap { .. }
             | Op::CancelBootstrap { .. }
             | Op::SearchFiles { .. }

@@ -2374,6 +2374,31 @@ impl Store {
         }
     }
 
+    /// Browser metadata belongs to this store and shares its writer claim.
+    pub fn load_browser(&self) -> io::Result<Option<crate::browser::Saved>> {
+        let bytes = match std::fs::read(self.dir.join("browser-tabs.json")) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let saved: crate::browser::Saved = serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        crate::browser::Service::restore(saved.clone())
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        Ok(Some(saved))
+    }
+
+    /// Refuse to overwrite malformed or future metadata; a failed save leaves
+    /// the previous file intact, just like the store's other replacements.
+    pub fn save_browser(&self, saved: &crate::browser::Saved) -> io::Result<()> {
+        self.writable()?;
+        self.load_browser()?;
+        crate::browser::Service::restore(saved.clone())
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let bytes = serde_json::to_vec(saved).map_err(io::Error::other)?;
+        replace_file(&self.dir.join("browser-tabs.json"), &bytes)
+    }
+
     /// Bytes read off logs so far, by this store and every handle sharing it.
     #[cfg(test)]
     pub(crate) fn bytes_read(&self) -> u64 {
@@ -2884,7 +2909,7 @@ impl Store {
     /// when it starts, and other writes touch a log too. A log with no dated
     /// time in its tail (one from before they were dated kept `4:22 pm`) has
     /// no known activity: `None`, so never listed as recent.
-        pub fn last_activity(&self, id: ThreadId) -> Option<SystemTime> {
+    pub fn last_activity(&self, id: ThreadId) -> Option<SystemTime> {
         let touched = self.last_used(id)?;
         let lines = self.backwards(id, 0).ok()?;
         let end = fs::metadata(self.log_path(id)).map_or(0, |meta| meta.len());
@@ -4845,7 +4870,10 @@ impl WriterState {
     /// give the log back its modification time: the log's mtime is the time
     /// of the Thread's last real write, which a reader (the bell, the nav's
     /// ages, `Store::last_used`) takes for when it was used.
-    fn keeping_modified<R>(&mut self, write: impl FnOnce(&mut Self) -> io::Result<R>) -> io::Result<R> {
+    fn keeping_modified<R>(
+        &mut self,
+        write: impl FnOnce(&mut Self) -> io::Result<R>,
+    ) -> io::Result<R> {
         let before = self.file.metadata().and_then(|meta| meta.modified()).ok();
         let written = write(self);
         if let Some(at) = before {
@@ -5208,9 +5236,16 @@ mod tests {
         writer.flush().unwrap();
         let path = dir.join(id.to_string()).join("log.jsonl");
         let past = SystemTime::now() - std::time::Duration::from_secs(20 * 86_400);
-        OpenOptions::new().write(true).open(&path).unwrap().set_modified(past).unwrap();
+        OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
 
-        store.set_title(id, "A title".into(), Some(&mut writer)).unwrap();
+        store
+            .set_title(id, "A title".into(), Some(&mut writer))
+            .unwrap();
 
         let kept = fs::metadata(&path).unwrap().modified().unwrap();
         assert_eq!(kept, past, "the amendment gave the log its time back");
@@ -6087,9 +6122,8 @@ mod tests {
         let store = Store::open(&dir).unwrap();
         let wrote = store.last_used(ThreadId::new(5)).unwrap();
         let did = store.last_activity(ThreadId::new(5)).unwrap();
-        let turn_ended = SystemTime::from(
-            crate::clock::parse_local("2026-01-02T09:05:00+00:00").unwrap(),
-        );
+        let turn_ended =
+            SystemTime::from(crate::clock::parse_local("2026-01-02T09:05:00+00:00").unwrap());
         assert_eq!(did, turn_ended, "the completion's time, not the file's");
         assert!(wrote > did, "the file was written long after");
     }
@@ -6116,11 +6150,19 @@ mod tests {
         };
         let dir = scratch("legacy-activity");
         plant_log(&dir, "6", &log(&[prompted, observed, mark, mark, mark]));
-        plant_log(&dir, "7", &log(&[prompted, observed, r#"{"type":"run_state","state":"idle"}"#]));
+        plant_log(
+            &dir,
+            "7",
+            &log(&[prompted, observed, r#"{"type":"run_state","state":"idle"}"#]),
+        );
         let dated = r#"{"type":"completion_observation","elapsed_ms":9,"completed_at":"2026-01-02T09:05:00+00:00"}"#;
         plant_log(&dir, "8", &log(&[prompted, dated, mark, mark]));
         let store = Store::open(&dir).unwrap();
-        assert_eq!(store.last_activity(ThreadId::new(6)), None, "ends in Ferrite's marks");
+        assert_eq!(
+            store.last_activity(ThreadId::new(6)),
+            None,
+            "ends in Ferrite's marks"
+        );
         assert_eq!(
             store.last_activity(ThreadId::new(7)),
             None,
@@ -6128,7 +6170,9 @@ mod tests {
         );
         assert_eq!(
             store.last_activity(ThreadId::new(8)),
-            Some(SystemTime::from(crate::clock::parse_local("2026-01-02T09:05:00+00:00").unwrap())),
+            Some(SystemTime::from(
+                crate::clock::parse_local("2026-01-02T09:05:00+00:00").unwrap()
+            )),
             "Ferrite's marks after a dated turn do not hide it"
         );
     }

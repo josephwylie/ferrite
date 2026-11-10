@@ -9,10 +9,13 @@ description = "Ferrite's Cockpit: the grid, the nav and the Roster glue"
 doctest = false
 
 [features]
+cef = ["ferrite-pane/cef"]
 # Opt-in native framebuffer artifacts (`cockpit::visual_reference`);
 # excluded from normal application builds. The app's own
 # `visual-reference` feature turns this on.
 visual-reference = ["gpui/test-support", "dep:gpui-reference-platform", "ferrite-pane/visual-reference"]
+
+browser-smoke = ["gpui/test-support", "dep:gpui-reference-platform", "ferrite-pane/browser-smoke"]
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }

@@ -1213,6 +1213,10 @@ fn boot_id() -> String {
 const QUIT_SYNC_DEADLINE: Duration = Duration::from_millis(500);
 
 impl Engine {
+    pub(crate) fn browser_store(&self) -> &Store {
+        &self.store
+    }
+
     pub fn try_new(store: Store, mut spawner: Box<dyn Spawner>) -> io::Result<Self> {
         let registry = Registry::open(store.dir())?;
         let groups = Groups::load(store.dir())?;

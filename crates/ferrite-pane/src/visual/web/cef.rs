@@ -28,6 +28,7 @@
 //! - **Main-thread budget.** Browsers are created from `pump()`, at most one
 //!   per call, so a scroll that brings several views back staggers them.
 
+mod control;
 mod document;
 mod handlers;
 mod input;
@@ -35,6 +36,8 @@ mod input;
 mod macos;
 #[cfg(target_os = "macos")]
 mod nsapp;
+mod observation;
+mod profile;
 #[cfg(windows)]
 mod windows;
 
@@ -44,7 +47,7 @@ use macos as platform;
 use windows as platform;
 
 use std::cell::{Cell, RefCell};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -56,7 +59,10 @@ use cef::{
     PaintElementType, RuntimeStyle, Settings, WindowInfo,
 };
 
-use super::{Cursor, Engine, Input, Page, Updates, View, Viewport, Wake};
+use super::{
+    BrowserDirty, BrowserState, BrowserView, BrowserViewport, ControllerEndpoint, Cursor, Engine,
+    Input, Page, Updates, View, Viewport, Wake,
+};
 
 /// The custom scheme pages are served from (`ferrite-view://page/<n>`).
 const SCHEME: &str = "ferrite-view";
@@ -81,6 +87,73 @@ const STUCK_LOAD: Duration = Duration::from_secs(2);
 /// How long a view stays hidden before its browser is closed. Long enough
 /// that scrolling past and back, or a quick look elsewhere, costs nothing.
 pub const RELEASE_AFTER: Duration = Duration::from_secs(2);
+
+/// Retain the Windows bootstrap's sandbox broker for all later CEF calls.
+///
+/// # Safety
+/// `sandbox_info` must be the pointer supplied to `RunWinMain` by CEF's
+/// bootstrap and remain valid until this process returns to that bootstrap.
+/// Call once, before any other CEF entry point, on the startup thread.
+#[cfg(windows)]
+pub unsafe fn windows_bootstrap(sandbox_info: *mut u8) {
+    // SAFETY: the bootstrap caller supplies the lifetime and ordering above.
+    unsafe { platform::set_sandbox_info(sandbox_info) };
+}
+
+/// One Chromium-compatible switch parser feeds CEF configuration and the
+/// external-page capability gate, including short/slash prefixes and values.
+#[derive(Default)]
+struct IsolationOverrides {
+    disable_sandbox: bool,
+    disable_external: bool,
+}
+
+fn isolation_overrides() -> IsolationOverrides {
+    let mut overrides = IsolationOverrides::default();
+    for mut argument in std::env::args().skip(1) {
+        if cfg!(windows) {
+            argument.make_ascii_lowercase();
+        }
+        let argument = if cfg!(windows) {
+            argument.trim()
+        } else {
+            argument.trim_matches([' ', '\t', '\r', '\n', '\u{b}', '\u{c}'])
+        };
+        if argument == "--" {
+            break;
+        }
+        let name = argument
+            .strip_prefix("--")
+            .or_else(|| argument.strip_prefix('-'))
+            .or_else(|| {
+                if cfg!(windows) {
+                    argument.strip_prefix('/')
+                } else {
+                    None
+                }
+            })
+            .and_then(|name| name.split('=').next());
+        match name {
+            Some("no-sandbox" | "single-process") => {
+                overrides.disable_sandbox = true;
+                overrides.disable_external = true;
+            }
+            Some(
+                "disable-web-security"
+                | "disable-gpu-sandbox"
+                | "disable-features"
+                | "enable-features",
+            ) => {
+                overrides.disable_external = true;
+            }
+            Some(name) if name.starts_with("disable-site-isolation") => {
+                overrides.disable_external = true;
+            }
+            _ => {}
+        }
+    }
+    overrides
+}
 
 /// What [`boot`] found this process to be.
 pub enum Boot {
@@ -120,7 +193,11 @@ pub fn boot() -> Result<Boot, String> {
         let helper = platform::Helper::enter(&exe)?;
         let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
         let mut app = handlers::InlineApp::new(global);
-        let code = execute_process(Some(helper.args()), Some(&mut app), std::ptr::null_mut());
+        let code = execute_process(
+            Some(helper.args()),
+            Some(&mut app),
+            platform::sandbox_info(),
+        );
         // `app` drops first, then `helper` (what CEF ran on).
         return Ok(Boot::Subprocess(code));
     }
@@ -141,7 +218,7 @@ impl Dormant {
         let code = execute_process(
             Some(args.as_main_args()),
             Some(&mut app),
-            std::ptr::null_mut(),
+            platform::sandbox_info(),
         );
         if code >= 0 {
             return Err(format!(
@@ -149,19 +226,21 @@ impl Dormant {
             ));
         }
 
-        let profile = profile_dir();
+        let profile = profile::Profile::new();
+        let overrides = isolation_overrides();
         // FERRITE_CEF_NO_SANDBOX=1 is the escape hatch if helpers won't start.
-        let no_sandbox =
-            !platform::SANDBOXED || std::env::var_os("FERRITE_CEF_NO_SANDBOX").is_some();
+        let no_sandbox = !platform::SANDBOXED
+            || std::env::var_os("FERRITE_CEF_NO_SANDBOX").is_some()
+            || overrides.disable_sandbox;
         let settings = Settings {
             no_sandbox: no_sandbox as i32,
             windowless_rendering_enabled: 1,
             // GPUI owns the run loop; CEF is driven from Engine::pump.
             multi_threaded_message_loop: 0,
             external_message_pump: 1,
-            // Throwaway profile: nothing persists between runs.
-            root_cache_path: path_string(&profile),
-            cache_path: path_string(&profile.join("default")),
+            // Sealed visuals use a throwaway child of the fixed profile root.
+            root_cache_path: path_string(profile.root()),
+            cache_path: path_string(profile.sealed()),
             persist_session_cookies: 0,
             log_severity: cef::LogSeverity::WARNING,
             ..Default::default()
@@ -170,7 +249,7 @@ impl Dormant {
             Some(args.as_main_args()),
             Some(&settings),
             Some(&mut app),
-            std::ptr::null_mut(),
+            platform::sandbox_info(),
         ) != 1
         {
             return Err("cef_initialize failed".into());
@@ -182,39 +261,19 @@ impl Dormant {
                 views: RefCell::new(Vec::new()),
                 next_id: Cell::new(1),
                 pumping: Cell::new(false),
+                shutdown: Cell::new(false),
+                browser_isolated: !no_sandbox
+                    && !overrides.disable_external
+                    && std::env::var_os("FERRITE_CEF_EXTRA_SWITCHES").is_none(),
+                control: RefCell::new(None),
+                browser_context: RefCell::new(None),
+                browser_context_ready: Arc::new(AtomicBool::new(false)),
                 profile,
                 _app: app,
                 _library: library,
             }),
         })
     }
-}
-
-/// A fresh per-process profile under the temp dir; leftovers from processes
-/// that are gone are removed.
-fn profile_dir() -> PathBuf {
-    let base = std::env::temp_dir();
-    if let Ok(entries) = std::fs::read_dir(&base) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let Some(pid) = name
-                .to_str()
-                .and_then(|n| n.strip_prefix("ferrite-cef-profile-"))
-            else {
-                continue;
-            };
-            if pid
-                .parse::<u32>()
-                .map(|pid| !platform::process_alive(pid))
-                .unwrap_or(false)
-            {
-                let _ = std::fs::remove_dir_all(entry.path());
-            }
-        }
-    }
-    let dir = base.join(format!("ferrite-cef-profile-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    platform::real_path(dir)
 }
 
 fn path_string(path: &Path) -> CefString {
@@ -266,6 +325,7 @@ fn now_ms() -> u64 {
 /// rendered bytes) so a theme change before load or a reload uses the latest.
 struct PageDoc {
     url: String,
+    external: bool,
     page: Mutex<Page>,
 }
 
@@ -283,10 +343,90 @@ struct Geometry {
     scale: f32,
 }
 
+/// CPU OSR layers for website select menus. CEF popup rectangles and input
+/// use DIPs; paint buffers use device pixels. Keep the original rectangle so
+/// a menu shifted inside the viewport still receives its original coordinates.
+#[derive(Default)]
+struct BrowserLayers {
+    view: Option<super::Frame>,
+    popup: Option<super::Frame>,
+    rect: cef::Rect,
+    shown: bool,
+}
+impl BrowserLayers {
+    fn origin(&self, geometry: Geometry) -> (i32, i32) {
+        (
+            self.rect
+                .x
+                .clamp(0, (geometry.width as i32 - self.rect.width).max(0)),
+            self.rect
+                .y
+                .clamp(0, (geometry.height as i32 - self.rect.height).max(0)),
+        )
+    }
+
+    fn input(&self, x: f32, y: f32, geometry: Geometry) -> (f32, f32) {
+        let (left, top) = self.origin(geometry);
+        if self.shown
+            && self.popup.is_some()
+            && x >= left as f32
+            && y >= top as f32
+            && x < (left + self.rect.width) as f32
+            && y < (top + self.rect.height) as f32
+        {
+            (
+                x + (self.rect.x - left) as f32,
+                y + (self.rect.y - top) as f32,
+            )
+        } else {
+            (x, y)
+        }
+    }
+
+    fn composite(&self, geometry: Geometry) -> Option<super::Frame> {
+        let base = self.view.as_ref()?;
+        let mut frame = super::Frame {
+            width: base.width,
+            height: base.height,
+            bgra: base.bgra.clone(),
+        };
+        if !self.shown {
+            return Some(frame);
+        }
+        let Some(popup) = self.popup.as_ref() else {
+            return Some(frame);
+        };
+        let (left, top) = self.origin(geometry);
+        let left = (left as f32 * geometry.scale).round() as u32;
+        let top = (top as f32 * geometry.scale).round() as u32;
+        let width = popup.width.min(frame.width.saturating_sub(left));
+        let height = popup.height.min(frame.height.saturating_sub(top));
+        for y in 0..height {
+            for x in 0..width {
+                let source = ((y * popup.width + x) * 4) as usize;
+                let destination = (((top + y) * frame.width + left + x) * 4) as usize;
+                // CEF's BGRA is premultiplied; source-over preserves translucent
+                // menu shadows without exposing pixels outside this view.
+                let alpha = u16::from(popup.bgra[source + 3]);
+                for channel in 0..4 {
+                    frame.bgra[destination + channel] = (u16::from(popup.bgra[source + channel])
+                        + (u16::from(frame.bgra[destination + channel]) * (255 - alpha) + 127)
+                            / 255)
+                        .min(255) as u8;
+                }
+            }
+        }
+        Some(frame)
+    }
+}
+
 /// One view's state as the callbacks see it. It outlives the view's browsers:
 /// a released view keeps it, and the next browser picks up where it left off.
 struct ViewState {
+    external: bool,
+    navigation: Mutex<BrowserState>,
     geometry: Mutex<Geometry>,
+    layers: Mutex<BrowserLayers>,
     updates: Mutex<Updates>,
     last_cursor: Mutex<Cursor>,
     /// Updates are waiting and the host hasn't been woken for them yet.
@@ -309,6 +449,41 @@ struct ViewState {
 }
 
 impl ViewState {
+    fn popup_input(&self, x: f32, y: f32) -> (f32, f32) {
+        if !self.external {
+            return (x, y);
+        }
+        let geometry = self.geometry();
+        self.layers.lock().unwrap().input(x, y, geometry)
+    }
+
+    fn clear_popup(&self) {
+        if !self.external {
+            return;
+        }
+        let geometry = self.geometry();
+        let frame = {
+            let mut layers = self.layers.lock().unwrap();
+            layers.shown = false;
+            layers.popup = None;
+            layers.composite(geometry)
+        };
+        if let Some(frame) = frame {
+            self.update(|updates| updates.frame = Some(frame));
+        }
+    }
+
+    fn navigation(&self, generation: u64, f: impl FnOnce(&mut BrowserState)) {
+        if self.external && self.is_current(generation) {
+            let mut navigation = self.navigation.lock().unwrap();
+            let before = navigation.clone();
+            f(&mut navigation);
+            if *navigation != before {
+                self.dirty.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+
     fn is_current(&self, generation: u64) -> bool {
         self.generation.load(Ordering::SeqCst) == generation
     }
@@ -356,60 +531,97 @@ struct EngineInner {
     views: RefCell<Vec<Weak<ViewInner>>>,
     next_id: Cell<u64>,
     pumping: Cell<bool>,
-    profile: PathBuf,
+    shutdown: Cell<bool>,
+    browser_isolated: bool,
+    control: RefCell<Option<control::Control>>,
+    browser_context: RefCell<Option<cef::RequestContext>>,
+    browser_context_ready: Arc<AtomicBool>,
+    profile: profile::Profile,
     _app: cef::App,
     _library: platform::Library,
 }
 
 impl Engine for CefEngine {
     fn open(&self, page: Page, viewport: Viewport, wake: Wake) -> Box<dyn View> {
-        let engine = &self.inner;
-        let id = engine.next_id.get();
-        engine.next_id.set(id + 1);
+        Box::new(self.open_view(page, viewport, wake, None, INITIAL_HEIGHT))
+    }
 
-        let doc = Arc::new(PageDoc {
-            url: format!("{SCHEME}://page/{id}"),
-            page: Mutex::new(page),
-        });
-        let state = Arc::new(ViewState {
-            geometry: Mutex::new(Geometry {
-                width: viewport.width.max(1),
-                height: INITIAL_HEIGHT,
-                scale: viewport.scale.max(0.5),
-            }),
-            updates: Mutex::new(Updates::default()),
-            last_cursor: Mutex::new(Cursor::Arrow),
-            dirty: AtomicBool::new(false),
-            generation: AtomicU64::new(0),
-            loaded: AtomicBool::new(false),
-            visible: AtomicBool::new(true),
-            restyle_unpainted: AtomicBool::new(false),
-            trace: engine.global.trace.load(Ordering::SeqCst),
-        });
-        let view = Rc::new(ViewInner {
-            _engine: self.inner.clone(),
-            global: engine.global.clone(),
-            state,
-            doc,
-            browser: RefCell::new(None),
+    fn open_browser(
+        &self,
+        url: &str,
+        viewport: BrowserViewport,
+        wake: Wake,
+    ) -> Result<Box<dyn BrowserView>, String> {
+        self.browser_available()?;
+        if !handlers::external_url(url) {
+            return Err("Conversation browser requires an http or https URL".into());
+        }
+        if self.inner.browser_context.borrow().is_none() {
+            // One shared website context, separate from every sealed visual.
+            let mut handler = handlers::website_context(self.inner.browser_context_ready.clone());
+            let context = cef::request_context_create_context(
+                Some(&cef::RequestContextSettings {
+                    cache_path: path_string(&self.inner.profile.websites()?),
+                    persist_session_cookies: 1,
+                    ..Default::default()
+                }),
+                Some(&mut handler),
+            )
+            .ok_or("CEF could not create an isolated website context")?;
+            *self.inner.browser_context.borrow_mut() = Some(context);
+        }
+        Ok(Box::new(self.open_view(
+            Page {
+                html: String::new(),
+                theme_css: String::new(),
+            },
+            Viewport {
+                width: viewport.width,
+                scale: viewport.scale,
+            },
             wake,
-            visible: Cell::new(true),
-            hidden_since: Cell::new(None),
-            released: Cell::new(false),
-            hide_deferred: Cell::new(false),
-            focused: Cell::new(false),
-            pressed: Cell::new(0),
-            pointer: Cell::new((0.0, 0.0)),
-            html_pending: Cell::new(false),
-            created_at: Cell::new(None),
-        });
-        engine.views.borrow_mut().push(Rc::downgrade(&view));
-        // The browser is created by the next pump (see `pump`).
-        Box::new(CefView(view))
+            Some(url),
+            viewport.height,
+        )))
+    }
+
+    fn browser_available(&self) -> Result<(), String> {
+        if self.inner.shutdown.get() {
+            return Err("The browser engine is shutting down".into());
+        }
+        if !self.inner.browser_isolated {
+            return Err("Conversation browsing requires the Chromium sandbox and web isolation; remove FERRITE_CEF_NO_SANDBOX and sandbox-disabling startup switches".into());
+        }
+        self.inner.profile.websites()?;
+        Ok(())
+    }
+
+    fn controller(&self) -> Result<ControllerEndpoint, String> {
+        self.browser_available()?;
+        let mut controller = self.inner.control.borrow_mut();
+        if controller.is_none() {
+            let mut created = control::Control::start()?;
+            for view in self.inner.live_views() {
+                if view.doc.external {
+                    if let Some(browser) = view.browser.borrow().clone() {
+                        created.register(view.target_id(), browser, view.agent_access.clone());
+                    }
+                }
+            }
+            *controller = Some(created);
+        }
+        Ok(controller.as_ref().unwrap().endpoint())
+    }
+
+    fn shutdown(&self) {
+        self.inner.shutdown();
     }
 
     fn pump(&self) -> Duration {
         let engine = &self.inner;
+        if engine.shutdown.get() {
+            return Duration::from_secs(1);
+        }
         // cef_do_message_loop_work must not be re-entered.
         if engine.pumping.replace(true) {
             return Duration::from_millis(1);
@@ -418,8 +630,25 @@ impl Engine for CefEngine {
         let views = engine.live_views();
         for view in &views {
             view.finish_deferred_hide();
-            view.release_if_hidden_long_enough();
+            if let (Some(browser), Some(observation)) = (
+                view.browser.borrow().as_ref(),
+                view.observation.borrow_mut().as_mut(),
+            ) {
+                observation.pump(browser, &view.state);
+            }
+            if !view.doc.external {
+                view.release_if_hidden_long_enough();
+            }
             view.retire_for_new_html();
+        }
+        if let Some(control) = engine.control.borrow_mut().as_mut() {
+            let ids = views
+                .iter()
+                .filter(|v| v.doc.external && v.browser.borrow().is_some())
+                .map(|v| v.target_id())
+                .collect();
+            control.retain(&ids);
+            control.pump();
         }
         // At most one browser per pump, and nothing else in that pump:
         // creating one costs the main thread a few ms (more under load), and
@@ -468,7 +697,110 @@ impl Engine for CefEngine {
     }
 }
 
+impl CefEngine {
+    fn open_view(
+        &self,
+        page: Page,
+        viewport: Viewport,
+        wake: Wake,
+        external_url: Option<&str>,
+        height: u32,
+    ) -> CefView {
+        let engine = &self.inner;
+        let id = engine.next_id.get();
+        engine.next_id.set(id + 1);
+
+        let doc = Arc::new(PageDoc {
+            url: external_url
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("{SCHEME}://page/{id}")),
+            external: external_url.is_some(),
+            page: Mutex::new(page),
+        });
+        let state = Arc::new(ViewState {
+            external: external_url.is_some(),
+            navigation: Mutex::new(BrowserState {
+                url: external_url.unwrap_or_default().into(),
+                loading: external_url.is_some(),
+                ..Default::default()
+            }),
+            geometry: Mutex::new(Geometry {
+                width: viewport.width.max(1),
+                height: height.clamp(1, MAX_HEIGHT),
+                scale: viewport.scale.max(0.5),
+            }),
+            layers: Mutex::new(BrowserLayers::default()),
+            updates: Mutex::new(Updates::default()),
+            last_cursor: Mutex::new(Cursor::Arrow),
+            dirty: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
+            loaded: AtomicBool::new(false),
+            visible: AtomicBool::new(true),
+            restyle_unpainted: AtomicBool::new(false),
+            trace: engine.global.trace.load(Ordering::SeqCst),
+        });
+        let view = Rc::new(ViewInner {
+            id,
+            _engine: self.inner.clone(),
+            global: engine.global.clone(),
+            state,
+            doc,
+            browser: RefCell::new(None),
+            observation: RefCell::new(None),
+            failed: Cell::new(false),
+            agent_access: Arc::new(AgentAccess::default()),
+            protected: Cell::new(false),
+            wake,
+            visible: Cell::new(true),
+            hidden_since: Cell::new(None),
+            released: Cell::new(false),
+            hide_deferred: Cell::new(false),
+            focused: Cell::new(false),
+            pressed: Cell::new(0),
+            pointer: Cell::new((0.0, 0.0)),
+            html_pending: Cell::new(false),
+            created_at: Cell::new(None),
+        });
+        engine.views.borrow_mut().push(Rc::downgrade(&view));
+        // The browser is created by the next pump (see `pump`).
+        CefView(view)
+    }
+}
+
 impl EngineInner {
+    fn shutdown(&self) {
+        if self.shutdown.replace(true) {
+            return;
+        }
+        let started = Instant::now();
+        // Retained GPUI globals, pump tasks and view handles outlive quit.
+        // Retire their native references explicitly, before cef_shutdown.
+        self.control.borrow_mut().take();
+        for view in self.live_views() {
+            view.agent_access.paused.store(true, Ordering::SeqCst);
+            view.agent_access.epoch.fetch_add(1, Ordering::SeqCst);
+            view.state.generation.fetch_add(1, Ordering::SeqCst);
+            view.observation.borrow_mut().take();
+            if let Some(browser) = view.browser.borrow_mut().take() {
+                if let Some(host) = browser.host() {
+                    host.close_browser(1);
+                }
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while self.global.live_browsers.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
+            do_message_loop_work();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let remaining = self.global.live_browsers.load(Ordering::SeqCst);
+        self.browser_context.borrow_mut().take();
+        cef::shutdown();
+        eprintln!(
+            "ferrite visuals: CEF shutdown in {:?}; browsers remaining before shutdown: {remaining}",
+            started.elapsed()
+        );
+    }
+
     fn live_views(&self) -> Vec<Rc<ViewInner>> {
         let mut views = self.views.borrow_mut();
         views.retain(|view| view.strong_count() > 0);
@@ -482,13 +814,8 @@ impl Drop for EngineInner {
     /// finished closing them before `cef_shutdown`, so pump until it has
     /// (bounded).
     fn drop(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while self.global.live_browsers.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
-            do_message_loop_work();
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        cef::shutdown();
-        let _ = std::fs::remove_dir_all(&self.profile);
+        self.shutdown();
+        // Profile cleanup and its exclusive lock outlive all CEF references.
     }
 }
 
@@ -497,7 +824,16 @@ impl Drop for EngineInner {
 
 struct CefView(Rc<ViewInner>);
 
+/// Shared with private target dispatch; intervention invalidates attachments
+/// even after the operator's current input burst has ended.
+#[derive(Default)]
+struct AgentAccess {
+    paused: AtomicBool,
+    epoch: AtomicU64,
+}
+
 struct ViewInner {
+    id: u64,
     /// Keeps CEF up while any view lives, whatever order the host drops in.
     _engine: Rc<EngineInner>,
     global: Arc<Global>,
@@ -506,6 +842,10 @@ struct ViewInner {
     /// None until the first pump after opening (CEF's context may not be
     /// initialised yet when the host opens), and again once released.
     browser: RefCell<Option<Browser>>,
+    observation: RefCell<Option<observation::Observation>>,
+    failed: Cell<bool>,
+    agent_access: Arc<AgentAccess>,
+    protected: Cell<bool>,
     wake: Wake,
     visible: Cell<bool>,
     /// When the view was last hidden, while it stays hidden.
@@ -529,9 +869,20 @@ struct ViewInner {
 }
 
 impl ViewInner {
+    fn target_id(&self) -> String {
+        format!(
+            "ferrite-browser-{}-{}",
+            self.id,
+            self.state.generation.load(Ordering::SeqCst)
+        )
+    }
+
     /// Visible and without a browser: never created yet, or released.
     fn wants_browser(&self) -> bool {
-        self.visible.get() && self.browser.borrow().is_none()
+        self.visible.get()
+            && !self.failed.get()
+            && self.browser.borrow().is_none()
+            && (!self.doc.external || self._engine.browser_context_ready.load(Ordering::SeqCst))
     }
 
     /// Load the page in a fresh browser. The view's geometry (including the
@@ -540,7 +891,8 @@ impl ViewInner {
     fn create_browser(&self) {
         let started = Instant::now();
         let generation = self.state.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        self.state.loaded.store(false, Ordering::SeqCst);
+        *self.state.layers.lock().unwrap() = BrowserLayers::default();
+        self.state.loaded.store(self.doc.external, Ordering::SeqCst);
         // The reloaded page has the latest theme built in.
         self.state.restyle_unpainted.store(false, Ordering::SeqCst);
         let mut client = handlers::client(
@@ -563,16 +915,42 @@ impl ViewInner {
             background_color: 0,
             ..Default::default()
         };
+        let mut context = if self.doc.external {
+            self._engine.browser_context.borrow().clone()
+        } else {
+            None
+        };
+        let url = if self.doc.external {
+            self.state.navigation.lock().unwrap().url.clone()
+        } else {
+            self.doc.url.clone()
+        };
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
             Some(&mut client),
-            Some(&self.doc.url.as_str().into()),
+            Some(&url.as_str().into()),
             Some(&settings),
             None,
-            None,
+            context.as_mut(),
         );
+        self.failed.set(browser.is_none());
         if browser.is_none() {
             ferrite_core::log!("visuals: cef_browser_host_create_browser_sync returned null");
+            self.state.navigation(generation, |state| {
+                state.loading = false;
+                state.error = Some("Chromium could not create this tab. Reload to retry.".into());
+            });
+        }
+        if self.doc.external {
+            if let (Some(control), Some(browser)) =
+                (self._engine.control.borrow_mut().as_mut(), browser.clone())
+            {
+                control.register(self.target_id(), browser, self.agent_access.clone());
+            }
+        }
+        if self.doc.external {
+            *self.observation.borrow_mut() =
+                browser.as_ref().and_then(observation::Observation::new);
         }
         *self.browser.borrow_mut() = browser;
         // The browser loads the document as it is now.
@@ -627,6 +1005,7 @@ impl ViewInner {
         // Retire the generation first: anything the closing browser still
         // sends is ignored.
         self.state.generation.fetch_add(1, Ordering::SeqCst);
+        *self.state.layers.lock().unwrap() = BrowserLayers::default();
         if let Some(host) = self
             .browser
             .borrow_mut()
@@ -666,6 +1045,7 @@ impl ViewInner {
             return;
         }
         self.state.generation.fetch_add(1, Ordering::SeqCst);
+        *self.state.layers.lock().unwrap() = BrowserLayers::default();
         if let Some(host) = self
             .browser
             .borrow_mut()
@@ -678,6 +1058,17 @@ impl ViewInner {
         self.pressed.set(0);
     }
 
+    fn navigation_intent(&self) {
+        if let Some(observation) = self.observation.borrow_mut().as_mut() {
+            observation.invalidate(&self.state);
+        }
+        let mut state = self.state.navigation.lock().unwrap();
+        state.loading = true;
+        state.dirty = BrowserDirty::Unknown;
+        state.error = None;
+        self.state.dirty.store(true, Ordering::SeqCst);
+    }
+
     fn host(&self) -> Option<cef::BrowserHost> {
         self.browser
             .borrow()
@@ -688,6 +1079,7 @@ impl ViewInner {
 
 impl Drop for ViewInner {
     fn drop(&mut self) {
+        self.observation.get_mut().take();
         if let Some(host) = self.host() {
             host.close_browser(1);
         }
@@ -711,6 +1103,7 @@ impl View for CefView {
             host.notify_screen_info_changed();
         }
         if width_changed || scale_changed {
+            view.state.clear_popup();
             host.was_resized();
         }
     }
@@ -718,15 +1111,25 @@ impl View for CefView {
     fn input(&self, event: Input) {
         let view = &self.0;
         let Some(host) = view.host() else { return };
+        if view.doc.external && matches!(&event, Input::Down { .. } | Input::Key { down: true, .. })
+        {
+            view.state.navigation.lock().unwrap().dirty = BrowserDirty::Dirty;
+            view.state.dirty.store(true, Ordering::SeqCst);
+        }
         match event {
             Input::Move { x, y, modifiers } => {
                 view.pointer.set((x, y));
+                let (x, y) = view.state.popup_input(x, y);
                 let flags = input::modifier_flags(modifiers) | view.pressed.get();
                 host.send_mouse_move_event(Some(&input::mouse_event(x, y, flags)), 0);
             }
             Input::Leave => {
+                if view.pressed.replace(0) != 0 {
+                    host.send_capture_lost_event();
+                }
                 let (x, y) = view.pointer.get();
-                host.send_mouse_move_event(Some(&input::mouse_event(x, y, view.pressed.get())), 1);
+                let (x, y) = view.state.popup_input(x, y);
+                host.send_mouse_move_event(Some(&input::mouse_event(x, y, 0)), 1);
             }
             Input::Down {
                 x,
@@ -743,6 +1146,7 @@ impl View for CefView {
                 view.pressed
                     .set(view.pressed.get() | input::button_flag(button));
                 let flags = input::modifier_flags(modifiers) | view.pressed.get();
+                let (x, y) = view.state.popup_input(x, y);
                 let event = input::mouse_event(x, y, flags);
                 host.send_mouse_click_event(
                     Some(&event),
@@ -761,6 +1165,7 @@ impl View for CefView {
                 view.pressed
                     .set(view.pressed.get() & !input::button_flag(button));
                 let flags = input::modifier_flags(modifiers) | view.pressed.get();
+                let (x, y) = view.state.popup_input(x, y);
                 let event = input::mouse_event(x, y, flags);
                 host.send_mouse_click_event(
                     Some(&event),
@@ -779,6 +1184,7 @@ impl View for CefView {
                 // Same sign convention as GPUI's ScrollDelta (positive = toward
                 // the top/left), in logical pixels.
                 let flags = input::modifier_flags(modifiers) | view.pressed.get();
+                let (x, y) = view.state.popup_input(x, y);
                 host.send_mouse_wheel_event(
                     Some(&input::mouse_event(x, y, flags)),
                     dx.round() as i32,
@@ -800,6 +1206,9 @@ impl View for CefView {
 
     fn set_theme(&self, theme_css: &str) {
         let view = &self.0;
+        if view.doc.external {
+            return;
+        }
         view.doc.page.lock().unwrap().theme_css = theme_css.to_owned();
         let frame = view
             .browser
@@ -819,6 +1228,9 @@ impl View for CefView {
 
     fn set_html(&self, html: &str) {
         let view = &self.0;
+        if view.doc.external {
+            return;
+        }
         {
             let mut page = view.doc.page.lock().unwrap();
             if page.html == html {
@@ -837,6 +1249,13 @@ impl View for CefView {
         }
         view.hidden_since.set((!visible).then(Instant::now));
         if !visible {
+            view.state.clear_popup();
+            *view.state.layers.lock().unwrap() = BrowserLayers::default();
+            if view.doc.external {
+                if let Some(observation) = view.observation.borrow_mut().as_mut() {
+                    observation.invalidate(&view.state);
+                }
+            }
             let unpainted = view.state.restyle_unpainted.load(Ordering::SeqCst);
             if unpainted && view.host().is_some() {
                 view.hide_deferred.set(true);
@@ -858,5 +1277,159 @@ impl View for CefView {
         let state = &self.0.state;
         state.dirty.store(false, Ordering::SeqCst);
         std::mem::take(&mut *state.updates.lock().unwrap())
+    }
+}
+
+impl BrowserView for CefView {
+    fn state(&self) -> BrowserState {
+        self.0.state.navigation.lock().unwrap().clone()
+    }
+    fn target_id(&self) -> Option<String> {
+        self.0.browser.borrow().as_ref().map(|_| self.0.target_id())
+    }
+    fn browser_viewport(&self) -> Option<BrowserViewport> {
+        let geometry = self.0.state.geometry.lock().unwrap();
+        Some(BrowserViewport {
+            width: geometry.width,
+            height: geometry.height,
+            scale: geometry.scale,
+        })
+    }
+    fn resize_browser(&self, viewport: BrowserViewport) {
+        let changed = {
+            let mut geometry = self.0.state.geometry.lock().unwrap();
+            let height = viewport.height.clamp(1, MAX_HEIGHT);
+            let changed = geometry.height != height;
+            geometry.height = height;
+            changed
+        };
+        self.resize(Viewport {
+            width: viewport.width,
+            scale: viewport.scale,
+        });
+        if changed {
+            self.0.state.clear_popup();
+            if let Some(host) = self.0.host() {
+                host.was_resized();
+            }
+        }
+    }
+    fn navigate(&self, url: &str) -> Result<(), String> {
+        if !handlers::external_url(url) {
+            return Err("Conversation browser requires an http or https URL".into());
+        }
+        self.0.failed.set(false);
+        if let Some(frame) = self
+            .0
+            .browser
+            .borrow()
+            .as_ref()
+            .and_then(|browser| browser.main_frame())
+        {
+            self.0.navigation_intent();
+            frame.load_url(Some(&url.into()));
+        } else {
+            let mut state = self.0.state.navigation.lock().unwrap();
+            state.url = url.into();
+            state.error = None;
+            state.dirty = BrowserDirty::Unknown;
+        }
+        self.0.state.dirty.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+    fn back(&self) -> Result<(), String> {
+        let browser = self.0.browser.borrow();
+        let browser = browser
+            .as_ref()
+            .ok_or("Tab is unloaded; show it before navigating history")?;
+        if browser.can_go_back() == 0 {
+            return Err("No previous page in this tab".into());
+        }
+        self.0.navigation_intent();
+        browser.go_back();
+        Ok(())
+    }
+    fn forward(&self) -> Result<(), String> {
+        let browser = self.0.browser.borrow();
+        let browser = browser
+            .as_ref()
+            .ok_or("Tab is unloaded; show it before navigating history")?;
+        if browser.can_go_forward() == 0 {
+            return Err("No next page in this tab".into());
+        }
+        self.0.navigation_intent();
+        browser.go_forward();
+        Ok(())
+    }
+    fn reload(&self) -> Result<(), String> {
+        self.0.failed.set(false);
+        if let Some(browser) = self.0.browser.borrow().as_ref() {
+            self.0.navigation_intent();
+            browser.reload();
+        } else {
+            self.0.navigation_intent();
+            self.0.visible.set(true);
+            self.0.state.visible.store(true, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+    fn set_protected(&self, protected: bool) {
+        if self.0.protected.replace(protected) && !protected {
+            if let Some(observation) = self.0.observation.borrow_mut().as_mut() {
+                observation.invalidate(&self.0.state);
+            }
+        }
+    }
+    fn control_epoch(&self) -> u64 {
+        self.0.agent_access.epoch.load(Ordering::SeqCst)
+    }
+    fn set_agent_paused(&self, paused: bool) {
+        let changed = self.0.agent_access.paused.swap(paused, Ordering::SeqCst) != paused;
+        if changed && paused {
+            self.0.agent_access.epoch.fetch_add(1, Ordering::SeqCst);
+        }
+        if changed {
+            if let Some(observation) = self.0.observation.borrow_mut().as_mut() {
+                observation.invalidate(&self.0.state);
+            }
+        }
+    }
+    fn try_release(&self) -> Result<bool, String> {
+        let view = &self.0;
+        let state = self.state();
+        if view.visible.get()
+            || view.protected.get()
+            || view.agent_access.paused.load(Ordering::SeqCst)
+            || state.loading
+            || state.dirty != BrowserDirty::Clean
+        {
+            return Ok(false);
+        }
+        if view.browser.borrow().is_none() {
+            return Ok(true);
+        }
+        if !view
+            .observation
+            .borrow()
+            .as_ref()
+            .is_some_and(|observation| observation.release_ready())
+        {
+            return Ok(false);
+        }
+        view.observation.borrow_mut().take();
+        view.state.generation.fetch_add(1, Ordering::SeqCst);
+        *view.state.layers.lock().unwrap() = BrowserLayers::default();
+        if let Some(host) = view
+            .browser
+            .borrow_mut()
+            .take()
+            .and_then(|browser| browser.host())
+        {
+            host.close_browser(1);
+        }
+        view.released.set(true);
+        view.focused.set(false);
+        view.pressed.set(0);
+        Ok(true)
     }
 }

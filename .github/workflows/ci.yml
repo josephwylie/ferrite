@@ -108,9 +108,19 @@ jobs:
         with:
           path: ~/.local/share/cef
           key: ${{ steps.cef-cache.outputs.cache-primary-key }}
-      - name: Visuals smoke
+      - name: Windows staging contract
+        shell: pwsh
+        run: scripts/tests/windows-stage.ps1
+      - name: Packaged Windows visuals smoke
         shell: pwsh
         timeout-minutes: 5
         run: |
-          scripts/copy-chromium-windows.ps1 -Destination target\debug
-          target\debug\ferrite.exe --visual-smoke
+          $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $built = Join-Path $metadata.target_directory "debug"
+          # The ordinary Rust executable must refuse CEF without the broker.
+          $naked = Start-Process -FilePath (Join-Path $built "ferrite.exe") -ArgumentList @('--visual-smoke') -NoNewWindow -Wait -PassThru
+          if ($naked.ExitCode -eq 0) { throw "Unpackaged executable rendered without the Windows sandbox bootstrap" }
+          $stage = Join-Path $built "bundle\windows\Ferrite"
+          scripts/stage-windows.ps1 -BuildDirectory $built -Destination $stage
+          $packaged = Start-Process -FilePath (Join-Path $stage "ferrite.exe") -ArgumentList @('--visual-smoke') -NoNewWindow -Wait -PassThru
+          if ($packaged.ExitCode -ne 0) { throw "Packaged Windows visuals smoke failed ($($packaged.ExitCode))" }

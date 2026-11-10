@@ -1,0 +1,8 @@
+ferrite: visuals off: Visuals require Ferrite's packaged Windows sandbox bootstrap
+ferrite: browser window smoke: launch pid 8876
+ferrite: browser window smoke: native application callback
+ferrite: attached to the Ferrite server, boot 231c-18e64acf7e435d18
+ferrite: browser window smoke: setting native app identity
+ferrite: browser window smoke: opening native window; Threads [ThreadId(1)]
+ferrite: browser window smoke: native bounds computed
+ferrite: browser window smoke: production CockpitView constructed

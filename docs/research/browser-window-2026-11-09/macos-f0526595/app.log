@@ -1,0 +1,8 @@
+ferrite: browser window smoke: launch pid 12203
+ferrite: browser window smoke: native application callback
+ferrite: attached to the Ferrite server, boot 2f8d-18e64ccfabcc17f0
+ferrite: browser window smoke: setting native app identity
+ferrite: browser window smoke: opening native window; Threads [ThreadId(1)]
+ferrite: browser window smoke: native bounds computed
+ferrite: browser window smoke: production CockpitView constructed
+[12203:41463:1109/063242.415907:ERROR:base/mac/process_requirement.cc:159] Unable to derive validation category for current process. Signature validation of current process failed: Error Domain=NSOSStatusErrorDomain Code=-67030 "(null)" (-67030)

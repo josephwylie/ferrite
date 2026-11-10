@@ -11,7 +11,6 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
@@ -42,11 +41,33 @@ fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{name}"))
 }
 
-fn stub(name: &str, script: &str) -> String {
-    let path = dir().join(name);
-    fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-    path.display().to_string()
+/// Immutable executables avoid Linux's ETXTBSY race when another test forks
+/// while a generated CLI script is still open for writing.
+fn stub(
+    provider: &str,
+    output: String,
+    host: &Path,
+    argv: Option<&Path>,
+) -> (String, Vec<(String, std::ffi::OsString)>) {
+    let mut env = vec![
+        ("FERRITE_VISUAL_TEST_OUTPUT".into(), output.into()),
+        (
+            "FERRITE_VISUAL_TEST_HOST".into(),
+            host.as_os_str().to_owned(),
+        ),
+    ];
+    if let Some(argv) = argv {
+        env.push((
+            "FERRITE_VISUAL_TEST_ARGV".into(),
+            argv.as_os_str().to_owned(),
+        ));
+    }
+    (
+        fixture(&format!("visual-{provider}.sh"))
+            .display()
+            .to_string(),
+        env,
+    )
 }
 
 /// The fake adapter: records what it was asked and answers as scripted.
@@ -184,18 +205,15 @@ fn claude(name: &str, visuals: Option<Visuals>) -> (ClaudeSession, PathBuf, Path
     let host = dir().join(format!("{name}.host.jsonl"));
     let argv = dir().join(format!("{name}.argv"));
     let _ = fs::remove_file(&host);
-    let program = stub(
-        name,
-        &format!(
-            "case \"$1\" in --version) echo '2.1.292 (Claude Code)'; exit 0;; esac\n\
-             echo \"$@\" > '{}'\ncat '{}'\nexec cat > '{}'",
-            argv.display(),
-            fixture(CLAUDE).display(),
-            host.display()
-        ),
+    let (program, env) = stub(
+        "claude",
+        fs::read_to_string(fixture(CLAUDE)).unwrap(),
+        &host,
+        Some(&argv),
     );
     let session = ClaudeSession::spawn(ClaudeConfig {
         program,
+        env,
         visuals,
         ..Default::default()
     })
@@ -424,19 +442,15 @@ fn a_permission_request_for_the_tool_is_allowed_without_a_decision() {
     let ask = json!({"type": "control_request", "request_id": "ask-1", "request": {
         "subtype": "can_use_tool", "tool_name": "mcp__ferrite__show_visual",
         "input": {"title": "t", "html": "<p>"}, "tool_use_id": "toolu_x"}});
-    let program = stub(
-        "claude-ask",
-        &format!(
-            "case \"$1\" in --version) echo '2.1.292 (Claude Code)'; exit 0;; esac\n\
-             echo '{{\"type\":\"control_response\",\"response\":{{\"subtype\":\"success\",\"request_id\":\"req_1\",\"response\":{{}}}}}}'\n\
-             echo '{ask}'\n\
-             echo '{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"\"}}'\n\
-             exec cat > '{}'",
-            host.display()
-        ),
-    );
+    let output = [
+        json!({"type":"control_response","response":{"subtype":"success","request_id":"req_1","response":{}}}),
+        ask,
+        json!({"type":"result","subtype":"success","is_error":false,"result":""}),
+    ].into_iter().map(|frame| frame.to_string()).collect::<Vec<_>>().join("\n");
+    let (program, env) = stub("claude", output, &host, None);
     let session = ClaudeSession::spawn(ClaudeConfig {
         program,
+        env,
         visuals: visuals(&renderer(shown()), Level::WhenAsked),
         ..Default::default()
     })
@@ -458,18 +472,15 @@ fn a_permission_request_for_the_tool_is_allowed_without_a_decision() {
 fn codex(name: &str, visuals: Option<Visuals>) -> (CodexSession, PathBuf) {
     let host = dir().join(format!("{name}.host.jsonl"));
     let _ = fs::remove_file(&host);
-    let program = stub(
-        name,
-        &format!(
-            "case \"$1\" in --version) echo 'codex-cli 0.160.1'; exit 0;; esac\n\
-             echo '{{\"id\":3,\"result\":{{\"data\":[]}}}}'\n\
-             cat '{}'\nexec cat > '{}'",
-            fixture(CODEX).display(),
-            host.display()
-        ),
+    let output = format!(
+        "{}\n{}",
+        json!({"id":3,"result":{"data":[]}}),
+        fs::read_to_string(fixture(CODEX)).unwrap()
     );
+    let (program, env) = stub("codex", output, &host, None);
     let session = CodexSession::spawn(CodexConfig {
         program,
+        env,
         visuals,
         ..Default::default()
     })
@@ -482,7 +493,12 @@ fn codex_is_offered_a_direct_dynamic_tool_and_its_call_gets_text_and_the_screens
     let renderer = renderer(shown());
     let (session, host) = codex("codex-offered", visuals(&renderer, Level::WhenAsked));
     let events = drain(session.events());
-    let lines = host_lines(&host, |lines| lines.iter().any(|line| line["id"] == 0));
+    // The replay may answer a tool before startup finishes. Wait for both
+    // independently written frames before inspecting the captured request.
+    let lines = host_lines(&host, |lines| {
+        lines.iter().any(|line| line["id"] == 0)
+            && lines.iter().any(|line| line["method"] == "thread/start")
+    });
 
     let start = lines
         .iter()
@@ -533,19 +549,19 @@ fn codex_is_offered_a_direct_dynamic_tool_and_its_call_gets_text_and_the_screens
 fn a_resumed_codex_thread_keeps_its_tool_and_is_told_to_call_it_directly() {
     let host = dir().join("codex-resume.host.jsonl");
     let _ = fs::remove_file(&host);
-    let program = stub(
-        "codex-resume",
-        &format!(
-            "case \"$1\" in --version) echo 'codex-cli 0.160.1'; exit 0;; esac\n\
-             echo '{{\"id\":1,\"result\":{{}}}}'\n\
-             echo '{{\"id\":3,\"result\":{{\"data\":[]}}}}'\n\
-             echo '{{\"id\":2,\"result\":{{\"thread\":{{\"id\":\"t\"}},\"model\":\"m\"}}}}'\n\
-             exec cat > '{}'",
-            host.display()
-        ),
-    );
+    let output = [
+        json!({"id":1,"result":{}}),
+        json!({"id":3,"result":{"data":[]}}),
+        json!({"id":2,"result":{"thread":{"id":"t"},"model":"m"}}),
+    ]
+    .into_iter()
+    .map(|frame| frame.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+    let (program, env) = stub("codex", output, &host, None);
     let session = CodexSession::spawn(CodexConfig {
         program,
+        env,
         resume: Some("t".into()),
         visuals: visuals(&renderer(shown()), Level::Automatic),
         ..Default::default()
@@ -570,15 +586,24 @@ fn a_resumed_codex_thread_keeps_its_tool_and_is_told_to_call_it_directly() {
 fn codex_without_visuals_offers_nothing_and_refuses_a_stray_call() {
     let (session, host) = codex("codex-none", None);
     drain(session.events());
-    let lines = host_lines(&host, |lines| lines.iter().any(|line| line["id"] == 0));
+    // The replay may answer a tool before startup finishes. Wait for both
+    // independently written frames before inspecting the captured request.
+    let lines = host_lines(&host, |lines| {
+        lines.iter().any(|line| line["id"] == 0)
+            && lines.iter().any(|line| line["method"] == "thread/start")
+    });
     let start = lines
         .iter()
         .find(|line| line["method"] == "thread/start")
-        .unwrap();
+        .expect("the fixture captured thread/start before completing");
     assert!(start["params"].get("dynamicTools").is_none());
     // The config still turns Codex's plan tool on; it names no Ferrite
     // tool namespace.
     assert!(start["params"]["config"].get("features").is_none());
+    assert_eq!(
+        start["params"]["config"]["tools"]["update_plan"]["enabled"], true,
+        "planning remains available with Visuals off"
+    );
     let answer = lines.iter().find(|line| line["id"] == 0).unwrap();
     assert_eq!(answer["result"]["success"], false);
 }

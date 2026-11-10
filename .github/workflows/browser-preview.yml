@@ -1,0 +1,47 @@
+name: Browser preview GPUI
+on:
+  push:
+    branches: ['feat/browser-193-ui', 'feat/browser-194']
+    paths:
+      - 'crates/ferrite-core/**'
+      - 'crates/ferrite-pane/**'
+      - 'crates/ferrite-cockpit/**'
+      - '.github/workflows/browser-preview.yml'
+  workflow_dispatch:
+concurrency:
+  group: browser-preview-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  preview:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    env:
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        continue-on-error: true
+      - name: Use direct compiler when sccache download is unavailable
+        shell: bash
+        run: |
+          if ! command -v sccache >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+          fi
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Preview input, frames and full viewport
+        run: cargo test -p ferrite-pane --locked --lib visual::element::tests
+      - name: Local preview routing and sealed files
+        run: cargo test -p ferrite-cockpit --locked --lib cockpit::tests::output_cards
+      - name: Preview shell behavior
+        run: cargo test -p ferrite-cockpit --locked --lib cockpit::tests::panel_preview
+      - name: Service-backed preview and new tab flow
+        run: cargo test -p ferrite-cockpit --locked --lib conversation_browser_shares_the_live_preview
+      - name: Transcript link interactions
+        run: cargo test -p ferrite-cockpit --locked --lib cockpit::tests::link_clicks

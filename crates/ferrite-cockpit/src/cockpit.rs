@@ -5,6 +5,9 @@
 
 mod agent_pane;
 pub(crate) mod beside;
+mod browser;
+#[cfg(feature = "browser-smoke")]
+mod browser_smoke;
 mod context_menu;
 pub(crate) mod decisions;
 mod drafts;
@@ -329,6 +332,7 @@ impl std::ops::DerefMut for CockpitPane {
 
 pub struct CockpitView {
     cockpit: Cockpit,
+    browsers: browser::Browsers,
     /// One view per Pane of the Cockpit's roster, in its order — the
     /// keyboard, the scrollback and the caches the window owns for each.
     /// `sync_panes` is the one door: after every act on the roster the
@@ -1470,10 +1474,24 @@ impl CockpitView {
         if prefs.ferrite_updates {
             updating::schedule_checks(cx);
         }
-        cx.on_app_quit(|view, _cx| {
+        cx.on_app_quit(|view, cx| {
             view.save_drafts();
             view.cockpit.halt_sessions();
-            async {}
+            #[cfg(feature = "cef")]
+            let browser = view.browsers.controller.clone();
+            let executor = cx.background_executor().clone();
+            async move {
+                #[cfg(feature = "cef")]
+                if let Some(browser) = browser {
+                    executor
+                        .spawn(async move {
+                            browser.shutdown();
+                        })
+                        .await;
+                }
+                #[cfg(not(feature = "cef"))]
+                let _ = executor;
+            }
         })
         .detach();
 
@@ -1486,8 +1504,14 @@ impl CockpitView {
         // tested directly against an empty registry below.
         #[cfg(test)]
         let launch_project = launch_project.or_else(|| cockpit.register_project(&here()).ok());
+        cx.bind_keys([gpui::KeyBinding::new("enter", browser::Go, Some("BrowserAddress"))]);
+        cx.bind_keys([
+            gpui::KeyBinding::new("escape", browser::CancelAnnotation, Some("BrowserAnnotationCapture")),
+            gpui::KeyBinding::new("escape", ferrite_pane::annotation_editor::Cancel, Some("AnnotationEditor")),
+        ]);
         let mut view = Self {
             cockpit,
+            browsers: Default::default(),
             panes: Vec::new(),
             focus: cx.focus_handle(),
             perf: std::env::var("FERRITE_PERF").is_ok().then(|| Perf {
@@ -1824,11 +1848,11 @@ impl CockpitView {
         }
     }
 
-    /// Open the Thread's PR on the forge, in the browser on this computer.
+    /// Open the Thread's PR in its browser preview.
     pub(crate) fn open_pr(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let url = self.facts.pr(thread).and_then(|pr| pr.url.as_deref());
+        let url = self.facts.pr(thread).and_then(|pr| pr.url.clone());
         if let Some(url) = url {
-            cx.open_url(url);
+            self.browser_action(thread, ferrite_core::browser::Action::Open { url }, cx);
         }
     }
 
@@ -2291,6 +2315,7 @@ impl CockpitView {
             self.sync_menu(cx);
         }
         let frame = self.cockpit.pump();
+        self.pump_browsers(cx);
         self.poll_remote_path(cx);
         self.poll_machine_repo(cx);
         let server_moved = self.server_moved();
@@ -10475,6 +10500,13 @@ impl CockpitView {
                 self.panes[index].preview.held_focus(window, cx)
             })
             .or_else(|| {
+                let index = self.focused();
+                if !self.preview_shown(index) { return None; }
+                let pane = self.panes.get(index)?;
+                if !pane.preview.document().is_some_and(|document| matches!(&document.body, ferrite_pane::preview::Body::Browser)) { return None; }
+                self.browser_annotation_focus(pane.thread()?, cx)
+            })
+            .or_else(|| {
                 self.panes
                     .get(self.focused())?
                     .review
@@ -12479,13 +12511,12 @@ impl CockpitView {
             }
             let row = pane::check_row(index, run);
             card = card.child(match run.url.clone() {
-                // A press opens the run's log where the browser is, and
-                // closes the card: the answer is now in the other window.
+                // Keep the run's log with the Thread's other browser tabs.
                 Some(url) => row.on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
-                        cx.open_url(&url);
+                        view.browser_action(thread, ferrite_core::browser::Action::Open { url: url.clone() }, cx);
                         view.context_checks = None;
                         cx.notify();
                     }),

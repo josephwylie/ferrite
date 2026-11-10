@@ -63,6 +63,13 @@ pub(crate) struct PreviewTab {
     rich: ferrite_pane::rich::TextCache,
     /// The find bar, while it is open.
     pub(crate) find: Option<PreviewFind>,
+    annotation_image: Option<AnnotationImage>,
+}
+
+struct AnnotationImage {
+    annotation: ferrite_core::browser_annotations::Annotation,
+    opened: Option<u64>,
+    image: std::sync::mpsc::Receiver<std::io::Result<PathBuf>>,
 }
 
 impl Default for PreviewTab {
@@ -75,6 +82,7 @@ impl Default for PreviewTab {
             markdown_scroll: ScrollHandle::new(),
             rich: ferrite_pane::rich::TextCache::default(),
             find: None,
+            annotation_image: None,
         }
     }
 }
@@ -171,6 +179,45 @@ impl CockpitView {
     /// the Panel back to its sections. A find bar closes with
     /// its document, and a Markdown reveal that is due settles.
     pub(in crate::cockpit) fn tend_previews(&mut self, window: &mut Window) {
+        for pane in &mut self.panes {
+            for annotation in pane.preview.take_annotation_requests() {
+                let image = pane
+                    .thread()
+                    .ok_or_else(|| {
+                        std::io::Error::other(
+                            "Open the owning Thread to review this browser capture",
+                        )
+                    })
+                    .and_then(|thread| {
+                        self.cockpit
+                            .browser_annotation_image(thread, annotation.clone())
+                    });
+                match image {
+                    Ok(image) => {
+                        pane.preview.loading_annotation(annotation.clone(), window);
+                        pane.preview_tab.annotation_image = Some(AnnotationImage {
+                            annotation,
+                            image,
+                            opened: pane.preview.opened().map(|(open, _)| open),
+                        });
+                    }
+                    Err(error) => {
+                        pane.preview
+                            .annotation_error(&annotation, error.to_string(), window)
+                    }
+                }
+            }
+            if let Some(pending) = pane.preview_tab.annotation_image.take() {
+                if pane.preview.opened().map(|(open, _)| open) == pending.opened {
+                    match pending.image.try_recv() {
+                        Ok(Ok(image)) => pane.preview.open_annotation(pending.annotation, image, window),
+                        Ok(Err(error)) => pane.preview.annotation_error(&pending.annotation, format!("The retained capture could not be opened: {error}. Reopen the annotation to try again."), window),
+                        Err(std::sync::mpsc::TryRecvError::Empty) => pane.preview_tab.annotation_image = Some(pending),
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => pane.preview.annotation_error(&pending.annotation, "The retained capture could not be loaded. Reopen the annotation to try again.".into(), window),
+                    }
+                }
+            }
+        }
         let first = !std::mem::replace(&mut self.panel.tended, true);
         for pane in &mut self.panes {
             let opened = pane.preview.opened();
@@ -333,6 +380,34 @@ impl CockpitView {
                 find.map(|find| &find.bar),
             )
             .into_any_element(),
+            Body::Browser => self.browser_body(pane.thread(), cx),
+            Body::BrowserAnnotation { annotation, image } => div()
+                .debug_selector(|| "browser-annotation-review".into())
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .gap(px(ferrite_ui::theme::SPACE_2))
+                .child(
+                    div()
+                        .text_size(px(FS_META))
+                        .text_color(rgb(INK_SUBTLE))
+                        .child(annotation.capture().url.clone()),
+                )
+                .when(!annotation.comment().is_empty(), |review| {
+                    review.child(
+                        div()
+                            .text_color(rgb(INK_STRONG))
+                            .child(annotation.comment().to_owned()),
+                    )
+                })
+                .child(match image {
+                    Some(image) => {
+                        ferrite_pane::annotation_editor::annotation_stage(annotation, image.clone())
+                    }
+                    None => div().child("Loading capture…").into_any_element(),
+                })
+                .into_any_element(),
             Body::Unshown(why) => unshown(why, &document.path, cx),
             Body::Page(page) => match page.shown(cx) {
                 Shown::Live(web) => div()
@@ -386,9 +461,20 @@ impl CockpitView {
         // A file (not a command's output, which no file holds, nor a page,
         // whose menu does it) can have its path copied, as the head reads
         // it, and open in its own app.
-        let file = (document.name.is_none() && document.page().is_none())
-            .then(|| (document.path.clone(), title.clone()));
-        let expand = document.page().is_some().then(|| self.expand_door(cx));
+        let file = match &document.body {
+            Body::BrowserAnnotation {
+                annotation,
+                image: Some(image),
+            } => Some((image.clone(), annotation.original().display().to_string())),
+            _ => (document.name.is_none() && document.page().is_none())
+                .then(|| (document.path.clone(), title.clone())),
+        };
+        let expand = (document.page().is_some()
+            || matches!(
+                document.body,
+                Body::Browser | Body::BrowserAnnotation { .. }
+            ))
+        .then(|| self.expand_door(cx));
         let doors = file
             .map(|(original, shown)| {
                 [

@@ -66,6 +66,8 @@ pub struct Attach {
     /// Draws the Visuals the Server's agents ask for; none, and this window
     /// does not offer to.
     pub renderer: Option<Arc<dyn Renderer>>,
+    /// This window can realize general website pages.
+    pub browser: bool,
     /// What the window finds on its own: CLI session files to adopt, a
     /// workspace's commands. It spawns no Session.
     pub discovery: Box<dyn crate::engine::Spawner>,
@@ -583,6 +585,58 @@ impl Remote {
         })
     }
 
+    pub(crate) fn browser_capture(
+        &mut self,
+        thread: ThreadId,
+        owner: crate::browser::Owner,
+        lease: crate::browser::Lease,
+        capture: crate::browser_annotations::Capture,
+        png: crate::protocol::WirePng,
+    ) -> io::Result<Receiver<io::Result<crate::browser_annotations::Annotation>>> {
+        let attachment = self
+            .attachment
+            .as_mut()
+            .ok_or_else(|| io::Error::from(gone(&self.detached)))?;
+        self.next_request += 1;
+        let id = self.next_request;
+        let sent = attachment
+            .client
+            .send_capture(ClientMessage::Command(Command {
+                id,
+                op: Op::BrowserCapture {
+                    thread,
+                    owner,
+                    lease,
+                    capture,
+                    png,
+                },
+            }));
+        if let Err(error) = sent {
+            self.detach(&format!("the capture upload could not be queued: {error}"));
+            return Err(error);
+        }
+        let (answer, answered) = mpsc::channel();
+        self.answer(id, answer, |done| match done {
+            Done::BrowserCapture { annotation } => Some(annotation),
+            _ => None,
+        });
+        Ok(answered)
+    }
+
+    pub(crate) fn browser_capture_image(
+        &mut self,
+        thread: ThreadId,
+        hash: String,
+    ) -> io::Result<Receiver<io::Result<crate::protocol::WirePng>>> {
+        self.ask(
+            Op::BrowserCaptureImage { thread, hash },
+            |done| match done {
+                Done::BrowserCaptureImage { png } => Some(png),
+                _ => None,
+            },
+        )
+    }
+
     pub(crate) fn read_review_file(
         &mut self,
         path: &Path,
@@ -749,7 +803,7 @@ impl Remote {
         }
     }
 
-    fn say(&mut self, message: &ClientMessage) {
+    pub(super) fn say(&mut self, message: &ClientMessage) {
         let Some(attachment) = &mut self.attachment else {
             return;
         };
@@ -1066,6 +1120,9 @@ fn hello(attach: &Attach) -> ClientMessage {
     let mut capabilities = Vec::new();
     if attach.renderer.is_some() {
         capabilities.push(Capability::RenderVisual);
+    }
+    if attach.browser {
+        capabilities.push(Capability::ConversationBrowser);
     }
     capabilities.push(Capability::ParkedThreads);
     ClientMessage::Hello {

@@ -89,22 +89,77 @@ pub(super) fn offer_visuals(
     let Some(definition) = visuals.and_then(crate::visual::Visuals::definition) else {
         return;
     };
+    offer_function(
+        params,
+        definition.name,
+        definition.description,
+        definition.input_schema,
+        start,
+    );
+}
+
+/// Append a function to Ferrite's namespace without replacing other tools or
+/// the per-Thread planning configuration.
+fn offer_function(params: &mut Value, name: &str, description: String, schema: Value, start: bool) {
     if start {
-        params["dynamicTools"] = serde_json::json!([{
-            "type": "namespace",
-            "name": crate::visual::SERVER,
-            "description": "Ferrite, the app the operator watches this conversation in.",
-            "tools": [{
-                "type": "function",
-                "name": definition.name,
-                "description": definition.description,
-                "inputSchema": definition.input_schema,
-            }],
-        }]);
+        if !params["dynamicTools"].is_array() {
+            params["dynamicTools"] = serde_json::json!([]);
+        }
+        let namespaces = params["dynamicTools"]
+            .as_array_mut()
+            .expect("tool namespaces");
+        let namespace = match namespaces
+            .iter()
+            .position(|namespace| namespace["name"] == crate::visual::SERVER)
+        {
+            Some(index) => &mut namespaces[index],
+            None => {
+                namespaces.push(serde_json::json!({"type":"namespace", "name":crate::visual::SERVER,
+                    "description":"Ferrite, the app the operator watches this conversation in.", "tools":[]}));
+                namespaces.last_mut().expect("inserted namespace")
+            }
+        };
+        namespace["tools"]
+            .as_array_mut()
+            .expect("namespace tools")
+            .push(serde_json::json!({
+                "type":"function", "name":name, "description":description, "inputSchema":schema
+            }));
     }
-    params["config"] = serde_json::json!({
-        "features": {"code_mode": {"direct_only_tool_namespaces": [crate::visual::SERVER]}}
-    });
+    let namespaces = &mut params["config"]["features"]["code_mode"]["direct_only_tool_namespaces"];
+    if !namespaces.is_array() {
+        *namespaces = serde_json::json!([]);
+    }
+    let namespaces = namespaces.as_array_mut().expect("direct tool namespaces");
+    if !namespaces
+        .iter()
+        .any(|namespace| namespace == crate::visual::SERVER)
+    {
+        namespaces.push(crate::visual::SERVER.into());
+    }
+}
+
+pub(super) fn offer_browser(
+    params: &mut Value,
+    browser: Option<&crate::browser::ThreadClient>,
+    start: bool,
+) {
+    if browser.is_none() {
+        return;
+    }
+    let definition = crate::browser::tools::definition();
+    offer_function(
+        params,
+        definition.name,
+        definition.description,
+        definition.input_schema,
+        start,
+    );
+    if !start {
+        let guidance = "This resumed Codex Thread retains its original dynamic tools. If ferrite.browser is absent, Conversation browser control is unavailable in this Thread; ask the operator to start a new Thread for browser work. Never launch a separate browser.";
+        let instructions = params["developerInstructions"].as_str().unwrap_or_default();
+        params["developerInstructions"] = format!("{instructions}\n\n{guidance}").into();
+    }
 }
 
 /// Offer Codex its own plan tool, and say when to use it. `update_plan` is
@@ -160,6 +215,42 @@ pub(super) fn answer_visual(
             respond,
         ),
         None => respond(crate::visual::Answer::unavailable()),
+    }
+    true
+}
+
+/// Translate only our browser dynamic call. The shared tool contract owns
+/// parsing, bounded asynchronous completion and Thread routing.
+pub(super) fn answer_browser(
+    frame: &Value,
+    browser: Option<&crate::browser::ThreadClient>,
+    stdin: std::sync::Arc<std::sync::Mutex<std::process::ChildStdin>>,
+) -> bool {
+    if frame["method"] != "item/tool/call"
+        || frame["params"]["namespace"] != crate::visual::SERVER
+        || frame["params"]["tool"] != crate::browser::tools::TOOL
+    {
+        return false;
+    }
+    let Some(id) = frame.get("id").cloned() else {
+        return false;
+    };
+    let respond = move |answer: crate::browser::tools::Answer| {
+        let mut items = vec![serde_json::json!({"type":"inputText", "text":answer.text})];
+        if let Some(png) = answer.png_base64() {
+            items.push(serde_json::json!({"type":"inputImage", "imageUrl":format!("data:image/png;base64,{png}")}));
+        }
+        let _ = super::write_request(
+            &stdin,
+            &serde_json::json!({"jsonrpc":"2.0", "id":id,
+            "result":{"success":!answer.is_error, "contentItems":items}}),
+        );
+    };
+    match browser {
+        Some(browser) => {
+            crate::browser::tools::answer(browser, &frame["params"]["arguments"], respond)
+        }
+        None => respond(crate::browser::tools::Answer::unavailable()),
     }
     true
 }
@@ -2199,6 +2290,51 @@ mod tests {
             input_items("read @docs/notes.txt", &[], None),
             [serde_json::json!({"type": "text", "text": "read @docs/notes.txt"})]
         );
+    }
+
+    #[test]
+    fn browser_annotation_native_image_reaches_codex() {
+        use crate::browser::{Document, TabId};
+        use crate::browser_annotations::{self, Capture, Selection, Viewport};
+        let root =
+            std::env::temp_dir().join(format!("ferrite-codex-browser-{}", std::process::id()));
+        let png = include_bytes!("../../../tests/fixtures/browser-original.png");
+        let annotation = browser_annotations::retain(
+            &root,
+            Capture {
+                document: Document {
+                    tab: TabId(8),
+                    generation: 2,
+                },
+                native_generation: 5,
+                url: "https://example.test/captured".into(),
+                viewport: Viewport {
+                    width_css: 1.0,
+                    height_css: 1.0,
+                    device_scale: 1.0,
+                },
+                selection: Selection::Region {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+            },
+            png,
+            "Align this field".into(),
+            vec![],
+        )
+        .unwrap();
+        let text = browser_annotations::compose("Fix it", &[], &[annotation.clone()]);
+        assert_eq!(
+            input_items(&text, &[], None),
+            [
+                serde_json::json!({"type": "localImage", "path": annotation.original()}),
+                serde_json::json!({"type": "text", "text": text}),
+            ]
+        );
+        assert_eq!(std::fs::read(annotation.original()).unwrap(), png);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

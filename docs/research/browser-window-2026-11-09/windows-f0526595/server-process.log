@@ -1,0 +1,6 @@
+ferrite: server: Projects are off: no C:\Users\RUNNER~1\AppData\Local\Temp\ferrite-window-z1a7rsf3\no-projects
+ferrite: server: 0.4.0 listening, boot 1d30-18e64caf5506697c
+ferrite: could not discover Codex models: codex CLI not found: `codex`
+{"url":"http://127.0.0.1:49900/"}
+ferrite: server: stopping, as a window asked
+ferrite: quitting: 1 sessions ended

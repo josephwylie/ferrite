@@ -1,0 +1,147 @@
+name: Browser native lifecycle
+
+# Keep the feasibility evidence independent of unrelated core test failures.
+# Match the primary CI's compiler caching for the vendored GPUI stack.
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  CARGO_INCREMENTAL: 0
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: 'true'
+
+on:
+  push:
+    branches: ['feat/browser-193-native']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  packaged-cef:
+    name: Packaged CEF sandbox (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    env:
+      FERRITE_BROWSER_SMOKE: '1'
+      # This workflow's ordinary/profile smoke uses only isolated test data.
+      FERRITE_BROWSER_SMOKE_MOCK_KEYCHAIN: '1'
+      FERRITE_BROWSER_SMOKE_DRIVER: ${{ github.workspace }}/scripts/probe-embedded-browser.py
+      FERRITE_BROWSER_EVIDENCE: ${{ github.workspace }}/target/browser-evidence
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: browser-cef
+          cache-on-failure: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja
+      - name: Install Windows build tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja --no-progress -y }
+      - name: Build Windows CEF application
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:CEF_PATH = Join-Path $HOME '.local\share\cef'
+          cargo build -p ferrite --locked --features cef
+          if ($LASTEXITCODE -ne 0) { throw 'CEF build failed' }
+      - name: Build macOS CEF application
+        if: runner.os == 'macOS'
+        run: |
+          CEF_PATH="$HOME/.local/share/cef" cargo build --profile local -p ferrite --locked --features cef
+          cargo build --profile local --locked -p herdr-projects --bin ferrite-projects
+      - name: Build native controller
+        # rust-cache omits nested .git metadata. Re-clone the pinned source
+        # rather than letting git resolve this restored folder to Ferrite's HEAD.
+        # Compiled target/agent-browser-cargo artifacts remain cached.
+        run: |
+          python -c "import shutil; shutil.rmtree('target/agent-browser-build', ignore_errors=True)"
+          python scripts/package-agent-browser.py --destination target/browser-controller
+      - name: Stage Windows package
+        id: package_windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          scripts/stage-windows.ps1 -BuildDirectory target/debug -Destination target/debug/bundle/windows/Ferrite
+          python scripts/package-agent-browser.py --destination target/debug/bundle/windows/Ferrite --from-stage target/browser-controller
+          if ($LASTEXITCODE -ne 0) { throw 'Native controller staging failed' }
+      - name: Stage and sign macOS bundle
+        id: package_macos
+        if: runner.os == 'macOS'
+        env:
+          FERRITE_BROWSER_CONTROLLER_STAGE: ${{ github.workspace }}/target/browser-controller
+        run: scripts/install-app.sh --bundle-only
+      - name: Windows packaged browser smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $naked = Start-Process -FilePath (Resolve-Path target/debug/ferrite.exe) -ArgumentList @('--visual-smoke') -NoNewWindow -Wait -PassThru
+          if ($naked.ExitCode -eq 0) { throw 'Naked executable bypassed the sandbox bootstrap' }
+          # CEF's bootstrap is a GUI executable: explicitly wait for its own
+          # completion rather than reading a previous command's LASTEXITCODE.
+          $packaged = Start-Process -FilePath (Resolve-Path target/debug/bundle/windows/Ferrite/ferrite.exe) -ArgumentList @('--visual-smoke') -NoNewWindow -Wait -PassThru
+          if ($packaged.ExitCode -ne 0) { throw "Packaged CEF smoke failed ($($packaged.ExitCode))" }
+      - name: macOS packaged browser smoke
+        if: runner.os == 'macOS'
+        run: target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite --visual-smoke
+      - name: Windows durable profile and competing process smoke
+        if: always() && !cancelled() && runner.os == 'Windows' && steps.package_windows.outcome == 'success'
+        shell: pwsh
+        env:
+          FERRITE_BROWSER_PROFILE: ${{ runner.temp }}/ferrite-browser-profile
+        run: |
+          foreach ($stage in @('write', 'read')) {
+            $env:FERRITE_BROWSER_PROFILE_SMOKE = $stage
+            $smoke = Start-Process -FilePath (Resolve-Path target/debug/bundle/windows/Ferrite/ferrite.exe) -ArgumentList @('--visual-smoke') -NoNewWindow -Wait -PassThru
+            if ($smoke.ExitCode -ne 0) { throw "Profile $stage smoke failed ($($smoke.ExitCode))" }
+          }
+      - name: macOS durable profile and competing process smoke
+        if: always() && !cancelled() && runner.os == 'macOS' && steps.package_macos.outcome == 'success'
+        env:
+          FERRITE_BROWSER_PROFILE: ${{ runner.temp }}/ferrite-browser-profile
+        run: |
+          for stage in write read; do
+            FERRITE_BROWSER_PROFILE_SMOKE="$stage" target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite --visual-smoke
+          done
+      - name: macOS production OS keychain and encrypted cookie restart
+        if: always() && !cancelled() && runner.os == 'macOS' && steps.package_macos.outcome == 'success'
+        run: python scripts/probe-browser-keychain.py target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite
+      - name: Windows unsafe startup smoke
+        if: always() && !cancelled() && runner.os == 'Windows' && steps.package_windows.outcome == 'success'
+        shell: pwsh
+        env:
+          FERRITE_BROWSER_UNSAFE_SMOKE: '1'
+        run: |
+          foreach ($unsafeSwitch in @('--no-sandbox', '--no-sandbox=0', '/NO-SANDBOX=0', '/DISABLE-WEB-SECURITY=0', '-disable-site-isolation-trials=0', '/DISABLE-FEATURES=SitePerProcess')) {
+            $smoke = Start-Process -FilePath (Resolve-Path target/debug/bundle/windows/Ferrite/ferrite.exe) -ArgumentList @('--visual-smoke', $unsafeSwitch) -NoNewWindow -Wait -PassThru
+            if ($smoke.ExitCode -ne 0) { throw "Unsafe configuration did not preserve sealed-only behavior: $unsafeSwitch ($($smoke.ExitCode))" }
+          }
+      - name: macOS unsafe startup smoke
+        if: always() && !cancelled() && runner.os == 'macOS' && steps.package_macos.outcome == 'success'
+        env:
+          FERRITE_BROWSER_UNSAFE_SMOKE: '1'
+        run: |
+          for unsafe_switch in --no-sandbox --no-sandbox=0 -no-sandbox=0 -disable-web-security=0 --disable-site-isolation-trials --disable-features=SitePerProcess; do
+            target/local/bundle/macos/Ferrite.app/Contents/MacOS/ferrite --visual-smoke "$unsafe_switch"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: embedded-browser-${{ runner.os }}-${{ runner.arch }}
+          path: target/browser-evidence
+          if-no-files-found: ignore

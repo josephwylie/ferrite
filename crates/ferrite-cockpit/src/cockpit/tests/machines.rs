@@ -207,6 +207,7 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
     ));
     let attach = |name: &str| {
         let mut core = Cockpit::attach(Attach {
+            browser: false,
             store: dir.join(name).join("threads"),
             server: Endpoint::Machine(bridge.clone()),
             client: ferrite_core::protocol::Peer {
@@ -503,6 +504,7 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
         ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default())))
             .unwrap();
     let mut core = Cockpit::attach(Attach {
+            browser: false,
         store: dir.join("window").join("threads"),
         server: Endpoint::Machine(std::sync::Arc::new(Bridge::new(
             "box",
@@ -1372,6 +1374,115 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
     );
 }
 
+/// The public Server/window path must show its exact native page, including
+/// provider-initiated opens and navigation that finishes before the next paint.
+#[gpui::test]
+fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx: &mut TestAppContext) {
+    use ferrite_core::browser::Action;
+    use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
+    use ferrite_pane::visual::{engine::Visuals, web::fake::{Call, FakeEngine}};
+    let dir = scratch("browser-preview");
+    let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
+    let bridge = std::sync::Arc::new(Bridge::new("box", dir.join("bridge.sock"), dial));
+    let mut core = Cockpit::attach(Attach {
+        store: dir.join("window"), server: Endpoint::Machine(bridge),
+        client: ferrite_core::protocol::Peer { name: "browser-preview".into(), version: "0".into() },
+        renderer: None, browser: true, discovery: Box::new(Fake::default()),
+    }).unwrap();
+    ferrite_core::doorbell::until("browser window did not attach", || {
+        core.pump(); matches!(core.server(), Some(ServerState::Attached { .. }))
+    });
+    let thread = core.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() }).unwrap();
+    core.browser_attach(thread).unwrap();
+    let opened = core.browser(thread, Action::Open { url: "http://localhost:5173/start".into() }).unwrap();
+    let document = opened.tabs[0].document();
+    bind_production_keys(cx);
+    let engine = std::rc::Rc::new(FakeEngine::new());
+    cx.update(|cx| Visuals::install(engine.clone(), cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    until(cx, |cx| engine.live_views() == 1 && cx.debug_bounds("browser-preview").is_some());
+    view.update(cx, |view, _| {
+        let state = view.cockpit.browser(thread, Action::Navigate { document, url: "http://localhost:5173/first".into() }).unwrap();
+        view.cockpit.browser(thread, Action::Navigate { document: state.tabs[0].document(), url: "http://localhost:5173/final".into() }).unwrap();
+    });
+    until(cx, |cx| view.update(cx, |view, _| {
+        let state = view.cockpit.browser_attach(thread).unwrap();
+        state.tabs[0].url == "http://localhost:5173/final" && !state.tabs[0].loading
+    }));
+    assert_eq!(engine.live_views(), 1, "navigation retains the page displayed by the preview");
+    assert!(engine.journal().contains(&Call::BrowserNavigate("http://localhost:5173/final".into())));
+    let new_tab = cx.debug_bounds("browser-new-tab").unwrap();
+    cx.simulate_click(new_tab.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_input("http://localhost:5173/second");
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap().tabs.len() == 2));
+    let state = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
+    assert_eq!(state.tabs[0].url, "http://localhost:5173/final", "new tab does not navigate the existing page");
+    assert_eq!(state.tabs[1].url, "http://localhost:5173/second");
+    engine.defer_browser_navigation(true);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("http://localhost:5173/delayed");
+    cx.simulate_keystrokes("enter");
+    until(cx, |_| engine.journal().contains(&Call::BrowserNavigate("http://localhost:5173/delayed".into())));
+    tick(cx);
+    let pending = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
+    assert_eq!(pending.tabs[1].url, "http://localhost:5173/delayed", "old native metadata must not overwrite an accepted navigation intent");
+    assert!(pending.tabs[1].loading);
+    assert_eq!(pending.tabs[1].dirty, ferrite_core::browser::Dirty::Unknown);
+    engine.finish_browser_navigations();
+    until(cx, |cx| view.update(cx, |view, _| {
+        let state = view.cockpit.browser_attach(thread).unwrap();
+        state.tabs[1].url == "http://localhost:5173/delayed" && !state.tabs[1].loading
+    }));
+    engine.defer_browser_navigation(false);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("http://localhost:5173/delayed#section");
+    cx.simulate_keystrokes("enter");
+    until(cx, |cx| view.update(cx, |view, _| {
+        let state = view.cockpit.browser_attach(thread).unwrap();
+        state.tabs[1].url == "http://localhost:5173/delayed#section" && !state.tabs[1].loading
+    }));
+    let wait_protection = |cx: &mut gpui::VisualTestContext, expected: bool, stage: &str| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        until(cx, |cx| {
+            let (state, active) = view.update(cx, |view, _| {
+                (view.cockpit.browser_attach(thread).unwrap(), view.cockpit.window_active())
+            });
+            assert!(std::time::Instant::now() < deadline,
+                "{stage}: expected protected={expected}, active={active}, state={state:?}");
+            state.tabs.iter().any(|tab| tab.protected) == expected
+        });
+    };
+    let viewport = cx.debug_bounds("browser-preview").unwrap();
+    let page_point = viewport.center();
+    cx.simulate_mouse_down(page_point, gpui::MouseButton::Left, gpui::Modifiers::none());
+    wait_protection(cx, true, "held pointer begins");
+    for _ in 0..3 { tick(cx); }
+    assert!(view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap().tabs.iter().any(|tab| tab.protected)),
+        "a held gesture must not settle between pointer events");
+    cx.simulate_mouse_up(viewport.origin - gpui::point(px(10.), px(10.)), gpui::MouseButton::Left, gpui::Modifiers::none());
+    wait_protection(cx, false, "outside pointer release settles");
+    cx.simulate_click(page_point, gpui::Modifiers::none());
+    // GPUI's keystroke helper emits only KeyDown. Real typing also releases
+    // each key; held keys deliberately keep manual interaction active.
+    cx.simulate_keystrokes("a");
+    cx.simulate_event(gpui::KeyUpEvent { keystroke: gpui::Keystroke::parse("a").unwrap() });
+    tick(cx);
+    cx.simulate_keystrokes("b");
+    cx.simulate_event(gpui::KeyUpEvent { keystroke: gpui::Keystroke::parse("b").unwrap() });
+    tick(cx);
+    assert!(view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap().tabs.iter().any(|tab| tab.protected)),
+        "a typing burst must remain protected between keys");
+    wait_protection(cx, false, "typing burst settles");
+    cx.simulate_mouse_down(page_point, gpui::MouseButton::Left, gpui::Modifiers::none());
+    wait_protection(cx, true, "second gesture begins");
+    let add_tab = cx.debug_bounds("browser-new-tab").unwrap().center();
+    cx.simulate_click(add_tab, gpui::Modifiers::none());
+    wait_protection(cx, false, "focus loss settles");
+}
+
 #[gpui::test]
 fn remote_inbox_uses_digests_and_follows_another_clients_park(cx: &mut TestAppContext) {
     use ferrite_core::protocol::{ServerMessage, SharedRoster};
@@ -1428,4 +1539,77 @@ fn remote_inbox_uses_digests_and_follows_another_clients_park(cx: &mut TestAppCo
     );
     tick(cx);
     assert!(remote(cx).is_empty(), "another client's Park removes it");
+}
+
+#[gpui::test]
+fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(cx: &mut TestAppContext) {
+    use ferrite_core::browser::Action;
+    use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
+    use ferrite_pane::visual::{engine::Visuals, web::{fake::{Call, FakeEngine}, Input}};
+    let dir = scratch("browser-annotation-host");
+    let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
+    let bridge = std::sync::Arc::new(Bridge::new("box", dir.join("bridge.sock"), dial));
+    let mut core = Cockpit::attach(Attach {
+        store: dir.join("window"), server: Endpoint::Machine(bridge),
+        client: ferrite_core::protocol::Peer { name: "browser-preview".into(), version: "0".into() },
+        renderer: None, browser: true, discovery: Box::new(Fake::default()),
+    }).unwrap();
+    ferrite_core::doorbell::until("browser window did not attach", || {
+        core.pump(); matches!(core.server(), Some(ServerState::Attached { .. }))
+    });
+    let thread = core.open(Provider::Claude, WorkspaceChoice::Main { checkout: here() }).unwrap();
+    core.browser_attach(thread).unwrap();
+    core.browser(thread, Action::Open { url: "http://localhost:5173/start".into() }).unwrap();
+    bind_production_keys(cx);
+    let engine = std::rc::Rc::new(FakeEngine::new());
+    cx.update(|cx| Visuals::install(engine.clone(), cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    until(cx, |cx| engine.live_views() == 1 && cx.debug_bounds("browser-preview").is_some());
+    let activation = || engine.journal().into_iter().filter(|call| {
+        matches!(call, Call::Input(input) if !matches!(input, Input::Leave))
+    }).collect::<Vec<_>>();
+    let before = activation();
+    let wait = |cx: &mut gpui::VisualTestContext, label: &str, done: fn(&mut gpui::VisualTestContext) -> bool| {
+        ferrite_core::doorbell::until(label, || { leap(cx, super::super::user_commands::ENDED_POLL); done(cx) });
+    };
+    let annotate = cx.debug_bounds("browser-annotate").expect("live browser offers annotation capture");
+    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
+    wait(cx, "region selection opens", |cx| cx.debug_bounds("browser-annotation-overlay").is_some());
+    let protected = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
+    assert!(protected.tabs[0].protected, "selection protects the exact live page");
+    let cancel = cx.debug_bounds("browser-annotation-cancel").unwrap();
+    cx.simulate_click(cancel.center(), gpui::Modifiers::none());
+    wait(cx, "Cancel closes selection", |cx| cx.debug_bounds("browser-annotation-overlay").is_none());
+    let released = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
+    assert!(!released.tabs[0].protected, "cancel releases capture protection");
+    let annotate = cx.debug_bounds("browser-annotate").unwrap();
+    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
+    wait(cx, "element controls open", |cx| cx.debug_bounds("browser-annotation-element").is_some());
+    let element = cx.debug_bounds("browser-annotation-element").unwrap();
+    cx.simulate_click(element.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("escape");
+    wait(cx, "Escape closes selection", |cx| cx.debug_bounds("browser-annotation-overlay").is_none());
+    let annotate = cx.debug_bounds("browser-annotate").unwrap();
+    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
+    wait(cx, "region retry opens", |cx| cx.debug_bounds("browser-annotation-overlay").is_some());
+    let overlay = cx.debug_bounds("browser-annotation-overlay").unwrap();
+    let from = overlay.origin + gpui::point(px(20.), px(20.));
+    let to = from + gpui::point(px(80.), px(60.));
+    cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::none());
+    wait(cx, "unavailable capture releases overlay", |cx| cx.debug_bounds("browser-annotation-overlay").is_none());
+    let released = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
+    assert!(!released.tabs[0].protected, "unavailable capture releases protection");
+    let annotate = cx.debug_bounds("browser-annotate").unwrap();
+    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
+    wait(cx, "selection opens before new tab", |cx| cx.debug_bounds("browser-annotation-overlay").is_some());
+    let new_tab = cx.debug_bounds("browser-new-tab").unwrap();
+    cx.simulate_click(new_tab.center(), gpui::Modifiers::none());
+    tick(cx);
+    let released = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
+    assert!(!released.tabs[0].protected, "starting another tab must release hidden selection protection");
+    assert!(cx.debug_bounds("browser-annotate").is_none(), "new address mode has no visible page to annotate");
+    assert_eq!(activation(), before, "annotation selection never forwards page activation input");
 }

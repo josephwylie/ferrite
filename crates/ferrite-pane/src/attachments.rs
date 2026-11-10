@@ -20,6 +20,7 @@ use gpui::{prelude::*, px, App, ElementId, IntoElement, SharedString, Window};
 
 use crate::preview::Preview;
 use crate::quote::Reply;
+use ferrite_core::browser_annotations::Annotation;
 
 /// Nothing to install now: delivered files draw in the float grammar rather
 /// than on the kit's stock attachment cards, so the kit's own tokens are no
@@ -28,6 +29,7 @@ pub fn init(_cx: &mut App) {}
 
 type Remove = Rc<dyn Fn(&PathBuf, &mut Window, &mut App)>;
 type DropReview = Rc<dyn Fn(&mut Window, &mut App)>;
+type RemoveAnnotation = Rc<dyn Fn(&str, &mut Window, &mut App)>;
 type RemoveReply = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 
 #[derive(IntoElement)]
@@ -41,6 +43,8 @@ pub struct Attachments {
     replies: Vec<Reply>,
     on_remove_reply: Option<RemoveReply>,
     island: bool,
+    annotations: Vec<Annotation>,
+    on_remove_annotation: Option<RemoveAnnotation>,
 }
 
 impl Attachments {
@@ -55,7 +59,22 @@ impl Attachments {
             replies: Vec::new(),
             on_remove_reply: None,
             island: false,
+            annotations: Vec::new(),
+            on_remove_annotation: None,
         }
+    }
+
+    pub fn annotations(mut self, annotations: Vec<Annotation>) -> Self {
+        self.annotations = annotations;
+        self
+    }
+
+    pub fn on_remove_annotation(
+        mut self,
+        callback: impl Fn(&str, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_remove_annotation = Some(Rc::new(callback));
+        self
     }
 
     /// Pending attachments as chips on the shelf above the prompt.
@@ -122,16 +141,26 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         replies,
         on_remove_reply,
         island,
+        annotations,
+        on_remove_annotation,
     } = attachments;
     let (images, others): (Vec<_>, Vec<_>) = files
         .into_iter()
         .enumerate()
         .partition(|(_, path)| crate::image_viewer::is_image(path));
     let gallery: Arc<[PathBuf]> = images.iter().map(|(_, path)| path.clone()).collect();
-    let cards: Vec<_> = images
+    let mut cards: Vec<_> = images
         .iter()
         .map(|(index, path)| image_card(*index, path, &gallery, &preview, on_remove.clone()))
         .collect();
+    cards.extend(
+        annotations
+            .into_iter()
+            .enumerate()
+            .map(|(index, annotation)| {
+                annotation_card(index, annotation, &preview, on_remove_annotation.clone())
+            }),
+    );
     let others_empty = others.is_empty();
     let chips = others.into_iter().map(|(index, path)| {
         let name = path
@@ -240,6 +269,93 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         .into_any_element()
 }
 
+/// A Browser annotation stays distinct from an ordinary file or source Review.
+/// Its captured URL and comment remain visible even when its page has gone.
+fn annotation_card(
+    index: usize,
+    annotation: Annotation,
+    preview: &Preview,
+    remove: Option<RemoveAnnotation>,
+) -> gpui::AnyElement {
+    use ferrite_ui::{pointer::Pointer as _, theme};
+    let original = annotation.original().to_path_buf();
+    let image = if original.is_file() {
+        Some(original)
+    } else {
+        annotation.cached_image()
+    };
+    let host = preview.clone();
+    let id = annotation.id().to_owned();
+    let comment = annotation.comment().to_owned();
+    let url = annotation.capture().url.clone();
+    gpui::div()
+        .id(SharedString::from(format!("browser-annotation-{id}")))
+        .debug_selector(|| "browser-annotation-attachment".into())
+        .flex()
+        .items_center()
+        .gap(px(theme::SPACE_2))
+        .min_w_0()
+        .max_w(px(theme::ATTACH_CHIP_MAX_W))
+        .p(px(theme::SPACE_2))
+        .rounded(px(theme::R_CARD))
+        .bg(theme::paint::RAISED)
+        .child(
+            ferrite_ui::components::button(("review-browser-annotation", index))
+                .debug_selector(move || format!("review-browser-annotation-{index}"))
+                .tab_stop(true)
+                .key_context("PromptAttachment")
+                .accessibility_label("Review browser annotation")
+                .p_0()
+                .flex()
+                .items_center()
+                .gap(px(theme::SPACE_2))
+                .min_w_0()
+                .cursor_pointer()
+                .hover_carried(format!("browser-annotation-{id}"))
+                .when_some(image, |card, image| {
+                    card.child(thumbnail(
+                        ("browser-annotation-image", index),
+                        &image,
+                        (64.0, 48.0),
+                    ))
+                })
+                .child(
+                    gpui::div()
+                        .flex()
+                        .flex_col()
+                        .min_w_0()
+                        .font_family(theme::FONT_UI)
+                        .text_size(px(theme::FS_META))
+                        .text_color(gpui::rgb(theme::INK_SUBTLE))
+                        .child("Browser annotation")
+                        .child(
+                            gpui::div()
+                                .truncate()
+                                .text_color(gpui::rgb(theme::INK_STRONG))
+                                .child(comment),
+                        )
+                        .child(gpui::div().truncate().child(url)),
+                )
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    host.review_annotation(annotation.clone(), window);
+                }),
+        )
+        .when_some(remove, |card, remove| {
+            card.child(
+                remove_button(("remove-browser-annotation", index))
+                    .debug_selector(move || format!("remove-browser-annotation-{index}"))
+                    .accessibility_label("Remove browser annotation")
+                    .tooltip_builder(ferrite_ui::menu::tooltip("Remove browser annotation"))
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        remove(&id, window, cx);
+                    }),
+            )
+        })
+        .into_any_element()
+}
+
 /// An image waiting in the tray as Claude shows one: the picture covering
 /// a `COMPOSER_THUMB` card (`thumbnail`), a button — a tab stop,
 /// Enter/Space — that opens it in the lightbox among the tray's images;
@@ -344,13 +460,15 @@ pub(crate) fn thumbnail(
                 .text_color(gpui::rgb(theme::RED))
                 .child("Failed")
         })
-        .when(!failed, |card| card.child(
-            gpui::img(path.to_path_buf())
-                .w(px(width))
-                .h(px(height))
-                .rounded(px(theme::R_CARD - theme::HAIRLINE_W))
-                .object_fit(gpui::ObjectFit::Cover),
-        ))
+        .when(!failed, |card| {
+            card.child(
+                gpui::img(path.to_path_buf())
+                    .w(px(width))
+                    .h(px(height))
+                    .rounded(px(theme::R_CARD - theme::HAIRLINE_W))
+                    .object_fit(gpui::ObjectFit::Cover),
+            )
+        })
 }
 
 /// A quoted passage as Claude draws one over the sent prompt's bubble: the

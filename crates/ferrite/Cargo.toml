@@ -9,6 +9,9 @@ description = "Ferrite: native multi-provider agent cockpit (GPUI app)"
 # tests compile the app once and the binary has none of its own.
 [lib]
 doctest = false
+# CEF's Windows sandbox bootstrap loads the application as ferrite.dll.
+# Keep rlib for the ordinary executable and application tests.
+crate-type = ["rlib", "cdylib"]
 
 [[bin]]
 name = "ferrite"
@@ -25,7 +28,9 @@ visual-reference = ["ferrite-cockpit/visual-reference"]
 # `cargo build` needs no cmake, ninja or 130-170 MB CEF download; without it
 # a visual shows its title, caption and an open-in-browser fallback instead
 # of the live page. The engine is the Pane's (`visual`, in ferrite-pane).
-cef = ["ferrite-pane/cef"]
+cef = ["ferrite-pane/cef", "ferrite-cockpit/cef"]
+
+browser-smoke = ["cef", "ferrite-cockpit/browser-smoke"]
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }

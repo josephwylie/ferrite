@@ -1,0 +1,2645 @@
+{
+  "environment": {
+    "date": "2026-11-09",
+    "os": "macOS27.2",
+    "hardware": "Apple M4",
+    "chrome": "157.0.8103.38",
+    "node": "25.9.0",
+    "agentBrowser": "0.41.2",
+    "playwright": "1.65.0",
+    "puppeteer": "25.16.0"
+  },
+  "baselineWithoutRecovery": {
+    "kind": "ab",
+    "block": 0,
+    "elapsedMs": 23268.015832999998,
+    "memoryBefore": 19.453125,
+    "memoryAfter": 19.921875,
+    "results": [
+      {
+        "i": 0,
+        "ms": 800.3555419999999,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 29,
+        "polls": 10,
+        "rssMiB": 19.75
+      },
+      {
+        "i": 1,
+        "ms": 880.6916669999998,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 30,
+        "polls": 11,
+        "rssMiB": 19.8125
+      },
+      {
+        "i": 2,
+        "ms": 844.1784170000001,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 30,
+        "polls": 11,
+        "rssMiB": 19.84375
+      },
+      {
+        "i": 3,
+        "ms": 979.0080419999999,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 30,
+        "polls": 11,
+        "rssMiB": 19.859375
+      },
+      {
+        "i": 4,
+        "ms": 1002.2947089999998,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 30,
+        "polls": 11,
+        "rssMiB": 19.859375
+      },
+      {
+        "i": 5,
+        "ms": 931.6562080000003,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 30,
+        "polls": 11,
+        "rssMiB": 19.859375
+      },
+      {
+        "i": 6,
+        "ms": 1018.4932920000001,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 30,
+        "polls": 11,
+        "rssMiB": 19.859375
+      },
+      {
+        "i": 7,
+        "ms": 994.0370409999996,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 31,
+        "polls": 12,
+        "rssMiB": 19.859375
+      },
+      {
+        "i": 8,
+        "ms": 832.6778340000001,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 30,
+        "polls": 11,
+        "rssMiB": 19.859375
+      },
+      {
+        "i": 9,
+        "ms": 888.942583,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 29,
+        "polls": 10,
+        "rssMiB": 19.859375
+      },
+      {
+        "i": 10,
+        "ms": 975.972667,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 29,
+        "polls": 10,
+        "rssMiB": 19.859375
+      },
+      {
+        "i": 11,
+        "ms": 927.1316669999997,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 31,
+        "polls": 12,
+        "rssMiB": 19.875
+      },
+      {
+        "i": 12,
+        "ms": 881.0249170000006,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 29,
+        "polls": 10,
+        "rssMiB": 19.875
+      },
+      {
+        "i": 13,
+        "ms": 831.494917,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 30,
+        "polls": 11,
+        "rssMiB": 19.890625
+      },
+      {
+        "i": 14,
+        "ms": 943.0100839999996,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 30,
+        "polls": 11,
+        "rssMiB": 19.890625
+      },
+      {
+        "i": 15,
+        "ms": 970.6404590000002,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 30,
+        "polls": 11,
+        "rssMiB": 19.890625
+      },
+      {
+        "i": 16,
+        "ms": 1079.295,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 30,
+        "polls": 11,
+        "rssMiB": 19.890625
+      },
+      {
+        "i": 17,
+        "ms": 986.6756669999995,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 29,
+        "polls": 10,
+        "rssMiB": 19.890625
+      },
+      {
+        "i": 18,
+        "ms": 1124.434416,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 28,
+        "polls": 9,
+        "rssMiB": 19.90625
+      },
+      {
+        "i": 19,
+        "ms": 1094.78975,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 29,
+        "polls": 10,
+        "rssMiB": 19.90625
+      },
+      {
+        "i": 20,
+        "ms": 1079.5386670000007,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 28,
+        "polls": 9,
+        "rssMiB": 19.90625
+      },
+      {
+        "i": 21,
+        "ms": 1001.4175420000029,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 29,
+        "polls": 10,
+        "rssMiB": 19.921875
+      },
+      {
+        "i": 22,
+        "ms": 1036.0984160000007,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 29,
+        "polls": 10,
+        "rssMiB": 19.921875
+      },
+      {
+        "i": 23,
+        "ms": 1091.2565409999988,
+        "success": false,
+        "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n",
+        "commands": 30,
+        "polls": 11,
+        "rssMiB": 19.921875
+      }
+    ]
+  },
+  "runs": [
+    {
+      "kind": "ab",
+      "block": 0,
+      "elapsedMs": 80918.195917,
+      "memoryBefore": 19.578125,
+      "memoryWarm": 20.015625,
+      "memoryAfter": 13.59375,
+      "recoveryErrors": [
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        }
+      ],
+      "results": [
+        {
+          "i": 0,
+          "ms": 3342.971375,
+          "success": true,
+          "commands": 80,
+          "polls": 35,
+          "recoveries": 1,
+          "rssMiB": 20.015625
+        },
+        {
+          "i": 1,
+          "ms": 3274.4429169999994,
+          "success": true,
+          "commands": 79,
+          "polls": 34,
+          "recoveries": 1,
+          "rssMiB": 20.09375,
+          "screenshotMs": 190.87862499999937
+        },
+        {
+          "i": 2,
+          "ms": 3448.6282499999998,
+          "success": true,
+          "commands": 80,
+          "polls": 35,
+          "recoveries": 1,
+          "rssMiB": 20.296875
+        },
+        {
+          "i": 3,
+          "ms": 3448.4993750000012,
+          "success": true,
+          "commands": 82,
+          "polls": 37,
+          "recoveries": 1,
+          "rssMiB": 20.3125
+        },
+        {
+          "i": 4,
+          "ms": 3002.3434590000015,
+          "success": true,
+          "commands": 77,
+          "polls": 32,
+          "recoveries": 1,
+          "rssMiB": 20.328125
+        },
+        {
+          "i": 5,
+          "ms": 3159.0732500000013,
+          "success": true,
+          "commands": 77,
+          "polls": 32,
+          "recoveries": 1,
+          "rssMiB": 20.34375
+        },
+        {
+          "i": 6,
+          "ms": 3296.922083999998,
+          "success": true,
+          "commands": 77,
+          "polls": 32,
+          "recoveries": 1,
+          "rssMiB": 20.34375
+        },
+        {
+          "i": 7,
+          "ms": 3356.889459000002,
+          "success": true,
+          "commands": 80,
+          "polls": 35,
+          "recoveries": 1,
+          "rssMiB": 20.359375
+        },
+        {
+          "i": 8,
+          "ms": 3443.9078340000015,
+          "success": true,
+          "commands": 79,
+          "polls": 34,
+          "recoveries": 1,
+          "rssMiB": 20.390625
+        },
+        {
+          "i": 9,
+          "ms": 3568.607041000003,
+          "success": true,
+          "commands": 79,
+          "polls": 34,
+          "recoveries": 1,
+          "rssMiB": 20.390625
+        },
+        {
+          "i": 10,
+          "ms": 3440.1279159999976,
+          "success": true,
+          "commands": 81,
+          "polls": 36,
+          "recoveries": 1,
+          "rssMiB": 20.390625
+        },
+        {
+          "i": 11,
+          "ms": 3561.008625000002,
+          "success": true,
+          "commands": 79,
+          "polls": 34,
+          "recoveries": 1,
+          "rssMiB": 18.1875
+        },
+        {
+          "i": 12,
+          "ms": 3466.2581250000003,
+          "success": true,
+          "commands": 77,
+          "polls": 32,
+          "recoveries": 1,
+          "rssMiB": 18.1875
+        },
+        {
+          "i": 13,
+          "ms": 3235.0131249999977,
+          "success": true,
+          "commands": 78,
+          "polls": 33,
+          "recoveries": 1,
+          "rssMiB": 18.1875
+        },
+        {
+          "i": 14,
+          "ms": 3469.7786659999983,
+          "success": true,
+          "commands": 80,
+          "polls": 35,
+          "recoveries": 1,
+          "rssMiB": 18.1875
+        },
+        {
+          "i": 15,
+          "ms": 3356.433333000001,
+          "success": true,
+          "commands": 80,
+          "polls": 35,
+          "recoveries": 1,
+          "rssMiB": 18.234375
+        },
+        {
+          "i": 16,
+          "ms": 3448.531167000001,
+          "success": true,
+          "commands": 80,
+          "polls": 35,
+          "recoveries": 1,
+          "rssMiB": 18.234375
+        },
+        {
+          "i": 17,
+          "ms": 3355.1249580000003,
+          "success": true,
+          "commands": 80,
+          "polls": 35,
+          "recoveries": 1,
+          "rssMiB": 18.25
+        },
+        {
+          "i": 18,
+          "ms": 3315.5007499999992,
+          "success": true,
+          "commands": 82,
+          "polls": 37,
+          "recoveries": 1,
+          "rssMiB": 18.25
+        },
+        {
+          "i": 19,
+          "ms": 3200.9828750000015,
+          "success": true,
+          "commands": 80,
+          "polls": 35,
+          "recoveries": 1,
+          "rssMiB": 18.265625
+        },
+        {
+          "i": 20,
+          "ms": 3150.1426670000073,
+          "success": true,
+          "commands": 81,
+          "polls": 36,
+          "recoveries": 1,
+          "rssMiB": 18.265625
+        },
+        {
+          "i": 21,
+          "ms": 3593.528999999995,
+          "success": true,
+          "commands": 81,
+          "polls": 36,
+          "recoveries": 1,
+          "rssMiB": 18.296875
+        },
+        {
+          "i": 22,
+          "ms": 3343.1473750000005,
+          "success": true,
+          "commands": 78,
+          "polls": 33,
+          "recoveries": 1,
+          "rssMiB": 16.8125
+        },
+        {
+          "i": 23,
+          "ms": 3365.647084000011,
+          "success": true,
+          "commands": 83,
+          "polls": 38,
+          "recoveries": 1,
+          "rssMiB": 13.59375
+        }
+      ]
+    },
+    {
+      "kind": "playwright",
+      "block": 0,
+      "elapsedMs": 104524.405167,
+      "memoryBefore": 132.53125,
+      "memoryWarm": 149.796875,
+      "memoryAfter": 163.046875,
+      "recoveryErrors": [],
+      "results": [
+        {
+          "i": 0,
+          "ms": 4371.626042,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 149.765625
+        },
+        {
+          "i": 1,
+          "ms": 3927.7630839999993,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 159.4375,
+          "screenshotMs": 246.18291599999975
+        },
+        {
+          "i": 2,
+          "ms": 4105.639833000001,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 170.25
+        },
+        {
+          "i": 3,
+          "ms": 3875.6361670000006,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 170.609375
+        },
+        {
+          "i": 4,
+          "ms": 4516.87025,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 158.515625
+        },
+        {
+          "i": 5,
+          "ms": 4273.505916000002,
+          "success": true,
+          "commands": 32,
+          "polls": 41,
+          "recoveries": 0,
+          "rssMiB": 158.78125
+        },
+        {
+          "i": 6,
+          "ms": 4166.316666999999,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 159.109375
+        },
+        {
+          "i": 7,
+          "ms": 4490.537250000001,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 159.5
+        },
+        {
+          "i": 8,
+          "ms": 4565.499624999997,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 159.859375
+        },
+        {
+          "i": 9,
+          "ms": 4303.343542000002,
+          "success": true,
+          "commands": 32,
+          "polls": 37,
+          "recoveries": 0,
+          "rssMiB": 160.125
+        },
+        {
+          "i": 10,
+          "ms": 5311.045624999999,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 160.40625
+        },
+        {
+          "i": 11,
+          "ms": 4395.214333999997,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 160.59375
+        },
+        {
+          "i": 12,
+          "ms": 3883.630250000002,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 160.8125
+        },
+        {
+          "i": 13,
+          "ms": 3688.9774169999946,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 161
+        },
+        {
+          "i": 14,
+          "ms": 4043.9150420000005,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 161.09375
+        },
+        {
+          "i": 15,
+          "ms": 4166.684165999999,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 161.421875
+        },
+        {
+          "i": 16,
+          "ms": 3748.759374999994,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 161.640625
+        },
+        {
+          "i": 17,
+          "ms": 4013.8546669999923,
+          "success": true,
+          "commands": 32,
+          "polls": 41,
+          "recoveries": 0,
+          "rssMiB": 161.875
+        },
+        {
+          "i": 18,
+          "ms": 4242.2229579999985,
+          "success": true,
+          "commands": 32,
+          "polls": 41,
+          "recoveries": 0,
+          "rssMiB": 162
+        },
+        {
+          "i": 19,
+          "ms": 4501.902166999993,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 162.203125
+        },
+        {
+          "i": 20,
+          "ms": 4467.794500000004,
+          "success": true,
+          "commands": 32,
+          "polls": 37,
+          "recoveries": 0,
+          "rssMiB": 162.40625
+        },
+        {
+          "i": 21,
+          "ms": 4864.0407089999935,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 162.53125
+        },
+        {
+          "i": 22,
+          "ms": 4868.825167000003,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 162.78125
+        },
+        {
+          "i": 23,
+          "ms": 5376.322667,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 163.046875
+        }
+      ]
+    },
+    {
+      "kind": "puppeteer",
+      "block": 0,
+      "viewport": {
+        "width": 1280,
+        "height": 713
+      },
+      "elapsedMs": 187825.556042,
+      "memoryBefore": 83.03125,
+      "memoryWarm": 92.8125,
+      "memoryAfter": 133.78125,
+      "recoveryErrors": [],
+      "results": [
+        {
+          "i": 0,
+          "ms": 7149.0356249999995,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 92.796875
+        },
+        {
+          "i": 1,
+          "ms": 7918.794792000001,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 98.875,
+          "screenshotMs": 283.6632919999993
+        },
+        {
+          "i": 2,
+          "ms": 7630.104374999999,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 125.78125
+        },
+        {
+          "i": 3,
+          "ms": 8572.930499999999,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 119.53125
+        },
+        {
+          "i": 4,
+          "ms": 7598.762457999997,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 119.890625
+        },
+        {
+          "i": 5,
+          "ms": 7067.9151249999995,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 116.921875
+        },
+        {
+          "i": 6,
+          "ms": 7598.237457999996,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 117.390625
+        },
+        {
+          "i": 7,
+          "ms": 8943.147624999998,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 118.25
+        },
+        {
+          "i": 8,
+          "ms": 10193.087083999999,
+          "success": true,
+          "commands": 32,
+          "polls": 41,
+          "recoveries": 0,
+          "rssMiB": 118.84375
+        },
+        {
+          "i": 9,
+          "ms": 7408.814125000004,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 119.5
+        },
+        {
+          "i": 10,
+          "ms": 5699.095000000001,
+          "success": true,
+          "commands": 32,
+          "polls": 37,
+          "recoveries": 0,
+          "rssMiB": 119.5625
+        },
+        {
+          "i": 11,
+          "ms": 6651.211250000008,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 119.5625
+        },
+        {
+          "i": 12,
+          "ms": 6801.531999999992,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 119.578125
+        },
+        {
+          "i": 13,
+          "ms": 8298.277125000008,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 120.125
+        },
+        {
+          "i": 14,
+          "ms": 9430.440208,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 129.515625
+        },
+        {
+          "i": 15,
+          "ms": 9378.257666999998,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 131.3125
+        },
+        {
+          "i": 16,
+          "ms": 7094.622541999997,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 131.390625
+        },
+        {
+          "i": 17,
+          "ms": 6341.079750000004,
+          "success": true,
+          "commands": 32,
+          "polls": 41,
+          "recoveries": 0,
+          "rssMiB": 131.515625
+        },
+        {
+          "i": 18,
+          "ms": 6840.312082999997,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 131.765625
+        },
+        {
+          "i": 19,
+          "ms": 8087.124292000022,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 132.140625
+        },
+        {
+          "i": 20,
+          "ms": 8287.40516699999,
+          "success": true,
+          "commands": 32,
+          "polls": 41,
+          "recoveries": 0,
+          "rssMiB": 132.4375
+        },
+        {
+          "i": 21,
+          "ms": 8821.226458999998,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 133.03125
+        },
+        {
+          "i": 22,
+          "ms": 7557.42758399999,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 133.40625
+        },
+        {
+          "i": 23,
+          "ms": 8040.812165999989,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 133.78125
+        }
+      ]
+    },
+    {
+      "kind": "ab",
+      "block": 1,
+      "viewport": {
+        "width": 1280,
+        "height": 713
+      },
+      "elapsedMs": 70025.214708,
+      "memoryBefore": 19.671875,
+      "memoryWarm": 20.0625,
+      "memoryAfter": 18.28125,
+      "recoveryErrors": [
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        }
+      ],
+      "results": [
+        {
+          "i": 0,
+          "ms": 3017.4256250000003,
+          "success": true,
+          "commands": 82,
+          "polls": 37,
+          "recoveries": 1,
+          "rssMiB": 20.0625
+        },
+        {
+          "i": 1,
+          "ms": 2746.3825420000003,
+          "success": true,
+          "commands": 79,
+          "polls": 34,
+          "recoveries": 1,
+          "rssMiB": 20.078125,
+          "screenshotMs": 88.88587499999994
+        },
+        {
+          "i": 2,
+          "ms": 2806.5713339999993,
+          "success": true,
+          "commands": 78,
+          "polls": 33,
+          "recoveries": 1,
+          "rssMiB": 20.28125
+        },
+        {
+          "i": 3,
+          "ms": 2824.6360000000004,
+          "success": true,
+          "commands": 79,
+          "polls": 34,
+          "recoveries": 1,
+          "rssMiB": 20.28125
+        },
+        {
+          "i": 4,
+          "ms": 2744.599624999999,
+          "success": true,
+          "commands": 82,
+          "polls": 37,
+          "recoveries": 1,
+          "rssMiB": 20.296875
+        },
+        {
+          "i": 5,
+          "ms": 2729.133040999999,
+          "success": true,
+          "commands": 79,
+          "polls": 34,
+          "recoveries": 1,
+          "rssMiB": 20.296875
+        },
+        {
+          "i": 6,
+          "ms": 2935.2586249999986,
+          "success": true,
+          "commands": 81,
+          "polls": 36,
+          "recoveries": 1,
+          "rssMiB": 20.3125
+        },
+        {
+          "i": 7,
+          "ms": 3003.3122920000023,
+          "success": true,
+          "commands": 80,
+          "polls": 35,
+          "recoveries": 1,
+          "rssMiB": 20.328125
+        },
+        {
+          "i": 8,
+          "ms": 3060.282124999998,
+          "success": true,
+          "commands": 78,
+          "polls": 33,
+          "recoveries": 1,
+          "rssMiB": 20.359375
+        },
+        {
+          "i": 9,
+          "ms": 2936.828209000003,
+          "success": true,
+          "commands": 79,
+          "polls": 34,
+          "recoveries": 1,
+          "rssMiB": 20.359375
+        },
+        {
+          "i": 10,
+          "ms": 2948.217832999999,
+          "success": true,
+          "commands": 76,
+          "polls": 31,
+          "recoveries": 1,
+          "rssMiB": 20.375
+        },
+        {
+          "i": 11,
+          "ms": 2898.069208999994,
+          "success": true,
+          "commands": 77,
+          "polls": 32,
+          "recoveries": 1,
+          "rssMiB": 20.375
+        },
+        {
+          "i": 12,
+          "ms": 3092.7736249999944,
+          "success": true,
+          "commands": 79,
+          "polls": 34,
+          "recoveries": 1,
+          "rssMiB": 20.375
+        },
+        {
+          "i": 13,
+          "ms": 2989.682541000002,
+          "success": true,
+          "commands": 79,
+          "polls": 34,
+          "recoveries": 1,
+          "rssMiB": 20.375
+        },
+        {
+          "i": 14,
+          "ms": 2930.6769579999964,
+          "success": true,
+          "commands": 80,
+          "polls": 35,
+          "recoveries": 1,
+          "rssMiB": 20.390625
+        },
+        {
+          "i": 15,
+          "ms": 2949.9161250000034,
+          "success": true,
+          "commands": 81,
+          "polls": 36,
+          "recoveries": 1,
+          "rssMiB": 20.40625
+        },
+        {
+          "i": 16,
+          "ms": 3030.4340840000004,
+          "success": true,
+          "commands": 81,
+          "polls": 36,
+          "recoveries": 1,
+          "rssMiB": 20.421875
+        },
+        {
+          "i": 17,
+          "ms": 2833.7646250000034,
+          "success": true,
+          "commands": 81,
+          "polls": 36,
+          "recoveries": 1,
+          "rssMiB": 18.234375
+        },
+        {
+          "i": 18,
+          "ms": 2933.696416999999,
+          "success": true,
+          "commands": 81,
+          "polls": 36,
+          "recoveries": 1,
+          "rssMiB": 18.25
+        },
+        {
+          "i": 19,
+          "ms": 3009.025916999999,
+          "success": true,
+          "commands": 82,
+          "polls": 37,
+          "recoveries": 1,
+          "rssMiB": 18.25
+        },
+        {
+          "i": 20,
+          "ms": 2893.3222920000044,
+          "success": true,
+          "commands": 83,
+          "polls": 38,
+          "recoveries": 1,
+          "rssMiB": 18.265625
+        },
+        {
+          "i": 21,
+          "ms": 2872.887167000008,
+          "success": true,
+          "commands": 81,
+          "polls": 36,
+          "recoveries": 1,
+          "rssMiB": 18.28125
+        },
+        {
+          "i": 22,
+          "ms": 2789.662541999991,
+          "success": true,
+          "commands": 82,
+          "polls": 37,
+          "recoveries": 1,
+          "rssMiB": 18.28125
+        },
+        {
+          "i": 23,
+          "ms": 2888.1830409999966,
+          "success": true,
+          "commands": 83,
+          "polls": 38,
+          "recoveries": 1,
+          "rssMiB": 18.28125
+        }
+      ]
+    },
+    {
+      "kind": "playwright",
+      "block": 1,
+      "viewport": {
+        "width": 1280,
+        "height": 713
+      },
+      "elapsedMs": 107310.608959,
+      "memoryBefore": 132,
+      "memoryWarm": 150.0625,
+      "memoryAfter": 160.640625,
+      "recoveryErrors": [],
+      "results": [
+        {
+          "i": 0,
+          "ms": 4676.141084,
+          "success": true,
+          "commands": 32,
+          "polls": 41,
+          "recoveries": 0,
+          "rssMiB": 150.03125
+        },
+        {
+          "i": 1,
+          "ms": 4466.959209000001,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 161.1875,
+          "screenshotMs": 191.71441699999923
+        },
+        {
+          "i": 2,
+          "ms": 4073.7897919999996,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 168.140625
+        },
+        {
+          "i": 3,
+          "ms": 4062.424332999999,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 168.421875
+        },
+        {
+          "i": 4,
+          "ms": 4231.879333000001,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 156.296875
+        },
+        {
+          "i": 5,
+          "ms": 4246.661833000002,
+          "success": true,
+          "commands": 32,
+          "polls": 37,
+          "recoveries": 0,
+          "rssMiB": 156.625
+        },
+        {
+          "i": 6,
+          "ms": 4528.223666999998,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 156.984375
+        },
+        {
+          "i": 7,
+          "ms": 4539.648541999999,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 157.234375
+        },
+        {
+          "i": 8,
+          "ms": 4196.1603749999995,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 157.84375
+        },
+        {
+          "i": 9,
+          "ms": 4635.010124999993,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 158.015625
+        },
+        {
+          "i": 10,
+          "ms": 4710.005875000003,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 158.234375
+        },
+        {
+          "i": 11,
+          "ms": 4504.696084000003,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 158.453125
+        },
+        {
+          "i": 12,
+          "ms": 4968.604291000003,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 158.65625
+        },
+        {
+          "i": 13,
+          "ms": 4914.374374999999,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 158.828125
+        },
+        {
+          "i": 14,
+          "ms": 4668.547959000003,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 158.953125
+        },
+        {
+          "i": 15,
+          "ms": 4383.903250000003,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 159.1875
+        },
+        {
+          "i": 16,
+          "ms": 4396.046749999994,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 159.3125
+        },
+        {
+          "i": 17,
+          "ms": 4378.333708999999,
+          "success": true,
+          "commands": 32,
+          "polls": 37,
+          "recoveries": 0,
+          "rssMiB": 159.515625
+        },
+        {
+          "i": 18,
+          "ms": 4194.775041000001,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 159.671875
+        },
+        {
+          "i": 19,
+          "ms": 4168.818416999988,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 159.9375
+        },
+        {
+          "i": 20,
+          "ms": 3936.362333000012,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 160.15625
+        },
+        {
+          "i": 21,
+          "ms": 4726.5309579999885,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 160.25
+        },
+        {
+          "i": 22,
+          "ms": 4626.759540999992,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 160.515625
+        },
+        {
+          "i": 23,
+          "ms": 4753.961125000002,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 160.640625
+        }
+      ]
+    },
+    {
+      "kind": "puppeteer",
+      "block": 1,
+      "viewport": {
+        "width": 1280,
+        "height": 713
+      },
+      "elapsedMs": 180838.192958,
+      "memoryBefore": 82.96875,
+      "memoryWarm": 89.78125,
+      "memoryAfter": 115.65625,
+      "recoveryErrors": [],
+      "results": [
+        {
+          "i": 0,
+          "ms": 7626.448708000001,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 89.765625
+        },
+        {
+          "i": 1,
+          "ms": 9812.113542,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 97.421875,
+          "screenshotMs": 272.3965420000022
+        },
+        {
+          "i": 2,
+          "ms": 9190.93925,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 122.703125
+        },
+        {
+          "i": 3,
+          "ms": 6747.278292000003,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 112.671875
+        },
+        {
+          "i": 4,
+          "ms": 6749.061916999999,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 113.265625
+        },
+        {
+          "i": 5,
+          "ms": 7565.0115829999995,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 113.34375
+        },
+        {
+          "i": 6,
+          "ms": 9452.658292,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 113.421875
+        },
+        {
+          "i": 7,
+          "ms": 8901.804333000007,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 113.765625
+        },
+        {
+          "i": 8,
+          "ms": 7529.496791000012,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 114.015625
+        },
+        {
+          "i": 9,
+          "ms": 6559.980500000005,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 114.109375
+        },
+        {
+          "i": 10,
+          "ms": 6881.955125000008,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 111.078125
+        },
+        {
+          "i": 11,
+          "ms": 7957.959124999994,
+          "success": true,
+          "commands": 32,
+          "polls": 41,
+          "recoveries": 0,
+          "rssMiB": 111.15625
+        },
+        {
+          "i": 12,
+          "ms": 8016.454582999999,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 112.703125
+        },
+        {
+          "i": 13,
+          "ms": 7863.740416000001,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 112.828125
+        },
+        {
+          "i": 14,
+          "ms": 8853.227790999998,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 112.984375
+        },
+        {
+          "i": 15,
+          "ms": 6624.128375,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 113.09375
+        },
+        {
+          "i": 16,
+          "ms": 7640.168166000003,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 113.125
+        },
+        {
+          "i": 17,
+          "ms": 7127.59154199998,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 113.140625
+        },
+        {
+          "i": 18,
+          "ms": 8862.201750000007,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 113.359375
+        },
+        {
+          "i": 19,
+          "ms": 8978.381958999991,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 113.8125
+        },
+        {
+          "i": 20,
+          "ms": 5497.271375000011,
+          "success": true,
+          "commands": 32,
+          "polls": 37,
+          "recoveries": 0,
+          "rssMiB": 114.3125
+        },
+        {
+          "i": 21,
+          "ms": 5398.244249999989,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 114.765625
+        },
+        {
+          "i": 22,
+          "ms": 5402.73545800001,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 115.140625
+        },
+        {
+          "i": 23,
+          "ms": 5203.288832999999,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 115.640625
+        }
+      ]
+    },
+    {
+      "kind": "ab",
+      "block": 2,
+      "viewport": {
+        "width": 1280,
+        "height": 713
+      },
+      "elapsedMs": 72106.92387500001,
+      "memoryBefore": 20.078125,
+      "memoryWarm": 20.46875,
+      "memoryAfter": 13.53125,
+      "recoveryErrors": [
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        },
+        {
+          "selector": "#save",
+          "error": "Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n"
+        }
+      ],
+      "results": [
+        {
+          "i": 0,
+          "ms": 2825.546125,
+          "success": true,
+          "commands": 77,
+          "polls": 32,
+          "recoveries": 1,
+          "rssMiB": 20.46875
+        },
+        {
+          "i": 1,
+          "ms": 3032.669667,
+          "success": true,
+          "commands": 80,
+          "polls": 35,
+          "recoveries": 1,
+          "rssMiB": 20.515625,
+          "screenshotMs": 138.24333299999944
+        },
+        {
+          "i": 2,
+          "ms": 2882.507458,
+          "success": true,
+          "commands": 80,
+          "polls": 35,
+          "recoveries": 1,
+          "rssMiB": 20.515625
+        },
+        {
+          "i": 3,
+          "ms": 2891.347833,
+          "success": true,
+          "commands": 76,
+          "polls": 31,
+          "recoveries": 1,
+          "rssMiB": 20.5
+        },
+        {
+          "i": 4,
+          "ms": 3517.6629999999986,
+          "success": true,
+          "commands": 76,
+          "polls": 31,
+          "recoveries": 1,
+          "rssMiB": 13.0625
+        },
+        {
+          "i": 5,
+          "ms": 3015.7999579999996,
+          "success": true,
+          "commands": 76,
+          "polls": 31,
+          "recoveries": 1,
+          "rssMiB": 13.0625
+        },
+        {
+          "i": 6,
+          "ms": 3013.184459,
+          "success": true,
+          "commands": 77,
+          "polls": 32,
+          "recoveries": 1,
+          "rssMiB": 13.09375
+        },
+        {
+          "i": 7,
+          "ms": 3078.4828339999985,
+          "success": true,
+          "commands": 73,
+          "polls": 28,
+          "recoveries": 1,
+          "rssMiB": 13.125
+        },
+        {
+          "i": 8,
+          "ms": 3036.118000000002,
+          "success": true,
+          "commands": 74,
+          "polls": 29,
+          "recoveries": 1,
+          "rssMiB": 13.140625
+        },
+        {
+          "i": 9,
+          "ms": 3567.503749999996,
+          "success": true,
+          "commands": 77,
+          "polls": 32,
+          "recoveries": 1,
+          "rssMiB": 13.15625
+        },
+        {
+          "i": 10,
+          "ms": 2857.3964170000036,
+          "success": true,
+          "commands": 76,
+          "polls": 31,
+          "recoveries": 1,
+          "rssMiB": 13.1875
+        },
+        {
+          "i": 11,
+          "ms": 2840.5441250000003,
+          "success": true,
+          "commands": 76,
+          "polls": 31,
+          "recoveries": 1,
+          "rssMiB": 13.203125
+        },
+        {
+          "i": 12,
+          "ms": 2895.7362920000014,
+          "success": true,
+          "commands": 77,
+          "polls": 32,
+          "recoveries": 1,
+          "rssMiB": 13.21875
+        },
+        {
+          "i": 13,
+          "ms": 2950.1823340000046,
+          "success": true,
+          "commands": 79,
+          "polls": 34,
+          "recoveries": 1,
+          "rssMiB": 13.234375
+        },
+        {
+          "i": 14,
+          "ms": 3051.0372079999943,
+          "success": true,
+          "commands": 80,
+          "polls": 35,
+          "recoveries": 1,
+          "rssMiB": 13.265625
+        },
+        {
+          "i": 15,
+          "ms": 3122.000957999997,
+          "success": true,
+          "commands": 80,
+          "polls": 35,
+          "recoveries": 1,
+          "rssMiB": 13.296875
+        },
+        {
+          "i": 16,
+          "ms": 3007.0114169999943,
+          "success": true,
+          "commands": 79,
+          "polls": 34,
+          "recoveries": 1,
+          "rssMiB": 13.3125
+        },
+        {
+          "i": 17,
+          "ms": 2782.1697499999937,
+          "success": true,
+          "commands": 81,
+          "polls": 36,
+          "recoveries": 1,
+          "rssMiB": 13.359375
+        },
+        {
+          "i": 18,
+          "ms": 2812.308041999997,
+          "success": true,
+          "commands": 80,
+          "polls": 35,
+          "recoveries": 1,
+          "rssMiB": 13.421875
+        },
+        {
+          "i": 19,
+          "ms": 3041.3950419999965,
+          "success": true,
+          "commands": 82,
+          "polls": 37,
+          "recoveries": 1,
+          "rssMiB": 13.46875
+        },
+        {
+          "i": 20,
+          "ms": 2981.805042,
+          "success": true,
+          "commands": 80,
+          "polls": 35,
+          "recoveries": 1,
+          "rssMiB": 13.46875
+        },
+        {
+          "i": 21,
+          "ms": 3145.8453750000044,
+          "success": true,
+          "commands": 82,
+          "polls": 37,
+          "recoveries": 1,
+          "rssMiB": 13.5
+        },
+        {
+          "i": 22,
+          "ms": 2792.183124999996,
+          "success": true,
+          "commands": 81,
+          "polls": 36,
+          "recoveries": 1,
+          "rssMiB": 13.515625
+        },
+        {
+          "i": 23,
+          "ms": 2731.4240419999987,
+          "success": true,
+          "commands": 78,
+          "polls": 33,
+          "recoveries": 1,
+          "rssMiB": 13.53125
+        }
+      ]
+    },
+    {
+      "kind": "playwright",
+      "block": 2,
+      "viewport": {
+        "width": 1280,
+        "height": 713
+      },
+      "elapsedMs": 79573.132625,
+      "memoryBefore": 132.203125,
+      "memoryWarm": 148.53125,
+      "memoryAfter": 98.734375,
+      "recoveryErrors": [],
+      "results": [
+        {
+          "i": 0,
+          "ms": 3449.698292,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 148.5
+        },
+        {
+          "i": 1,
+          "ms": 3197.2246670000004,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 158.25,
+          "screenshotMs": 54.169708000000355
+        },
+        {
+          "i": 2,
+          "ms": 2913.304583,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 169.921875
+        },
+        {
+          "i": 3,
+          "ms": 3429.6503329999996,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 170.28125
+        },
+        {
+          "i": 4,
+          "ms": 3280.1425419999996,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 170.46875
+        },
+        {
+          "i": 5,
+          "ms": 3127.8983750000007,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 170.8125
+        },
+        {
+          "i": 6,
+          "ms": 3041.958917,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 125.171875
+        },
+        {
+          "i": 7,
+          "ms": 3250.251458999999,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 127.140625
+        },
+        {
+          "i": 8,
+          "ms": 3072.2235830000027,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 134.90625
+        },
+        {
+          "i": 9,
+          "ms": 3125.8039160000008,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 135.0625
+        },
+        {
+          "i": 10,
+          "ms": 3217.4337080000005,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 135.265625
+        },
+        {
+          "i": 11,
+          "ms": 3125.170208000003,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 135.578125
+        },
+        {
+          "i": 12,
+          "ms": 3331.9543330000015,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 135.65625
+        },
+        {
+          "i": 13,
+          "ms": 3331.2692499999976,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 129.328125
+        },
+        {
+          "i": 14,
+          "ms": 3265.2674169999955,
+          "success": true,
+          "commands": 32,
+          "polls": 37,
+          "recoveries": 0,
+          "rssMiB": 129.65625
+        },
+        {
+          "i": 15,
+          "ms": 4397.307625000001,
+          "success": true,
+          "commands": 32,
+          "polls": 34,
+          "recoveries": 0,
+          "rssMiB": 98.84375
+        },
+        {
+          "i": 16,
+          "ms": 3879.970207999999,
+          "success": true,
+          "commands": 32,
+          "polls": 36,
+          "recoveries": 0,
+          "rssMiB": 91.234375
+        },
+        {
+          "i": 17,
+          "ms": 3497.1451250000027,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 93.296875
+        },
+        {
+          "i": 18,
+          "ms": 3218.121334000003,
+          "success": true,
+          "commands": 32,
+          "polls": 37,
+          "recoveries": 0,
+          "rssMiB": 96.25
+        },
+        {
+          "i": 19,
+          "ms": 3316.633332999998,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 96.765625
+        },
+        {
+          "i": 20,
+          "ms": 3157.1759579999925,
+          "success": true,
+          "commands": 32,
+          "polls": 37,
+          "recoveries": 0,
+          "rssMiB": 97.328125
+        },
+        {
+          "i": 21,
+          "ms": 3245.7084170000016,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 98.125
+        },
+        {
+          "i": 22,
+          "ms": 3216.3433749999967,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 98.390625
+        },
+        {
+          "i": 23,
+          "ms": 3311.94591699999,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 98.734375
+        }
+      ]
+    },
+    {
+      "kind": "puppeteer",
+      "block": 2,
+      "viewport": {
+        "width": 1280,
+        "height": 713
+      },
+      "elapsedMs": 131144.247625,
+      "memoryBefore": 82.890625,
+      "memoryWarm": 92.609375,
+      "memoryAfter": 86.609375,
+      "recoveryErrors": [],
+      "results": [
+        {
+          "i": 0,
+          "ms": 4784.2002919999995,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 92.59375
+        },
+        {
+          "i": 1,
+          "ms": 4804.824833,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 98.046875,
+          "screenshotMs": 120.66391699999986
+        },
+        {
+          "i": 2,
+          "ms": 5607.394833,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 123.359375
+        },
+        {
+          "i": 3,
+          "ms": 4768.367583000001,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 119.4375
+        },
+        {
+          "i": 4,
+          "ms": 6413.479500000001,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 93.671875
+        },
+        {
+          "i": 5,
+          "ms": 6243.430208000002,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 59.5
+        },
+        {
+          "i": 6,
+          "ms": 5903.020417,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 64.265625
+        },
+        {
+          "i": 7,
+          "ms": 5629.27925,
+          "success": true,
+          "commands": 32,
+          "polls": 41,
+          "recoveries": 0,
+          "rssMiB": 65.53125
+        },
+        {
+          "i": 8,
+          "ms": 5767.694583000004,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 66.359375
+        },
+        {
+          "i": 9,
+          "ms": 6089.405125000005,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 70.90625
+        },
+        {
+          "i": 10,
+          "ms": 5820.382292000002,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 71.484375
+        },
+        {
+          "i": 11,
+          "ms": 5400.821208000001,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 71.5
+        },
+        {
+          "i": 12,
+          "ms": 5457.727500000008,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 71.59375
+        },
+        {
+          "i": 13,
+          "ms": 6598.541041000004,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 72.953125
+        },
+        {
+          "i": 14,
+          "ms": 6883.580457999997,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 82.4375
+        },
+        {
+          "i": 15,
+          "ms": 4310.513416999995,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 84.234375
+        },
+        {
+          "i": 16,
+          "ms": 4506.64175000001,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 84.4375
+        },
+        {
+          "i": 17,
+          "ms": 4661.379084,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 84.59375
+        },
+        {
+          "i": 18,
+          "ms": 4502.261541999993,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 84.859375
+        },
+        {
+          "i": 19,
+          "ms": 4891.980540999997,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 85.546875
+        },
+        {
+          "i": 20,
+          "ms": 4946.975166999997,
+          "success": true,
+          "commands": 32,
+          "polls": 39,
+          "recoveries": 0,
+          "rssMiB": 85.84375
+        },
+        {
+          "i": 21,
+          "ms": 5008.055791999999,
+          "success": true,
+          "commands": 32,
+          "polls": 38,
+          "recoveries": 0,
+          "rssMiB": 86.28125
+        },
+        {
+          "i": 22,
+          "ms": 6283.299874999997,
+          "success": true,
+          "commands": 32,
+          "polls": 36,
+          "recoveries": 0,
+          "rssMiB": 86.21875
+        },
+        {
+          "i": 23,
+          "ms": 5615.756083,
+          "success": true,
+          "commands": 32,
+          "polls": 40,
+          "recoveries": 0,
+          "rssMiB": 86.609375
+        }
+      ]
+    }
+  ],
+  "scrollDiagnostic": {
+    "kind": "ab",
+    "block": 0,
+    "viewport": {
+      "width": 1280,
+      "height": 713
+    },
+    "elapsedMs": 1091.320792,
+    "memoryBefore": 19.828125,
+    "memoryAfter": 20.109375,
+    "recoveryErrors": [],
+    "results": [
+      {
+        "i": 0,
+        "ms": 1073.493125,
+        "success": false,
+        "error": "Error: Error: \u2717 Element '#save' is outside the viewport, so the click would not reach it\n Geometry: {\"top\":705.875,\"bottom\":747.875,\"centerY\":726.875,\"innerHeight\":713}",
+        "commands": 29,
+        "polls": 9,
+        "recoveries": 0,
+        "rssMiB": 20.109375
+      }
+    ]
+  },
+  "restart": {
+    "after": [
+      "block0-ab",
+      "block0-playwright"
+    ],
+    "seededFinalRecords": 48,
+    "contentViewport": {
+      "width": 1280,
+      "height": 713
+    }
+  }
+}

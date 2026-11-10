@@ -49,7 +49,7 @@ pub struct Terminal {
 mod hangup;
 
 impl Terminal {
-    /// Start the user's login shell in `directory`, keeping `scrollback`
+    /// Start the platform shell in `directory`, keeping `scrollback`
     /// lines of history, at `columns` by `lines` — the pane's size as the
     /// caller reckons it, so the shell's first prompt is drawn to fit; the
     /// view sets the measured size on its first frame.
@@ -68,6 +68,7 @@ impl Terminal {
         let options = tty::Options {
             #[cfg(unix)]
             shell: Some(hangup::login_shell()),
+            // On Windows, use alacritty's native PowerShell/ConPTY default.
             working_directory: Some(directory.to_path_buf()),
             env: HashMap::from([
                 ("TERM".to_string(), "xterm-256color".to_string()),
@@ -224,13 +225,20 @@ impl Drop for Terminal {
             hangup.end(io);
             return;
         }
-        // The loop ends its thread on the message; the PTY's drop ends the
-        // shell.
+        #[cfg(windows)]
+        {
+            // Alacritty owns the ConPTY and its child watcher. Dropping the
+            // returned event loop closes the pseudoconsole (and attached
+            // clients). ClosePseudoConsole can block on older Windows, so
+            // joining and dropping it must also stay off the UI thread.
+            std::thread::spawn(move || drop(io.join()));
+        }
+        #[cfg(not(windows))]
         drop(io);
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};

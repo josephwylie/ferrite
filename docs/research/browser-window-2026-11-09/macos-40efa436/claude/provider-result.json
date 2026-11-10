@@ -1,0 +1,16 @@
+{
+  "probe": "a1891a66ed924487833e58be7a5e9cb2",
+  "provider": "claude",
+  "peer_pid": 10501,
+  "observed_fixture": true,
+  "success": true,
+  "answer": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"state\":{\"tabs\":[{\"id\":1,\"url\":\"http://127.0.0.1:49279/\",\"generation\":2,\"loading\":false,\"can_back\":false,\"can_forward\":false,\"error\":null,\"live\":true,\"visible\":true,\"dirty\":\"dirty\",\"protected\":false}],\"active\":1},\"revision\":3,\"observation\":\"2896-18e64bbbe1b0d398:3\",\"value\":{\"snapshot\":\"- button \\\"Window fixture\\\" [ref=fed562ceae7555f1ef79ce080_0]\",\"refs\":{\"fed562ceae7555f1ef79ce080_0\":{\"role\":\"button\",\"name\":\"Window fixture\"}},\"truncated\":false}}"
+      }
+    ],
+    "isError": false
+  }
+}

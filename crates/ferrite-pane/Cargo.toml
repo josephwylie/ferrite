@@ -11,12 +11,14 @@ doctest = false
 [features]
 # Agent visuals drawn by Chromium (CEF, off-screen; ADR 0013). The app's
 # own `cef` feature turns this on; see its Cargo.toml.
-cef = ["dep:cef"]
+cef = ["dep:cef", "dep:tungstenite", "dep:getrandom", "dep:base64"]
 # The hooks the app's reference captures drive, and the visuals' own
 # snapshots (`visual::shots`).
 visual-reference = ["gpui/test-support"]
 # The test hooks the app's own tests reach for.
 test-support = []
+# Bounded packaged acceptance dispatch/completion hooks, absent from releases.
+browser-smoke = []
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
@@ -32,6 +34,9 @@ gpui = { package = "gpui-kit", version = "=0.6.0" }
 gpui-base = "=0.6.0"
 serde_json = { workspace = true }
 url = "2"
+tungstenite = { version = "0.24", default-features = false, features = ["handshake"], optional = true }
+getrandom = { version = "0.3", optional = true }
+base64 = { version = "0.22", optional = true }
 percent-encoding = "2"
 # Visuals: a rendered frame becomes a gpui RenderImage (which holds
 # image::Frames), and the agent's screenshot is a PNG. Already in the tree
@@ -50,7 +55,7 @@ cef = { version = "=154.5.0", default-features = false, features = ["sandbox"], 
 [target.'cfg(windows)'.dependencies]
 # The same engine on Windows, without `sandbox`: CEF's Windows sandbox only
 # runs inside its bootstrap launcher (ADR 0013), which Ferrite doesn't use.
-cef = { version = "=154.5.0", default-features = false, optional = true }
+cef = { version = "=154.5.0", default-features = false, features = ["sandbox"], optional = true }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse"] }
 
 [dev-dependencies]

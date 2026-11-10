@@ -1343,6 +1343,14 @@ pub struct Window {
     pub(crate) a11y: A11y,
 }
 
+impl Drop for Window {
+    fn drop(&mut self) {
+        // Native window destruction may be deferred past App shutdown.
+        // Release the focused entity before its input handler outlives GPUI.
+        drop(self.platform_window.take_input_handler());
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 struct ModifierState {
     modifiers: Modifiers,

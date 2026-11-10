@@ -1,0 +1,12 @@
+{
+  "success": false,
+  "error": "window fixture timed out: opened=true, clicked=true, frames=245, last error=",
+  "normal_native_window": true,
+  "preview_operator_route": true,
+  "window_pointer_input": true,
+  "rendered_frames": 245,
+  "provider_requested": true,
+  "provider_started": false,
+  "elapsed_ms": 60128,
+  "scope": "operator Preview and optional actual provider Observe/Click/Observe; annotations are not tested"
+}

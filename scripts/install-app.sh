@@ -22,6 +22,9 @@
 # ~320 MB unpacked) is fetched once into $CEF_PATH (default
 # ~/.local/share/cef). FERRITE_NO_CEF=1 builds without visuals.
 #
+# FERRITE_BUILD_FEATURES=browser-smoke opts into the packaged window acceptance
+# driver; ordinary packages continue to build only cef.
+#
 # --dmg (the published release) builds with the release profile; installs
 # here use the `local` profile (Cargo.toml), which skips ThinLTO.
 #
@@ -78,6 +81,9 @@ if [ -z "${FERRITE_NO_CEF:-}" ]; then
   done
   export CEF_PATH="${CEF_PATH:-$HOME/.local/share/cef}"
   FEATURES=(--features cef)
+  if [ -n "${FERRITE_BUILD_FEATURES:-}" ]; then
+    FEATURES=(--features "cef,$FERRITE_BUILD_FEATURES")
+  fi
 fi
 
 PROFILE=local
@@ -103,6 +109,12 @@ BUILT="$TARGET/$PROFILE/bundle/macos/$NAME.app"
 rm -rf "$BUILT"
 mkdir -p "$BUILT/Contents/MacOS" "$BUILT/Contents/Resources"
 cp "$BIN" "$BUILT/Contents/MacOS/ferrite"
+# Native controller is staged only; browsing remains gated by #192 validation.
+CONTROLLER_ARGS=(--destination "$BUILT/Contents/MacOS" --metadata-directory "$BUILT/Contents/Resources/agent-browser")
+if [ -n "${FERRITE_BROWSER_CONTROLLER_STAGE:-}" ]; then
+  CONTROLLER_ARGS+=(--from-stage "$FERRITE_BROWSER_CONTROLLER_STAGE")
+fi
+/usr/bin/python3 "$ROOT/scripts/package-agent-browser.py" "${CONTROLLER_ARGS[@]}"
 
 # iconutil expects this exact set of filenames. Generate the platform resource
 # from the checked-in 1254px source so the Dock gets sharp 1x and 2x variants.
@@ -230,6 +242,7 @@ if [ "$SIGNING_IDENTITY" = "-" ]; then
   # again. Signed by one identity, every build is the same app to macOS.
   # Its helpers are signed too (and become copies), so they carry it.
   LOCAL="${MACOS_LOCAL_IDENTITY:--}"
+  codesign --force --sign "$LOCAL" "$BUILT/Contents/MacOS/agent-browser"
   if [ -n "${FEATURES[*]:-}" ]; then
     codesign --force --sign "$LOCAL" "$BUILT/Contents/Frameworks/$FRAMEWORK_NAME"
     if [ -n "$DMG" ] || [ "$LOCAL" != "-" ]; then
@@ -267,6 +280,8 @@ PLIST
     done
     rm -f "$ENTITLEMENTS"
   fi
+  codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
+    "$BUILT/Contents/MacOS/agent-browser"
   codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$BUILT"
   codesign --verify --deep --strict --verbose=2 "$BUILT"
 fi

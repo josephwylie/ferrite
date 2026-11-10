@@ -47,6 +47,62 @@ pub struct Viewport {
     pub scale: f32,
 }
 
+/// The full external browser viewport, in logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BrowserViewport {
+    pub width: u32,
+    pub height: u32,
+    pub scale: f32,
+}
+
+/// Confidence that automatically discarding the document will preserve work.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BrowserDirty {
+    Clean,
+    Dirty,
+    #[default]
+    Unknown,
+}
+
+/// Navigation and lifecycle state, independently readable from frame updates.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BrowserState {
+    pub url: String,
+    pub title: String,
+    pub loading: bool,
+    pub can_back: bool,
+    pub can_forward: bool,
+    pub error: Option<String>,
+    pub document_generation: u64,
+    pub dirty: BrowserDirty,
+}
+
+/// A website tab. Its identity belongs to the conversation service; the
+/// optional target identifies only the current live Chromium incarnation.
+pub trait BrowserView: View {
+    fn state(&self) -> BrowserState;
+    fn target_id(&self) -> Option<String>;
+    fn browser_viewport(&self) -> Option<BrowserViewport> {
+        None
+    }
+    fn resize_browser(&self, viewport: BrowserViewport);
+    fn navigate(&self, url: &str) -> Result<(), String>;
+    fn back(&self) -> Result<(), String>;
+    fn forward(&self) -> Result<(), String>;
+    fn reload(&self) -> Result<(), String>;
+    fn set_protected(&self, protected: bool);
+    /// Stop further controller writes at dispatch while operator input owns the
+    /// page. Manual `View::input` and read-only captures remain available.
+    fn set_agent_paused(&self, _paused: bool) {}
+    /// Advances before operator input; old native attachments remain fenced.
+    fn control_epoch(&self) -> u64 {
+        0
+    }
+    /// Release only a hidden, unprotected, confidently clean document.
+    /// A released view restores its last URL lazily when shown.
+    fn try_release(&self) -> Result<bool, String>;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MouseButton {
     Left,
@@ -146,8 +202,39 @@ impl Updates {
 /// Called (on the main thread) whenever a view has new [`Updates`] to take.
 pub type Wake = Box<dyn Fn()>;
 
+/// Credentials for Ferrite's private controller. Never expose these to web content.
+/// The endpoint accepts a WebSocket upgrade only with this Authorization header.
+#[derive(Clone)]
+pub struct ControllerEndpoint {
+    pub url: String,
+    pub authorization: String,
+}
+
 /// A web engine. One per process, used from the main thread only.
 pub trait Engine {
+    /// Open a fixed-height external page, isolated from sealed inline visuals.
+    /// Browser views retain live state while hidden; the conversation service
+    /// must explicitly close them when safe to reclaim.
+    fn open_browser(
+        &self,
+        _url: &str,
+        _viewport: BrowserViewport,
+        _wake: Wake,
+    ) -> Result<Box<dyn BrowserView>, String> {
+        Err("Conversation browser is unavailable in this build".into())
+    }
+
+    /// Report browser capability without starting the controller transport.
+    fn browser_available(&self) -> Result<(), String> {
+        Err("Conversation browser is unavailable in this build".into())
+    }
+
+    /// Start an authenticated controller transport on demand. Only external
+    /// browser views are discoverable; sealed visuals never enter its registry.
+    fn controller(&self) -> Result<ControllerEndpoint, String> {
+        Err("Conversation browser control is unavailable in this build".into())
+    }
+
     /// Start rendering `page` at `viewport`. `wake` is called whenever the view
     /// has updates; the first frame and content height follow shortly.
     fn open(&self, page: Page, viewport: Viewport, wake: Wake) -> Box<dyn View>;
@@ -155,6 +242,10 @@ pub trait Engine {
     /// Do any work that is due on the main thread, and say how long until the
     /// engine next needs this called. The host calls it on a timer.
     fn pump(&self) -> Duration;
+
+    /// Close all pages and stop the engine on its main thread before process
+    /// exit. Idempotent; retained view handles must no longer call the engine.
+    fn shutdown(&self) {}
 }
 
 /// One page. Dropping it closes the page and frees its resources; hiding it
