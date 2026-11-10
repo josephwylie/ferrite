@@ -90,11 +90,23 @@ fn a_transcript_at_its_retention_cap_keeps_its_text_identity_as_it_streams(
     cx: &mut TestAppContext,
 ) {
     let _clock = hold_wall_clock();
-    let (core, fake) = cockpit("retention-cap-identity", 1);
+    // A 64 KiB cap stands in for the real 4 MiB: the trim is the same.
+    let limits = ferrite_core::activity::ActivityLimits {
+        content_bytes_per_subject: 64 * 1024,
+        ..Default::default()
+    };
+    let fake = Fake::default();
+    let dir = scratch("retention-cap-identity");
+    let store = Store::open(&dir).unwrap().with_activity_limits(limits);
+    let mut core = Cockpit::new(store, Box::new(fake.clone()));
+    let thread = core
+        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .unwrap();
+    did_something_now(&dir, thread);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    // Past the 4 MiB of answer the display keeps.
+    // Past the answer the display keeps.
     for at in 0..66 {
-        turn(&fake, at, 64 * 1024);
+        turn(&fake, at, 1024);
         if at % 16 == 15 {
             pump(&view, cx);
         }
@@ -113,7 +125,7 @@ fn a_transcript_at_its_retention_cap_keeps_its_text_identity_as_it_streams(
     let namespace = view.read_with(cx, |view, _| view.panes[0].text_namespace());
     let mut namespaces = std::collections::BTreeSet::new();
     for at in 66..86 {
-        turn(&fake, at, 8 * 1024);
+        turn(&fake, at, 128);
         pump(&view, cx);
         namespaces.insert(view.read_with(cx, |view, _| view.panes[0].text_namespace()));
     }
