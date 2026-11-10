@@ -1546,7 +1546,8 @@ fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(c
     use ferrite_core::browser::Action;
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
     use ferrite_pane::visual::{engine::Visuals, web::{fake::{Call, FakeEngine}, Input}};
-    let dir = scratch("browser-annotation-host");
+    // Short: the machine's socket under it must fit macOS's 104-byte SUN_LEN.
+    let dir = scratch("annotation-host");
     let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
     let bridge = std::sync::Arc::new(Bridge::new("box", dir.join("bridge.sock"), dial));
     let mut core = Cockpit::attach(Attach {
