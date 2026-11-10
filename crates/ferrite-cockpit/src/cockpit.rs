@@ -511,6 +511,8 @@ pub struct CockpitView {
     /// The Solo view's right panel (`panel`): its tab per Thread and
     /// whether the window has room for it.
     panel: panel::Panel,
+    /// "Open a surface": the Panel's default focus while no tab shows.
+    panel_empty_focus: gpui::FocusHandle,
     /// Back and forward through where the operator has been (`history`).
     history: history::History,
     session_controls: Option<(ThreadId, u64)>,
@@ -1477,6 +1479,7 @@ impl CockpitView {
         }
         cx.on_app_quit(|view, cx| {
             view.save_drafts();
+            view.save_surfaces();
             view.cockpit.halt_sessions();
             #[cfg(feature = "cef")]
             let browser = view.browsers.controller.clone();
@@ -1565,7 +1568,8 @@ impl CockpitView {
             inbox_working_expanded: false,
             inbox_snoozed_expanded: false,
             context_menu: None,
-            panel: Default::default(),
+            panel: panel::Panel::load(&prefs.dir),
+            panel_empty_focus: cx.focus_handle(),
             history: Default::default(),
             session_controls: None,
             mode_picker: None,
@@ -3560,7 +3564,6 @@ impl CockpitView {
         match target {
             MenuTarget::Thread(thread)
             | MenuTarget::Pane(thread)
-            | MenuTarget::Tools(thread)
             | MenuTarget::Snooze(thread) => self.thread_path(thread),
             MenuTarget::Project(project) => self
                 .cockpit
@@ -3572,7 +3575,9 @@ impl CockpitView {
             | MenuTarget::ChangesScope(_)
             | MenuTarget::ChangesMore(_)
             | MenuTarget::Terminal(_)
-            | MenuTarget::TerminalMore(_) => None,
+            | MenuTarget::TerminalMore(_)
+            | MenuTarget::SurfaceMenu(_)
+            | MenuTarget::SurfaceTab { .. } => None,
             MenuTarget::Group(_)
             | MenuTarget::Parked
             | MenuTarget::Review { .. }
@@ -10286,11 +10291,13 @@ impl CockpitView {
         #[cfg(test)]
         RENDERS.with(|renders| renders.set(renders.get() + 1));
         // A Solo pair lasts while focus stays on one of its Panes.
-        self.tend_panel(window);
+        // A checkout's file goes to Files before the Panel tends its tabs,
+        // so it never stands as a File tab of its own.
+        self.redirect_previews_to_files(cx);
+        self.tend_panel(window, cx);
         if self.solo_beside.is_some() && self.solo_pair().is_none() {
             self.solo_beside = None;
         }
-        self.redirect_previews_to_files(cx);
         self.update_auto_rail(window);
         if self.nav_railed() {
             self.snooze_editor = None;
@@ -10871,8 +10878,9 @@ impl CockpitView {
             // pointer leaves the Pane div, clamped to the origin transcript.
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|view, _: &MouseUpEvent, _, cx| {
+                cx.listener(|view, event: &MouseUpEvent, _, cx| {
                     view.end_seam_drag(cx);
+                    view.panel_pointer_released(event.position, cx);
                     if view.drop_preview.take().is_some()
                         | view.dragging.take().is_some()
                         | view.nav_dragging.take().is_some()
@@ -10901,6 +10909,7 @@ impl CockpitView {
                     // Only the nav's order reads it.
                     view.notify_part(parts::Part::Nav, cx);
                 }
+                view.panel_pointer_moved(event.position, event.dragging(), cx);
                 if view.seam_drag.is_some() {
                     if event.dragging() {
                         view.drag_seam(event.position, window, cx);

@@ -195,17 +195,17 @@ fn a_page_card_opens_the_page_beside_the_transcript(cx: &mut TestAppContext) {
     });
     tick(cx);
 
-    // Expand: the Panel takes all the board can give, and back.
+    // Maximize: the Panel takes all the board can give, and back.
     let wide = f32::from(panel.size.width);
-    let expand = cx.debug_bounds("preview-expand").expect("an expand door");
+    let expand = cx.debug_bounds("panel-maximize").expect("a maximize door");
     cx.simulate_click(expand.center(), gpui::Modifiers::none());
     tick(cx);
     let expanded = f32::from(cx.debug_bounds("panel").unwrap().size.width);
-    use ferrite_ui::theme::{NAV_WIDTH, PANEL_PREVIEW_BOARD_MIN};
-    let most = 1600. - NAV_WIDTH - PANEL_PREVIEW_BOARD_MIN;
+    use ferrite_ui::theme::{DOCK_THREAD_MIN_W, NAV_WIDTH};
+    let most = 1600. - NAV_WIDTH - DOCK_THREAD_MIN_W;
     assert!(expanded > wide, "expanded is wider: {expanded} vs {wide}");
     assert!((expanded - most).abs() < 1., "{expanded} vs {most}");
-    let expand = cx.debug_bounds("preview-expand").unwrap();
+    let expand = cx.debug_bounds("panel-maximize").unwrap();
     cx.simulate_click(expand.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(
@@ -213,12 +213,14 @@ fn a_page_card_opens_the_page_beside_the_transcript(cx: &mut TestAppContext) {
         wide
     );
 
-    // × closes it, and the hidden Panel with it.
-    let close = cx.debug_bounds("preview-close").expect("a ×");
-    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    // Closing its tab closes the page.
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let page = crate::cockpit::surfaces::SurfaceId::File(workspace.join("site/index.html"));
+    assert!(panel_tabs(&view, thread, cx).0.contains(&page), "the page is a File tab");
+    view.update(cx, |view, cx| view.close_surface(thread, &page, cx));
     tick(cx);
-    assert!(cx.debug_bounds("panel").is_none());
-    assert!(view.read_with(cx, |view, _| !view.panel.expanded));
+    assert!(!panel_tabs(&view, thread, cx).0.contains(&page));
+    assert!(cx.debug_bounds("preview-page-title").is_none());
 }
 
 #[gpui::test]

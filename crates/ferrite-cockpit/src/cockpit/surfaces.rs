@@ -236,12 +236,9 @@ impl Surfaces {
             .or_insert_with(|| ThreadSurfaces::new(open))
     }
 
-    pub(crate) fn threads_mut(&mut self) -> impl Iterator<Item = (ThreadId, &mut ThreadSurfaces)> {
-        self.threads.iter_mut().map(|(thread, surfaces)| (*thread, surfaces))
-    }
-
-    pub(crate) fn remove(&mut self, thread: ThreadId) {
-        self.threads.remove(&thread);
+    /// Keep only the Threads `keep` says still exist.
+    pub(crate) fn retain(&mut self, keep: impl Fn(ThreadId) -> bool) {
+        self.threads.retain(|thread, _| keep(*thread));
     }
 }
 

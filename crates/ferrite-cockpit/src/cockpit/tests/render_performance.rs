@@ -351,9 +351,15 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     );
     // The preview closes from the keyboard (escape, or cmd-w in it; F-14).
     view.update(cx, |view, cx| view.close_preview(0, cx));
-    // The file opened the Files column, which stays beside the Pane until it
+    // The file opened the Files tab, which stays beside the Pane until it
     // is put away: the measure below is of the Pane with the window to itself.
-    view.update(cx, |view, cx| view.press_tool(crate::cockpit::tools::Tool::Files, cx));
+    view.update(cx, |view, cx| {
+        let thread = view.panes[0].thread().unwrap();
+        view.close_surface(thread, &crate::cockpit::surfaces::SurfaceId::Files, cx);
+        if view.panel_open(thread) {
+            view.toggle_panel_now(cx);
+        }
+    });
     tick(cx);
 
     let id = view.read_with(cx, |view, _| {

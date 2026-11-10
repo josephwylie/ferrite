@@ -983,13 +983,51 @@ pub const PANEL_PAD_B: f32 = SPACE_2;
 /// does: a 16px hit strip, the 6px hovered thumb 5px from either side.
 pub const PANEL_SCROLLBAR_INSET: f32 = 5.0;
 const _: () = assert!(PANEL_PAD_R == 2. * PANEL_SCROLLBAR_INSET + SCROLLBAR_THUMB_W_HOVER);
-/// 28px — a panel tab in the head row (`Overview` and a preview's), 10px
-/// inline padding; 2px between tabs.
+/// 28px — a tab inside a Surface (the Files editor's file tabs, the Changes
+/// scope), 10px inline padding.
 pub const PANEL_TAB_H: f32 = 28.0;
 pub const PANEL_TAB_PAD_X: f32 = 10.0;
-/// The Preview tab's label, the file's name cut from its start, is never
-/// wider than this: the tabs beside it keep their places.
-pub const PANEL_PREVIEW_TAB_MAX_W: f32 = 160.0;
+/// **The Panel's head row** (ADR 0039, T3's right panel,
+/// `t3-reference/panel-composer.md` §4.1): in the title row, 8 in on the
+/// left and 12 on the right (T3's `pl-2 pr-3`), its tabs, `+` and maximize
+/// `SURFACE_HEAD_GAP` apart (`gap-1`).
+pub const SURFACE_HEAD_PAD_L: f32 = SPACE_2;
+pub const SURFACE_HEAD_PAD_R: f32 = SPACE_3;
+pub const SURFACE_HEAD_GAP: f32 = SPACE_1;
+/// **A Surface tab** (T3's `h-6 max-w-36 rounded-md pl-1.5 pr-2 gap-0.5
+/// text-xs`): 24 tall, never wider than 144, its title `FS_BADGE` at
+/// `W_LABEL`; its leading 16px button (`SURFACE_TAB_CLOSE`, radius
+/// `SURFACE_TAB_CLOSE_R`) holds the kind's 12px icon, the tab's × under
+/// the pointer.
+pub const SURFACE_TAB_H: f32 = 24.0;
+pub const SURFACE_TAB_MAX_W: f32 = 144.0;
+pub const SURFACE_TAB_PAD_L: f32 = 6.0;
+pub const SURFACE_TAB_PAD_R: f32 = SPACE_2;
+pub const SURFACE_TAB_GAP: f32 = SPACE_0_5;
+pub const SURFACE_TAB_CLOSE: f32 = 16.0;
+pub const SURFACE_TAB_CLOSE_R: f32 = 4.0;
+pub const SURFACE_TAB_ICON: f32 = 12.0;
+/// How far a held tab moves sideways before it drags (T3's dnd-kit
+/// distance): a shorter move is a click.
+pub const SURFACE_TAB_DRAG: f32 = 6.0;
+/// The head's `+` (T3's `icon-xs` ghost, `Plus size-3.5`).
+pub const SURFACE_PLUS: f32 = 24.0;
+pub const SURFACE_PLUS_GLYPH: f32 = 14.0;
+/// A Surface's own row under the head (the Files editor's tabs and doors,
+/// the Terminal's `⋯`), T3's side chat head (`h-9`).
+pub const SURFACE_BAR_H: f32 = 36.0;
+/// The Changes Surface's toolbar (T3's diff toolbar, `h-7 px-2 gap-2`).
+pub const SURFACE_TOOLBAR_H: f32 = 28.0;
+/// **"Open a surface"** (T3's empty panel, `max-w-xs py-6`): its rows 32
+/// tall at radius 8, 10 in, 10 between icon and label, 2 apart;
+/// each ends in a soft key cap (`KEY_CAP_SOFT`, 20 square, white 7%).
+pub const SURFACE_EMPTY_W: f32 = 320.0;
+pub const SURFACE_EMPTY_ROW_H: f32 = 32.0;
+pub const SURFACE_EMPTY_ROW_R: f32 = 8.0;
+pub const SURFACE_EMPTY_ROW_PAD_X: f32 = 10.0;
+pub const KEY_CAP_SOFT: f32 = 20.0;
+pub const KEY_CAP_SOFT_R: f32 = 4.0;
+pub const KEY_CAP_SOFT_GROUND: u32 = 0xffffff12;
 /// The Panel while its Preview tab shows (SPEC §5.6.3): `PANEL_PREVIEW_SHARE`
 /// of the window, held between `PANEL_PREVIEW_MIN_W` and
 /// `PANEL_PREVIEW_MAX_W` — wide enough to read code at its own size — and
@@ -1731,10 +1769,9 @@ pub const REPLY_TILE_LINES: usize = 3;
 /// `Ask a quick question` for its placeholder and `↵` at its foot. Expanded,
 /// the pane covers the whole content area. Every change is one frame.
 pub const SIDE_CHAT_W: f32 = 420.0;
-pub const SIDE_CHAT_TAB_MAX_W: f32 = 180.0;
 pub const SIDE_CHAT_INSET: f32 = SPACE_2;
-/// The Terminal's column in the dock (Claude's measures the side chat's
-/// width, `terminal-open.png`).
+/// The Panel's least width while a Terminal shows (Claude's measures the
+/// side chat's width, `terminal-open.png`).
 pub const TERMINAL_W: f32 = SIDE_CHAT_W;
 /// **The terminal's grid** (`terminal-open.png`): the code face at
 /// `FS_TERMINAL` on `LH_TERMINAL` rows, in from the column's edge by
@@ -1767,10 +1804,10 @@ pub const TERMINAL_PILL_LIFT: f32 = 28.0;
 /// `FILES_INDENT` in, a git status marked by a `FILES_STATUS_DOT` dot at
 /// the row's end.
 pub const FILES_TREE_W: f32 = 240.0;
-/// How the dock shares the room right of the nav (`files-code.png`: the
-/// dock 1000 of 1666, the thread 666): Files and Changes take
-/// `FILES_SHARE` of it, never under `FILES_MIN_W`, and the thread keeps at
-/// least `DOCK_THREAD_MIN_W`.
+/// The Panel's least width while Files or Changes shows (`files-code.png`:
+/// the column 1000 of 1666, the thread 666): `FILES_SHARE` of the room
+/// right of the nav, never under `FILES_MIN_W`. Wide or maximized, the
+/// thread keeps at least `DOCK_THREAD_MIN_W`.
 pub const FILES_SHARE: f32 = 0.6;
 pub const FILES_MIN_W: f32 = 420.0;
 pub const DOCK_THREAD_MIN_W: f32 = 480.0;

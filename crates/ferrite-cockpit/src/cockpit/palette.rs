@@ -244,8 +244,8 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The palette, to pick a Thread to open beside the focused Pane (the
-    /// tab strip's split-right button, `Beside::Thread`).
+    /// The palette, to pick a Thread to open beside the focused Pane (its
+    /// `Open a thread beside`, `Beside::Thread`).
     pub(super) fn open_palette_beside(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_palette(PaletteScope::All, "", window, cx);
         self.floats.beside = true;
@@ -920,6 +920,36 @@ impl CockpitView {
             bound_chord("cockpit::TogglePanel"),
             Command::TogglePanel,
         );
+        // The Panel's own (ADR 0039): T3's `+` menu, close and reopen
+        // chords are Ferrite's ⌘T/⌘W/⌘⇧T, so these are the palette's.
+        add(
+            focused.is_some(),
+            "Open a surface".into(),
+            "the Panel's + menu",
+            None,
+            Command::SurfaceMenu,
+        );
+        add(
+            focused.is_some_and(|thread| self.active_surface(thread).is_some() && self.panel_open(thread)),
+            "Close surface".into(),
+            "the Panel's shown tab",
+            None,
+            Command::CloseSurface,
+        );
+        add(
+            focused.is_some(),
+            "Reopen closed surface".into(),
+            "",
+            None,
+            Command::ReopenSurface,
+        );
+        add(
+            focused.is_some() && !self.grid_board(),
+            "Open a thread beside".into(),
+            "",
+            None,
+            Command::OpenBeside,
+        );
         add(
             !self.panes.is_empty(),
             "Fullscreen pane".into(),
@@ -1255,9 +1285,27 @@ impl CockpitView {
             }
             Command::ShowChanges => {
                 if let Some(thread) = thread {
-                    self.open_panel(thread, cx);
+                    match self.opener_unavailable(thread, panel::Opener::Changes) {
+                        None => self.run_opener(thread, panel::Opener::Changes, cx),
+                        Some(_) => self.open_panel(thread, cx),
+                    }
                 }
             }
+            Command::SurfaceMenu => self.open_surface_menu(cx),
+            Command::CloseSurface => {
+                if let Some((thread, id)) =
+                    thread.and_then(|thread| Some((thread, self.active_surface(thread)?)))
+                {
+                    self.close_surface(thread, &id, cx);
+                }
+            }
+            Command::ReopenSurface => {
+                if let Some(thread) = thread {
+                    self.surfaces_mut(thread).reopen_closed();
+                    cx.notify();
+                }
+            }
+            Command::OpenBeside => self.open_palette_beside(window, cx),
             Command::ShowChecks => self.open_checks(window, cx),
             Command::RefreshPr => {
                 if let Some(thread) = thread {

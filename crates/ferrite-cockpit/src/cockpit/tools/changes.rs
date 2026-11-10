@@ -1,10 +1,11 @@
 //! Changes (Claude's, `changes-split.png`, `changes-more-menu.png`): the
-//! checkout's diff as one scroll of files, under the Files editor in the
-//! dock's column or alone.
+//! checkout's diff as one scroll of files: the Panel's Changes Surface (ADR
+//! 0039).
 //!
-//! - **Head:** the scope as a dropdown — `All changes` (against the base
+//! - **Its toolbar** (T3's diff toolbar, 28 tall under the Panel's head):
+//!   the scope as a dropdown at the left — `All changes` (against the base
 //!   branch), `Uncommitted changes` (the default) or `Compare against ›` a
-//!   branch — then `⋯`, expand and close.
+//!   branch — and `⋯` at the right.
 //! - **Each file:** `▾ name dir`, its `+N` (and `−N`), a circle that marks it
 //!   reviewed (and folds it away), `↗` to open it in Files, then its hunks
 //!   as the panel draws them (`panel::hunks`).
@@ -24,7 +25,7 @@ use ferrite_ui::theme::{self, paint};
 use ferrite_pane::composer::{Composer, Role};
 
 use super::*;
-use crate::cockpit::view_head::Column;
+use crate::cockpit::surfaces::SurfaceId;
 use crate::cockpit::context_menu::Submenu;
 use crate::cockpit::panel::hunks::{hunks_element, shown, Line, Shown, Sign};
 
@@ -183,10 +184,7 @@ impl CockpitView {
     /// A Files tab's `Show changes`: the Changes column opens on that file,
     /// its diff unfolded and in view.
     pub(in crate::cockpit) fn show_changes_of(&mut self, thread: ThreadId, path: &str, cx: &mut Context<Self>) {
-        if !self.tools.dock(thread).changes {
-            self.press_tool(Tool::Changes, cx);
-        }
-        self.ensure_changes(thread, cx);
+        self.upsert_surface(thread, SurfaceId::Changes, cx);
         let Some(changes) = self.changes_of(thread) else {
             return;
         };
@@ -475,9 +473,6 @@ impl CockpitView {
             .flex_col()
             .flex_1()
             .min_h_0()
-            .when(self.tools.dock(thread).files, |pane| {
-                pane.border_t(px(theme::HAIRLINE_W)).border_color(paint::LINE)
-            })
             .child(self.changes_head(thread, changes, cx))
             .child(body)
     }
@@ -519,33 +514,30 @@ impl CockpitView {
             ferrite_pane::preview::head_door(key, key.into(), glyph)
                 .tooltip(ferrite_ui::menu::tooltip(tip))
         };
-        let expanded = self.panel.expanded;
         div()
             .flex()
             .flex_shrink_0()
             .items_center()
-            .gap(px(SPACE_1))
-            .h(px(WIN_CHROME_H))
-            .px(px(SIDE_CHAT_INSET))
-            .pr(px(super::super::panel::tools_inset() - PANEL_PAD_R))
-            .mt(px(self.head_drop(Column::Files)))
+            .justify_between()
+            .gap(px(SPACE_2))
+            .h(px(SURFACE_TOOLBAR_H))
+            .px(px(SPACE_2))
             .child(
                 div()
                     .id("changes-scope")
                     .debug_selector(|| "changes-scope".into())
                     .flex()
-                    .flex_1()
                     .min_w_0()
                     .items_center()
                     .gap(px(SPACE_1))
-                    .h(px(PANEL_TAB_H))
+                    .h(px(SURFACE_TAB_H))
                     .px(px(PANEL_TAB_PAD_X))
                     .rounded(px(R_CONTROL))
                     .text_size(px(FS_LABEL))
                     .cursor_pointer()
                     .hover(|scope| scope.bg(paint::RAISED))
                     .child(div().min_w_0().truncate().child(SharedString::from(changes.scope.label())))
-                    .child(icons::icon(icons::CHEVRON_DOWN, ICON_CHEVRON, INK_SUBTLE))
+                    .child(icons::icon(icons::CHEVRON_DOWN, SURFACE_PLUS_GLYPH, INK_SUBTLE))
                     .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
                         cx.stop_propagation();
                         view.open_context_menu(MenuTarget::ChangesScope(thread), event.position(), cx);
@@ -555,24 +547,6 @@ impl CockpitView {
                 move |view, event: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     view.open_context_menu(MenuTarget::ChangesMore(thread), event.position(), cx);
-                },
-            )))
-            .child(
-                door(
-                    "changes-expand",
-                    if expanded { icons::MINIMIZE } else { icons::MAXIMIZE },
-                    if expanded { "Collapse" } else { "Expand" },
-                )
-                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.panel.expanded = !view.panel.expanded;
-                    cx.notify();
-                })),
-            )
-            .child(door("changes-close", icons::CLOSE, "Close").on_click(cx.listener(
-                move |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.press_tool(Tool::Changes, cx);
                 },
             )))
     }
