@@ -1319,10 +1319,9 @@ fn deleting_a_thread_preserves_a_shared_registered_worktree() {
 }
 
 /// A Thread from before the registry, bound to an unregistered worktree,
-/// takes its clean tree with it; the tree is told as removed, as
-/// `worktree.remove`'s is (Projects' `worktree.removed`, ADR 0031).
+/// takes its clean tree with it.
 #[test]
-fn deleting_a_legacy_worktree_thread_tells_its_tree_removed() {
+fn deleting_a_legacy_worktree_thread_removes_its_tree() {
     let root = scratch("delete-legacy-worktree");
     let repo = init_repo(&root);
     let path = root.join("legacy-tree");
@@ -1349,8 +1348,6 @@ fn deleting_a_legacy_worktree_thread_tells_its_tree_removed() {
     engine.delete(thread).unwrap();
 
     assert!(!path.exists(), "the clean tree is removed");
-    assert_eq!(engine.take_removed_worktrees(), [path]);
-    assert!(engine.take_removed_worktrees().is_empty(), "told once");
 }
 
 /// Deleting a main-bound Thread deletes the Thread — the operator's
@@ -5331,7 +5328,7 @@ fn a_window_tells_which_thread_it_shows_and_which_composer_holds_text() {
 }
 
 /// A Thread parked with unsent text took its Composer with it: revived, it
-/// reports no `draft`, so Projects may prompt it (ADR 0030).
+/// reports no `draft`, so an agent may prompt it (ADR 0030).
 #[test]
 fn a_parked_thread_holds_no_draft_when_revived() {
     let (mut core, _fake) = cockpit("draft-parked");
@@ -5544,7 +5541,7 @@ fn reopening_an_open_thread_lands_on_it_without_starting_it_again() {
 #[test]
 fn a_thread_started_with_env_and_a_launcher_is_revived_with_them() {
     let (mut core, fake) = cockpit("launch-env");
-    let env = vec![("HERDR_PROJECTS_DATA_DIR".to_string(), "/data".to_string())];
+    let env = vec![("TOOL_DATA_DIR".to_string(), "/data".to_string())];
     let launcher: Vec<String> = ["bwrap", "--ro-bind", "/r", "/r", "--"]
         .map(String::from)
         .into();

@@ -369,7 +369,7 @@ fn samples() -> Vec<Request> {
             launch_provider: None,
             args: vec!["--model".into(), "opus".into()],
             resume: Some("4f2a".into()),
-            env: [("HERDR_PROJECTS_DATA_DIR".into(), "/data".into())].into(),
+            env: [("TOOL_DATA_DIR".into(), "/data".into())].into(),
             launcher: Vec::new(),
             ready: true,
             timeout_ms: Some(60_000),
@@ -402,7 +402,7 @@ fn thread_start() -> ThreadStartParams {
 fn later_samples() -> Vec<(&'static str, Request)> {
     vec![
         (
-            "thread_start_herdr",
+            "thread_start_options",
             request(Method::ThreadStart(ThreadStartParams {
                 title: Some("t-0001".into()),
                 focus: true,
@@ -451,8 +451,8 @@ fn later_samples() -> Vec<(&'static str, Request)> {
             request(Method::ThreadStart(ThreadStartParams {
                 worktree: false,
                 env: [
-                    ("HERDR_PROJECTS_CONFIG_DIR".into(), "/config".into()),
-                    ("HERDR_PROJECTS_DATA_DIR".into(), "/data".into()),
+                    ("TOOL_CONFIG_DIR".into(), "/config".into()),
+                    ("TOOL_DATA_DIR".into(), "/data".into()),
                 ]
                 .into(),
                 launcher: [
@@ -1055,10 +1055,10 @@ fn the_version_is_the_name_then_semver() {
     );
 }
 
-/// What herdr-projects asks with: a Thread's start, its prompt confirmed
-/// working or blocked, a Project by id and label.
+/// A Thread's start with every option, its prompt confirmed working or
+/// blocked, a Project by id and label.
 #[test]
-fn herdr_projects_calls_read_as_their_parameters() {
+fn the_launch_options_read_as_their_parameters() {
     match parse(
         "thread.start",
         &[
@@ -1113,7 +1113,7 @@ fn herdr_projects_calls_read_as_their_parameters() {
         "thread.start",
         &[
             "--env",
-            r#"{"HERDR_PROJECTS_DATA_DIR":"/data"}"#,
+            r#"{"TOOL_DATA_DIR":"/data"}"#,
             "--launcher",
             "bwrap",
             "--launcher",
@@ -1123,7 +1123,7 @@ fn herdr_projects_calls_read_as_their_parameters() {
         ],
     ) {
         Ok(Method::ThreadStart(params)) => {
-            assert_eq!(params.env["HERDR_PROJECTS_DATA_DIR"], "/data");
+            assert_eq!(params.env["TOOL_DATA_DIR"], "/data");
             assert_eq!(params.launcher, ["bwrap", "--ro-bind", "--"]);
         }
         other => panic!("{other:?}"),

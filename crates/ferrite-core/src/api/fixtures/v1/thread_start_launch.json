@@ -1,1 +1,1 @@
-{"id":"1","method":"thread.start","params":{"cwd":"/work/app","provider":"codex","env":{"HERDR_PROJECTS_CONFIG_DIR":"/config","HERDR_PROJECTS_DATA_DIR":"/data"},"launcher":["bwrap","--dev-bind","/","/","--ro-bind","/r","/r","--"]}}
+{"id":"1","method":"thread.start","params":{"cwd":"/work/app","provider":"codex","env":{"TOOL_CONFIG_DIR":"/config","TOOL_DATA_DIR":"/data"},"launcher":["bwrap","--dev-bind","/","/","--ro-bind","/r","/r","--"]}}

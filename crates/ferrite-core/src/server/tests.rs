@@ -21,8 +21,6 @@ use crate::{Decision, DecisionAnswer, SessionEvent};
 #[cfg(unix)]
 mod browser_providers;
 mod browser_annotations;
-#[cfg(unix)]
-mod herdr;
 mod park;
 mod publish;
 
@@ -172,32 +170,23 @@ struct Harness {
 }
 
 fn start(name: &str) -> Harness {
-    serve(name, None, None)
+    serve(name, None)
 }
 
 /// A Server whose Sessions start only as the returned Sender lets each
 /// through, one `()` each.
 fn start_gated(name: &str) -> (Harness, Sender<()>) {
     let (gate, opens) = mpsc::channel();
-    (serve(name, Some(Arc::new(Mutex::new(opens))), None), gate)
+    (serve(name, Some(Arc::new(Mutex::new(opens)))), gate)
 }
 
-/// A Server whose Projects run `projects`, when given, for their hooks.
-fn serve(name: &str, gate: Option<Arc<Mutex<Receiver<()>>>>, projects: Option<PathBuf>) -> Harness {
-    serve_in(scratch(name), gate, projects)
+fn serve(name: &str, gate: Option<Arc<Mutex<Receiver<()>>>>) -> Harness {
+    serve_in(scratch(name), gate)
 }
 
 /// `serve`, on the Store already in `dir`: a restart's successor.
-fn serve_in(
-    dir: PathBuf,
-    gate: Option<Arc<Mutex<Receiver<()>>>>,
-    projects: Option<PathBuf>,
-) -> Harness {
+fn serve_in(dir: PathBuf, gate: Option<Arc<Mutex<Receiver<()>>>>) -> Harness {
     let store = dir.join("threads");
-    let projects = projects.map(|program| {
-        let env = super::projects::environment(&store, Path::new("/bin/ferrite"), &program);
-        super::projects::Projects::started(program, env)
-    });
     let address = link::address(&store);
     let listener = link::listen(&address).unwrap();
     let api = crate::api::address(&store);
@@ -231,7 +220,6 @@ fn serve_in(
         let mut server = Server::new(engine, info, renders, defaults, settings_dir);
         server.browser_requests = browser_requests;
         disk_ready.send(server.browser_disk.control()).unwrap();
-        server.projects = projects;
         server.relaunch = Box::new(move |executable: &Path| {
             relaunches.send(executable.to_owned()).unwrap();
             Ok(())
@@ -3194,7 +3182,7 @@ fn told(window: &mut Window, wanted: impl Fn(&ServerMessage) -> bool) -> ServerM
     }
 }
 
-/// What herdr-projects reads of an agent (ADR 0030): a Thread started
+/// What a coordinating agent reads of another (ADR 0030): a Thread started
 /// `ready` answers once it is up, landing the windows on it; the windows
 /// say which Thread the operator is looking at and which Composer holds
 /// unsent text; Attention changes are counted; a prompt `until` working
@@ -4089,74 +4077,6 @@ fn repository(dir: &Path) -> PathBuf {
     repo
 }
 
-/// herdr-projects' hook hears the Threads as herdr's panes (ADR 0031): an
-/// agent detected as one opens, its status as its Attention changes, the
-/// pane closed as it parks, each by this Server's API socket.
-#[cfg(unix)]
-#[test]
-fn projects_hook_hears_threads_as_herdrs_panes() {
-    let bin = scratch("projects-hooks-bin");
-    let (program, file) = super::projects::tests::recorder(&bin, 0);
-    let harness = serve("projects-hooks", None, Some(program));
-    let mut window = attach(&harness.address);
-    let (thread, _provider) = open(&mut window, &harness);
-    call(&harness).answer(
-        "1",
-        "agent.prompt",
-        serde_json::json!({ "thread": thread, "text": "go" }),
-    );
-    window.command(2, Op::Park { thread });
-
-    let socket = harness.api.display().to_string();
-    let pane = format!(r#""pane_id":"{thread}""#);
-    let heard = |event: &str, says: &str| {
-        let said = |call: &String| {
-            call.starts_with(&format!("hook {event} "))
-                && call.contains(&pane)
-                && call.contains(says)
-                && call.ends_with(&format!(" {socket} none"))
-        };
-        let calls = super::projects::tests::calls(&file, |calls| calls.iter().any(said));
-        assert!(
-            calls.iter().any(said),
-            "no {event} saying {says}: {calls:#?}"
-        );
-    };
-    heard("pane.agent_detected", r#""agent":"claude""#);
-    heard("pane.agent_status_changed", r#""agent_status":"working""#);
-    heard("pane.closed", r#"{"event":"pane.closed","#);
-}
-
-/// herdr-projects' hook hears a worktree `worktree.remove` removed as
-/// herdr's `worktree.removed`, by its path.
-#[cfg(unix)]
-#[test]
-fn projects_hook_hears_a_removed_worktree() {
-    let bin = scratch("projects-worktree-bin");
-    let (program, file) = super::projects::tests::recorder(&bin, 0);
-    let harness = serve("projects-worktree", None, Some(program));
-    let repo = repo_in(&harness.dir);
-    let mut caller = call(&harness);
-    let started = caller.answer(
-        "1",
-        "thread.start",
-        serde_json::json!({ "cwd": repo, "worktree": true, "branch": "t-1", "base": "main" }),
-    );
-    let tree = started["result"]["thread"]["worktree"].clone();
-    let removed = caller.answer("2", "worktree.remove", serde_json::json!({ "path": tree }));
-    assert!(removed.get("result").is_some(), "{removed}");
-
-    let said = format!(
-        r#"{{"event":"worktree.removed","data":{{"workspace_id":{tree},"worktree":{{"path":{tree}}}}}}}"#
-    );
-    let heard = |call: &String| call.starts_with("hook worktree.removed ") && call.contains(&said);
-    let calls = super::projects::tests::calls(&file, |calls| calls.iter().any(heard));
-    assert!(
-        calls.iter().any(heard),
-        "no worktree.removed for {tree}: {calls:#?}"
-    );
-}
-
 #[test]
 fn manual_install_with_the_same_version_is_detected() {
     use std::time::{Duration, SystemTime};
@@ -4895,7 +4815,7 @@ fn a_window_sees_its_restart_through() {
     // `exec` closes the old Server's sockets; this thread's stay open.
     gone(&harness.address);
     gone(&harness.api);
-    let _successor = serve_in(harness.dir.clone(), None, None);
+    let _successor = serve_in(harness.dir.clone(), None);
     pump_until_within(&mut window, Duration::from_secs(10), |window| {
         window.server_restart() != Some(&ServerRestart::Restarting)
     });
@@ -4946,7 +4866,7 @@ fn a_restart_not_back_in_time_reads_failed_until_it_is() {
     assert_eq!(harness.server.join().unwrap(), 0);
     gone(&harness.address);
     gone(&harness.api);
-    let _successor = serve_in(harness.dir.clone(), None, None);
+    let _successor = serve_in(harness.dir.clone(), None);
     pump_until_within(&mut window, Duration::from_secs(10), |window| {
         matches!(
             window.server_restart(),
@@ -5854,7 +5774,7 @@ fn snooze_is_shared_and_survives_server_restart_without_a_session() {
     // a real exec closes these sockets before the successor listens.
     gone(&harness.address);
     gone(&harness.api);
-    let successor = serve_in(harness.dir.clone(), None, None);
+    let successor = serve_in(harness.dir.clone(), None);
     let mut reopened = cockpit(&successor);
     pump_until(&mut reopened, |window| {
         window

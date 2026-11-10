@@ -22,11 +22,6 @@
 # ~320 MB unpacked) is fetched once into $CEF_PATH (default
 # ~/.local/share/cef). FERRITE_NO_CEF=1 builds without visuals.
 #
-# Projects (ADR 0031): herdr-projects 1.0's program (package `herdr-projects`)
-# ships as `ferrite-projects` beside the app's binary, in `Contents/MacOS`,
-# where the Server and the board find it and hand it to agents and hooks
-# (`FERRITE_PROJECTS_BIN` overrides that), signed as the app is.
-#
 # FERRITE_BUILD_FEATURES=browser-smoke opts into the packaged window acceptance
 # driver; ordinary packages continue to build only cef.
 #
@@ -97,7 +92,6 @@ if [ -n "$DMG" ]; then
 fi
 
 cargo build --profile "$PROFILE" --locked --manifest-path "$ROOT/Cargo.toml" -p ferrite "${FEATURES[@]+"${FEATURES[@]}"}"
-cargo build --profile "$PROFILE" --locked --manifest-path "$ROOT/Cargo.toml" -p herdr-projects --bin ferrite-projects
 
 metadata="$(cargo metadata --no-deps --format-version 1 --manifest-path "$ROOT/Cargo.toml")"
 TARGET="$(printf '%s' "$metadata" | /usr/bin/python3 -c \
@@ -106,19 +100,15 @@ VERSION="$(printf '%s' "$metadata" | /usr/bin/python3 -c \
   'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "ferrite"))')"
 
 BIN="$TARGET/$PROFILE/ferrite"
-PROJECTS_BIN="$TARGET/$PROFILE/ferrite-projects"
-for built in "$BIN" "$PROJECTS_BIN"; do
-  if [ ! -x "$built" ]; then
-    echo "no release binary at $built" >&2
-    exit 1
-  fi
-done
+if [ ! -x "$BIN" ]; then
+  echo "no release binary at $BIN" >&2
+  exit 1
+fi
 
 BUILT="$TARGET/$PROFILE/bundle/macos/$NAME.app"
 rm -rf "$BUILT"
 mkdir -p "$BUILT/Contents/MacOS" "$BUILT/Contents/Resources"
 cp "$BIN" "$BUILT/Contents/MacOS/ferrite"
-cp "$PROJECTS_BIN" "$BUILT/Contents/MacOS/ferrite-projects"
 # Native controller is staged only; browsing remains gated by #192 validation.
 CONTROLLER_ARGS=(--destination "$BUILT/Contents/MacOS" --metadata-directory "$BUILT/Contents/Resources/agent-browser")
 if [ -n "${FERRITE_BROWSER_CONTROLLER_STAGE:-}" ]; then
@@ -252,7 +242,6 @@ if [ "$SIGNING_IDENTITY" = "-" ]; then
   # again. Signed by one identity, every build is the same app to macOS.
   # Its helpers are signed too (and become copies), so they carry it.
   LOCAL="${MACOS_LOCAL_IDENTITY:--}"
-  codesign --force --sign "$LOCAL" "$BUILT/Contents/MacOS/ferrite-projects"
   codesign --force --sign "$LOCAL" "$BUILT/Contents/MacOS/agent-browser"
   if [ -n "${FEATURES[*]:-}" ]; then
     codesign --force --sign "$LOCAL" "$BUILT/Contents/Frameworks/$FRAMEWORK_NAME"
@@ -291,8 +280,6 @@ PLIST
     done
     rm -f "$ENTITLEMENTS"
   fi
-  codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
-    "$BUILT/Contents/MacOS/ferrite-projects"
   codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
     "$BUILT/Contents/MacOS/agent-browser"
   codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$BUILT"

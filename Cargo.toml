@@ -8,10 +8,6 @@ members = [
     "crates/ferrite-cockpit",
     "crates/ferrite-terminal",
     "crates/ferrite-frame",
-    "crates/ferrite-projects",
-    "crates/ferrite-projects-core",
-    "crates/ferrite-projects-flow",
-    "crates/ferrite-projects-board",
     "crates/ferrite-focus-notify",
     "crates/ferrite-reviewr",
 ]
@@ -32,26 +28,10 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
-# preserve_order and float_roundtrip are herdr-projects' (ADR 0031): a closing
-# note's time read back is the time written.
+# preserve_order keeps a JSON object's keys as written (fixtures, the
+# API's answers); float_roundtrip reads a written time back exactly.
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
-
-# herdr-projects 1.0's crates (ADR 0031) and what they take from upstream's
-# workspace, as upstream declares them.
-sw-core = { path = "crates/ferrite-projects-core" }
-sw-flow = { path = "crates/ferrite-projects-flow" }
-sw-board = { path = "crates/ferrite-projects-board" }
-ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
-crossterm = "0.29"
-unicode-width = "0.2"
-unicode-segmentation = "1"
 libc = "0.2"
-regex = "1"
-fancy-regex = "0.14"
-toml = "0.9"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-sha1_smol = "1"
-yaml-rust2 = { version = "0.10", default-features = false }
 
 [patch.crates-io]
 gpui-base = { path = "vendor/gpui-base" }

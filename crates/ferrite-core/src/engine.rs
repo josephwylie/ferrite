@@ -1192,9 +1192,6 @@ pub struct Engine {
     /// and this Engine's feed into it.
     turn_agents: Vec<ferrite_reviewr::ferrite::Agent>,
     turns: ferrite_reviewr::ferrite::TurnSource,
-    /// The worktrees removed from disk and not yet handed over
-    /// (`take_removed_worktrees`).
-    removed_worktrees: Vec<PathBuf>,
     #[cfg(test)]
     refuse_park: std::collections::HashSet<ThreadId>,
     /// How many Thread states `publish` has built (`states_built`).
@@ -1262,7 +1259,6 @@ impl Engine {
             attention_count: Default::default(),
             turn_agents: Vec::new(),
             turns: Default::default(),
-            removed_worktrees: Vec::new(),
             #[cfg(test)]
             refuse_park: std::collections::HashSet::new(),
             #[cfg(test)]
@@ -2216,7 +2212,6 @@ impl Engine {
                     self.threads.remove(&thread);
                     self.open.retain(|open| *open != thread);
                     workspace::remove_worktree(&repo, &path).map_err(DeleteError::Git)?;
-                    self.removed_worktrees.push(path.clone());
                 }
                 // The menu forgets the removed tree; the branch stays git's.
                 self.registry
@@ -2935,14 +2930,7 @@ impl Engine {
     /// The registry forgets the worktree at `path`, removed for good with
     /// no Thread bound to it (`retire_worktree` forgets the others').
     pub fn forget_worktree(&mut self, path: &Path) -> io::Result<()> {
-        self.removed_worktrees.push(path.to_owned());
         self.registry.remove_worktree(path)
-    }
-
-    /// The worktrees removed from disk since the last call: by
-    /// `worktree.remove` (`forget_worktree`) or with a deleted Thread.
-    pub fn take_removed_worktrees(&mut self) -> Vec<PathBuf> {
-        std::mem::take(&mut self.removed_worktrees)
     }
 
     /// Whether some Thread's Main just finished making a worktree and is

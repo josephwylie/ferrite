@@ -75,9 +75,6 @@ pub struct Spawn {
     /// The Server's API socket, told to each agent (`FERRITE_SOCKET`) so it
     /// can drive other Threads (ADR 0027). `None` where there is no API.
     pub api: Option<PathBuf>,
-    /// The shipped `ferrite-projects` while Projects run (ADR 0031): each
-    /// agent is told it with herdr's socket, as herdr tells every pane.
-    pub projects: Option<PathBuf>,
 }
 
 impl Spawn {
@@ -90,7 +87,6 @@ impl Spawn {
             renderer,
             browser: None,
             api: None,
-            projects: None,
         }
     }
 
@@ -390,11 +386,7 @@ impl Spawn {
             .iter()
             .map(|(name, value)| (name.clone(), value.into()))
             .chain(
-                crate::api::caller_environment(
-                    request.thread,
-                    self.api.as_deref(),
-                    self.projects.as_deref(),
-                )
+                crate::api::caller_environment(request.thread, self.api.as_deref())
                 .into_iter()
                 .map(|(name, value)| (name.to_string(), value)),
             )
@@ -607,7 +599,7 @@ mod tests {
     #[test]
     fn a_threads_env_and_launcher_reach_its_cli() {
         let env = [
-            ("HERDR_PROJECTS_DATA_DIR".to_string(), "/data".to_string()),
+            ("TOOL_DATA_DIR".to_string(), "/data".to_string()),
             ("FERRITE_THREAD_ID".to_string(), "99".to_string()),
         ];
         let launcher = ["bwrap".to_string(), "--".to_string()];
@@ -634,54 +626,13 @@ mod tests {
         assert_eq!(
             claude.env,
             [
-                ("HERDR_PROJECTS_DATA_DIR".to_string(), "/data".into()),
+                ("TOOL_DATA_DIR".to_string(), "/data".into()),
                 ("FERRITE_THREAD_ID".to_string(), "99".into()),
                 ("FERRITE_THREAD_ID".to_string(), "12".into()),
             ],
             "Ferrite's own is set last, over the Thread's"
         );
         assert_eq!(claude.launcher, launcher);
-    }
-
-    /// While Projects run, every agent is told its pane — its Thread —
-    /// herdr's socket — the API's — and the program, as herdr tells every
-    /// pane: it is known as its task's agent, and a task it delegates
-    /// links this Server (ADR 0031).
-    #[test]
-    fn while_projects_run_every_agent_is_in_herdrs_pane_environment() {
-        let projects = Spawn {
-            api: Some(PathBuf::from("/store/api.sock")),
-            projects: Some(PathBuf::from("/f/ferrite-projects")),
-            ..Spawn::new(Arc::default(), None)
-        };
-        let SessionConfig::Claude(claude) = projects.config(SpawnRequest {
-            thread: ThreadId::new(12),
-            provider: Provider::Claude,
-            model: None,
-            effort: None,
-            resume: None,
-            resume_at: None,
-            permission_mode: None,
-            name: None,
-            cwd: None,
-            additional_directories: Vec::new(),
-            launch: crate::engine::AgentLaunch::default(),
-        }) else {
-            panic!("a Claude request makes a Claude config");
-        };
-        let told = |name: &str| {
-            claude
-                .env
-                .iter()
-                .find(|(key, _)| *key == name)
-                .map(|(_, value)| value.clone())
-        };
-        assert_eq!(told("HERDR_PANE_ID"), Some("12".into()));
-        assert_eq!(told("HERDR_SOCKET_PATH"), Some("/store/api.sock".into()));
-        assert_eq!(
-            told("FERRITE_PROJECTS_BIN"),
-            Some("/f/ferrite-projects".into())
-        );
     }
 
     #[derive(Default)]
