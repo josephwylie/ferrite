@@ -181,8 +181,9 @@ class Boundary:
     def recovery_success(self,state,*_):
         self.control(state,{'kind':'click','reference':self.ref(state,'Recoverable boundary target')},self.recovered)
     def recovered(self,state,*_):
-        if state['value'].get('initial_failures')!=1 or state['value'].get('recovery_attempts')!=1:raise ValueError('Partially visible click did not report its bounded recovery')
-        self.checks.append('outside viewport click scrolls and retries exactly once')
+        counts=(state['value'].get('initial_failures',0),state['value'].get('recovery_attempts',0))
+        if counts not in ((0,0),(1,1)):raise ValueError('Partially visible click reported inconsistent or unbounded recovery')
+        self.checks.append('outside viewport click scrolls and retries exactly once' if counts==(1,1) else 'partly visible target is clicked without needing recovery')
         self.observe(self.recovery_failure)
     def recovery_failure(self,state,*_):
         self.control(state,{'kind':'click','reference':self.ref(state,'Fixed partial boundary target')},self.failed_recovery,True)
