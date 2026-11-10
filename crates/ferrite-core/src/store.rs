@@ -1978,7 +1978,7 @@ type DirKey = PathBuf;
 
 #[cfg(not(unix))]
 fn dir_key(dir: &Path) -> io::Result<DirKey> {
-    fs::canonicalize(dir)
+    dunce::canonicalize(dir)
 }
 
 /// The derived summary cache beside the logs: counts for pre-13 logs that
@@ -2020,7 +2020,7 @@ fn log_stamp(path: &Path) -> Option<(u64, u128)> {
 /// a state the disk no longer holds.
 pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let path = if fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
-        fs::canonicalize(path)?
+        dunce::canonicalize(path)?
     } else {
         path.to_path_buf()
     };

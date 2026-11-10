@@ -629,12 +629,12 @@ fn list_repo_answers_a_projects_worktrees_and_branches_read_by_the_server() {
     // a verbatim path. Compare directory identity, not those spellings.
     let mut worktrees = listing.worktrees;
     for worktree in &mut worktrees {
-        worktree.path = std::fs::canonicalize(&worktree.path).unwrap();
+        worktree.path = dunce::canonicalize(&worktree.path).unwrap();
     }
     assert_eq!(
         worktrees,
         [crate::workspace::ListedWorktree {
-            path: std::fs::canonicalize(&tree).unwrap(),
+            path: dunce::canonicalize(&tree).unwrap(),
             branch: Some("fix".into()),
         }]
     );
@@ -3668,7 +3668,7 @@ fn projects_are_opened_renamed_and_closed() {
     );
     assert_eq!(
         nested["result"]["thread"]["cwd"],
-        std::fs::canonicalize(&inside)
+        dunce::canonicalize(&inside)
             .unwrap()
             .display()
             .to_string(),

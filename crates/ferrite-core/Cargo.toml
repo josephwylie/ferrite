@@ -26,6 +26,10 @@ sha2 = "0.10"
 # The API's JSON Schema, generated from its one declaration of each
 # operation (`api::schema`). Already in the tree via gpui-component.
 schemars = "1"
+# Canonical paths without Windows' `\\?\` verbatim prefix, which git
+# rejects: project roots, worktree placement and cwd identity. Already in
+# the tree via aws-lc-sys.
+dunce = "1"
 
 # Stopping an operator's command ends its process group (`user_commands`).
 [target.'cfg(unix)'.dependencies]

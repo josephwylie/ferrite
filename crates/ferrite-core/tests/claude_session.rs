@@ -1207,7 +1207,7 @@ fn the_cli_runs_in_the_configured_workspace() {
     drop(session);
     assert_eq!(
         recorded[0],
-        fs::canonicalize(&workspace).unwrap().display().to_string()
+        dunce::canonicalize(&workspace).unwrap().display().to_string()
     );
 }
 

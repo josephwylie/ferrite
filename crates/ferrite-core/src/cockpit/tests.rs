@@ -809,7 +809,7 @@ fn opening_a_project_exposes_its_additional_directories_without_changing_cwd() {
     );
     assert_eq!(
         fake.additional_directories.borrow().last().unwrap(),
-        &[extra.canonicalize().unwrap()]
+        &[dunce::canonicalize(&extra).unwrap()]
     );
 }
 

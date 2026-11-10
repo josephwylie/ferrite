@@ -220,7 +220,7 @@ fn thread_of(agent: &Value) -> u64 {
 }
 
 fn same_dir(a: &str, b: &Path) -> bool {
-    std::fs::canonicalize(a).ok() == std::fs::canonicalize(b).ok()
+    dunce::canonicalize(a).ok() == dunce::canonicalize(b).ok()
 }
 
 /// A task delegated through the adapter gets a placed pane whose Thread is

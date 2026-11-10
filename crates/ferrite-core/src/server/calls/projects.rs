@@ -77,7 +77,7 @@ impl Server {
     /// The Project holding `cwd` — or, for a linked worktree, holding its
     /// repository — else `cwd` registered as one, with `label`.
     pub(super) fn open_project(&mut self, params: ProjectOpenParams) -> Result<Value, ApiError> {
-        let cwd = std::fs::canonicalize(&params.cwd).map_err(failed)?;
+        let cwd = dunce::canonicalize(&params.cwd).map_err(failed)?;
         let registry = self.engine.registry();
         let found = registry.containing(&cwd).or_else(|| {
             let checkout = workspace::checkout_of(&cwd).filter(|checkout| checkout.linked)?;

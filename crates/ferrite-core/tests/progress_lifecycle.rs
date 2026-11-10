@@ -47,7 +47,7 @@ fn latest_output_survives_the_disclosed_prefix_limit_and_split_lines() {
 }
 
 #[test]
-fn unavailable_latest_test_run_clears_the_previous_verdict() {
+fn an_unfinished_latest_test_run_clears_the_previous_verdict() {
     let mut t = Transcript::default();
     t.apply(Input::Event(tool("first")));
     t.apply(Input::Event(SessionEvent::ToolCompleted {

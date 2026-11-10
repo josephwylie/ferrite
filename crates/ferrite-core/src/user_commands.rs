@@ -269,7 +269,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::canonicalize(dir).unwrap()
+        dunce::canonicalize(dir).unwrap()
     }
 
     fn command(run: Run) -> UserCommand {

@@ -328,7 +328,7 @@ pub const WORKTREES: &str = ".worktrees";
 /// spelled through a symlink its registered root was resolved from.
 fn exclude_inside(repo: &Path, path: &Path) -> Result<(), GitError> {
     let inside = path.strip_prefix(repo).ok().map(Path::to_path_buf).or_else(|| {
-        let canonical = fs::canonicalize(repo).ok()?;
+        let canonical = dunce::canonicalize(repo).ok()?;
         path.strip_prefix(&canonical).ok().map(Path::to_path_buf)
     });
     let Some(top) = inside.and_then(|inside| {
@@ -425,7 +425,7 @@ pub fn checkout_of(root: &Path) -> Option<Checkout> {
             linked: false,
         });
     };
-    let common = fs::canonicalize(admin.join(common.trim())).ok()?;
+    let common = dunce::canonicalize(admin.join(common.trim())).ok()?;
     Some(Checkout {
         repo: common.parent()?.to_path_buf(),
         linked: true,
@@ -437,7 +437,7 @@ pub fn checkout_of(root: &Path) -> Option<Checkout> {
 pub fn same_dir(a: &Path, b: &Path) -> bool {
     a == b
         || matches!(
-            (fs::canonicalize(a), fs::canonicalize(b)),
+            (dunce::canonicalize(a), dunce::canonicalize(b)),
             (Ok(a), Ok(b)) if a == b
         )
 }
@@ -1330,13 +1330,13 @@ mod tests {
         let listed = worktrees(&repo).unwrap();
         assert_eq!(listed.len(), 2, "{listed:?}");
         assert_eq!(
-            fs::canonicalize(&listed[0].path).unwrap(),
-            fs::canonicalize(&repo).unwrap()
+            dunce::canonicalize(&listed[0].path).unwrap(),
+            dunce::canonicalize(&repo).unwrap()
         );
         assert_eq!(listed[0].branch.as_deref(), Some("main"));
         assert_eq!(
-            fs::canonicalize(&listed[1].path).unwrap(),
-            fs::canonicalize(&tree).unwrap()
+            dunce::canonicalize(&listed[1].path).unwrap(),
+            dunce::canonicalize(&tree).unwrap()
         );
         assert_eq!(listed[1].branch.as_deref(), Some("feature/side"));
         assert_eq!(
@@ -1770,7 +1770,7 @@ mod tests {
         assert_eq!(
             checkout_of(&tree),
             Some(Checkout {
-                repo: fs::canonicalize(&repo).unwrap(),
+                repo: dunce::canonicalize(&repo).unwrap(),
                 linked: true,
             })
         );
