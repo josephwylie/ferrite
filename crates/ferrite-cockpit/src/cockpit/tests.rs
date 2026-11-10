@@ -12,6 +12,7 @@ mod decision_cards;
 mod decisions_parity;
 mod diagnostics;
 mod drafts;
+mod factory;
 mod files;
 mod find;
 mod floats_parity;

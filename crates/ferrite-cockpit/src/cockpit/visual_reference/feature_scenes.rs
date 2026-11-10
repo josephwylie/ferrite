@@ -50,6 +50,7 @@ pub(super) const STATES: &[&str] = &[
     "files-empty",
     "changes-split",
     "terminal",
+    "factory",
 ];
 
 pub(super) fn handles(state: &str) -> bool {
@@ -93,6 +94,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "files-empty" => tools("files-empty", &[Tool::Files], None),
         "changes-split" => tools("changes-split", &[Tool::Files, Tool::Changes], Some("crates/ferrite-ui/src/motion.rs")),
         "terminal" => tools("terminal", &[Tool::Terminal], None),
+        "factory" => factory(),
         _ => unreachable!("`handles` lists every state"),
     }
 }
@@ -680,6 +682,82 @@ fn toast_done() -> (Scene, Setup) {
             cost_usd: Some(0.09),
         });
     (scene, Box::new(|_, _, _| {}))
+}
+
+/// A Project's Factory board (#220): a Task in each state but Ready to
+/// approve, the one that needs the operator open in its panel on its
+/// Activity.
+fn factory() -> (Scene, Setup) {
+    use ferrite_core::factory::{Board, Status, Task};
+    let mut scene = Scene::new("factory");
+    let ferrite = scene.project("ferrite");
+    let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
+    let project = scene.core.project_id(mine).expect("a Project");
+    let worker = scene
+        .core
+        .fixture_open_owned(
+            Provider::Claude,
+            ferrite_core::workspace::WorkspaceChoice::Main {
+                checkout: ferrite.clone(),
+            },
+            ferrite_core::ThreadOwner::Task("t-2".into()),
+        )
+        .expect("open the Worker");
+    scene.core.focus_thread(mine);
+    let task = |id: &str,
+                title: &str,
+                status: Status,
+                model: &str,
+                result: Option<&str>,
+                reason: Option<&str>,
+                activity: serde_json::Value| {
+        let task: Task = serde_json::from_value(serde_json::json!({
+            "id": id,
+            "project": project,
+            "title": title,
+            "instructions": title,
+            "status": status,
+            "agent": {"provider": "claude", "model": model},
+            "branch": format!("factory/{id}"),
+            "worker": (id == "t-2").then_some(worker),
+            "worktree": format!("~/work/ferrite/.worktrees/factory/{id}"),
+            "result": result,
+            "reason": reason,
+            "activity": activity,
+            "created_ms": 1_700_000_000_000_i64,
+        }))
+        .expect("a fixture Task");
+        task
+    };
+    let at = |by: &str, text: &str| serde_json::json!({"at_ms": 1_700_000_000_000_i64, "by": by, "text": text});
+    let board = Board {
+        tasks: vec![
+            task("t-1", "Bump the toolchain to 1.92", Status::Queued, "claude-sonnet-4", None, None, serde_json::json!([at("operator", "Started the task")])),
+            task(
+                "t-2",
+                "Fix the flaky login test",
+                Status::NeedsHuman,
+                "claude-opus-4",
+                None,
+                Some("No access to the staging database"),
+                serde_json::json!([
+                    at("operator", "Started the task"),
+                    at("ferrite", "Started a Worker on factory/t-2"),
+                    at("agent", "Unable to finish: No access to the staging database"),
+                ]),
+            ),
+            task("t-3", "Add a retry to the uploader", Status::Working, "claude-opus-4", None, None, serde_json::json!([at("ferrite", "Started a Worker on factory/t-3")])),
+            task("t-4", "Rename the settings rows", Status::Stopped, "claude-sonnet-4", None, Some("Stopped by you"), serde_json::json!([at("operator", "Stopped the task")])),
+            task("t-5", "Write the 0.9 changelog", Status::Completed, "claude-opus-4", Some("Drafted CHANGELOG.md with 14 changes"), None, serde_json::json!([at("agent", "Finished: Drafted CHANGELOG.md with 14 changes")])),
+        ],
+    };
+    scene.core.fixture_factory(board);
+    let setup: Setup = Box::new(move |view, _, cx| {
+        view.open_factory(project, cx);
+        view.open_task("t-2", cx);
+        view.task_tab(crate::cockpit::factory::TaskTab::Activity, cx);
+    });
+    (scene, setup)
 }
 
 /// A turn that did a little work and closed with its wrap-up box: recap, the

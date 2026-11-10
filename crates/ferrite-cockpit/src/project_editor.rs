@@ -89,6 +89,17 @@ pub fn path_field(machine: &str, editor: impl IntoElement, focused: bool) -> Div
     )
 }
 
+/// Any one-line field on a sheet in the name row's face: the New task
+/// sheet's instructions among them.
+pub fn text_field(
+    label: SharedString,
+    editor: impl IntoElement,
+    focused: bool,
+    focused_selector: &'static str,
+) -> Div {
+    field(label, editor, focused, focused_selector)
+}
+
 fn field(
     label: SharedString,
     editor: impl IntoElement,

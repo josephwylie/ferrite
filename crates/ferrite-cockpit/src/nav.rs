@@ -1008,6 +1008,44 @@ pub fn view_icon(path: &'static str) -> AnyElement {
     icon(path, NAV_ICON, INK_STRONG).into_any_element()
 }
 
+/// A Project's Factory entry, first under its heading (ADR 0037): the
+/// board's icon, `Factory`, and how many of its Tasks need the operator,
+/// as a view row says its count. Selected while its board shows.
+pub fn factory_row(project: ProjectId, count: usize, active: bool) -> Stateful<Div> {
+    let key = format!("nav-factory-{}", project.get());
+    let label = key.clone();
+    let tally = key.clone();
+    line_frame(
+        SharedString::from(key.clone()),
+        SharedString::from(key.clone()),
+        active,
+    )
+    .debug_selector(move || key.clone())
+    .gap(px(NAV_ICON_GAP))
+    .text_color(rgb(INK_STRONG))
+    .child(
+        div()
+            .flex()
+            .flex_shrink_0()
+            .size(px(NAV_ICON))
+            .child(view_icon(icons::BOARD)),
+    )
+    .child(
+        div()
+            .debug_selector(move || format!("{label}-label"))
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .child("Factory"),
+    )
+    .when(count > 0, |row| {
+        row.child(
+            components::tabular(trailing(count.to_string(), FS_META, INK_SUBTLE))
+                .debug_selector(move || format!("{tally}-count")),
+        )
+    })
+}
+
 /// A chord as it is drawn, its key a capital: `cmd-k` → `⌘K`.
 fn chord_glyphs(keys: &str) -> String {
     components::chord_text(keys).to_uppercase()

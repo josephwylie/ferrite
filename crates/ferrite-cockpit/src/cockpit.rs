@@ -12,6 +12,7 @@ mod context_menu;
 pub(crate) mod decisions;
 mod drafts;
 pub(crate) mod empty_board;
+pub(crate) mod factory;
 mod history;
 mod leaving;
 mod lightbox;
@@ -666,6 +667,8 @@ pub struct CockpitView {
     nav_measure_rest: std::cell::Cell<bool>,
     /// The empty board shown while Threads stay open (`show_empty_board`).
     empty_shown: bool,
+    /// A Project's Factory board, shown in the board's place (ADR 0037).
+    factory_view: Option<factory::FactoryView>,
     /// The empty board's selected row, and the list's own focus.
     empty_cursor: usize,
     empty_focus: FocusHandle,
@@ -1640,6 +1643,7 @@ impl CockpitView {
             decisions: decisions::DecisionState::new(cx.weak_entity()),
             nav_measure_rest: std::cell::Cell::new(false),
             empty_shown: false,
+            factory_view: None,
             empty_cursor: 0,
             empty_focus: cx.focus_handle(),
             solo_beside: None,
@@ -2334,6 +2338,9 @@ impl CockpitView {
         let parked_moved = self.cockpit.take_parked_changed();
         if parked_moved {
             self.parked_changed(cx);
+        }
+        if self.cockpit.take_factory_changed() {
+            self.factory_changed(cx);
         }
         self.apply_thread_rules(&frame, cx);
         self.land(cx);
@@ -4358,6 +4365,12 @@ impl CockpitView {
                     self.chime(sound);
                 }
             }
+            Asked::TaskAlert {
+                project,
+                task,
+                status,
+                title,
+            } => self.present_task_alert(project, task, status, title, window, cx),
         }
     }
 
@@ -9092,6 +9105,17 @@ impl CockpitView {
             .map(|row| project_of(row.thread))
             .chain(placed.iter().filter_map(|(project, _)| *project))
             .collect();
+        // A Project whose Factory holds Tasks has a section for its entry,
+        // though no Thread of the operator's is under it.
+        keys.extend(
+            self.cockpit
+                .factory()
+                .tasks
+                .iter()
+                .map(|task| task.project)
+                .filter(|project| self.nav_filter.is_none_or(|wanted| wanted == *project))
+                .map(Some),
+        );
         keys.sort_by_key(|key| (key.is_none(), *key));
         keys.dedup();
         let mut solos: Vec<nav::ThreadRow> = Vec::new();
@@ -9469,6 +9493,7 @@ impl CockpitView {
     /// re-aims to the clicked Thread like every other deliberate move.
     fn focus_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         self.empty_shown = false;
+        self.factory_view = None;
         if self.cockpit.focus_thread(thread) {
             if let Some(index) = self.pane_for(thread) {
                 self.focus_pane(index);
@@ -9482,6 +9507,7 @@ impl CockpitView {
     /// mirror follows.
     pub fn enter_group(&mut self, group: GroupId, cx: &mut Context<Self>) {
         self.empty_shown = false;
+        self.factory_view = None;
         match self.cockpit.enter_group(group) {
             Ok(()) => {
                 self.sync_panes(cx);
@@ -9512,6 +9538,7 @@ impl CockpitView {
     /// tail of cmd-o and a parked nav row's click (#21).
     fn revive_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         self.empty_shown = false;
+        self.factory_view = None;
         match self.cockpit.reopen(thread) {
             Ok(()) => {
                 self.sync_panes(cx);
@@ -10339,6 +10366,12 @@ impl CockpitView {
                 .collect(),
             _ => Vec::new(),
         };
+        // The open Task's Worker, drawn in its panel, streams whole too.
+        self.leave_factory_if_moved();
+        let drawn: Vec<ThreadId> = match self.factory_worker_drawn() {
+            Some(worker) => vec![worker],
+            None => drawn,
+        };
         self.cockpit.draws_transcripts(drawn);
 
         if level == Level::Transcript {
@@ -10562,6 +10595,8 @@ impl CockpitView {
         // its rows answer ↑ ↓ ⏎ under the `EmptyBoard` context.
         let wanted = if lost {
             self.focus.clone()
+        } else if let Some(focus) = self.factory_focus(window, cx) {
+            focus
         } else if self.rename.is_none() && fullscreen.is_none() && self.empty_board_shown() {
             self.empty_focus.clone()
         } else {
@@ -10680,7 +10715,10 @@ impl CockpitView {
             self.probe_cli_versions(cx);
         }
         let board = self.board_bounds(window);
-        let grid = if self.empty_shown && fullscreen.is_none() {
+        let grid = if self.factory_view.is_some() {
+            // A Project's Factory board stands in the board's place.
+            frame().flex().child(self.factory_board(window, cx))
+        } else if self.empty_shown && fullscreen.is_none() {
             // Shown on purpose while Threads stay open (`show_empty_board`).
             frame().flex().child(self.empty_board(cx))
         } else if let Some(index) = fullscreen.filter(|index| !self.has_reader(*index)) {
@@ -11031,6 +11069,7 @@ impl CockpitView {
             .children(self.band_menu_element(window, cx))
             .children(self.settings_element(window, cx))
             .children(self.project_editor_element(window, cx))
+            .children(self.new_task_sheet(window, cx))
             .children(self.toast_float(window, cx))
             .children(self.sheet_floats(window, cx))
             .children(self.lightbox_element(cx))
@@ -13459,6 +13498,9 @@ impl CockpitView {
     /// (the click handler's doing) and lands on what it was about — on its
     /// machine, when that is off screen.
     pub(crate) fn open_system_notification(&mut self, tag: &str, cx: &mut Context<Self>) {
+        if self.open_task_notification(tag, cx) {
+            return;
+        }
         // Its entry stays: read now, the next pump takes it out of the
         // notification centre with the rest.
         if let Some(alert) = self.needs_you.posted.get(tag).cloned() {
@@ -14279,6 +14321,10 @@ impl CockpitView {
             }) {
                 // Every section's rows start on its heading's label.
                 let mut rows: Vec<AnyElement> = Vec::new();
+                // A Project's Factory entry heads its rows.
+                if let Some(project) = section.project.filter(|_| !section.mixed && !recents) {
+                    rows.push(self.factory_nav_row(project, cx));
+                }
                 if !section.drawn.is_empty() {
                     let mut solos: Vec<AnyElement> = section
                         .drawn
