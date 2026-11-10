@@ -168,6 +168,7 @@ struct Harness {
     answers: Answers,
     queued: Queued,
     browser: crate::browser::Client,
+    browser_disk: browser::DiskControl,
 }
 
 fn start(name: &str) -> Harness {
@@ -215,6 +216,7 @@ fn serve_in(
     let settings_dir = dir.clone();
     let (relaunches, relaunched) = mpsc::channel();
     let (browser, browser_requests) = crate::browser::channel();
+    let (disk_ready, disk) = mpsc::channel();
     let server = std::thread::spawn(move || {
         let store = Store::open(&store).unwrap();
         let reopen = launch_threads(&store);
@@ -228,6 +230,7 @@ fn serve_in(
         let defaults = Arc::new(Mutex::new(SessionDefaults::default()));
         let mut server = Server::new(engine, info, renders, defaults, settings_dir);
         server.browser_requests = browser_requests;
+        disk_ready.send(server.browser_disk.control()).unwrap();
         server.projects = projects;
         server.relaunch = Box::new(move |executable: &Path| {
             relaunches.send(executable.to_owned()).unwrap();
@@ -248,6 +251,7 @@ fn serve_in(
         answers,
         queued,
         browser,
+        browser_disk: disk.recv_timeout(Duration::from_secs(5)).unwrap(),
     }
 }
 

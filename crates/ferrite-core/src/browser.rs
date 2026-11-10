@@ -813,7 +813,8 @@ fn begin_navigation(tab: &mut Tab) -> Result<()> {
     Ok(())
 }
 
-fn validate_url(url: &str) -> Result<()> {
+/// The shared address policy for admitted tabs and native website navigation.
+pub fn validate_url(url: &str) -> Result<()> {
     let parsed = url::Url::parse(url)
         .map_err(|_| "Enter a valid http:// or https:// website address".to_string())?;
     if matches!(parsed.scheme(), "http" | "https")

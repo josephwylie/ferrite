@@ -642,7 +642,9 @@ impl Controller {
         let mut value = match &job.control {
             Control::Unknown => Err(failure("Unsupported browser control")),
             Control::Observe => {
-                let mut value = self.command(json!({"action":"snapshot", "interactive":true}))?;
+                // Keep ordinary page text and status messages alongside the
+                // actionable references; the projection below bounds both.
+                let mut value = self.command(json!({"action":"snapshot", "interactive":false}))?;
                 self.refs.retain(|_, binding| binding.target != job.target);
                 // Closed pages cannot leave an unbounded reference history.
                 if self.refs.len() > 16384 {

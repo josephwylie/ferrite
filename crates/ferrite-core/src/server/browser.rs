@@ -2,6 +2,10 @@
 //! not grant ownership: the connection must also be attached to the Thread.
 use super::*;
 use crate::browser::{Action, Service};
+mod disk;
+#[cfg(test)]
+pub(super) use disk::Control as DiskControl;
+pub(super) use disk::Disk;
 
 pub(super) fn load(store: &crate::store::Store) -> Service {
     match store.load_browser().and_then(|saved| {
@@ -20,8 +24,9 @@ pub(super) fn load(store: &crate::store::Store) -> Service {
 
 impl Server {
     pub(super) fn browser_capture(
-        &self,
+        &mut self,
         id: ClientId,
+        request: u64,
         thread: ThreadId,
         owner: crate::browser::Owner,
         lease: crate::browser::Lease,
@@ -60,24 +65,36 @@ impl Server {
         if browser_annotations::png_size(&bytes).map_err(failed)? != (png.width, png.height) {
             return Err(failed("The page geometry changed; capture it again"));
         }
-        let annotation = browser_annotations::retain(
-            &self.engine.browser_store().dir().join(thread.to_string()),
-            capture,
-            &bytes,
-            String::new(),
-            vec![],
-        )
-        .map_err(failed)?;
-        Ok(Some(Done::BrowserCapture { annotation }))
+        if self
+            .browser_captures
+            .iter()
+            .any(|pending| pending.thread == thread && pending.lease == lease)
+        {
+            return Err(failed("This browser capture is already being retained"));
+        }
+        let dir = self.engine.browser_store().dir().join(thread.to_string());
+        let answer = self
+            .browser_disk
+            .submit(|answer| disk::Job::Capture(dir, capture, bytes, answer));
+        self.browser_captures.push(CaptureWrite {
+            id,
+            request,
+            thread,
+            owner,
+            lease,
+            release: false,
+            answer,
+        });
+        Ok(None)
     }
 
     pub(super) fn browser_capture_image(
-        &self,
+        &mut self,
         id: ClientId,
+        request: u64,
         thread: ThreadId,
         hash: &str,
     ) -> Result<Option<Done>, WireError> {
-        use base64::Engine as _;
         if !self
             .clients
             .get(&id)
@@ -87,19 +104,13 @@ impl Server {
                 "Open this Thread before reviewing its browser captures",
             ));
         }
-        let bytes = crate::browser_annotations::read_retained(
-            &self.engine.browser_store().dir().join(thread.to_string()),
-            hash,
-        )
-        .map_err(failed)?;
-        let (width, height) = crate::browser_annotations::png_size(&bytes).map_err(failed)?;
-        Ok(Some(Done::BrowserCaptureImage {
-            png: crate::protocol::WirePng {
-                base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-                width,
-                height,
-            },
-        }))
+        let dir = self.engine.browser_store().dir().join(thread.to_string());
+        let hash = hash.to_owned();
+        let answer = self
+            .browser_disk
+            .submit(|answer| disk::Job::Image(dir, hash, answer));
+        self.reads.push((id, request, answer));
+        Ok(None)
     }
 
     pub(super) fn browser_window(&self, id: ClientId, thread: ThreadId) -> Result<(), WireError> {
@@ -206,16 +217,23 @@ impl Server {
         action: Action,
     ) -> Result<Option<Done>, WireError> {
         self.browser_window(id, thread)?;
+        let owner = self
+            .browser
+            .state(thread)
+            .owner
+            .ok_or_else(|| failed("This browser has no owner"))?;
         let mut next = self.browser.clone();
         let state = next.apply(thread, id, action.clone()).map_err(failed)?;
-        // Metadata is durable before realizing a page. A failed disk write is
-        // reported, never silently described as a successful persisted open.
-        self.engine
-            .browser_store()
-            .save_browser(&next.save())
-            .map_err(failed)?;
-        self.browser = next;
-        self.publish_browser(thread, Some(action));
+        let saved = next.save();
+        let answer = self.browser_disk.save(saved);
+        self.browser_write = Some(Write {
+            thread,
+            owner,
+            action: Some(action),
+            answer,
+            reply: Reply::None,
+            failure: None,
+        });
         Ok(Some(Done::Browser { state }))
     }
 
@@ -226,28 +244,24 @@ impl Server {
         owner: crate::browser::Owner,
         page: crate::browser::PageState,
     ) -> Result<Option<Done>, WireError> {
-        if owner.window != id {
-            return Err(failed("This browser belongs to another window"));
-        }
-        self.browser_window(id, thread)?;
+        self.browser_owned(id, thread, owner)?;
         self.browser.update(thread, owner, page).map_err(failed)?;
-        // The page already changed in the real engine: acknowledge its new
-        // identity even if the drive failed, retaining the live operator work.
-        if let Err(error) = self.save_browser() {
-            crate::log!("browser metadata could not be saved: {:?}", error);
-            self.browser.persistence_error(thread, &error.message);
-        }
+        let saved = self.browser.save();
+        let answer = self.browser_disk.save(saved);
+        self.browser_write = Some(Write {
+            thread,
+            owner,
+            action: None,
+            answer,
+            reply: Reply::None,
+            failure: None,
+        });
+        // The native page already changed; publish its identity immediately,
+        // but its durable acknowledgement waits for the worker.
         self.publish_browser(thread, None);
         Ok(Some(Done::Browser {
             state: self.browser.state(thread),
         }))
-    }
-
-    pub(super) fn save_browser(&self) -> Result<(), WireError> {
-        self.engine
-            .browser_store()
-            .save_browser(&self.browser.save())
-            .map_err(failed)
     }
 
     pub(super) fn publish_browser(&mut self, thread: ThreadId, action: Option<Action>) {
@@ -390,7 +404,10 @@ impl Server {
 
     pub(super) fn forward_browser_requests(&mut self) {
         use crate::browser::Operation;
-        while let Ok(request) = self.browser_requests.0.try_recv() {
+        while self.browser_write.is_none() {
+            let Ok(request) = self.browser_requests.0.try_recv() else {
+                break;
+            };
             let thread = request.thread;
             let owner = match self.browser_owner(thread) {
                 Ok(owner) => owner,
@@ -405,7 +422,19 @@ impl Server {
                 Operation::Action {
                     action,
                     observation,
-                } => self.browser_agent_action(thread, owner, action, observation),
+                } => match self.browser_agent_action(thread, owner, action, observation) {
+                    Ok(_) => {
+                        self.browser_write
+                            .as_mut()
+                            .expect("action persistence")
+                            .reply = Reply::Agent {
+                            reply: request.reply,
+                            revision: self.browser.operator_revision(thread),
+                        };
+                        continue;
+                    }
+                    Err(error) => Err(error),
+                },
                 Operation::Control {
                     document,
                     revision,
@@ -638,6 +667,141 @@ impl Server {
             self.browser_uncertain.remove(&thread);
             self.browser_observed.remove(&thread);
             self.publish_browser(thread, None);
+        }
+    }
+}
+
+pub(super) enum Reply {
+    None,
+    Window(ClientId, u64),
+    Agent {
+        reply: std::sync::mpsc::SyncSender<Result<crate::browser::Response, String>>,
+        revision: u64,
+    },
+}
+
+pub(super) struct Write {
+    thread: ThreadId,
+    owner: crate::browser::Owner,
+    action: Option<Action>,
+    answer: Receiver<Result<Option<Done>, WireError>>,
+    pub(super) reply: Reply,
+    // A staged action invalidated by an owner change is repaired on disk
+    // before reporting failure; it must not resurrect the departed owner.
+    failure: Option<WireError>,
+}
+
+pub(super) struct CaptureWrite {
+    id: ClientId,
+    request: u64,
+    pub(super) thread: ThreadId,
+    pub(super) owner: crate::browser::Owner,
+    pub(super) lease: crate::browser::Lease,
+    pub(super) release: bool,
+    answer: Receiver<Result<Option<Done>, WireError>>,
+}
+
+fn completed(
+    answer: &Receiver<Result<Option<Done>, WireError>>,
+) -> Option<Result<Option<Done>, WireError>> {
+    match answer.try_recv() {
+        Ok(result) => Some(result),
+        Err(mpsc::TryRecvError::Empty) => None,
+        Err(mpsc::TryRecvError::Disconnected) => Some(Err(failed("The browser disk worker ended"))),
+    }
+}
+
+impl Server {
+    pub(super) fn answer_browser_disk(&mut self) {
+        let mut captures = std::mem::take(&mut self.browser_captures);
+        for capture in captures.drain(..) {
+            if let Some(result) = completed(&capture.answer) {
+                if capture.release || result.is_err() {
+                    let _ = self
+                        .browser
+                        .release(capture.thread, capture.owner, capture.lease);
+                    self.publish_browser(capture.thread, None);
+                }
+                self.reply(capture.id, capture.request, result);
+            } else {
+                self.browser_captures.push(capture);
+            }
+        }
+        let result = self
+            .browser_write
+            .as_ref()
+            .and_then(|write| completed(&write.answer));
+        if let Some(mut result) = result {
+            let mut write = self.browser_write.take().expect("completed browser write");
+            if result.is_ok() && write.failure.is_none() {
+                if let Some(action) = &write.action {
+                    // Reapply to the live service: revisions, leases and other
+                    // Threads may have changed while the worker waited.
+                    let applied = match &write.reply {
+                        Reply::Agent { revision, .. }
+                            if *revision != self.browser.operator_revision(write.thread)
+                                || self.browser.operator_active(write.thread) =>
+                        {
+                            Err("The operator interacted with this page; observe fresh state before continuing".into())
+                        }
+                        _ => self.browser.apply_owned(write.thread, write.owner, action.clone()),
+                    };
+                    match applied {
+                        Ok(_) => self.publish_browser(write.thread, Some(action.clone())),
+                        Err(error) => {
+                            let saved = self.browser.save();
+                            write.answer = self.browser_disk.save(saved);
+                            write.failure = Some(failed(error));
+                            self.browser_write = Some(write);
+                            return;
+                        }
+                    }
+                }
+            }
+            if let Err(error) = &result {
+                self.browser.persistence_error(write.thread, &error.message);
+                self.publish_browser(write.thread, None);
+            }
+            if let Some(error) = write.failure.take() {
+                // Even if the corrective write fails, never acknowledge the
+                // invalidated action as a successful persisted navigation.
+                result = Err(error);
+            }
+            if write.action.is_none() {
+                // A native page has already changed. Acknowledge its current
+                // identity even on a disk failure; the state carries the error.
+                result = Ok(None);
+            }
+            let result = result.map(|_| {
+                Some(Done::Browser {
+                    state: self.browser.state(write.thread),
+                })
+            });
+            match write.reply {
+                Reply::None => {}
+                Reply::Window(id, request) => self.reply(id, request, result),
+                Reply::Agent { reply, .. } => {
+                    let result = result
+                        .map(|_| self.browser_response(write.thread, None))
+                        .map_err(|error| error.message);
+                    let _ = reply.send(result);
+                }
+            }
+        }
+        while self.browser_write.is_none() {
+            let Some((id, request, op)) = self.browser_changes.pop_front() else {
+                break;
+            };
+            if let Some(request) = request {
+                self.command(id, Command { id: request, op });
+            } else if let Op::BrowserPage {
+                thread,
+                owner,
+                page,
+            } = op
+            {
+                let _ = self.browser_page(id, thread, owner, page);
+            }
         }
     }
 }

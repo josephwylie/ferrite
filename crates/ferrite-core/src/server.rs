@@ -343,6 +343,10 @@ struct Server {
     renders: render::Renders,
     browser: crate::browser::Service,
     browser_requests: crate::browser::Requests,
+    browser_disk: browser::Disk,
+    browser_write: Option<browser::Write>,
+    browser_captures: Vec<browser::CaptureWrite>,
+    browser_changes: std::collections::VecDeque<(ClientId, Option<u64>, Op)>,
     browser_pending: BTreeMap<u64, browser::Pending>,
     browser_next: u64,
     browser_uncertain: BTreeMap<ThreadId, crate::browser::Lease>,
@@ -383,6 +387,7 @@ impl Server {
         settings_dir: PathBuf,
     ) -> Self {
         let browser = browser::load(engine.browser_store());
+        let browser_disk = browser::Disk::new(engine.browser_store().clone());
         Self {
             engine,
             info,
@@ -393,6 +398,10 @@ impl Server {
             answered: BTreeMap::new(),
             renders,
             browser,
+            browser_disk,
+            browser_write: None,
+            browser_captures: Vec::new(),
+            browser_changes: Default::default(),
             browser_requests: Default::default(),
             browser_pending: BTreeMap::new(),
             browser_next: 0,
@@ -444,6 +453,7 @@ impl Server {
             self.answer_bootstraps();
             self.answer_searches();
             self.answer_reads();
+            self.answer_browser_disk();
             self.forward_renders();
             self.forward_browser_requests();
             self.broadcast();
@@ -559,7 +569,19 @@ impl Server {
             } => {
                 // Kept for older window peers; new windows synchronously ACK
                 // the document generation through Op::BrowserPage.
-                let _ = self.browser_page(id, thread, owner, page);
+                if self.browser_write.is_some() {
+                    self.browser_changes.push_back((
+                        id,
+                        None,
+                        Op::BrowserPage {
+                            thread,
+                            owner,
+                            page,
+                        },
+                    ));
+                } else {
+                    let _ = self.browser_page(id, thread, owner, page);
+                }
             }
             ClientMessage::Rendered {
                 request,
@@ -611,6 +633,19 @@ impl Server {
     }
 
     fn command(&mut self, id: ClientId, Command { id: request, op }: Command) {
+        if self.browser_write.is_some()
+            && matches!(
+                &op,
+                Op::Browser { .. }
+                    | Op::BrowserPage { .. }
+                    | Op::BrowserProtect { .. }
+                    | Op::BrowserReclaim { .. }
+                    | Op::BrowserReclaimed { .. }
+            )
+        {
+            self.browser_changes.push_back((id, Some(request), op));
+            return;
+        }
         let executed = match &op {
             Op::BrowserCapture {
                 thread,
@@ -618,9 +653,9 @@ impl Server {
                 lease,
                 capture,
                 png,
-            } => self.browser_capture(id, *thread, *owner, *lease, capture.clone(), png),
+            } => self.browser_capture(id, request, *thread, *owner, *lease, capture.clone(), png),
             Op::BrowserCaptureImage { thread, hash } => {
-                self.browser_capture_image(id, *thread, hash)
+                self.browser_capture_image(id, request, *thread, hash)
             }
             Op::BrowserProtect {
                 thread,
@@ -640,9 +675,15 @@ impl Server {
                 owner,
                 lease,
             } => self.browser_owned(id, *thread, *owner).and_then(|_| {
-                self.browser
-                    .release(*thread, *owner, *lease)
-                    .map_err(failed)?;
+                if let Some(capture) = self.browser_captures.iter_mut().find(|capture| {
+                    capture.thread == *thread && capture.owner == *owner && capture.lease == *lease
+                }) {
+                    capture.release = true;
+                } else {
+                    self.browser
+                        .release(*thread, *owner, *lease)
+                        .map_err(failed)?;
+                }
                 self.publish_browser(*thread, None);
                 Ok(None)
             }),
@@ -915,6 +956,20 @@ impl Server {
                 executed
             }
         };
+        if executed.is_ok() {
+            if matches!(&op, Op::Browser { .. } | Op::BrowserPage { .. }) {
+                if let Some(write) = &mut self.browser_write {
+                    write.reply = browser::Reply::Window(id, request);
+                    return;
+                }
+            }
+            if matches!(
+                &op,
+                Op::BrowserCapture { .. } | Op::BrowserCaptureImage { .. }
+            ) {
+                return;
+            }
+        }
         self.reply(id, request, executed);
     }
 
