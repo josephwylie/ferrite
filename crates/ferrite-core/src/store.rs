@@ -1733,14 +1733,19 @@ pub struct Store {
     full_sync_interval: std::time::Duration,
     /// How far apart marks sit, at least.
     mark_spacing: u64,
-    /// The Main cost a replay base must have after it: twice what Activity
-    /// retains of Main, so its window lies wholly after the base.
-    base_cost: u64,
+    /// What the Activity of a Thread read from this store retains: the
+    /// default, or a test's small world. A replay base sits twice what it
+    /// retains of Main before the end, so its window lies wholly after it.
+    activity_limits: crate::activity::ActivityLimits,
     shared: std::sync::Arc<Shared>,
     #[cfg(test)]
     fail_create: bool,
     #[cfg(test)]
     fail_delete: bool,
+    /// Held by a test: a large switch's exchanges are not read until it
+    /// lets go, so the switch is seen pending however fast the read is.
+    #[cfg(test)]
+    exchange_reads: Option<std::sync::Arc<std::sync::Mutex<()>>>,
 }
 
 /// What every handle this process opens on one store directory shares.
@@ -2347,13 +2352,14 @@ impl Store {
             flush_interval,
             full_sync_interval: FULL_SYNC_INTERVAL,
             mark_spacing: MARK_SPACING,
-            base_cost: 2 * crate::activity::ActivityLimits::default().content_bytes_per_subject
-                as u64,
+            activity_limits: crate::activity::ActivityLimits::default(),
             shared,
             #[cfg(test)]
             fail_create: false,
             #[cfg(test)]
             fail_delete: false,
+            #[cfg(test)]
+            exchange_reads: None,
         }
     }
 
@@ -2430,7 +2436,28 @@ impl Store {
         limits: crate::activity::ActivityLimits,
     ) -> Self {
         self.mark_spacing = mark_spacing;
-        self.base_cost = 2 * limits.content_bytes_per_subject as u64;
+        self.activity_limits = limits;
+        self
+    }
+
+    /// What the Activity of a Thread read from this store retains.
+    pub fn activity_limits(&self) -> crate::activity::ActivityLimits {
+        self.activity_limits
+    }
+
+    /// The Main cost a replay base must have after it.
+    fn base_cost(&self) -> u64 {
+        2 * self.activity_limits.content_bytes_per_subject as u64
+    }
+
+    /// A switch's exchanges read on a thread of their own wait for `hold`
+    /// to be let go.
+    #[cfg(test)]
+    pub(crate) fn hold_exchange_reads(
+        mut self,
+        hold: std::sync::Arc<std::sync::Mutex<()>>,
+    ) -> Self {
+        self.exchange_reads = Some(hold);
         self
     }
 
@@ -2697,7 +2724,7 @@ impl Store {
             last_mark: None,
             mark_len: 0,
             summary: Some(Summary::default()),
-            tracker: Some(Tracker::new(self.base_cost)),
+            tracker: Some(Tracker::new(self.base_cost())),
             base: None,
         };
         Ok((id, self.writer_on(id, file, tail)))
@@ -3280,9 +3307,13 @@ impl Store {
             return ExchangeRead::Ready(Some(read()));
         }
         let (send, receive) = std::sync::mpsc::channel();
+        #[cfg(test)]
+        let hold = self.exchange_reads.clone();
         let spawned = std::thread::Builder::new()
             .name("ferrite-handover".into())
             .spawn(move || {
+                #[cfg(test)]
+                let _held = hold.as_ref().map(|hold| hold.lock());
                 let _ = send.send(read());
             });
         match spawned {
@@ -3441,7 +3472,7 @@ impl Store {
             None => (header_end, header.facts(), Some(Summary::default())),
         };
         // From the header on, the whole log passes through: follow it.
-        let mut tracker = mark.is_none().then(|| Tracker::new(self.base_cost));
+        let mut tracker = mark.is_none().then(|| Tracker::new(self.base_cost()));
         let mut tail = Vec::new();
         let mut file = self.read_log(id)?;
         file.seek(io::SeekFrom::Start(from))?;
@@ -3512,7 +3543,7 @@ impl Store {
             .copied()
             .unwrap_or(parsed.readable as u64);
         let new_header = line(&Header::of(facts.clone()))?.len() as u64;
-        let mut tracker = Tracker::new(self.base_cost);
+        let mut tracker = Tracker::new(self.base_cost());
         for (at, record) in parsed.offsets.iter().zip(&parsed.snapshot.records) {
             tracker.observe(at - old_header + new_header, record);
         }
@@ -3618,14 +3649,14 @@ impl Store {
         let handle = self.writer(id)?;
         let mut writer = handle.lock();
         let bounded = match writer.inherited.clone() {
-            Some(base) => read_from(self.read_log(id)?, &base, writer.len, self.base_cost)?,
+            Some(base) => read_from(self.read_log(id)?, &base, writer.len, self.base_cost())?,
             None => None,
         };
         let (records, tracker, evict) = match bounded {
             Some(read) => read,
             None => {
                 let parsed = parse(id, &self.read_whole_log(id)?)?;
-                let mut tracker = Tracker::new(self.base_cost);
+                let mut tracker = Tracker::new(self.base_cost());
                 for (at, record) in parsed.offsets.iter().zip(&parsed.snapshot.records) {
                     tracker.observe(*at, record);
                 }
@@ -3670,13 +3701,7 @@ impl Store {
     ) -> Result<Vec<crate::activity::ActivityInput>, LoadError> {
         let file = File::open(self.log_path(thread))?;
         let through = file.metadata()?.len();
-        activity::read_agent_inputs(
-            file,
-            thread,
-            key,
-            through,
-            crate::activity::ActivityLimits::default(),
-        )
+        activity::read_agent_inputs(file, thread, key, through, self.activity_limits)
     }
 
     /// Read only the complete prefix returned by `ThreadWriter::checkpoint`.
@@ -3694,7 +3719,7 @@ impl Store {
             thread,
             key,
             through,
-            crate::activity::ActivityLimits::default(),
+            self.activity_limits,
         )
     }
 
@@ -3714,7 +3739,7 @@ impl Store {
             through,
             base: state.tracker.as_mut().and_then(Tracker::base),
             facts: state.facts.clone(),
-            base_cost: self.base_cost,
+            base_cost: self.base_cost(),
         })
     }
 

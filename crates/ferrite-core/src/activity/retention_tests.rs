@@ -287,9 +287,20 @@ fn check(state: &SubjectState, limits: ActivityLimits, seed: u64, step: usize, s
 
 #[test]
 fn trimmed_history_reads_as_a_rebuild_from_the_retained_records() {
+    trimmed_histories_read_as_rebuilds(20);
+}
+
+/// The same property over five times the seeds, for rarer interleavings.
+#[test]
+#[ignore = "soak: the full seed sweep"]
+fn trimmed_history_reads_as_a_rebuild_across_many_seeds() {
+    trimmed_histories_read_as_rebuilds(100);
+}
+
+fn trimmed_histories_read_as_rebuilds(seeds: u64) {
     let mut in_place = 0;
     let mut rebuilds = 0;
-    for seed in 1..=100u64 {
+    for seed in 1..=seeds {
         let mut rng = Rng(
             seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1,
             0,

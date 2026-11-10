@@ -105,8 +105,9 @@ fn a_state_message_supersedes_its_waiting_kind_without_overtaking() {
 
 #[test]
 fn a_client_too_far_behind_is_lagged_and_nothing_more_is_queued() {
-    let mut outbox = Outbox::default();
-    let chunk = "x".repeat(1 << 20);
+    let limit = 1 << 20;
+    let mut outbox = Outbox::new(limit);
+    let chunk = "x".repeat(32 << 10);
     let mut seq = 0;
     let lagged = loop {
         seq += 1;
@@ -117,7 +118,7 @@ fn a_client_too_far_behind_is_lagged_and_nothing_more_is_queued() {
         assert!(seq < 64, "never lagged");
     };
     assert_eq!(lagged, Lagged);
-    assert!(seq as usize * chunk.len() >= LAGGED_BYTES);
+    assert!(seq as usize * chunk.len() >= limit);
     assert!(outbox.lagged());
     assert_eq!(outbox.pop(), None);
     assert_eq!(outbox.push(roster(&[1], 1)), Err(Lagged));
@@ -221,7 +222,7 @@ fn a_client_attaches_and_both_sides_hear_each_other() {
     let server = std::thread::spawn(move || {
         let stream = listener.accept().unwrap();
         let (joined, joining) = mpsc::channel();
-        Connection::serve(7, stream, joined).unwrap();
+        Connection::serve(7, stream, joined, LAGGED_BYTES).unwrap();
         let Ok(Heard::Joined(7, connection)) = joining.recv() else {
             panic!("joined first");
         };
@@ -309,7 +310,7 @@ fn a_refused_generation_is_the_attach_error() {
     let server = std::thread::spawn(move || {
         let stream = listener.accept().unwrap();
         let (heard, hear) = mpsc::channel();
-        Connection::serve(1, stream, heard).unwrap();
+        Connection::serve(1, stream, heard, LAGGED_BYTES).unwrap();
         let Ok(Heard::Joined(_, connection)) = hear.recv() else {
             panic!("joined first");
         };
@@ -457,7 +458,7 @@ fn a_connection_let_go_closes_its_stream() {
     let listener = listen(&path).unwrap();
     let mut client = connect(&path).unwrap();
     let (heard, hear) = mpsc::channel();
-    Connection::serve(1, listener.accept().unwrap(), heard).unwrap();
+    Connection::serve(1, listener.accept().unwrap(), heard, LAGGED_BYTES).unwrap();
     let Ok(Heard::Joined(1, connection)) = hear.recv() else {
         panic!("joined first");
     };

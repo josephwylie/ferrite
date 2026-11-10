@@ -180,7 +180,7 @@ pub fn run(options: Options) -> i32 {
             crate::log!("server: cannot accept API connections: {error}");
         }
     }
-    if let Err(error) = link::accept_all(listener, heard) {
+    if let Err(error) = link::accept_all(listener, heard, link::LAGGED_BYTES) {
         crate::log!("server: cannot accept connections: {error}");
         return 1;
     }
@@ -240,7 +240,7 @@ pub fn fixture_browser_machine(
     }
     let address = link::address(&store);
     let (heard, hear) = mpsc::channel();
-    link::accept_all(link::listen(&address)?, heard)?;
+    link::accept_all(link::listen(&address)?, heard, link::LAGGED_BYTES)?;
     std::thread::spawn(move || {
         let engine = Engine::try_new(Store::open(&store).expect("the Store opens"), spawner)
             .expect("the registry opens");

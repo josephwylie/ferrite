@@ -383,8 +383,19 @@ fn seen(activity: &Activity, evicted: &[&str]) -> String {
 /// replay show the same Thread, and the bounded one replays far less.
 #[test]
 fn a_bounded_revive_shows_what_a_full_replay_shows() {
+    bounded_revives_show_what_full_replays_show(6);
+}
+
+/// The same property over four times the seeds, for rarer interleavings.
+#[test]
+#[ignore = "soak: the full seed sweep"]
+fn a_bounded_revive_shows_what_a_full_replay_shows_across_many_seeds() {
+    bounded_revives_show_what_full_replays_show(24);
+}
+
+fn bounded_revives_show_what_full_replays_show(seeds: u64) {
     let mut bounded_reads = 0;
-    for seed in 0..24u64 {
+    for seed in 0..seeds {
         let dir = scratch(&format!("revive-equivalence-{seed}"));
         let store = Store::open(&dir).unwrap().scaled(16 * 1024, limits());
         let id = write_thread(&store, seed, 300 + (seed as usize % 5) * 100);
@@ -435,9 +446,10 @@ fn a_bounded_revive_shows_what_a_full_replay_shows() {
         );
         let _ = fs::remove_dir_all(&dir);
     }
+    // Five in six: a short seeded Thread may fit its window whole.
     assert!(
-        bounded_reads >= 20,
-        "only {bounded_reads} of 24 revives replayed less than half the log"
+        bounded_reads * 6 >= seeds * 5,
+        "only {bounded_reads} of {seeds} revives replayed less than half the log"
     );
 }
 
