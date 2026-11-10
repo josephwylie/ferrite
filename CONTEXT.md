@@ -289,6 +289,47 @@ one Thread can start, prompt, wait on and read other Threads. Only the
 operator answers a Decision; an agent passes the operator's answer on.
 _Avoid_: MCP, RPC, plugin API.
 
+**Factory**
+A Project's delegated work: its Coordinator, its Workflows and the board of
+its Tasks. The operator hands work to it and comes back for questions and
+approvals. One per Project, on the Server that owns the Project.
+_Avoid_: board (that is one view of it), projects, pipeline.
+
+**Workflow**
+A process the operator authored for a Project: ordered Steps, how Tasks
+start, who approves and what finishes one. Saved in numbered versions; a
+Task keeps the version it started with. The operator's own, never part of
+the repository.
+_Avoid_: pipeline, automation, flow.
+
+**Step**
+One position in a Workflow: a name, instructions, skills, Provider, model,
+Effort, and where a Task goes on each outcome the Step can report. The
+window may label a Step "agent".
+_Avoid_: stage, node, role.
+
+**Task**
+One piece of delegated work moving through one version of a Workflow, or
+through a single Step when handed off one-off. It is queued, working,
+needs the operator, ready to approve, stopped or completed. It carries its
+instructions, the operator's answers and feedback, the evidence its Steps
+reported and the pull request it concerns, if any.
+_Avoid_: job, ticket, issue (the tracker's), Thread (a Task is not a
+conversation).
+
+**Worker**
+The Thread running one Step for one Task. Owned by its Task: reached
+through the Task, never listed among the operator's own Threads, never in
+the Inbox.
+_Avoid_: agent (the Provider's), subagent (that is a Session's own), child.
+
+**Coordinator**
+A Project's one Thread for directing its Factory in conversation:
+discussing work, proposing a Task, a Workflow change or a redirect, which
+the operator accepts or dismisses. Owned by the Factory as a Worker is by
+its Task. Talking to it starts nothing.
+_Avoid_: orchestrator, manager, assistant.
+
 **Not a harness, not an agent.** Ferrite never runs its own agent loop and
 never calls model APIs itself. It orchestrates official agent CLIs (each
 Provider's own harness) and renders what they stream. The agents' behavior,
@@ -306,7 +347,8 @@ would be a new concept, not a revival of this one.
 - v1 cockpit: Solo by default; an opened Group shows its exact membership with
   semantic zoom.
 - v1 git: workspace binding only (worktree or main); no checkpoints yet.
-- Issue-tracker/board integration: later, not v1.
+- Issue-tracker/board integration: later, not v1. Amended 2026-11-10 (ADR 0037):
+  a Project has a Factory; the operator's tracker stays the tracker.
 - Platforms: macOS (Metal) AND Windows (DirectX 11) first-class from the start.
 - Remote: full control (watching, Decisions, prompting, Thread creation) —
   wanted soon after v1 core.
