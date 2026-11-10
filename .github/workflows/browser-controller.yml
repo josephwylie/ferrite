@@ -12,16 +12,6 @@ env:
   SCCACHE_GHA_ENABLED: 'true'
 
 on:
-  push:
-    branches: [feat/browser-194]
-    paths:
-      - 'scripts/package-agent-browser.py'
-      - 'scripts/patches/agent-browser-0.41.2-ferrite.patch'
-      - 'scripts/native_browser_service.py'
-      - 'scripts/probe-agent-browser-behavior.py'
-      - 'scripts/probe-agent-browser-transport.py'
-      - 'scripts/test_package_agent_browser.py'
-      - '.github/workflows/browser-controller.yml'
   pull_request:
     paths:
       - 'scripts/package-agent-browser.py'

@@ -12,8 +12,6 @@ env:
   SCCACHE_GHA_ENABLED: 'true'
 
 on:
-  push:
-    branches: [feat/browser-196]
   pull_request:
     paths:
       - 'scripts/*agent-browser*'
@@ -27,7 +25,6 @@ on:
       - 'scripts/test_package_agent_browser.py'
       - '.github/workflows/browser-window.yml'
       - 'scripts/probe-browser-window.py'
-      - 'crates/ferrite*/**'
       - 'scripts/*windows.ps1'
       - 'scripts/install-app.sh'
   workflow_dispatch:

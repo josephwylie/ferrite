@@ -14,10 +14,6 @@ env:
 on:
   pull_request:
     paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.cargo/config.toml'
-      - 'crates/ferrite*/**'
       - 'scripts/package-agent-browser.py'
       - 'scripts/patches/agent-browser-0.41.2-ferrite.patch'
       - 'scripts/native_browser_service.py'
