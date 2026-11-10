@@ -732,7 +732,15 @@ fn factory() -> (Scene, Setup) {
     let at = |by: &str, text: &str| serde_json::json!({"at_ms": 1_700_000_000_000_i64, "by": by, "text": text});
     let board = Board {
         tasks: vec![
-            task("t-1", "Bump the toolchain to 1.92", Status::Queued, "claude-sonnet-4", None, None, serde_json::json!([at("operator", "Started the task")])),
+            task(
+                "t-1",
+                "Bump the toolchain to 1.92",
+                Status::Queued,
+                "claude-sonnet-4",
+                None,
+                None,
+                serde_json::json!([at("operator", "Started the task")]),
+            ),
             task(
                 "t-2",
                 "Fix the flaky login test",
@@ -743,12 +751,42 @@ fn factory() -> (Scene, Setup) {
                 serde_json::json!([
                     at("operator", "Started the task"),
                     at("ferrite", "Started a Worker on factory/t-2"),
-                    at("agent", "Unable to finish: No access to the staging database"),
+                    at(
+                        "agent",
+                        "Unable to finish: No access to the staging database"
+                    ),
                 ]),
             ),
-            task("t-3", "Add a retry to the uploader", Status::Working, "claude-opus-4", None, None, serde_json::json!([at("ferrite", "Started a Worker on factory/t-3")])),
-            task("t-4", "Rename the settings rows", Status::Stopped, "claude-sonnet-4", None, Some("Stopped by you"), serde_json::json!([at("operator", "Stopped the task")])),
-            task("t-5", "Write the 0.9 changelog", Status::Completed, "claude-opus-4", Some("Drafted CHANGELOG.md with 14 changes"), None, serde_json::json!([at("agent", "Finished: Drafted CHANGELOG.md with 14 changes")])),
+            task(
+                "t-3",
+                "Add a retry to the uploader",
+                Status::Working,
+                "claude-opus-4",
+                None,
+                None,
+                serde_json::json!([at("ferrite", "Started a Worker on factory/t-3")]),
+            ),
+            task(
+                "t-4",
+                "Rename the settings rows",
+                Status::Stopped,
+                "claude-sonnet-4",
+                None,
+                Some("Stopped by you"),
+                serde_json::json!([at("operator", "Stopped the task")]),
+            ),
+            task(
+                "t-5",
+                "Write the 0.9 changelog",
+                Status::Completed,
+                "claude-opus-4",
+                Some("Drafted CHANGELOG.md with 14 changes"),
+                None,
+                serde_json::json!([at(
+                    "agent",
+                    "Finished: Drafted CHANGELOG.md with 14 changes"
+                )]),
+            ),
         ],
     };
     scene.core.fixture_factory(board);

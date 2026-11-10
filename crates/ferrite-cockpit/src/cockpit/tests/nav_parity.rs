@@ -308,10 +308,25 @@ fn a_project_is_drawn_on_one_left_edge(cx: &mut TestAppContext) {
         "a member, a step in",
     );
     assert!(loose.top() < group_row.top() && group_row.bottom() <= first.top());
+    // The Project's Factory entry heads its rows (#220), then its own.
+    let project = view
+        .read_with(cx, |view, _| view.cockpit.project_id(threads[2]))
+        .expect("a Project");
+    let factory = at(cx, format!("nav-factory-{}", project.get()));
     assert_eq!(
-        loose.top(),
+        factory.left(),
+        heading.left(),
+        "the entry keeps the full width"
+    );
+    assert_eq!(
+        factory.top(),
         heading.bottom() + px(NAV_ROW_GAP),
         "the first row, a row's gap under the heading"
+    );
+    assert_eq!(
+        loose.top(),
+        factory.bottom() + px(NAV_ROW_GAP),
+        "the Thread rows a row's gap under the entry"
     );
     for gone in [
         format!("nav-guide-{}-0", threads[0].get()),

@@ -80,7 +80,14 @@ fn the_board_lays_cards_in_their_columns(cx: &mut TestAppContext) {
                 None,
                 Some("No access to the staging database"),
             ),
-            task("t-3", project, Status::Completed, None, Some("Fixed it"), None),
+            task(
+                "t-3",
+                project,
+                Status::Completed,
+                None,
+                Some("Fixed it"),
+                None,
+            ),
             task(
                 "t-4",
                 project,
@@ -143,7 +150,14 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
         )
         .unwrap();
     core.fixture_factory(Board {
-        tasks: vec![task("t-1", project, Status::Working, Some(worker), None, None)],
+        tasks: vec![task(
+            "t-1",
+            project,
+            Status::Working,
+            Some(worker),
+            None,
+            None,
+        )],
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
@@ -159,10 +173,14 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
     cx.simulate_click(tab.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(shows(cx, "task-activity-0") && shows(cx, "task-activity-1"));
-    view.update(cx, |view, cx| view.task_tab(crate::cockpit::factory::TaskTab::Context, cx));
+    view.update(cx, |view, cx| {
+        view.task_tab(crate::cockpit::factory::TaskTab::Context, cx)
+    });
     tick(cx);
     assert!(shows(cx, "task-instructions"));
-    view.update(cx, |view, cx| view.task_tab(crate::cockpit::factory::TaskTab::Worker, cx));
+    view.update(cx, |view, cx| {
+        view.task_tab(crate::cockpit::factory::TaskTab::Worker, cx)
+    });
     tick(cx);
     assert!(shows(cx, "task-worker"), "the Worker's Pane");
     view.read_with(cx, |view, _| {
@@ -206,6 +224,7 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
             Some("No access"),
         )],
     });
+    cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
@@ -216,6 +235,11 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
         })
     };
     let before = toasts(cx);
+    let inbox_len = |view: &CockpitView| {
+        let state = view.nav_state();
+        view.inbox(&state).inbox.len()
+    };
+    let inbox_before = view.read_with(cx, |view, _| inbox_len(view));
     view.update(cx, |view, cx| {
         let watched = view.cockpit.threads()[0];
         view.focus_thread(watched, cx);
@@ -233,9 +257,7 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
     assert_eq!(toasts(cx), before + 1, "a toast");
     view.read_with(cx, |view, _| {
         assert_eq!(view.chimed, [Sound::NeedsYou], "a chime");
-        let state = view.nav_state();
-        let inbox = view.inbox(&state);
-        assert!(inbox.inbox.is_empty(), "nothing in the Inbox");
+        assert_eq!(inbox_len(view), inbox_before, "nothing reaches the Inbox");
         assert!(view.needs_you.toasts().is_empty());
     });
     assert_eq!(
