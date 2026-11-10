@@ -6,12 +6,13 @@ use crate::palette::Act;
 
 /// A Worker, open and asking, and a parked Coordinator are in none of the
 /// nav's rows (tree, Groups, Parked), the palette's Threads or the
-/// Inbox, and the Worker's request rings nothing, while the operator's
-/// own request toasts as ever.
+/// Inbox, and the Worker's request rings nothing, while a request from
+/// the operator's own Thread, off the board as the Worker is, toasts as
+/// ever.
 #[gpui::test]
 fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) {
-    let (mut core, fake) = cockpit("owned-unlisted", 1);
-    let mine = core.threads()[0];
+    let (mut core, fake) = cockpit("owned-unlisted", 2);
+    let (watched, mine) = (core.threads()[0], core.threads()[1]);
     let worker = core
         .fixture_open_owned(
             Provider::Claude,
@@ -30,12 +31,18 @@ fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) 
     core.park(coordinator).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    // The operator looks at another Thread of theirs: a request from one
+    // in view rings nothing for any Thread, owned or not.
+    view.update(cx, |view, cx| view.focus_thread(watched, cx));
     tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.focused_thread(), Some(watched));
+    });
 
     let toasts = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, _| view.needs_you.toasts().len())
     };
-    fake.streams.borrow()[1]
+    fake.streams.borrow()[2]
         .send(decision("perm_worker"))
         .unwrap();
     tick(cx);
@@ -71,7 +78,7 @@ fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) 
         "the palette finds neither"
     );
 
-    fake.streams.borrow()[0]
+    fake.streams.borrow()[1]
         .send(decision("perm_mine"))
         .unwrap();
     tick(cx);
