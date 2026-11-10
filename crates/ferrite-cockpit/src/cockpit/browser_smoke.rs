@@ -83,7 +83,7 @@ impl CockpitView {
                                 if let Some(tab)=state.tabs.iter().find(|tab|tab.id==document.tab && tab.live && !tab.loading && tab.error.is_none() && tab.url==*url) {
                                     if tab.document()==document { return Err("Reclaimed page restoration reused stale document identity".into()); }
                                     std::fs::write(output.join("lifecycle-restoration.json"),serde_json::to_vec_pretty(&serde_json::json!({"restored":tab,"previous_document":document,"urls_only_not_unsaved_form_restoration":true})).unwrap()).map_err(|e|e.to_string())?;
-                                    window.draw(cx);window.render_to_image().map_err(|e|e.to_string())?.save(output.join("window-restored.png")).map_err(|e|e.to_string())?;
+                                    window.draw(cx).clear(cx);window.render_to_image().map_err(|e|e.to_string())?.save(output.join("window-restored.png")).map_err(|e|e.to_string())?;
                                     return Ok(true);
                                 }
                             } else {
@@ -101,7 +101,7 @@ impl CockpitView {
                         if !path.exists() { return Ok(false); }
                         let answer: serde_json::Value = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
                         if answer["success"] != true {
-                            window.draw(cx);
+                            window.draw(cx).clear(cx);
                             if let Ok(image) = window.render_to_image() {
                                 let _ = image.save(output.join("window-provider-error.png"));
                             }
@@ -109,7 +109,7 @@ impl CockpitView {
                         }
                         // Provider acknowledgements alone do not prove the owning
                         // Preview changed. Decode the actual native Window again.
-                        window.draw(cx);
+                        window.draw(cx).clear(cx);
                         let image = window.render_to_image().map_err(|error| error.to_string())?;
                         if boundaries {
                             image.save(output.join("window-boundaries.png")).map_err(|e|e.to_string())?;
@@ -160,12 +160,12 @@ impl CockpitView {
                             phase(&output,"first-browser-use");
                             Ok(view.panes[index].preview.open_url(&url, window))
                         })?;
-                        window.draw(cx);
+                        window.draw(cx).clear(cx);
                         return Ok(false);
                     }
                     // Draw through this native Window's renderer, as the app does.
                     // Unlike HeadlessAppContext, this requires the platform window.
-                    window.draw(cx);
+                    window.draw(cx).clear(cx);
                     let image = window.render_to_image().map_err(|error| error.to_string())?;
                     frames += 1;
                     if frames == 1 || frames % 20 == 0 {
