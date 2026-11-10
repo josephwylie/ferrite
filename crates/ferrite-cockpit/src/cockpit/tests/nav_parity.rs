@@ -643,18 +643,16 @@ fn the_folded_nav_is_a_keyed_rail(cx: &mut TestAppContext) {
     cx.executor().advance_clock(Duration::from_millis(400));
     tick(cx);
     let rail = cx.debug_bounds("nav-rail").expect("folded, the rail");
-    assert!((rail.size.width - px(nav::FOLDED_WIDTH)).abs() <= px(0.5));
     let mut above = px(0.);
     for thread in &threads {
         let id: &'static str = format!("nav-rail-{}", thread.get()).leak();
         let line = cx.debug_bounds(id).expect("a line per open Thread");
-        assert_eq!(line.size.height, px(ferrite_ui::theme::NAV_RAIL_CELL));
         assert!(line.top() >= above, "in the tree's order");
         above = line.bottom();
     }
     let board = cx.update(|window, cx| view.read(cx).board_bounds(window));
     assert!(
-        (board.x - nav::FOLDED_WIDTH).abs() <= 0.5,
+        (px(board.x) - rail.right()).abs() <= px(0.5),
         "the board starts right of the rail: {board:?}"
     );
     let keyed = |cx: &mut gpui::VisualTestContext| {

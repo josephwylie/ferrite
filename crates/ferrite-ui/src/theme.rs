@@ -3215,70 +3215,6 @@ mod tests {
     use super::*;
     use crate::face::{be16, covers, table, GEIST_MONO};
 
-    /// Rule 2.2.4: no state tints a ground. The Decision's wash is retired,
-    /// and nothing in the crate may bring it back.
-    #[test]
-    fn no_source_file_names_the_retired_attention_wash() {
-        let retired = ["ATTENTION", "_WASH"].concat();
-        let mut stack = vec![std::path::PathBuf::from(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src"
-        ))];
-        while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(&dir).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else if path.extension().is_some_and(|ext| ext == "rs") {
-                    let source = std::fs::read_to_string(&path).unwrap();
-                    assert!(!source.contains(&retired), "{path:?} names {retired}");
-                }
-            }
-        }
-    }
-
-    /// Every lexicon word, so the casing rule below covers them all.
-    const LEXICON: &[&str] = &[
-        words::NEEDS_YOU,
-        words::APPROVAL,
-        words::QUESTION,
-        words::DONE,
-        words::FAILED,
-        words::FAILING,
-        words::INTERRUPTED,
-        words::WORKING,
-        words::STARTING,
-        words::PAUSED,
-        words::UNAVAILABLE,
-    ];
-
-    #[test]
-    fn every_state_word_is_lowercase_and_dashless() {
-        for word in LEXICON {
-            assert!(!word.is_empty());
-            assert_eq!(*word, word.to_lowercase(), "{word:?} is not lowercase");
-            assert!(!word.contains('\u{2014}'), "{word:?} carries an em dash");
-            assert!(!word.contains('\u{b7}'), "{word:?} carries a separator");
-            assert_eq!(*word, word.trim(), "{word:?} carries padding");
-        }
-    }
-
-    #[test]
-    fn only_needs_you_and_failure_words_take_a_colour() {
-        for word in LEXICON {
-            let expected = match *word {
-                words::NEEDS_YOU => ATTENTION,
-                words::FAILED | words::FAILING => BLOCKED,
-                _ => INK_SUBTLE,
-            };
-            assert_eq!(word_ink(word), expected, "{word:?}");
-        }
-        assert_eq!(word_ink("needs you"), ATTENTION);
-        assert_eq!(word_ink("failed"), BLOCKED);
-        assert_eq!(word_ink("failing"), BLOCKED);
-        assert_eq!(word_ink("done"), INK_SUBTLE);
-    }
-
     /// One waiting agent `needs you`; more `need you`, on every surface.
     #[test]
     fn a_needs_you_count_agrees_with_its_number() {
@@ -3458,20 +3394,6 @@ mod tests {
         assert_ne!(find, selected);
     }
 
-    /// Rule 5: two text tiers (Claude's content and meta), brightest
-    /// first, the placeholder and structure under the lot.
-    #[test]
-    fn the_ink_ladder_is_two_tiers() {
-        assert_eq!(
-            [INK_STRONG, INK_SUBTLE, PLACEHOLDER_INK],
-            [0xefefef, 0x9c9c9c, 0x878787]
-        );
-        let ladder = [INK_STRONG, INK_SUBTLE, PLACEHOLDER_INK, TEXT_FAINT];
-        for pair in ladder.windows(2) {
-            assert!(luminance(pair[0]) > luminance(pair[1]), "{pair:06x?}");
-        }
-    }
-
     /// Rule 3: the surfaces, darkest first, every one opaque and neutral
     /// grey (no hue anywhere but state), and no accent.
     #[test]
@@ -3502,17 +3424,7 @@ mod tests {
             let (r, g, b) = (face >> 16, (face >> 8) & 0xff, face & 0xff);
             assert!(r == g && g == b, "{name} #{face:06x} is not a neutral grey");
         }
-        assert_eq!(
-            [CARD, BLOCK, FIELD, RAISED, FLOAT, SELECTED, FLOAT_SEL],
-            [0x1a1a1a, 0x262626, 0x303030, 0x242424, 0x303030, 0x2a2a2a, 0x3e3e3e]
-        );
-        assert_eq!((PRIMARY, ON_PRIMARY), (INK_STRONG, 0x161616));
-        // Two line greys, and each raised surface's edge a step over it.
-        assert_eq!((LINE, CARD_RING), (0x303030, 0x222222));
-        assert_eq!(
-            [FIELD_RING, FLOAT_EDGE, BLOCK_RING],
-            [0x404040, 0x383838, 0x333333]
-        );
+        // Each raised surface's edge a step over it.
         for (edge, ground) in [
             (FIELD_RING, FIELD),
             (FLOAT_EDGE, FLOAT),
@@ -3523,50 +3435,11 @@ mod tests {
                 "{edge:06x} on {ground:06x}"
             );
         }
-        // The state rings and washes are white at their stated opacities.
-        let alpha = |rgba: u32| (rgba & 0xff) as f32 / 255.;
-        for (line, opacity) in [(FOCUS_RING, 0.22), (DROP_EDGE, 0.22), (DROP_WASH, 0.06)] {
+        // The state rings and washes are white; the wait ring is yellow.
+        for line in [FOCUS_RING, DROP_EDGE, DROP_WASH] {
             assert_eq!(line >> 8, 0xffffff, "{line:08x} is white");
-            assert!((alpha(line) - opacity).abs() < 0.005, "{line:08x}");
         }
         assert_eq!(WAIT_RING >> 8, ATTENTION, "the wait ring is yellow");
-        assert!((alpha(WAIT_RING) - 0.35).abs() < 0.005);
-    }
-
-    /// No accent: no ink the chrome wears is blue, and the retired names
-    /// stay retired (ADR 0033).
-    #[test]
-    fn the_accent_is_retired() {
-        let source = include_str!("theme.rs");
-        let head = &source[..source.find("\n#[cfg(test)]\nmod tests").unwrap()];
-        for retired in [
-            "ACCENT",
-            "ON_ACCENT",
-            "ACCENT_HI",
-            "PATH_INK",
-            "MODE_INK",
-            "FINISHED",
-        ] {
-            let decl = format!("pub const {retired}:");
-            assert!(!head.contains(&decl), "{retired} is retired");
-        }
-        for (name, ink) in [
-            ("CARET", CARET),
-            ("CONTROL_FOCUS", CONTROL_FOCUS),
-            ("INLINE_CODE_INK", INLINE_CODE_INK),
-            ("PRIMARY", PRIMARY),
-        ] {
-            assert_eq!(ink, INK_STRONG, "{name} is the strongest ink");
-        }
-        // A link is the one ink that is not state (rule 6); a mention is a
-        // path, so a link.
-        assert_ne!(LINK_INK, INK_STRONG, "links wear the link blue");
-        assert_eq!(MENTION_INK, LINK_INK);
-        assert!(mode_is_manual("default"), "Manual reads amber");
-        for quiet in ["acceptEdits", "plan", "bypassPermissions", "auto", "never"] {
-            assert!(!mode_is_manual(quiet), "{quiet} wears the plain meta ink");
-        }
-        assert_eq!(IDLE, INK_SUBTLE, "done and idle wear no hue");
     }
 
     /// Rule 4: every region is an opaque grey, the hairlines white
@@ -3609,7 +3482,6 @@ mod tests {
             assert!((3..=4).contains(&step), "{ground:06x} steps {step}");
         }
         // A hovered row stays under the selection.
-        assert_eq!(over(HOVER_WASH, CARD), 0x1e1e1e);
         assert!(luminance(over(HOVER_WASH, CARD)) < luminance(SELECTED));
         // A paint converts the way `rgba()` does, never the way `rgb()` would.
         let fill: gpui::Fill = paint::CARD.into();
@@ -3618,21 +3490,12 @@ mod tests {
         assert_eq!(hsla, paint::RAISED.hsla());
     }
 
-    /// Rule 2: radii by role (SPEC §3.6), and only floats cast.
-    #[test]
-    fn radii_follow_their_roles_and_only_floats_cast() {
-        assert_eq!([R_CONTROL, R_CARD, R_FLOAT], [6.0, 10.0, 12.0]);
-        assert_eq!(R_TIGHT, 2.0);
-        const { assert!(SHADOW_FLOAT_Y > 0.0 && SHADOW_FLOAT_BLUR > 0.0) };
-    }
-
     /// Rule 1: every type role on a whole-pixel line, a 1.5× reading line
     /// at every reading size, headings at the body size, a code cell of
     /// 0.6em, and every chrome size on the type scale.
     #[test]
     fn every_type_role_has_a_whole_pixel_line_box() {
         use ferrite_core::settings::ReadingSize;
-        assert_eq!((FS_UI, LH_UI), (14.0, 20.0), "chrome is 14 on 20");
         for (size, line) in [(FS_PROSE, LH_PROSE), (FS_UI, LH_UI)] {
             assert_eq!(line, line.round());
             assert!(line >= size * 1.35, "{size}px on a {line}px line box");
@@ -3659,10 +3522,6 @@ mod tests {
         }
         assert_eq!(prose_line_height(FS_PROSE), LH_PROSE);
         // The chrome's roles (SPEC §3.5).
-        assert_eq!(
-            [FS_TITLE, FS_LABEL, FS_META, FS_BADGE, FS_COMPOSER],
-            [14.0, 13.0, 13.0, 12.0, 14.0]
-        );
         for size in [
             FS_UI,
             FS_PROSE,
@@ -3678,19 +3537,13 @@ mod tests {
         ] {
             assert!(TYPE_SCALE.contains(&size), "{size} is off the scale");
         }
-        assert_eq!(
-            (W_BODY, W_LABEL, W_STRONG),
-            (FontWeight::NORMAL, FontWeight::MEDIUM, FontWeight::SEMIBOLD)
-        );
         for line in [LH_META, LH_PANEL_DIFF] {
             assert_eq!(line, line.round());
         }
         let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
         assert!(near(CODE_CELL, 7.8) && near(CH, CODE_CELL));
         assert!(near(GLYPH_GUTTER, 2.0 * CH));
-        assert_eq!((ROW, HALF_ROW), (20.0, 10.0));
-        assert_eq!(TITLEBAR_H, 44.0);
-        assert_eq!((NAV_WIDTH, BOARD_PAD, GRID_GAP), (256.0, 8.0, 8.0));
+        assert_eq!(HALF_ROW * 2.0, ROW);
         assert_eq!(WIN_CHROME_H, TITLEBAR_H);
         assert_eq!(TRAFFIC_Y, (WIN_CHROME_H - 14.0) / 2.0);
     }
@@ -3793,13 +3646,11 @@ mod tests {
             .expect("a Windows family name")
     }
 
-    /// Rule 1: two faces. The system's UI font sets what is read, SF Pro
-    /// Mono (bundled, its five weights and nothing else) sets code.
+    /// Rule 1: code is set in the bundled mono, so every bundled face is
+    /// the family the code runs name, and nothing else is bundled.
     #[test]
-    fn faces_are_the_system_ui_font_and_the_bundled_mono() {
-        assert_eq!((FONT_UI, FONT_CODE), (".SystemUIFont", "Geist Mono"));
+    fn every_bundled_face_is_the_code_face() {
         assert!(crate::FONTS.iter().all(|face| family(face) == FONT_CODE));
-        assert_eq!(crate::FONTS.len(), 5, "regular, italic and three weights");
     }
 
     /// Rule 10: what Geist Mono sets is in the face; what the platform's

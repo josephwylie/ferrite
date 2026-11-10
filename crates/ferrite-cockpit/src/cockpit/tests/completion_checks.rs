@@ -350,7 +350,9 @@ fn multiline_composer_keeps_its_lower_edge_and_end_caret_on_resize(cx: &mut Test
         "    indented  text\twith a long continuation that must wrap across the narrow composer\n"
             .repeat(12)
             + "    final  line";
-    cx.simulate_input(&draft);
+    // Pasted, not typed: one edit, where typing it is a thousand keystrokes.
+    cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(draft.clone())));
+    cx.simulate_keystrokes("cmd-v");
     tick(cx);
     let expanded = cx.debug_bounds("focused-prompt-editor").unwrap();
     assert_eq!(

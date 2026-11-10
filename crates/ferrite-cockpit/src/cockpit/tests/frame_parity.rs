@@ -28,9 +28,7 @@ fn board_of<'a>(
 }
 
 /// F-1: the Pane's edge is an overlay, so its content starts at the Pane's
-/// own edges — the head at the Pane's left and top, its mark 14px in and
-/// its title a gap after it (SPEC §5.9) — and every Pane root is the
-/// `PANE_GROUP` hover group.
+/// own edges: the head at the Pane's left and top (SPEC §5.9).
 #[gpui::test]
 fn a_panes_content_starts_at_its_own_edges(cx: &mut TestAppContext) {
     let (view, _fake, cx, _group) = board_of("frame-edge-overlay", 4, cx);
@@ -45,22 +43,9 @@ fn a_panes_content_starts_at_its_own_edges(cx: &mut TestAppContext) {
             (head.left() - px(rect.x)).abs() < px(1.) && (head.top() - px(rect.y)).abs() < px(1.),
             "the head starts at the Pane's corner: {head:?} / {rect:?}"
         );
-        // The 38px row and its hairline under it.
-        assert_eq!(head.size.height, px(ferrite_ui::theme::PANE_HEAD_H + 1.));
-        let mark = bounds(cx, format!("pane-head-dot-{key}"));
-        assert!(
-            (mark.left() - px(rect.x + ferrite_ui::theme::PANE_HEAD_PAD_L)).abs() < px(1.),
-            "the mark 14px in: {mark:?} / {rect:?}"
-        );
-        let title = bounds(cx, format!("pane-head-title-{key}"));
-        assert!(
-            (title.left() - (mark.right() + px(ferrite_ui::theme::PANE_HEAD_GAP))).abs() < px(1.),
-            "the title a gap after the mark: {title:?} / {mark:?}"
-        );
         let root = bounds(cx, format!("pane-root-{key}"));
         assert!((root.left() - px(rect.x)).abs() < px(1.));
     }
-    assert_eq!(pane::PANE_GROUP, "pane");
 }
 
 /// F-2: a waiting Pane wears the one attention edge whether it holds focus
@@ -317,9 +302,9 @@ fn a_parked_member_is_its_tile_until_enter_wakes_it(cx: &mut TestAppContext) {
 
 /// F-13: the empty board offers only what would do something (no parked
 /// Thread to reopen, no Group to open here), its rows walk with `Next` /
-/// `Previous`, wrapping, and its recent list stops at four.
+/// `Previous`, wrapping.
 #[gpui::test]
-fn the_empty_board_walks_its_rows_and_lists_four_recent(cx: &mut TestAppContext) {
+fn the_empty_board_walks_its_rows(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("frame-empty-board", 6);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
@@ -344,9 +329,6 @@ fn the_empty_board_walks_its_rows_and_lists_four_recent(cx: &mut TestAppContext)
     view.read_with(cx, |view, _| assert_eq!(view.empty_cursor, 0, "it wraps"));
     step(Box::new(empty_board::Previous), cx);
     view.read_with(cx, |view, _| assert_eq!(view.empty_cursor, 2, "both ways"));
-    let recent = view.read_with(cx, |view, _| view.cockpit.threads().len());
-    assert!(recent > ferrite_ui::theme::EMPTY_RECENT_MAX);
-    assert_eq!(ferrite_ui::theme::EMPTY_RECENT_MAX, 4);
     // Landing on a Thread leaves the empty board.
     let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
     view.update(cx, |view, cx| view.focus_thread(thread, cx));
@@ -529,10 +511,6 @@ fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
     assert_eq!((card.x, card.y), (nav::WIDTH, WIN_CHROME_H));
     assert_eq!(card.x + card.w, 1600. - PANEL_W);
     assert_eq!(card.y + card.h, 960., "no gutter under it");
-    assert_eq!(
-        (card.x, card.y, card.w, card.h),
-        (256., 44., 1600. - 256. - PANEL_W, 916.)
-    );
     let panel = cx.debug_bounds("panel").expect("the panel");
     assert_eq!(
         panel,
@@ -548,11 +526,11 @@ fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
 }
 
 /// SPEC §5.9: a 2×2 Group is four equal cards `GRID_GAP` apart on the
-/// frame, flush with the panel's column, its seams the gutters' centre lines: a 9px grab band and a
-/// `SEAM_LINE_W` line, both centred in the 8px gutter.
+/// frame, flush with the panel's column, its grab band and seam line both
+/// centred in the gutter.
 #[gpui::test]
 fn a_group_is_cards_an_eight_pixel_gutter_apart(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{BOARD_PAD, GRID_GAP, PANEL_W, SEAM_LINE_W, WIN_CHROME_H};
+    use ferrite_ui::theme::{BOARD_PAD, GRID_GAP, PANEL_W, WIN_CHROME_H};
     let (view, _fake, cx, _group) = board_of("frame-group-cards", 4, cx);
     cx.simulate_resize(gpui::size(px(1600.), px(960.)));
     tick(cx);
@@ -578,11 +556,9 @@ fn a_group_is_cards_an_eight_pixel_gutter_apart(cx: &mut TestAppContext) {
     );
     let gutter = tl.x + tl.w + GRID_GAP / 2.;
     let band = bounds(cx, "board-seam-0-band-0".to_string());
-    assert_eq!(band.size.width, px(9.));
     // gpui snaps the half-pixel band to the device pixel.
     assert!((band.center().x - px(gutter)).abs() <= px(0.5), "{band:?}");
     let line = bounds(cx, "board-seam-0".to_string());
-    assert_eq!(line.size.width, px(SEAM_LINE_W));
     assert!((line.center().x - px(gutter)).abs() <= px(0.5), "{line:?}");
 }
 

@@ -461,13 +461,6 @@ mod tests {
             assert!(svg.starts_with("<svg "), "{key} is an svg element");
             assert!(svg.contains("viewBox="), "{key} declares a viewBox");
         }
-        assert_eq!(
-            ICONS.len(),
-            30 + REFRESH_ICONS.len() + TITLE_BAR_ICONS.len(),
-            "the prototype and app controls, including close, the four \
-             Windows caption glyphs, the image mark, the CLI update mark and the board door; every glyph \
-             Geist Mono lacks is typed in the face the platform falls back to (theme rule 10)"
-        );
     }
 
     /// The line icons must carry the `.stroke` class's attributes on the

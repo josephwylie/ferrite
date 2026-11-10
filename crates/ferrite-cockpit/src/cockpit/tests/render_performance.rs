@@ -2476,8 +2476,8 @@ fn a_kit_toast_coming_in_rebuilds_no_pane(cx: &mut TestAppContext) {
 
 /// The kit's toast card moves as Ferrite's own toasts do (the vendored
 /// gpui-component's patch): it slides down its own height out from under
-/// the edge it hangs on, never further, and lands within `TOAST_IN`
-/// (200ms), not the kit's 400ms rise from 96px.
+/// the edge it hangs on, never further, never back, and lands within
+/// `TOAST_IN` (200ms), not the kit's 400ms rise from 96px.
 #[gpui::test]
 fn a_kit_toast_slides_its_own_height_on_the_toast_tokens(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
@@ -2485,36 +2485,51 @@ fn a_kit_toast_slides_its_own_height_on_the_toast_tokens(cx: &mut TestAppContext
     cx.update(|window, cx| {
         use gpui::component::WindowExt;
         window.push_notification(
-            gpui::component::notification::Notification::new().message("Server restarted"),
+            gpui::component::notification::Notification::new()
+                .message("Server restarted")
+                .autohide(false),
             cx,
         )
     });
-    // The card slides on the wall clock: let real time pass with the frames.
-    let started = std::time::Instant::now();
+    // The card slides on the wall clock, from the frame that first draws
+    // it. Frames are drawn back to back, so a loaded machine still lands
+    // some inside the slide. Each is stamped before it is drawn and the
+    // slide's start taken as late as it can be (the end of the frame that
+    // first drew the card): a frame stamped `TOAST_IN` after that was drawn
+    // at least that far into the slide, however slow the machine.
+    let landed = Duration::from_millis(ferrite_ui::theme::MOTION_TOAST_IN_MS);
+    let mut started = None;
     let mut tops = Vec::new();
     let mut height = px(0.);
-    for _ in 0..30 {
-        std::thread::sleep(Duration::from_millis(16));
+    for _ in 0..300 {
+        let before = std::time::Instant::now();
         cx.executor().advance_clock(Duration::from_millis(16));
         cx.run_until_parked();
         display_frames(cx);
-        if let Some(card) = cx.debug_bounds("notification-card") {
-            tops.push((started.elapsed(), card.top()));
-            height = card.size.height;
+        let Some(card) = cx.debug_bounds("notification-card") else {
+            continue;
+        };
+        let started = *started.get_or_insert_with(std::time::Instant::now);
+        let at = before.saturating_duration_since(started);
+        tops.push((at, card.top()));
+        height = card.size.height;
+        if at >= landed * 2 {
+            break;
         }
     }
     let rest = tops.last().expect("the card was drawn").1;
-    let (first_at, first) = tops[0];
     assert!(
-        first_at < Duration::from_millis(150),
-        "the premise: seen early"
+        tops.iter().any(|(_, top)| *top < rest - px(1.)),
+        "it came down into place: {tops:?}"
     );
-    assert!(first < rest - px(1.), "it came down into place: {tops:?}");
     assert!(
-        first >= rest - height - px(1.),
-        "from its own height, no more"
+        tops.iter().all(|(_, top)| *top >= rest - height - px(1.)),
+        "from its own height, no more: {tops:?}"
     );
-    let landed = Duration::from_millis(ferrite_ui::theme::MOTION_TOAST_IN_MS + 48);
+    assert!(
+        tops.windows(2).all(|pair| pair[1].1 >= pair[0].1 - px(0.5)),
+        "only ever down: {tops:?}"
+    );
     assert!(
         tops.iter()
             .filter(|(at, _)| *at >= landed)
