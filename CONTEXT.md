@@ -66,21 +66,26 @@ _Avoid_: dashboard, workspace (see Workspace binding).
 The default Cockpit view: exactly the focused Thread's Pane.
 
 **Panel**
-The right column, beside the board: the focused Thread's changes, its
-pull request and its context, one tab each, and its **preview** while one
-is open. It follows the focused Thread in every view (Solo, a Group's
-focused Pane, a fullscreen Pane, with a Review open beside it), shown
-while the operator has it on; there is none without a Thread (a draft,
-the empty board), but for a draft's preview.
+The right column, beside the board: the focused Thread's **Surfaces** as
+tabs (ADR 0039). It follows the focused Thread in every view (Solo, a
+Group's focused Pane, a fullscreen Pane, with a Review open beside it),
+shown while the operator has it on; there is none without a Thread (a
+draft, the empty board), but for a draft's preview.
 _Avoid_: sidebar (that is the nav), Beside slot (that opens inside the
-board).
+board), dock (its columns are Surfaces now).
+
+**Surface**
+One tab in the Panel, one per thing it shows: the Overview, Changes,
+Files, a Preview, a Browser tab, a Terminal, a side chat, an agent,
+background work, a pull request. Opening one already open brings its tab
+forward. Each Thread keeps its own.
+_Avoid_: section, pane (that is the board's), view.
 
 **Preview**
 A file, an image or a command's output opened from a Pane — a file link
 in an answer, a ⌘-clicked path, a tool row, a prompt's image, a shelf
-chip, a changed file, a review's line — read in the Panel's Preview tab,
-which widens the Panel while it shows. Each Pane keeps its own; the Panel
-shows the focused Pane's. Another file opening replaces it in place.
+chip, a changed file, a review's line — read as a Surface in the Panel,
+which widens while it shows. Another file opening replaces it in place.
 _Avoid_: reader (the board's reader slot is the Review's), viewer (that is
 the image's part of it).
 

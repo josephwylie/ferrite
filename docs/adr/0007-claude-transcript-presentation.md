@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded in part by ADR 0038 (grouping, labels, folding and timing of a turn's work)
 date: 2026-09-06
 ---
 
