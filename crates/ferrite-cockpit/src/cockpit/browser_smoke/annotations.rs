@@ -155,7 +155,12 @@ fn scroll_editor(window:&mut Window,cx:&mut App,y:f32) {
 
 pub(super) fn history(view:&Entity<CockpitView>,window:&mut Window,cx:&mut App,output:&Path,stage:&mut u8)->Result<bool,String> {
     let expected:Vec<Annotation>=serde_json::from_slice(&std::fs::read(std::env::var_os("FERRITE_BROWSER_WINDOW_EXPECTED_ANNOTATIONS").ok_or("missing original annotation evidence")?).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
-    let restored=view.read(cx).cockpit.threads().iter().find_map(|thread| {
+    let original:serde_json::Value=serde_json::from_slice(&std::fs::read(output.parent().ok_or("missing original output directory")?.join("window-result.json")).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    let owning_thread:ferrite_core::ThreadId=serde_json::from_value(original["scenario_thread"].clone()).map_err(|e|e.to_string())?;
+    // History follows the drawn Thread; a fresh Codex Thread is not the
+    // imported Thread initially focused by the restarted window.
+    view.update(cx,|view,cx|view.focus_thread(owning_thread,cx));
+    let restored=std::iter::once(&owning_thread).find_map(|thread| {
         let mirror=view.read(cx).cockpit.thread(*thread)?;
         let annotations:Vec<_>=mirror.transcript().blocks().iter().filter_map(|block| {
             match &block.body { ferrite_core::transcript::Body::Prompt(words)=>Some(ferrite_core::browser_annotations::split(words.clone()).2), _=>None }
