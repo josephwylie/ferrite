@@ -1,14 +1,20 @@
 name: CI
 
-# Validate each PR once; main builds also seed caches for subsequent PRs.
+# A PR runs the macOS checks only, and nothing when it changes docs alone.
+# Windows and the app with visuals run on main, and on a PR labelled
+# `full-ci`. A skipped job counts as passed for branch protection. Caches
+# are saved from main only, which every PR reads.
 on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # A newer push to a PR replaces its run; main's runs all finish, so each
+  # one saves the caches PRs read.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -23,8 +29,42 @@ env:
   SCCACHE_GHA_ENABLED: "true"
 
 jobs:
+  # What the run covers: `code` is false for a PR that changes only docs
+  # (Markdown, docs/); `full` is true on main and for a `full-ci` PR.
+  # A scope that fails to say runs everything (`!= 'false'` below), so a
+  # broken scope never skips a check.
+  scope:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      code: ${{ steps.scope.outputs.code }}
+      full: ${{ steps.scope.outputs.full }}
+    steps:
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "full=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json files --jq '.files[].path')
+          if printf '%s\n' "$files" | grep -qvE '^docs/|\.md$'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "full=$FULL_LABEL" >> "$GITHUB_OUTPUT"
+
   macos:
     name: macOS (Metal)
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.code != 'false' }}
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -32,6 +72,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
       - name: Test core
         run: cargo test -p ferrite-core --locked
       - name: Test the vendored review core
@@ -41,27 +84,33 @@ jobs:
       # The Chromium adapter is shared with Windows: keep it compiling here.
       # (Running it needs the .app bundle; see visual/smoke.rs.)
       - name: CEF version
+        if: needs.scope.outputs.full != 'false'
         id: cef
         run: echo "version=$(sed -n '/^name = "cef"$/{n;s/^version = ".*+\(.*\)"$/\1/p;}' Cargo.lock)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v4
+        if: needs.scope.outputs.full != 'false'
         id: cef-cache
         with:
           path: ~/.local/share/cef
           key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
       - name: Install CEF build tools
+        if: needs.scope.outputs.full != 'false'
         run: brew install cmake ninja
       - name: Build app with visuals
+        if: needs.scope.outputs.full != 'false'
         id: visuals
         run: CEF_PATH="$HOME/.local/share/cef" cargo build -p ferrite --locked --features cef
-      # Saved once the build has fetched CEF, whatever comes after.
+      # Saved from main once the build has fetched CEF, whatever comes after.
       - uses: actions/cache/save@v4
-        if: always() && steps.visuals.outcome == 'success' && steps.cef-cache.outputs.cache-hit != 'true'
+        if: always() && github.ref == 'refs/heads/main' && steps.visuals.outcome == 'success' && steps.cef-cache.outputs.cache-hit != 'true'
         with:
           path: ~/.local/share/cef
           key: ${{ steps.cef-cache.outputs.cache-primary-key }}
 
   windows:
     name: Windows (DirectX 11)
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.code != 'false' && needs.scope.outputs.full != 'false' }}
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -72,18 +121,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
       - name: Test core
         run: cargo test -p ferrite-core --locked -- --nocapture
       - name: Test the vendored review core
         run: cargo test -p ferrite-reviewr --locked
       # The app is built once, with visuals, as Windows ships it; macOS
-      # builds it without them too. Visuals (ADR 0013): the app with Chromium, and proof that Chromium
-      # runs from it on Windows: `ferrite --visual-smoke` boots the engine
-      # headless, opens a page and checks its frames' pixels, its content
-      # height and a hover (crates/ferrite/src/visual/smoke.rs). CEF is a
-      # ~170 MB download, cached by its version in Cargo.lock; the runner
-      # has cmake, and ninja is installed for CEF's C++ wrapper. The runner
-      # has no GPU: Chromium falls back to software on its own.
+      # builds it without them too. Visuals (ADR 0013): the app with
+      # Chromium, and proof that Chromium runs from it on Windows:
+      # `ferrite --visual-smoke` boots the engine headless, opens a page and
+      # checks its frames' pixels, its content height and a hover
+      # (crates/ferrite/src/visual/smoke.rs). CEF is a ~170 MB download,
+      # cached by its version in Cargo.lock; the runner has cmake, and ninja
+      # is installed for CEF's C++ wrapper. The runner has no GPU: Chromium
+      # falls back to software on its own.
       - name: CEF version
         id: cef
         shell: bash
@@ -102,9 +155,9 @@ jobs:
         run: |
           $env:CEF_PATH = Join-Path $HOME ".local\share\cef"
           cargo build -p ferrite --locked --features cef
-      # Saved once the build has fetched CEF, whatever comes after.
+      # Saved from main once the build has fetched CEF, whatever comes after.
       - uses: actions/cache/save@v4
-        if: always() && steps.visuals.outcome == 'success' && steps.cef-cache.outputs.cache-hit != 'true'
+        if: always() && github.ref == 'refs/heads/main' && steps.visuals.outcome == 'success' && steps.cef-cache.outputs.cache-hit != 'true'
         with:
           path: ~/.local/share/cef
           key: ${{ steps.cef-cache.outputs.cache-primary-key }}
