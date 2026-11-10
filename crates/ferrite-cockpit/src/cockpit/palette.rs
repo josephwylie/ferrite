@@ -461,7 +461,7 @@ impl CockpitView {
         let project_of = |thread: ThreadId| self.facts.get(thread).and_then(|facts| facts.project);
         let open_threads: Vec<ThreadId> = {
             let mut open = self.cockpit.threads();
-            open.retain(|thread| !self.side_chats.owns(*thread));
+            open.retain(|thread| !self.side_chats.owns(*thread) && self.cockpit.operators(*thread));
             open.sort();
             open
         };

@@ -244,13 +244,24 @@ type LiveRequest = (ferrite_core::notifications::DecisionNoticeId, bool);
 fn news(
     notifications: &ferrite_core::notifications::Notifications,
     after: Option<ferrite_core::notifications::NoticeId>,
+    operators: &dyn Fn(ThreadId) -> bool,
 ) -> (Vec<FreshNotice>, Vec<LiveRequest>) {
+    // An owned Thread's Notices and requests ring nothing: its owner
+    // (a Task, a Factory) tells the operator in its own way (ADR 0037).
+    // Its Notices still move the watermark, so they are never news later.
     let fresh = notifications
         .since(after)
-        .map(|notice| (notice.id, notice.thread, notice.read))
+        .map(|notice| {
+            (
+                notice.id,
+                notice.thread,
+                notice.read || !operators(notice.thread),
+            )
+        })
         .collect();
     let requests = notifications
         .decisions()
+        .filter(|notice| operators(notice.id.thread))
         .map(|notice| (notice.id.clone(), notice.read))
         .collect();
     (fresh, requests)
@@ -9298,6 +9309,10 @@ impl CockpitView {
     /// `All projects` alone, rather than being quietly filed under someone
     /// else's Project.
     fn admitted(&self, thread: ThreadId) -> bool {
+        // An owned Thread (a Worker, a Coordinator) is its owner's to list.
+        if !self.cockpit.operators(thread) {
+            return false;
+        }
         let Some(wanted) = self.nav_filter else {
             return true;
         };
@@ -13294,13 +13309,16 @@ impl CockpitView {
         // its alerts by them would drop the ones the window brought along.
         let here = self.attached().then_some(notifications);
         if let Some(here) = here {
-            let (fresh, requests) = news(here, self.needs_you.presented(None));
+            let operators = |thread: ThreadId| self.cockpit.operators(thread);
+            let (fresh, requests) = news(here, self.needs_you.presented(None), &operators);
             self.needs_you.hear(None, fresh, requests, now);
         }
         for away in machines.iter().flat_map(|machines| machines.off_screen()) {
+            let operators = |thread: ThreadId| away.status.operators(thread);
             let (fresh, requests) = news(
                 away.notifications,
                 self.needs_you.presented(Some(&away.key)),
+                &operators,
             );
             self.needs_you.hear(Some(away.key), fresh, requests, now);
         }

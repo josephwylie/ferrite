@@ -30,6 +30,7 @@ mod nav_list;
 mod nav_parity;
 mod navigation;
 mod output_cards;
+mod owned_threads;
 mod panel;
 mod panel_preview;
 mod parking;
