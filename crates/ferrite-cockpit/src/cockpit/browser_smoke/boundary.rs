@@ -130,7 +130,7 @@ impl Scenario {
         if !ready {
             return Ok(false);
         }
-        window.draw(cx);
+        window.draw(cx).clear(cx);
         window
             .render_to_image()
             .map_err(|e| e.to_string())?

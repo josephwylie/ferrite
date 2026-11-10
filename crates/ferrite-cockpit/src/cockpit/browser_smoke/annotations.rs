@@ -169,7 +169,7 @@ pub(super) fn history(view:&Entity<CockpitView>,window:&mut Window,cx:&mut App,o
         ferrite_core::browser_annotations::read_retained(directory,annotation.original_hash()).map_err(|e|e.to_string())?;
     }
     view.update(cx,|view,cx|view.focus_thread(thread,cx));
-    window.draw(cx);
+    window.draw(cx).clear(cx);
     if *stage==0 {
         let state=view.update(cx,|view,_|view.cockpit.browser_attach(thread)).map_err(|e|e.to_string())?;
         if state.tabs.iter().any(|tab|tab.live) { return Err("History-only restoration eagerly realized a browser page".into()); }
