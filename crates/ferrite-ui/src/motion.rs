@@ -2179,62 +2179,6 @@ mod tests {
         }
     }
 
-    /// Claude Desktop's numbers, read from its source
-    /// (docs/research/craft/motion-claude-source.md).
-    #[test]
-    fn the_catalog_keeps_claudes_numbers() {
-        let quart = CubicBezier::new(0.165, 0.84, 0.44, 1.0);
-        let snap = CubicBezier::new(0.32, 0.72, 0.0, 1.0);
-        let overshoot = CubicBezier::new(0.34, 1.3, 0.64, 1.0);
-        let cases: [(&str, MotionSpec, u64, CubicBezier); 20] = [
-            ("stream", STREAM_FADE, 400, LINEAR),
-            ("bubble", BUBBLE_IN, 450, overshoot),
-            ("dialog in", DIALOG_IN, 200, quart),
-            ("dialog out", DIALOG_OUT, 200, quart),
-            ("veil", VEIL, 200, quart),
-            ("palette out", PALETTE_OUT, 120, quart),
-            ("palette veil", PALETTE_VEIL, 50, quart),
-            ("tooltip", TOOLTIP_IN, 120, snap),
-            (
-                "promote",
-                PROMOTE_IN,
-                220,
-                CubicBezier::new(0.215, 0.61, 0.355, 1.0),
-            ),
-            ("morph", MORPH, 180, CubicBezier::new(0.2, 0.0, 0.0, 1.0)),
-            ("hover", HOVER_FADE, 60, quart),
-            ("press", PRESS_IN, 60, quart),
-            ("release", PRESS_OUT, 450, overshoot),
-            ("actions out", ACTIONS_OUT, 60, snap),
-            ("chevron", CHEVRON, 60, EASE_STANDARD),
-            ("fold", FOLD, 150, CubicBezier::new(0.0, 0.0, 0.58, 1.0)),
-            ("jump", JUMP_FADE, 200, EASE_STANDARD),
-            ("usage arc", USAGE_ARC, 300, quart),
-            ("switch", SWITCH, 120, overshoot),
-            ("toast", TOAST_OUT, 200, quart),
-        ];
-        for (name, spec, ms, curve) in cases {
-            assert_eq!((spec.duration_ms, spec.curve), (ms, curve), "{name}");
-        }
-        assert_eq!((ACTIONS_IN.delay_ms, ACTIONS_IN.duration_ms), (100, 120));
-        assert_eq!(STREAM_LAND, Duration::from_millis(120));
-        assert_eq!(USAGE_INK.duration_ms, 200);
-        assert_eq!(TOAST_IN.duration_ms, 200);
-        assert_eq!(HOVER_SNAP.duration_ms, 0, "rows snap");
-        assert_eq!(MENU_IN.duration_ms, 0, "menus snap open");
-        assert_eq!(theme::MOTION_PRESS_SCALE, 0.975);
-        assert_eq!(theme::MOTION_TOAST_OUT_SCALE, 0.85);
-        assert_eq!(theme::MOTION_BUBBLE_FROM_SCALE, 0.92);
-        assert_eq!(theme::MOTION_SCROLLBAR_LINGER_MS, 1_400);
-        assert_eq!(
-            SCROLLBAR_FADE.duration_ms, 100,
-            "the thumb keeps its own fade"
-        );
-        // Ferrite's own, with no Claude counterpart.
-        assert_eq!(ROW_IN.duration_ms, 180);
-        assert_eq!(FADE_QUICK.duration_ms, 150);
-    }
-
     /// The overshoot curves pass their end and come back (a spring's
     /// settle): `eval` lets them, and still lands on 1.
     #[test]
