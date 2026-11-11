@@ -1261,7 +1261,10 @@ impl CockpitView {
         let Some(view) = self.factory_view.as_ref() else {
             return div().into_any_element();
         };
-        let shown = self.shown_step().map(|step| step.id.clone());
+        // While the start is shown, no Step's row is the chosen one.
+        let shown = (!self.start_shown())
+            .then(|| self.shown_step().map(|step| step.id.clone()))
+            .flatten();
         let name_field = Field::WorkflowName(workflow.id.clone());
         let mut outline = div()
             .id("outline")
