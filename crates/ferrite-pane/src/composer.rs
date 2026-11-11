@@ -153,17 +153,18 @@ pub struct Composer {
     review: CommentStore,
     browser_annotations: Vec<Annotation>,
     /// Tokens the operator picked from a menu — an `@` mention's
-    /// `@rel/path`, a `/` command's `/name`: any occurrence still standing
-    /// whole in the text paints as a chip, whichever provider serves the
-    /// Thread. Display only — the wire reads the text itself (Claude's CLI
-    /// attaches the file and dispatches the command, Codex's send derives
-    /// its mention and skill items), so a token edited away simply stops
-    /// being one.
+    /// `@rel/path`, a `/` command's `/name`, a `$` skill's `$name`: any
+    /// occurrence still standing whole in the text is a token, whichever
+    /// provider serves the Thread (`tokens`). The wire reads the text
+    /// itself (Claude's CLI attaches the file and dispatches the command,
+    /// Codex's send derives its mention and skill items).
     chips: Vec<SharedString>,
     /// The Session's commands and skills, by bare name (`set_commands`):
-    /// a `/name` token naming one chips however it got into the text —
-    /// picked, typed out, pasted or restored with a draft.
+    /// a `/name` or `$name` naming one is a token however it got into the
+    /// text — picked, typed out, pasted or restored with a draft.
     commands: std::collections::HashSet<SharedString>,
+    /// Those of `commands` that are skills (`SessionCommand::is_skill`).
+    skills: std::collections::HashSet<SharedString>,
     /// A `/` or `@` popover is open over this line (#23). The cockpit owns
     /// the menu; this flag only widens the line's own key context to
     /// `ComposerMenu` — on the FOCUSED node, where gpui's same-depth
@@ -214,12 +215,9 @@ pub struct Composer {
     /// Every caret drawn, and when, for the tests of its cadence.
     #[cfg(any(test, feature = "test-support"))]
     caret_draws: Vec<(Instant, Option<Caret>)>,
-    /// The chip grounds last drawn, in window coordinates, for the tests.
+    /// The tokens last drawn, for the tests.
     #[cfg(any(test, feature = "test-support"))]
-    last_chips: Vec<Bounds<Pixels>>,
-    /// The skill tokens last drawn in `SKILL_INK`, as byte ranges.
-    #[cfg(any(test, feature = "test-support"))]
-    last_skills: Vec<Range<usize>>,
+    last_tokens: Vec<Token>,
 }
 
 impl EventEmitter<Edited> for Composer {}
@@ -238,6 +236,7 @@ impl Composer {
             browser_annotations: Vec::new(),
             chips: Vec::new(),
             commands: Default::default(),
+            skills: Default::default(),
             menu_open: false,
             history_available: false,
             last_layout: None,
@@ -257,23 +256,37 @@ impl Composer {
             #[cfg(any(test, feature = "test-support"))]
             caret_draws: Vec::new(),
             #[cfg(any(test, feature = "test-support"))]
-            last_chips: Vec::new(),
-            #[cfg(any(test, feature = "test-support"))]
-            last_skills: Vec::new(),
+            last_tokens: Vec::new(),
         }
     }
 
-    /// The skill tokens the line last drew in blue, with no ground.
+    /// The skill tokens the line last drew in `SKILL_INK`.
     #[cfg(any(test, feature = "test-support"))]
-    pub fn skill_ranges(&self) -> &[Range<usize>] {
-        &self.last_skills
+    pub fn skill_ranges(&self) -> Vec<Range<usize>> {
+        self.drawn_tokens(TokenKind::Skill)
     }
 
-    /// The chip grounds the line last drew, in window coordinates.
+    /// The tokens of `kind` the line last drew.
     #[cfg(any(test, feature = "test-support"))]
-    pub fn chip_grounds(&self) -> &[Bounds<Pixels>] {
-        &self.last_chips
+    pub fn drawn_tokens(&self, kind: TokenKind) -> Vec<Range<usize>> {
+        self.last_tokens
+            .iter()
+            .filter(|token| token.kind == kind)
+            .map(|token| token.range.clone())
+            .collect()
     }
+
+    /// The tokens in the line now.
+    fn tokens(&self) -> Vec<Token> {
+        tokens(self.line.text(), &self.chips, &self.commands, &self.skills)
+    }
+
+    /// Hand the line its tokens, so each edits as one unit.
+    fn atomize(&mut self) {
+        let atoms = self.tokens().into_iter().map(|token| token.range).collect();
+        self.line.set_atoms(atoms);
+    }
+
 
     /// Every caret drawn and when, and when its blink last restarted: the
     /// cockpit's tests of the blink drawn by the loops overlay.
@@ -535,9 +548,10 @@ impl Composer {
         browser_annotations::compose(&self.quoted_line(), &self.files, &self.browser_annotations)
     }
 
-    /// The line with its quotes ahead of it.
+    /// The line with its quotes ahead of it, as the wire reads it.
     fn quoted_line(&self) -> String {
-        crate::quote::compose(&self.replies, self.line.text())
+        let line = wire_text(self.line.text(), &self.tokens());
+        crate::quote::compose(&self.replies, &line)
     }
 
     /// The files added a moment ago, still growing into the tray
@@ -646,6 +660,7 @@ impl Composer {
         if !self.chips.contains(&token) {
             self.chips.push(token);
         }
+        self.atomize();
         cx.notify();
     }
 
@@ -662,20 +677,18 @@ impl Composer {
         cx: &mut Context<Self>,
     ) {
         let same = commands.len() == self.commands.len()
-            && commands
-                .iter()
-                .all(|command| self.commands.contains(command.name.as_str()));
+            && commands.iter().all(|command| {
+                self.commands.contains(command.name.as_str())
+                    && self.skills.contains(command.name.as_str()) == command.is_skill()
+            });
         if same {
             return;
         }
-        let commands: std::collections::HashSet<SharedString> = commands
-            .iter()
-            .map(|command| SharedString::from(command.name.clone()))
-            .collect();
-        if commands != self.commands {
-            self.commands = commands;
-            cx.notify();
-        }
+        let name = |command: &ferrite_core::SessionCommand| SharedString::from(command.name.clone());
+        self.commands = commands.iter().map(name).collect();
+        self.skills = commands.iter().filter(|command| command.is_skill()).map(name).collect();
+        self.atomize();
+        cx.notify();
     }
 
     /// The box's height in rows now, for text showing `rows`: easing to it
@@ -710,6 +723,7 @@ impl Composer {
     }
 
     fn edited(&mut self, cx: &mut Context<Self>) {
+        self.atomize();
         self.goal_x = None;
         // The caret just moved: show it solid again and restart the blink,
         // so it is never faint at the moment the operator is looking for it.
@@ -1122,66 +1136,152 @@ impl Render for Composer {
     }
 }
 
-/// Where chips stand in the text: each staged token still whole in it,
-/// and each `/name` token naming one of the Session's `commands` — whole
-/// meaning start-of-line or whitespace on both sides, exactly the
-/// boundaries the wire's own `@`-token and `/`-command rules read —
-/// sorted, overlaps dropped. These byte ranges paint as chips.
-fn pill_ranges(
+/// What a token in the line is (T3's inline chips): a skill, a file, or
+/// a `/command` the Session knows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TokenKind {
+    Skill,
+    File,
+    Command,
+}
+
+/// A token's bytes in the line, and its kind. A token edits as one unit
+/// (`Line::set_atoms`) and paints in its kind's accent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Token {
+    pub range: Range<usize>,
+    pub kind: TokenKind,
+}
+
+impl TokenKind {
+    fn ink(self) -> u32 {
+        match self {
+            Self::Skill => ferrite_ui::theme::SKILL_INK,
+            Self::File => ferrite_ui::theme::FILE_INK,
+            Self::Command => ferrite_ui::theme::MENTION_INK,
+        }
+    }
+
+    /// The icon standing where the sigil was (`$`, `@`), and its stroke; a
+    /// command keeps its `/`.
+    fn icon(self, token: &str) -> Option<(&'static str, f32)> {
+        use ferrite_ui::{icons, theme};
+        match self {
+            Self::Skill => Some((icons::BOX, theme::SKILL_ICON_STROKE)),
+            Self::File => {
+                let path = std::path::Path::new(token.trim_start_matches('@'));
+                let image = crate::image_viewer::is_image(path);
+                Some((
+                    if image { icons::IMAGE } else { icons::FILE },
+                    theme::ICON_STROKE,
+                ))
+            }
+            Self::Command => None,
+        }
+    }
+}
+
+/// Where tokens stand in the text, sorted, overlaps dropped. A token is
+/// whole — start-of-line or whitespace on both sides, the boundaries the
+/// wire's own `@`-token and `/`-command rules read — and is
+/// - a skill: `$name` naming any of the Session's `commands`, or `/name`
+///   naming one of its `skills`;
+/// - a command: `/name` naming another of its `commands`;
+/// - a file: a staged `@path` (`chips`, picked from the `@` menu).
+///
+/// A staged `/name` or `$name` counts as its name does, or as a command.
+fn tokens(
     text: &str,
     chips: &[SharedString],
     commands: &std::collections::HashSet<SharedString>,
-) -> Vec<Range<usize>> {
-    let mut ranges: Vec<Range<usize>> = Vec::new();
-    if !commands.is_empty() {
-        let mut start = None;
-        for (at, ch) in text.char_indices().chain([(text.len(), ' ')]) {
-            if !ch.is_whitespace() {
-                start.get_or_insert(at);
-                continue;
-            }
-            let Some(from) = start.take() else {
-                continue;
-            };
-            if text[from..at]
-                .strip_prefix('/')
-                .is_some_and(|name| commands.contains(name))
-            {
-                ranges.push(from..at);
-            }
+    skills: &std::collections::HashSet<SharedString>,
+) -> Vec<Token> {
+    let named = |word: &str| -> Option<TokenKind> {
+        if let Some(name) = word.strip_prefix('$') {
+            return commands.contains(name).then_some(TokenKind::Skill);
+        }
+        let name = word.strip_prefix('/')?;
+        if skills.contains(name) {
+            Some(TokenKind::Skill)
+        } else {
+            commands.contains(name).then_some(TokenKind::Command)
+        }
+    };
+    let mut found: Vec<Token> = Vec::new();
+    let mut start = None;
+    for (at, ch) in text.char_indices().chain([(text.len(), ' ')]) {
+        if !ch.is_whitespace() {
+            start.get_or_insert(at);
+            continue;
+        }
+        let Some(from) = start.take() else {
+            continue;
+        };
+        if let Some(kind) = named(&text[from..at]) {
+            found.push(Token {
+                range: from..at,
+                kind,
+            });
         }
     }
     for token in chips {
+        let kind = if token.starts_with('@') {
+            TokenKind::File
+        } else {
+            named(token).unwrap_or(TokenKind::Command)
+        };
         let mut from = 0;
-        while let Some(found) = text[from..].find(token.as_ref()) {
-            let start = from + found;
+        while let Some(at) = text[from..].find(token.as_ref()) {
+            let start = from + at;
             let end = start + token.len();
             let before = start == 0 || text[..start].ends_with(char::is_whitespace);
             let after = end == text.len() || text[end..].starts_with(char::is_whitespace);
             if before && after {
-                ranges.push(start..end);
+                found.push(Token {
+                    range: start..end,
+                    kind,
+                });
                 from = end;
             } else {
                 from = start + 1;
             }
         }
     }
-    ranges.sort_by_key(|range| range.start);
-    ranges.dedup_by(|next, kept| next.start < kept.end);
-    ranges
+    found.sort_by_key(|token| token.range.start);
+    found.dedup_by(|next, kept| next.range.start < kept.range.end);
+    found
 }
 
-/// The line's text runs: the base style, a picked chip in `MENTION_INK` (a skill's, `skills`, in `SKILL_INK`)
-/// over `pills`, the selection's own `INK_STRONG` ink over `selected` —
-/// the selection quad is the app's one translucent selection wash, painted
+/// The line as the wire reads it: a skill typed `$name` goes as `/name`,
+/// the grammar both providers' sends translate (Codex's skill items,
+/// Claude's own dispatch).
+fn wire_text(text: &str, tokens: &[Token]) -> String {
+    let mut out = text.to_string();
+    for token in tokens {
+        if token.kind == TokenKind::Skill && text[token.range.clone()].starts_with('$') {
+            out.replace_range(token.range.start..token.range.start + 1, "/");
+        }
+    }
+    out
+}
+
+/// What the shaper draws in a token's sigil's place: an em space, the
+/// icon's 1em square (`TOKEN_ICON` at `FS_COMPOSER`).
+const ICON_SLOT: &str = "\u{2003}";
+/// How many bytes longer the shaped text is per icon slot.
+const SLOT_EXTRA: usize = ICON_SLOT.len() - 1;
+
+/// The line's text runs: the base style, each token at `W_LABEL` in its
+/// kind's ink, the selection's own `INK_STRONG` ink over `selected` — the
+/// selection quad is the app's one translucent selection wash, painted
 /// under the shaped line — and the IME underline (`INK_SUBTLE`, 1px) over
 /// `marked`. Split at every boundary so each run wears exactly its styles.
+/// Ranges are in the shaped text's bytes.
 fn runs_for(
     base: &TextRun,
     len: usize,
     marked: Option<Range<usize>>,
-    pills: &[Range<usize>],
-    skills: &[Range<usize>],
+    tokens: &[(Range<usize>, TokenKind)],
     selected: Option<Range<usize>>,
 ) -> Vec<TextRun> {
     let mut cuts = vec![0, len];
@@ -1191,8 +1291,8 @@ fn runs_for(
     if let Some(selected) = &selected {
         cuts.extend([selected.start, selected.end]);
     }
-    for pill in pills {
-        cuts.extend([pill.start, pill.end]);
+    for (range, _) in tokens {
+        cuts.extend([range.start, range.end]);
     }
     cuts.sort_unstable();
     cuts.dedup();
@@ -1206,19 +1306,12 @@ fn runs_for(
             len: to - from,
             ..base.clone()
         };
-        if pills
+        if let Some((_, kind)) = tokens
             .iter()
-            .any(|pill| pill.start <= from && to <= pill.end)
+            .find(|(range, _)| range.start <= from && to <= range.end)
         {
-            let skill = skills
-                .iter()
-                .any(|skill| skill.start <= from && to <= skill.end);
-            run.color = rgb(if skill {
-                ferrite_ui::theme::SKILL_INK
-            } else {
-                ferrite_ui::theme::MENTION_INK
-            })
-            .into();
+            run.color = rgb(kind.ink()).into();
+            run.font.weight = ferrite_ui::theme::W_LABEL;
         }
         if selected
             .as_ref()
@@ -1250,7 +1343,8 @@ fn runs_for(
 /// one row and opens the next — so a lookup takes the last row that starts
 /// at or before an offset: a caret on the boundary paints at the start of
 /// the later row, where what it types will land, and the earlier row's
-/// trailing space is its last caret stop.
+/// trailing space is its last caret stop. Offsets are the line's own
+/// (`Composer::text`), not the shaped text's.
 #[derive(Clone, Copy, Debug)]
 struct Row {
     line: usize,
@@ -1261,15 +1355,17 @@ struct Row {
 
 /// The shaped text as last laid out: the hard lines, each wrapped at the
 /// box's width, flattened into visual rows. Positions are local to the
-/// text's own origin, unscrolled — the element applies `scroll`.
+/// text's own origin, unscrolled — the element applies `scroll`. A skill's
+/// or a file's sigil is shaped as an `ICON_SLOT` its icon paints over
+/// (`slots`); every method speaks the line's own offsets.
 pub(crate) struct Layout {
     lines: Vec<WrappedLine>,
     rows: Vec<Row>,
     line_height: Pixels,
-    /// The pills that stand on a ground; the rest, a skill or command
-    /// (`/name`), are blue ink alone, as Claude's is (`skills`).
-    grounded: Vec<Range<usize>>,
-    skills: Vec<Range<usize>>,
+    source: String,
+    tokens: Vec<Token>,
+    /// The line's offsets of the sigils shaped as icon slots, ascending.
+    slots: Vec<usize>,
 }
 
 impl Layout {
@@ -1282,15 +1378,34 @@ impl Layout {
         wrap_width: Option<Pixels>,
         window: &Window,
     ) -> Self {
-        let content = SharedString::from(composer.line.text().to_string());
-        let selected = composer.line.selection();
-        let pills = pill_ranges(&content, composer.chips(), &composer.commands);
-        let (skills, grounded): (Vec<_>, Vec<_>) = pills
+        let source = composer.line.text().to_string();
+        let tokens = composer.tokens();
+        let slots: Vec<usize> = tokens
             .iter()
-            .cloned()
-            .partition(|pill| content[pill.start..pill.end].starts_with('/'));
+            .filter(|token| token.kind.icon(&source[token.range.clone()]).is_some())
+            .map(|token| token.range.start)
+            .collect();
+        let mut layout = Self {
+            lines: Vec::new(),
+            rows: Vec::new(),
+            line_height,
+            source,
+            tokens,
+            slots,
+        };
+        let mut shaped = layout.source.clone();
+        for &slot in layout.slots.iter().rev() {
+            shaped.replace_range(slot..slot + 1, ICON_SLOT);
+        }
+        let selected = composer.line.selection();
+        let display = |range: &Range<usize>| layout.display(range.start)..layout.display(range.end);
+        let token_runs: Vec<_> = layout
+            .tokens
+            .iter()
+            .map(|token| (display(&token.range), token.kind))
+            .collect();
         let run = TextRun {
-            len: content.len(),
+            len: shaped.len(),
             font: style.font(),
             color: style.color,
             background_color: None,
@@ -1299,98 +1414,90 @@ impl Layout {
         };
         let runs = runs_for(
             &run,
-            content.len(),
-            composer.line.marked(),
-            &pills,
-            &skills,
-            (!selected.is_empty()).then(|| selected.clone()),
+            shaped.len(),
+            composer.line.marked().as_ref().map(display),
+            &token_runs,
+            (!selected.is_empty()).then(|| display(&selected)),
         );
         let font_size = style.font_size.to_pixels(window.rem_size());
         let lines: Vec<WrappedLine> = window
             .text_system()
-            .shape_text(content, font_size, &runs, wrap_width, None)
+            .shape_text(SharedString::from(shaped), font_size, &runs, wrap_width, None)
             .map(|lines| lines.into_vec())
             .unwrap_or_default();
         let mut rows = Vec::new();
         let mut line_start = 0;
         for (index, line) in lines.iter().enumerate() {
+            let source_start = layout.source_of(line_start);
             let mut start = 0;
             for boundary in line.wrap_boundaries() {
                 let end = line.runs()[boundary.run_ix].glyphs[boundary.glyph_ix].index;
                 rows.push(Row {
                     line: index,
-                    line_start,
-                    start: line_start + start,
-                    end: line_start + end,
+                    line_start: source_start,
+                    start: layout.source_of(line_start + start),
+                    end: layout.source_of(line_start + end),
                 });
                 start = end;
             }
             rows.push(Row {
                 line: index,
-                line_start,
-                start: line_start + start,
-                end: line_start + line.len(),
+                line_start: source_start,
+                start: layout.source_of(line_start + start),
+                end: layout.source_of(line_start + line.len()),
             });
             line_start += line.len() + 1;
         }
-        Self {
-            lines,
-            rows,
-            line_height,
-            grounded,
-            skills,
+        layout.lines = lines;
+        layout.rows = rows;
+        layout
+    }
+
+    /// The shaped text's offset for the line's `offset`.
+    fn display(&self, offset: usize) -> usize {
+        offset + SLOT_EXTRA * self.slots.iter().take_while(|&&slot| slot < offset).count()
+    }
+
+    /// The line's offset for the shaped text's `offset`: inside an icon
+    /// slot is after its sigil.
+    fn source_of(&self, offset: usize) -> usize {
+        let mut shift = 0;
+        for &slot in &self.slots {
+            let at = slot + shift;
+            if offset <= at {
+                break;
+            }
+            if offset < at + ICON_SLOT.len() {
+                return slot + 1;
+            }
+            shift += SLOT_EXTRA;
         }
+        offset - shift
     }
 
     fn rows(&self) -> usize {
         self.rows.len().max(1)
     }
 
-    /// The chips' grounds in `bounds` scrolled by `scroll` rows: one per row
-    /// a chip crosses, `MENTION_CHIP_INSET_Y` inside the row, reaching
-    /// `MENTION_CHIP_PAD_X` past the token either side — but never more
-    /// than half into the character beside it, so two chips a space apart
-    /// never touch.
-    fn chip_grounds(&self, bounds: Bounds<Pixels>, scroll: usize) -> Vec<Bounds<Pixels>> {
-        use ferrite_ui::theme::{MENTION_CHIP_INSET_Y, MENTION_CHIP_PAD_X};
-        let pad = px(MENTION_CHIP_PAD_X);
-        let inset = px(MENTION_CHIP_INSET_Y);
-        let mut grounds = Vec::new();
-        for pill in &self.grounded {
-            for (index, row) in self.rows.iter().enumerate() {
-                if pill.end <= row.start || row.end <= pill.start {
-                    continue;
-                }
-                let (from, to) = (pill.start.max(row.start), pill.end.min(row.end));
-                let text = &self.lines[row.line].text;
-                let local = |at: usize| at - row.line_start;
-                let before = text[..local(from)]
-                    .chars()
-                    .next_back()
-                    .filter(|_| from > row.start)
-                    .map(|ch| from - ch.len_utf8());
-                let after = text[local(to)..]
-                    .chars()
-                    .next()
-                    .filter(|_| to < row.end)
-                    .map(|ch| to + ch.len_utf8());
-                let left = self.x_in_row(index, from);
-                let right = self.x_in_row(index, to);
-                let reach_left =
-                    before.map_or(pad, |at| pad.min((left - self.x_in_row(index, at)) / 2.));
-                let reach_right =
-                    after.map_or(pad, |at| pad.min((self.x_in_row(index, at) - right) / 2.));
-                let top = bounds.top() + self.line_height * index - self.line_height * scroll;
-                grounds.push(Bounds::from_corners(
-                    point(bounds.left() + left - reach_left, top + inset),
-                    point(
-                        bounds.left() + right + reach_right,
-                        top + self.line_height - inset,
-                    ),
-                ));
-            }
-        }
-        grounds
+    /// Where each token's icon paints in `bounds` scrolled by `scroll`
+    /// rows: a `TOKEN_ICON` square over its slot, centred on its row.
+    fn icons(&self, bounds: Bounds<Pixels>, scroll: usize) -> Vec<(Bounds<Pixels>, &'static str, f32, u32)> {
+        let side = px(ferrite_ui::theme::TOKEN_ICON);
+        self.tokens
+            .iter()
+            .filter_map(|token| {
+                let (icon, stroke) = token.kind.icon(&self.source[token.range.clone()])?;
+                let at = self.position(token.range.start);
+                let top = bounds.top() + at.y - self.line_height * scroll
+                    + (self.line_height - side) / 2.;
+                Some((
+                    Bounds::new(point(bounds.left() + at.x, top), size(side, side)),
+                    icon,
+                    stroke,
+                    token.kind.ink(),
+                ))
+            })
+            .collect()
     }
 
     /// The widest row, unwrapped — what the box measures as when no width
@@ -1422,8 +1529,7 @@ impl Layout {
         if !wraps {
             return row.end;
         }
-        let text = &self.lines[row.line].text;
-        let last = text[..row.end - row.line_start]
+        let last = self.source[..row.end]
             .chars()
             .next_back()
             .map_or(0, char::len_utf8);
@@ -1436,8 +1542,9 @@ impl Layout {
             return Pixels::ZERO;
         };
         let layout = &self.lines[row.line].unwrapped_layout;
-        let offset = offset.clamp(row.start, row.end) - row.line_start;
-        layout.x_for_index(offset) - layout.x_for_index(row.start - row.line_start)
+        let local = |at: usize| self.display(at) - self.display(row.line_start);
+        layout.x_for_index(local(offset.clamp(row.start, row.end)))
+            - layout.x_for_index(local(row.start))
     }
 
     /// Where `offset` paints: its row's top-left plus its x.
@@ -1452,9 +1559,11 @@ impl Layout {
             return 0;
         };
         let layout = &self.lines[row.line].unwrapped_layout;
-        let row_start = row.start - row.line_start;
+        let line_start = self.display(row.line_start);
+        let row_start = self.display(row.start) - line_start;
         let nearest = layout.closest_index_for_x(x + layout.x_for_index(row_start));
-        (row.line_start + nearest).clamp(row.start, self.caret_end(index))
+        self.source_of(line_start + nearest)
+            .clamp(row.start, self.caret_end(index))
     }
 
     /// The offset under an unscrolled local point: above the rows is the
@@ -1665,7 +1774,10 @@ impl Element for LineElement {
             }
         } else {
             // One quad per row the selection crosses, from where it enters
-            // the row to where it leaves.
+            // the row to where it leaves; a token selected whole is washed
+            // as a unit, rounded (T3's node selection).
+            let token = layout.tokens.iter().any(|token| token.range == selected);
+            let radius = px(if token { ferrite_ui::theme::TOKEN_SELECTION_R } else { 0. });
             let quads = layout
                 .rows
                 .iter()
@@ -1683,6 +1795,7 @@ impl Element for LineElement {
                         // the translucent wash, with `INK_STRONG` runs over it.
                         rgba(ferrite_ui::theme::COMPOSER_SELECTION),
                     )
+                    .corner_radii(radius)
                 })
                 .collect();
             (quads, None, None)
@@ -1714,12 +1827,8 @@ impl Element for LineElement {
 
         #[cfg(any(test, feature = "test-support"))]
         {
-            let grounds = layout.chip_grounds(bounds, scroll);
-            let skills = layout.skills.clone();
-            self.composer.update(cx, |composer, _| {
-                composer.last_chips = grounds;
-                composer.last_skills = skills;
-            });
+            let tokens = layout.tokens.clone();
+            self.composer.update(cx, |composer, _| composer.last_tokens = tokens);
         }
         PrepaintState {
             layout: Some(layout),
@@ -1824,19 +1933,18 @@ fn paint_text(
     cx: &mut App,
 ) {
     let line_height = layout.line_height;
-    // A chip at a row's edge reaches its pad past the text's box.
-    let pad = px(ferrite_ui::theme::MENTION_CHIP_PAD_X);
-    let mask = Bounds::from_corners(
-        point(bounds.left() - pad, bounds.top()),
-        point(bounds.right() + pad, bounds.bottom()),
-    );
-    window.with_content_mask(Some(ContentMask { bounds: mask }), |window| {
-        // The chips' grounds, then the selection wash and the caret, all
-        // under the glyphs.
-        for ground in layout.chip_grounds(bounds, scroll) {
-            window.paint_quad(
-                fill(ground, rgba(ferrite_ui::theme::MENTION_CHIP))
-                    .corner_radii(px(ferrite_ui::theme::R_CONTROL)),
+    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        // The selection wash and the caret under the glyphs; the tokens'
+        // icons in their slots.
+        for (square, icon, stroke, ink) in layout.icons(bounds, scroll) {
+            let side = f32::from(square.size.width);
+            let _ = window.paint_svg(
+                square,
+                ferrite_ui::icons::stroked_key(icon, side, stroke),
+                None,
+                gpui::TransformationMatrix::unit(),
+                rgb(ink).into(),
+                cx,
             );
         }
         for quad in quads {
@@ -2045,22 +2153,57 @@ mod tests {
         Default::default()
     }
 
-    /// A `/name` naming one of the Session's commands chips however it got
-    /// into the text — typed, pasted, restored — whole tokens only, with no
-    /// pick staged; the `@` and staged chips still chip beside it.
+    fn set(names: &[&str]) -> std::collections::HashSet<SharedString> {
+        shared(names).into_iter().collect()
+    }
+
+    fn ranges(tokens: Vec<Token>) -> Vec<Range<usize>> {
+        tokens.into_iter().map(|token| token.range).collect()
+    }
+
+    /// A `/name` naming one of the Session's commands is a token however
+    /// it got into the text — typed, pasted, restored — whole tokens only,
+    /// with no pick staged; the `@` and staged tokens beside it too.
     #[test]
-    fn a_known_command_chips_unpicked() {
-        let commands = shared(&["to-spec", "mattpocock-skills:grill-with-docs"])
-            .into_iter()
-            .collect();
+    fn a_known_command_is_a_token_unpicked() {
+        let commands = set(&["to-spec", "mattpocock-skills:grill-with-docs"]);
         let text = "for their venue /mattpocock-skills:grill-with-docs";
-        assert_eq!(pill_ranges(text, &[], &commands), [16..text.len()]);
-        assert_eq!(pill_ranges("/to-spec now", &[], &commands), [0..8]);
-        assert!(pill_ranges("/to-specs a/to-spec /to", &[], &commands).is_empty());
+        assert_eq!(ranges(tokens(text, &[], &commands, &none())), [16..text.len()]);
+        assert_eq!(ranges(tokens("/to-spec now", &[], &commands, &none())), [0..8]);
+        assert!(tokens("/to-specs a/to-spec /to", &[], &commands, &none()).is_empty());
         assert_eq!(
-            pill_ranges("/to-spec @a", &shared(&["@a"]), &commands),
+            ranges(tokens("/to-spec @a", &shared(&["@a"]), &commands, &none())),
             [0..8, 9..11]
         );
+    }
+
+    /// T3's grammar: `$name` is a skill, `/name` a command unless the name
+    /// is a skill, a picked `@path` a file.
+    #[test]
+    fn tokens_take_their_kind_from_their_sigil_and_the_catalogue() {
+        let commands = set(&["tdd", "compact"]);
+        let skills = set(&["tdd"]);
+        let kinds = |text: &str| -> Vec<TokenKind> {
+            tokens(text, &shared(&["@src/lib.rs"]), &commands, &skills)
+                .into_iter()
+                .map(|token| token.kind)
+                .collect()
+        };
+        assert_eq!(kinds("$tdd"), [TokenKind::Skill]);
+        assert_eq!(kinds("/tdd"), [TokenKind::Skill], "a skill typed the old way");
+        assert_eq!(kinds("/compact"), [TokenKind::Command]);
+        assert_eq!(kinds("@src/lib.rs"), [TokenKind::File]);
+        assert!(kinds("$nope").is_empty(), "an unknown name is prose");
+    }
+
+    /// The wire keeps the grammar both providers' sends read: `$tdd` goes
+    /// as `/tdd`; prose dollars stay.
+    #[test]
+    fn a_skill_goes_on_the_wire_as_slash_name() {
+        let commands = set(&["tdd"]);
+        let text = "costs $5, run $tdd now";
+        let found = tokens(text, &[], &commands, &none());
+        assert_eq!(wire_text(text, &found), "costs $5, run /tdd now");
     }
 
     fn shared(tokens: &[&str]) -> Vec<SharedString> {
@@ -2070,80 +2213,71 @@ mod tests {
             .collect()
     }
 
-    /// #23: a picked mention paints as a pill exactly while its token still
-    /// stands whole in the text — the same boundary rule the wire reads.
+    /// #23: a picked mention is a token exactly while it still stands whole
+    /// in the text — the same boundary rule the wire reads.
     #[test]
     #[allow(clippy::single_range_in_vec_init)] // assertions compare literal ranges
-    fn pill_ranges_cover_whole_tokens_only() {
+    fn tokens_cover_whole_words_only() {
         let mentions = shared(&["@docs/notes.txt"]);
-        assert_eq!(
-            pill_ranges("read @docs/notes.txt now", &mentions, &none()),
-            [5..20]
-        );
-        // Edited into a longer word, it is no longer the token.
-        assert!(pill_ranges("read @docs/notes.txtx", &mentions, &none()).is_empty());
-        assert!(pill_ranges("x@docs/notes.txt", &mentions, &none()).is_empty());
-        // At the very ends of the line it still counts.
-        assert_eq!(pill_ranges("@docs/notes.txt", &mentions, &none()), [0..15]);
-        // Gone from the text, gone from the paint.
-        assert!(pill_ranges("plain prose", &mentions, &none()).is_empty());
+        let found = |text: &str| ranges(tokens(text, &mentions, &none(), &none()));
+        assert_eq!(found("read @docs/notes.txt now"), [5..20]);
+        assert!(found("read @docs/notes.txtx").is_empty());
+        assert!(found("x@docs/notes.txt").is_empty());
+        assert_eq!(found("@docs/notes.txt"), [0..15]);
+        assert!(found("plain prose").is_empty());
     }
 
-    /// A picked `/` command chips by the same rule as a mention, beside
-    /// one: `/tdd` whole, never inside `/tdd-loop` or a path.
+    /// A picked `/` command is a token by the same rule as a mention,
+    /// beside one: `/tdd` whole, never inside `/tdd-loop` or a path.
     #[test]
-    fn a_picked_command_chips_as_a_mention_does() {
+    fn a_picked_command_is_a_token_as_a_mention_is() {
         let chips = shared(&["/tdd", "@src/lib.rs"]);
-        assert_eq!(
-            pill_ranges("/tdd fix @src/lib.rs", &chips, &none()),
-            [0..4, 9..20]
-        );
-        assert!(pill_ranges("/tdd-loop", &chips, &none()).is_empty());
-        assert!(pill_ranges("see a/tdd", &chips, &none()).is_empty());
+        let found = |text: &str| ranges(tokens(text, &chips, &none(), &none()));
+        assert_eq!(found("/tdd fix @src/lib.rs"), [0..4, 9..20]);
+        assert!(found("/tdd-loop").is_empty());
+        assert!(found("see a/tdd").is_empty());
     }
 
     #[test]
     #[allow(clippy::single_range_in_vec_init)]
-    fn overlapping_pill_candidates_keep_the_first() {
+    fn overlapping_token_candidates_keep_the_first() {
         let mentions = shared(&["@a", "@a"]);
-        assert_eq!(pill_ranges("@a", &mentions, &none()), [0..2]);
+        assert_eq!(ranges(tokens("@a", &mentions, &none(), &none())), [0..2]);
     }
 
-    /// The run splitter hands the shaper exactly the text's length, pill
-    /// styling only inside pill ranges, and the IME underline only inside
-    /// the marked range.
-    #[test]
-    #[allow(clippy::single_range_in_vec_init)]
-    fn runs_split_at_pill_and_marked_boundaries() {
-        let base = TextRun {
+    fn base() -> TextRun {
+        TextRun {
             len: 0,
             font: gpui::font(ferrite_ui::theme::FONT_CODE),
             color: gpui::white(),
             background_color: None,
             underline: None,
             strikethrough: None,
-        };
+        }
+    }
+
+    /// The run splitter hands the shaper exactly the text's length, token
+    /// styling only inside token ranges, and the IME underline only inside
+    /// the marked range. Tokens wear T3's accents at `W_LABEL` on no
+    /// ground: a skill magenta, a file blue.
+    #[test]
+    fn runs_split_at_token_and_marked_boundaries() {
         let text = "read @a now";
-        let runs = runs_for(&base, text.len(), Some(8..11), &[5..7], &[], None);
+        let runs = runs_for(&base(), text.len(), Some(8..11), &[(5..7, TokenKind::File)], None);
         let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
         assert_eq!(lens.iter().sum::<usize>(), text.len());
         assert_eq!(lens, [5, 2, 1, 3]);
-        // A picked mention is a path: the terminal's cyan, on no ground —
-        // never `INK_STRONG`, never a chip (theme WP-D).
-        assert_eq!(runs[1].color, rgb(ferrite_ui::theme::MENTION_INK).into());
-        assert_eq!(ferrite_ui::theme::MENTION_INK, ferrite_ui::theme::LINK_INK);
+        assert_eq!(runs[1].color, rgb(0x0090cd).into(), "oklch(0.62 0.136 237)");
+        assert_eq!(runs[1].font.weight, ferrite_ui::theme::W_LABEL);
         assert!(runs[1].background_color.is_none());
         assert!(runs[0].background_color.is_none());
         assert!(runs[3].underline.is_some(), "the mark wears the underline");
         assert!(runs[2].underline.is_none());
 
-        // An empty line still hands the shaper one (empty) run.
-        assert_eq!(runs_for(&base, 0, None, &[], &[], None).len(), 1);
+        assert_eq!(runs_for(&base(), 0, None, &[], None).len(), 1);
 
-        // A skill is `SKILL_INK` — Claude's own blue — never the mention's.
-        let runs = runs_for(&base, text.len(), None, &[5..7], &[5..7], None);
-        assert_eq!(runs[1].color, rgb(ferrite_ui::theme::SKILL_INK).into());
-        assert_ne!(ferrite_ui::theme::SKILL_INK, ferrite_ui::theme::MENTION_INK);
+        let runs = runs_for(&base(), text.len(), None, &[(5..7, TokenKind::Skill)], None);
+        assert_eq!(runs[1].color, rgb(0xb261be).into(), "oklch(0.62 0.16 322)");
     }
 
     /// The caret's hard blink: shown from its start for half the turn,
@@ -2164,14 +2298,10 @@ mod tests {
     #[test]
     fn selected_runs_take_the_strong_ink() {
         let base = TextRun {
-            len: 0,
-            font: gpui::font(ferrite_ui::theme::FONT_CODE),
             color: rgb(ferrite_ui::theme::INK_STRONG).into(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
+            ..base()
         };
-        let runs = runs_for(&base, 11, None, &[], &[], Some(5..7));
+        let runs = runs_for(&base, 11, None, &[], Some(5..7));
         let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
         assert_eq!(lens, [5, 2, 4]);
         assert_eq!(runs[1].color, rgb(ferrite_ui::theme::INK_STRONG).into());

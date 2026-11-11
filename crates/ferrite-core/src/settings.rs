@@ -135,6 +135,18 @@ pub struct Settings {
     /// github.com, gitlab.com and Azure DevOps (reviewr's `*_host` keys,
     /// ADR 0021). Default: none.
     pub forge_hosts: ForgeHosts,
+    /// The models the model picker's star marked, in the order they were
+    /// starred: its Favourites tab, and the first rows of their provider's
+    /// own tab. Default: none.
+    pub favourite_models: Vec<FavouriteModel>,
+}
+
+/// One starred model: its provider and the value the provider takes for it
+/// (`opus`, `gpt-5.6`), `default` for the provider's own default.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FavouriteModel {
+    pub provider: Provider,
+    pub model: String,
 }
 
 /// One self-hosted host per forge, each a bare hostname (`ghe.corp.example`)
@@ -256,6 +268,7 @@ impl Default for Settings {
             allowance_warnings: vec![80, 95],
             machines: Vec::new(),
             forge_hosts: ForgeHosts::default(),
+            favourite_models: Vec::new(),
         }
     }
 }
@@ -366,6 +379,25 @@ impl Settings {
         match provider {
             Provider::Claude => self.claude_effort = effort,
             Provider::Codex => self.codex_effort = effort,
+        }
+    }
+
+    pub fn is_favourite(&self, provider: Provider, model: &str) -> bool {
+        self.favourite_models
+            .iter()
+            .any(|favourite| favourite.provider == provider && favourite.model == model)
+    }
+
+    /// Star `model`, or take its star off.
+    pub fn toggle_favourite(&mut self, provider: Provider, model: &str) {
+        if self.is_favourite(provider, model) {
+            self.favourite_models
+                .retain(|favourite| !(favourite.provider == provider && favourite.model == model));
+        } else {
+            self.favourite_models.push(FavouriteModel {
+                provider,
+                model: model.to_string(),
+            });
         }
     }
 
@@ -481,6 +513,10 @@ mod tests {
                 gitlab: None,
                 azure_devops: None,
             },
+            favourite_models: vec![FavouriteModel {
+                provider: Provider::Codex,
+                model: "gpt-5.6".into(),
+            }],
         }
     }
 

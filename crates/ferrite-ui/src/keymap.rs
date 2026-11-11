@@ -435,6 +435,25 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // Composer's own arrows, so they win on the palette's line.
         ("left".into(), "palette::PreviousType", Some("Palette")),
         ("right".into(), "palette::NextType", Some("Palette")),
+        // The model picker's own keys on its search line, after the
+        // Composer's so they win there: ↑↓ walk the list or the Reasoning
+        // column, ⏎ picks in it, ← → cross between them, ⌘1–⌘9 pick the
+        // listed models (T3's `modelPicker.jump.N`), esc shuts it.
+        ("up".into(), "model_picker::Up", Some("ModelPicker")),
+        ("down".into(), "model_picker::Down", Some("ModelPicker")),
+        ("enter".into(), "model_picker::Confirm", Some("ModelPicker")),
+        ("escape".into(), "model_picker::Dismiss", Some("ModelPicker")),
+        ("left".into(), "model_picker::Left", Some("ModelPicker")),
+        ("right".into(), "model_picker::Right", Some("ModelPicker")),
+        (with_primary("1"), "model_picker::Jump1", Some("ModelPicker")),
+        (with_primary("2"), "model_picker::Jump2", Some("ModelPicker")),
+        (with_primary("3"), "model_picker::Jump3", Some("ModelPicker")),
+        (with_primary("4"), "model_picker::Jump4", Some("ModelPicker")),
+        (with_primary("5"), "model_picker::Jump5", Some("ModelPicker")),
+        (with_primary("6"), "model_picker::Jump6", Some("ModelPicker")),
+        (with_primary("7"), "model_picker::Jump7", Some("ModelPicker")),
+        (with_primary("8"), "model_picker::Jump8", Some("ModelPicker")),
+        (with_primary("9"), "model_picker::Jump9", Some("ModelPicker")),
         ("up".into(), "nav::SelectPrevious", Some("NavTree")),
         ("down".into(), "nav::SelectNext", Some("NavTree")),
         ("enter".into(), "nav::Open", Some("NavTree")),
@@ -1049,6 +1068,12 @@ mod tests {
                 ("end", "nav::SelectLast", "NavTree"),
                 ("menu", "nav::OpenMenu", "NavTree"),
                 ("shift-f10", "nav::OpenMenu", "NavTree"),
+                ("up", "model_picker::Up", "ModelPicker"),
+                ("down", "model_picker::Down", "ModelPicker"),
+                ("enter", "model_picker::Confirm", "ModelPicker"),
+                ("escape", "model_picker::Dismiss", "ModelPicker"),
+                ("left", "model_picker::Left", "ModelPicker"),
+                ("right", "model_picker::Right", "ModelPicker"),
                 ("up", "shortcuts::ScrollUp", "Shortcuts"),
                 ("down", "shortcuts::ScrollDown", "Shortcuts"),
                 ("escape", "shortcuts::Dismiss", "Shortcuts"),

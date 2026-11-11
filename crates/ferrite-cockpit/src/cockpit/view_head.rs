@@ -8,9 +8,10 @@
 //! wanted where there is nothing else to do. Where they reach over the
 //! board (folded), the head starts clear of them (`view_head_pad_l`).
 //!
-//! Solo names the focused Thread — its title (a double-click renames it),
+//! Solo names the focused Thread with T3's breadcrumb (`solo_head`): its
+//! Project, a side chat's parent, then its title (a double-click renames it),
 //! taking the row's free width, and its ▾ (the Thread's menu, as Claude's
-//! title carries one); the Project is the nav's and the branch the panel's,
+//! title carries one, shown under the pointer); the branch is the panel's,
 //! so while the panel is hidden the branch follows the ▾ in the quiet ink
 //! (`head_branch`). A Group names itself — its title, `<project> · N
 //! threads`, and `New thread`. There is no layout switch and no PR button.
@@ -46,8 +47,21 @@ impl CockpitView {
         // The head runs to the column's edge (or the window's), clear of
         // the tools that stand against it.
         let right = self.view_head_end();
+        let menu_thread = matches!(self.cockpit.roster().view(), View::Solo)
+            .then(|| self.focused_thread())
+            .flatten()
+            .filter(|_| !self.empty_board_shown());
         div()
             .debug_selector(|| "view-head".into())
+            .when_some(menu_thread, |head, thread| {
+                head.on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
+                    }),
+                )
+            })
             .absolute()
             .top_0()
             .left(px(self.board_left()))
@@ -196,20 +210,102 @@ impl CockpitView {
         )
     }
 
-    /// Solo: the focused Thread's title and its ▾, as Claude's, then the
-    /// branch while the panel that says it is hidden, then a spacer. The
-    /// Project is the nav's.
+    /// Solo: T3's breadcrumb, `/` between its items — the Project (its
+    /// badge and name, a click starts a new Thread in it), a side chat's
+    /// parent Thread, then the Thread's title with its chevron — then
+    /// where a machine runs it (`From` the machine), the branch while the
+    /// panel that says it is hidden, and a spacer.
     fn solo_head(&self, cx: &mut Context<Self>) -> Option<Vec<AnyElement>> {
         let thread = self.focused_thread()?;
+        let mut crumbs = Vec::new();
+        if let Some(project) = self.head_project(thread, cx) {
+            crumbs.extend([project, separator()]);
+        }
+        if let Some(parent) = self.side_chats.owner_of(thread) {
+            crumbs.extend([self.head_parent(parent, cx), separator()]);
+        }
+        crumbs.push(self.view_title(thread, cx));
+        let mut parts = vec![div()
+            .debug_selector(|| "view-breadcrumb".into())
+            .flex()
+            .flex_shrink(1.)
+            .min_w_0()
+            .items_center()
+            .gap(px(theme::HEAD_CRUMB_GAP))
+            .children(crumbs)
+            .into_any_element()];
+        if let Some(machine) = self.cockpit.machine() {
+            parts.push(environment_badge(machine.name()));
+        }
         let branch = self
             .panel_pane()
             .is_none()
             .then(|| self.head_branch(thread))
             .flatten();
-        let mut parts = vec![self.view_title(thread, cx), title_menu(thread, cx)];
         parts.extend(branch);
         parts.push(div().flex_1().into_any_element());
         Some(parts)
+    }
+
+    /// The breadcrumb's Project: its badge at `HEAD_BADGE` then its name,
+    /// at most `HEAD_PROJECT_MAX_W`, in `INK_SUBTLE` lifting to
+    /// `INK_STRONG` under the pointer. A click starts a new Thread there.
+    fn head_project(&self, thread: ThreadId, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let facts = self.facts.get(thread)?;
+        let (project, name) = (facts.project?, facts.project_label.clone()?);
+        let badge = ferrite_ui::project_badge::project_badge(&name)
+            .size(px(theme::HEAD_BADGE))
+            .rounded(px(theme::HEAD_BADGE / 4.0));
+        Some(
+            div()
+                .id(("view-head-project", thread.get() as usize))
+                .debug_selector(|| "view-head-project".into())
+                .occlude()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(px(theme::HEAD_BADGE_GAP))
+                .max_w(px(theme::HEAD_PROJECT_MAX_W))
+                .cursor_pointer()
+                .text_size(px(theme::FS_TITLE))
+                .font_weight(theme::W_LABEL)
+                .text_color(rgb(theme::INK_SUBTLE))
+                .hover(|style| style.text_color(rgb(theme::INK_STRONG)))
+                .child(badge)
+                .child(div().min_w_0().truncate().child(name.clone()))
+                .tooltip(ferrite_ui::menu::tooltip(format!("New thread in {name}")))
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.open_draft_in_project(project, cx);
+                }))
+                .into_any_element(),
+        )
+    }
+
+    /// A side chat's parent Thread, muted: a click opens it. It gives way
+    /// first when the row is narrow, down to its ellipsis; its tooltip
+    /// keeps the whole title.
+    fn head_parent(&self, parent: ThreadId, cx: &mut Context<Self>) -> AnyElement {
+        let title = self.facts.name(parent).clone();
+        div()
+            .id(("view-head-parent", parent.get() as usize))
+            .debug_selector(|| "view-head-parent".into())
+            .occlude()
+            .flex_shrink(1.)
+            .min_w(px(theme::HEAD_PARENT_MIN_W))
+            .truncate()
+            .cursor_pointer()
+            .text_size(px(theme::FS_TITLE))
+            .font_weight(theme::W_LABEL)
+            .text_color(rgb(theme::INK_SUBTLE))
+            .hover(|style| style.text_color(rgb(theme::INK_STRONG)))
+            .child(title.clone())
+            .tooltip(ferrite_ui::menu::tooltip(title))
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.focus_thread(parent, cx);
+            }))
+            .into_any_element()
     }
 
     /// The Thread's branch in the quiet ink, for a head whose panel is
@@ -229,8 +325,10 @@ impl CockpitView {
         )
     }
 
-    /// The Thread's title at the view's weight: double-click renames it,
-    /// in place, as a Pane head's title does (`pane_title`).
+    /// The Thread's title at the view's weight, the breadcrumb's current
+    /// item, at least `VIEW_TITLE_MIN_W`, its chevron shown only under the
+    /// pointer (T3's). A click opens the Thread's menu; a double-click
+    /// renames it in place, as a Pane head's title does (`pane_title`).
     fn view_title(&self, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
         if let Some((RenameTarget::ViewTitle(editing), editor)) = &self.rename {
             if *editing == thread {
@@ -243,26 +341,49 @@ impl CockpitView {
                     .into_any_element();
             }
         }
-        div()
+        let name = self.facts.name(thread).clone();
+        let hover = SharedString::from(format!("view-title-hover-{}", thread.get()));
+        let shown = ferrite_ui::motion::hover_t(&hover) > 0.0;
+        let title = div()
             .id(("view-title", thread.get() as usize))
             .debug_selector(|| "view-title".into())
-            .occlude()
-            .min_w_0()
+            .min_w(px(theme::VIEW_TITLE_MIN_W))
             .truncate()
             .text_size(px(theme::FS_TITLE))
             .font_weight(theme::W_LABEL)
             .text_color(rgb(theme::INK_STRONG))
-            .child(self.facts.name(thread).clone())
-            .tooltip(ferrite_ui::menu::tooltip("Rename \u{b7} double-click"))
+            .child(name.clone())
+            .tooltip(ferrite_ui::menu::tooltip(name))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
                     if event.click_count >= 2 {
+                        view.context_menu = None;
                         view.start_rename(RenameTarget::ViewTitle(thread), cx);
+                    } else {
+                        view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
                     }
                 }),
+            );
+        div()
+            .id(("view-title-item", thread.get() as usize))
+            .occlude()
+            .flex()
+            .flex_shrink(1.)
+            .min_w_0()
+            .items_center()
+            .gap(px(theme::HEAD_CHEVRON_GAP))
+            .on_hover(ferrite_ui::motion::hover_snap(hover))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
+                }),
             )
+            .child(title)
+            .child(title_menu(thread, shown, cx))
             .into_any_element()
     }
 
@@ -358,18 +479,28 @@ fn history_arrow(
     door.tooltip(ferrite_ui::menu::action_tooltip(label, action))
 }
 
-/// The title's ▾ (Claude's): the Thread's menu (`MenuTarget::Thread`:
-/// rename, park, copy its path…) from the head, where the pointer is.
-fn title_menu(thread: ThreadId, cx: &mut Context<CockpitView>) -> AnyElement {
+/// The title's chevron (T3's, `CHEVRON_DOWN` at 14 in `INK_SUBTLE`):
+/// the Thread's menu (`MenuTarget::Thread`: rename, park, copy its
+/// path…) from the head, where the pointer is. It keeps its place, seen
+/// only while the title is under the pointer (`shown`).
+fn title_menu(thread: ThreadId, shown: bool, cx: &mut Context<CockpitView>) -> AnyElement {
     control(
         crate::nav::icon_button(
             "view-title-menu",
             icons::CHEVRON_DOWN,
-            theme::NAV_HEADING_GLYPH,
+            theme::HEAD_CHEVRON,
             theme::NAV_HEADING_BUTTON,
             theme::R_CONTROL,
         )
-        .debug_selector(|| "view-title-menu".into())
+        .debug_selector(move || {
+            if shown {
+                "view-title-chevron-shown"
+            } else {
+                "view-title-menu"
+            }
+            .into()
+        })
+        .opacity(if shown { 1.0 } else { 0.0 })
         .tooltip(ferrite_ui::menu::tooltip("Thread actions"))
         .on_mouse_down(
             MouseButton::Left,
@@ -379,6 +510,32 @@ fn title_menu(thread: ThreadId, cx: &mut Context<CockpitView>) -> AnyElement {
             }),
         ),
     )
+}
+
+/// The breadcrumb's `/`, in the muted icon ink.
+fn separator() -> AnyElement {
+    div()
+        .debug_selector(|| "view-head-separator".into())
+        .flex_shrink_0()
+        .text_size(px(theme::FS_TITLE))
+        .text_color(rgb(theme::INK_SUBTLE))
+        .child("/")
+        .into_any_element()
+}
+
+/// T3's environment badge after the title: `From` the machine while the
+/// window runs a machine's Threads.
+fn environment_badge(machine: &str) -> AnyElement {
+    div()
+        .debug_selector(|| "view-head-environment".into())
+        .flex_shrink_0()
+        .px(px(theme::SPACE_1_5))
+        .rounded(px(theme::R_CONTROL))
+        .bg(rgba(theme::HEAD_ENV_GROUND))
+        .text_size(px(theme::FS_META))
+        .text_color(rgb(theme::BLUE))
+        .child(SharedString::from(format!("From {machine}")))
+        .into_any_element()
 }
 
 /// The head's second word, `INK_SUBTLE`: where the Thread works, or a

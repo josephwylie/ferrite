@@ -1235,12 +1235,12 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     assert_eq!(
         rows(cx),
         [
-            named("trunk", "checked out"),
-            named("feature/wt", "worktree · wt-feature"),
+            named("Current checkout", "trunk"),
+            named("Previous worktree (feature/wt)", "wt-feature"),
             named("main", "existing branch"),
             named("topic/spare", "existing branch"),
             named("New branch", "in the project checkout"),
-            named("New branch + worktree", "in an isolated checkout"),
+            named("New worktree", "in an isolated checkout"),
         ],
         "git on the machine lists the repo, its own worktrees and branches"
     );
