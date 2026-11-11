@@ -285,8 +285,8 @@ impl Workflow {
 }
 
 /// What a new Workflow starts from: `blank`, one Step to fill in, or
-/// `issue_to_reviewed_pr`, Triager, Explorer, Implementer and Reviewer as
-/// an example to edit.
+/// `issue_to_reviewed_pr`, Triager, Explorer, Implementer, Reviewer, a
+/// Merge agent and a Conflict resolver as an example to edit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Template {
@@ -368,13 +368,36 @@ pub(super) fn from_template(template: Template, workflow: &mut Workflow, agent: 
             review.on_finished = Destination::Approval;
             review.on_unable = Destination::Step(implement.id.clone());
             review.fresh = true;
+            let mut merge = step(
+                "Merge agent",
+                "Read the PR reference, its current head, the approval and the feedback in the \
+                 task context. Use your configured GitHub tools to check the PR and merge it when \
+                 eligible. Confirm it actually merged before reporting success. Report conflicts, \
+                 pending checks, missing access, new commits since approval or an unconfirmed \
+                 result as that outcome.",
+                &[],
+            );
+            let mut resolve = step(
+                "Conflict resolver",
+                "Resolve only the reported merge conflicts, keep the approved behaviour, push the \
+                 result and hand the changed PR back for review.",
+                &["implement"],
+            );
+            merge.on_finished = Destination::Complete;
+            merge.on_unable = Destination::Human;
+            merge.outcome_routes = Some(MergeRoutes {
+                conflict: Destination::Step(resolve.id.clone()),
+                ..MergeRoutes::default()
+            });
+            resolve.on_finished = Destination::Step(review.id.clone());
             Definition {
                 name: "Issue to reviewed PR".into(),
                 approval: Approval {
+                    after: Destination::Step(merge.id.clone()),
                     rework_to: Destination::Step(implement.id.clone()),
                     ..Approval::default()
                 },
-                steps: vec![triage, explore, implement, review],
+                steps: vec![triage, explore, implement, review, merge, resolve],
             }
         }
     };

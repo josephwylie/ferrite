@@ -33,7 +33,7 @@ mod direct;
 mod pr;
 mod workflow;
 
-pub use pr::{short, Delivery, MergeOutcome, MergeRoutes, Evidence, EvidenceKind, PullRequest, Revision};
+pub use pr::{evidence_line, short, Delivery, MergeOutcome, MergeRoutes, Evidence, EvidenceKind, PullRequest, Revision};
 pub use direct::{Answered, Feedback, FeedbackKind, Override, Oversight, Question, ThenReturn};
 pub use workflow::{
     Approval, ApprovalChange, Approver, Catalog, Definition, Destination, Problem, Resolved,

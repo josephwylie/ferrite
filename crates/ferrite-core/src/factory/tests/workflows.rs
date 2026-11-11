@@ -222,7 +222,14 @@ fn workflows_are_made_blank_or_from_the_template_renamed_and_several_per_project
     assert_eq!(names(&factory, &blank), ["Agent"]);
     assert_eq!(
         names(&factory, &example),
-        ["Triager", "Explorer", "Implementer", "Reviewer"]
+        [
+            "Triager",
+            "Explorer",
+            "Implementer",
+            "Reviewer",
+            "Merge agent",
+            "Conflict resolver"
+        ]
     );
     assert_eq!(
         workflow(&factory, &example).draft.name,
