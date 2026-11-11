@@ -324,7 +324,11 @@ pub fn parse(op: &Operation, args: &[&str], context: &Context) -> Result<Request
         params.insert("path".into(), json!(here.join(path)));
     }
     let mut request = json!({ "id": "1", "method": op.name, "params": params });
-    if let Some(thread) = context.thread.as_deref().and_then(|t| t.parse::<u64>().ok()) {
+    if let Some(thread) = context
+        .thread
+        .as_deref()
+        .and_then(|t| t.parse::<u64>().ok())
+    {
         request["caller"] = json!(thread);
     }
     serde_json::from_value(request).map_err(|error| error.to_string())
