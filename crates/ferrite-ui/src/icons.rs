@@ -145,6 +145,14 @@ icons![
     "pin",
     "clock",
     // (end UI refresh)
+    // The nav's Thread card (T3 Code's): its status words' glyphs, the PR
+    // chip's draft, the worktree on its checkout line, a pin's undo.
+    "shield-question",
+    "message-circle-question",
+    "circle-alert",
+    "git-pull-request-draft",
+    "folder-git-2",
+    "pin-off",
 ];
 
 pub const SIDEBAR: &str = "icons/sidebar.svg";
@@ -307,6 +315,17 @@ pub const CODE: &str = "icons/code.svg";
 pub const PIN: &str = "icons/pin.svg";
 pub const CLOCK: &str = "icons/clock.svg";
 // (end UI refresh)
+/// A Thread card's status (`nav::card`): an approval or plan waits, a
+/// question waits, a run failed or its tests fail.
+pub const SHIELD_QUESTION: &str = "icons/shield-question.svg";
+pub const MESSAGE_CIRCLE_QUESTION: &str = "icons/message-circle-question.svg";
+pub const CIRCLE_ALERT: &str = "icons/circle-alert.svg";
+/// A draft PR on a Thread card's chip.
+pub const GIT_PULL_REQUEST_DRAFT: &str = "icons/git-pull-request-draft.svg";
+/// A Thread working in a worktree, on its card's checkout line.
+pub const FOLDER_GIT: &str = "icons/folder-git-2.svg";
+/// A pinned card's pin under the pointer: the press unpins.
+pub const PIN_OFF: &str = "icons/pin-off.svg";
 
 pub struct Assets;
 
