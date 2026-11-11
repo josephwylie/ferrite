@@ -21,7 +21,7 @@ use super::*;
 #[derive(Default)]
 pub(crate) struct Tools {
     files: HashMap<ThreadId, files::Files>,
-    changes: HashMap<ThreadId, changes::Changes>,
+    changes: HashMap<changes::Diff, changes::Changes>,
     terminals: HashMap<ThreadId, terminal::Terminals>,
     terminal_prefs: terminal::Prefs,
     /// The shown shell is to take the keyboard (`tend_terminal`).
@@ -34,7 +34,7 @@ gpui::actions!(cockpit, [ToggleTerminal, ToggleChanges, ToggleFiles, ToggleFileT
 
 #[cfg(test)]
 pub(crate) use editor::AUTO_SAVE_AFTER;
-pub(crate) use changes::{Sub as ChangesSub, Verb as ChangesVerb};
+pub(crate) use changes::{Diff, Sub as ChangesSub, Verb as ChangesVerb};
 pub(crate) use files::{Sub as FilesSub, Verb as FilesVerb};
 pub(crate) use terminal::{Sub as TerminalSub, Verb as TerminalVerb};
 

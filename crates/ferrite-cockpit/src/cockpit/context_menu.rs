@@ -38,10 +38,10 @@ pub(super) enum MenuTarget {
     /// The Files pane's `⋯`.
     FilesMore(ThreadId),
     /// The Changes scope dropdown, and its `⋯`.
-    ChangesScope(ThreadId),
-    ChangesMore(ThreadId),
+    ChangesScope(tools::Diff),
+    ChangesMore(tools::Diff),
     /// The Changes toolbar's base: the branches to compare against.
-    ChangesBase(ThreadId),
+    ChangesBase(tools::Diff),
     /// The terminal's right-click, and its `⋯`.
     Terminal(ThreadId),
     TerminalMore(ThreadId),
@@ -330,10 +330,10 @@ impl CockpitView {
             }
             MenuTarget::File(_) => rows = self.files_row_rows(),
             MenuTarget::FilesMore(thread) => rows = self.files_more_rows(thread),
-            MenuTarget::ChangesScope(thread) => rows = self.changes_scope_rows(thread),
-            MenuTarget::ChangesMore(thread) => rows = self.changes_more_rows(thread),
-            MenuTarget::ChangesBase(thread) => {
-                rows = self.changes_branch_rows(thread).into_iter().map(Some).collect()
+            MenuTarget::ChangesScope(diff) => rows = self.changes_scope_rows(diff),
+            MenuTarget::ChangesMore(diff) => rows = self.changes_more_rows(diff),
+            MenuTarget::ChangesBase(diff) => {
+                rows = self.changes_branch_rows(diff).into_iter().map(Some).collect()
             }
             MenuTarget::Terminal(_) => rows = self.terminal_context_rows(),
             MenuTarget::TerminalMore(_) => rows = self.terminal_more_rows(),
@@ -491,8 +491,8 @@ impl CockpitView {
                 self.files_sub_rows(thread, sub)
             }
             (Submenu::Files(_), _) => Vec::new(),
-            (Submenu::Changes(_), MenuTarget::ChangesScope(thread)) => {
-                self.changes_branch_rows(thread)
+            (Submenu::Changes(_), MenuTarget::ChangesScope(diff)) => {
+                self.changes_branch_rows(diff)
             }
             (Submenu::Changes(_), _) => Vec::new(),
             (Submenu::Terminal(sub), _) => self.terminal_sub_rows(sub),
@@ -686,11 +686,11 @@ impl CockpitView {
                 self.run_files_verb(thread, verb, cx)
             }
             (
-                MenuTarget::ChangesScope(thread)
-                | MenuTarget::ChangesMore(thread)
-                | MenuTarget::ChangesBase(thread),
+                MenuTarget::ChangesScope(diff)
+                | MenuTarget::ChangesMore(diff)
+                | MenuTarget::ChangesBase(diff),
                 MenuVerb::Changes(verb),
-            ) => self.run_changes_verb(thread, verb, cx),
+            ) => self.run_changes_verb(diff, verb, cx),
             (
                 MenuTarget::Terminal(thread) | MenuTarget::TerminalMore(thread),
                 MenuVerb::Terminal(verb),
