@@ -649,14 +649,14 @@ fn subagents(fake: &Fake, stream: usize, count: usize) {
     }
 }
 
-/// A card's title takes its whole line. At the nav's own width, a member
+/// A card's title takes its whole line. At the nav's own width, a Thread
 /// of the shown Group on a long worktree branch that runs five subagents
 /// is a 78px card: its title pinned to the card's text width, its branch
 /// cut in its middle on line 3 inside the card, so a long branch can
 /// never squeeze the title. The subagent count is never on the card.
 #[gpui::test]
 fn a_card_title_takes_its_line_and_the_branch_its_own(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{NAV_CARD_H, NAV_ROW_PAD_X, NAV_TREE_INDENT};
+    use ferrite_ui::theme::{NAV_CARD_H, NAV_ROW_PAD_X};
     let (view, fake, cx, _group) = board("nav-title-first", 2, cx);
     subagents(&fake, 0, 5);
     subagents(&fake, 1, 5);
@@ -703,17 +703,17 @@ fn a_card_title_takes_its_line_and_the_branch_its_own(cx: &mut TestAppContext) {
         let title = bounds(cx, format!("nav-title-{id}"));
         let card = bounds(cx, format!("nav-thread-{id}"));
         assert_eq!(card.size.height, px(NAV_CARD_H), "three lines");
-        // The shown Group starts on its Project's label, its members a
-        // step further; a member's title takes the rest of the line.
-        let member_x = NAV_ROW_PAD_X + NAV_TREE_INDENT;
-        let expected = card.size.width - px(member_x + NAV_ROW_PAD_X);
+        // One flat list (ADR 0040): every card's title starts at its pad
+        // and takes the rest of the line.
+        let pad = NAV_ROW_PAD_X;
+        let expected = card.size.width - px(2.0 * pad);
         assert!(
             (title.size.width - expected).abs() < px(0.5),
             "the title takes its line: {title:?}, {expected:?}"
         );
         assert!(
-            (title.left() - (card.left() + px(member_x))).abs() < px(0.5),
-            "the title starts at the member's edge"
+            (title.left() - (card.left() + px(pad))).abs() < px(0.5),
+            "the title starts at the card's pad"
         );
         let branch = bounds(cx, format!("nav-card-branch-{id}"));
         assert!(

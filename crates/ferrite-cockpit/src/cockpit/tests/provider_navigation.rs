@@ -180,7 +180,7 @@ fn a_folded_nav_keeps_its_toggle_at_the_rails_top(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);
 
-    let first = view.read_with(cx, |view, _| view.nav_state().ordered_rows()[0].thread);
+    let first = view.read_with(cx, |view, _| view.nav_state().open_rows().next().unwrap().thread);
     let row: &'static str = format!("nav-thread-{}", first.get()).leak();
     assert!(
         cx.debug_bounds(row).is_none(),

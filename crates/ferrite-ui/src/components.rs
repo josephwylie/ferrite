@@ -347,9 +347,14 @@ pub fn elevation(rung: Elevation) -> Vec<BoxShadow> {
 /// answers no pointer; the caller lays it absolute over the scroller's
 /// edge.
 pub fn edge_fade(fill: Hsla, rising: bool) -> Div {
+    edge_fade_over(fill, rising, theme::EDGE_FADE)
+}
+
+/// `edge_fade` over `height` (the nav's is `NAV_EDGE_FADE`).
+pub fn edge_fade_over(fill: Hsla, rising: bool, height: f32) -> Div {
     let at = |a: f32| Hsla { a, ..fill };
     let angle = if rising { 0. } else { 180. };
-    let quarter = (theme::EDGE_FADE / 4.).round();
+    let quarter = (height / 4.).round();
     let hold = div().w_full().h(px(2. * quarter)).bg(fill);
     let knee = div().w_full().h(px(quarter)).bg(gpui::linear_gradient(
         angle,
@@ -361,7 +366,7 @@ pub fn edge_fade(fill: Hsla, rising: bool) -> Div {
         gpui::linear_color_stop(at(theme::EDGE_FADE_KNEE), 0.),
         gpui::linear_color_stop(at(0.), 1.),
     ));
-    let fade = div().flex().flex_col().w_full().h(px(theme::EDGE_FADE));
+    let fade = div().flex().flex_col().w_full().h(px(height));
     if rising {
         fade.child(ease).child(knee).child(hold)
     } else {

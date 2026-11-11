@@ -26,7 +26,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject};
 use ferrite_core::cockpit::Cockpit;
 use ferrite_core::store::{Provider, Store};
-use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::workspace::{BranchStatus, WorkspaceChoice};
 use ferrite_core::{Hunk, RunState, SessionEvent, ThreadId, ToolResult, TurnOutcome};
 use ferrite_reviewr::forge::{
@@ -112,9 +111,6 @@ pub(crate) struct World {
     /// launched.
     pub launch: PathBuf,
     pub cast: Cast,
-    /// The Projects the mockups draw folded: workmate (`workmate 1`) and
-    /// tempo (its heading alone).
-    pub folded: Vec<ProjectId>,
     /// What each open Thread's checkout says (branch, upstream drift,
     /// dirt): what git reads there, for a scene to seed the nav with
     /// before its own reads land.
@@ -381,21 +377,12 @@ pub(crate) fn build(root: &Path, look: Look, pr: Pr, clock: Clock) -> World {
     branches.extend([chess, supplier, calls, epicurean, bb].map(|t| (t, agenticos.clone())));
     branches.extend([customers, business, redesign].map(|t| (t, invoicemate.clone())));
 
-    let folded = core
-        .registry()
-        .projects()
-        .iter()
-        .filter(|project| ["workmate", "tempo"].contains(&project.title.as_str()))
-        .map(|project| project.id)
-        .collect();
-
     World {
         core,
         sessions,
         home,
         launch,
         cast,
-        folded,
         branches,
     }
 }

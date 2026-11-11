@@ -455,8 +455,8 @@ fn a_machine_without_ferrited_says_so_and_takes_no_input(cx: &mut TestAppContext
         "the board"
     );
     assert!(
-        debug_bounds(cx, "machine-lost-tree".into()).is_some(),
-        "its tree in the nav"
+        debug_bounds(cx, "machine-lost-list".into()).is_some(),
+        "its list in the nav"
     );
     cx.update(|window, cx| {
         assert!(
@@ -574,8 +574,8 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
     );
 
     let door = cx
-        .debug_bounds("nav-view-parked")
-        .expect("the Parked view's row");
+        .debug_bounds("nav-shelf-parked")
+        .expect("the Parked shelf's header");
     cx.simulate_click(door.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     let row_id: &'static str = format!("nav-thread-{}", named.get()).leak();
@@ -943,7 +943,7 @@ fn a_system_notification_outlives_a_move(cx: &mut TestAppContext) {
         assert_eq!(
             view.landing.as_ref().map(|(landing, _)| match landing {
                 Landing::Alert(Alert { away, thread, .. })
-                | Landing::Inbox(Alert { away, thread, .. }) => (away.clone(), *thread),
+=> (away.clone(), *thread),
             }),
             Some((None, here)),
             "on its Thread once it answers"
