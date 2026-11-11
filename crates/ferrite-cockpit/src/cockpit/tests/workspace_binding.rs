@@ -878,3 +878,44 @@ fn a_turn_end_rereads_the_checkout_off_the_ui_thread(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(branch(&view, cx).as_deref(), Some("agent-moved"));
 }
+
+/// T3 widens the workspace menu to `min(336, window − 32)` once it offers
+/// a previous worktree: 336 in a roomy window, the window less its margins
+/// in a narrow one.
+#[gpui::test]
+fn the_workspace_menu_with_a_previous_worktree_is_336_or_the_window_less_32(cx: &mut TestAppContext) {
+    use ferrite_ui::theme::{MENU_WINDOW_MARGIN, WORKSPACE_MENU_W};
+    let base = scratch("workspace-width");
+    let repo = repo_with_worktree_and_branches(&base);
+    let store = Store::open(base.join("threads")).unwrap();
+    let core = Cockpit::new(store, Box::new(Fake::default()));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    view.update(cx, |view, _| view.aim_launch(&repo));
+    view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
+    // The menu, opened from its chip in a window `window` wide.
+    let menu_w = |window: f32, cx: &mut gpui::VisualTestContext| {
+        cx.simulate_resize(gpui::size(px(window), px(800.)));
+        tick(cx);
+        let chip = cx.debug_bounds("band-chip-1").expect("the Workspace chip");
+        cx.simulate_mouse_down(chip.center(), gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_up(chip.center(), gpui::MouseButton::Left, gpui::Modifiers::none());
+        for _ in 0..3 {
+            cx.executor().advance_clock(std::time::Duration::from_millis(300));
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+        }
+        view.read_with(cx, |view, _| {
+            let open = view.popover.as_ref().expect("the workspace popover");
+            assert!(matches!(open.kind, Kind::Band(pane::BandChip::Workspace)));
+            assert!(open.rows.iter().any(|row| row.name.starts_with("Previous worktree")));
+        });
+        let width = cx.debug_bounds("composer-menu").expect("the workspace menu").size.width;
+        view.update(cx, |view, cx| {
+            view.popover = None;
+            cx.notify();
+        });
+        f32::from(width)
+    };
+    assert_eq!(menu_w(1400., cx), WORKSPACE_MENU_W);
+    assert_eq!(menu_w(360., cx), 360. - 2. * MENU_WINDOW_MARGIN);
+}

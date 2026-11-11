@@ -221,7 +221,8 @@ impl CockpitView {
         if let Some(project) = self.head_project(thread, cx) {
             crumbs.extend([project, separator()]);
         }
-        if let Some(parent) = self.side_chats.owner_of(thread) {
+        let parent = self.side_chats.owner_of(thread);
+        if let Some(parent) = parent {
             crumbs.extend([self.head_parent(parent, cx), separator()]);
         }
         crumbs.push(self.view_title(thread, cx));
@@ -243,7 +244,11 @@ impl CockpitView {
             .then(|| self.head_branch(thread))
             .flatten();
         parts.extend(branch);
-        parts.push(div().flex_1().into_any_element());
+        let spare = div().flex_1().h_full();
+        parts.push(match parent {
+            Some(parent) => spare.child(self.parent_room_probe(parent, cx)).into_any_element(),
+            None => spare.into_any_element(),
+        });
         Some(parts)
     }
 
@@ -282,30 +287,81 @@ impl CockpitView {
         )
     }
 
-    /// A side chat's parent Thread, muted: a click opens it. It gives way
-    /// first when the row is narrow, down to its ellipsis; its tooltip
-    /// keeps the whole title.
+    /// A side chat's parent Thread, muted: a click opens it. While the row
+    /// overflows it collapses to a literal `...` (T3's), its room measured
+    /// as the row's width changes (`ParentRoom`); its tooltip keeps the
+    /// whole title.
     fn head_parent(&self, parent: ThreadId, cx: &mut Context<Self>) -> AnyElement {
         let title = self.facts.name(parent).clone();
+        let mut room = self.head_parent_room.get();
+        room.collapsed = room.collapses(self.parent_title_w(parent, cx));
+        self.head_parent_room.set(room);
+        let shown = if room.collapsed {
+            div()
+                .debug_selector(|| "view-head-parent-collapsed".into())
+                .child("...")
+        } else {
+            div().min_w_0().truncate().child(title.clone())
+        };
+        let probe = self.head_parent_room.clone();
         div()
             .id(("view-head-parent", parent.get() as usize))
             .debug_selector(|| "view-head-parent".into())
+            .relative()
             .occlude()
+            .flex()
             .flex_shrink(1.)
-            .min_w(px(theme::HEAD_PARENT_MIN_W))
-            .truncate()
+            .min_w_0()
             .cursor_pointer()
             .text_size(px(theme::FS_TITLE))
             .font_weight(theme::W_LABEL)
             .text_color(rgb(theme::INK_SUBTLE))
             .hover(|style| style.text_color(rgb(theme::INK_STRONG)))
-            .child(title.clone())
+            .aria_label(format!("Open parent thread: {title}"))
+            .child(shown)
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| {
+                        let mut room = probe.get();
+                        room.parent = f32::from(bounds.size.width);
+                        probe.set(room);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .tooltip(ferrite_ui::menu::tooltip(title))
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 view.focus_thread(parent, cx);
             }))
             .into_any_element()
+    }
+
+    /// The parent's title drawn whole, as wide as the head would draw it.
+    fn parent_title_w(&self, parent: ThreadId, cx: &gpui::App) -> f32 {
+        crate::nav::Measure::Text(cx).ui(self.facts.name(parent).as_ref(), theme::FS_TITLE, theme::W_LABEL)
+    }
+
+    /// The head's spare width after the breadcrumb, laid out: once it says
+    /// the parent should show otherwise than it does, the frame is drawn
+    /// again.
+    fn parent_room_probe(&self, parent: ThreadId, cx: &gpui::App) -> impl IntoElement {
+        let need = self.parent_title_w(parent, cx);
+        let probe = self.head_parent_room.clone();
+        gpui::canvas(
+            move |bounds, window, _| {
+                let mut room = probe.get();
+                room.spare = Some(f32::from(bounds.size.width));
+                probe.set(room);
+                if room.collapses(need) != room.collapsed {
+                    window.refresh();
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .size_full()
     }
 
     /// The Thread's branch in the quiet ink, for a head whose panel is
@@ -512,6 +568,34 @@ fn title_menu(thread: ThreadId, shown: bool, cx: &mut Context<CockpitView>) -> A
     )
 }
 
+/// The breadcrumb parent's room as the last frame laid it out.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ParentRoom {
+    /// The parent's width, and the head's spare width after the row (none
+    /// before the row is first laid out).
+    parent: f32,
+    spare: Option<f32>,
+    /// The parent shows as `...`.
+    collapsed: bool,
+}
+
+impl ParentRoom {
+    /// Whether a parent whose whole title is `need` wide shows as `...`:
+    /// once the row has no spare width (it overflows), and until the spare
+    /// width would hold the whole title with `HEAD_PARENT_ROOM_SLACK` to
+    /// spare, so a measure a hair off never sets it flickering.
+    fn collapses(self, need: f32) -> bool {
+        let Some(spare) = self.spare else {
+            return false;
+        };
+        if self.collapsed {
+            self.parent + spare < need + theme::HEAD_PARENT_ROOM_SLACK
+        } else {
+            spare <= 0.
+        }
+    }
+}
+
 /// The breadcrumb's `/`, in the muted icon ink.
 fn separator() -> AnyElement {
     div()
@@ -556,5 +640,32 @@ fn control(button: impl IntoElement) -> AnyElement {
         .occlude()
         .child(button)
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ParentRoom;
+    use ferrite_ui::theme::HEAD_PARENT_ROOM_SLACK;
+
+    /// T3's breadcrumb parent: whole while the row has room, a literal
+    /// `...` once it overflows, whole again only when the row would hold
+    /// the whole title (and its slack), so it never flickers at the edge.
+    #[test]
+    fn the_breadcrumb_parent_collapses_while_the_row_overflows() {
+        let need = 120.;
+        let room = |parent: f32, spare: f32, collapsed: bool| ParentRoom {
+            parent,
+            spare: Some(spare),
+            collapsed,
+        };
+        assert!(!ParentRoom::default().collapses(need), "before any layout: whole");
+        assert!(!room(need, 40., false).collapses(need), "room: whole");
+        assert!(room(60., 0., false).collapses(need), "overflowing: `...`");
+        assert!(room(14., 100., true).collapses(need), "not yet room for it all");
+        assert!(
+            !room(14., need - 14. + HEAD_PARENT_ROOM_SLACK, true).collapses(need),
+            "room again: whole"
+        );
+    }
 }
 
