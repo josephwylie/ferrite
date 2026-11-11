@@ -45,9 +45,10 @@
 //!    never by a second grey, an inset or a gap that reads. A Solo Pane is
 //!    the plane itself, flush and unringed (`PaneEdge::Flush`); a Group's
 //!    Panes keep a `CARD_RING` hairline round their cells, at `R_CARD`.
-//!    **Three radii**: `R_CONTROL` 6 (controls, rows, chips), `R_CARD` 10
-//!    (bubbles, cards, the Decision box) and `R_FLOAT` 12 (the Composer,
-//!    menus, popovers, sheets); dots, pills and the send circle round.
+//!    **Four radii**: `R_CONTROL` 6 (controls, rows, chips), `R_CARD` 10
+//!    (bubbles, cards, the Decision box), `R_FLOAT` 12 (menus, popovers,
+//!    sheets) and `R_COMPOSER` 16 (the Solo Composer); dots, pills and the
+//!    send circle round.
 //!    **Two line greys**: `LINE` #303030 for seams, dividers and table
 //!    rules, `CARD_RING` #222222 for a card's ring. A raised surface edges
 //!    itself a step over its own fill (`FIELD_RING` the Composer's,
@@ -906,9 +907,14 @@ pub const R_CONTROL: f32 = 6.0;
 /// tool or comment card, the failure strip, the panel's file block, a sent
 /// image's thumbnail.
 pub const R_CARD: f32 = 10.0;
-/// 12px — the Composer and every float: menus, popovers, the palette,
-/// sheets. The kit's `radius_lg`.
+/// 12px — every float: menus, popovers, the palette, sheets. The kit's
+/// `radius_lg`.
 pub const R_FLOAT: f32 = 12.0;
+/// 16px — the Solo Composer's box (T3's `rounded-2xl`), its ring and its
+/// top highlight.
+pub const R_COMPOSER: f32 = 16.0;
+/// The Solo box's top highlight (T3's dark `inset-shadow-2xs`): white 3%.
+pub const COMPOSER_TOP_HIGHLIGHT: u32 = 0xffffff08;
 /// 2px — meter segments and other tiny marks.
 pub const R_TIGHT: f32 = 2.0;
 
@@ -1039,6 +1045,9 @@ pub const SURFACE_EMPTY_ROW_PAD_X: f32 = 10.0;
 pub const KEY_CAP_SOFT: f32 = 20.0;
 pub const KEY_CAP_SOFT_R: f32 = 4.0;
 pub const KEY_CAP_SOFT_GROUND: u32 = 0xffffff12;
+/// The outline key cap (T3's `Kbd variant="outline"`, `border-foreground/15`):
+/// the Composer's `⇥ Tab` after a predicted follow-up.
+pub const KEY_CAP_OUTLINE_EDGE: u32 = 0xffffff26;
 /// The Panel while its Preview tab shows (SPEC §5.6.3): `PANEL_PREVIEW_SHARE`
 /// of the window, held between `PANEL_PREVIEW_MIN_W` and
 /// `PANEL_PREVIEW_MAX_W` — wide enough to read code at its own size — and
@@ -2242,7 +2251,7 @@ pub const ENV_CHIP_GAP: f32 = SPACE_3;
 /// under the reading column: at most `TX_COLUMN_MAX_W` wide, centred as
 /// the transcript is, and never nearer the card's sides and foot than
 /// `COMPOSER_INSET` (the shelf keeps the same column):
-/// `paint::FIELD` at `R_FLOAT`, a 1px `FIELD_RING` laid outside it (it takes
+/// `paint::FIELD` at `R_COMPOSER`, a 1px `FIELD_RING` laid outside it (it takes
 /// no layout).
 ///
 /// - **The working line** is not the stack's: it is the transcript's last

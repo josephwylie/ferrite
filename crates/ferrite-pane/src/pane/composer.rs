@@ -381,7 +381,7 @@ pub(super) fn composer_region(
 }
 
 /// The Solo Composer (SPEC §5.5): a box `COMPOSER_OUTSET` past the reading
-/// column at each side — `paint::FIELD` at `R_FLOAT`, its `FIELD_RING`
+/// column at each side — `paint::FIELD` at `R_COMPOSER`, its `FIELD_RING`
 /// laid outside it — holding the pending files, the input (no `❯`) and the
 /// toolbar the cockpit wires; the queue strip stands over it as its own
 /// card, the footer under it. Files dragged over it light its edge and say
@@ -405,7 +405,14 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
     } = stack;
     let geometry = view.geometry.clone();
     let namespace = view.text_namespace();
-    let ring = |ink: u32| components::outer_ring(theme::R_FLOAT, rgba(ink));
+    let ring = |ink: u32| components::outer_ring(theme::R_COMPOSER, rgba(ink));
+    // T3's `inset-shadow-2xs`: a hairline of light along the box's top.
+    let highlight = div()
+        .absolute()
+        .inset_0()
+        .rounded(px(theme::R_COMPOSER))
+        .border_t_1()
+        .border_color(rgba(theme::COMPOSER_TOP_HIGHLIGHT));
     let field = div()
         .debug_selector(|| "composer-block".into())
         .when(drop_target, |field| {
@@ -416,14 +423,15 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         .flex_col()
         .flex_shrink_0()
         .min_w_0()
-        .rounded(px(theme::R_FLOAT))
+        .rounded(px(theme::R_COMPOSER))
         .bg(theme::paint::FIELD)
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
         .text_color(rgb(INK_STRONG))
         .when(decision.is_some(), |field| field.key_context("Decision"))
-        .child(ring(theme::paint::FIELD_RING.rgba()));
+        .child(ring(theme::paint::FIELD_RING.rgba()))
+        .child(highlight);
     let mut field = components::on_bounds(field, move |bounds, _, _| {
         geometry.set(PaneGeometry {
             composer: Some(bounds),
@@ -442,7 +450,7 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
             .items_center()
             .justify_center()
             .gap(px(theme::SPACE_2))
-            .rounded(px(theme::R_FLOAT))
+            .rounded(px(theme::R_COMPOSER))
             .bg(theme::paint::FIELD)
             .text_color(rgb(INK_STRONG))
             .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, INK_STRONG))
@@ -863,7 +871,7 @@ fn chip_button(id: impl Into<gpui::ElementId>, cx: &gpui::App) -> gpui::componen
 ///
 /// A predicted follow-up is already in the operator's voice and already
 /// filtered, so it is shown verbatim — a draft of their next prompt, not a
-/// description of one — with `⇥ accept`, which is always kept whole: an
+/// description of one — with its `⇥ Tab` key cap, always kept whole: an
 /// accept key nobody knows about is the same as no accept key, so the
 /// prediction's own words give way to it.
 #[derive(Clone, Debug, PartialEq)]
@@ -885,26 +893,26 @@ impl Ghost {
     #[cfg(test)]
     pub(super) fn text(&self) -> String {
         if self.accept {
-            format!("{} \u{b7} {ACCEPT_HINT}", self.head)
+            format!("{} {ACCEPT_HINT}", self.head)
         } else {
             self.head.to_string()
         }
     }
 }
 
-/// What follows a verbatim prediction.
-const ACCEPT_HINT: &str = "\u{21e5} accept";
+/// The key cap after a verbatim prediction (T3's outline `Kbd`).
+const ACCEPT_HINT: &str = "\u{21e5} Tab";
 
-/// The resting line's words, and a running turn's.
-const IDLE_PLACEHOLDER: &str = "Type / for commands";
+/// The line's words in every ordinary state (T3's one placeholder): it
+/// names the three triggers.
+const IDLE_PLACEHOLDER: &str = "Ask anything. @ files, $ skills, / commands";
 /// Both Enter and ⌘Enter bind `Submit`, which while a turn runs joins that
 /// turn (Claude folds it in at the next tool round, Codex steers it), so
 /// the hint names the one thing a key does.
 const RUNNING_PLACEHOLDER: &str = "\u{21b5} to steer this turn";
 
-/// The placeholder for this line, Claude's three: the first prompt, a
-/// draft's or an empty Thread's; while a turn runs, that ↵ steers it; else
-/// the way to the commands.
+/// The placeholder for this line: while a turn runs, that ↵ steers it;
+/// else the triggers, a draft's and an empty Thread's alike.
 /// A landed prediction shows verbatim instead. A Decision or a dead
 /// Session changes nothing here: the line still takes typing, and sending
 /// revives.
@@ -915,7 +923,7 @@ pub(super) fn placeholder(
     suggestion: Option<&str>,
 ) -> Ghost {
     if draft || transcript.is_some_and(|transcript| transcript.blocks().is_empty()) {
-        return Ghost::says("Describe a task or ask a question");
+        return Ghost::says(IDLE_PLACEHOLDER);
     }
     let busy = transcript.is_some_and(|transcript| transcript.status() == Status::Streaming);
     match followup::suggest(pending, transcript, suggestion) {
@@ -1003,22 +1011,39 @@ pub(super) fn ghost_row(ghost: Ghost, left: f32) -> Div {
                 .child(ghost.head),
         )
         .when(ghost.accept, |row| {
-            // The placeholder is one muted run, its `·` too (the
-            // prototype's `.ph-text`).
             row.child(
                 div()
                     .debug_selector(|| "prompt-placeholder-hint".into())
                     .flex()
                     .flex_shrink_0()
+                    .items_center()
                     .h(px(theme::COMPOSER_ROW_H))
-                    .child(
-                        components::cells("\u{b7}")
-                            .px(px(theme::CH))
-                            .w(px(3.0 * theme::CH)),
-                    )
-                    .child(components::cells(ACCEPT_HINT)),
+                    .pl(px(theme::SPACE_2))
+                    .child(outline_key_cap(ACCEPT_HINT)),
             )
         })
+}
+
+/// T3's outline key cap (`Kbd variant="outline"`): a physical key, so the
+/// hint stays distinct beside the prediction's own words. 1px edges with a
+/// 2px foot in `KEY_CAP_OUTLINE_EDGE`, no ground.
+fn outline_key_cap(key: &'static str) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .min_w(px(theme::KEY_CAP_SOFT))
+        .h(px(theme::KEY_CAP_SOFT))
+        .px(px(theme::SPACE_1_5))
+        .border_1()
+        .border_b_2()
+        .border_color(rgba(theme::KEY_CAP_OUTLINE_EDGE))
+        .rounded(px(theme::KEY_CAP_SOFT_R))
+        .text_size(px(theme::FS_BADGE))
+        .font_weight(theme::W_LABEL)
+        .text_color(rgb(INK_SUBTLE))
+        .child(key)
 }
 
 /// #11: whether this Thread still offers adopting a CLI session — no

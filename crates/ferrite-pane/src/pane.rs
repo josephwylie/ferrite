@@ -4783,11 +4783,11 @@ mod tests {
         }));
         assert_eq!(
             placeholder(false, false, Some(&answered), Some("Run the tests")).text(),
-            "Run the tests \u{b7} \u{21e5} accept"
+            "Run the tests \u{21e5} Tab"
         );
         assert_eq!(
             placeholder(false, true, None, Some("Run the tests")).text(),
-            "Describe a task or ask a question",
+            "Ask anything. @ files, $ skills, / commands",
             "a draft has no conversation to predict from"
         );
     }
@@ -6750,7 +6750,7 @@ mod tests {
         let empty = Transcript::default();
         assert_eq!(
             placeholder(false, false, Some(&empty), None).text(),
-            "Describe a task or ask a question",
+            "Ask anything. @ files, $ skills, / commands",
             "an empty Thread asks for its first prompt, as a draft does"
         );
         let mut live = Transcript::default();
@@ -6761,11 +6761,11 @@ mod tests {
         }));
         assert_eq!(
             placeholder(false, false, Some(&live), None).text(),
-            "Type / for commands"
+            "Ask anything. @ files, $ skills, / commands"
         );
         assert_eq!(
             placeholder(true, false, Some(&live), None).text(),
-            "Type / for commands"
+            "Ask anything. @ files, $ skills, / commands"
         );
         let mut running = Transcript::default();
         running.apply(Input::Prompt("fix the decoder".into()));
@@ -6784,11 +6784,11 @@ mod tests {
         }));
         assert_eq!(
             placeholder(false, false, Some(&closed), None).text(),
-            "Type / for commands"
+            "Ask anything. @ files, $ skills, / commands"
         );
         assert_eq!(
             placeholder(false, true, None, None).text(),
-            "Describe a task or ask a question"
+            "Ask anything. @ files, $ skills, / commands"
         );
 
         // A landed prediction is the line, verbatim and unadorned — it is a
@@ -6809,11 +6809,11 @@ mod tests {
         // A Decision and a dead Session both outrank it.
         assert_eq!(
             placeholder(true, false, Some(&answered), Some("Run the tests")).text(),
-            "Type / for commands"
+            "Ask anything. @ files, $ skills, / commands"
         );
         assert_eq!(
             placeholder(false, false, Some(&closed), Some("Run the tests")).text(),
-            "Type / for commands"
+            "Ask anything. @ files, $ skills, / commands"
         );
 
         // No line names a message or ends in an ellipsis.
