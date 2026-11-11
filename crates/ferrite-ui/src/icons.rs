@@ -164,6 +164,15 @@ icons![
     "zap",
     "chevron-up",
     "folder-git",
+    // The Panel's Surfaces: a side chat's delete, the Changes toolbar's
+    // view tools.
+    "trash-2",
+    "rows-3",
+    "columns-2",
+    "text-wrap",
+    "pilcrow",
+    "flask-conical-off",
+    "folder-tree",
 ];
 
 pub const SIDEBAR: &str = "icons/sidebar.svg";
@@ -351,6 +360,16 @@ pub const ZAP: &str = "icons/zap.svg";
 pub const CHEVRON_UP: &str = "icons/chevron-up.svg";
 /// An existing worktree in the workspace menu (`FOLDER_GIT` is a new one).
 pub const FOLDER_GIT_EXISTING: &str = "icons/folder-git.svg";
+/// A side chat's delete, in its Surface's head.
+pub const TRASH: &str = "icons/trash-2.svg";
+/// The Changes toolbar: Stacked and Split, Wrap, Whitespace, Hide test
+/// files, File tree.
+pub const ROWS: &str = "icons/rows-3.svg";
+pub const COLUMNS: &str = "icons/columns-2.svg";
+pub const TEXT_WRAP: &str = "icons/text-wrap.svg";
+pub const PILCROW: &str = "icons/pilcrow.svg";
+pub const FLASK_OFF: &str = "icons/flask-conical-off.svg";
+pub const FOLDER_TREE: &str = "icons/folder-tree.svg";
 
 pub struct Assets;
 
