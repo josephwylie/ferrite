@@ -115,7 +115,7 @@ impl CockpitView {
 
     /// The branch `thread`'s checkout is on: as git last said, else as the
     /// Thread was bound.
-    pub(super) fn thread_branch(&self, thread: ThreadId) -> Option<SharedString> {
+    pub(in crate::cockpit) fn thread_branch(&self, thread: ThreadId) -> Option<SharedString> {
         let facts = self.facts.get(thread)?;
         facts
             .status

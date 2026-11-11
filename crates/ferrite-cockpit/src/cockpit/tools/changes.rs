@@ -5,7 +5,11 @@
 //! - **Its toolbar** (T3's diff toolbar, 28 tall under the Panel's head):
 //!   the scope as a dropdown at the left — `All changes` (against the base
 //!   branch), `Uncommitted changes` (the default) or `Compare against ›` a
-//!   branch — and `⋯` at the right.
+//!   branch — and, against a branch, `Comparing <head> against <base>`, the
+//!   base a dropdown of its own. At the right, 14px tools: Refresh,
+//!   Collapse or Expand all, Wrap, Whitespace, Hide test files, then `⋯`.
+//!   T3's Stacked/Split toggle and File tree wait for a split diff and a
+//!   tree of the changed files, which the diff body does not have yet.
 //! - **Each file:** `▾ name dir`, its `+N` (and `−N`), a circle that marks it
 //!   reviewed (and folds it away), `↗` to open it in Files, then its hunks
 //!   as the panel draws them (`panel::hunks`).
@@ -69,6 +73,7 @@ pub(crate) enum Verb {
     ExpandAll,
     ToggleWrap,
     ToggleWhitespace,
+    ToggleTests,
     Refresh,
 }
 
@@ -102,6 +107,8 @@ pub(crate) struct Changes {
     folded: HashSet<String>,
     wrap: bool,
     hide_whitespace: bool,
+    /// Test files left out of the list (`is_test_path`).
+    hide_tests: bool,
     scroll: ScrollHandle,
     /// The branches `Compare against ›` lists, as of the last read.
     branches: Vec<String>,
@@ -120,12 +127,30 @@ impl Changes {
             folded: HashSet::new(),
             wrap: true,
             hide_whitespace: false,
+            hide_tests: false,
             scroll: ScrollHandle::new(),
             branches: Vec::new(),
             generation: 0,
             filter,
         }
     }
+}
+
+/// Whether `path` reads as a test file (T3's Hide test files): under a
+/// `test`/`tests`/`__tests__`/`spec` directory, or named as one
+/// (`*_test.*`, `test_*`, `*.test.*`, `*.spec.*`, `tests.rs`).
+pub(crate) fn is_test_path(path: &str) -> bool {
+    let mut parts = path.split('/').collect::<Vec<_>>();
+    let name = parts.pop().unwrap_or_default();
+    if parts.iter().any(|dir| matches!(*dir, "test" | "tests" | "__tests__" | "spec")) {
+        return true;
+    }
+    let stem = name.split('.').next().unwrap_or(name);
+    stem.ends_with("_test")
+        || stem.starts_with("test_")
+        || stem == "tests"
+        || name.contains(".test.")
+        || name.contains(".spec.")
 }
 
 /// The paths whose change is staged, as git's index holds them.
@@ -313,6 +338,7 @@ impl CockpitView {
             Verb::ExpandAll => changes.folded.clear(),
             Verb::ToggleWrap => changes.wrap = !changes.wrap,
             Verb::ToggleWhitespace => changes.hide_whitespace = !changes.hide_whitespace,
+            Verb::ToggleTests => changes.hide_tests = !changes.hide_tests,
             Verb::Refresh => {
                 self.refresh_changes(thread, cx);
                 return;
@@ -395,6 +421,7 @@ impl CockpitView {
             None,
             row("Word wrap", changes.wrap, Verb::ToggleWrap),
             row("Hide whitespace changes", changes.hide_whitespace, Verb::ToggleWhitespace),
+            row("Hide test files", changes.hide_tests, Verb::ToggleTests),
             None,
             row("Refresh", false, Verb::Refresh),
         ]
@@ -418,6 +445,7 @@ impl CockpitView {
                     .iter()
                     .enumerate()
                     .filter(|(_, file)| wanted.is_empty() || file.path.to_lowercase().contains(&wanted))
+                    .filter(|(_, file)| !changes.hide_tests || !is_test_path(&file.path))
                     .collect();
                 let list = if listed.is_empty() {
                     self.changes_note("No files match").into_any_element()
@@ -517,13 +545,105 @@ impl CockpitView {
             .child(note.into())
     }
 
+    /// T3's diff toolbar: the scope and what it compares at the left, the
+    /// view's tools at the right.
     fn changes_head(&self, thread: ThreadId, changes: &Changes, cx: &mut Context<Self>) -> Div {
         use theme::*;
-        let door = |key: &'static str, glyph: &'static str, tip: &'static str| {
-            ferrite_pane::preview::head_door(key, key.into(), glyph)
+        let all_folded = matches!(&changes.load, Load::Read(files)
+            if !files.is_empty() && files.iter().all(|file| changes.folded.contains(&file.path)));
+        let mut tool = |key: &'static str, glyph: &'static str, tip: &'static str, on: bool, verb: Verb| {
+            div()
+                .id(key)
+                .debug_selector(move || key.into())
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .justify_center()
+                .size(px(SURFACE_PLUS))
+                .rounded(px(R_CONTROL))
+                .when(on, |tool| tool.bg(paint::SELECTED))
+                .hover_control(key)
+                .child(icons::icon(glyph, SURFACE_PLUS_GLYPH, if on { INK_STRONG } else { INK_SUBTLE }))
                 .tooltip(ferrite_ui::menu::tooltip(tip))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.run_changes_verb(thread, verb, cx);
+                }))
         };
+        let (fold_tip, fold_verb) = if all_folded {
+            ("Expand all files", Verb::ExpandAll)
+        } else {
+            ("Collapse all files", Verb::CollapseAll)
+        };
+        let tools = div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(SPACE_0_5))
+            .child(tool("changes-refresh", icons::REFRESH, "Refresh", false, Verb::Refresh))
+            .child(tool("changes-fold-all", icons::COLLAPSE_ALL, fold_tip, false, fold_verb))
+            .child(tool("changes-wrap", icons::TEXT_WRAP, "Word wrap", changes.wrap, Verb::ToggleWrap))
+            .child(tool(
+                "changes-whitespace",
+                icons::PILCROW,
+                "Hide whitespace changes",
+                changes.hide_whitespace,
+                Verb::ToggleWhitespace,
+            ))
+            .child(tool(
+                "changes-hide-tests",
+                icons::FLASK_OFF,
+                "Hide test files",
+                changes.hide_tests,
+                Verb::ToggleTests,
+            ));
+        let base = match &changes.scope {
+            Scope::Uncommitted => None,
+            Scope::All => Some(
+                self.facts
+                    .get(thread)
+                    .and_then(|facts| facts.default_branch.clone())
+                    .map_or_else(|| "the base".to_string(), |base| base.to_string()),
+            ),
+            Scope::Against(branch) => Some(branch.clone()),
+        };
+        let comparing = base.map(|base| {
+            let head = self
+                .thread_branch(thread)
+                .map_or_else(|| "HEAD".to_string(), |head| head.to_string());
+            div()
+                .debug_selector(|| "changes-comparing".into())
+                .flex()
+                .min_w_0()
+                .items_center()
+                .gap(px(SPACE_1))
+                .text_size(px(FS_BADGE))
+                .text_color(rgb(INK_SUBTLE))
+                .child(div().min_w_0().truncate().child(SharedString::from(format!("Comparing {head} against"))))
+                .child(
+                    div()
+                        .id("changes-base")
+                        .debug_selector(|| "changes-base".into())
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(px(SPACE_0_5))
+                        .px(px(SPACE_1))
+                        .rounded(px(R_CONTROL))
+                        .text_color(rgb(INK_STRONG))
+                        .cursor_pointer()
+                        .hover(|base| base.bg(paint::RAISED))
+                        .child(SharedString::from(base))
+                        .child(icons::icon(icons::CHEVRON_DOWN, ICON_CHEVRON, INK_SUBTLE))
+                        .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.open_context_menu(MenuTarget::ChangesBase(thread), event.position(), cx);
+                        })),
+                )
+        });
         div()
+            .debug_selector(|| "changes-toolbar".into())
             .flex()
             .flex_shrink_0()
             .items_center()
@@ -533,31 +653,46 @@ impl CockpitView {
             .px(px(SPACE_2))
             .child(
                 div()
-                    .id("changes-scope")
-                    .debug_selector(|| "changes-scope".into())
                     .flex()
+                    .flex_1()
                     .min_w_0()
                     .items_center()
-                    .gap(px(SPACE_1))
-                    .h(px(SURFACE_TAB_H))
-                    .px(px(PANEL_TAB_PAD_X))
-                    .rounded(px(R_CONTROL))
-                    .text_size(px(FS_LABEL))
-                    .cursor_pointer()
-                    .hover(|scope| scope.bg(paint::RAISED))
-                    .child(div().min_w_0().truncate().child(SharedString::from(changes.scope.label())))
-                    .child(icons::icon(icons::CHEVRON_DOWN, SURFACE_PLUS_GLYPH, INK_SUBTLE))
-                    .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.open_context_menu(MenuTarget::ChangesScope(thread), event.position(), cx);
-                    })),
+                    .gap(px(SPACE_2))
+                    .child(
+                        div()
+                            .id("changes-scope")
+                            .debug_selector(|| "changes-scope".into())
+                            .flex()
+                            .flex_shrink_0()
+                            .items_center()
+                            .gap(px(SPACE_1))
+                            .h(px(SURFACE_TAB_H))
+                            .px(px(SPACE_2))
+                            .rounded(px(R_CONTROL))
+                            .bg(paint::RAISED)
+                            .text_size(px(FS_BADGE))
+                            .font_weight(W_LABEL)
+                            .cursor_pointer()
+                            .hover(|scope| scope.bg(paint::SELECTED))
+                            .child(SharedString::from(changes.scope.label()))
+                            .child(icons::icon(icons::CHEVRON_DOWN, SURFACE_PLUS_GLYPH, INK_SUBTLE))
+                            .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                view.open_context_menu(MenuTarget::ChangesScope(thread), event.position(), cx);
+                            })),
+                    )
+                    .children(comparing),
             )
-            .child(door("changes-more", icons::ELLIPSIS, "More").on_click(cx.listener(
-                move |view, event: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.open_context_menu(MenuTarget::ChangesMore(thread), event.position(), cx);
-                },
-            )))
+            .child(
+                tools.child(
+                    ferrite_pane::preview::head_door("changes-more", "changes-more".into(), icons::ELLIPSIS)
+                        .tooltip(ferrite_ui::menu::tooltip("More"))
+                        .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.open_context_menu(MenuTarget::ChangesMore(thread), event.position(), cx);
+                        })),
+                ),
+            )
     }
 
     fn changes_file(
@@ -719,6 +854,17 @@ mod tests {
         let mixed = vec![line(Sign::Added, ""), line(Sign::Removed, "x")];
         let out = without_whitespace(vec![kept.clone(), bare, mixed]);
         assert_eq!(out, [kept, vec![line(Sign::Removed, "x")]]);
+    }
+
+    #[test]
+    fn test_files_are_told_by_their_path() {
+        use super::is_test_path;
+        for test in ["tests/a.rs", "src/cockpit/tests/pr.rs", "a_test.go", "test_a.py", "a.test.ts", "a.spec.js", "src/tests.rs"] {
+            assert!(is_test_path(test), "{test}");
+        }
+        for code in ["src/attest.rs", "contest.md", "src/testing.rs", "a.rs"] {
+            assert!(!is_test_path(code), "{code}");
+        }
     }
 
     #[test]

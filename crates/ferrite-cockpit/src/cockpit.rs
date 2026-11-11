@@ -3589,6 +3589,7 @@ impl CockpitView {
             MenuTarget::FilesMore(_)
             | MenuTarget::ChangesScope(_)
             | MenuTarget::ChangesMore(_)
+            | MenuTarget::ChangesBase(_)
             | MenuTarget::Terminal(_)
             | MenuTarget::TerminalMore(_)
             | MenuTarget::SurfaceMenu(_)
