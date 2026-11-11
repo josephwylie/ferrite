@@ -513,7 +513,7 @@ pub(crate) fn tree<'a>(changes: &'a [Changed], root: Option<&Path>) -> Vec<Node<
     let mut top = Dir::default();
     for change in changes {
         let shown = root
-            .and_then(|root| Path::new(&change.path).strip_prefix(root).ok())
+            .and_then(|root| crate::file_links::inside_checkout(Path::new(&change.path), root))
             .map_or_else(|| change.path.clone(), |path| path.display().to_string());
         let mut parts: Vec<&str> = shown.split('/').filter(|part| !part.is_empty()).collect();
         let Some(name) = parts.pop() else {
@@ -664,6 +664,11 @@ mod tests {
         let lone = [change("/w/a/b/c.rs")];
         let top = tree(&lone, Some(Path::new("/w")));
         assert_eq!(names(&top), ["a/b/"]);
+        // The agent names the file by its real path; the Thread stands in
+        // the checkout through a symlink: the file is still under it.
+        let (real, link) = crate::file_links::tests::symlinked_checkout("changed-tree");
+        let linked = [change(&real.join("f01.txt").to_string_lossy())];
+        assert_eq!(names(&tree(&linked, Some(&link))), ["f01.txt"]);
         assert_eq!(changed_label(1), "1 changed file");
         assert_eq!(changed_label(3), "3 changed files");
     }
