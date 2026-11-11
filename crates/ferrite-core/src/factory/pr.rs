@@ -24,6 +24,31 @@ pub struct Delivery {
     /// Why a completed Task's worktree stays, when it does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept: Option<String>,
+    /// When removing a merged Task's kept worktree was last tried: it is
+    /// tried again every [`TIDY_AGAIN_MS`] until it goes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tidied_ms: Option<i64>,
+}
+
+/// How often a merged Task's kept worktree is tried again (G3).
+pub const TIDY_AGAIN_MS: i64 = 10 * 60_000;
+
+/// A merged Task whose worktree was kept, last tried long enough ago: it
+/// is tried again, never forced. Whether it was.
+pub(super) fn tidy_again(task: &mut Task, now_ms: i64, effects: &mut Vec<Effect>) -> bool {
+    let merged = task.delivery.pr.as_ref().is_some_and(|pr| pr.merged);
+    let (Some(path), Some(tried)) = (task.worktree.clone(), task.delivery.tidied_ms) else {
+        return false;
+    };
+    if !merged || task.delivery.kept.is_none() || now_ms - tried < TIDY_AGAIN_MS {
+        return false;
+    }
+    task.delivery.tidied_ms = Some(now_ms);
+    effects.push(Effect::Tidy {
+        task: task.id.clone(),
+        path,
+    });
+    true
 }
 
 /// A GitHub pull request, as `owner/repository#number`.
@@ -558,6 +583,7 @@ pub(super) fn tidied(
                 return Ok(Answer::Changed(false));
             }
             task.delivery.kept = None;
+            task.delivery.tidied_ms = None;
             let branch = task.branch.clone();
             task.note(
                 now_ms,
@@ -566,6 +592,7 @@ pub(super) fn tidied(
             );
         }
         Some(why) => {
+            task.delivery.tidied_ms.get_or_insert(now_ms);
             if task.delivery.kept.as_ref() == Some(&why) {
                 return Ok(Answer::Changed(false));
             }

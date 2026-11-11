@@ -111,6 +111,7 @@ impl State {
                     effects.push(Effect::Park { thread });
                 }
             }
+            changed |= super::pr::tidy_again(task, now_ms, effects);
             if !task.archived() && now_ms - completed >= ARCHIVE_AFTER_MS {
                 task.keeping.archived_ms = Some(now_ms);
                 changed = true;

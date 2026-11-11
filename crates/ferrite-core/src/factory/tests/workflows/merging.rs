@@ -790,3 +790,54 @@ fn a_tasks_pr_head_is_read_from_github_when_it_starts() {
         "{effects:?}"
     );
 }
+
+/// G3: a merged Task's worktree kept because its checkout was dirty is
+/// tried again (never forced) at the periodic tidy, and once removed the
+/// Task stops saying it was kept.
+#[test]
+fn a_kept_worktree_is_tried_again_until_it_goes() {
+    let mut factory = Factory::in_memory();
+    let (task, _) = at_merge(&mut factory);
+    merge_report(&mut factory, SECOND, MergeOutcome::Merged, "MERGED").unwrap();
+    factory.step(9, &BTreeMap::new());
+    let kept = |kept: Option<&str>| Command::WorktreeTidied {
+        task: task.clone(),
+        kept: kept.map(str::to_string),
+    };
+    factory
+        .command(kept(Some("The worktree has uncommitted changes.")), 10)
+        .unwrap();
+    let tidies = |effects: &[Effect]| {
+        effects
+            .iter()
+            .filter(|effect| matches!(effect, Effect::Tidy { .. }))
+            .count()
+    };
+    assert_eq!(
+        tidies(&factory.step(11, &BTreeMap::new())),
+        0,
+        "not at once"
+    );
+    let later = 10 + TIDY_AGAIN_MS;
+    assert_eq!(
+        tidies(&factory.step(later, &BTreeMap::new())),
+        1,
+        "tried again"
+    );
+    assert_eq!(
+        tidies(&factory.step(later + 1, &BTreeMap::new())),
+        0,
+        "once a while"
+    );
+    factory.command(kept(None), later + 2).unwrap();
+    let done = the(&factory, &task);
+    assert_eq!(
+        (done.worktree.as_ref(), done.delivery.kept.as_ref()),
+        (None, None)
+    );
+    assert_eq!(
+        tidies(&factory.step(later + 2 * TIDY_AGAIN_MS, &BTreeMap::new())),
+        0,
+        "gone, nothing more to try"
+    );
+}

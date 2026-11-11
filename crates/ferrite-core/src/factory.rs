@@ -44,7 +44,7 @@ pub use coordinator::{
 pub use direct::{Answered, Feedback, FeedbackKind, Override, Oversight, Question, ThenReturn};
 pub use pr::{
     evidence_line, short, Delivery, Evidence, EvidenceKind, MergeOutcome, MergeRoutes, PullRequest,
-    Revision,
+    Revision, TIDY_AGAIN_MS,
 };
 pub use recovery::Keeping;
 pub use starts::{when_label, zone_label};
@@ -766,7 +766,9 @@ pub enum Effect {
     },
     /// Bring an open Coordinator's Provider, model and effort to its
     /// settings, from its next turn.
-    Tune { thread: ThreadId },
+    Tune {
+        thread: ThreadId,
+    },
 }
 
 /// What is written.
