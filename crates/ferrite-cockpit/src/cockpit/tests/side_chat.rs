@@ -236,3 +236,54 @@ fn block_text(block: &ferrite_core::transcript::Block) -> String {
         _ => String::new(),
     }
 }
+
+/// The side chat's head (T3's): 36 tall under the tab strip, its title,
+/// Bring back and Trash. Bring back waits for a finished reply, then puts
+/// the side chat's run into the main Thread's next message; Trash takes
+/// the chat away, a second press first when deletes are confirmed.
+#[gpui::test]
+fn the_side_chat_head_brings_back_and_trashes(cx: &mut TestAppContext) {
+    let (view, fake, cx) = answered("side-chat-head", cx);
+    open_chat(&view, cx, None);
+    let owner = owner(&view, cx);
+    let id = side_tabs(&view, owner, cx)[0];
+    let head = cx.debug_bounds("side-chat-head").expect("its head");
+    assert_eq!(head.size.height, px(ferrite_ui::theme::SURFACE_BAR_H));
+    let blocked = view.read_with(cx, |view, _| view.bring_back_blocked(owner, id));
+    assert_eq!(blocked, Some("Available after a finished reply."));
+
+    cx.simulate_input("what is alpha?");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    let send = |event: SessionEvent| fake.streams.borrow()[1].send(event).unwrap();
+    send(SessionEvent::TextDelta {
+        text: "Alpha is the first letter.\n\n".into(),
+    });
+    tick(cx);
+    let blocked = view.read_with(cx, |view, _| view.bring_back_blocked(owner, id));
+    assert_eq!(blocked, Some("Available after a finished reply."), "still answering");
+    let dot = format!("panel-tab-SideChat-{id}-pending");
+    assert!(debug_bounds(cx, dot.clone()).is_some(), "its tab's pending dot");
+    send(SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Completed,
+        cost_usd: None,
+    });
+    tick(cx);
+    assert!(debug_bounds(cx, dot).is_none(), "answered: no dot");
+    assert_eq!(view.read_with(cx, |view, _| view.bring_back_blocked(owner, id)), None);
+    let back = cx.debug_bounds("side-chat-bring-back").unwrap();
+    cx.simulate_click(back.center(), gpui::Modifiers::none());
+    tick(cx);
+    let composer = composer_text(&view, cx);
+    assert!(composer.starts_with("> From a side chat:"), "{composer:?}");
+    assert!(composer.contains("Alpha is the first letter."), "{composer:?}");
+
+    view.update(cx, |view, _| view.prefs.settings.confirm_delete = true);
+    let trash = cx.debug_bounds("side-chat-trash").unwrap();
+    cx.simulate_click(trash.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(side_tabs(&view, owner, cx), [id], "armed: still there");
+    cx.simulate_click(trash.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(side_tabs(&view, owner, cx).is_empty(), "the second press deletes it");
+}
