@@ -764,3 +764,43 @@ fn a_redirect_survives_a_reload() {
     assert_eq!(the(&reread, &task).step.as_deref(), Some(steps[2].as_str()));
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A deciding run refuses `finished`: asked to report, or resumed, it is
+/// told to report its decision.
+#[test]
+fn a_deciding_run_is_nudged_and_resumed_to_report_its_decision() {
+    let mut factory = Factory::in_memory();
+    let (id, steps) = reviewed(&mut factory, ApprovalChange::default());
+    approval(
+        &mut factory,
+        &id,
+        ApprovalChange {
+            by: Some(Approver::Agent),
+            step: Some(steps[0].clone()),
+            instructions: Some("Check the changelog entry".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    save(&mut factory, &id).unwrap();
+    let task = running(&mut factory, &id);
+    finished(&mut factory, FIRST, "Built");
+    started(&mut factory, &task, SECOND);
+    finished(&mut factory, SECOND, "Reviewed: fine");
+    factory.step(10, &at(FIRST, false, 1));
+    assert!(the(&factory, &task).oversight.deciding);
+
+    let effects = factory.step(11, &at(FIRST, false, 2));
+    let told = prompts(&effects);
+    assert_eq!(told.len(), 1, "asked to report: {effects:?}");
+    assert!(told[0].contains("report outcome approved"), "{}", told[0]);
+    assert!(!told[0].contains("report outcome finished"), "{}", told[0]);
+
+    command(&mut factory, Command::Stop { task: task.clone() }).unwrap();
+    command(&mut factory, Command::Resume { task: task.clone() }).unwrap();
+    let effects = factory.step(12, &at(FIRST, false, 3));
+    let told = prompts(&effects);
+    assert_eq!(told.len(), 1, "{effects:?}");
+    assert!(told[0].contains("report outcome approved"), "{}", told[0]);
+    assert!(!told[0].contains("report outcome finished"), "{}", told[0]);
+}

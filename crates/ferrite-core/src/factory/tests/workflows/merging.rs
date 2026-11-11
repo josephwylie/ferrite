@@ -709,3 +709,29 @@ fn skipping_the_merge_step_never_completes_the_task_as_merged() {
     let reason = the_task.reason.clone().unwrap_or_default();
     assert!(reason.contains("nothing was merged"), "{reason}");
 }
+
+/// A merge Step refuses `finished`: when it is asked to report, or
+/// resumed, it is told the results it may report.
+#[test]
+fn a_merge_step_is_nudged_and_resumed_with_the_results_it_reports() {
+    let mut factory = Factory::in_memory();
+    let (task, _) = at_merge(&mut factory);
+    let effects = factory.step(9, &seen_at(SECOND, false, 1));
+    let told = prompts(&effects);
+    assert_eq!(told.len(), 1, "{effects:?}");
+    assert!(told[0].contains("report outcome merged"), "{}", told[0]);
+    assert!(!told[0].contains("report outcome finished"), "{}", told[0]);
+
+    factory
+        .command(Command::Stop { task: task.clone() }, 10)
+        .unwrap();
+    factory
+        .command(Command::Resume { task: task.clone() }, 11)
+        .unwrap();
+    let effects = factory.step(12, &seen_at(SECOND, false, 2));
+    let told = prompts(&effects);
+    assert_eq!(told.len(), 1, "{effects:?}");
+    assert!(told[0].contains("resumed"), "{}", told[0]);
+    assert!(told[0].contains("report outcome merged"), "{}", told[0]);
+    assert!(!told[0].contains("report outcome finished"), "{}", told[0]);
+}

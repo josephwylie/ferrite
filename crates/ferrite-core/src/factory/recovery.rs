@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 use super::{
-    reporting, Actor, Effect, Seen, State, Status, Task, TaskId, Watch, ASKING, REPORTING,
+    Actor, Effect, Seen, State, Status, Task, TaskId, Watch,
 };
 
 /// What a Task remembers of interruptions and time.
@@ -130,10 +130,7 @@ fn revival_prompt(task: &Task, cause: Cause) -> String {
     } else {
         ""
     };
-    let reporting = match step {
-        Some(step) => reporting(task, step),
-        None => format!("{REPORTING}\n\n{ASKING}"),
-    };
+    let reporting = super::reporting_now(task);
     format!(
         "You were interrupted: {why}. This is the same conversation, started again. Continue \
          where you left off. Before you repeat anything with an effect outside this worktree (a \

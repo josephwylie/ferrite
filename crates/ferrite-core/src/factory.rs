@@ -1671,7 +1671,7 @@ fn at_rest_rule(task: &mut Task, seen: &Seen, now_ms: i64, effects: &mut Vec<Eff
             );
             effects.push(Effect::Prompt {
                 thread,
-                text: nudge_prompt(),
+                text: nudge_prompt(task),
             });
             task.watch.baseline = seen.turns;
             task.watch.nudged_ms = Some(now_ms);
@@ -1912,39 +1912,38 @@ fn return_prompt(task: &Task, step: &Step) -> String {
 
 /// What the asker is told once the operator answers.
 fn answer_prompt(task: &Task, question: &str, answer: &str) -> String {
-    let reporting = match task.current_step() {
-        Some(step) => reporting(task, step),
-        None => format!(
-            "When you are done, report the outcome with `{REPORT} finished \"<what you did>\"`, \
-             or `{REPORT} unable \"<what you tried>\"`."
-        ),
-    };
+    let reporting = reporting_now(task);
     format!(
         "The operator answered your question.\n\nYou asked: {question}\n\nTheir answer: \
          {answer}\n\nContinue with your instructions in light of that.\n\n{reporting}"
     )
 }
 
-fn nudge_prompt() -> String {
+/// How the Task's current run reports, whatever it is: a Step's outcome,
+/// a merge result or an approval decision, or a one-off's outcome.
+fn reporting_now(task: &Task) -> String {
+    match task.current_step() {
+        Some(step) => reporting(task, step),
+        None => format!("{REPORTING}\n\n{ASKING}"),
+    }
+}
+
+fn nudge_prompt(task: &Task) -> String {
     format!(
-        "Your turn ended without reporting the task's outcome. Report it now with \
-         `{REPORT} finished \"<what you did>\"`, or `{REPORT} unable \"<what you tried>\"`."
+        "Your turn ended without reporting the task's outcome. Report it now.\n\n{}",
+        reporting_now(task)
     )
 }
 
+/// A merge Step is told to reconcile an unconfirmed result first (#223).
 fn resume_prompt(task: &Task) -> String {
-    // A merge Step reports its result, after reconciling an unconfirmed
-    // one (#223).
-    if let Some(step) = task.current_step().filter(|step| step.outcome_routes.is_some()) {
-        return format!(
-            "The operator resumed this task. Continue where you left off.\n{}\n{}",
-            pr::reconcile(task, step),
-            reporting(task, step)
-        );
-    }
+    let reconcile = task
+        .current_step()
+        .map(|step| pr::reconcile(task, step))
+        .unwrap_or_default();
     format!(
-        "The operator resumed this task. Continue where you left off, and report the \
-         outcome with `{REPORT} finished …` or `{REPORT} unable …` when you are done."
+        "The operator resumed this task. Continue where you left off.\n{reconcile}\n{}",
+        reporting_now(task)
     )
 }
 
