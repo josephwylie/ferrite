@@ -543,31 +543,18 @@ fn a_tray_image_is_a_thumbnail_card(cx: &mut TestAppContext) {
     });
 }
 
-/// The skill tokens the first Pane's line last drew in blue.
+/// The skill tokens the first Pane's line last drew in `SKILL_INK`.
 fn skill_ranges(
     view: &gpui::Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
 ) -> Vec<std::ops::Range<usize>> {
-    view.read_with(cx, |view, cx| {
-        view.panes[0].composer.read(cx).skill_ranges().to_vec()
-    })
+    view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).skill_ranges())
 }
 
-/// The chip grounds the first Pane's line last drew.
-fn chip_grounds(
-    view: &gpui::Entity<CockpitView>,
-    cx: &mut gpui::VisualTestContext,
-) -> Vec<gpui::Bounds<Pixels>> {
-    view.read_with(cx, |view, cx| {
-        view.panes[0].composer.read(cx).chip_grounds().to_vec()
-    })
-}
-
-/// The owner's first case: on a Codex Thread whose Session lists the
-/// `to-spec` skill, `/to-spec` typed out in full (no pick) draws in
-/// blue with no ground, and sends as the plain text it reads.
+/// A typed skill on a Codex Thread is a skill token, and the caret steps
+/// over it: an edit can never break it into prose that half-matches.
 #[gpui::test]
-fn a_typed_skill_on_a_codex_thread_draws_as_a_chip(cx: &mut TestAppContext) {
+fn a_typed_skill_on_a_codex_thread_is_one_token(cx: &mut TestAppContext) {
     let (core, fake, _checkout) = bound_cockpit("typed-skill-chip", Provider::Codex);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -586,28 +573,95 @@ fn a_typed_skill_on_a_codex_thread_draws_as_a_chip(cx: &mut TestAppContext) {
 
     cx.simulate_input("/to-spec now");
     tick(cx);
-    // Claude's skill is blue ink and no ground (`SKILL_INK`).
-    assert!(
-        chip_grounds(&view, cx).is_empty(),
-        "no ground behind a skill"
-    );
-    assert_eq!(skill_ranges(&view, cx), [0..8], "`/to-spec` is blue");
+    assert_eq!(skill_ranges(&view, cx), [0..8], "`/to-spec` is a skill");
 
-    // An edit that breaks the token unmakes the chip.
-    cx.simulate_keystrokes("home right right right right right right right right");
+    cx.simulate_keystrokes("home right");
     cx.simulate_input("s");
     tick(cx);
-    assert_eq!(composer_text(&view, cx), "/to-specs now");
+    assert_eq!(
+        composer_text(&view, cx),
+        "/to-specs now",
+        "→ steps over the token whole, so the letter lands after it"
+    );
     assert!(
         skill_ranges(&view, cx).is_empty(),
         "`/to-specs` is no skill"
     );
+    cx.simulate_keystrokes("backspace end backspace backspace backspace");
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "/to-spec ");
+    cx.simulate_keystrokes("backspace backspace");
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "", "⌫ after the token takes it whole");
 }
 
-/// The owner's second case: a skill picked after prose (↵) draws as a
-/// chip at the end of the sentence.
+/// T3's grammar: `$` opens the skills, and the pick lands as a `$name`
+/// skill token, which goes on the wire as the `/name` the providers read.
+/// `/` still opens the commands.
 #[gpui::test]
-fn a_skill_picked_after_prose_draws_as_a_chip(cx: &mut TestAppContext) {
+fn dollar_opens_the_skills_and_the_pick_is_a_skill_token(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("dollar-skills", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let mut commands = menu_commands();
+    commands.push(ferrite_core::SessionCommand {
+        name: "grill-me".into(),
+        description: "A relentless interview".into(),
+        path: None,
+        source: Some(ferrite_core::CommandSource::Skill),
+    });
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Commands { commands })
+        .unwrap();
+    tick(cx);
+
+    cx.simulate_input("plan it $gri");
+    tick(cx);
+    let rows = menu_names(&view, cx);
+    assert_eq!(rows, ["grill-me"], "only skills under `$`");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "plan it $grill-me ");
+    assert_eq!(skill_ranges(&view, cx), [8..17], "the pick is a skill token");
+    cx.simulate_input("now");
+    cx.simulate_keystrokes("escape enter");
+    tick(cx);
+    assert_eq!(fake.sent.borrow().as_slice(), ["plan it /grill-me now"]);
+
+    cx.simulate_input("$5 and $zzz");
+    tick(cx);
+    assert_eq!(
+        menu_names(&view, cx),
+        ["No skills found. Try / to browse provider commands."]
+    );
+    view.update(cx, |view, cx| {
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.set(String::new(), cx));
+    });
+    cx.simulate_input("/com");
+    tick(cx);
+    assert!(
+        menu_names(&view, cx).contains(&"commit".to_string()),
+        "`/` still opens the commands"
+    );
+}
+
+/// The open Composer menu's row names, top first.
+fn menu_names(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<String> {
+    view.read_with(cx, |view, _| {
+        view.popover
+            .as_ref()
+            .map(|open| open.rows.iter().map(|row| row.row.name.to_string()).collect())
+            .unwrap_or_default()
+    })
+}
+
+/// The owner's second case: a skill picked after prose (↵) is a skill
+/// token at the end of the sentence.
+#[gpui::test]
+fn a_skill_picked_after_prose_is_a_token(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("picked-skill-chip", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -634,9 +688,8 @@ fn a_skill_picked_after_prose_draws_as_a_chip(cx: &mut TestAppContext) {
         composer_text(&view, cx),
         "details for their venue /mattpocock-skills:grill-with-docs "
     );
-    assert!(chip_grounds(&view, cx).is_empty(), "blue ink, no ground");
     let ranges = skill_ranges(&view, cx);
-    assert_eq!(ranges.len(), 1, "the pick is blue: {ranges:?}");
+    assert_eq!(ranges.len(), 1, "the pick is a skill: {ranges:?}");
     assert_eq!(ranges[0].start, "details for their venue ".len());
 }
 
@@ -662,7 +715,13 @@ fn a_restored_draft_keeps_its_skill_chip_and_sends_plain_text(cx: &mut TestAppCo
         });
     });
     tick(cx);
-    assert_eq!(skill_ranges(&view, cx).len(), 2, "both commands are blue");
+    let commands = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .composer
+            .read(cx)
+            .drawn_tokens(ferrite_pane::composer::TokenKind::Command)
+    });
+    assert_eq!(commands.len(), 2, "both commands are tokens");
 
     cx.simulate_keystrokes("escape enter");
     tick(cx);
@@ -713,7 +772,7 @@ fn a_skill_in_a_sent_bubble_is_blue_with_its_description_on_hover(cx: &mut TestA
         .expect("the skill draws as its own inline token");
     let bubble = cx.debug_bounds("transcript-prompt").expect("the bubble");
     assert!(
-        bubble.contains(&skill.center()) && skill.size.width < bubble.size.width / 2.,
+        bubble.contains(&skill.center()) && skill.right() < bubble.right() - px(100.),
         "inside the bubble, just the token: {skill:?} in {bubble:?}"
     );
     assert!(

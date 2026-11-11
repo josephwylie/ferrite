@@ -403,7 +403,13 @@ pub fn icon(path: &'static str, size: f32, color: u32) -> Svg {
 /// [`icon`] stroked `stroke` px instead of `theme::ICON_STROKE`: a glyph
 /// whose reference draws it heavier (T3's skill cube, its send arrow).
 pub fn icon_stroked(path: &'static str, size: f32, stroke: f32, color: u32) -> Svg {
-    icon(path, size, color).path(SharedString::from(format!("{path}@{size}/{stroke}")))
+    icon(path, size, color).path(stroked_key(path, size, stroke))
+}
+
+/// The asset key `icon_stroked` draws, for an element that paints the SVG
+/// itself (`Window::paint_svg`).
+pub fn stroked_key(path: &str, size: f32, stroke: f32) -> SharedString {
+    format!("{path}@{size}/{stroke}").into()
 }
 
 /// The key of `path` drawn `size` px square: `Assets` strokes it at

@@ -2321,21 +2321,24 @@ pub const PLACEHOLDER_GAP: f32 = CARET_W + SPACE_1;
 /// One selection colour app-wide: the Composer paints the transcript's
 /// native selection wash under its selected runs.
 pub const COMPOSER_SELECTION: u32 = TEXT_SELECTION_WASH;
-/// A chip in the Composer's line — a picked `@` mention, a `/command`
-/// the Session knows: `LINK_INK` (a path, a command: the link blue) on a
-/// `MENTION_CHIP` ground (that blue at 16%) at `R_CONTROL`, the ground
-/// `MENTION_CHIP_INSET_Y` inside the row and reaching `MENTION_CHIP_PAD_X`
-/// past the token either side (at most half into the space beside it).
-pub const MENTION_INK: u32 = LINK_INK;
-pub const MENTION_CHIP: u32 = 0x7aa8ee29;
-pub const MENTION_CHIP_PAD_X: f32 = 3.0;
-pub const MENTION_CHIP_INSET_Y: f32 = 1.0;
-/// A skill (`/name`) in the Composer's line and in a sent prompt (Claude's,
-/// `claude/parity/slash-picked.png`, `skill-sent-bubble.png`): blue ink and
-/// no ground. Under the pointer in a bubble it takes `SKILL_HOVER`, a faint
-/// blue wash behind the token alone (`skill-hover.png`).
-pub const SKILL_INK: u32 = 0x5ea1ea;
-pub const SKILL_HOVER: u32 = 0x5ea1ea26;
+/// A token in the Composer's line and in a sent prompt (T3's context
+/// chips, `contextChipAccents.ts`, all at L 0.62): no ground, `W_LABEL`, the
+/// kind's accent, underlined only under the pointer. A skill (`$name`) is
+/// `SKILL_INK` (`oklch(0.62 0.16 322)`) after Lucide's cube
+/// (`icons::BOX`, stroked `SKILL_ICON_STROKE`); a file (`@path`)
+/// `FILE_INK` (`oklch(0.62 0.136 237)`) after its type icon; a `/command`
+/// the Session knows `MENTION_INK` (`oklch(0.62 0.11 215)`), no icon. The
+/// icon is `TOKEN_ICON` (1em) square, standing where the sigil was.
+pub const SKILL_INK: u32 = 0xb261be;
+pub const FILE_INK: u32 = 0x0090cd;
+pub const MENTION_INK: u32 = 0x0096af;
+pub const SKILL_ICON_STROKE: f32 = 1.85;
+pub const TOKEN_ICON: f32 = FS_COMPOSER;
+/// Between a sent token's icon and its name (T3's `gap-[0.2em]`).
+pub const TOKEN_ICON_GAP_EM: f32 = 0.2;
+/// A selected token's wash (T3's node selection): the one selection
+/// colour, at this radius.
+pub const TOKEN_SELECTION_R: f32 = 4.0;
 /// The skill's card above it: the description wraps at this width.
 pub const SKILL_TIP_W: f32 = 260.0;
 /// The panel's Context section (`pane::context_usage`): its stacked bar

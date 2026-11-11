@@ -1284,6 +1284,9 @@ enum Consequence {
     /// on Claude and translated to the typed skill item inside the Codex
     /// Session.
     Command(SharedString),
+    /// Replace the active `$filter` with the skill's `$name ` token, which
+    /// goes on the wire as `/name` (`composer::wire_text`).
+    Skill(SharedString),
     /// The local `provider` row pre-lock (#25): clear the line and open
     /// the picker in the menu's place.
     OpenProviderPicker,
@@ -6280,6 +6283,92 @@ impl CockpitView {
         self.popover = self.derive_menu(cx);
     }
 
+    /// The `$` menu (T3's): the skills the Session serving the focused
+    /// Pane lists, through the fuzzy filter; while a draft's catalogue
+    /// loads, or when none matches, one inert line says so.
+    fn skill_menu(&mut self, filter: String, cx: &mut Context<Self>) -> Option<Popover> {
+        let pane = self.panes.get(self.focused())?;
+        let identity = pane.identity;
+        let (skills, loading): (Vec<ferrite_core::SessionCommand>, bool) = match pane.thread() {
+            Some(thread) => (self.cockpit.thread(thread)?.commands().to_vec(), false),
+            None => {
+                let draft = pane.draft()?;
+                let provider = draft.binding.provider().provider;
+                let cwd = draft
+                    .binding
+                    .resolve(self.cockpit.registry(), !self.on_machine())
+                    .ok()?
+                    .source_root()
+                    .to_path_buf();
+                let line = pane.composer.clone();
+                let menu = self.draft_commands(provider, cwd);
+                menu.poll();
+                if menu.pending.is_none() && menu.error.is_none() {
+                    line.update(cx, |composer, cx| composer.set_commands(&menu.commands, cx));
+                }
+                (menu.commands.clone(), menu.pending.is_some())
+            }
+        };
+        let skills: Vec<_> = skills.into_iter().filter(|command| command.is_skill()).collect();
+        let mut rows: Vec<Row> = command_rows(&skills, &filter)
+            .into_iter()
+            .map(|row| Row {
+                consequence: Consequence::Skill(row.insert.clone()),
+                row,
+                active: false,
+            })
+            .collect();
+        if rows.is_empty() {
+            let note = if loading {
+                "Searching workspace skills..."
+            } else {
+                "No skills found. Try / to browse provider commands."
+            };
+            rows.push(Row {
+                row: pane::MenuRow {
+                    insert: "".into(),
+                    name: note.into(),
+                    detail: "".into(),
+                    matched: Vec::new(),
+                    prose_detail: true,
+                    inert: true,
+                    tag: None,
+                },
+                active: false,
+                consequence: Consequence::Inert,
+            });
+        }
+        Some(Popover {
+            scroll: ScrollHandle::new(),
+            revealed: Default::default(),
+            hold: None,
+            pane: identity,
+            kind: Kind::Commands,
+            rows,
+            selected: 0,
+        })
+    }
+
+    /// The draft's command catalogue for `provider` in `cwd`, asked for
+    /// afresh when either changed.
+    fn draft_commands(&mut self, provider: Provider, cwd: std::path::PathBuf) -> &mut DraftCommands {
+        if self
+            .draft_commands
+            .as_ref()
+            .is_none_or(|menu| menu.provider != provider || menu.cwd != cwd)
+        {
+            let pending = self.cockpit.discover_commands(provider, &cwd);
+            self.draft_commands = Some(DraftCommands {
+                provider,
+                cwd,
+                pending,
+                commands: Vec::new(),
+                error: None,
+            });
+        }
+        self.draft_commands.as_mut().expect("initialized above")
+    }
+
     fn derive_menu(&mut self, cx: &mut Context<Self>) -> Option<Popover> {
         // Muted until the text moves again.
         if self.menu_muted {
@@ -6292,6 +6381,11 @@ impl CockpitView {
             (composer.text().to_string(), composer.cursor())
         };
         let mention = mention_token(&text, cursor);
+        if mention.is_none() {
+            if let Some((_, filter)) = skill_token(&text, cursor) {
+                return self.skill_menu(filter.to_string(), cx);
+            }
+        }
         // A slash inside an active @path belongs to file completion.
         if let Some((token_start, filter)) =
             slash_token(&text, cursor).filter(|_| mention.is_none())
@@ -6332,25 +6426,11 @@ impl CockpitView {
                         });
                     }
                 };
-                if self
-                    .draft_commands
-                    .as_ref()
-                    .is_none_or(|menu| menu.provider != provider || menu.cwd != cwd)
-                {
-                    let pending = self.cockpit.discover_commands(provider, &cwd);
-                    self.draft_commands = Some(DraftCommands {
-                        provider,
-                        cwd,
-                        pending,
-                        commands: Vec::new(),
-                        error: None,
-                    });
-                }
-                let menu = self.draft_commands.as_mut().expect("initialized above");
+                let line = pane.composer.clone();
+                let menu = self.draft_commands(provider, cwd);
                 menu.poll();
                 if menu.pending.is_none() && menu.error.is_none() {
-                    pane.composer
-                        .update(cx, |composer, cx| composer.set_commands(&menu.commands, cx));
+                    line.update(cx, |composer, cx| composer.set_commands(&menu.commands, cx));
                 }
                 let mut rows: Vec<Row> = command_rows(&menu.commands, filter)
                     .into_iter()
@@ -6789,6 +6869,25 @@ impl CockpitView {
                     // The pick is a chip, as a mention is; it sends as
                     // the plain `/name` it reads.
                     let token = format!("/{name}");
+                    composer.splice(start..end, &format!("{token} "), cx);
+                    composer.stage_chip(SharedString::from(token), cx);
+                });
+            }
+            Consequence::Skill(name) => {
+                composer.update(cx, |composer, cx| {
+                    let cursor = composer.cursor();
+                    let text = composer.text();
+                    let Some((start, _)) = skill_token(text, cursor) else {
+                        return;
+                    };
+                    let mut end = cursor
+                        + text[cursor..]
+                            .find(char::is_whitespace)
+                            .unwrap_or(text.len() - cursor);
+                    if text[end..].starts_with(' ') {
+                        end += 1;
+                    }
+                    let token = format!("${name}");
                     composer.splice(start..end, &format!("{token} "), cx);
                     composer.stage_chip(SharedString::from(token), cx);
                 });
@@ -9875,6 +9974,21 @@ fn slash_token(text: &str, cursor: usize) -> Option<(usize, &str)> {
         .next()
         .map_or(start == 0, char::is_alphabetic);
     valid.then_some((start, filter))
+}
+
+/// The `$` token the caret sits in (T3's skill trigger): the `$`'s byte
+/// offset and the filter typed after it. As `@`, the `$` opens a token —
+/// start of line or after whitespace — and a digit after it is a price,
+/// not a skill (`$5`).
+fn skill_token(text: &str, cursor: usize) -> Option<(usize, &str)> {
+    let head = text.get(..cursor)?;
+    let at = head.rfind('$')?;
+    let filter = &head[at + 1..];
+    if filter.contains(char::is_whitespace) || filter.starts_with(|ch: char| ch.is_ascii_digit()) {
+        return None;
+    }
+    let opens_token = at == 0 || text[..at].ends_with(char::is_whitespace);
+    opens_token.then_some((at, filter))
 }
 
 /// The `@` token the caret sits in: the `@`'s byte offset and the filter

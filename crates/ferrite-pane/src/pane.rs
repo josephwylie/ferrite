@@ -3357,46 +3357,69 @@ fn skill_named<'a>(
     skills.iter().find(|skill| skill.name == name)
 }
 
-/// A skill in a sent prompt (Claude's, `claude/parity/skill-sent-bubble.png`,
-/// `skill-hover.png`): `SKILL_INK` on no ground, in the prompt's face, a
-/// faint blue wash behind it under the pointer, and a card above it — the
-/// full name in `INK_SUBTLE`, then the catalogue's description, as the `/` picker reads it — wrapped at
-/// `SKILL_TIP_W`.
+/// A skill in a sent prompt, the Composer's token (T3's
+/// `SkillInlineText`): the cube (`icons::BOX`, 1em) then the name at
+/// `W_LABEL` in `SKILL_INK`, on no ground, underlined under the pointer,
+/// and a card above it: the full name in `INK_SUBTLE`, the catalogue's
+/// description, and `View instructions` where the skill names its
+/// SKILL.md, which a click opens.
 pub(crate) fn skill_token(
     label: &str,
     skill: &ferrite_core::SessionCommand,
     window: &mut gpui::Window,
 ) -> (gpui::Size<gpui::Pixels>, AnyElement) {
-    let style = window.text_style();
+    let label = label.trim_start_matches(['/', '$']).to_string();
+    let mut style = window.text_style();
+    style.font_weight = theme::W_LABEL;
     let size = style.font_size.to_pixels(window.rem_size());
     let shaped = window.text_system().shape_line(
-        SharedString::from(label.to_string()),
+        SharedString::from(label.clone()),
         size,
         &[style.to_run(label.len())],
         None,
     );
-    let width = shaped.width();
+    let icon_side = f32::from(size);
+    let gap = icon_side * theme::TOKEN_ICON_GAP_EM;
+    let width = shaped.width() + px(icon_side + gap);
     let line = window.line_height();
     let name = skill.name.clone();
-    let description = skill.description.clone();
+    let mut body = skill.description.clone();
+    if skill.path.is_some() {
+        body.push_str("\n\nView instructions");
+    }
+    let instructions = skill.path.clone().map(std::path::PathBuf::from);
     let element = div()
         .id(SharedString::from(format!("prompt-skill-{name}")))
         .debug_selector({
             let name = name.clone();
             move || format!("prompt-skill-{name}")
         })
+        .flex()
+        .items_center()
+        .gap(px(gap))
         .w(width)
         .h(line)
-        .rounded(px(theme::R_CONTROL))
+        .font_weight(theme::W_LABEL)
         .text_color(rgb(theme::SKILL_INK))
         .whitespace_nowrap()
-        .hover(|style| style.bg(gpui::rgba(theme::SKILL_HOVER)))
+        .hover(|style| style.underline())
+        .when_some(instructions, |token, path| {
+            token
+                .cursor_pointer()
+                .on_click(move |_, _, cx| cx.open_with_system(&path))
+        })
         .tooltip(ferrite_ui::menu::tooltip_card(
-            format!("/{name}"),
-            description,
+            format!("${name}"),
+            body,
             theme::SKILL_TIP_W,
         ))
-        .child(SharedString::from(label.to_string()))
+        .child(ferrite_ui::icons::icon_stroked(
+            ferrite_ui::icons::BOX,
+            icon_side,
+            theme::SKILL_ICON_STROKE,
+            theme::SKILL_INK,
+        ))
+        .child(SharedString::from(label))
         .into_any_element();
     (gpui::size(width, line), element)
 }
