@@ -37,6 +37,7 @@ pub use remote::{Attach, Endpoint, ServerRestart, ServerState};
 pub use status::{ServerStatus, StatusRow};
 
 pub(crate) mod mirror;
+mod factory_fixture;
 mod parked;
 mod remote;
 mod shared;
@@ -74,12 +75,9 @@ pub struct Cockpit {
     allowance_warnings: Vec<crate::providers::limits::AllowanceWarning>,
     /// What API callers asked of the windows, oldest first.
     asked: Vec<Asked>,
-    /// A fixture world's own Factory, answering Workflow asks as a
-    /// Server's would (`fixture_live_factory`); a real window has none.
-    local_factory: Option<crate::factory::Factory>,
-    /// A fixture world's Task asks, kept to be read back
-    /// (`fixture_record_tasks`); a real window keeps none.
-    task_asks: Option<Vec<crate::protocol::TaskAction>>,
+    /// A fixture world's Factory, answering its Factory asks as a
+    /// Server's would; a real window has none.
+    factory_fixture: Option<factory_fixture::FactoryFixture>,
     /// The Subject each Pane shows, where it is not Main: what this window
     /// reads when the operator looks at it.
     visible_subjects: std::collections::BTreeMap<ThreadId, Subject>,
@@ -102,10 +100,6 @@ pub struct Cockpit {
     /// What a fixture world's forge says (`fixture_forge`), by checkout:
     /// answered in place of its CLI. Empty outside fixtures.
     forge_fixture: HashMap<PathBuf, ferrite_reviewr::forge::PrView>,
-    /// What a fixture world's GitHub login lists (`fixture_github`): each
-    /// repository and its labels, in place of `gh`. `None` outside
-    /// fixtures.
-    github_fixture: Option<Vec<(String, Vec<String>)>>,
     /// What a fixture world's disk says is free (`fixture_free_disk`):
     /// answered in place of the volume. `None` outside fixtures.
     free_disk_fixture: Option<u64>,
@@ -237,14 +231,12 @@ impl Cockpit {
             browser_messages: Vec::new(),
             allowance_warnings: Vec::new(),
             asked: Vec::new(),
-            local_factory: None,
-            task_asks: None,
+            factory_fixture: None,
             visible_subjects: std::collections::BTreeMap::new(),
             window_active: true,
             composing: std::collections::BTreeSet::new(),
             forge: Default::default(),
             forge_fixture: HashMap::new(),
-            github_fixture: None,
             free_disk_fixture: None,
             drawn: None,
             told: None,
@@ -2094,16 +2086,11 @@ impl Cockpit {
         ask: crate::protocol::GitHubAsk,
     ) -> io::Result<Receiver<io::Result<Vec<String>>>> {
         use crate::protocol::GitHubAsk;
-        if let Some(world) = &self.github_fixture {
-            let names: Vec<String> = match &ask {
-                GitHubAsk::Repositories => world.iter().map(|(name, _)| name.clone()).collect(),
-                GitHubAsk::Labels { repository } => world
-                    .iter()
-                    .find(|(name, _)| name == repository)
-                    .map(|(_, labels)| labels.clone())
-                    .unwrap_or_default(),
-                GitHubAsk::Unknown => Vec::new(),
-            };
+        if let Some(names) = self
+            .factory_fixture
+            .as_ref()
+            .and_then(|fixture| fixture.github_names(&ask))
+        {
             return Ok(read_here(move || Ok(names)));
         }
         match &mut self.link {
@@ -2536,91 +2523,39 @@ impl Cockpit {
     /// A Factory command. The Factory runs in the Server: a window that
     /// runs its agents itself has none.
     pub fn task(&mut self, action: crate::protocol::TaskAction) -> io::Result<Option<Done>> {
-        if let Some(asks) = self.task_asks.as_mut() {
-            asks.push(action);
-            return Ok(Some(Done::Changed { changed: true }));
-        }
-        let done = self
-            .remote()?
-            .execute(Op::Task { action })
-            .map_err(io::Error::from);
-        self.settle();
-        done
+        self.factory_ask(Op::Task { action })
     }
 
     /// A Workflow authoring command (#221), answered by the Server's
-    /// Factory (or a fixture world's own).
+    /// Factory.
     pub fn workflow(
         &mut self,
         action: crate::protocol::WorkflowAction,
     ) -> io::Result<Option<Done>> {
-        if let Some(factory) = self.local_factory.as_mut() {
-            let agent = crate::factory::Agent {
-                provider: Provider::Claude,
-                model: None,
-                effort: None,
-            };
-            let command = crate::factory::workflow_command(action, &agent, Vec::new())
-                .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "unknown ask"))?;
-            let answer = factory
-                .command(command, 0)
-                .map_err(|refusal| io::Error::other(refusal.message))?;
-            let board = factory.board();
-            self.receive_fixture(ServerMessage::Factory { revision: 0, board });
-            return Ok(Some(match answer {
-                crate::factory::Answer::Task(task) | crate::factory::Answer::Duplicate(task) => {
-                    Done::Task { task }
-                }
-                crate::factory::Answer::Changed(changed) => Done::Changed { changed },
-                crate::factory::Answer::Workflow(workflow) => Done::Workflow { workflow },
-                crate::factory::Answer::Step(step) => Done::Step { step },
-                crate::factory::Answer::Version(version) => Done::Version { version },
-                crate::factory::Answer::Proposal(proposal) => Done::Proposal { proposal },
-            }));
-        }
-        let done = self
-            .remote()?
-            .execute(Op::Workflow { action })
-            .map_err(io::Error::from);
-        self.settle();
-        done
+        self.factory_ask(Op::Workflow { action })
     }
 
-    /// A Coordinator command (#224), answered by the Server's Factory (or
-    /// a fixture world's own, which starts no Thread).
+    /// A Coordinator command (#224), answered by the Server's Factory.
     pub fn coordinator(
         &mut self,
         action: crate::protocol::CoordinatorAction,
     ) -> io::Result<Option<Done>> {
-        if let Some(factory) = self.local_factory.as_mut() {
-            let agent = crate::factory::Agent {
-                provider: Provider::Claude,
-                model: None,
-                effort: None,
-            };
-            let command =
-                crate::factory::coordinator_command(action, &agent, Default::default())
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "unknown ask"))?;
-            let answer = factory
-                .command(command, 0)
-                .map_err(|refusal| io::Error::other(refusal.message))?;
-            let board = factory.board();
-            self.receive_fixture(ServerMessage::Factory { revision: 0, board });
-            return Ok(Some(match answer {
-                crate::factory::Answer::Task(task) | crate::factory::Answer::Duplicate(task) => {
-                    Done::Task { task }
-                }
-                crate::factory::Answer::Changed(changed) => Done::Changed { changed },
-                crate::factory::Answer::Workflow(workflow) => Done::Workflow { workflow },
-                crate::factory::Answer::Step(step) => Done::Step { step },
-                crate::factory::Answer::Version(version) => Done::Version { version },
-                crate::factory::Answer::Proposal(proposal) => Done::Proposal { proposal },
-            }));
+        self.factory_ask(Op::Coordinator { action })
+    }
+
+    /// One Factory ask, of the Server (or a fixture world's own Factory).
+    fn factory_ask(&mut self, op: Op) -> io::Result<Option<Done>> {
+        if let Some((done, board)) = self
+            .factory_fixture
+            .as_mut()
+            .and_then(|fixture| fixture.execute(op.clone()))
+        {
+            if let Some(board) = board {
+                self.receive_fixture(ServerMessage::Factory { revision: 0, board });
+            }
+            return done;
         }
-        let done = self
-            .remote()?
-            .execute(Op::Coordinator { action })
-            .map_err(io::Error::from);
+        let done = self.remote()?.execute(op).map_err(io::Error::from);
         self.settle();
         done
     }
@@ -2795,7 +2730,7 @@ impl Cockpit {
     /// A fixture world's GitHub login: the repositories it reaches and
     /// each one's labels, answered in place of `gh` (#225).
     pub fn fixture_github(&mut self, repositories: Vec<(String, Vec<String>)>) {
-        self.github_fixture = Some(repositories);
+        self.factory_fixture.get_or_insert_default().github = Some(repositories);
     }
 
     /// Whether a fixture world's forge answers for the checkout at `path`:
@@ -2842,31 +2777,33 @@ impl Cockpit {
     pub fn fixture_live_factory(&mut self) {
         let factory = crate::factory::Factory::in_memory();
         let board = factory.board();
-        self.local_factory = Some(factory);
+        self.factory_fixture.get_or_insert_default().factory = Some(factory);
         self.receive_fixture(ServerMessage::Factory { revision: 0, board });
     }
 
     /// A fixture world keeps its Task asks, each answered as changed, to
     /// be read back with `fixture_task_asks`.
     pub fn fixture_record_tasks(&mut self) {
-        self.task_asks = Some(Vec::new());
+        self.factory_fixture.get_or_insert_default().asks = Some(Vec::new());
     }
 
     pub fn fixture_task_asks(&self) -> &[crate::protocol::TaskAction] {
-        self.task_asks.as_deref().unwrap_or_default()
+        self.factory_fixture
+            .as_ref()
+            .and_then(|fixture| fixture.asks.as_deref())
+            .unwrap_or_default()
     }
 
     /// A fixture world's Factory hears `command` as a Server's would
     /// (a GitHub read's answer, say), and the window is told the board.
     pub fn fixture_factory_command(&mut self, command: crate::factory::Command) {
-        let Some(factory) = self.local_factory.as_mut() else {
-            return;
-        };
-        if let Err(refusal) = factory.command(command, 0) {
-            crate::log!("fixture: the Factory refused: {refusal}");
+        if let Some(board) = self
+            .factory_fixture
+            .as_mut()
+            .and_then(|fixture| fixture.hear(command))
+        {
+            self.receive_fixture(ServerMessage::Factory { revision: 0, board });
         }
-        let board = factory.board();
-        self.receive_fixture(ServerMessage::Factory { revision: 0, board });
     }
 
     /// A fixture world's Task alert, as a Server would say it.

@@ -1634,6 +1634,19 @@ fn at_rest_rule(task: &mut Task, seen: &Seen, now_ms: i64, effects: &mut Vec<Eff
     }
 }
 
+/// A Factory answer as a window's reply.
+pub fn done(answer: Answer) -> crate::protocol::Done {
+    use crate::protocol::Done;
+    match answer {
+        Answer::Task(task) | Answer::Duplicate(task) => Done::Task { task },
+        Answer::Changed(changed) => Done::Changed { changed },
+        Answer::Workflow(workflow) => Done::Workflow { workflow },
+        Answer::Step(step) => Done::Step { step },
+        Answer::Version(version) => Done::Version { version },
+        Answer::Proposal(proposal) => Done::Proposal { proposal },
+    }
+}
+
 /// A window's authoring ask as the command it is: new Workflows and
 /// Steps on `agent`; a save checked against `models` and the skills the
 /// window found. `None` for an ask this Ferrite does not know.

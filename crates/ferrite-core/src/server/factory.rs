@@ -45,17 +45,7 @@ pub(super) fn wire_error(error: ApiError) -> WireError {
     }
 }
 
-/// A Factory answer as a window's reply.
-pub(super) fn done(answer: Answer) -> Done {
-    match answer {
-        Answer::Task(task) | Answer::Duplicate(task) => Done::Task { task },
-        Answer::Changed(changed) => Done::Changed { changed },
-        Answer::Workflow(workflow) => Done::Workflow { workflow },
-        Answer::Step(step) => Done::Step { step },
-        Answer::Version(version) => Done::Version { version },
-        Answer::Proposal(proposal) => Done::Proposal { proposal },
-    }
-}
+pub(super) use crate::factory::done;
 
 /// A Provider Decision as a Task says it: the Provider's own summary,
 /// else the tool it gates.
