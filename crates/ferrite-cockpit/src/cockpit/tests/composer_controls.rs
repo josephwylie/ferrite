@@ -960,3 +960,35 @@ fn a_sent_prompt_shows_stop_before_its_first_event(cx: &mut TestAppContext) {
         "stop stands from the send"
     );
 }
+
+/// T3's primary actions: while a turn runs with something typed, stop (a
+/// 28 circle) stands beside send (a 32 circle), so the operator can steer
+/// or interrupt from the same row. Each does its own act.
+#[gpui::test]
+fn a_running_turn_with_text_shows_stop_beside_send(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("stop-beside-send", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Go".into());
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    assert!(cx.debug_bounds("composer-stop").is_some(), "stop alone");
+    assert!(cx.debug_bounds("composer-send").is_none(), "no send when empty");
+    view.update(cx, |view, cx| {
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.set("Also this".into(), cx));
+    });
+    tick(cx);
+    let stop = cx.debug_bounds("composer-stop").expect("stop stays");
+    let send = cx.debug_bounds("composer-send").expect("send joins it");
+    assert!(stop.right() <= send.left(), "stop before send: {stop:?} / {send:?}");
+    assert_eq!(stop.size.width, px(28.));
+    assert_eq!(send.size.width, px(32.));
+    cx.simulate_click(stop.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(*fake.interrupts.borrow(), 1, "stop interrupts");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[0].composer.read(cx).text(), "Also this", "and keeps the text");
+    });
+}

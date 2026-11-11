@@ -268,7 +268,7 @@ const TUNING_PENDING_HINT: &str = "Available once the last change is accepted";
 /// Whether a turn runs on this Thread for the stop affordances: from the
 /// moment a prompt is sent — before the provider's first event, which
 /// `busy` waits for — through a starting Session to the turn's end. The
-/// send circle reads it (`pane::send_is_stop`), so a way to stop is in view
+/// Composer reads it (`pane::primary_actions`), so a way to stop is in view
 /// from the first frame.
 fn turn_running(open: &ThreadView) -> bool {
     open.busy() || open.activity().main_operator_turn()
@@ -8336,6 +8336,7 @@ impl CockpitView {
         if self.grid_board() {
             return (index == self.focused()).then(|| pane::ComposerControls {
                 attach: None,
+                stop: None,
                 send: self.send_button(index, true, cx),
                 footer: None,
                 env: None,
@@ -8407,6 +8408,7 @@ impl CockpitView {
         words.extend(mode);
         Some(pane::ComposerControls {
             attach: Some(attach),
+            stop: self.stop_button(index, cx),
             send: self.send_button(index, false, cx),
             footer: Some(pane::composer_footer(model, words, ring).into_any_element()),
             env: env
@@ -8416,41 +8418,59 @@ impl CockpitView {
         })
     }
 
-    /// The send circle: Enter's act — or, while a turn runs
-    /// (`turn_running`) and the line is empty, `stop`, Esc's. The box's
-    /// stands only once there is something to send or stop (Claude's: an
-    /// empty box shows no send). The `compact` Composer's always stands and
-    /// always sends (into a running turn): its placeholder says
-    /// `↵ to steer this turn`.
+    /// Whether this Pane's turn runs, and whether its line is empty: what
+    /// decides its primary actions (`pane::primary_actions`).
+    fn running_and_empty(&self, index: usize, cx: &gpui::App) -> (bool, bool) {
+        let pane = &self.panes[index];
+        let running = pane
+            .thread()
+            .and_then(|thread| self.cockpit.thread(thread))
+            .is_some_and(|open| turn_running(&open));
+        (running, pane.composer.read(cx).is_empty())
+    }
+
+    /// The send circle: Enter's act, steering a running turn. The box's
+    /// stands only once there is something to send (an empty box shows
+    /// none). The `compact` Composer's always stands and always sends
+    /// (into a running turn): its placeholder says `↵ to steer this turn`.
     fn send_button(
         &self,
         index: usize,
         compact: bool,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let pane = &self.panes[index];
-        let running = pane
-            .thread()
-            .and_then(|thread| self.cockpit.thread(thread))
-            .is_some_and(|open| turn_running(&open));
-        let empty = pane.composer.read(cx).is_empty();
-        let stop = pane::send_is_stop(running, empty, compact);
-        if empty && !stop && !compact {
+        let (running, empty) = self.running_and_empty(index, cx);
+        if !pane::primary_actions(running, empty, compact).send {
             return None;
         }
-        let button = pane::send_button(stop, empty, compact, cx)
+        let button = pane::send_button(running, empty, compact, cx)
             .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                 cx.stop_propagation();
                 view.focus_pane(index);
                 let focus = view.panes[index].composer.read(cx).focus_handle(cx);
                 window.focus(&focus, cx);
-                match view.panes[index].thread() {
-                    Some(thread) if stop => {
-                        view.cockpit.interrupt(thread);
-                        view.facts.acted(&view.cockpit, thread);
-                        cx.notify();
-                    }
-                    _ => view.submit(&Submit, window, cx),
+                view.submit(&Submit, window, cx);
+            }))
+            .into_any_element();
+        Some(button)
+    }
+
+    /// Stop, while the turn runs: Esc's act, which keeps what is typed.
+    fn stop_button(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (running, empty) = self.running_and_empty(index, cx);
+        if !pane::primary_actions(running, empty, false).stop {
+            return None;
+        }
+        let button = pane::stop_button(cx)
+            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                view.focus_pane(index);
+                let focus = view.panes[index].composer.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+                if let Some(thread) = view.panes[index].thread() {
+                    view.cockpit.interrupt(thread);
+                    view.facts.acted(&view.cockpit, thread);
+                    cx.notify();
                 }
             }))
             .into_any_element();

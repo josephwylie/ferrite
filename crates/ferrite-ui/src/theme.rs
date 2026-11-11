@@ -2487,9 +2487,31 @@ pub const TOOL_CHIP_LOGO: f32 = 13.0;
 /// readable; a longer label (a provider's native mode) cuts here
 /// (`pane::composer_toolbar`).
 pub const TOOLBAR_LEAD_MAX_W: f32 = 180.0;
-/// The send circle (28) and its arrow (14).
-pub const COMPOSER_SEND: f32 = 28.0;
+/// The send circle (T3's `sm:h-8 sm:w-8`, 32) and its arrow (14), growing
+/// to `MOTION_SEND_HOVER_SCALE` under the pointer.
+pub const COMPOSER_SEND: f32 = 32.0;
 pub const COMPOSER_SEND_ICON: f32 = 14.0;
+pub const MOTION_SEND_HOVER_SCALE: f32 = 1.05;
+/// T3's send arrow strokes 1.8 at 14.
+pub const SEND_ARROW_STROKE: f32 = 1.8;
+/// The send circle lit (T3's `--message-action`, its dark `--primary`
+/// `oklch(0.571 0.21 264)`), under the pointer that mixed 90% with the
+/// background, its white arrow and its inset top highlight (white 16%).
+/// `PRIMARY` stays the dialogs' neutral primary.
+pub const SEND_LIT: u32 = 0x346bf1;
+pub const SEND_LIT_HOVER: u32 = 0x2f60d9;
+pub const ON_SEND_LIT: u32 = 0xffffff;
+pub const SEND_LIT_HIGHLIGHT: u32 = 0xffffff29;
+/// Stop (T3's interrupt, `sm:size-7`): a 28 circle in its dark destructive
+/// (red-500 mixed 90% with white) at 90%, the full colour under the
+/// pointer, a white 8 square at radius 1.5 (`icons::STOP` drawn at 12).
+/// Not `RED`, which is the text hue.
+pub const COMPOSER_STOP: f32 = 28.0;
+pub const COMPOSER_STOP_ICON: f32 = 12.0;
+pub const STOP: u32 = 0xfb414ae6;
+pub const STOP_HOVER: u32 = 0xfb414aff;
+/// Between stop and send while both stand.
+pub const PRIMARY_ACTIONS_GAP: f32 = SPACE_2;
 /// The Solo box is one row, as Claude's: the `+` (`COMPOSER_ATTACH`), the
 /// line, the send circle, `COMPOSER_ROW_GAP` apart, `COMPOSER_ROW_PAD`
 /// inside the box — 44 high at one row, the `+` glyph 14 in and the line

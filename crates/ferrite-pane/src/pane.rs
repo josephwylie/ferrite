@@ -31,8 +31,9 @@ pub use composer::model_label;
 pub use composer::{
     attach_button, composer_footer, composer_row_limit, env_strip, env_word, flat_facts_text,
     mode_chip, model_effort_chip, offers_import, permission_mode_label, queued_close, queued_count,
-    queued_edit, queued_send_now, queued_sends_now, queued_takes_back, send_button, send_is_stop,
-    toolbar_chip, ComposerControls,
+    primary_actions, queued_edit, queued_send_now, queued_sends_now, queued_takes_back, send_button,
+    stop_button,
+    toolbar_chip, ComposerControls, PrimaryActions,
 };
 use composer::{
     composer_region, composer_stack, env_face, ghost_row, placeholder, queue_card, ComposerStack,

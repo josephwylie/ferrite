@@ -103,24 +103,39 @@ pub fn attach_button(cx: &gpui::App) -> gpui::component::button::Button {
         .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, INK_STRONG))
 }
 
-/// Whether the send circle shows stop: Solo's (not `compact`), while the
-/// turn runs, with nothing in the box. The cockpit draws the circle from
-/// it; the working line names no key.
-pub fn send_is_stop(running: bool, empty: bool, compact: bool) -> bool {
-    !compact && running && empty
+/// Which of the Composer's primary actions stand (T3's): Solo's stop while
+/// a turn runs, its send once something is typed, both while a turn runs
+/// with text (stop first). The `compact` Composer's one circle always
+/// stands and always sends, into a running turn too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrimaryActions {
+    pub stop: bool,
+    pub send: bool,
 }
 
-/// The send circle (`COMPOSER_SEND` round; the `compact` Composer's, SPEC
-/// §5.9, `SEND_CIRCLE_SM` with its glyph `SEND_GLYPH_SM`, spaced by its
-/// box's gap). Three faces, as Claude's and Codex's: with something to send,
-/// lit — `PRIMARY` with an `ON_PRIMARY` `arrow-up`; with nothing (`empty`),
-/// at rest — `paint::SEND` with the arrow in `INK_SUBTLE` (still pressable:
-/// an empty ↵ has its own acts); while a turn runs with nothing typed
-/// (`stop`), `paint::SEND` with `stop` in `INK_STRONG`. The ground changes
-/// at once with the keystroke that changes it; the glyph morphs
-/// (`send_glyph`). The tooltip names the key.
+pub fn primary_actions(running: bool, empty: bool, compact: bool) -> PrimaryActions {
+    if compact {
+        return PrimaryActions {
+            stop: false,
+            send: true,
+        };
+    }
+    PrimaryActions {
+        stop: running,
+        send: !empty,
+    }
+}
+
+/// The send circle (`COMPOSER_SEND` round, growing to
+/// `MOTION_SEND_HOVER_SCALE` under the pointer; the `compact` Composer's,
+/// SPEC §5.9, `SEND_CIRCLE_SM` with its glyph `SEND_GLYPH_SM`). With
+/// something to send it is lit, T3's: `SEND_LIT` with an `ON_SEND_LIT`
+/// arrow under a `SEND_LIT_HIGHLIGHT` top edge; with nothing (`empty`, the
+/// compact one's) `paint::SEND` with the arrow in `INK_SUBTLE`, still
+/// pressable. While a turn runs (`steer`) the arrow morphs into the steer
+/// glyph (`send_glyph`). The tooltip names the key.
 pub fn send_button(
-    stop: bool,
+    steer: bool,
     empty: bool,
     compact: bool,
     cx: &gpui::App,
@@ -130,54 +145,82 @@ pub fn send_button(
     } else {
         (theme::COMPOSER_SEND, theme::COMPOSER_SEND_ICON)
     };
-    let lit = !stop && !empty;
+    let lit = !empty;
     let (rest, hover, press, ink): (gpui::Hsla, gpui::Hsla, gpui::Hsla, u32) = if lit {
         (
-            rgb(theme::PRIMARY).into(),
-            rgb(theme::PRIMARY_HOVER).into(),
-            rgb(theme::PRIMARY_HOVER).into(),
-            theme::ON_PRIMARY,
+            rgb(theme::SEND_LIT).into(),
+            rgb(theme::SEND_LIT_HOVER).into(),
+            rgb(theme::SEND_LIT_HOVER).into(),
+            theme::ON_SEND_LIT,
         )
     } else {
         (
             theme::paint::SEND.into(),
             theme::paint::SEND.into(),
             theme::paint::PRESS.into(),
-            if stop { INK_STRONG } else { INK_SUBTLE },
+            INK_SUBTLE,
         )
     };
-    components::faded_button("composer-send", rest, hover, press, rgb(ink).into(), cx)
-        .debug_selector(move || {
-            if stop {
-                "composer-stop"
-            } else {
-                "composer-send"
-            }
-            .into()
-        })
+    let lift = if compact {
+        1.0
+    } else {
+        theme::MOTION_SEND_HOVER_SCALE
+    };
+    components::lifting_button("composer-send", rest, hover, press, rgb(ink).into(), lift, cx)
+        .debug_selector(|| "composer-send".into())
+        .relative()
         .p_0()
         .size(px(size))
         .flex_shrink_0()
         .rounded_full()
         .map(|button| {
-            if stop {
-                button.tip_with_key("Stop", components::bound_chord("cockpit::Interrupt"))
-            } else {
-                button.tip_with_key("Send", Some(components::spell_chord("enter")))
-            }
+            let verb = if steer { "Steer" } else { "Send" };
+            button.tip_with_key(verb, Some(components::spell_chord("enter")))
         })
-        .child(send_glyph(stop, glyph, ink))
+        .when(lit, |button| {
+            button.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .rounded_full()
+                    .border_t_1()
+                    .border_color(rgba(theme::SEND_LIT_HIGHLIGHT)),
+            )
+        })
+        .child(send_glyph(steer, glyph, ink))
 }
 
-/// The send circle's glyph, morphing between `arrow-up` and `stop` when
-/// the state flips under it (`motion::settled`, `FADE_QUICK`): the old
-/// glyph fades and shrinks to `MOTION_SEND_GLYPH_FROM` as the new one fades
-/// and grows into its place, both centred in the circle. First paint lands
-/// on its state.
-fn send_glyph(stop: bool, extent: f32, ink: u32) -> impl IntoElement {
+/// Stop (T3's interrupt): a `COMPOSER_STOP` circle in `STOP`, `STOP_HOVER`
+/// under the pointer, its white rounded square; the tooltip says
+/// `Interrupt` and names the key.
+pub fn stop_button(cx: &gpui::App) -> gpui::component::button::Button {
+    components::faded_button(
+        "composer-stop",
+        rgba(theme::STOP).into(),
+        rgba(theme::STOP_HOVER).into(),
+        rgba(theme::STOP_HOVER).into(),
+        rgb(theme::ON_SEND_LIT).into(),
+        cx,
+    )
+    .debug_selector(|| "composer-stop".into())
+    .p_0()
+    .size(px(theme::COMPOSER_STOP))
+    .flex_shrink_0()
+    .rounded_full()
+    .tip_with_key("Interrupt", components::bound_chord("cockpit::Interrupt"))
+    .child(icon(icons::STOP, theme::COMPOSER_STOP_ICON, theme::ON_SEND_LIT))
+}
+
+/// The send circle's glyph, morphing between `arrow-up` and the steer
+/// glyph when a turn starts or ends under it (`motion::settled`,
+/// `FADE_QUICK`): the old glyph fades and shrinks to
+/// `MOTION_SEND_GLYPH_FROM` as the new one fades and grows into its place,
+/// both centred in the circle. First paint lands on its state. The arrow
+/// is T3's, stroked `SEND_ARROW_STROKE`.
+fn send_glyph(steer: bool, extent: f32, ink: u32) -> impl IntoElement {
     ferrite_ui::motion::settled(
         "send-glyph",
-        stop,
+        steer,
         ferrite_ui::motion::FADE_QUICK,
         move |t| {
             let face =
@@ -191,15 +234,18 @@ fn send_glyph(stop: bool, extent: f32, ink: u32) -> impl IntoElement {
                         .items_center()
                         .justify_center()
                         .opacity(shown)
-                        .child(icon(path, extent, ink).with_transformation(
-                            gpui::Transformation::scale(gpui::size(scale, scale)),
-                        ))
+                        .child(
+                            icons::icon_stroked(path, extent, theme::SEND_ARROW_STROKE, ink)
+                                .with_transformation(gpui::Transformation::scale(gpui::size(
+                                    scale, scale,
+                                ))),
+                        )
                 };
             div()
                 .relative()
                 .size(px(extent))
                 .child(face(icons::ARROW_UP, 1.0 - t))
-                .child(face(icons::STOP, t))
+                .child(face(icons::CORNER_UP_RIGHT, t))
         },
     )
 }
@@ -213,7 +259,9 @@ fn send_glyph(stop: bool, extent: f32, ink: u32) -> impl IntoElement {
 /// listing order.
 pub struct ComposerControls {
     pub attach: Option<AnyElement>,
-    /// The send circle; none while the box has nothing to send or stop.
+    /// Stop, while a turn runs (`primary_actions`), before send.
+    pub stop: Option<AnyElement>,
+    /// The send circle; none while the box has nothing to send.
     pub send: Option<AnyElement>,
     pub footer: Option<AnyElement>,
     pub env: Option<AnyElement>,
@@ -520,10 +568,10 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
     });
     // One row, as Claude's: the `+`, the line that grows, the send circle,
     // the buttons standing at the row's foot as the line grows over them.
-    let (attach, send, footer, env, actions) = match toolbar {
+    let (attach, primary, footer, env, actions) = match toolbar {
         Some(controls) => (
             controls.attach,
-            controls.send,
+            primary_slot(controls.stop, controls.send),
             controls.footer,
             controls.env,
             controls.queue,
@@ -581,7 +629,7 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
                     .px(px(theme::COMPOSER_TOOLBAR_PAD_X))
                     .children(attach.map(slot))
                     .child(div().flex_1())
-                    .children(send.map(slot)),
+                    .children(primary.map(slot)),
             );
     } else {
         field = field.child(
@@ -595,7 +643,7 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
                 .when(attached, |row| row.pt(px(theme::ATTACH_ROW_GAP)))
                 .children(attach.map(slot))
                 .child(live.py(px(theme::COMPOSER_TEXT_PAD_Y)))
-                .children(send.map(slot)),
+                .children(primary.map(slot)),
         );
     }
     field = field.children(drop_hint);
@@ -634,6 +682,22 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
                 .px(px(theme::COMPOSER_OUTSET - theme::FOOTER_CHIP_PAD_X))
                 .children(footer),
         ))
+}
+
+/// Stop then send, `PRIMARY_ACTIONS_GAP` apart (T3's `gap-2`), or none.
+fn primary_slot(stop: Option<AnyElement>, send: Option<AnyElement>) -> Option<AnyElement> {
+    if stop.is_none() && send.is_none() {
+        return None;
+    }
+    Some(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(theme::PRIMARY_ACTIONS_GAP))
+            .children(stop)
+            .children(send)
+            .into_any_element(),
+    )
 }
 
 /// What stands over either Composer: `SHELF_GAP` over the box it belongs

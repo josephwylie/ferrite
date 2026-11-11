@@ -82,6 +82,20 @@ pub fn faded_button(
     ink: Hsla,
     cx: &App,
 ) -> Button {
+    lifting_button(id, rest, hover, press, ink, 1.0, cx)
+}
+
+/// [`faded_button`] that also grows to `lift` with its hover blend (T3's
+/// send, `hover:scale-105`), its press squish on top.
+pub fn lifting_button(
+    id: impl Into<ElementId>,
+    rest: Hsla,
+    hover: Hsla,
+    press: Hsla,
+    ink: Hsla,
+    lift: f32,
+    cx: &App,
+) -> Button {
     let id = id.into();
     let key = crate::pointer::hover_key(&id);
     let ground = motion::hover_blend(&key, rest, hover);
@@ -93,7 +107,7 @@ pub fn faded_button(
         .custom(crate::pointer::button_variant(ground, ink, press, cx))
         .when(ground.a > 0.0, |button| button.bg(ground))
         .on_hover(motion::hover_listener(key.clone()));
-    motion::pressable(button, key)
+    motion::pressable_lifting(button, key, lift)
 }
 
 /// A text tooltip on a faded kit `Button`, in the floating vocabulary

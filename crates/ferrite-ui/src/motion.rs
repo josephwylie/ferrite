@@ -1926,10 +1926,20 @@ fn press_key(key: &str) -> SharedString {
 /// so the press lands where it rests. Its frames ride the hover blends'
 /// (the view that painted the hover draws them). Reduced motion: no squish.
 pub fn pressable<E: InteractiveElement + Styled>(element: E, key: SharedString) -> E {
+    pressable_lifting(element, key, 1.0)
+}
+
+/// [`pressable`] that also grows to `lift` with `key`'s hover blend.
+pub fn pressable_lifting<E: InteractiveElement + Styled>(
+    element: E,
+    key: SharedString,
+    lift: f32,
+) -> E {
     let pressed = hover_t(&press_key(&key));
+    let hovered = if lift == 1.0 { 0.0 } else { hover_t(&key) };
     let mut element = scaled(
         element,
-        lerp(1.0, theme::MOTION_PRESS_SCALE, pressed),
+        lerp(1.0, lift, hovered) * lerp(1.0, theme::MOTION_PRESS_SCALE, pressed),
         FROM_CENTRE,
     );
     let (down, up, away) = (key.clone(), key.clone(), key);
