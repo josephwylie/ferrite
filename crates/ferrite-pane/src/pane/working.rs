@@ -541,7 +541,21 @@ pub(super) fn starting_line(still: bool, solo: bool) -> Div {
 /// around it. Under reduced motion the header draws its seconds in place
 /// and is drawn again as they turn (`Header::seconds`).
 fn live_clock(started: std::time::Instant) -> AnyElement {
-    let clock = LiveClock { started };
+    counting_clock(started, "progress-clock", ferrite_core::progress::live_seconds)
+}
+
+/// A clock counting from `started` on its own as `live_clock` does, its
+/// time read by `format` (an agent's `2m 05s`).
+pub(crate) fn counting_clock(
+    started: std::time::Instant,
+    selector: &'static str,
+    format: fn(Duration) -> String,
+) -> AnyElement {
+    let clock = LiveClock {
+        started,
+        selector,
+        format,
+    };
     ferrite_ui::loops_overlay::hosted(move || clock.into_any_element()).into_any_element()
 }
 
@@ -577,6 +591,8 @@ pub fn background_clock(launched: std::time::Instant) -> Div {
 #[derive(IntoElement, Clone, Copy)]
 struct LiveClock {
     started: std::time::Instant,
+    selector: &'static str,
+    format: fn(Duration) -> String,
 }
 
 impl RenderOnce for LiveClock {
@@ -590,11 +606,10 @@ impl RenderOnce for LiveClock {
             cx,
         );
         let elapsed = ferrite_core::clock::instant().saturating_duration_since(self.started);
+        let selector = self.selector;
         div()
-            .debug_selector(|| "progress-clock".into())
-            .child(SharedString::from(ferrite_core::progress::live_seconds(
-                elapsed,
-            )))
+            .debug_selector(move || selector.into())
+            .child(SharedString::from((self.format)(elapsed)))
     }
 }
 
