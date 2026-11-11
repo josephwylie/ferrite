@@ -1,9 +1,8 @@
 //! The side chat (Claude's, `claude/sidechat-open.png`): quick questions
-//! about a Thread that leave it as it is. It is the right pane's other body
-//! (`panel`): `Start a side chat` in the selection's pill opens it beside the
-//! Thread, which reflows narrower; its head is a tab strip, each tab its own
-//! conversation, with expand (the pane covers the content area) and close
-//! at the right. Open, close, expand and tab changes are one frame.
+//! about a Thread that leave it as it is. Each conversation is a Surface of
+//! the Thread's Panel (ADR 0039), one tab per fork: `Start a side chat` in
+//! the selection's pill, or the Panel's `+` menu (Side chat, S), opens one
+//! beside the Thread, which reflows narrower; the tab's × ends it.
 //!
 //! A tab's conversation is a fork of the Thread (`Cockpit::fork`, the
 //! whole of it): the agent's own context, none of the Thread's state. The
@@ -22,7 +21,7 @@
 //! has made it (`bind`). A fork the agent refuses leaves its reason in the
 //! tab's place.
 
-use crate::cockpit::view_head::Column;
+use crate::cockpit::surfaces::SurfaceId;
 use std::collections::VecDeque;
 
 use super::*;
@@ -30,7 +29,6 @@ use super::*;
 use ferrite_core::activity::Subject;
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_pane::composer::Role;
-use ferrite_pane::preview::head_door;
 use ferrite_pane::quote::Reply;
 use ferrite_ui::icons::{self, icon};
 
@@ -60,12 +58,11 @@ struct Tab {
     refused: Option<SharedString>,
 }
 
-/// One Thread's side chat: its tabs, the one shown, and whether the pane
-/// covers the content area.
+/// One Thread's side chats, and the one its Panel last showed (kept in
+/// step with the Panel's tabs by `tend_side_chat`).
 struct Chat {
     tabs: Vec<Tab>,
     active: usize,
-    expanded: bool,
     /// Tabs ever made, which names the next: `Side chat 2`.
     made: usize,
 }
@@ -84,10 +81,6 @@ pub(crate) struct SideChats {
 }
 
 impl SideChats {
-    pub(crate) fn is_open(&self, owner: ThreadId) -> bool {
-        self.chats.contains_key(&owner)
-    }
-
     /// Whether `thread` is a tab's fork: no Pane, nav row or palette entry
     /// of its own.
     pub(crate) fn owns(&self, thread: ThreadId) -> bool {
@@ -96,10 +89,6 @@ impl SideChats {
                 .as_ref()
                 .is_some_and(|c| c.thread == thread)
         })
-    }
-
-    pub(crate) fn is_expanded(&self, owner: ThreadId) -> bool {
-        self.chats.get(&owner).is_some_and(|chat| chat.expanded)
     }
 
     /// The shown tab's field.
@@ -154,23 +143,6 @@ impl SideChats {
 }
 
 impl CockpitView {
-    /// Whether Pane `index`'s Thread has a side chat open: the right pane
-    /// shows it, over the sections and any preview.
-    pub(super) fn side_chat_shown(&self, index: usize) -> bool {
-        self.panes
-            .get(index)
-            .and_then(|pane| pane.thread())
-            .is_some_and(|thread| self.side_chats.is_open(thread))
-    }
-
-    /// Whether the pane covers the content area, the Thread's head and
-    /// tools under it.
-    pub(super) fn side_chat_covers(&self) -> bool {
-        self.focused_thread().is_some_and(|owner| {
-            self.side_chats.is_expanded(owner) && self.side_chats.is_open(owner)
-        })
-    }
-
     /// `Start a side chat` (the selection's pill, `passage` the selection):
     /// open `owner`'s side chat, or add a tab to it, asking the agent for
     /// the fork that holds the conversation.
@@ -184,8 +156,8 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// `+`: one more tab, empty, in `owner`'s side chat: asks the agent for
-    /// its fork, and waits for it (`bind_side_thread`).
+    /// One more side chat, empty, for `owner`: asks the agent for its
+    /// fork, and waits for it (`bind_side_thread`).
     fn new_side_tab(&mut self, owner: ThreadId, passage: Option<String>, cx: &mut Context<Self>) {
         let asked = self.ask_side_fork(owner);
         let id = self.push_side_tab(owner, passage, asked.clone().err(), cx);
@@ -234,7 +206,6 @@ impl CockpitView {
         let chat = self.side_chats.chats.entry(owner).or_insert_with(|| Chat {
             tabs: Vec::new(),
             active: 0,
-            expanded: false,
             made: 0,
         });
         chat.made += 1;
@@ -251,6 +222,7 @@ impl CockpitView {
         });
         chat.active = chat.tabs.len() - 1;
         self.side_chats.focus_wanted = true;
+        self.upsert_surface(owner, SurfaceId::SideChat(id), cx);
         id
     }
 
@@ -312,14 +284,14 @@ impl CockpitView {
         }
     }
 
-    /// The tab's ×: it and its fork go; the last tab closes the pane.
-    fn close_side_tab(&mut self, owner: ThreadId, index: usize, cx: &mut Context<Self>) {
+    /// Its Surface's tab closed: the side chat and its fork go.
+    pub(super) fn close_side_tab(&mut self, owner: ThreadId, id: u64, cx: &mut Context<Self>) {
         let Some(chat) = self.side_chats.chats.get_mut(&owner) else {
             return;
         };
-        if index >= chat.tabs.len() {
+        let Some(index) = chat.tabs.iter().position(|tab| tab.id == id) else {
             return;
-        }
+        };
         let tab = chat.tabs.remove(index);
         chat.active = chat.active.min(chat.tabs.len().saturating_sub(1));
         self.side_chats.asked.retain(|(_, id)| *id != tab.id);
@@ -333,35 +305,21 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The pane's ×: every tab goes with it.
+    /// Every side chat of `owner` goes, and their tabs (what the tests do
+    /// between cases).
+    #[cfg(test)]
     pub(super) fn close_side_chat(&mut self, owner: ThreadId, cx: &mut Context<Self>) {
         let Some(chat) = self.side_chats.chats.remove(&owner) else {
             return;
         };
         for tab in chat.tabs {
+            self.forget_surface(owner, &SurfaceId::SideChat(tab.id));
             self.side_chats.asked.retain(|(_, id)| *id != tab.id);
             if let Some(conversation) = tab.conversation {
                 self.retire(conversation.thread);
             }
         }
         cx.notify();
-    }
-
-    fn select_side_tab(&mut self, owner: ThreadId, index: usize, cx: &mut Context<Self>) {
-        if let Some(chat) = self.side_chats.chats.get_mut(&owner) {
-            if index < chat.tabs.len() && chat.active != index {
-                chat.active = index;
-                self.side_chats.focus_wanted = true;
-                cx.notify();
-            }
-        }
-    }
-
-    fn toggle_side_expanded(&mut self, owner: ThreadId, cx: &mut Context<Self>) {
-        if let Some(chat) = self.side_chats.chats.get_mut(&owner) {
-            chat.expanded = !chat.expanded;
-            cx.notify();
-        }
     }
 
     /// ⏎ in the shown tab's field: the question goes to its fork (queued
@@ -424,13 +382,31 @@ impl CockpitView {
         Some(chat.tabs.get(chat.active)?.conversation.as_ref()?.thread)
     }
 
-    /// Every frame: hand the field the keyboard it asked for, and keep each
-    /// tab's transcript told what its fork holds.
+    /// Every frame: follow the side chat each Panel shows, hand the field
+    /// the keyboard it asked for, and keep each tab's transcript told what
+    /// its fork holds.
     pub(super) fn tend_side_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(owner) = self
-            .focused_thread()
-            .filter(|owner| self.side_chats.is_open(*owner))
-        {
+        let owners: Vec<ThreadId> = self.side_chats.chats.keys().copied().collect();
+        for owner in &owners {
+            let Some(SurfaceId::SideChat(id)) = self.active_surface(*owner) else {
+                continue;
+            };
+            let Some(chat) = self.side_chats.chats.get_mut(owner) else {
+                continue;
+            };
+            if let Some(at) = chat.tabs.iter().position(|tab| tab.id == id) {
+                if chat.active != at {
+                    chat.active = at;
+                    self.side_chats.focus_wanted = true;
+                }
+            }
+        }
+        if let Some(owner) = self.focused_thread().filter(|owner| {
+            matches!(
+                self.pane_for(*owner).and_then(|index| self.shown_surface(index)),
+                Some(SurfaceId::SideChat(_))
+            )
+        }) {
             if std::mem::take(&mut self.side_chats.focus_wanted) {
                 if let Some(field) = self.side_chats.field(owner) {
                     let focus = field.read(cx).focus_target(window, cx);
@@ -438,7 +414,6 @@ impl CockpitView {
                 }
             }
         }
-        let owners: Vec<ThreadId> = self.side_chats.chats.keys().copied().collect();
         for owner in owners {
             self.sync_side_transcript(owner, cx);
         }
@@ -608,44 +583,18 @@ impl CockpitView {
 
     // ------------------------------------------------------------ drawing
 
-    /// The panel's column while it holds `owner`'s side chat: laid over the
-    /// window's right edge from the top of the head row to the bar —
-    /// `SIDE_CHAT_W` wide, the board having given it up — or, expanded,
-    /// across the whole content area, over the Thread. Only the drawing
-    /// widens: the board keeps its layout beneath, so expanding and
-    /// collapsing lay out nothing.
-    pub(super) fn side_chat_column(
-        &self,
-        owner: ThreadId,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let width = if self.side_chats.is_expanded(owner) {
-            f32::from(window.viewport_size().width) - self.board_left()
-        } else {
-            self.panel_column_w()
-        };
-        div()
-            .debug_selector(|| "panel".into())
-            .absolute()
-            .top_0()
-            .right_0()
-            .bottom(px(ferrite_ui::theme::HAIRLINE_W))
-            .w(px(width))
-            .overflow_hidden()
-            .bg(ferrite_ui::theme::paint::PANEL)
-            .child(self.side_chat_body(owner, cx))
-            .into_any_element()
-    }
-
-    /// The pane's content (`side_chat_column` lays it in the column): the tab
-    /// strip, the conversation or its empty word, the composer.
-    pub(super) fn side_chat_body(&self, owner: ThreadId, cx: &mut Context<Self>) -> AnyElement {
+    /// Side chat `id`'s Surface: the conversation or its empty word, the
+    /// composer.
+    pub(super) fn side_chat_body(&self, owner: ThreadId, id: u64, cx: &mut Context<Self>) -> AnyElement {
         use ferrite_ui::theme::*;
-        let Some(chat) = self.side_chats.chats.get(&owner) else {
+        let Some(tab) = self
+            .side_chats
+            .chats
+            .get(&owner)
+            .and_then(|chat| chat.tabs.iter().find(|tab| tab.id == id))
+        else {
             return div().into_any_element();
         };
-        let tab = &chat.tabs[chat.active];
         let (shown, said) = match &tab.conversation {
             Some(conversation)
                 if self
@@ -689,126 +638,18 @@ impl CockpitView {
             .text_size(px(FS_UI))
             .line_height(px(LH_UI))
             .text_color(rgb(INK_STRONG))
-            .child(self.side_chat_head(owner, chat, cx))
             .child(body)
             .child(self.side_chat_composer(tab, cx))
             .into_any_element()
     }
 
-    /// The head: the tabs, `+`, and at the right expand and close.
-    fn side_chat_head(&self, owner: ThreadId, chat: &Chat, cx: &mut Context<Self>) -> Div {
-        use ferrite_ui::theme::*;
-        let tabs: Vec<_> = chat
-            .tabs
-            .iter()
-            .enumerate()
-            .map(|(index, tab)| self.side_chat_tab(owner, index, tab, index == chat.active, cx))
-            .collect();
-        let plus = head_door("side-chat-new", "side-chat-new".into(), icons::PLUS)
-            .tooltip(ferrite_ui::menu::tooltip("New side chat"))
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.new_side_tab(owner, None, cx);
-                cx.notify();
-            }));
-        let expand = head_door(
-            "side-chat-expand",
-            "side-chat-expand".into(),
-            if chat.expanded {
-                icons::MINIMIZE
-            } else {
-                icons::MAXIMIZE
-            },
-        )
-        .tooltip(ferrite_ui::menu::tooltip(if chat.expanded {
-            "Collapse"
-        } else {
-            "Expand"
-        }))
-        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-            cx.stop_propagation();
-            view.toggle_side_expanded(owner, cx);
-        }));
-        let close = head_door("side-chat-close", "side-chat-close".into(), icons::CLOSE)
-            .tooltip(ferrite_ui::menu::tooltip("Close"))
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.close_side_chat(owner, cx);
-            }));
-        div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(SPACE_1))
-            .h(px(WIN_CHROME_H))
-            .px(px(SIDE_CHAT_INSET))
-            .mt(px(self.head_drop(Column::Rail)))
-            .children(tabs)
-            .child(plus)
-            .child(div().flex_1())
-            .child(expand)
-            .child(close)
-    }
-
-    /// One tab: its name and its ×, the shown one on the carried ground.
-    fn side_chat_tab(
-        &self,
-        owner: ThreadId,
-        index: usize,
-        tab: &Tab,
-        active: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        use ferrite_ui::theme::*;
-        let id = gpui::ElementId::from(SharedString::from(format!("side-chat-tab-{index}")));
-        let key = ferrite_ui::pointer::hover_key(&id);
-        let close = crate::nav::icon_button(
-            format!("side-chat-tab-{index}-close"),
-            icons::CLOSE,
-            ATTACH_REMOVE_ICON,
-            THUMB_REMOVE,
-            R_CONTROL,
-        )
-        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-            cx.stop_propagation();
-            view.close_side_tab(owner, index, cx);
-        }));
-        div()
-            .id(id)
-            .debug_selector(move || format!("side-chat-tab-{index}"))
-            .flex()
-            .flex_shrink_1()
-            .min_w_0()
-            .max_w(px(SIDE_CHAT_TAB_MAX_W))
-            .items_center()
-            .gap(px(SPACE_1))
-            .h(px(PANEL_TAB_H))
-            .pl(px(PANEL_TAB_PAD_X))
-            .pr(px(SPACE_1))
-            .rounded(px(R_CONTROL))
-            .text_size(px(FS_LABEL))
-            .font_weight(W_LABEL)
-            .occlude()
-            .map(|face| {
-                if active {
-                    face.hover_carried(key)
-                } else {
-                    face.hover_raised(key).press_raised()
-                }
-            })
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .child(tab.title.clone()),
-            )
-            .child(close)
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                view.select_side_tab(owner, index, cx);
-            }))
-            .into_any_element()
+    /// Side chat `id`'s title, for its tab.
+    pub(super) fn side_chat_title(&self, owner: ThreadId, id: u64) -> SharedString {
+        self.side_chats
+            .chats
+            .get(&owner)
+            .and_then(|chat| chat.tabs.iter().find(|tab| tab.id == id))
+            .map_or_else(|| "Side chat".into(), |tab| tab.title.clone())
     }
 
     /// The composer at the foot: a `FIELD` card with the line, its

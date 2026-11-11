@@ -464,6 +464,44 @@ fn tick(cx: &mut gpui::VisualTestContext) {
     cx.run_until_parked();
 }
 
+/// `thread`'s Panel tabs, in order, and the one it shows (ADR 0039).
+fn panel_tabs(
+    view: &gpui::Entity<CockpitView>,
+    thread: ThreadId,
+    cx: &mut gpui::VisualTestContext,
+) -> (Vec<super::surfaces::SurfaceId>, Option<super::surfaces::SurfaceId>) {
+    view.read_with(cx, |view, _| {
+        let tabs = view
+            .panel
+            .surfaces
+            .get(thread)
+            .map_or_else(|| vec![super::surfaces::SurfaceId::Overview], |state| state.tabs.clone());
+        (tabs, view.active_surface(thread))
+    })
+}
+
+/// Opening `id` twice through `open` leaves one tab for it, shown: the
+/// Panel's one door (`upsert_surface`).
+fn opens_once(
+    view: &gpui::Entity<CockpitView>,
+    thread: ThreadId,
+    id: super::surfaces::SurfaceId,
+    cx: &mut gpui::VisualTestContext,
+    mut open: impl FnMut(&gpui::Entity<CockpitView>, &mut gpui::VisualTestContext),
+) {
+    for time in ["first", "second"] {
+        open(view, cx);
+        tick(cx);
+        let (tabs, active) = panel_tabs(view, thread, cx);
+        assert_eq!(
+            tabs.iter().filter(|tab| **tab == id).count(),
+            1,
+            "{time} open of {id:?}: one tab in {tabs:?}"
+        );
+        assert_eq!(active.as_ref(), Some(&id), "{time} open shows it");
+    }
+}
+
 /// Move the executor's clock `by` in one step, as a machine waking from
 /// sleep does, then pump: a timer due in between fires once, at the new
 /// time. `advance_clock` would instead run the pump every `PUMP_MS` of

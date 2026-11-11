@@ -589,7 +589,7 @@ fn the_reader_bar_closes_with_its_reader(cx: &mut TestAppContext) {
     cx.simulate_input("needle");
     tick(cx);
     assert!(reader_state(&view, cx).is_some());
-    let close = cx.debug_bounds("preview-close").expect("the preview's ×");
+    let close = cx.debug_bounds("panel-tab-File-notes.md-close").expect("its tab's ×");
     cx.simulate_click(close.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(reader_state(&view, cx).is_none(), "the bar closed with it");

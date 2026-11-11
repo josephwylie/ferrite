@@ -184,6 +184,12 @@ pub(crate) enum Command {
     ReconnectMcp,
     BackgroundTasks,
     ShowChanges,
+    /// The Panel's `+` menu, its tab closed, a closed tab back (ADR 0039).
+    SurfaceMenu,
+    CloseSurface,
+    ReopenSurface,
+    /// The palette again, to pick a Thread to open beside the focused one.
+    OpenBeside,
     ShowChecks,
     RefreshPr,
     OpenPr,
@@ -224,7 +230,8 @@ impl Command {
             Command::ParkThread | Command::ShowParked => ARCHIVE,
             Command::Settings => GEAR,
             Command::ToggleSidebar => SIDEBAR,
-            Command::TogglePanel => PANEL_RIGHT,
+            Command::TogglePanel | Command::SurfaceMenu => PANEL_RIGHT,
+            Command::OpenBeside => SPLIT_RIGHT,
             Command::FullscreenPane => MAXIMIZE,
             Command::Notifications => BELL,
             Command::CopyPrompt => COPY,

@@ -2,7 +2,8 @@
 //! files with their hunks, its scope, its ⋯ menu, reviewed marks.
 use super::*;
 use crate::cockpit::context_menu::Submenu;
-use crate::cockpit::tools::{ChangesSub, ChangesVerb, Tool};
+use crate::cockpit::panel::Opener;
+use crate::cockpit::tools::{ChangesSub, ChangesVerb};
 
 fn git(repo: &std::path::Path, args: &[&str]) {
     let out = std::process::Command::new("git").args(args).current_dir(repo).output().expect("git");
@@ -36,7 +37,7 @@ fn window<'a>(
 
 /// Press the door and wait for the read to land.
 fn opened(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
-    view.update(cx, |view, cx| view.press_tool(Tool::Changes, cx));
+    view.update(cx, |view, cx| view.run_opener(thread, Opener::Changes, cx));
     for _ in 0..400 {
         tick(cx);
         if view.read_with(cx, |view, _| view.changes_read(thread).is_some()) {

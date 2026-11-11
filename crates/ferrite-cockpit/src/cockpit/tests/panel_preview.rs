@@ -1,6 +1,6 @@
-//! The Panel's Preview tab (`panel/preview.rs`, SPEC §5.6.3): a file opens
-//! there at its line, the Panel wide and the line in view; its × and esc
-//! close it, never the turn, and the Panel goes back to its sections;
+//! The Panel's File Surface (`panel/preview.rs`, SPEC §5.6.3): a file opens
+//! in its own tab at its line, the Panel widened and the line in view; its
+//! tab's × and esc close it, never the turn;
 //! ⌘W in it closes it, not the Pane; each Thread keeps its own, the Panel
 //! showing the focused Pane's; focus moving to another Pane takes the
 //! keyboard out of an image; a draft previews in the Panel and keeps it
@@ -60,9 +60,9 @@ fn window<'a>(
     (view, fake, cx)
 }
 
-/// A file opened at a line: the Preview tab appears beside `Overview`
-/// and is shown, the Panel wide, the target line in view; its × closes it
-/// and the Panel goes back to its sections, tabless, at its own width.
+/// A file opened at a line: its File tab appears beside `Overview` and is
+/// shown, the Panel widened, the target line in view; its tab's × closes
+/// it and the Panel shows `Overview` again, as wide as it was left.
 #[gpui::test]
 fn a_file_at_a_line_opens_wide_and_closes_back_to_the_sections(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window("preview-line", 1, cx);
@@ -73,7 +73,7 @@ fn a_file_at_a_line_opens_wide_and_closes_back_to_the_sections(cx: &mut TestAppC
     let file = source("preview-line-file", 200);
 
     preview(&view, &file, Some(150), cx);
-    assert!(cx.debug_bounds("panel-tab-Preview").is_some(), "its tab");
+    assert!(cx.debug_bounds("panel-tab-File-lines.rs").is_some(), "its tab");
     assert!(
         cx.debug_bounds("panel-tab-Overview").is_some(),
         "beside the sections'"
@@ -96,27 +96,23 @@ fn a_file_at_a_line_opens_wide_and_closes_back_to_the_sections(cx: &mut TestAppC
         "line 150 is brought to the middle: {scrolled:?}"
     );
 
-    let close = cx.debug_bounds("preview-close").expect("its ×");
+    let close = cx.debug_bounds("panel-tab-File-lines.rs-close").expect("its ×");
     cx.simulate_click(close.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()));
     assert!(
-        cx.debug_bounds("panel-tab-Preview").is_none(),
+        cx.debug_bounds("panel-tab-File-lines.rs").is_none(),
         "its tab goes"
-    );
-    assert!(
-        cx.debug_bounds("panel-tab-Overview").is_none(),
-        "no tabs without a preview"
     );
     assert!(
         cx.debug_bounds("panel-sections").is_some(),
         "back to the sections"
     );
-    assert_eq!(panel_w(cx), Some(PANEL_W), "at the Panel's own width");
+    assert_eq!(panel_w(cx), Some(wide), "narrowing back is the operator's");
 }
 
-/// `Overview` picked while a preview is open keeps the preview and its
-/// tab, at the Panel's own width; its tab brings it back, wide.
+/// `Overview` picked while a preview is open keeps the preview's tab, and
+/// the Panel's width; its tab brings the document back.
 #[gpui::test]
 fn another_tab_keeps_the_preview_for_later(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window("preview-tabs", 1, cx);
@@ -126,9 +122,9 @@ fn another_tab_keeps_the_preview_for_later(cx: &mut TestAppContext) {
     let overview = cx.debug_bounds("panel-tab-Overview").unwrap();
     cx.simulate_click(overview.center(), gpui::Modifiers::none());
     tick(cx);
-    assert_eq!(panel_w(cx), Some(PANEL_W));
+    assert_eq!(panel_w(cx), Some(wide));
     assert!(cx.debug_bounds("panel-preview").is_none());
-    let tab = cx.debug_bounds("panel-tab-Preview").expect("its tab stays");
+    let tab = cx.debug_bounds("panel-tab-File-lines.rs").expect("its tab stays");
     cx.simulate_click(tab.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(panel_w(cx), Some(wide));
@@ -260,7 +256,7 @@ fn focus_moving_to_another_pane_takes_the_keyboard_from_an_image(cx: &mut TestAp
 }
 
 /// A draft, which has no Panel of its own, shows the Panel for its preview
-/// alone — the Preview tab, no other — and its first send, which makes it a
+/// alone, with no tabs — and its first send, which makes it a
 /// Thread, keeps it as it was: the same width, the same document, the
 /// Thread's `Overview` joining it.
 #[gpui::test]
@@ -281,10 +277,10 @@ fn a_draft_previews_in_the_panel_and_keeps_it_through_its_first_send(cx: &mut Te
     );
     let file = source("preview-draft-file", 20);
     preview(&view, &file, None, cx);
-    assert!(cx.debug_bounds("panel-tab-Preview").is_some());
+    assert!(cx.debug_bounds("panel-preview").is_some());
     assert!(
         cx.debug_bounds("panel-tab-Overview").is_none(),
-        "no Thread's sections"
+        "no Thread's tabs"
     );
     let wide = panel_w(cx).expect("the Panel shows for it");
 
@@ -306,20 +302,21 @@ fn a_draft_previews_in_the_panel_and_keeps_it_through_its_first_send(cx: &mut Te
     );
 }
 
-/// ⌥⌘B while a preview shows puts it away with the Panel: a hidden Panel
-/// holds no preview.
+/// ⌥⌘B while a preview shows hides the Panel and keeps its tabs: shown
+/// again, it is back on the file.
 #[gpui::test]
-fn hiding_the_panel_puts_its_preview_away(cx: &mut TestAppContext) {
+fn hiding_the_panel_keeps_its_file_tab(cx: &mut TestAppContext) {
     let (view, _fake, cx) = window("preview-hide", 1, cx);
     let file = source("preview-hide-file", 20);
     preview(&view, &file, None, cx);
+    let wide = panel_w(cx).unwrap();
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     tick(cx);
     assert_eq!(panel_w(cx), None);
-    assert!(view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()));
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     tick(cx);
-    assert_eq!(panel_w(cx), Some(PANEL_W), "back on its own tab");
+    assert_eq!(panel_w(cx), Some(wide));
+    assert!(cx.debug_bounds("panel-preview").is_some(), "back on the file");
 }
 
 /// The owner's `verification.txt`: a plain-text file reads as prose, as

@@ -34,6 +34,9 @@ use gpui::{
 use crate::image_viewer::ImageViewer;
 use crate::page::{PageSource, PageView};
 
+/// The path the live browser's document stands under (`show_browser`).
+pub const BROWSER_PATH: &str = "browser://tabs";
+
 #[derive(Clone)]
 pub struct Document {
     pub path: PathBuf,
@@ -330,7 +333,7 @@ impl Preview {
 
     pub fn show_browser(&self) {
         self.set(Document {
-            path: PathBuf::from("browser://tabs"),
+            path: PathBuf::from(BROWSER_PATH),
             name: Some("Browser".into()),
             body: Body::Browser,
         });
@@ -437,6 +440,12 @@ impl Preview {
     /// Close the lightbox (esc, its ×, a press on the dim around it).
     pub fn close_lightbox(&self) {
         self.state.lock().unwrap().lightbox = None;
+    }
+
+    /// Show `document` again as it was last read (its Panel tab brought
+    /// back), without reading its file afresh.
+    pub fn restore(&self, document: Document) {
+        self.set(document);
     }
 
     fn set(&self, document: Document) {
