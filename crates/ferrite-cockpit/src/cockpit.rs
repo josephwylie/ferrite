@@ -17,6 +17,7 @@ mod leaving;
 mod lightbox;
 mod machines;
 mod nav_keys;
+mod nav_pick;
 mod palette;
 pub(crate) mod panel;
 mod parts;
@@ -528,6 +529,16 @@ pub struct CockpitView {
     /// `BranchStatus` the mark was drawn from, so the card can never
     /// disagree with the mark that opened it.
     context_checks: Option<ThreadId>,
+    /// The Threads the titler is naming right now: their cards draw the
+    /// title at `NAV_CARD_RETITLING_OPACITY` until its answer lands.
+    titling: std::collections::HashSet<ThreadId>,
+    /// The cards ⌘- and ⇧-click picked (`nav_pick`), in picking order.
+    nav_picked: Vec<ThreadId>,
+    /// A Park press held down and sweeping across cards.
+    park_sweep: Option<nav_pick::ParkSweep>,
+    /// The Thread cards in the order the nav last drew them: what a ⇧-click
+    /// and a sweep span.
+    nav_drawn: std::cell::RefCell<Vec<ThreadId>>,
     /// Each bar card trigger's bounds as last laid out (a draft's band
     /// chips), recorded in prepaint: what a bar card hangs from.
     float_triggers: FloatTriggers,
@@ -1055,10 +1066,10 @@ enum NavChip {
 impl NavChip {
     fn element(&self, measure: &nav::Measure) -> Div {
         nav::drag_row(match self {
-            NavChip::Thread(row) => nav::thread_row_with_title(
+            NavChip::Thread(row) => nav::thread_card(
                 row,
                 row.name.clone(),
-                None,
+                nav::CardDoors::default(),
                 nav::RowPlace::ROOT,
                 None,
                 false,
@@ -1577,6 +1588,10 @@ impl CockpitView {
             usage_popover_held: false,
             session_control_error: None,
             context_checks: None,
+            titling: std::collections::HashSet::new(),
+            nav_picked: Vec::new(),
+            park_sweep: None,
+            nav_drawn: Default::default(),
             float_triggers: FloatTriggers::default(),
             band_from_hero: false,
             card_waits: Default::default(),
@@ -5446,6 +5461,14 @@ impl CockpitView {
                 }),
             )
             .into_any_element()
+    }
+
+    /// Whether the rename field is open on `thread`'s title.
+    fn renaming_thread(&self, thread: ThreadId) -> bool {
+        matches!(
+            &self.rename,
+            Some((RenameTarget::Thread(editing), _)) if *editing == thread
+        )
     }
 
     /// A Thread's title cell — `editable_group_title`'s twin.
@@ -9353,6 +9376,10 @@ impl CockpitView {
             .and_then(|facts| facts.last_used)
             .map(|at| crate::facts::since_label(at, now))
             .unwrap_or_default();
+        let working = matches!(
+            status,
+            nav::RowStatus::Working | nav::RowStatus::Failing
+        );
         let row = nav::ThreadRow {
             thread,
             name: self.facts.name(thread),
@@ -9360,11 +9387,33 @@ impl CockpitView {
             project: facts.and_then(|facts| facts.project_label.clone()),
             selected: false,
             tail: nav::NavTail::of(status, slot.as_ref(), age),
+            branch: facts.and_then(Self::checkout_branch),
+            worktree: facts.and_then(|facts| facts.worktree.clone()),
+            pr: self.facts.pr(thread).map(nav::NavPr::of),
+            provider: open
+                .map(|open| open.provider())
+                .or_else(|| facts.and_then(|facts| facts.provider)),
+            activity_at: facts.and_then(|facts| facts.last_used),
+            working_since: open
+                .filter(|_| working)
+                .and_then(|open| open.turn().started),
+            pinned: self.prefs.settings.pinned_threads.contains(&thread),
+            retitling: self.titling.contains(&thread),
+            picked: self.card_picked(thread),
         };
         #[cfg(test)]
         drawn::record_row(
             thread,
-            format!("{:?} {:?} {}", row.status, row.tail, row.name),
+            format!(
+                "{:?} {:?} branch={:?} pr={:?} provider={:?} receded={} {}",
+                row.status,
+                row.tail,
+                row.branch,
+                row.pr.as_ref().map(|pr| (pr.number, pr.state)),
+                row.provider,
+                row.receded(),
+                row.name,
+            ),
         );
         row
     }
@@ -11630,6 +11679,7 @@ impl CockpitView {
             &self.cockpit.model_catalog(provider),
         );
         let rx = ferrite_core::titler::spawn(form);
+        self.titling.insert(thread);
         cx.spawn(async move |this, cx| {
             let title = cx
                 .background_executor()
@@ -11645,6 +11695,9 @@ impl CockpitView {
     /// operator's rename in the meantime wins, and a parked Thread keeps
     /// its prompt-derived name.
     fn adopt_title(&mut self, thread: ThreadId, title: Option<String>, cx: &mut Context<Self>) {
+        if self.titling.remove(&thread) {
+            self.notify_part(parts::Part::Nav, cx);
+        }
         let Some(title) = title else {
             return;
         };
@@ -13590,6 +13643,7 @@ impl CockpitView {
     fn nav_content(&self, state: &nav::NavState, window: &Window, cx: &mut Context<Self>) -> Div {
         #[cfg(test)]
         drawn::built_nav();
+        self.nav_drawn.borrow_mut().clear();
         // A fold mid-move: the nav (its part alone) draws again next frame.
         if self.nav_folds_moving(cx) {
             ferrite_ui::motion::request_frame(window);
@@ -13599,6 +13653,7 @@ impl CockpitView {
             nav::NavView::Inbox => self.needs_you_list(state, window, cx),
             nav::NavView::Parked => self.parked_list(state, cx),
         };
+        let list = self.sweep_release(list, cx);
         let gear = nav::gear_button().on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
             cx.stop_propagation();
             view.toggle_settings(cx);
@@ -13649,63 +13704,91 @@ impl CockpitView {
         )
     }
 
-    /// An Inbox row's hover controls: pin, snooze, and park the Thread.
-    fn activity_row_actions(&self, thread: ThreadId, cx: &mut Context<Self>) -> nav::RowActions {
-        let pinned = self.prefs.settings.pinned_threads.contains(&thread);
-        let button = |key: String, glyph: &'static str, tip: &'static str| {
-            nav::row_action(key, glyph)
-                .mr(px(0.))
-                .tooltip(ferrite_ui::menu::tooltip(tip))
-        };
-        let actions = div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .child(
-                button(
-                    format!("nav-activity-pin-{}", thread.get()),
-                    ferrite_ui::icons::PIN,
-                    if pinned { "Unpin" } else { "Pin" },
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.set_pinned(thread, !pinned, cx);
-                    }),
-                ),
+    /// What a Thread's card wires (`nav::CardDoors`): its hover strip —
+    /// Snooze, whose menu opens under it (hidden while a turn is queued),
+    /// and Park — for an open Thread; the pin's unpin; and the PR chip,
+    /// whose press opens the PR in the Panel's preview (⌘-press, in the
+    /// browser). Pin stays in the context menu.
+    fn card_doors(&self, thread: ThreadId, cx: &mut Context<Self>) -> nav::CardDoors {
+        let open = self.cockpit.thread(thread);
+        let held = matches!(
+            self.context_menu.as_ref().map(|menu| menu.target),
+            Some(MenuTarget::Snooze(snoozing)) if snoozing == thread
+        );
+        let strip = open.map(|open| {
+            let mut buttons = Vec::new();
+            if open.queue().is_empty() {
+                let drawn = std::rc::Rc::new(std::cell::Cell::new(None::<gpui::Bounds<Pixels>>));
+                buttons.push(
+                    nav::snooze_button(thread)
+                        .relative()
+                        .child({
+                            let drawn = drawn.clone();
+                            gpui::canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                                .absolute()
+                                .size_full()
+                        })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                let target = MenuTarget::Snooze(thread);
+                                match drawn.get() {
+                                    Some(button) => view.open_context_menu_under(target, button, cx),
+                                    None => view.open_context_menu(target, event.position, cx),
+                                }
+                            }),
+                        )
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .into_any_element(),
+                );
+            }
+            buttons.push(
+                nav::park_button(thread)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.arm_park_sweep(thread, cx);
+                        }),
+                    )
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .into_any_element(),
+            );
+            nav::strip(buttons, nav::strip_w(open.queue().is_empty(), &nav::Measure::Text(cx)))
+        });
+        let pin = nav::pin_glyph(thread, true)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.set_pinned(thread, false, cx);
+                }),
             )
-            .child(
-                button(
-                    format!("nav-activity-snooze-{}", thread.get()),
-                    ferrite_ui::icons::CLOCK,
-                    "Snooze",
-                )
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .into_any_element();
+        let pr = self.facts.pr(thread).map(|pr| {
+            let url = pr.url.clone();
+            nav::pr_chip(thread, &nav::NavPr::of(pr))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
-                        view.open_context_menu(MenuTarget::Snooze(thread), event.position, cx);
+                        match &url {
+                            Some(url) if event.modifiers.platform => cx.open_url(url),
+                            _ => view.open_pr(thread, cx),
+                        }
                     }),
                 )
-                .on_click(|_, _, cx| cx.stop_propagation()),
-            )
-            .child(
-                button(
-                    format!("nav-activity-archive-{}", thread.get()),
-                    ferrite_ui::icons::ARCHIVE,
-                    "Park",
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.park_listed(&[thread], cx);
-                    }),
-                ),
-            )
-            .into_any_element();
-        nav::RowActions::strip(actions, 3)
+                .on_click(|_, _, cx| cx.stop_propagation())
+                .into_any_element()
+        });
+        nav::CardDoors {
+            strip,
+            strip_held: held,
+            pr,
+            pin: Some(pin),
+        }
     }
 
     /// Park each of `threads` (reversible: the Parked view holds them).
@@ -13811,8 +13894,12 @@ impl CockpitView {
         for (index, row) in rows.iter().enumerate() {
             let local_request = row.away.is_none();
             let verb = row.open_verb();
-            let open = cx.listener(move |view, _: &ClickEvent, window, cx| {
+            let picks = row.thread;
+            let open = cx.listener(move |view, event: &ClickEvent, window, cx| {
                 cx.stop_propagation();
+                if local_request && view.pick_card(picks, event.modifiers(), cx) {
+                    return;
+                }
                 view.snooze_editor = None;
                 view.notice_verb(verb.clone(), cx);
                 window.blur(cx);
@@ -13826,26 +13913,28 @@ impl CockpitView {
                     selected,
                     ..self.thread_row(row.thread)
                 };
-                let drawn = nav::thread_row_with_title(
+                let editing = self.renaming_thread(row.thread);
+                let drawn = nav::thread_card(
                     &thread,
-                    thread.name.clone(),
-                    Some(self.activity_row_actions(row.thread, cx)),
-                    nav::RowPlace::Inbox,
+                    self.editable_thread_title(row.thread, thread.name.clone(), cx),
+                    self.card_doors(row.thread, cx),
+                    nav::RowPlace::ROOT,
                     None,
-                    false,
+                    editing,
                     &nav::Measure::Text(cx),
                 );
                 div()
                     .id(("notice-row", index))
                     .debug_selector(move || format!("notice-row-{index}"))
                     .flex_shrink_0()
-                    .child(drawn)
+                    .child(self.pickable_card(drawn, row.thread, cx))
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener({
                             let thread = row.thread;
                             move |view, event: &MouseDownEvent, _, cx| {
                                 cx.stop_propagation();
+                                view.pick_for_menu(thread, cx);
                                 view.open_context_menu(
                                     MenuTarget::Thread(thread),
                                     event.position,
@@ -13886,16 +13975,19 @@ impl CockpitView {
             {
                 let thread = entry.thread;
                 list = list.child(
-                    nav::thread_row_with_title(
+                    self.pickable_card(nav::thread_card(
                         entry,
-                        entry.name.clone(),
-                        Some(self.activity_row_actions(thread, cx)),
-                        nav::RowPlace::Inbox,
+                        self.editable_thread_title(thread, entry.name.clone(), cx),
+                        self.card_doors(thread, cx),
+                        nav::RowPlace::ROOT,
                         None,
-                        false,
+                        self.renaming_thread(thread),
                         &nav::Measure::Text(cx),
-                    )
-                    .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                    ), thread, cx)
+                    .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
+                        if view.pick_card(thread, event.modifiers(), cx) {
+                            return;
+                        }
                         view.snooze_editor = None;
                         view.land_on_thread(thread, cx);
                         window.blur(cx);
@@ -13904,6 +13996,7 @@ impl CockpitView {
                         MouseButton::Right,
                         cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
+                            view.pick_for_menu(thread, cx);
                             view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
                         }),
                     ),
@@ -13945,17 +14038,24 @@ impl CockpitView {
                     }),
                 )
                 .into_any_element();
+                let doors = nav::CardDoors {
+                    strip: Some(nav::strip(vec![wake], nav::ROW_ACTION_W)),
+                    ..self.card_doors(thread, cx)
+                };
                 list = list.child(
-                    nav::thread_row_with_title(
+                    self.pickable_card(nav::thread_card(
                         entry,
-                        entry.name.clone(),
-                        Some(nav::RowActions::single(wake)),
-                        nav::RowPlace::Inbox,
+                        self.editable_thread_title(thread, entry.name.clone(), cx),
+                        doors,
+                        nav::RowPlace::ROOT,
                         None,
-                        false,
+                        self.renaming_thread(thread),
                         &nav::Measure::Text(cx),
-                    )
-                    .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                    ), thread, cx)
+                    .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
+                        if view.pick_card(thread, event.modifiers(), cx) {
+                            return;
+                        }
                         view.snooze_editor = None;
                         view.land_on_thread(thread, cx);
                         window.blur(cx);
@@ -13964,6 +14064,7 @@ impl CockpitView {
                         MouseButton::Right,
                         cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
+                            view.pick_for_menu(thread, cx);
                             view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
                         }),
                     ),
@@ -14664,55 +14765,19 @@ impl CockpitView {
             index,
         };
         let title = self.editable_thread_title(thread, row.name.clone(), cx);
-        let editing = matches!(
-            &self.rename,
-            Some((RenameTarget::Thread(editing), _)) if *editing == thread
-        );
-        // Under the pointer every row offers its menu at `⋯`, as Claude's
-        // and Codex's lists do: the right-click menu, from a button.
-        let more = format!(
-            "nav-more-{}-{}",
-            group.map_or(0, GroupId::get),
-            thread.get()
-        );
-        // Where the button drew, so its menu opens under it.
-        let drawn = std::rc::Rc::new(std::cell::Cell::new(None::<gpui::Bounds<Pixels>>));
-        let action = Some(
-            nav::row_action(more.clone(), ferrite_ui::icons::ELLIPSIS)
-                .debug_selector(move || more.clone())
-                .relative()
-                .tooltip(ferrite_ui::menu::tooltip("More"))
-                .child({
-                    let drawn = drawn.clone();
-                    gpui::canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
-                        .absolute()
-                        .size_full()
-                })
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        let target = MenuTarget::Thread(thread);
-                        match drawn.get() {
-                            Some(button) => view.open_context_menu_under(target, button, cx),
-                            None => view.open_context_menu(target, event.position, cx),
-                        }
-                    }),
-                )
-                .on_click(|_, _, cx| cx.stop_propagation())
-                .into_any_element(),
-        );
+        let editing = self.renaming_thread(thread);
         let item = nav::NavItem::Thread(thread, group);
-        let head = nav::thread_row_with_title(
+        let head = nav::thread_card(
             row,
             title,
-            action.map(nav::RowActions::single),
+            self.card_doors(thread, cx),
             place,
             group,
             editing,
             &nav::Measure::Text(cx),
         )
         .children(self.cursor_reveal(item));
+        let head = self.pickable_card(head, thread, cx);
         let face = self.thread_ghost(thread);
         let nav_edge = self.nav_width();
         let chip = NavChip::Thread(row.clone());
@@ -14747,13 +14812,17 @@ impl CockpitView {
             // A click, not a press: pressing a row to drag it onto the
             // board must leave the board showing, not switch to the row's
             // own view before the drag begins.
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
+                if view.pick_card(thread, event.modifiers(), cx) {
+                    return;
+                }
                 view.open_nav_row(thread, group, cx);
             }))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
+                    view.pick_for_menu(thread, cx);
                     view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
                 }),
             )

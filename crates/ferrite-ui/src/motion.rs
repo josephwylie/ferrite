@@ -25,6 +25,7 @@
 //! | palette | [`DIALOG_IN`] in from its top, [`PALETTE_OUT`] 120ms out | the palette and the shortcuts sheet ([`dialog_in_casting`], [`float_out`]), their veil fading over [`PALETTE_VEIL`] 50ms both ways |
 //! | tooltip | [`TOOLTIP_IN`] 120ms ease-snap, 0.98 → 1 | every tooltip (`menu::tooltip`, [`tooltip_in`]) after gpui's 300ms delay; the next one within 200ms shows at once, with no entrance. No exit: gpui drops a tooltip on its frame |
 //! | sidebar (cmd-B) | none | the column snaps between its width and the rail: no ride, no fade, no per-frame relayout of the board |
+//! | nav card recede | [`RECEDE`] 150ms standard, opacity only | a receded working Thread card (70%) comes up to full under the pointer or the nav's keyboard cursor and goes back as it leaves; its fill and its hover strip snap; reduced motion snaps it too |
 //! | nav folds | [`FOLD`] 150ms `ease-out`, height and opacity | a Project section, a Group's members and Pinned open and shut ([`fold_body`], one [`Reveal`] per fold); only the nav part redraws |
 //! | right panel | none | the Panel (`cockpit/panel.rs`) snaps open and shut and between its own width and a preview's, as Claude's does |
 //! | (Ferrite's) slot slide | [`SLOT_OPEN`] 240ms / [`SLOT_CLOSE`] 200ms, [`EASE_SNAP`] | the Review beside its Pane, in the reader slot (`cockpit/beside.rs`): a [`Reveal`] on its split's share (`Tree::reveal`) slides it in from its far edge while the Pane narrows, every frame, its content laid out at its resting size and clipped so it never re-wraps; closing slides it out, a little quicker, and only then is the slot removed; a flip mid-slide turns around; a seam drag lands it |
@@ -315,6 +316,8 @@ pub const ACTIONS_IN: MotionSpec =
 pub const ACTIONS_OUT: MotionSpec = spec(theme::MOTION_DUR_FAST_MS, EASE_SNAP);
 /// A disclosure chevron's quarter turn.
 pub const CHEVRON: MotionSpec = spec(theme::MOTION_CHEVRON_MS, EASE_STANDARD);
+/// A receded working nav card coming up to full opacity under the pointer.
+pub const RECEDE: MotionSpec = spec(theme::MOTION_RECEDE_MS, EASE_STANDARD);
 /// A nav fold opening and shutting (`fold_body`).
 pub const FOLD: MotionSpec = spec(theme::MOTION_FOLD_MS, EASE_OUT);
 /// An attachment added to a draft growing in (`chip_in`).

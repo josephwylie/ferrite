@@ -255,7 +255,9 @@ fn the_triangles_fold_for_real_and_the_folds_hold(cx: &mut TestAppContext) {
 /// stay where its rows were.
 #[gpui::test]
 fn a_project_is_drawn_on_one_left_edge(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{NAV_CHEVRON, NAV_ROW_GAP, NAV_ROW_H, NAV_ROW_PAD_X, NAV_TREE_INDENT};
+    use ferrite_ui::theme::{
+        NAV_CARD_H_SHORT, NAV_CHEVRON, NAV_ROW_GAP, NAV_ROW_PAD_X, NAV_TREE_INDENT,
+    };
     let (mut core, _fake) = cockpit("nav-tree-edge", 3);
     let threads = sorted_threads(&core);
     let group = core
@@ -272,6 +274,7 @@ fn a_project_is_drawn_on_one_left_edge(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     view.update(cx, |view, cx| view.focus_thread(threads[2], cx));
     tick(cx);
+    without_checkouts(&view, cx);
     let at = |cx: &mut gpui::VisualTestContext, key: String| {
         cx.debug_bounds(key.clone().leak())
             .unwrap_or_else(|| panic!("{key} drawn"))
@@ -328,8 +331,8 @@ fn a_project_is_drawn_on_one_left_edge(cx: &mut TestAppContext) {
     let (member, x) = indent(cx, threads[0]);
     close(
         member.size.height,
-        NAV_ROW_H,
-        "the shown Group's member is one line",
+        NAV_CARD_H_SHORT,
+        "the shown Group's member is a card too",
     );
     close(
         px(x),
