@@ -31,6 +31,7 @@ pub mod agent;
 mod bridge;
 mod browser;
 mod calls;
+mod coordinator;
 mod factory;
 pub mod github;
 mod render;
@@ -376,6 +377,9 @@ struct Server {
     told_factory: Option<u64>,
     /// What a one-off Task's Worker runs on: the operator's defaults.
     factory_agent: crate::factory::Agent,
+    /// The settings each Coordinator's Session was last tuned to (#224),
+    /// so one it refused is not tried again every pass.
+    coordinators_tuned: std::collections::BTreeMap<crate::ThreadId, crate::factory::Agent>,
     /// What the Factory's GitHub starts are read through (#225): the
     /// operator's `gh`, or a test's scripted reader.
     github: Arc<dyn github::GitHub>,
@@ -431,6 +435,7 @@ impl Server {
             factory,
             told_factory: None,
             factory_agent: factory::default_agent(&Settings::default()),
+            coordinators_tuned: Default::default(),
             github: Arc::new(github::Gh),
             github_reads: Vec::new(),
             clock: Arc::new(factory::now_ms),
@@ -954,6 +959,7 @@ impl Server {
             }
             Op::Task { action } => self.task_command(action),
             Op::Workflow { action } => self.workflow_command(action),
+            Op::Coordinator { action } => self.coordinator_command(action),
             Op::GitHub { ask } => {
                 let github = Arc::clone(&self.github);
                 let ask = ask.clone();

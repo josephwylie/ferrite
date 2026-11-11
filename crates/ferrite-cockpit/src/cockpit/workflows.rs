@@ -29,6 +29,8 @@ const SKILL_ROWS: usize = 8;
 /// What the Factory view shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Surface {
+    /// The Coordinator's conversation and proposals (#224).
+    Coordinator,
     Board,
     Workflows,
 }
@@ -96,6 +98,8 @@ pub(crate) enum Pick {
     ReworkGoesTo(Destination),
     /// A "Tasks start" setting (#225).
     Start(super::starts::StartPick),
+    /// The Coordinator's Provider, model or effort (#224).
+    Coordinator(super::coordinator::CoordinatorPick),
 }
 
 /// Skills found installed for one Provider in the Project.
@@ -221,6 +225,16 @@ impl CockpitView {
         view.surface = surface;
         view.workflows.focused = None;
         self.ensure_fields(cx);
+        if surface == Surface::Coordinator {
+            self.ensure_coordinator_field(cx);
+            // Its Pane takes the keyboard, as a Worker's on its tab.
+            if let Some(index) = self
+                .coordinator_thread()
+                .and_then(|thread| self.pane_for(thread))
+            {
+                self.focus_pane(index);
+            }
+        }
         cx.notify();
     }
 
@@ -845,6 +859,7 @@ impl CockpitView {
                 cx.notify();
             }
             Pick::Task(pick) => self.apply_task_pick(pick, cx),
+            Pick::Coordinator(pick) => self.apply_coordinator_pick(pick, cx),
             Pick::Approver(by) => self.edit_approval(
                 ApprovalChange {
                     by: Some(by),
@@ -1054,6 +1069,16 @@ impl CockpitView {
         };
         let board = self.cockpit.factory();
         let counts = [
+            (
+                Surface::Coordinator,
+                "Coordinator",
+                board
+                    .proposals_of(view.project)
+                    .filter(|proposal| {
+                        proposal.status == ferrite_core::factory::ProposalStatus::Pending
+                    })
+                    .count(),
+            ),
             (Surface::Board, "Board", board.of(view.project).count()),
             (
                 Surface::Workflows,

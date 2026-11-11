@@ -363,6 +363,10 @@ pub enum Op {
     GitHub {
         ask: GitHubAsk,
     },
+    /// A Project's Coordinator and its proposals (#224), as a window asks.
+    Coordinator {
+        action: CoordinatorAction,
+    },
     Notice {
         action: NoticeAction,
     },
@@ -561,6 +565,7 @@ impl Op {
             | Op::Task { .. }
             | Op::Workflow { .. }
             | Op::GitHub { .. }
+            | Op::Coordinator { .. }
             | Op::Notice { .. }
             | Op::SettingsChanged
             | Op::CliReplaced { .. }
@@ -919,6 +924,28 @@ pub enum WorkflowAction {
         workflow: String,
         take: bool,
     },
+    #[serde(other)]
+    Unknown,
+}
+
+/// What a window asks of a Project's Coordinator (#224).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CoordinatorAction {
+    /// The operator's words; the Coordinator starts on the first.
+    Say { project: ProjectId, text: String },
+    /// Its Provider, model and effort, from its next turn.
+    Agent {
+        project: ProjectId,
+        agent: crate::factory::Agent,
+    },
+    /// Run a proposal's act as the operator's. `skills`, as a save's are.
+    Accept {
+        proposal: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skills: Vec<(Provider, Vec<String>)>,
+    },
+    Dismiss { proposal: String },
     #[serde(other)]
     Unknown,
 }
@@ -1339,6 +1366,10 @@ pub enum Done {
     /// The version a save made, or the latest when nothing changed.
     Version {
         version: u32,
+    },
+    /// The proposal raised (#224).
+    Proposal {
+        proposal: String,
     },
     /// A Task deleted; `kept` says why its worktree was left.
     Deleted {

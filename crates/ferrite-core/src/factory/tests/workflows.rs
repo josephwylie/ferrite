@@ -728,3 +728,4 @@ fn workflows_survive_a_reload() {
 
 mod direction;
 mod merging;
+mod coordinator;

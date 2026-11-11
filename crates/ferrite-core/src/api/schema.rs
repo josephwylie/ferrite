@@ -26,6 +26,9 @@
 //! - `not_a_worker`: `report` from a Thread that is no Task's Worker.
 //! - `not_now`: the Task's state does not allow it (delete a working
 //!   Task: stop it first).
+//! - `unknown_proposal`: no proposal has that id.
+//! - `not_a_coordinator`: `proposal raise` from a Thread that is no
+//!   Project's Coordinator.
 //! - `failed`: anything else, in its own words.
 //! - `server_unavailable`: the CLI's own, no Server answered.
 //!
@@ -197,6 +200,18 @@ operations! {
         "A Worker reports its Task's PR head (and which PR, the first time): each new head is a revision.";
     ReportEvidence(ReportEvidenceParams) => "report.evidence", ["text"],
         "A Worker keeps what a check or tool showed as evidence, about the PR's current revision.";
+    ProposalRaise(ProposalRaiseParams) => "proposal.raise", ["act"],
+        "The Coordinator proposes starting a Task, saving a version, automatic starts or a redirect; nothing happens until the user accepts.";
+    ProposalList(TaskListParams) => "proposal.list", [],
+        "The Coordinators' proposals, pending, accepted or dismissed, of every Project or of one.";
+    ProposalAccept(ProposalParams) => "proposal.accept", ["proposal"],
+        "Accept a proposal: its act runs as the user's. Only on the user's word.";
+    ProposalDismiss(ProposalParams) => "proposal.dismiss", ["proposal"],
+        "Dismiss a proposal: nothing changes.";
+    CoordinatorSay(CoordinatorSayParams) => "coordinator.say", ["text"],
+        "Say something to a Project's Coordinator, starting it on first use.";
+    CoordinatorSet(CoordinatorSetParams) => "coordinator.set", ["provider"],
+        "Choose the Coordinator's provider, model and effort, from its next turn.";
     TaskClear(TaskClearParams) => "task.clear", [],
         "Move a Project's Completed Tasks to its Archive now, off the board; they are kept whole.";
 }
@@ -687,4 +702,72 @@ pub struct TaskSubmitParams {
     pub identity: String,
     /// What the Task is to do; its first line is its title.
     pub instructions: String,
+}
+
+/// Which of the four acts a proposal is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposedAct {
+    Start,
+    Save,
+    Automation,
+    Redirect,
+}
+
+/// `start` takes `instructions` and maybe `workflow`; `save` and
+/// `automation` a `workflow`; `redirect` a `task`, the Step it goes `to`,
+/// and maybe `skip`, `then` and `note`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProposalRaiseParams {
+    pub act: ProposedAct,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skip: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub then: Option<crate::factory::ThenReturn>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// The proposing Coordinator's own Thread (the CLI sends
+    /// `FERRITE_THREAD_ID`).
+    pub coordinator: ThreadId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProposalParams {
+    /// The proposal's id, as `proposal.list` gives it (`p-1`).
+    pub proposal: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CoordinatorSayParams {
+    pub text: String,
+    /// The Project (`project.list`'s `id`); else the Project holding `cwd`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// The CLI sends its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CoordinatorSetParams {
+    pub provider: crate::store::Provider,
+    /// The provider's default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The operator's default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// The CLI sends its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
 }

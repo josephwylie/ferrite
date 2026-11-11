@@ -803,7 +803,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         keeping: Default::default(),
                     }],
                     workflows: Vec::new(),
-                    trouble: None,
+                    ..Default::default()
                 },
             }),
         ),
@@ -1024,6 +1024,99 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
+            "command_coordinator_say",
+            command(
+                27,
+                Op::Coordinator {
+                    action: crate::protocol::CoordinatorAction::Say {
+                        project,
+                        text: "What is left on the board?".into(),
+                    },
+                },
+            ),
+        ),
+        (
+            "command_coordinator_agent",
+            command(
+                28,
+                Op::Coordinator {
+                    action: crate::protocol::CoordinatorAction::Agent {
+                        project,
+                        agent: crate::factory::Agent {
+                            provider: Provider::Codex,
+                            model: Some("gpt-5-codex".into()),
+                            effort: Some("high".into()),
+                        },
+                    },
+                },
+            ),
+        ),
+        (
+            "command_coordinator_accept",
+            command(
+                29,
+                Op::Coordinator {
+                    action: crate::protocol::CoordinatorAction::Accept {
+                        proposal: "p-1".into(),
+                        skills: vec![(Provider::Claude, vec!["code-review".into()])],
+                    },
+                },
+            ),
+        ),
+        (
+            "command_coordinator_dismiss",
+            command(
+                30,
+                Op::Coordinator {
+                    action: crate::protocol::CoordinatorAction::Dismiss {
+                        proposal: "p-2".into(),
+                    },
+                },
+            ),
+        ),
+        (
+            "reply_proposal",
+            Sample::Server(ServerMessage::Reply {
+                id: 31,
+                ok: Some(Done::Proposal {
+                    proposal: "p-1".into(),
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "factory_coordinator",
+            Sample::Server(ServerMessage::Factory {
+                revision: 6,
+                board: serde_json::from_value(serde_json::json!({
+                    "tasks": [],
+                    "coordinators": [{
+                        "project": 3, "thread": 12,
+                        "agent": { "provider": "codex", "model": "gpt-5-codex", "effort": "high" },
+                    }],
+                    "proposals": [
+                        {
+                            "id": "p-1", "project": 3, "status": "accepted", "raised_ms": 1_700_000_000_000_i64,
+                            "act": { "kind": "start", "instructions": "Fix the toolbar overflow" },
+                            "task": "t-4",
+                        },
+                        {
+                            "id": "p-2", "project": 3, "status": "pending", "raised_ms": 1_700_000_000_001_i64,
+                            "act": {
+                                "kind": "redirect", "task": "t-1",
+                                "direction": { "to": "s-3", "skip": ["s-2"], "then": "me", "note": "Docs only" },
+                            },
+                        },
+                        {
+                            "id": "p-3", "project": 3, "status": "dismissed", "raised_ms": 1_700_000_000_002_i64,
+                            "act": { "kind": "automation", "workflow": "w-1" },
+                        },
+                    ],
+                }))
+                .unwrap(),
+            }),
+        ),
+        (
             "factory_workflows",
             Sample::Server(ServerMessage::Factory {
                 revision: 4,
@@ -1057,6 +1150,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         next_step: 2,
                         automation: Default::default(),
                     }],
+                    ..Default::default()
                 },
             }),
         ),

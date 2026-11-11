@@ -43,13 +43,14 @@ pub(super) fn load(store_dir: &std::path::Path) -> factory::Factory {
 }
 
 /// A Factory answer as a window's reply.
-fn done(answer: Answer) -> Done {
+pub(super) fn done(answer: Answer) -> Done {
     match answer {
         Answer::Task(task) => Done::Task { task },
         Answer::Changed(changed) => Done::Changed { changed },
         Answer::Workflow(workflow) => Done::Workflow { workflow },
         Answer::Step(step) => Done::Step { step },
         Answer::Version(version) => Done::Version { version },
+        Answer::Proposal(proposal) => Done::Proposal { proposal },
     }
 }
 
@@ -108,6 +109,7 @@ impl Server {
                 }
             }
         }
+        self.tune_coordinators();
         kept
     }
 
@@ -150,7 +152,7 @@ impl Server {
     }
 
     /// One command, and at once what it set off.
-    fn factory_command(&mut self, command: Command) -> Result<(Answer, Vec<String>), ApiError> {
+    pub(super) fn factory_command(&mut self, command: Command) -> Result<(Answer, Vec<String>), ApiError> {
         let answer = self.factory.command(command, self.now_ms())?;
         let kept = self.step_factory();
         Ok((answer, kept))
@@ -180,6 +182,9 @@ impl Server {
                 }
             }
             Effect::Prompt { thread, text } => {
+                if !self.wake_coordinator(thread, &text) {
+                    return None;
+                }
                 let prompt = AgentPromptParams {
                     thread,
                     text,
@@ -231,6 +236,12 @@ impl Server {
                     crate::log!("server: the Factory did not take a worktree's removal: {refusal}");
                 }
             }
+            Effect::StartCoordinator {
+                project,
+                agent,
+                prompt,
+            } => self.start_coordinator(project, agent, prompt),
+            Effect::Tune { thread, agent } => self.retune(thread, agent),
             Effect::Notify {
                 task,
                 project,
@@ -419,7 +430,7 @@ impl Server {
 
     /// What is known installed, for a save's check: each Provider's
     /// models as its agents announced them, and the skills a window found.
-    fn catalog(&self, skills: Vec<(crate::store::Provider, Vec<String>)>) -> factory::Catalog {
+    pub(super) fn catalog(&self, skills: Vec<(crate::store::Provider, Vec<String>)>) -> factory::Catalog {
         factory::Catalog {
             models: crate::store::Provider::ALL
                 .into_iter()
@@ -601,7 +612,7 @@ impl Server {
     }
 
     /// The Project named, or the one holding `cwd`.
-    fn project_of(
+    pub(super) fn project_of(
         &self,
         project: Option<&str>,
         cwd: Option<&std::path::Path>,

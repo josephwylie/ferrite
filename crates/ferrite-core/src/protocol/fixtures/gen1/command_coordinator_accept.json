@@ -1,0 +1,1 @@
+{"type":"command","id":29,"op":"coordinator","action":{"kind":"accept","proposal":"p-1","skills":[["claude",["code-review"]]]}}

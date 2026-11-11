@@ -1,0 +1,1 @@
+{"type":"command","id":28,"op":"coordinator","action":{"kind":"agent","project":2,"agent":{"provider":"codex","model":"gpt-5-codex","effort":"high"}}}

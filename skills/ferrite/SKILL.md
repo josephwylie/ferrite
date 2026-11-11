@@ -341,6 +341,42 @@ Only `merged` may route to Completed; `--on-pending wait` keeps waiting.
 "$F" report outcome unknown "gh pr merge timed out"
 ```
 
+### The Coordinator
+
+Each Project's Factory has one **Coordinator** (an agent Thread the
+Factory owns, `owner: {"factory": 3}`, in the main checkout) that the
+user talks to in the Factory's Coordinator view; it starts on their
+first word. `coordinator say` speaks to it from a script, and
+`coordinator set` chooses its provider, model and effort from its next
+turn.
+
+```bash
+"$F" coordinator say "What is left on the board?" --project 3
+"$F" coordinator set codex --model gpt-5-codex --effort high --project 3
+```
+
+If you are the Coordinator, read and draft freely (`task list`, `task get`,
+`workflow get`, `step edit`, …), but never act: starting a Task, saving a
+Workflow version, turning automatic starts on and redirecting a Task are
+**proposals**, shown to the user as a card they accept or dismiss. Nothing
+happens until they accept. A one-off handoff needs no Workflow.
+
+```bash
+"$F" proposal raise start --instructions "Fix the toolbar overflow" --workflow w-1
+"$F" proposal raise save --workflow w-1
+"$F" proposal raise automation --workflow w-1
+"$F" proposal raise redirect --task t-1 --to s-3 --skip s-2 --then me --note "Only the docs changed"
+"$F" proposal list --project 3
+```
+
+`proposal accept` and `proposal dismiss` are the user's: run them only on
+their word.
+
+```bash
+"$F" proposal accept p-1
+"$F" proposal dismiss p-1
+```
+
 ## Another machine
 
 Only when the user asks for work on one of their saved machines (Ferrite's

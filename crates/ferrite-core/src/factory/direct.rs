@@ -49,6 +49,10 @@ pub struct Oversight {
     /// ignored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub superseded: Vec<ThreadId>,
+    /// What the Coordinator is to be told of a Task routed to it (#224),
+    /// until the next step tells it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consult: Option<String>,
 }
 
 fn is_zero(count: &u64) -> bool {
@@ -617,14 +621,11 @@ pub(super) fn follow(
             }
             Resolved::Coordinator => {
                 task.reason = Some(if text.is_empty() {
-                    "The task routes to the Coordinator, which this Ferrite does not run yet."
-                        .to_string()
+                    format!("{name} sent the task to the Coordinator: talk it over there.")
                 } else {
-                    format!(
-                        "{name} routes to the Coordinator, which this Ferrite does not run yet: \
-                         {text}"
-                    )
+                    format!("{name} sent the task to the Coordinator: {text}")
                 });
+                task.oversight.consult = Some(super::coordinator::routed(task, &name, &text));
                 task.enter(Status::NeedsHuman, effects);
             }
             Resolved::Wait if task.worker.is_some() => {

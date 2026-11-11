@@ -78,6 +78,7 @@ fn panel<'a>(
     core.fixture_factory(Board {
         workflows: Vec::new(),
         tasks: vec![task(project, status)],
+        ..Default::default()
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(1000.)));

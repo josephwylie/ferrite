@@ -220,6 +220,12 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "task.submit",
             "report.revision",
             "report.evidence",
+            "proposal.raise",
+            "proposal.list",
+            "proposal.accept",
+            "proposal.dismiss",
+            "coordinator.say",
+            "coordinator.set",
             "task.clear",
         ]
     );
@@ -536,6 +542,38 @@ fn samples() -> Vec<Request> {
         request(Method::ReportEvidence(ReportEvidenceParams {
             text: "cargo test: 12 passed".into(),
             worker: thread(),
+        })),
+        request(Method::ProposalRaise(ProposalRaiseParams {
+            act: ProposedAct::Redirect,
+            instructions: None,
+            workflow: None,
+            task: Some("t-1".into()),
+            to: Some("s-3".into()),
+            skip: vec!["s-2".into()],
+            then: Some(crate::factory::ThenReturn::Me),
+            note: Some("Only the docs changed".into()),
+            coordinator: thread(),
+        })),
+        request(Method::ProposalList(TaskListParams {
+            project: Some("3".into()),
+        })),
+        request(Method::ProposalAccept(ProposalParams {
+            proposal: "p-1".into(),
+        })),
+        request(Method::ProposalDismiss(ProposalParams {
+            proposal: "p-2".into(),
+        })),
+        request(Method::CoordinatorSay(CoordinatorSayParams {
+            text: "What is left?".into(),
+            project: Some("3".into()),
+            cwd: None,
+        })),
+        request(Method::CoordinatorSet(CoordinatorSetParams {
+            provider: Provider::Codex,
+            model: Some("gpt-5-codex".into()),
+            effort: Some("high".into()),
+            project: Some("3".into()),
+            cwd: None,
         })),
         request(Method::TaskClear(TaskClearParams {
             project: Some("3".into()),
@@ -1106,6 +1144,45 @@ fn automatic_starts_parse_from_the_cli() {
             workflow: "w-1".into(),
             identity: "JIRA-12".into(),
             instructions: "Fix the CSV export".into(),
+        }))
+    );
+}
+
+/// The Coordinator's proposals name its own Thread from where it runs;
+/// accepting and dismissing name the proposal.
+#[test]
+fn proposals_parse_from_the_cli() {
+    assert_eq!(
+        parse(
+            "proposal.raise",
+            &["start", "--instructions", "Fix the toolbar", "--workflow", "w-1"]
+        ),
+        Ok(Method::ProposalRaise(ProposalRaiseParams {
+            act: ProposedAct::Start,
+            instructions: Some("Fix the toolbar".into()),
+            workflow: Some("w-1".into()),
+            task: None,
+            to: None,
+            skip: Vec::new(),
+            then: None,
+            note: None,
+            coordinator: ThreadId::new(7),
+        }))
+    );
+    assert_eq!(
+        parse("proposal.accept", &["p-1"]),
+        Ok(Method::ProposalAccept(ProposalParams {
+            proposal: "p-1".into()
+        }))
+    );
+    assert_eq!(
+        parse("coordinator.set", &["codex", "--model", "gpt-5-codex"]),
+        Ok(Method::CoordinatorSet(CoordinatorSetParams {
+            provider: Provider::Codex,
+            model: Some("gpt-5-codex".into()),
+            effort: None,
+            project: None,
+            cwd: Some(PathBuf::from("/work/app")),
         }))
     );
 }
