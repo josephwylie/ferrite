@@ -940,34 +940,42 @@ mod tests {
         }));
         assert_eq!(kinds(&transcript, &running()), [Prompt, Working, Activity, LiveTail]);
 
+        // The running turn's prompt gone from the window, an earlier turn
+        // still in it: the live row reaches back to that turn's end, no
+        // further.
         let mut earlier = Transcript::default();
+        prompt(&mut earlier, "one");
         bash(&mut earlier, "a");
         settle(&mut earlier, "a", false);
-        earlier.apply(Input::Event(SessionEvent::TurnEnded {
-            outcome: ferrite_core::TurnOutcome::Completed,
-            cost_usd: None,
-        }));
+        complete(&mut earlier, 2_000);
+        prompt(&mut earlier, "two");
         earlier.apply(Input::Event(SessionEvent::ThinkingDelta {
             text: "next".into(),
         }));
+        let window: Vec<Block> = earlier
+            .blocks()
+            .iter()
+            .filter(|block| !matches!(&block.body, Body::Prompt(text) if text == "two"))
+            .cloned()
+            .collect();
         let shape = running();
-        let rows = TranscriptRows::new(earlier.blocks(), &shape, READING);
+        let rows = TranscriptRows::new(&window, &shape, READING);
         assert_eq!(
             calls(&rows),
             [
                 (Working, vec![]),
-                (Activity, vec!["a".to_string()]),
+                (Prompt, vec![]),
+                (TurnFold, vec![]),
                 (LiveTail, vec![]),
             ]
         );
-        let thought = earlier
-            .blocks()
+        let thought = window
             .iter()
             .find(|block| matches!(block.body, Body::Thinking(_)))
             .unwrap()
             .id;
         assert_eq!(
-            live_anchor(earlier.blocks(), &shape),
+            live_anchor(&window, &shape),
             Some(DisclosureId::Live(thought))
         );
     }
