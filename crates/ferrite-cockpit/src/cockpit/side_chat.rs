@@ -91,6 +91,17 @@ impl SideChats {
         })
     }
 
+    /// The Thread whose side chat `thread` is a fork of: the head's
+    /// parent.
+    pub(crate) fn owner_of(&self, thread: ThreadId) -> Option<ThreadId> {
+        self.chats.iter().find_map(|(owner, chat)| {
+            chat.tabs
+                .iter()
+                .any(|tab| tab.conversation.as_ref().is_some_and(|c| c.thread == thread))
+                .then_some(*owner)
+        })
+    }
+
     /// The shown tab's field.
     fn field(&self, owner: ThreadId) -> Option<&Entity<Composer>> {
         let chat = self.chats.get(&owner)?;
