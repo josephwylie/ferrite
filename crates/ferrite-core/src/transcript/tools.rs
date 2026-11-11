@@ -46,11 +46,41 @@ pub enum Grouping {
     StateOnly,
 }
 
+/// The glyph a work row draws in its gutter (T3 Code's Lucide set,
+/// `TimelineToolActivityIcon`): one per kind of work, and the ones a row
+/// that is no call wears (a thought, an error, an update).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolIcon {
+    Terminal,
+    SquarePen,
+    Eye,
+    /// A code search.
+    Search,
+    /// A web search or a fetch.
+    Globe,
+    Brain,
+    /// A tool the provider names at run time (MCP), or a mixed group.
+    Hammer,
+    Wrench,
+    Bot,
+    /// A background task's tool.
+    Zap,
+    MessageCircle,
+    ListTodo,
+    PullRequest,
+    /// Ferrite's own tools: the app's mark.
+    App,
+    Browser,
+    Alert,
+    Check,
+}
+
 /// How one tool presents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolPolicy<'a> {
     pub kind: ToolKind<'a>,
     pub grouping: Grouping,
+    pub icon: ToolIcon,
     /// The name its row shows, the way Claude Code prints it: a file edit
     /// is `Update` (Claude's `Edit` and `MultiEdit`, Codex's `fileChange`),
     /// a Codex shell call is `Bash`; every other name stands as sent.
@@ -95,6 +125,22 @@ pub fn policy(name: &str) -> ToolPolicy<'_> {
             _ => (Other, RollsUp),
         },
     };
+    let icon = match (kind, name) {
+        (_, crate::browser::tools::CLAUDE_NAME | crate::browser::tools::TOOL) => ToolIcon::Browser,
+        (_, "TaskStop" | "TaskOutput" | "KillShell") => ToolIcon::Zap,
+        (Command, _) => ToolIcon::Terminal,
+        (Read | List, _) => ToolIcon::Eye,
+        (Edit | Write, _) => ToolIcon::SquarePen,
+        (Search, _) => ToolIcon::Search,
+        (Fetch | WebSearch, _) => ToolIcon::Globe,
+        (Agent, _) => ToolIcon::Bot,
+        (Todo, _) => ToolIcon::ListTodo,
+        (Question, _) => ToolIcon::MessageCircle,
+        (Visual | Mcp("ferrite"), _) => ToolIcon::App,
+        (Mcp(_), name) if name.contains("pull_request") => ToolIcon::PullRequest,
+        (Mcp(_), _) => ToolIcon::Hammer,
+        (Findings | Other, _) => ToolIcon::Wrench,
+    };
     let display = match name {
         "Edit" | "MultiEdit" | "fileChange" => "Update",
         "commandExecution" => "Bash",
@@ -103,6 +149,7 @@ pub fn policy(name: &str) -> ToolPolicy<'_> {
     ToolPolicy {
         kind,
         grouping,
+        icon,
         display,
     }
 }
@@ -289,6 +336,36 @@ mod tests {
             "cargo build"
         );
         assert_eq!(short_subject(Search, "fn main, src"), "fn main, src");
+    }
+
+    #[test]
+    fn every_kind_of_work_draws_its_own_icon() {
+        use ToolIcon::*;
+        for (name, icon) in [
+            ("Bash", Terminal),
+            ("commandExecution", Terminal),
+            ("Edit", SquarePen),
+            ("fileChange", SquarePen),
+            ("Write", SquarePen),
+            ("Read", Eye),
+            ("LS", Eye),
+            ("Grep", Search),
+            ("WebSearch", Globe),
+            ("WebFetch", Globe),
+            ("Agent", Bot),
+            ("TaskStop", Zap),
+            ("AskUserQuestion", MessageCircle),
+            ("ExitPlanMode", MessageCircle),
+            ("TodoWrite", ListTodo),
+            ("mcp__github__create_pull_request", PullRequest),
+            ("mcp__ferrite__show_visual", App),
+            ("mcp__ferrite__update_plan", ListTodo),
+            ("mcp__ferrite__browser", Browser),
+            ("mcp__linear__get_issue", Hammer),
+            ("SomethingNew", Wrench),
+        ] {
+            assert_eq!(policy(name).icon, icon, "{name}");
+        }
     }
 
     #[test]
