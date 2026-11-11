@@ -414,19 +414,22 @@ fn only_a_queued_stopped_or_completed_task_is_deleted() {
     );
 }
 
-/// What the operator says to a Worker is on its Task, and a Task that
-/// needed them works again.
+/// What the operator says to a Worker is recorded on its Task, nothing
+/// more: a Task that needs them still does, and a waiting question still
+/// waits for its answer. Resume and Answer are the commands for that.
 #[test]
-fn what_the_operator_says_is_recorded_and_puts_the_task_back_to_work() {
+fn what_the_operator_says_is_recorded_and_changes_nothing_else() {
     let mut factory = Factory::in_memory();
     let task = working(&mut factory);
-    report(
-        &mut factory,
-        Outcome::Unable {
-            tried: "no access".into(),
-        },
-    )
-    .unwrap();
+    factory
+        .command(
+            Command::Ask {
+                worker: WORKER,
+                text: "Which token?".into(),
+            },
+            10,
+        )
+        .unwrap();
     factory
         .command(
             Command::OperatorSaid {
@@ -436,8 +439,15 @@ fn what_the_operator_says_is_recorded_and_puts_the_task_back_to_work() {
             11,
         )
         .unwrap();
+    let effects = factory.step(12, &seen(false, 1));
+    assert!(prompts(&effects).is_empty(), "{effects:?}");
     let task = factory.task(&task).unwrap();
-    assert_eq!(task.status, Status::Working);
+    assert_eq!(task.status, Status::NeedsHuman);
+    assert_eq!(
+        task.oversight.question.as_ref().map(|q| q.text.as_str()),
+        Some("Which token?"),
+        "still waiting for its answer"
+    );
     let last = task.activity.last().unwrap();
     assert_eq!(
         (last.by, last.text.as_str()),

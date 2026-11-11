@@ -1362,15 +1362,9 @@ impl State {
             }
             Command::OperatorSaid { worker, text } => {
                 let task = self.worker_task(worker)?;
+                // Recorded, so later Steps know; nothing more. Resume and
+                // Answer are the operator's commands for the rest.
                 task.note(now_ms, Actor::Operator, text);
-                // Said in the Worker, it is the answer to its question.
-                task.oversight.question = None;
-                if matches!(task.status, Status::NeedsHuman | Status::Stopped)
-                    && task.oversight.permission.is_none()
-                {
-                    task.reason = None;
-                    task.enter(Status::Working, effects);
-                }
                 task.watch.rebase = true;
                 Ok(Answer::Changed(true))
             }
