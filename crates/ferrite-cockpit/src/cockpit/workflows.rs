@@ -14,8 +14,8 @@ use std::collections::HashMap;
 
 use super::*;
 use ferrite_core::factory::{
-    self as core_factory, Catalog, Destination, Problem, RouteKind, Step, StepChange, StepId,
-    Template, Workflow, WorkflowId,
+    self as core_factory, ApprovalChange, Approver, Catalog, Destination, Problem, RouteKind,
+    Step, StepChange, StepId, Template, Workflow, WorkflowId,
 };
 use ferrite_core::protocol::{Done, WorkflowAction};
 use ferrite_pane::composer::{Composer, Edited, Role};
@@ -41,6 +41,8 @@ pub(crate) enum Field {
     Instructions(WorkflowId, StepId),
     /// The skills picker's search.
     SkillSearch,
+    /// Agent approval's decision instructions (#222).
+    ApprovalInstructions(WorkflowId),
 }
 
 impl Field {
@@ -51,6 +53,7 @@ impl Field {
             Field::StepName(..) => "inspector-name".into(),
             Field::Instructions(..) => "inspector-instructions".into(),
             Field::SkillSearch => "skill-search".into(),
+            Field::ApprovalInstructions(_) => "approval-instructions".into(),
         }
     }
 }
@@ -75,6 +78,16 @@ pub(crate) enum Pick {
     Delete(StepId),
     /// The New task sheet's process: one-off, or a Workflow.
     Process(Option<WorkflowId>),
+    /// A choice on a Task's Rework or Direct this task sheet (#222).
+    Task(super::direction::TaskPick),
+    /// Who approves the shown Workflow's results.
+    Approver(Approver),
+    /// The Step that decides agent approval.
+    Decider(StepId),
+    /// What runs once approved.
+    AfterApproval(Destination),
+    /// Where the Workflow sends rework.
+    ReworkGoesTo(Destination),
 }
 
 /// Skills found installed for one Provider in the Project.
@@ -95,6 +108,8 @@ pub(crate) struct Workflows {
     /// The skills search is revealed.
     pub(crate) skills_open: bool,
     pub(crate) skills: Vec<SkillsFound>,
+    /// The inspector shows the approval settings, not a Step.
+    pub(crate) approval: bool,
 }
 
 impl Workflows {
@@ -107,6 +122,7 @@ impl Workflows {
             outline_focus: cx.focus_handle(),
             skills_open: false,
             skills: Vec::new(),
+            approval: false,
         }
     }
 }
@@ -261,9 +277,28 @@ impl CockpitView {
         if let Some(view) = self.factory_view.as_mut() {
             view.workflows.step = Some(step);
             view.workflows.focused = None;
+            view.workflows.approval = false;
         }
         self.ensure_fields(cx);
         cx.notify();
+    }
+
+    /// Show the approval settings in the inspector.
+    pub(crate) fn select_approval(&mut self, cx: &mut Context<Self>) {
+        if let Some(view) = self.factory_view.as_mut() {
+            view.workflows.approval = true;
+            view.workflows.focused = None;
+        }
+        self.ensure_fields(cx);
+        cx.notify();
+    }
+
+    /// Change the shown Workflow's approval settings.
+    pub(crate) fn edit_approval(&mut self, change: ApprovalChange, cx: &mut Context<Self>) {
+        let Some(workflow) = self.shown_id() else {
+            return;
+        };
+        self.workflow_ask(WorkflowAction::EditApproval { workflow, change }, cx);
     }
 
     /// The shown Workflow's id.
@@ -377,6 +412,10 @@ impl CockpitView {
                 Field::WorkflowName(workflow.id.clone()),
                 workflow.draft.name.clone(),
             ));
+            wanted.push((
+                Field::ApprovalInstructions(workflow.id.clone()),
+                workflow.draft.approval.instructions.clone(),
+            ));
             if let Some(step) = self.shown_step() {
                 wanted.push((
                     Field::StepName(workflow.id.clone(), step.id.clone()),
@@ -452,6 +491,13 @@ impl CockpitView {
                 cx.notify();
                 return;
             }
+            Field::ApprovalInstructions(workflow) => WorkflowAction::EditApproval {
+                workflow,
+                change: ApprovalChange {
+                    instructions: Some(text),
+                    ..Default::default()
+                },
+            },
         };
         self.workflow_ask(action, cx);
     }
@@ -785,6 +831,35 @@ impl CockpitView {
                 }
                 cx.notify();
             }
+            Pick::Task(pick) => self.apply_task_pick(pick, cx),
+            Pick::Approver(by) => self.edit_approval(
+                ApprovalChange {
+                    by: Some(by),
+                    ..Default::default()
+                },
+                cx,
+            ),
+            Pick::Decider(step) => self.edit_approval(
+                ApprovalChange {
+                    step: Some(step),
+                    ..Default::default()
+                },
+                cx,
+            ),
+            Pick::AfterApproval(to) => self.edit_approval(
+                ApprovalChange {
+                    after: Some(to),
+                    ..Default::default()
+                },
+                cx,
+            ),
+            Pick::ReworkGoesTo(to) => self.edit_approval(
+                ApprovalChange {
+                    rework_to: Some(to),
+                    ..Default::default()
+                },
+                cx,
+            ),
         }
     }
 
@@ -1238,7 +1313,10 @@ impl CockpitView {
         let Some(view) = self.factory_view.as_ref() else {
             return div().into_any_element();
         };
-        let shown = self.shown_step().map(|step| step.id.clone());
+        let shown = self
+            .shown_step()
+            .map(|step| step.id.clone())
+            .filter(|_| !view.workflows.approval);
         let name_field = Field::WorkflowName(workflow.id.clone());
         let mut outline = div()
             .id("outline")
@@ -1290,7 +1368,52 @@ impl CockpitView {
                 cx,
             ));
         }
+        let approval_flagged = problems.iter().any(|problem| problem.approval);
+        let approval_shown = view.workflows.approval;
+        let approval = &workflow.draft.approval;
+        let decides = match approval.by {
+            Approver::Human => "You approve".to_string(),
+            Approver::Agent => match approval.step.as_deref().and_then(|id| workflow.draft.step(id)) {
+                Some(step) => format!("{} decides", step.name),
+                None => "An agent decides".into(),
+            },
+        };
         outline
+            .child(
+                div()
+                    .id("outline-approval")
+                    .debug_selector(move || {
+                        match (approval_shown, approval_flagged) {
+                            (true, true) => "outline-approval-selected-flagged",
+                            (true, false) => "outline-approval-selected",
+                            (false, true) => "outline-approval-flagged",
+                            (false, false) => "outline-approval",
+                        }
+                        .into()
+                    })
+                    .mt(px(SPACE_2))
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_2))
+                    .px(px(SPACE_2))
+                    .h(px(ROW + SPACE_2))
+                    .rounded(px(R_CONTROL))
+                    .cursor_pointer()
+                    .when(approval_shown, |row| row.bg(paint::SELECTED))
+                    .when(!approval_shown, |row| row.hover(|row| row.bg(paint::HOVER)))
+                    .child(div().font_weight(W_LABEL).child("Approval"))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(FS_META))
+                            .text_color(rgb(if approval_flagged { BLOCKED } else { INK_SUBTLE }))
+                            .child(SharedString::from(decides)),
+                    )
+                    .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.select_approval(cx)
+                    })),
+            )
             .child(
                 div().pt(px(SPACE_2)).child(
                     ferrite_ui::components::ghost_button("outline-add", "+ Add agent", cx)
@@ -1568,6 +1691,13 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use ferrite_ui::theme::*;
+        if self
+            .factory_view
+            .as_ref()
+            .is_some_and(|view| view.workflows.approval)
+        {
+            return self.approval_inspector(workflow, window, cx);
+        }
         let Some(step) = self.shown_step() else {
             return div()
                 .debug_selector(|| "inspector-none".into())
@@ -1952,6 +2082,223 @@ impl CockpitView {
                 ),
             )
             .into_any_element()
+    }
+}
+
+impl CockpitView {
+    /// The approval settings (#222): who approves, the deciding agent and
+    /// its instructions, what follows approval and where rework goes,
+    /// their problems, and the read-only list of what ends in Completed.
+    fn approval_inspector(
+        &self,
+        workflow: &Workflow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use super::direction::{chooser, segmented};
+        use ferrite_ui::theme::*;
+        let draft = &workflow.draft;
+        let approval = &draft.approval;
+        let problems = draft.approval_problems();
+        let flagged = |words: &str| problems.iter().any(|problem| problem.message.contains(words));
+        let label = |text: &'static str| {
+            div()
+                .text_size(px(FS_META))
+                .font_weight(W_LABEL)
+                .text_color(rgb(INK_SUBTLE))
+                .child(text)
+        };
+        let meta = |text: &'static str| {
+            div()
+                .text_size(px(FS_META))
+                .text_color(rgb(INK_SUBTLE))
+                .child(text)
+        };
+        let named = |step: &Step| {
+            if step.name.trim().is_empty() {
+                "Untitled agent".to_string()
+            } else {
+                step.name.clone()
+            }
+        };
+        let mut body = div()
+            .id("approval-settings")
+            .debug_selector(|| "approval-settings".into())
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_3))
+            .p(px(SPACE_4))
+            .overflow_y_scroll()
+            .child(label("Approval"))
+            .child(label("Who approves the result"))
+            .child(segmented(
+                "approval-by",
+                approval.by,
+                &[(Approver::Human, "You"), (Approver::Agent, "An agent")],
+                |view, by, cx| view.apply_pick(Pick::Approver(by), cx),
+                cx,
+            ));
+        if approval.by == Approver::Agent {
+            let decider = approval.step.as_deref().and_then(|id| draft.step(id));
+            let picks = draft
+                .steps
+                .iter()
+                .map(|step| {
+                    (
+                        ferrite_ui::menu::Item::new(named(step))
+                            .checked(decider.is_some_and(|decider| decider.id == step.id)),
+                        Pick::Decider(step.id.clone()),
+                    )
+                })
+                .collect();
+            body = body
+                .child(label("Deciding agent"))
+                .child(chooser(
+                    "approval-decider",
+                    decider.map_or_else(|| "Choose an agent".to_string(), named),
+                    flagged("deciding agent") || flagged("agent that decides"),
+                    picks,
+                    cx,
+                ))
+                .child(meta(
+                    "If this agent's own route leads to approval, it decides in the same run. \
+                     Otherwise it runs once more to decide.",
+                ))
+                .children(self.text_input(
+                    &Field::ApprovalInstructions(workflow.id.clone()),
+                    "Decision instructions",
+                    window,
+                    cx,
+                ))
+                .child(meta(
+                    "What to verify, what evidence to return, and when it may approve without you.",
+                ));
+        }
+        let after_picks = std::iter::once(Destination::Complete)
+            .chain(draft.steps.iter().map(|step| Destination::Step(step.id.clone())))
+            .map(|to| {
+                let text = match &to {
+                    Destination::Step(id) => draft
+                        .step(id)
+                        .map_or_else(|| "Deleted agent".to_string(), |step| format!("Run {}", named(step))),
+                    _ => "Completed".to_string(),
+                };
+                (
+                    ferrite_ui::menu::Item::new(text).checked(to == approval.after),
+                    Pick::AfterApproval(to),
+                )
+            })
+            .collect();
+        let rework_picks = draft
+            .steps
+            .iter()
+            .map(|step| Destination::Step(step.id.clone()))
+            .chain([Destination::Coordinator])
+            .map(|to| {
+                (
+                    ferrite_ui::menu::Item::new(draft.route_label("", &to))
+                        .checked(to == approval.rework_to),
+                    Pick::ReworkGoesTo(to),
+                )
+            })
+            .collect();
+        let after_text = match &approval.after {
+            Destination::Step(id) => draft
+                .step(id)
+                .map_or_else(|| "Deleted agent".to_string(), |step| format!("Run {}", named(step))),
+            _ => "Completed".to_string(),
+        };
+        body = body
+            .child(
+                div()
+                    .flex()
+                    .gap(px(SPACE_2))
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap(px(SPACE_1))
+                            .child(label("After approval"))
+                            .child(chooser(
+                                "approval-after",
+                                after_text,
+                                flagged("After approval"),
+                                after_picks,
+                                cx,
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap(px(SPACE_1))
+                            .child(label("Rework goes to"))
+                            .child(chooser(
+                                "approval-rework",
+                                draft.route_label("", &approval.rework_to),
+                                flagged("Rework goes"),
+                                rework_picks,
+                                cx,
+                            )),
+                    ),
+            )
+            .child(meta(
+                "You can always rework to another agent from the task itself, for that task only.",
+            ));
+        for (at, problem) in problems.iter().enumerate() {
+            body = body.child(
+                div()
+                    .debug_selector(move || format!("approval-problem-{at}"))
+                    .text_size(px(FS_META))
+                    .text_color(rgb(BLOCKED))
+                    .child(SharedString::from(problem.message.clone())),
+            );
+        }
+        let paths = draft.completion_paths();
+        let mut ends = div()
+            .debug_selector(|| "completion-paths".into())
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_1));
+        if paths.is_empty() {
+            ends = ends.child(
+                div()
+                    .text_color(rgb(BLOCKED))
+                    .child("No route ends in Completed."),
+            );
+        }
+        for (at, path) in paths.into_iter().enumerate() {
+            ends = ends.child(
+                div()
+                    .debug_selector(move || format!("completion-path-{at}"))
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_2))
+                    .child(ferrite_ui::icons::icon(
+                        ferrite_ui::icons::CHECK_CIRCLE,
+                        ROW_ICON,
+                        INK_SUBTLE,
+                    ))
+                    .child(SharedString::from(path)),
+            );
+        }
+        body.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(SPACE_2))
+                .pt(px(SPACE_2))
+                .child(label("Ends in Completed"))
+                .child(meta("read only \u{b7} from the routes")),
+        )
+        .child(ends)
+        .child(meta("Change these on the routes of the agents, or with After approval."))
+        .into_any_element()
     }
 }
 

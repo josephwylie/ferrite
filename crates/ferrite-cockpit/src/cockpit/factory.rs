@@ -82,6 +82,8 @@ pub(crate) struct FactoryView {
     pub(crate) workflows: super::workflows::Workflows,
     /// The open Factory picker's rows.
     pub(crate) picks: Vec<(ferrite_ui::menu::Item, super::workflows::Pick)>,
+    /// Answers, rework and redirects being written, and their sheets.
+    pub(crate) direct: super::direction::Direct,
 }
 
 /// A system notification's tag for a Task.
@@ -103,7 +105,7 @@ fn status_ink(status: Status) -> u32 {
 /// What a card says under its title: the result, the stop reason.
 fn outcome_line(task: &Task) -> Option<String> {
     match task.status {
-        Status::Completed => task.result.clone(),
+        Status::Completed | Status::Approval => task.result.clone(),
         Status::NeedsHuman | Status::Stopped => task.reason.clone(),
         _ => None,
     }
@@ -130,6 +132,7 @@ impl CockpitView {
                     surface: super::workflows::Surface::Board,
                     workflows,
                     picks: Vec::new(),
+                    direct: Default::default(),
                 })
             }
         }
@@ -148,7 +151,9 @@ impl CockpitView {
             view.open = Some(task.to_string());
             view.tab = TaskTab::Overview;
             view.note = None;
+            view.direct.focused = None;
         }
+        self.ensure_drafts(task, cx);
         cx.notify();
     }
 
@@ -168,7 +173,7 @@ impl CockpitView {
     }
 
     /// The open Task, as the board says it now.
-    fn open_task_now(&self) -> Option<&Task> {
+    pub(super) fn open_task_now(&self) -> Option<&Task> {
         let id = self.factory_view.as_ref()?.open.as_deref()?;
         self.cockpit.factory().task(id)
     }
@@ -219,6 +224,9 @@ impl CockpitView {
                 view.open = None;
             }
         }
+        if let Some(open) = self.open_task_now().map(|task| task.id.clone()) {
+            self.ensure_drafts(&open, cx);
+        }
         self.ensure_fields(cx);
         cx.notify();
     }
@@ -229,6 +237,9 @@ impl CockpitView {
         let view = self.factory_view.as_ref()?;
         if let Some(sheet) = &view.sheet {
             return Some(sheet.instructions.read(cx).focus_handle(cx));
+        }
+        if let Some(focus) = self.direct_focus(cx) {
+            return Some(focus);
         }
         if let Some(focus) = self.workflows_focus(cx) {
             return Some(focus);
@@ -681,8 +692,13 @@ impl CockpitView {
                     ))
                     .child(SharedString::from(match task.current_step() {
                         Some(step) => format!(
-                            "{} \u{b7} {}",
+                            "{}{} \u{b7} {}",
                             step.name,
+                            if task.oversight.deciding {
+                                " \u{b7} approval decision"
+                            } else {
+                                ""
+                            },
                             core_factory::agent_label(&task.agent)
                         ),
                         None => core_factory::agent_label(&task.agent),
@@ -799,7 +815,10 @@ impl CockpitView {
                     .child(ferrite_ui::components::status_dot(status_ink(task.status)))
                     .child(task.status.word())
                     .child("\u{b7}")
-                    .child(SharedString::from(core_factory::agent_label(&task.agent))),
+                    .child(SharedString::from(core_factory::agent_label(&task.agent)))
+                    .when(task.oversight.deciding, |line| {
+                        line.child("\u{b7} approval decision")
+                    }),
             )
             .child(actions);
 
@@ -853,14 +872,32 @@ impl CockpitView {
                             .child(div().child(SharedString::from(text)))
                     };
                     div()
+                        .id("task-overview")
                         .debug_selector(|| "task-overview".into())
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
                         .flex()
                         .flex_col()
                         .gap(px(SPACE_3))
                         .p(px(SPACE_4))
-                        .children(task.result.clone().map(|result| line("Result", result)))
-                        .children(task.reason.clone().map(|reason| line("Why", reason)))
+                        .children(
+                            task.result
+                                .clone()
+                                .filter(|_| task.status != Status::Approval)
+                                .map(|result| line("Result", result)),
+                        )
+                        .children(
+                            task.reason
+                                .clone()
+                                .filter(|_| {
+                                    task.oversight.question.is_none()
+                                        && task.status != Status::Approval
+                                })
+                                .map(|reason| line("Why", reason)),
+                        )
                         .child(line("Status", task.status.word().to_string()))
+                        .children(self.task_say(task, window, cx))
                         .into_any_element()
                 }
                 TaskTab::Activity => {
