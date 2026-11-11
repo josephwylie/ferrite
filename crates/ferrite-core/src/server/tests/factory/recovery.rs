@@ -97,7 +97,9 @@ fn a_session_that_dies_is_revived_once_then_stops_and_another_project_is_untouch
     let read = told(&mut caller, worker, "ended unexpectedly");
     assert!(read.contains("report outcome finished"), "{read}");
     let held = task_until(&mut caller, &task, |task| {
-        said(task).iter().any(|(_, text)| text.contains("Session interrupted"))
+        said(task)
+            .iter()
+            .any(|(_, text)| text.contains("Session interrupted"))
     });
     assert_eq!(held["status"], "working", "{held}");
     assert_eq!(held["worker"], serde_json::json!(worker), "same Thread");
@@ -164,7 +166,11 @@ fn approved_workflow(harness: &Harness, project: &str) -> String {
         "workflow.approval",
         serde_json::json!({ "workflow": workflow, "rework_to": format!("step:{}", step.as_str().unwrap()) }),
     );
-    ok(harness, "workflow.save", serde_json::json!({ "workflow": workflow }));
+    ok(
+        harness,
+        "workflow.save",
+        serde_json::json!({ "workflow": workflow }),
+    );
     workflow
 }
 
@@ -232,7 +238,11 @@ fn a_restart_mid_step_and_mid_approval_revives_once_and_waits() {
         "{stopped}"
     );
 
-    let approved = ok(&harness, "task.approve", serde_json::json!({ "task": waiting }));
+    let approved = ok(
+        &harness,
+        "task.approve",
+        serde_json::json!({ "task": waiting }),
+    );
     assert_eq!(approved["task"]["status"], "completed", "{approved}");
     let cleared = ok(&harness, "task.clear", serde_json::json!({ "cwd": repo }));
     assert_eq!(cleared["changed"], true, "{cleared}");
@@ -246,10 +256,17 @@ fn a_restart_mid_step_and_mid_approval_revives_once_and_waits() {
     );
 
     let parked = caller.answer("g", "thread.get", serde_json::json!({ "thread": builder }));
-    assert_eq!(parked["error"]["code"], "unknown_thread", "parked: {parked}");
+    assert_eq!(
+        parked["error"]["code"], "unknown_thread",
+        "parked: {parked}"
+    );
     let log = harness.dir.join("threads").join(builder.get().to_string());
     assert!(log.exists(), "parked, not deleted: {}", log.display());
-    ok(&harness, "task.delete", serde_json::json!({ "task": waiting }));
+    ok(
+        &harness,
+        "task.delete",
+        serde_json::json!({ "task": waiting }),
+    );
     let deadline = Instant::now() + Duration::from_secs(5);
     while log.exists() {
         assert!(Instant::now() < deadline, "deleted with its Task");

@@ -90,6 +90,8 @@ pub(crate) struct FactoryView {
     pub(crate) direct: super::direction::Direct,
     /// The Coordinator surface's field before the Coordinator runs (#224).
     pub(crate) opening: Option<Entity<Composer>>,
+    /// The Archive, when it shows in the board's place (#226).
+    pub(crate) archive: super::archive::Archive,
 }
 
 /// A system notification's tag for a Task.
@@ -140,6 +142,7 @@ impl CockpitView {
                     picks: Vec::new(),
                     direct: Default::default(),
                     opening: None,
+                    archive: Default::default(),
                 })
             }
         }
@@ -257,6 +260,9 @@ impl CockpitView {
             return Some(focus);
         }
         if let Some(focus) = self.coordinator_focus(window, cx) {
+            return Some(focus);
+        }
+        if let Some(focus) = self.archive_focus(cx) {
             return Some(focus);
         }
         if let Some(focus) = self.workflows_focus(cx) {
@@ -476,7 +482,8 @@ impl CockpitView {
         };
         let project = view.project;
         let board = self.cockpit.factory();
-        let tasks: Vec<&Task> = board.of(project).collect();
+        let tasks: Vec<&Task> = board.on_board(project).collect();
+        let archived = board.archive(project, "").count();
         let title = self
             .cockpit
             .registry()
@@ -537,6 +544,10 @@ impl CockpitView {
                             })),
                     )
             }))
+            .when(
+                view.surface == super::workflows::Surface::Board && !view.archive.shown,
+                |head| head.child(self.archive_button(archived, cx)),
+            )
             .child(
                 ferrite_ui::components::secondary_button(
                     "factory-new-task",
@@ -555,6 +566,8 @@ impl CockpitView {
             self.workflows_surface(window, cx)
         } else if view.surface == super::workflows::Surface::Coordinator {
             self.coordinator_surface(window, cx)
+        } else if view.archive.shown {
+            self.archive_surface(window, cx)
         } else if tasks.is_empty() {
             div()
                 .debug_selector(|| "factory-empty".into())
@@ -628,6 +641,12 @@ impl CockpitView {
                                     .text_size(px(FS_META))
                                     .text_color(rgb(INK_SUBTLE))
                                     .child(SharedString::from(in_column.len().to_string())),
+                            )
+                            .when(
+                                status == Status::Completed && !in_column.is_empty(),
+                                |heading| {
+                                    heading.child(div().flex_1()).child(self.clear_button(cx))
+                                },
                             ),
                     );
                 if in_column.is_empty() {
@@ -667,6 +686,7 @@ impl CockpitView {
             .line_height(px(LH_UI))
             .text_color(rgb(INK_STRONG))
             .child(head)
+            .children(self.factory_trouble())
             .child(body)
     }
 
@@ -781,7 +801,11 @@ impl CockpitView {
     }
 
     /// The open Task's panel: its status, tabs, and the tab's content.
-    fn task_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn task_panel(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
         let view = self.factory_view.as_ref()?;
         let task = self.open_task_now()?;
@@ -789,7 +813,20 @@ impl CockpitView {
         let id = task.id.clone();
 
         let mut actions = div().flex().items_center().gap(px(SPACE_2));
-        if matches!(
+        // Archived, a Task is read-only (#226).
+        let archived = task.archived();
+        if archived {
+            actions = actions.child(
+                div()
+                    .debug_selector(|| "task-archived".into())
+                    .text_size(px(FS_META))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(SharedString::from(match task.keeping.archived_ms {
+                        Some(at) => format!("Archived {}", core_factory::when_label(at)),
+                        None => "Archived".to_string(),
+                    })),
+            );
+        } else if matches!(
             task.status,
             Status::Queued | Status::Working | Status::NeedsHuman
         ) {
@@ -802,7 +839,7 @@ impl CockpitView {
                     })),
             );
         }
-        if task.status == Status::Stopped {
+        if task.status == Status::Stopped && !archived {
             let task = id.clone();
             actions = actions.child(
                 ferrite_ui::components::secondary_button("task-resume", None, "Resume", cx)
@@ -812,7 +849,7 @@ impl CockpitView {
                     })),
             );
         }
-        if task.status.deletable() {
+        if task.status.deletable() && !archived {
             let task = id.clone();
             actions = actions.child(
                 crate::project_editor::destructive_button("task-delete", "Delete", false, cx)
@@ -1049,12 +1086,14 @@ impl CockpitView {
                     .p(px(SPACE_2))
                     .child(self.pane_slot(index, Level::Transcript, window, cx))
                     .into_any_element(),
-                None => div()
-                    .debug_selector(|| "task-worker-none".into())
-                    .p(px(SPACE_4))
-                    .text_color(rgb(INK_SUBTLE))
-                    .child("No agent is working on this task right now.")
-                    .into_any_element(),
+                None => self.worker_history(task).unwrap_or_else(|| {
+                    div()
+                        .debug_selector(|| "task-worker-none".into())
+                        .p(px(SPACE_4))
+                        .text_color(rgb(INK_SUBTLE))
+                        .child("No agent is working on this task right now.")
+                        .into_any_element()
+                }),
             },
         };
 

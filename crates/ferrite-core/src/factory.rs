@@ -1518,7 +1518,9 @@ impl State {
                     let Some(seen) = task.worker.and_then(|thread| workers.get(&thread)) else {
                         continue;
                     };
-                    let cause = match task.worker.is_some_and(|thread| restarted.contains(&thread))
+                    let cause = match task
+                        .worker
+                        .is_some_and(|thread| restarted.contains(&thread))
                     {
                         true => recovery::Cause::Restart,
                         false => recovery::Cause::Ended,

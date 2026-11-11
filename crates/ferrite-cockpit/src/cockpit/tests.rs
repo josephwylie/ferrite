@@ -1,3 +1,4 @@
+mod archive;
 mod attention_alerts;
 mod boards;
 mod changes;

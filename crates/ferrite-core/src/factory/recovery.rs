@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::BTreeSet;
 
-use super::{reporting, Actor, Effect, Seen, State, Status, Task, TaskId, Watch, ASKING, REPORTING};
+use super::{
+    reporting, Actor, Effect, Seen, State, Status, Task, TaskId, Watch, ASKING, REPORTING,
+};
 
 /// What a Task remembers of interruptions and time.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,9 +151,7 @@ pub(super) fn unstarted(
     effects: &mut Vec<Effect>,
 ) {
     for task in &mut state.tasks {
-        if !unstarted.contains(&task.id)
-            || task.status != Status::Working
-            || task.worker.is_some()
+        if !unstarted.contains(&task.id) || task.status != Status::Working || task.worker.is_some()
         {
             continue;
         }

@@ -80,7 +80,10 @@ fn a_second_loss_stops_the_task_and_resume_continues_it() {
     let reason = stopped.reason.clone().unwrap();
     assert!(reason.contains("ended unexpectedly"), "{reason}");
     assert!(reason.contains("revived once"), "{reason}");
-    assert!(factory.step(7, &lost(0)).is_empty(), "stopped stays stopped");
+    assert!(
+        factory.step(7, &lost(0)).is_empty(),
+        "stopped stays stopped"
+    );
 
     factory
         .command(Command::Resume { task: task.clone() }, 8)
@@ -334,7 +337,10 @@ fn clear_archives_a_projects_completed_tasks_at_once() {
     factory.set_limit(5);
     let done = working(&mut factory);
     complete(&mut factory, &done, 10);
-    let open = start(&mut factory, "Rename the flag\nKeep the old one as an alias");
+    let open = start(
+        &mut factory,
+        "Rename the flag\nKeep the old one as an alias",
+    );
     let elsewhere = factory
         .command(
             Command::Start {
@@ -359,10 +365,18 @@ fn clear_archives_a_projects_completed_tasks_at_once() {
     let Answer::Task(elsewhere) = elsewhere else {
         panic!()
     };
-    assert!(factory.task(&elsewhere).unwrap().keeping.archived_ms.is_none());
+    assert!(factory
+        .task(&elsewhere)
+        .unwrap()
+        .keeping
+        .archived_ms
+        .is_none());
 
     let mut factory = Factory::in_memory();
-    let task = start(&mut factory, "Tidy\nThe README mentions the old deploy script");
+    let task = start(
+        &mut factory,
+        "Tidy\nThe README mentions the old deploy script",
+    );
     factory.step(1, &BTreeMap::new());
     worker_up(&mut factory, &task, WORKER);
     complete(&mut factory, &task, 20);

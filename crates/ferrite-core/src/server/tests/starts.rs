@@ -543,7 +543,10 @@ fn starts_that_arrived_during_a_restart_are_handled_once() {
     // Down across the schedule's run; a new issue is labelled meanwhile.
     let world = world.restart(
         midnight() + HOUR + 30_000,
-        vec![matching(vec![issue(3, "Old crash"), issue(7, "Login fails")])],
+        vec![matching(vec![
+            issue(3, "Old crash"),
+            issue(7, "Login fails"),
+        ])],
     );
     assert_eq!(world.automation(&schedule)["switch"], "on");
     assert_eq!(world.automation(&github)["switch"], "on");
@@ -563,7 +566,10 @@ fn starts_that_arrived_during_a_restart_are_handled_once() {
     // And once more across a second restart: nothing is started again.
     let world = world.restart(
         midnight() + HOUR + 60_000,
-        vec![matching(vec![issue(3, "Old crash"), issue(7, "Login fails")])],
+        vec![matching(vec![
+            issue(3, "Old crash"),
+            issue(7, "Login fails"),
+        ])],
     );
     world.settle();
     assert_eq!(world.tasks().len(), 2, "nothing again");

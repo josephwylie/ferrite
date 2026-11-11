@@ -4,6 +4,7 @@
 //! Decision, the held prompt — is folded in core and read from there.
 
 mod agent_pane;
+pub(crate) mod archive;
 pub(crate) mod beside;
 mod browser;
 #[cfg(feature = "browser-smoke")]

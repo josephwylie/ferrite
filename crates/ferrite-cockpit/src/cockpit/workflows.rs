@@ -1079,7 +1079,7 @@ impl CockpitView {
                     })
                     .count(),
             ),
-            (Surface::Board, "Board", board.of(view.project).count()),
+            (Surface::Board, "Board", board.on_board(view.project).count()),
             (
                 Surface::Workflows,
                 "Workflows",
