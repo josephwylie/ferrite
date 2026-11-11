@@ -2255,6 +2255,15 @@ fn samples() -> Vec<(&'static str, Sample)> {
             ),
         ),
         (
+            "command_task_clear",
+            command(
+                22,
+                Op::Task {
+                    action: TaskAction::Clear { project },
+                },
+            ),
+        ),
+        (
             "command_task_start_pr",
             command(
                 21,

@@ -1619,6 +1619,7 @@ pub fn task_command(action: crate::protocol::TaskAction) -> Option<Command> {
         TaskAction::Approve { task } => Command::Approve { task },
         TaskAction::Rework { task, feedback, to } => Command::Rework { task, feedback, to },
         TaskAction::Redirect { task, direction } => Command::Redirect { task, direction },
+        TaskAction::Clear { project } => Command::Clear { project },
         TaskAction::Start { .. } | TaskAction::Delete { .. } | TaskAction::Unknown => return None,
     })
 }

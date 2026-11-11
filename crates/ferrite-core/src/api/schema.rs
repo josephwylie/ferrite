@@ -197,6 +197,8 @@ operations! {
         "A Worker reports its Task's PR head (and which PR, the first time): each new head is a revision.";
     ReportEvidence(ReportEvidenceParams) => "report.evidence", ["text"],
         "A Worker keeps what a check or tool showed as evidence, about the PR's current revision.";
+    TaskClear(TaskClearParams) => "task.clear", [],
+        "Move a Project's Completed Tasks to its Archive now, off the board; they are kept whole.";
 }
 
 /// No parameters.
@@ -460,6 +462,17 @@ pub struct TaskStartParams {
     /// `owner/repository#number` or its URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskClearParams {
+    /// The Project whose Completed Tasks go (`project.list`'s `id`); else
+    /// the Project holding `cwd`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// The CLI sends its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

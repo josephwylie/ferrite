@@ -850,6 +850,11 @@ pub enum TaskAction {
         task: String,
         direction: crate::factory::Override,
     },
+    /// The Completed column's Clear: the Project's Completed Tasks go to
+    /// its Archive (#226).
+    Clear {
+        project: ProjectId,
+    },
     #[serde(other)]
     Unknown,
 }

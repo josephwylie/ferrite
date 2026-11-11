@@ -220,6 +220,7 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "task.submit",
             "report.revision",
             "report.evidence",
+            "task.clear",
         ]
     );
 }
@@ -535,6 +536,10 @@ fn samples() -> Vec<Request> {
         request(Method::ReportEvidence(ReportEvidenceParams {
             text: "cargo test: 12 passed".into(),
             worker: thread(),
+        })),
+        request(Method::TaskClear(TaskClearParams {
+            project: Some("3".into()),
+            cwd: None,
         })),
     ]
 }

@@ -241,6 +241,7 @@ owns, `owner: {"task": "t-1"}`) does it. Start one only when the user asks.
 "$F" task approve t-1
 "$F" task rework t-1 "Add a test for the flag" --to step:s-3
 "$F" task redirect t-1 s-3 --skip s-2 --then me --note "Only the docs changed"
+"$F" task clear --project 3
 ```
 
 A Task waits in Needs human for a question (`task answer`) and in Ready to
@@ -248,6 +249,12 @@ approve for approval (`task approve`, or `task rework` with feedback).
 `task redirect` sends one Task to a Step, skipping Steps, then following
 the routes or returning it to the user (`--then me`); the saved Workflow
 is unchanged. Do these only when the user asks.
+
+Completed Tasks leave the board for the Project's Archive 7 days after
+they complete; `task clear` moves them now. Archived Tasks are kept whole
+and still listed by `task list` (with `archived_ms`). A Worker interrupted
+by a restart or a crash is revived once and told so; a second failure
+stops its Task with the reason, for the user to resume or redirect.
 
 `task start` uses the Project holding the CLI's directory when no
 `--project` is given. `task delete` takes a Queued, Stopped or Completed

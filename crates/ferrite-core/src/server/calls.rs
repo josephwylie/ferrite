@@ -222,6 +222,7 @@ impl Server {
                     pr: params.pr,
                 },
             ),
+            Method::TaskClear(params) => self.api_task_clear(params),
             Method::ReportEvidence(params) => self.api_worker_said(
                 params.worker,
                 crate::factory::Command::ReportEvidence {

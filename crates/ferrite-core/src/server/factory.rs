@@ -12,7 +12,8 @@ use serde_json::{json, Value};
 
 use super::Server;
 use crate::api::schema::{
-    AgentPromptParams, ReportOutcomeParams, ReportQuestionParams, ReportedOutcome, TaskListParams,
+    AgentPromptParams, ReportOutcomeParams, ReportQuestionParams, ReportedOutcome, TaskClearParams,
+    TaskListParams,
     TaskParams, TaskRedirectParams, TaskReworkParams, TaskStartParams, TaskSubmitParams,
     WorkflowCreateParams,
 };
@@ -649,6 +650,13 @@ impl Server {
             answer["trouble"] = json!(trouble);
         }
         Ok(answer)
+    }
+
+    /// Clear: the Project's Completed Tasks go to its Archive (#226).
+    pub(super) fn api_task_clear(&mut self, params: TaskClearParams) -> Result<Value, ApiError> {
+        let project = self.project_of(params.project.as_deref(), params.cwd.as_deref())?;
+        let (answer, _) = self.factory_command(Command::Clear { project })?;
+        Ok(json!({ "changed": answer == Answer::Changed(true) }))
     }
 
     pub(super) fn api_task_get(&self, params: TaskParams) -> Result<Value, ApiError> {
