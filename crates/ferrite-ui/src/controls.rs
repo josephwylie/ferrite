@@ -78,6 +78,7 @@ pub fn chooser(
                 .when(look.full_width, |row| row.w_full())
                 .child(
                     div()
+                        .debug_selector(|| "chooser-value".into())
                         .min_w_0()
                         .truncate()
                         .when(look.full_width, |value| value.flex_1())

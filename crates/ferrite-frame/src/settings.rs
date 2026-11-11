@@ -545,7 +545,10 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
                         }
                         menu.item(
                             PopupMenuItem::element(move |_, _| {
-                                components::kit_row(ferrite_ui::menu::row_face(&item, false, false))
+                                components::kit_row(
+                                    ferrite_ui::menu::row_face(&item, false, false)
+                                        .debug_selector(move || format!("{id}-option-{at}")),
+                                )
                             })
                             .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
@@ -902,5 +905,81 @@ mod tests {
             assert_eq!(on.style().background, Some(paint::FLOAT_SEL.into()));
             assert_eq!(off.style().background, None);
         });
+    }
+
+    /// A choice from a list shows its current value; its menu lists every
+    /// option with the current one checked, and picking one makes it the
+    /// value shown and the one checked.
+    #[gpui::test]
+    fn a_chooser_shows_its_value_and_its_menu_picks_another(cx: &mut gpui::TestAppContext) {
+        use std::cell::Cell;
+        const OPTIONS: [&str; 2] = ["Opus", "Sonnet"];
+        struct Host {
+            current: Rc<Cell<usize>>,
+        }
+        impl Render for Host {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let now = self.current.get();
+                let current = self.current.clone();
+                let row = Row::new(
+                    "Model",
+                    "",
+                    Vec::new(),
+                    Control::Chooser {
+                        id: "model",
+                        selected: OPTIONS[now].into(),
+                        options: OPTIONS
+                            .iter()
+                            .enumerate()
+                            .map(|(at, label)| (SharedString::from(*label), at == now))
+                            .collect(),
+                        pick: Rc::new(move |at, _| current.set(at)),
+                    },
+                );
+                div().size_full().child(control(&row, window, cx))
+            }
+        }
+        cx.update(ferrite_pane::pane::init_components);
+        let current = Rc::new(Cell::new(1));
+        let (host, cx) = cx.add_window_view({
+            let current = current.clone();
+            |_, _| Host { current }
+        });
+        cx.run_until_parked();
+        let sonnet_shown = cx.debug_bounds("chooser-value").expect("its value");
+        let chooser = cx.debug_bounds("model").expect("the chooser");
+        assert!(chooser.contains(&sonnet_shown.center()));
+
+        let checked = |cx: &mut gpui::VisualTestContext| {
+            let rows = [
+                cx.debug_bounds("model-option-0")
+                    .expect("the menu lists Opus"),
+                cx.debug_bounds("model-option-1").expect("and Sonnet"),
+            ];
+            let check = cx.debug_bounds("float-check").expect("one is checked");
+            let lit: Vec<usize> = (0..2)
+                .filter(|at| rows[*at].contains(&check.center()))
+                .collect();
+            (rows, lit)
+        };
+        cx.simulate_click(chooser.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        let (rows, lit) = checked(cx);
+        assert_eq!(lit, [1], "Sonnet, the current one, is checked");
+
+        cx.simulate_click(rows[0].center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(current.get(), 0, "picking Opus picks it");
+        host.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        let opus_shown = cx.debug_bounds("chooser-value").expect("its value");
+        assert!(
+            opus_shown.size.width < sonnet_shown.size.width,
+            "the shorter Opus is shown: {opus_shown:?} after {sonnet_shown:?}"
+        );
+        let chooser = cx.debug_bounds("model").expect("the chooser");
+        cx.simulate_click(chooser.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(checked(cx).1, [0], "now Opus is checked");
     }
 }
