@@ -6,7 +6,7 @@
 //! Each Thread keeps its own ordered tabs (`surfaces`): Overview (the old
 //! sections: Environment, Context, Connectors, Changes), Changes, Files, a
 //! File (a preview: `preview.rs`), the Browser, a Terminal, a side chat, an
-//! agent, background work. Every way in goes through one door,
+//! agent, background work, the branch's pull request (`pull_request.rs`). Every way in goes through one door,
 //! `upsert_surface`, which brings a tab already open forward and adds one
 //! otherwise; the body is one `match` on the active Surface
 //! (`surface_body`). The head row (`strip.rs`) holds the tabs, the `+` menu
@@ -33,6 +33,7 @@ mod background;
 mod changes;
 pub(crate) mod hunks;
 pub(crate) mod preview;
+mod pull_request;
 mod sections;
 mod strip;
 
@@ -40,6 +41,7 @@ use super::surfaces::{SurfaceId, Surfaces, ThreadSurfaces};
 use ferrite_ui::icons::{self, icon};
 use super::*;
 
+pub(crate) use pull_request::PrAction;
 pub(crate) use strip::Opener;
 #[cfg(test)]
 pub(crate) use strip::tab_scroll_step;
@@ -72,6 +74,10 @@ pub(crate) struct Panel {
     /// The background cards turned from how they start (running open,
     /// finished closed), by call.
     pub(crate) background_turned: std::collections::HashSet<String>,
+    /// Each Thread's pull request, read whole for its Surface.
+    pr_reads: std::collections::HashMap<ThreadId, pull_request::PrRead>,
+    /// The Thread whose PR's Merge waits for its second press.
+    pr_armed: Option<ThreadId>,
 }
 
 impl Panel {
@@ -96,6 +102,8 @@ impl Panel {
             tab_press: None,
             empty_highlight: 0,
             background_turned: Default::default(),
+            pr_reads: Default::default(),
+            pr_armed: None,
         }
     }
 }
@@ -110,13 +118,18 @@ struct TabPress {
 }
 
 /// Which stored Surfaces still resolve after a restart (the file's
-/// `migrate`): the singletons, and a File whose file is still there. A
+/// `migrate`): the singletons, the branch's pull request (read again as it
+/// shows), and a File whose file is still there. A
 /// shell, a live page, a side chat's fork and an agent's drill-in end with
 /// the window. A deleted Thread's Panel goes when the tabs are next
 /// written (`save_surfaces`).
 fn survives_restart(_: ThreadId, id: &SurfaceId) -> bool {
     match id {
-        SurfaceId::Overview | SurfaceId::Changes | SurfaceId::Files | SurfaceId::Background => true,
+        SurfaceId::Overview
+        | SurfaceId::Changes
+        | SurfaceId::Files
+        | SurfaceId::Background
+        | SurfaceId::PullRequest(_) => true,
         SurfaceId::File(path) => path.exists(),
         SurfaceId::Browser | SurfaceId::Terminal(_) | SurfaceId::SideChat(_) | SurfaceId::Agent(_) => {
             false
@@ -126,13 +139,13 @@ fn survives_restart(_: ThreadId, id: &SurfaceId) -> bool {
 
 /// The least width the Panel shows `active` at, in a window `window` wide
 /// (ADR 0039's floor per kind): the sections' `PANEL_W`; a reading width
-/// for a file or the browser; most of the room for Files and Changes; the
+/// for a file, the browser or a pull request; most of the room for Files and Changes; the
 /// side chat's for a shell, a side chat or an agent.
 fn floor_w(active: Option<&SurfaceId>, window: f32) -> f32 {
     use ferrite_ui::theme::*;
     match active {
         None | Some(SurfaceId::Overview | SurfaceId::Background) => PANEL_W,
-        Some(SurfaceId::File(_) | SurfaceId::Browser) => {
+        Some(SurfaceId::File(_) | SurfaceId::Browser | SurfaceId::PullRequest(_)) => {
             (window * PANEL_PREVIEW_SHARE).clamp(PANEL_PREVIEW_MIN_W, PANEL_PREVIEW_MAX_W)
         }
         Some(SurfaceId::Files | SurfaceId::Changes) => {
@@ -242,6 +255,7 @@ impl CockpitView {
             }
             SurfaceId::Changes => self.ensure_changes(thread, cx),
             SurfaceId::Overview => self.refresh_context(thread),
+            SurfaceId::PullRequest(_) => self.read_pr_snapshot(thread, true, cx),
             _ => {}
         }
         self.surfaces_mut(thread).upsert(id);
@@ -300,7 +314,11 @@ impl CockpitView {
             SurfaceId::Agent(key) => self.close_agent_drill(thread, key, cx),
             SurfaceId::File(path) => self.close_preview_of(thread, path),
             SurfaceId::Browser => self.close_preview_of(thread, std::path::Path::new(preview::BROWSER_PATH)),
-            SurfaceId::Overview | SurfaceId::Changes | SurfaceId::Files | SurfaceId::Background => {}
+            SurfaceId::Overview
+            | SurfaceId::Changes
+            | SurfaceId::Files
+            | SurfaceId::Background
+            | SurfaceId::PullRequest(_) => {}
         }
     }
 
@@ -363,6 +381,7 @@ impl CockpitView {
                     self.ensure_files(thread, cx);
                 }
                 Some(SurfaceId::Changes) => self.ensure_changes(thread, cx),
+                Some(SurfaceId::PullRequest(_)) => self.read_pr_snapshot(thread, false, cx),
                 _ => {}
             }
         }
@@ -662,6 +681,7 @@ impl CockpitView {
             }
             Some(SurfaceId::SideChat(tab)) => filled(self.side_chat_body(thread, tab, cx)),
             Some(SurfaceId::Agent(key)) => filled(self.agent_drill_body(thread, &key)),
+            Some(SurfaceId::PullRequest(number)) => filled(self.pr_surface(thread, number, cx)),
         }
     }
 }

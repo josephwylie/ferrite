@@ -47,6 +47,8 @@ pub(super) enum MenuTarget {
     SurfaceMenu(ThreadId),
     /// A Panel tab's right-click, by its place in the strip.
     SurfaceTab { thread: ThreadId, at: usize },
+    /// The pull request Surface's `⋯`.
+    PrMore(ThreadId),
 }
 
 /// One thing a context-menu row does.
@@ -119,6 +121,8 @@ pub(super) enum MenuVerb {
     CloseOtherSurfaces,
     CloseSurfacesRight,
     CloseAllSurfaces,
+    /// A pull request Surface's row.
+    Pr(panel::PrAction),
 }
 
 /// A parent row's submenu.
@@ -359,6 +363,7 @@ impl CockpitView {
             MenuTarget::TerminalMore(_) => rows = self.terminal_more_rows(),
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread),
             MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at),
+            MenuTarget::PrMore(thread) => rows = self.pr_menu_rows(thread),
             MenuTarget::Page(owner) => {
                 let address = self
                     .page_source(owner)
@@ -703,6 +708,7 @@ impl CockpitView {
             (MenuTarget::SurfaceTab { thread, at }, verb) => {
                 self.run_surface_tab_verb(thread, at, verb, cx)
             }
+            (MenuTarget::PrMore(thread), MenuVerb::Pr(action)) => self.run_pr_action(thread, action, cx),
             (MenuTarget::File(thread) | MenuTarget::FilesMore(thread), MenuVerb::Files(verb)) => {
                 self.run_files_verb(thread, verb, cx)
             }
@@ -810,6 +816,7 @@ impl CockpitView {
                     | MenuTarget::TerminalMore(_)
                     | MenuTarget::SurfaceMenu(_)
                     | MenuTarget::SurfaceTab { .. }
+                    | MenuTarget::PrMore(_)
                     | MenuTarget::Page(_) => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);

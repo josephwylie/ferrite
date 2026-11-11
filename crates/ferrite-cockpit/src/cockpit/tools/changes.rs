@@ -172,6 +172,15 @@ impl CockpitView {
         }
     }
 
+    /// The Changes state for `thread`, made on the branch's whole diff if
+    /// it is new: what a pull request's Code view shows.
+    pub(in crate::cockpit) fn ensure_branch_changes(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        if !self.tools.changes.contains_key(&thread) {
+            self.ensure_changes(thread, cx);
+            self.run_changes_verb(thread, Verb::All, cx);
+        }
+    }
+
     /// Whether the last read of `thread`'s Changes lists the file at `path`
     /// (relative to the checkout).
     pub(in crate::cockpit) fn changes_list(&self, thread: ThreadId, path: &str) -> bool {

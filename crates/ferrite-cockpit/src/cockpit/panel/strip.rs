@@ -105,6 +105,7 @@ fn surface_icon(id: &SurfaceId) -> &'static str {
         SurfaceId::Terminal(_) => icons::TERMINAL,
         SurfaceId::SideChat(_) => icons::MESSAGES_SQUARE,
         SurfaceId::Agent(_) => icons::SUBAGENTS,
+        SurfaceId::PullRequest(_) => icons::GIT_PULL_REQUEST,
     }
 }
 
@@ -123,6 +124,7 @@ pub(crate) fn surface_selector(id: &SurfaceId) -> String {
         SurfaceId::Terminal(number) => format!("panel-tab-Terminal-{number}"),
         SurfaceId::SideChat(tab) => format!("panel-tab-SideChat-{tab}"),
         SurfaceId::Agent(_) => "panel-tab-Agent".into(),
+        SurfaceId::PullRequest(number) => format!("panel-tab-PullRequest-{number}"),
     }
 }
 
@@ -161,7 +163,7 @@ impl CockpitView {
             Opener::Terminal => self.new_terminal_surface(thread, cx),
             Opener::Files => self.upsert_surface(thread, SurfaceId::Files, cx),
             Opener::Changes => self.upsert_surface(thread, SurfaceId::Changes, cx),
-            Opener::PullRequest => self.open_pr(thread, cx),
+            Opener::PullRequest => self.open_pr_surface(thread, cx),
             Opener::SideChat => self.open_side_chat(thread, None, cx),
             Opener::Background => self.open_background(thread, cx),
             Opener::Overview => self.open_panel(thread, cx),
@@ -256,6 +258,7 @@ impl CockpitView {
             SurfaceId::Terminal(number) => format!("Terminal {number}").into(),
             SurfaceId::SideChat(tab) => self.side_chat_title(thread, *tab),
             SurfaceId::Agent(key) => self.agent_title(thread, key),
+            SurfaceId::PullRequest(number) => format!("#{number}").into(),
         }
     }
 
@@ -403,9 +406,12 @@ impl CockpitView {
                 })
                 .child(icon(icons::CLOSE, SURFACE_TAB_ICON, INK_STRONG))
         } else {
-            div()
-                .flex()
-                .child(icon(surface_icon(id), SURFACE_TAB_ICON, if active { INK_STRONG } else { INK_SUBTLE }))
+            // A pull request's icon says its state, in its state's ink.
+            let (glyph, ink) = match (id, self.pr_tone(thread)) {
+                (SurfaceId::PullRequest(_), Some(tone)) => (tone.glyph(), tone.ink()),
+                _ => (surface_icon(id), if active { INK_STRONG } else { INK_SUBTLE }),
+            };
+            div().flex().child(icon(glyph, SURFACE_TAB_ICON, ink))
         };
         let close_key = SharedString::from(format!("panel-tab-close-{at}"));
         let close = div()

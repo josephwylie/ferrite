@@ -3592,7 +3592,8 @@ impl CockpitView {
             | MenuTarget::Terminal(_)
             | MenuTarget::TerminalMore(_)
             | MenuTarget::SurfaceMenu(_)
-            | MenuTarget::SurfaceTab { .. } => None,
+            | MenuTarget::SurfaceTab { .. }
+            | MenuTarget::PrMore(_) => None,
             MenuTarget::Group(_)
             | MenuTarget::Parked
             | MenuTarget::Review { .. }
