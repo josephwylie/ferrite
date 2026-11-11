@@ -213,6 +213,30 @@ impl Server {
                 workflow: params.workflow,
                 step: params.step,
             }),
+            Method::ReportQuestion(params) => self.api_ask(params),
+            Method::TaskAnswer(params) => {
+                let task = params.task.clone();
+                self.api_task_command(
+                    &task,
+                    crate::factory::Command::AnswerQuestion {
+                        task: params.task,
+                        text: params.text,
+                        question: params.question,
+                    },
+                )
+            }
+            Method::TaskApprove(params) => {
+                let task = params.task.clone();
+                self.api_task_command(&task, crate::factory::Command::Approve { task: params.task })
+            }
+            Method::TaskRework(params) => self.api_task_rework(params),
+            Method::TaskRedirect(params) => self.api_task_redirect(params),
+            Method::WorkflowApproval(params) => {
+                self.api_author(crate::factory::Command::EditApproval {
+                    workflow: params.workflow,
+                    change: params.change,
+                })
+            }
             Method::NotificationShow(params) => {
                 self.say(ServerMessage::Notification {
                     title: params.title,

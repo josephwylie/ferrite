@@ -846,6 +846,67 @@ fn samples() -> Vec<(&'static str, Sample)> {
             ),
         ),
         (
+            "command_task_answer",
+            command(
+                23,
+                Op::Task {
+                    action: TaskAction::Answer {
+                        task: "t-1".into(),
+                        text: "Call the flag --fast".into(),
+                        question: Some(1),
+                    },
+                },
+            ),
+        ),
+        (
+            "command_task_rework",
+            command(
+                24,
+                Op::Task {
+                    action: TaskAction::Rework {
+                        task: "t-1".into(),
+                        feedback: "Add a test for the flag".into(),
+                        to: Some(crate::factory::Destination::Step("s-3".into())),
+                    },
+                },
+            ),
+        ),
+        (
+            "command_task_redirect",
+            command(
+                25,
+                Op::Task {
+                    action: TaskAction::Redirect {
+                        task: "t-1".into(),
+                        direction: crate::factory::Override {
+                            to: "s-3".into(),
+                            skip: vec!["s-2".into()],
+                            then: crate::factory::ThenReturn::Me,
+                            note: "Only the docs changed".into(),
+                        },
+                    },
+                },
+            ),
+        ),
+        (
+            "command_workflow_edit_approval",
+            command(
+                26,
+                Op::Workflow {
+                    action: WorkflowAction::EditApproval {
+                        workflow: "w-1".into(),
+                        change: crate::factory::ApprovalChange {
+                            by: Some(crate::factory::Approver::Agent),
+                            step: Some("s-4".into()),
+                            instructions: Some("Approve when the checks pass".into()),
+                            after: Some(crate::factory::Destination::Complete),
+                            rework_to: Some(crate::factory::Destination::Step("s-3".into())),
+                        },
+                    },
+                },
+            ),
+        ),
+        (
             "reply_version",
             Sample::Server(ServerMessage::Reply {
                 id: 22,

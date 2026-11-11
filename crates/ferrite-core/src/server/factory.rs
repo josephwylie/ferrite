@@ -12,8 +12,9 @@ use serde_json::{json, Value};
 
 use super::Server;
 use crate::api::schema::{
-    AgentPromptParams, ReportOutcomeParams, ReportedOutcome, TaskListParams, TaskParams,
-    TaskStartParams, WorkflowCreateParams,
+    AgentPromptParams, ReportOutcomeParams, ReportQuestionParams, ReportedOutcome,
+    TaskListParams, TaskParams, TaskRedirectParams, TaskReworkParams, TaskStartParams,
+    WorkflowCreateParams,
 };
 use crate::api::{ApiError, Code};
 use crate::engine::{Launch, ProviderChoice};
@@ -355,10 +356,6 @@ impl Server {
                 let (answer, _) = self.factory_command(start).map_err(wire)?;
                 Ok(Some(done(answer)))
             }
-            TaskAction::Stop { task } => self.task_changed(Command::Stop { task }).map_err(wire),
-            TaskAction::Resume { task } => {
-                self.task_changed(Command::Resume { task }).map_err(wire)
-            }
             TaskAction::Delete { task } => {
                 let (_, kept) = self
                     .factory_command(Command::Delete { task })
@@ -367,10 +364,13 @@ impl Server {
                     kept: (!kept.is_empty()).then(|| kept.join(" ")),
                 }))
             }
-            TaskAction::Unknown => Err(WireError {
-                code: crate::protocol::ErrorCode::Unsupported,
-                message: "this server does not know that Factory command".into(),
-            }),
+            other => match factory::task_command(other) {
+                Some(command) => self.task_changed(command).map_err(wire),
+                None => Err(WireError {
+                    code: crate::protocol::ErrorCode::Unsupported,
+                    message: "this server does not know that Factory command".into(),
+                }),
+            },
         }
     }
 
@@ -499,7 +499,8 @@ impl Server {
             | Command::AddStep { workflow, .. }
             | Command::EditStep { workflow, .. }
             | Command::MoveStep { workflow, .. }
-            | Command::DeleteStep { workflow, .. } => workflow.clone(),
+            | Command::DeleteStep { workflow, .. }
+            | Command::EditApproval { workflow, .. } => workflow.clone(),
             _ => unreachable!("only authoring commands"),
         };
         let (answer, _) = self.factory_command(command)?;
@@ -602,26 +603,91 @@ impl Server {
     }
 
     pub(super) fn api_report(&mut self, params: ReportOutcomeParams) -> Result<Value, ApiError> {
+        let summary = params.summary;
         let outcome = match params.outcome {
-            ReportedOutcome::Finished => Outcome::Finished {
-                summary: params.summary,
-            },
-            ReportedOutcome::Unable => Outcome::Unable {
-                tried: params.summary,
-            },
+            ReportedOutcome::Finished => Outcome::Finished { summary },
+            ReportedOutcome::Unable => Outcome::Unable { tried: summary },
+            ReportedOutcome::Approved => Outcome::Approved { summary },
+            ReportedOutcome::Rejected => Outcome::Rejected { reasons: summary },
         };
-        let (answer, _) = self.factory_command(Command::Report {
-            worker: params.worker,
-            outcome,
-        })?;
+        self.api_worker_said(
+            params.worker,
+            Command::Report {
+                worker: params.worker,
+                outcome,
+            },
+        )
+    }
+
+    pub(super) fn api_ask(&mut self, params: ReportQuestionParams) -> Result<Value, ApiError> {
+        self.api_worker_said(
+            params.worker,
+            Command::Ask {
+                worker: params.worker,
+                text: params.text,
+            },
+        )
+    }
+
+    /// A Worker's report or question, answered with its Task.
+    fn api_worker_said(&mut self, worker: ThreadId, command: Command) -> Result<Value, ApiError> {
+        let (answer, _) = self.factory_command(command)?;
         let task = self
             .factory
-            .task_of(params.worker)
+            .task_of(worker)
             .map(|task| task.id.clone())
             .unwrap_or_default();
         Ok(json!({
             "task": self.task_json(&task)?,
             "changed": answer == Answer::Changed(true),
         }))
+    }
+
+    /// An operator's command on one Task, answered with the Task.
+    pub(super) fn api_task_command(
+        &mut self,
+        task: &str,
+        command: Command,
+    ) -> Result<Value, ApiError> {
+        let (answer, _) = self.factory_command(command)?;
+        let changed = answer == Answer::Changed(true);
+        Ok(json!({ "task": self.task_json(task)?, "changed": changed }))
+    }
+
+    pub(super) fn api_task_rework(&mut self, params: TaskReworkParams) -> Result<Value, ApiError> {
+        let to = params
+            .to
+            .as_deref()
+            .map(str::parse::<factory::Destination>)
+            .transpose()
+            .map_err(|why| ApiError::new(Code::InvalidRequest, why))?;
+        let task = params.task.clone();
+        self.api_task_command(
+            &task,
+            Command::Rework {
+                task: params.task,
+                feedback: params.feedback,
+                to,
+            },
+        )
+    }
+
+    pub(super) fn api_task_redirect(
+        &mut self,
+        params: TaskRedirectParams,
+    ) -> Result<Value, ApiError> {
+        let task = params.task.clone();
+        self.api_task_command(
+            &task,
+            Command::Redirect {
+                task: params.task,
+                direction: factory::Override {
+                    to: params.to,
+                    skip: params.skip,
+                    then: params.then.unwrap_or_default(),
+                    note: params.note.unwrap_or_default(),
+                },
+            },
+        )
     }
 }

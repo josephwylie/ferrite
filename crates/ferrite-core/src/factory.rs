@@ -1304,7 +1304,36 @@ pub fn workflow_command(
             workflow,
             catalog: Catalog { models, skills },
         },
+        WorkflowAction::EditApproval { workflow, change } => {
+            Command::EditApproval { workflow, change }
+        }
         WorkflowAction::Unknown => return None,
+    })
+}
+
+/// A window's ask of one Task as the command it is; `None` for one that
+/// is not of one Task in place (start, delete) or that this Ferrite does
+/// not know.
+pub fn task_command(action: crate::protocol::TaskAction) -> Option<Command> {
+    use crate::protocol::TaskAction;
+    Some(match action {
+        TaskAction::Stop { task } => Command::Stop { task },
+        TaskAction::Resume { task } => Command::Resume { task },
+        TaskAction::Answer {
+            task,
+            text,
+            question,
+        } => Command::AnswerQuestion {
+            task,
+            text,
+            question,
+        },
+        TaskAction::Approve { task } => Command::Approve { task },
+        TaskAction::Rework { task, feedback, to } => Command::Rework { task, feedback, to },
+        TaskAction::Redirect { task, direction } => Command::Redirect { task, direction },
+        TaskAction::Start { .. } | TaskAction::Delete { .. } | TaskAction::Unknown => {
+            return None
+        }
     })
 }
 

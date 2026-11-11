@@ -208,6 +208,12 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "step.edit",
             "step.move",
             "step.delete",
+            "report.question",
+            "task.answer",
+            "task.approve",
+            "task.rework",
+            "task.redirect",
+            "workflow.approval",
         ]
     );
 }
@@ -454,6 +460,38 @@ fn samples() -> Vec<Request> {
         request(Method::StepDelete(StepParams {
             workflow: "w-1".into(),
             step: "s-2".into(),
+        })),
+        request(Method::ReportQuestion(ReportQuestionParams {
+            text: "Which flag name should it use?".into(),
+            worker: thread(),
+        })),
+        request(Method::TaskAnswer(TaskAnswerParams {
+            task: "t-1".into(),
+            text: "Call it --fast".into(),
+            question: Some(1),
+        })),
+        request(Method::TaskApprove(TaskParams { task: "t-1".into() })),
+        request(Method::TaskRework(TaskReworkParams {
+            task: "t-1".into(),
+            feedback: "Add a test for the flag".into(),
+            to: Some("step:s-3".into()),
+        })),
+        request(Method::TaskRedirect(TaskRedirectParams {
+            task: "t-1".into(),
+            to: "s-3".into(),
+            skip: vec!["s-2".into()],
+            then: Some(crate::factory::ThenReturn::Me),
+            note: Some("Only the docs changed".into()),
+        })),
+        request(Method::WorkflowApproval(WorkflowApprovalParams {
+            workflow: "w-1".into(),
+            change: crate::factory::ApprovalChange {
+                by: Some(crate::factory::Approver::Agent),
+                step: Some("s-4".into()),
+                instructions: Some("Approve when the checks pass".into()),
+                after: Some(crate::factory::Destination::Complete),
+                rework_to: Some(crate::factory::Destination::Step("s-3".into())),
+            },
         })),
     ]
 }
@@ -991,6 +1029,55 @@ fn workflow_authoring_parses_from_the_cli() {
             name: None,
             project: None,
             cwd: Some(PathBuf::from("/work/app")),
+        }))
+    );
+}
+
+/// A Worker asks from where it runs; the operator's answer, rework,
+/// redirect and a Workflow's approval settings are CLI commands too.
+#[test]
+fn questions_approval_and_direction_parse_from_the_cli() {
+    assert_eq!(
+        parse("report.question", &["Which flag name?"]),
+        Ok(Method::ReportQuestion(ReportQuestionParams {
+            text: "Which flag name?".into(),
+            worker: ThreadId::new(7),
+        }))
+    );
+    assert_eq!(
+        parse("report.outcome", &["rejected", "No changelog entry"]),
+        Ok(Method::ReportOutcome(ReportOutcomeParams {
+            outcome: ReportedOutcome::Rejected,
+            summary: "No changelog entry".into(),
+            worker: ThreadId::new(7),
+        }))
+    );
+    assert_eq!(
+        parse(
+            "task.redirect",
+            &["t-1", "s-3", "--skip", "s-2", "--then", "me", "--note", "Docs only"]
+        ),
+        Ok(Method::TaskRedirect(TaskRedirectParams {
+            task: "t-1".into(),
+            to: "s-3".into(),
+            skip: vec!["s-2".into()],
+            then: Some(crate::factory::ThenReturn::Me),
+            note: Some("Docs only".into()),
+        }))
+    );
+    assert_eq!(
+        parse(
+            "workflow.approval",
+            &["w-1", "--by", "agent", "--step", "s-4", "--rework-to", "step:s-3"]
+        ),
+        Ok(Method::WorkflowApproval(WorkflowApprovalParams {
+            workflow: "w-1".into(),
+            change: crate::factory::ApprovalChange {
+                by: Some(crate::factory::Approver::Agent),
+                step: Some("s-4".into()),
+                rework_to: Some(crate::factory::Destination::Step("s-3".into())),
+                ..Default::default()
+            },
         }))
     );
 }

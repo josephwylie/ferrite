@@ -10,8 +10,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Actor, Answer, Approver, Destination, Effect, Outcome, Refusal, RefusalCode,
-    Resolved, Status, Step, StepId, StepResult, Task, Watch,
+    Actor, Answer, Approver, Destination, Effect, Outcome, Refusal, RefusalCode, Resolved, Status,
+    Step, StepId, StepResult, Task, Watch,
 };
 use crate::ThreadId;
 
@@ -32,11 +32,7 @@ pub struct Oversight {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub feedback: Vec<Feedback>,
     /// The operator's direction for this Task only.
-    #[serde(
-        default,
-        rename = "override",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, rename = "override", skip_serializing_if = "Option::is_none")]
     pub direction: Option<Override>,
     /// "Return it to me": the operator approves, whoever the Workflow
     /// names.
@@ -183,11 +179,9 @@ impl Task {
             && approval.step.as_deref() == Some(step.id.as_str())
             && step.on_finished == Destination::Approval
             && !self.oversight.to_me
-            && !self
-                .oversight
-                .direction
-                .as_ref()
-                .is_some_and(|direction| direction.then == ThenReturn::Me && direction.to == step.id)
+            && !self.oversight.direction.as_ref().is_some_and(|direction| {
+                direction.then == ThenReturn::Me && direction.to == step.id
+            })
     }
 
     /// The current run decides an approval, now or in its own report.
@@ -502,10 +496,17 @@ pub(super) fn reported(
             task.oversight.to_me = true;
             enter_approval(task, Some(&step.id), summary, now_ms, effects);
         }
-        Outcome::Finished { summary } => {
-            follow(task, Some(&step.id), step.on_finished, summary, now_ms, effects)
+        Outcome::Finished { summary } => follow(
+            task,
+            Some(&step.id),
+            step.on_finished,
+            summary,
+            now_ms,
+            effects,
+        ),
+        Outcome::Unable { tried } => {
+            follow(task, Some(&step.id), step.on_unable, tried, now_ms, effects)
         }
-        Outcome::Unable { tried } => follow(task, Some(&step.id), step.on_unable, tried, now_ms, effects),
     }
     Ok(())
 }
@@ -651,10 +652,9 @@ fn approved(task: &mut Task, now_ms: i64, effects: &mut Vec<Effect>) {
     task.oversight.to_me = false;
     task.oversight.deciding = false;
     task.oversight.direction = None;
-    let after = task
-        .workflow
-        .as_ref()
-        .map_or(Destination::Complete, |run| run.definition.approval.after.clone());
+    let after = task.workflow.as_ref().map_or(Destination::Complete, |run| {
+        run.definition.approval.after.clone()
+    });
     let result = task.result.clone().unwrap_or_default();
     match after {
         Destination::Step(_) => follow(task, None, after, result, now_ms, effects),
@@ -691,7 +691,11 @@ pub(super) fn permission(
         (None, true) if task.status == Status::NeedsHuman => {
             task.oversight.permission = None;
             task.reason = None;
-            task.note(now_ms, Actor::Ferrite, "Permission answered; the agent continues");
+            task.note(
+                now_ms,
+                Actor::Ferrite,
+                "Permission answered; the agent continues",
+            );
             task.enter(Status::Working, effects);
             task.watch = Watch {
                 baseline: turns,
@@ -715,10 +719,13 @@ pub(super) fn decision_section(task: &Task) -> String {
         .result
         .clone()
         .or_else(|| {
-            task.results.iter().rev().find_map(|result| match &result.outcome {
-                Outcome::Finished { summary } => Some(summary.clone()),
-                _ => None,
-            })
+            task.results
+                .iter()
+                .rev()
+                .find_map(|result| match &result.outcome {
+                    Outcome::Finished { summary } => Some(summary.clone()),
+                    _ => None,
+                })
         })
         .unwrap_or_else(|| "this task's current result".into());
     format!(
@@ -748,7 +755,10 @@ pub(super) fn said_since(task: &Task, after: usize, answers: bool) -> String {
                 )
             })
             .collect();
-        out.push_str(&format!("\n## Questions answered\n\n{}\n", lines.join("\n")));
+        out.push_str(&format!(
+            "\n## Questions answered\n\n{}\n",
+            lines.join("\n")
+        ));
     }
     let feedback: Vec<String> = task
         .oversight
@@ -757,7 +767,9 @@ pub(super) fn said_since(task: &Task, after: usize, answers: bool) -> String {
         .filter(|each| each.after >= after)
         .map(|each| match each.kind {
             FeedbackKind::Rejected => format!("- {}", each.text),
-            FeedbackKind::Rework => format!("- The operator asked {} for rework: {}", each.to, each.text),
+            FeedbackKind::Rework => {
+                format!("- The operator asked {} for rework: {}", each.to, each.text)
+            }
             FeedbackKind::Redirect => {
                 format!("- The operator sent the task to {}: {}", each.to, each.text)
             }

@@ -77,6 +77,9 @@ pub struct Cockpit {
     /// A fixture world's own Factory, answering Workflow asks as a
     /// Server's would (`fixture_live_factory`); a real window has none.
     local_factory: Option<crate::factory::Factory>,
+    /// A fixture world's Task asks, kept to be read back
+    /// (`fixture_record_tasks`); a real window keeps none.
+    task_asks: Option<Vec<crate::protocol::TaskAction>>,
     /// The Subject each Pane shows, where it is not Main: what this window
     /// reads when the operator looks at it.
     visible_subjects: std::collections::BTreeMap<ThreadId, Subject>,
@@ -231,6 +234,7 @@ impl Cockpit {
             allowance_warnings: Vec::new(),
             asked: Vec::new(),
             local_factory: None,
+            task_asks: None,
             visible_subjects: std::collections::BTreeMap::new(),
             window_active: true,
             composing: std::collections::BTreeSet::new(),
@@ -2494,6 +2498,10 @@ impl Cockpit {
     /// A Factory command. The Factory runs in the Server: a window that
     /// runs its agents itself has none.
     pub fn task(&mut self, action: crate::protocol::TaskAction) -> io::Result<Option<Done>> {
+        if let Some(asks) = self.task_asks.as_mut() {
+            asks.push(action);
+            return Ok(Some(Done::Changed { changed: true }));
+        }
         let done = self
             .remote()?
             .execute(Op::Task { action })
@@ -2750,6 +2758,16 @@ impl Cockpit {
         let board = factory.board();
         self.local_factory = Some(factory);
         self.receive_fixture(ServerMessage::Factory { revision: 0, board });
+    }
+
+    /// A fixture world keeps its Task asks, each answered as changed, to
+    /// be read back with `fixture_task_asks`.
+    pub fn fixture_record_tasks(&mut self) {
+        self.task_asks = Some(Vec::new());
+    }
+
+    pub fn fixture_task_asks(&self) -> &[crate::protocol::TaskAction] {
+        self.task_asks.as_deref().unwrap_or_default()
     }
 
     /// A fixture world's Task alert, as a Server would say it.
