@@ -41,7 +41,8 @@ const PRELUDE: &str = concat!(
 );
 
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/claude-{name}.jsonl"))
+    // Cargo runs a crate's tests in the crate's own directory.
+    std::path::absolute(format!("tests/fixtures/claude-{name}.jsonl")).unwrap()
 }
 
 /// An executable stub `claude` in a per-process temp dir.
@@ -492,9 +493,7 @@ fn answering(fixture_name: &str, answer: impl Fn(&SessionEvent) -> DecisionAnswe
 
 /// What the recording sent back for the same Decision.
 fn recorded_answer(fixture_name: &str) -> Value {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join(format!("tests/fixtures/claude-{fixture_name}.host.jsonl"));
-    fs::read_to_string(path)
+    fs::read_to_string(fixture(&format!("{fixture_name}.host")))
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())

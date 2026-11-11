@@ -35,7 +35,8 @@ const PRELUDE: &str = concat!(
 );
 
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/codex-{name}.jsonl"))
+    // Cargo runs a crate's tests in the crate's own directory.
+    std::path::absolute(format!("tests/fixtures/codex-{name}.jsonl")).unwrap()
 }
 
 /// An executable stub `codex` in a per-process temp dir.
@@ -527,9 +528,7 @@ fn answering(fixture_name: &str, tag: &str, answer: impl Fn(&Decision) -> Decisi
 
 /// What the recording sent back for the same Decision.
 fn recorded_answer(fixture_name: &str) -> Value {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join(format!("tests/fixtures/codex-{fixture_name}.host.jsonl"));
-    fs::read_to_string(path)
+    fs::read_to_string(fixture(&format!("{fixture_name}.host")))
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
@@ -753,11 +752,7 @@ fn a_mentioned_file_rides_as_a_mention_item_beside_the_text() {
 /// process never had. Replayed from the committed `resume` capture.
 #[test]
 fn a_resumed_session_answers_from_the_previous_process_history() {
-    let host = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/codex-resume-0.149.1.host.jsonl"),
-    )
-    .unwrap();
+    let host = fs::read_to_string(fixture("resume-0.149.1.host")).unwrap();
     let resumed_thread = host
         .lines()
         .find_map(|line| {

@@ -314,3 +314,9 @@ ditto "$BUILT" "$DEST"
 rm -rf "$BUILT"
 
 echo "Installed → $DEST"
+
+# A new worktree starts with this checkout's build (scripts/warm-worktree.sh):
+# bring it up to what was just installed. The app is in place by now, so a
+# failure here is reported and no more.
+"$ROOT/scripts/warm-main.sh" ||
+  echo "warm-main failed; new worktrees start from an older build" >&2
