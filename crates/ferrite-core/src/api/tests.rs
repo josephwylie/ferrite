@@ -1055,7 +1055,16 @@ fn questions_approval_and_direction_parse_from_the_cli() {
     assert_eq!(
         parse(
             "task.redirect",
-            &["t-1", "s-3", "--skip", "s-2", "--then", "me", "--note", "Docs only"]
+            &[
+                "t-1",
+                "s-3",
+                "--skip",
+                "s-2",
+                "--then",
+                "me",
+                "--note",
+                "Docs only"
+            ]
         ),
         Ok(Method::TaskRedirect(TaskRedirectParams {
             task: "t-1".into(),
@@ -1068,7 +1077,15 @@ fn questions_approval_and_direction_parse_from_the_cli() {
     assert_eq!(
         parse(
             "workflow.approval",
-            &["w-1", "--by", "agent", "--step", "s-4", "--rework-to", "step:s-3"]
+            &[
+                "w-1",
+                "--by",
+                "agent",
+                "--step",
+                "s-4",
+                "--rework-to",
+                "step:s-3"
+            ]
         ),
         Ok(Method::WorkflowApproval(WorkflowApprovalParams {
             workflow: "w-1".into(),

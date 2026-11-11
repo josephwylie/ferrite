@@ -227,7 +227,10 @@ impl Server {
             }
             Method::TaskApprove(params) => {
                 let task = params.task.clone();
-                self.api_task_command(&task, crate::factory::Command::Approve { task: params.task })
+                self.api_task_command(
+                    &task,
+                    crate::factory::Command::Approve { task: params.task },
+                )
             }
             Method::TaskRework(params) => self.api_task_rework(params),
             Method::TaskRedirect(params) => self.api_task_redirect(params),

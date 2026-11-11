@@ -14,8 +14,8 @@ use std::collections::HashMap;
 
 use super::*;
 use ferrite_core::factory::{
-    self as core_factory, ApprovalChange, Approver, Catalog, Destination, Problem, RouteKind,
-    Step, StepChange, StepId, Template, Workflow, WorkflowId,
+    self as core_factory, ApprovalChange, Approver, Catalog, Destination, Problem, RouteKind, Step,
+    StepChange, StepId, Template, Workflow, WorkflowId,
 };
 use ferrite_core::protocol::{Done, WorkflowAction};
 use ferrite_pane::composer::{Composer, Edited, Role};
@@ -1373,7 +1373,11 @@ impl CockpitView {
         let approval = &workflow.draft.approval;
         let decides = match approval.by {
             Approver::Human => "You approve".to_string(),
-            Approver::Agent => match approval.step.as_deref().and_then(|id| workflow.draft.step(id)) {
+            Approver::Agent => match approval
+                .step
+                .as_deref()
+                .and_then(|id| workflow.draft.step(id))
+            {
                 Some(step) => format!("{} decides", step.name),
                 None => "An agent decides".into(),
             },
@@ -1406,7 +1410,11 @@ impl CockpitView {
                         div()
                             .flex_1()
                             .text_size(px(FS_META))
-                            .text_color(rgb(if approval_flagged { BLOCKED } else { INK_SUBTLE }))
+                            .text_color(rgb(if approval_flagged {
+                                BLOCKED
+                            } else {
+                                INK_SUBTLE
+                            }))
                             .child(SharedString::from(decides)),
                     )
                     .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
@@ -2100,7 +2108,11 @@ impl CockpitView {
         let draft = &workflow.draft;
         let approval = &draft.approval;
         let problems = draft.approval_problems();
-        let flagged = |words: &str| problems.iter().any(|problem| problem.message.contains(words));
+        let flagged = |words: &str| {
+            problems
+                .iter()
+                .any(|problem| problem.message.contains(words))
+        };
         let label = |text: &'static str| {
             div()
                 .text_size(px(FS_META))
@@ -2178,12 +2190,18 @@ impl CockpitView {
                 ));
         }
         let after_picks = std::iter::once(Destination::Complete)
-            .chain(draft.steps.iter().map(|step| Destination::Step(step.id.clone())))
+            .chain(
+                draft
+                    .steps
+                    .iter()
+                    .map(|step| Destination::Step(step.id.clone())),
+            )
             .map(|to| {
                 let text = match &to {
-                    Destination::Step(id) => draft
-                        .step(id)
-                        .map_or_else(|| "Deleted agent".to_string(), |step| format!("Run {}", named(step))),
+                    Destination::Step(id) => draft.step(id).map_or_else(
+                        || "Deleted agent".to_string(),
+                        |step| format!("Run {}", named(step)),
+                    ),
                     _ => "Completed".to_string(),
                 };
                 (
@@ -2206,9 +2224,10 @@ impl CockpitView {
             })
             .collect();
         let after_text = match &approval.after {
-            Destination::Step(id) => draft
-                .step(id)
-                .map_or_else(|| "Deleted agent".to_string(), |step| format!("Run {}", named(step))),
+            Destination::Step(id) => draft.step(id).map_or_else(
+                || "Deleted agent".to_string(),
+                |step| format!("Run {}", named(step)),
+            ),
             _ => "Completed".to_string(),
         };
         body = body
@@ -2297,7 +2316,9 @@ impl CockpitView {
                 .child(meta("read only \u{b7} from the routes")),
         )
         .child(ends)
-        .child(meta("Change these on the routes of the agents, or with After approval."))
+        .child(meta(
+            "Change these on the routes of the agents, or with After approval.",
+        ))
         .into_any_element()
     }
 }

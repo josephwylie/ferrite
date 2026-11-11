@@ -283,12 +283,20 @@ impl Board {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
-    Finished { summary: String },
-    Unable { tried: String },
+    Finished {
+        summary: String,
+    },
+    Unable {
+        tried: String,
+    },
     /// The deciding agent approves.
-    Approved { summary: String },
+    Approved {
+        summary: String,
+    },
     /// The deciding agent does not, and why.
-    Rejected { reasons: String },
+    Rejected {
+        reasons: String,
+    },
 }
 
 /// Every change, whoever asks.
@@ -1331,9 +1339,7 @@ pub fn task_command(action: crate::protocol::TaskAction) -> Option<Command> {
         TaskAction::Approve { task } => Command::Approve { task },
         TaskAction::Rework { task, feedback, to } => Command::Rework { task, feedback, to },
         TaskAction::Redirect { task, direction } => Command::Redirect { task, direction },
-        TaskAction::Start { .. } | TaskAction::Delete { .. } | TaskAction::Unknown => {
-            return None
-        }
+        TaskAction::Start { .. } | TaskAction::Delete { .. } | TaskAction::Unknown => return None,
     })
 }
 
