@@ -30,7 +30,7 @@ pub use agents::{AgentFace, AgentFaces, AgentRun};
 pub use composer::model_label;
 pub use composer::{
     attach_button, composer_footer, composer_row_limit, env_strip, env_word, flat_facts_text,
-    mode_chip, model_effort_chip, offers_import, permission_mode_label, queued_close, queued_count,
+    mode_chip, model_effort_chip, offers_import, ModelChip, permission_mode_label, queued_close, queued_count,
     primary_actions, queued_edit, queued_send_now, queued_sends_now, queued_takes_back, send_button,
     stop_button,
     toolbar_chip, ComposerControls, PrimaryActions,
@@ -4884,7 +4884,14 @@ mod tests {
                 let chip = |selector: &'static str, loading| {
                     div()
                         .debug_selector(move || selector.into())
-                        .child(model_effort_chip("Sonnet 4.5".into(), None, loading))
+                        .child(model_effort_chip(ModelChip {
+                            mark: ferrite_ui::provider::mark(Provider::Claude),
+                            model: "Sonnet 4.5".into(),
+                            effort: None,
+                            loading,
+                            open: false,
+                            group: selector.into(),
+                        }))
                 };
                 div()
                     .flex()
