@@ -3018,11 +3018,11 @@ pub fn motion_preview(output: String) {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .size(px(theme::JUMP_LATEST))
+                        .size(px(theme::CONTROL_H))
                         .rounded_full()
                         .border_1()
                         .border_color(theme::paint::LINE)
-                        .tooltip(ferrite_ui::menu::tooltip("Jump to latest"))
+                        .tooltip(ferrite_ui::menu::tooltip("Scroll to end"))
                         .child(ferrite_ui::icons::icon(
                             ferrite_ui::icons::ARROW_DOWN,
                             theme::ICON_BUTTON_GLYPH,

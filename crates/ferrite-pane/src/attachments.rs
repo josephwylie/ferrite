@@ -11,6 +11,7 @@
 //! bubble (`quote_row`).
 
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
@@ -45,6 +46,7 @@ pub struct Attachments {
     island: bool,
     annotations: Vec<Annotation>,
     on_remove_annotation: Option<RemoveAnnotation>,
+    added: HashSet<PathBuf>,
 }
 
 impl Attachments {
@@ -61,7 +63,14 @@ impl Attachments {
             island: false,
             annotations: Vec::new(),
             on_remove_annotation: None,
+            added: HashSet::new(),
         }
+    }
+
+    /// The files just added to a draft: they grow in (`motion::chip_in`).
+    pub fn added(mut self, added: HashSet<PathBuf>) -> Self {
+        self.added = added;
+        self
     }
 
     pub fn annotations(mut self, annotations: Vec<Annotation>) -> Self {
@@ -127,6 +136,16 @@ impl Attachments {
 /// sit in the `PromptAttachment` key context, so their Enter never sends.
 /// A click on a card or a chip opens the image in the lightbox, among the
 /// tray's images, or the file in the Pane's preview.
+/// A file `added` to a draft's tray while it was drawn grows in
+/// (`motion::chip_in`), keyed on its path.
+fn grown(added: &HashSet<PathBuf>, path: &Path, element: impl IntoElement) -> gpui::AnyElement {
+    if !added.contains(path) {
+        return element.into_any_element();
+    }
+    let id = SharedString::from(format!("chip-in-{}", path.display()));
+    ferrite_ui::motion::chip_in(id, gpui::div().child(element)).into_any_element()
+}
+
 fn chips(attachments: Attachments) -> gpui::AnyElement {
     use ferrite_ui::pointer::Pointer as _;
     use ferrite_ui::theme;
@@ -143,6 +162,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         island,
         annotations,
         on_remove_annotation,
+        added,
     } = attachments;
     let (images, others): (Vec<_>, Vec<_>) = files
         .into_iter()
@@ -151,7 +171,13 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
     let gallery: Arc<[PathBuf]> = images.iter().map(|(_, path)| path.clone()).collect();
     let mut cards: Vec<_> = images
         .iter()
-        .map(|(index, path)| image_card(*index, path, &gallery, &preview, on_remove.clone()))
+        .map(|(index, path)| {
+            grown(
+                &added,
+                path,
+                image_card(*index, path, &gallery, &preview, on_remove.clone()),
+            )
+        })
         .collect();
     cards.extend(
         annotations
@@ -170,7 +196,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             .to_string();
         let host = preview.clone();
         let open = path.clone();
-        div()
+        let chip = div()
             .id(("attachment", index))
             .flex()
             .flex_shrink_0()
@@ -227,7 +253,8 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
                 host.open(open.clone(), None, &[], window, cx);
-            })
+            });
+        grown(&added, &path, chip)
     });
     let review = (review > 0).then(|| review_chip(review, on_drop_review));
     let replies: Vec<_> = replies
@@ -703,7 +730,7 @@ fn remove_button(id: impl Into<ElementId>) -> gpui::component::button::Button {
 impl RenderOnce for Attachments {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         // The draft's shelf and the delivered prompt's files are one recipe;
-        // only the draft can remove.
+        // only the draft can remove, or grow a file in.
         chips(self)
     }
 }

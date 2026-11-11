@@ -735,3 +735,32 @@ fn a_skill_in_a_sent_bubble_is_blue_with_its_description_on_hover(cx: &mut TestA
         "wrapped at its width: {name:?} {description:?}"
     );
 }
+
+/// A file added to the draft grows into the tray (`CHIP_IN`); the files
+/// a draft is put back with stand where they are.
+#[gpui::test]
+fn an_added_attachment_grows_in_and_a_restored_one_stands(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("tray-chip-in", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let added = std::path::PathBuf::from("/tmp/notes.md");
+    let composer = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    composer.update(cx, |composer, cx| {
+        composer.add_files(std::slice::from_ref(&added), cx)
+    });
+    let growing = |cx: &mut gpui::VisualTestContext| {
+        composer.read_with(cx, |composer, cx| composer.files_growing(cx))
+    };
+    assert!(growing(cx).contains(&added), "it grows in");
+    let text = composer.read_with(cx, |composer, _| composer.editable());
+    composer.update(cx, |composer, cx| composer.take(cx));
+    composer.update(cx, |composer, cx| composer.set(text, cx));
+    assert!(growing(cx).is_empty(), "a draft put back stands");
+    composer.update(cx, |composer, cx| composer.take(cx));
+    composer.update(cx, |composer, cx| {
+        composer.add_files(std::slice::from_ref(&added), cx)
+    });
+    cx.executor().advance_clock(Duration::from_millis(
+        ferrite_ui::theme::MOTION_CHIP_IN_MS,
+    ));
+    assert!(growing(cx).is_empty(), "and stands once it has grown");
+}
