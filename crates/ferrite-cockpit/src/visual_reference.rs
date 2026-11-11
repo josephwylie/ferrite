@@ -31,7 +31,7 @@ use ferrite_core::{
     providers::Session,
     settings::ReadingSize,
     store::{Provider, Store},
-    workspace::WorkspaceChoice,
+    workspace::{PrState, WorkspaceChoice},
     ControlKind, Decision, DecisionAnswer, DecisionKind, Hunk, McpServer, McpStatus,
     PermissionModeChoice, QueueEvent, QueuedPrompt, SessionCommand, SessionEvent, ThreadId,
     ToolResult, TurnOutcome,
@@ -364,14 +364,21 @@ impl Scene {
     }
 
     fn open(&mut self, provider: Provider, checkout: &Path, title: &str) -> (ThreadId, Feed) {
+        let main = WorkspaceChoice::Main {
+            checkout: checkout.to_path_buf(),
+        };
+        self.open_in(provider, main, title)
+    }
+
+    fn open_in(
+        &mut self,
+        provider: Provider,
+        workspace: WorkspaceChoice,
+        title: &str,
+    ) -> (ThreadId, Feed) {
         let thread = self
             .core
-            .open(
-                provider,
-                WorkspaceChoice::Main {
-                    checkout: checkout.to_path_buf(),
-                },
-            )
+            .open(provider, workspace)
             .expect("open fixture Thread");
         if !title.is_empty() {
             self.core
@@ -513,6 +520,10 @@ const STATES: &[(&str, &[&str])] = &[
     ("navhover", &["app"]),
     ("navkeys", &["app"]),
     ("navcards", &["app"]),
+    ("navshelves", &["app"]),
+    ("navsearch", &["app"]),
+    ("navhovercard", &["app"]),
+    ("navempty", &["app"]),
     ("palettefilter", &["app"]),
     // (end WP-G)
 
@@ -1323,53 +1334,42 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
-        // The Activity view (the bell): `Priority` and `Today`, and a done
-        // Thread the operator just opened from it.
+        // The nav's one list (ADR 0040): cards with their Project badges
+        // from the top, the shelves folded over the foot, and a done
+        // Thread the operator just opened.
         "navlist" => {
             let (scene, branches) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
-                view.show_nav_view(crate::nav::NavView::Inbox, None, cx);
-                let notes = view
-                    .cockpit
-                    .threads()
-                    .into_iter()
-                    .find(|thread| view.facts.name(*thread).as_ref() == "Release notes 0.9")
-                    .expect("the fixture's done Thread");
+                let notes = named_thread(view, "Release notes 0.9");
                 view.land_on_thread(notes, cx);
             });
             (scene, setup)
         }
-        // The pointer over a tree row and a Project heading: each row's
-        // hover action (park, new Thread) in place of what it says there.
+        // The pointer over a slim row on the open Parked shelf: Revive in
+        // place of its age.
         "navhover" => {
             let (scene, branches) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
-                let state = view.nav_state();
-                let review = state
-                    .solos
+                view.set_shelf_open(crate::nav::Shelf::Parked, true, cx);
+                let parked = view
+                    .nav_state()
+                    .parked
                     .iter()
-                    .find(|row| row.name.as_ref() == "Menu photography brief")
-                    .expect("the fixture's idle Thread")
+                    .find(|row| row.name.as_ref() == "Codex resume handshake")
+                    .expect("the fixture's parked Thread")
                     .thread;
-                let heading = state
-                    .sections
-                    .iter()
-                    .position(|section| section.label.as_ref() == "swarmdeck")
-                    .expect("the fixture's swarmdeck");
-                for key in [
-                    format!("nav-thread-0-{}", review.get()),
-                    format!("nav-project-section-{heading}"),
-                ] {
-                    ferrite_ui::motion::hover_listener(key.into())(&true, window, cx);
+                let key = crate::nav::card_key(parked);
+                for key in [crate::nav::list::slim_fade_key(&key), key] {
+                    ferrite_ui::motion::hover_snap(key)(&true, window, cx);
                 }
                 cx.notify();
             });
             (scene, setup)
         }
-        // The tree holding the keyboard (⌘⇧E), its cursor walked down onto
-        // a row.
+        // The list holding the keyboard (⌘⇧E), its cursor walked down onto
+        // a card.
         "navkeys" => {
             let (scene, branches) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
@@ -1379,45 +1379,80 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
-        // The nav's Thread cards in every status (Working with its clock,
-        // Approval, Failed, Done, idle with an age), with PR chips open,
+        // The nav's one list over the #000 grained column: cards with their
+        // Project badges at the top, the Working shelf open, Snoozed and
+        // Parked folded at the bottom.
+        "navshelves" => {
+            let (scene, branches) = nav();
+            let setup: Setup = Box::new(|view, window, cx| {
+                branches(view, window, cx);
+                let copy = named_thread(view, "Checkout copy review");
+                let wake =
+                    ferrite_core::clock::system_time() + std::time::Duration::from_secs(3 * 3600);
+                view.cockpit
+                    .snooze_thread(copy, Some(wake))
+                    .expect("snooze the fixture Thread");
+                view.set_shelf_open(crate::nav::Shelf::Working, true, cx);
+                cx.notify();
+            });
+            (scene, setup)
+        }
+        // The search field holding text: its results in the list's place,
+        // the first lit.
+        "navsearch" => {
+            let (scene, branches) = nav();
+            let setup: Setup = Box::new(|view, window, cx| {
+                branches(view, window, cx);
+                view.nav_search
+                    .update(cx, |line, cx| line.set("re".into(), cx));
+                let field = gpui::Focusable::focus_handle(&view.nav_search, cx);
+                window.focus(&field, cx);
+                cx.notify();
+            });
+            (scene, setup)
+        }
+        // A card's hover detail, to its right: the Title, then its Project,
+        // branch, Provider and pull request.
+        "navhovercard" => {
+            let (scene, branches) = nav();
+            let setup: Setup = Box::new(|view, window, cx| {
+                branches(view, window, cx);
+                let harness = named_thread(view, "Screenshot harness");
+                view.facts
+                    .pr_answered(harness, Some(fixture_pr(415, PrState::Open, false)));
+                crate::nav::card_hover(crate::nav::card_key(harness), false)(&true, window, cx);
+                cx.notify();
+            });
+            (scene, setup)
+        }
+        // Nothing above the shelves: T3's words, centred, and the link that
+        // opens the Parked shelf.
+        "navempty" => (nav_empty(), none),
+        // The nav's Thread cards in every status of #231's table (Working
+        // with its clock, Approval, Input, Failed, Done, idle with an age),
+        // a worktree, a Thread handed over from Codex, PR chips open,
         // draft, merged and closed, a long branch cut in its middle, Claude
         // and Codex logos, and the pointer over a receded working card.
         "navcards" => {
-            let (scene, branches) = nav();
+            let (mut scene, branches) = nav();
+            nav_card_states(&mut scene);
             let setup: Setup = Box::new(|view, window, cx| {
-                use ferrite_core::workspace::{PrState, PullRequest};
                 branches(view, window, cx);
-                view.show_nav_view(crate::nav::NavView::Inbox, None, cx);
-                let named = |view: &CockpitView, name: &str| {
-                    view.cockpit
-                        .threads()
-                        .into_iter()
-                        .find(|thread| view.facts.name(*thread).as_ref() == name)
-                        .unwrap_or_else(|| panic!("the fixture's {name}"))
-                };
-                let pr = |number, state, draft| PullRequest {
-                    number,
-                    state,
-                    draft,
-                    url: None,
-                    title: Some("Thread cards in the nav".into()),
-                    checks: None,
-                    runs: Vec::new(),
-                };
+                view.set_shelf_open(crate::nav::Shelf::Working, true, cx);
                 for (name, reading) in [
-                    ("Screenshot harness", pr(415, PrState::Open, false)),
-                    ("Release notes 0.9", pr(388, PrState::Open, true)),
-                    ("Board card sync", pr(207, PrState::Merged, false)),
-                    ("Checkout copy review", pr(96, PrState::Closed, false)),
+                    ("Screenshot harness", fixture_pr(415, PrState::Open, false)),
+                    ("Release notes 0.9", fixture_pr(388, PrState::Open, true)),
+                    ("Board card sync", fixture_pr(207, PrState::Merged, false)),
+                    (
+                        "Checkout copy review",
+                        fixture_pr(96, PrState::Closed, false),
+                    ),
                 ] {
-                    let thread = named(view, name);
+                    let thread = named_thread(view, name);
                     view.facts.pr_answered(thread, Some(reading));
                 }
-                let running = named(view, "Retained transcript rendering");
-                crate::nav::card_hover(crate::nav::NavCursor::thread(running, None).key, true)(
-                    &true, window, cx,
-                );
+                let running = named_thread(view, "Retained transcript rendering");
+                crate::nav::card_hover(crate::nav::card_key(running), true)(&true, window, cx);
                 cx.notify();
             });
             (scene, setup)
@@ -1965,6 +2000,90 @@ fn nav() -> (Scene, Setup) {
         cx.notify();
     });
     (scene, setup)
+}
+
+/// The open Thread a nav scene's fixture titled `name`.
+fn named_thread(view: &CockpitView, name: &str) -> ThreadId {
+    view.cockpit
+        .threads()
+        .into_iter()
+        .find(|thread| view.facts.name(*thread).as_ref() == name)
+        .unwrap_or_else(|| panic!("the fixture's {name}"))
+}
+
+fn fixture_pr(number: u64, state: PrState, draft: bool) -> ferrite_core::workspace::PullRequest {
+    ferrite_core::workspace::PullRequest {
+        number,
+        state,
+        draft,
+        url: None,
+        title: Some("Thread cards in the nav".into()),
+        checks: None,
+        runs: Vec::new(),
+    }
+}
+
+/// The card states `nav()` leaves out: a question waiting (`Input`), a
+/// worktree's Thread, and one handed over from Codex to Claude, each
+/// finishing unseen after the fixture's notices were read.
+fn nav_card_states(scene: &mut Scene) {
+    let ferrite = scene.project("ferrite");
+    let (asking, feed) = scene.open(Provider::Claude, &ferrite, "Card status words");
+    scene
+        .core
+        .send(asking, "Pick the card's status words.".into());
+    feed.boot(Provider::Claude, 15_000)
+        .text("Two readings fit; which should the card keep?")
+        .ev(questions("card-words", "card-words-tool"));
+
+    let worktree = scene.root.join("work").join("ferrite-pay-api-migration");
+    std::fs::create_dir_all(&worktree).expect("create fixture worktree");
+    let (migration, feed) = scene.open_in(
+        Provider::Claude,
+        WorkspaceChoice::ExistingWorktree {
+            repo: ferrite.clone(),
+            path: worktree,
+        },
+        "Pay API migration",
+    );
+    scene.core.send(migration, "Migrate the pay API.".into());
+    feed.boot(Provider::Claude, 26_000)
+        .text("Migrated; the old client is gone.")
+        .end(0.07);
+
+    let (handed, feed) = scene.open(Provider::Codex, &ferrite, "Docs outline");
+    scene.core.send(handed, "Outline the API docs.".into());
+    feed.boot(Provider::Codex, 20_000)
+        .text("Outlined the docs.")
+        .end(0.03);
+    scene.core.pump();
+    scene
+        .core
+        .set_provider(
+            handed,
+            ferrite_core::cockpit::ProviderChoice {
+                provider: Provider::Claude,
+                model: None,
+            },
+        )
+        .expect("hand the fixture Thread over");
+    let claude = Feed(scene.feeds.borrow().last().expect("its Claude").clone());
+    claude.boot(Provider::Claude, 20_000);
+    scene.core.pump();
+}
+
+/// The nav with nothing above its shelves: every Thread parked.
+fn nav_empty() -> Scene {
+    let mut scene = Scene::new("navempty");
+    let ferrite = scene.project("ferrite");
+    for title in ["Codex resume handshake", "Old spike: wasm preview"] {
+        let (thread, feed) = scene.open(Provider::Codex, &ferrite, title);
+        scene.core.send(thread, format!("{title}."));
+        feed.boot(Provider::Codex, 30_000).text("Done.").end(0.02);
+        scene.core.pump();
+        scene.core.park(thread).expect("park fixture Thread");
+    }
+    scene
 }
 
 /// `count` idle subagents under a fixture Main, so its nav row counts them.
@@ -3198,15 +3317,16 @@ pub fn motion_preview(output: String) {
                         }
                     });
                     (
-                        "Sidebar fold: 150ms ease-out; chevron 60ms",
+                        "Fold: 150ms ease-out; a shelf's chevron 150ms",
                         div()
                             .w(px(260.))
                             .flex()
                             .flex_col()
-                            .child(crate::nav::fold_heading(
-                                "preview-fold",
-                                "ferrite",
-                                self.folded,
+                            .child(crate::nav::list::shelf_heading(
+                                crate::nav::Shelf::Working,
+                                3,
+                                !self.folded,
+                                false,
                             ))
                             .children(rows)
                             .into_any_element(),

@@ -7,7 +7,6 @@
 //! then does only what the operator would have done on the way to that
 //! view: open the panel, or the palette with a query.
 
-use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::workspace::BranchStatus;
 use ferrite_core::ThreadId;
 use gpui::{Context, Window};
@@ -15,7 +14,6 @@ use gpui::{Context, Window};
 use super::{CockpitView, HeldLoops, Home, Scene, Setup};
 use crate::demo::mockup::{self, Look, Pr, World, CAPTURE};
 use crate::demo::world::{self, Clock, Fixture};
-use crate::nav::NavFold;
 use crate::palette::PaletteScope;
 use ferrite_ui::platform_text::disable_font_smoothing;
 
@@ -135,7 +133,6 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         core,
         sessions,
         cast,
-        folded,
         branches,
         ..
     } = built;
@@ -155,22 +152,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         // once (ADR 0015's seen rule), so the operator reads that word only
         // while the window is in the background. The shot is taken so.
         let active = shot != Shot::Group;
-        prepare(view, branches, &folded, active, window, cx);
-        // The Groups the mockups draw folded: InvoiceMate Business, and
-        // WORK wherever it is not the view.
-        let shut: Vec<_> = view
-            .cockpit
-            .groups()
-            .iter()
-            .filter(|group| {
-                let title = group.display_title();
-                title == "InvoiceMate Business" || (title == "WORK" && shot.look() == Look::Solo)
-            })
-            .map(|group| group.id)
-            .collect();
-        for group in shut {
-            view.set_nav_fold(NavFold::Group(group), true, cx);
-        }
+        prepare(view, branches, active, window, cx);
         if shot.panel() {
             view.open_panel(cast.memory, cx);
         }
@@ -186,13 +168,11 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
 }
 
 /// What every refresh view shares: the CLIs it
-/// found, the checkouts' branches (before git's own reads land), workmate
-/// and tempo folded, no toast for a request that was standing when the
+/// found, the checkouts' branches (before git's own reads land), no toast for a request that was standing when the
 /// window opened, and a window that has the keyboard when `active`.
 fn prepare(
     view: &mut CockpitView,
     branches: Vec<(ThreadId, BranchStatus)>,
-    folded: &[ProjectId],
     active: bool,
     window: &mut Window,
     cx: &mut Context<CockpitView>,
@@ -210,9 +190,6 @@ fn prepare(
             .map(|(thread, status)| (thread, Some(status)))
             .collect(),
     );
-    for project in folded {
-        view.set_nav_fold(NavFold::Project(*project), true, cx);
-    }
     use gpui::component::WindowExt as _;
     window.clear_notifications(cx);
     view.ring_alerts(cx);

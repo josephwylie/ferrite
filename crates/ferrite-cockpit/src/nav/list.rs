@@ -130,7 +130,7 @@ pub enum SlimTime {
 
 /// The blend a slim row's time-to-action crossfade and its badge ride,
 /// apart from its fill's.
-fn slim_fade_key(key: &str) -> SharedString {
+pub(crate) fn slim_fade_key(key: &str) -> SharedString {
     format!("{key}:slim").into()
 }
 
