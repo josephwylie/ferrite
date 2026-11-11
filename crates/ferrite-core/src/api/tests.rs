@@ -494,7 +494,8 @@ fn every_later_parameter_has_a_frozen_request_that_round_trips() {
 }
 
 fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("src/api/fixtures/v1")
+    // Cargo runs a crate's tests in the crate's own directory.
+    std::path::absolute("src/api/fixtures/v1").unwrap()
 }
 
 fn fixture_name(request: &Request) -> String {

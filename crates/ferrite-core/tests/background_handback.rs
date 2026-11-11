@@ -18,7 +18,8 @@ const PRELUDE: &str = concat!(
 );
 
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/claude-{name}.jsonl"))
+    // Cargo runs a crate's tests in the crate's own directory.
+    std::path::absolute(format!("tests/fixtures/claude-{name}.jsonl")).unwrap()
 }
 
 fn stub(name: &str, script: &str) -> String {

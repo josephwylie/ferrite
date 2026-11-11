@@ -591,8 +591,9 @@ impl Replay {
 }
 
 fn fixture_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/subagents")
+    // Cargo runs a crate's tests in the crate's own directory.
+    std::path::absolute("tests/fixtures/subagents")
+        .unwrap()
         .join(name)
 }
 

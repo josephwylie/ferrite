@@ -33,7 +33,8 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{name}"))
+    // Cargo runs a crate's tests in the crate's own directory.
+    std::path::absolute(format!("tests/fixtures/{name}")).unwrap()
 }
 
 /// An executable stub `claude` in a per-process temp dir.
