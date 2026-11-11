@@ -66,7 +66,7 @@ icons![
     "resend",
     "ferrite-mono",
     // ---- WP-A icons (append names above the end line)
-    "reasoning",
+
     // (end WP-A)
 
     // ---- WP-B icons (append names above the end line)
@@ -155,6 +155,17 @@ icons![
     "git-pull-request-draft",
     "folder-git-2",
     "pin-off",
+    // A transcript work row's gutter (T3 Code's `TimelineToolActivityIcon`).
+    "square-pen",
+    "eye",
+    "brain",
+    "hammer",
+    "wrench",
+    "bot",
+    "zap",
+    "message-circle",
+    "list-todo",
+    "app-window",
 ];
 
 pub const SIDEBAR: &str = "icons/sidebar.svg";
@@ -195,8 +206,6 @@ pub const RESEND: &str = "icons/resend.svg";
 pub const FERRITE_MONO: &str = "icons/ferrite-mono.svg";
 
 // ---- WP-A icon names (append consts above the end line)
-/// `∴` (not in Geist Mono): the reasoning row's gutter mark, three dots.
-pub const REASONING: &str = "icons/reasoning.svg";
 // (end WP-A)
 
 // ---- WP-B icon names (append consts above the end line)
@@ -330,23 +339,40 @@ pub const GIT_PULL_REQUEST_DRAFT: &str = "icons/git-pull-request-draft.svg";
 pub const FOLDER_GIT: &str = "icons/folder-git-2.svg";
 /// A pinned card's pin under the pointer: the press unpins.
 pub const PIN_OFF: &str = "icons/pin-off.svg";
+/// A transcript work row's glyphs (`tools::ToolIcon`), Lucide's.
+pub const SQUARE_PEN: &str = "icons/square-pen.svg";
+pub const EYE: &str = "icons/eye.svg";
+pub const BRAIN: &str = "icons/brain.svg";
+pub const HAMMER: &str = "icons/hammer.svg";
+pub const WRENCH: &str = "icons/wrench.svg";
+pub const BOT: &str = "icons/bot.svg";
+pub const ZAP: &str = "icons/zap.svg";
+pub const MESSAGE_CIRCLE: &str = "icons/message-circle.svg";
+pub const LIST_TODO: &str = "icons/list-todo.svg";
+pub const APP_WINDOW: &str = "icons/app-window.svg";
 
 pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
-        let (path, size) = match path
-            .rsplit_once('@')
-            .map(|(path, size)| (path, size.parse()))
-        {
-            Some((path, Ok(size))) => (path, Some(size)),
-            _ => (path, None),
+        let drawn = path.rsplit_once('@').and_then(|(path, drawn)| {
+            let (size, stroke) = drawn.split_once('/').unwrap_or((drawn, ""));
+            let stroke = if stroke.is_empty() {
+                theme::ICON_STROKE
+            } else {
+                stroke.parse().ok()?
+            };
+            Some((path, size.parse::<f32>().ok()?, stroke))
+        });
+        let (path, drawn) = match drawn {
+            Some((path, size, stroke)) => (path, Some((size, stroke))),
+            None => (path, None),
         };
         Ok(ICONS
             .iter()
             .find(|(name, _)| *name == path)
-            .map(|(_, bytes)| match size {
-                Some(size) => Cow::Owned(stroke_at(bytes, size)),
+            .map(|(_, bytes)| match drawn {
+                Some((size, stroke)) => Cow::Owned(stroke_at(bytes, size, stroke)),
                 None => Cow::Borrowed(*bytes),
             })
             .or_else(|| gpui::assets::Assets::get(path).map(|asset| asset.data)))
@@ -374,6 +400,18 @@ pub fn icon(path: &'static str, size: f32, color: u32) -> Svg {
         .text_color(rgb(color))
 }
 
+/// [`icon`] stroked `stroke` px at its `size` rather than
+/// `theme::ICON_STROKE`, in `color` (its alpha kept): a work row's Lucide
+/// glyph at Lucide's own weight (`theme::WORK_ICON_STROKE`).
+pub fn icon_stroked(path: &'static str, size: f32, stroke: f32, color: gpui::Hsla) -> Svg {
+    svg()
+        .path(SharedString::from(format!("{path}@{size}/{stroke}")))
+        .w(px(size))
+        .h(px(size))
+        .flex_shrink_0()
+        .text_color(color)
+}
+
 /// The key of `path` drawn `size` px square: `Assets` strokes it at
 /// `theme::ICON_STROKE` for that size. gpui rasterises an SVG per key and
 /// device size, and hands `AssetSource::load` only the key, so the size
@@ -385,7 +423,7 @@ fn drawn_at(path: &str, size: f32) -> SharedString {
 /// `svg` with every `stroke-width` set so that, scaled from its viewBox to
 /// `size` px, it strokes `theme::ICON_STROKE`. An SVG with no stroke (a
 /// fill logomark) is returned as it is.
-fn stroke_at(svg: &[u8], size: f32) -> Vec<u8> {
+fn stroke_at(svg: &[u8], size: f32, stroke: f32) -> Vec<u8> {
     let Ok(text) = std::str::from_utf8(svg) else {
         return svg.to_vec();
     };
@@ -396,7 +434,7 @@ fn stroke_at(svg: &[u8], size: f32) -> Vec<u8> {
     let Some(view) = view else {
         return svg.to_vec();
     };
-    let width = format!("{}", theme::ICON_STROKE * view / size);
+    let width = format!("{}", stroke * view / size);
     let mut pieces = text.split(r#"stroke-width=""#);
     let mut out = pieces.next().unwrap_or_default().to_string();
     for piece in pieces {
@@ -468,13 +506,13 @@ mod tests {
             COPY,
             RESEND,
             FERRITE_MONO,
-            REASONING,
             IMAGE,
             BOARD,
         ]
         .into_iter()
         .chain(REFRESH_ICONS)
         .chain(TITLE_BAR_ICONS)
+        .chain(WORK_ROW_ICONS)
         {
             let bytes = Assets
                 .load(key)
@@ -520,6 +558,7 @@ mod tests {
         .into_iter()
         .chain(REFRESH_ICONS)
         .chain(TITLE_BAR_ICONS)
+        .chain(WORK_ROW_ICONS)
         {
             let bytes = Assets.load(key).unwrap().unwrap();
             let svg = std::str::from_utf8(&bytes).unwrap();
@@ -568,6 +607,29 @@ mod tests {
 
     /// The title bar's line icons (Wave 2), in the family.
     const TITLE_BAR_ICONS: [&str; 3] = [BACK, FORWARD, DIFF];
+
+    /// A work row's Lucide glyphs.
+    const WORK_ROW_ICONS: [&str; 10] = [
+        SQUARE_PEN,
+        EYE,
+        BRAIN,
+        HAMMER,
+        WRENCH,
+        BOT,
+        ZAP,
+        MESSAGE_CIRCLE,
+        LIST_TODO,
+        APP_WINDOW,
+    ];
+
+    /// A work row's glyph strokes Lucide's own weight, 1.33px at 16.
+    #[test]
+    fn a_work_row_icon_strokes_lucides_weight() {
+        let key = format!("{BRAIN}@16/{}", theme::WORK_ICON_STROKE);
+        let bytes = Assets.load(&key).unwrap().unwrap();
+        let drawn = std::str::from_utf8(&bytes).unwrap();
+        assert!((drawn_stroke(drawn, 16.0) - 4.0 / 3.0).abs() < 0.001);
+    }
 
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
     const REFRESH_ICONS: [&str; 37] = [

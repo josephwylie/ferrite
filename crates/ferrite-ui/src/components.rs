@@ -355,6 +355,35 @@ pub fn edge_fade(fill: Hsla, rising: bool) -> Div {
     }
 }
 
+/// A fade `height` tall into `fill`, its alpha at each `(at, alpha)` stop
+/// (fractions from the edge, the edge's first) and linear between: a CSS
+/// many-stop mask, which gpui's two-stop gradients draw as a stack (T3's
+/// `topbar-scroll-fade`, `TX_TOP_FADE_STOPS`; its scroll areas' linear
+/// fade). `rising` runs it up from the foot. It answers no pointer; the
+/// caller lays it absolute over the scroller's edge.
+pub fn fade(fill: Hsla, rising: bool, height: f32, stops: &[(f32, f32)]) -> Div {
+    let at = |a: f32| Hsla {
+        a: fill.a * a,
+        ..fill
+    };
+    let angle = if rising { 0. } else { 180. };
+    let mut pieces: Vec<Div> = stops
+        .windows(2)
+        .map(|pair| {
+            let ((x0, a0), (x1, a1)) = (pair[0], pair[1]);
+            div().w_full().h(px(height * (x1 - x0))).bg(gpui::linear_gradient(
+                angle,
+                gpui::linear_color_stop(at(a0), 0.),
+                gpui::linear_color_stop(at(a1), 1.),
+            ))
+        })
+        .collect();
+    if rising {
+        pieces.reverse();
+    }
+    div().flex().flex_col().w_full().h(px(height)).children(pieces)
+}
+
 /// `shadow` with its ink scaled by `k` (0..1): a floating surface's shadow
 /// while it fades in or out (`motion::menu_in`).
 pub fn shadow_faded(shadow: Vec<BoxShadow>, k: f32) -> Vec<BoxShadow> {
@@ -531,39 +560,79 @@ mod loops {
     /// shares one clock.
     pub use crate::working_mark::working_mark;
 
-    /// The colour the shimmer crests at over `base`: Claude's clay crests at
-    /// the prototype's `#ffe1d3`; another ink lifted toward white by
+    /// The colour a shine crests at over `base`: over `INK_SUBTLE`, T3's
+    /// foreground (`INK_STRONG`); another ink lifted toward white by
     /// `SHIMMER_LIFT`.
     pub fn shimmer_crest(base: u32) -> Hsla {
-        if base == theme::PROVIDER_CLAUDE {
-            rgb(theme::SHIMMER_CREST_CLAUDE).into()
+        if base == theme::INK_SUBTLE {
+            rgb(theme::INK_STRONG).into()
         } else {
             motion::mix(rgb(base).into(), rgb(0xffffff).into(), theme::SHIMMER_LIFT)
         }
     }
 
-    /// How far toward its crest the shimmer lifts the ink at `x` (a
-    /// fraction of the run's width) at `phase` [0, 1): the prototype's 300%
-    /// linear gradient — a crest `2 × SHIMMER_HALF_WIDTH` of the run wide,
-    /// linear on each side, travelling left to right from half a run
-    /// before the text to half a run past it. 0 off the crest.
-    pub fn shimmer_lift(x: f32, phase: f32) -> f32 {
-        let centre = -0.5 + 2.0 * phase.rem_euclid(1.0);
-        (1.0 - (x - centre).abs() / theme::SHIMMER_HALF_WIDTH).max(0.0)
+    /// T3 Code's two live shines.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Shine {
+        /// `live-tool-shine`, a running call's label: a `SHIMMER_BAND`-wide
+        /// band, linear up to its crest at the middle and down again, from a
+        /// band before the run to its end.
+        Tool,
+        /// `ActivityShimmerOverlay`, the Thinking and compacting rows: a
+        /// softer window (T3's mask stops), from a band before the run to a
+        /// band past it.
+        Activity,
     }
 
-    /// The working caption's shimmer (theme rule 8): `text` in `base` (the
-    /// provider's colour) under a crest of `shimmer_crest(base)` sweeping left
-    /// to right every `MOTION_SHIMMER_MS`, its ink graded across the run as
-    /// the prototype's text-clipped gradient grades it: per device column,
-    /// not per character (`ShimmerText`). One run, so nothing reflows; one
-    /// line that truncates at its end. Only the focused Pane's working line
-    /// wears it; under reduced motion it is plain `base`. The caller sets
-    /// the face, size and line height.
+    /// How far toward its crest `shine` lifts the ink `x` px into a run
+    /// `width` px wide, at step `step` of `SHIMMER_STEPS`. 0 outside the
+    /// window.
+    pub fn shine_lift(shine: Shine, x: f32, width: f32, step: usize) -> f32 {
+        let band = theme::SHIMMER_BAND;
+        let t = (step % theme::SHIMMER_STEPS) as f32 / theme::SHIMMER_STEPS as f32;
+        let (travel, profile): (f32, &[(f32, f32)]) = match shine {
+            Shine::Tool => (width + band, &[(0., 0.), (0.5, 1.), (1., 0.)]),
+            Shine::Activity => (
+                width + 2. * band,
+                &[
+                    (0., 0.),
+                    (0.15, 0.12),
+                    (0.35, 0.55),
+                    (0.5, 1.),
+                    (0.65, 0.55),
+                    (0.85, 0.12),
+                    (1., 0.),
+                ],
+            ),
+        };
+        let at = (x - (-band + t * travel)) / band;
+        profile
+            .windows(2)
+            .find(|pair| (pair[0].0..=pair[1].0).contains(&at))
+            .map_or(0., |pair| {
+                let ((x0, y0), (x1, y1)) = (pair[0], pair[1]);
+                y0 + (y1 - y0) * (at - x0) / (x1 - x0)
+            })
+    }
+
+    /// A running call's live label (`Shine::Tool`, theme rule 8): `text` in
+    /// `base` under `shimmer_crest(base)`, its ink graded per device column
+    /// as the browser's text-clipped gradient grades it (`ShimmerText`), the
+    /// window stepping across every `MOTION_SHIMMER_MS` in `SHIMMER_STEPS`
+    /// steps, the view drawn only on a step. One run, so nothing reflows;
+    /// one line that truncates at its end. Any live row in sight wears it;
+    /// out of sight it is not drawn, so it waits; under reduced motion it
+    /// is plain `base`. The caller sets the face, size and line height.
     pub fn shimmer(text: impl Into<SharedString>, base: u32) -> AnyElement {
+        shine(text, base, Shine::Tool)
+    }
+
+    /// [`shimmer`] in either of T3's shines.
+    pub fn shine(text: impl Into<SharedString>, base: u32, shine: Shine) -> AnyElement {
         let shimmer = Shimmer {
             text: text.into(),
             base,
+            shine,
         };
         crate::loops_overlay::hosted(move || shimmer.clone().into_any_element()).into_any_element()
     }
@@ -572,24 +641,37 @@ mod loops {
     struct Shimmer {
         text: SharedString,
         base: u32,
+        shine: Shine,
     }
 
     impl RenderOnce for Shimmer {
-        fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
             let base: Hsla = rgb(self.base).into();
-            // The crest moves at every instant: a frame loop at the
-            // display's rate, as the orbs beside it are.
-            let turn = Duration::from_millis(theme::MOTION_SHIMMER_MS);
-            let frame = motion::frame_loop(turn, motion::LoopClock::Css, cx);
-            let lit = frame.map(|frame| (frame.phase, shimmer_crest(self.base)));
-            let leases = frame.is_some_and(|frame| frame.leases);
+            let lit = (!motion::reduced_motion(cx)).then(|| {
+                let turn = Duration::from_millis(theme::MOTION_SHIMMER_MS);
+                let steps = motion::Motion::Frames(theme::SHIMMER_STEPS);
+                let phase = motion::css_phase(turn, steps, window.current_view(), cx);
+                Lit {
+                    step: frame_at(phase, theme::SHIMMER_STEPS),
+                    crest: shimmer_crest(self.base),
+                    shine: self.shine,
+                }
+            });
             div()
                 .min_w_0()
                 .truncate()
                 .text_color(base)
                 .debug_selector(|| "shimmer".into())
-                .child(ShimmerText::new(self.text, base, lit, leases))
+                .child(ShimmerText::new(self.text, base, lit))
         }
+    }
+
+    /// Where a shine stands, and what it crests at.
+    #[derive(Clone, Copy)]
+    struct Lit {
+        step: usize,
+        crest: Hsla,
+        shine: Shine,
     }
 
     /// A run in `base`, or, while it shimmers, its glyphs painted a device
@@ -600,10 +682,8 @@ mod loops {
     /// shaped line, so a narrow Pane cuts it where the still run is cut.
     struct ShimmerText {
         base: Hsla,
-        /// The crest's phase and colour; `None` holds the run still.
-        lit: Option<(f32, Hsla)>,
-        /// Whether this draw asks for the next frame (`motion::lease_frame`).
-        leases: bool,
+        /// Where the shine stands; `None` holds the run still.
+        lit: Option<Lit>,
         child: AnyElement,
         layout: gpui::TextLayout,
     }
@@ -616,13 +696,12 @@ mod loops {
     }
 
     impl ShimmerText {
-        fn new(text: SharedString, base: Hsla, lit: Option<(f32, Hsla)>, leases: bool) -> Self {
+        fn new(text: SharedString, base: Hsla, lit: Option<Lit>) -> Self {
             let text = gpui::StyledText::new(text);
             let layout = text.layout().clone();
             Self {
                 base,
                 lit,
-                leases,
                 child: text.into_any_element(),
                 layout,
             }
@@ -663,15 +742,11 @@ mod loops {
             &mut self,
             _: Option<&gpui::GlobalElementId>,
             _: Option<&gpui::InspectorElementId>,
-            bounds: gpui::Bounds<gpui::Pixels>,
+            _: gpui::Bounds<gpui::Pixels>,
             _: &mut (),
             window: &mut Window,
             cx: &mut App,
         ) {
-            // The next frame, only while the crest can be seen.
-            if self.leases && window.content_mask().bounds.intersects(&bounds) {
-                motion::lease_frame(window, cx);
-            }
             self.child.prepaint(window, cx);
         }
 
@@ -685,7 +760,7 @@ mod loops {
             window: &mut Window,
             cx: &mut App,
         ) {
-            let Some((phase, crest)) = self.lit else {
+            let Some(Lit { step, crest, shine }) = self.lit else {
                 self.child.paint(window, cx);
                 return;
             };
@@ -723,7 +798,7 @@ mod loops {
             for column in first..last {
                 let x0 = column as f32 / scale;
                 let x1 = (column + 1) as f32 / scale;
-                let lift = shimmer_lift(((x0 + x1) / 2.0 - left) / width, phase);
+                let lift = shine_lift(shine, (x0 + x1) / 2.0 - left, width, step);
                 let ink = motion::mix(self.base, crest, lift);
                 let mask = gpui::Bounds::from_corners(
                     gpui::point(px(x0), bounds.top()),
@@ -2245,25 +2320,41 @@ mod tests {
         assert_eq!(frame_at(0.9999999, 10), 9);
     }
 
-    /// The shimmer's crest travels left to right across the run, peaks at
-    /// the crest colour, and leaves the rest of the run in its base colour.
+    /// T3's shines: a fixed 72px window stepping left to right in 30 steps
+    /// over 2.2s, whatever the run's width; the tool's band crests at its
+    /// middle, the activity's softer window at its mask stops.
     #[test]
-    fn the_shimmer_crest_sweeps_left_to_right() {
-        // Before and after the sweep: nothing is lit.
-        for x in [0.0, 0.5, 1.0] {
-            assert_eq!(shimmer_lift(x, 0.0), 0.0);
+    fn a_shine_steps_a_fixed_band_across_the_run() {
+        use Shine::*;
+        assert_eq!(theme::MOTION_SHIMMER_MS, 2_200);
+        assert_eq!(theme::SHIMMER_STEPS, 30);
+        // At its first step both windows wait a band before the run.
+        for x in [1.0, 50.0, 199.0] {
+            assert_eq!(shine_lift(Tool, x, 200.0, 0), 0.0);
+            assert_eq!(shine_lift(Activity, x, 200.0, 0), 0.0);
         }
-        // Mid-sweep the crest sits at the run's middle, symmetric.
-        assert_eq!(shimmer_lift(0.5, 0.5), 1.0);
-        assert!((shimmer_lift(0.3, 0.5) - shimmer_lift(0.7, 0.5)).abs() < 1e-5);
-        // It travels left to right.
-        assert!(shimmer_lift(0.2, 0.35) > shimmer_lift(0.2, 0.65));
-        assert!(shimmer_lift(0.8, 0.35) < shimmer_lift(0.8, 0.65));
-        // Claude's clay crests at the prototype's `#ffe1d3`, lighter than it.
-        let base: Hsla = rgb(theme::PROVIDER_CLAUDE).into();
-        let crest = shimmer_crest(theme::PROVIDER_CLAUDE);
-        assert_eq!(crest, rgb(theme::SHIMMER_CREST_CLAUDE).into());
-        assert!(crest.l > base.l);
+        // The tool's band (travel 272px over 30 steps) crests at its middle.
+        let tool_at = |step: usize| -72.0 + step as f32 / 30.0 * 272.0 + 36.0;
+        assert!((shine_lift(Tool, tool_at(15), 200.0, 15) - 1.0).abs() < 1e-4);
+        assert!((shine_lift(Tool, tool_at(15) + 18.0, 200.0, 15) - 0.5).abs() < 1e-4);
+        assert_eq!(shine_lift(Tool, tool_at(15) + 40.0, 200.0, 15), 0.0);
+        // The band is 72px wide on a short run and a long one alike.
+        let width = |run: f32, step: usize| {
+            (0..(run as usize + 200))
+                .filter(|x| shine_lift(Tool, *x as f32 - 100.0, run, step) > 0.0)
+                .count()
+        };
+        assert_eq!(width(120.0, 15), width(600.0, 15));
+        // The activity window's stops: 12% at 10.8px, 55% at 25.2px.
+        let left = -72.0 + 15.0 / 30.0 * 344.0;
+        assert!((shine_lift(Activity, left + 10.8, 200.0, 15) - 0.12).abs() < 1e-3);
+        assert!((shine_lift(Activity, left + 25.2, 200.0, 15) - 0.55).abs() < 1e-3);
+        assert!((shine_lift(Activity, left + 36.0, 200.0, 15) - 1.0).abs() < 1e-3);
+        // Over `INK_SUBTLE` it crests at `INK_STRONG`.
+        assert_eq!(
+            shimmer_crest(theme::INK_SUBTLE),
+            Hsla::from(rgb(theme::INK_STRONG))
+        );
     }
 
     /// The caret's hard blink: shown for the first half of a 1s turn,
@@ -2305,7 +2396,7 @@ mod tests {
             fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
                 div()
                     .child(working_mark(theme::CHECK_MARK, theme::RUNNING))
-                    .child(shimmer("Working", theme::PROVIDER_CLAUDE))
+                    .child(shimmer("Working", theme::INK_SUBTLE))
             }
         }
         let window = cx.add_window(|_, _| Board);
@@ -2319,24 +2410,23 @@ mod tests {
         cx.update(|cx| assert!(motion::pulse_parked(cx), "no loop leased the clock"));
     }
 
-    /// Lit, the shimmer rides the display's frames, as the orbs do: it
-    /// asks for the next frame and declares nothing on the ~30fps pulse
-    /// clock, which stays parked.
+    /// Lit, a shine steps: it declares its next step on the pulse clock and
+    /// asks the display for no frame between steps.
     #[gpui::test]
-    fn a_lit_shimmer_leases_display_frames_not_the_pulse_clock(cx: &mut gpui::TestAppContext) {
+    fn a_lit_shine_wakes_only_on_its_steps(cx: &mut gpui::TestAppContext) {
         motion::testing::drive();
         struct Line;
         impl gpui::Render for Line {
             fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
-                div().child(shimmer("Working", theme::PROVIDER_CLAUDE))
+                div().child(shine("Thinking", theme::INK_SUBTLE, Shine::Activity))
             }
         }
         let window = cx.add_window(|_, _| Line);
         cx.run_until_parked();
         window
             .update(cx, |_, window, cx| {
-                assert!(motion::testing::frame_leased(window, cx), "one frame asked");
-                assert!(motion::pulse_parked(cx), "no 30fps tick declared");
+                assert!(!motion::testing::frame_leased(window, cx), "no display frame");
+                assert!(!motion::pulse_parked(cx), "its next step is declared");
             })
             .unwrap();
     }
@@ -2352,7 +2442,7 @@ mod tests {
             fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
                 div().flex().w(px(80.)).child(shimmer(
                     "Checking the supplied arguments",
-                    theme::PROVIDER_CLAUDE,
+                    theme::INK_SUBTLE,
                 ))
             }
         }
