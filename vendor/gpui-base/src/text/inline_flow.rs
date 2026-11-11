@@ -668,7 +668,15 @@ fn layout_flow(
         return InlineFlowLayout::default();
     }
 
-    let line_ranges = line_ranges(items, image_sizes, text_style, wrap_width, code_pad, window);
+    let line_ranges = line_ranges(
+        items,
+        image_sizes,
+        text_style,
+        wrap_width,
+        code_font,
+        code_pad,
+        window,
+    );
     let font_size = text_style.font_size.to_pixels(rem_size);
     let mut fragments = Vec::new();
     let mut max_width = Pixels::ZERO;
@@ -804,31 +812,49 @@ fn is_code(style: &HighlightStyle) -> bool {
 }
 
 /// A text item's slice as wrap fragments: its text, with a zero-length
-/// `code_pad` element either side of each code run in it.
+/// `code_pad` element either side of each code run in it. The wrapper
+/// measures in the prose face alone, so each code word goes in as an
+/// element of its width in the code face, and each code space as a prose
+/// space plus the difference.
 fn text_wrap_fragments<'a>(
     text: &'a str,
     highlights: &[(Range<usize>, HighlightStyle)],
     range: Range<usize>,
     code_pad: Pixels,
+    code_width: &mut impl FnMut(&str, &HighlightStyle) -> Pixels,
+    space_width: Pixels,
 ) -> Vec<WrapLineFragment<'a>> {
-    let mut cuts: Vec<usize> = Vec::new();
-    if code_pad > Pixels::ZERO {
-        for (code, _) in highlights.iter().filter(|(_, style)| is_code(style)) {
-            for cut in [code.start, code.end] {
-                if range.start <= cut && cut <= range.end && text.is_char_boundary(cut) {
-                    cuts.push(cut);
-                }
-            }
-        }
-    }
     let mut fragments = Vec::new();
     let mut at = range.start;
-    for cut in cuts {
-        if at < cut {
-            fragments.push(WrapLineFragment::text(&text[at..cut]));
+    for (code, style) in highlights.iter().filter(|(_, style)| is_code(style)) {
+        if code.end < range.start || code.start > range.end {
+            continue;
         }
-        fragments.push(WrapLineFragment::element(code_pad, 0));
-        at = cut.max(at);
+        let start = code.start.max(range.start);
+        let end = code.end.min(range.end);
+        if start < at || !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+            continue;
+        }
+        if at < start {
+            fragments.push(WrapLineFragment::text(&text[at..start]));
+        }
+        if code_pad > Pixels::ZERO && code.start >= range.start {
+            fragments.push(WrapLineFragment::element(code_pad, 0));
+        }
+        for piece in text[start..end].split_inclusive(' ') {
+            let word = piece.trim_end_matches(' ');
+            if !word.is_empty() {
+                fragments.push(WrapLineFragment::element(code_width(word, style), word.len()));
+            }
+            for _ in word.len()..piece.len() {
+                fragments.push(WrapLineFragment::text(" "));
+                fragments.push(WrapLineFragment::element(code_width(" ", style) - space_width, 0));
+            }
+        }
+        if code_pad > Pixels::ZERO && code.end <= range.end {
+            fragments.push(WrapLineFragment::element(code_pad, 0));
+        }
+        at = end;
     }
     if at < range.end {
         fragments.push(WrapLineFragment::text(&text[at..range.end]));
@@ -841,6 +867,7 @@ fn line_ranges(
     image_sizes: &[Option<Size<Pixels>>],
     text_style: &TextStyle,
     wrap_width: Option<Pixels>,
+    code_font: Option<&SharedString>,
     code_pad: Pixels,
     window: &mut Window,
 ) -> Vec<Range<usize>> {
@@ -869,6 +896,20 @@ fn line_ranges(
     let mut wrapper = window
         .text_system()
         .line_wrapper(text_style.font(), font_size);
+    let text_system = window.text_system().clone();
+    let shaped_width = |text: &str, run: TextRun| {
+        text_system
+            .shape_line(SharedString::from(text.to_owned()), font_size, &[run], None)
+            .width()
+    };
+    let space_width = shaped_width(" ", text_style.to_run(1));
+    let mut code_width = |text: &str, highlight: &HighlightStyle| {
+        let mut run = text_style.clone().highlight(*highlight).to_run(text.len());
+        if let Some(family) = code_font {
+            run.font.family = family.clone();
+        }
+        shaped_width(text, run)
+    };
     let mut ranges = Vec::new();
 
     for hard_line in hard_lines {
@@ -888,7 +929,14 @@ fn line_ranges(
                             let start = hard_line.start.max(item_start) - item_start;
                             let end = hard_line.end.min(item_end) - item_start;
                             if start < end {
-                                text_wrap_fragments(text, highlights, start..end, code_pad)
+                                text_wrap_fragments(
+                                    text,
+                                    highlights,
+                                    start..end,
+                                    code_pad,
+                                    &mut code_width,
+                                    space_width,
+                                )
                             } else {
                                 Vec::new()
                             }
