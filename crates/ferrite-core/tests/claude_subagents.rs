@@ -36,8 +36,9 @@ impl Stub {
     }
 
     fn spawn(&self, relative_fixture: &str) -> ClaudeSession {
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/subagents")
+        // Cargo runs a crate's tests in the crate's own directory.
+        let fixture = std::path::absolute("tests/fixtures/subagents")
+            .unwrap()
             .join(relative_fixture);
         let program = self.directory.join("claude");
         let marker = json!({"type":"stream_event", "parent_tool_use_id":null, "event":{

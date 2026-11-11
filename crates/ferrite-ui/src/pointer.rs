@@ -373,7 +373,8 @@ mod tests {
     /// hover in the window blends over 100ms.
     #[test]
     fn no_render_site_writes_its_own_hover() {
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        // Cargo runs a crate's tests in the crate's own directory.
+        let src = std::path::PathBuf::from("src");
         let mut stack = vec![src];
         let mut offenders = Vec::new();
         while let Some(dir) = stack.pop() {
