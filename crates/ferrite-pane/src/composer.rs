@@ -141,6 +141,9 @@ pub struct Composer {
     files_focus: FocusHandle,
     line: Line,
     files: Vec<PathBuf>,
+    /// When each file was added to the draft, while it may still be growing
+    /// in (`attachments`).
+    files_added: std::collections::HashMap<PathBuf, std::time::Instant>,
     /// Transcript passages the operator is replying to (a selection's
     /// Reply), each with what they said about it: Reply cards in the tray,
     /// sent ahead of the line's words (`crate::quote`).
@@ -229,6 +232,7 @@ impl Composer {
             files_focus: cx.focus_handle(),
             line: Line::default(),
             files: Vec::new(),
+            files_added: Default::default(),
             replies: Vec::new(),
             review: CommentStore::new(),
             browser_annotations: Vec::new(),
@@ -363,6 +367,7 @@ impl Composer {
             return None;
         }
         let files = composer.files.clone();
+        let added = composer.files_growing(cx);
         let replies = composer.replies.clone();
         let comments = composer.review.len();
         let annotations = composer.browser_annotations.clone();
@@ -379,6 +384,7 @@ impl Composer {
                 .tab_stop(true)
                 .child(
                     crate::attachments::Attachments::new("prompt-attachments", files, preview)
+                        .added(added)
                         .review(comments)
                         .annotations(annotations)
                         .on_remove_annotation(move |id, window, cx| {
@@ -475,6 +481,7 @@ impl Composer {
     /// Put a line back into the Composer, ready to edit at its end. The
     /// review comments stay as they are: they are not part of the line.
     pub fn set(&mut self, text: String, cx: &mut Context<Self>) {
+        self.files_added.clear();
         if matches!(self.role, Role::Field(_)) {
             // Fields hold literal values, including captured page text and
             // comments. Only a prompt recalls attachment/reply context.
@@ -498,6 +505,7 @@ impl Composer {
         let text = self.prompt();
         self.line.take();
         self.files.clear();
+        self.files_added.clear();
         self.replies.clear();
         self.review.take_all();
         self.browser_annotations.clear();
@@ -532,10 +540,29 @@ impl Composer {
         crate::quote::compose(&self.replies, self.line.text())
     }
 
+    /// The files added a moment ago, still growing into the tray
+    /// (`motion::CHIP_IN`); what the draft held when it was drawn
+    /// (restored, put back) stands.
+    pub fn files_growing(&self, cx: &App) -> std::collections::HashSet<PathBuf> {
+        let now = cx.background_executor().now();
+        self.files_added
+            .iter()
+            .filter(|(path, at)| {
+                self.files.contains(path)
+                    && now.saturating_duration_since(**at) < ferrite_ui::motion::CHIP_IN.duration()
+            })
+            .map(|(path, _)| path.clone())
+            .collect()
+    }
+
     pub fn add_files(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        let now = cx.background_executor().now();
+        self.files_added
+            .retain(|_, at| now.saturating_duration_since(*at) < ferrite_ui::motion::CHIP_IN.duration());
         for path in paths {
             if !self.files.contains(path) {
                 self.files.push(path.clone());
+                self.files_added.insert(path.clone(), now);
             }
         }
         self.edited(cx);

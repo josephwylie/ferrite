@@ -318,10 +318,12 @@ impl Find {
             .right(px(TX_INSET_GROUP))
             .flex()
             .justify_end()
-            .child(ferrite_ui::motion::menu_in(
+            // It fades in (T3's 150ms), and goes at once.
+            .child(ferrite_ui::motion::fade_in(
                 "find-bar-in",
                 bar,
-                ferrite_ui::motion::Opens::Down,
+                ferrite_ui::motion::FADE_QUICK,
+                1.0,
             ))
     }
 

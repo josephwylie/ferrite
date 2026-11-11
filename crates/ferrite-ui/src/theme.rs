@@ -3230,6 +3230,11 @@ pub const MOTION_SCROLL_MAX_MS: u64 = MOTION_DUR_BASE_MS;
 /// Scroll to end shows this long after it is first wanted, so it never
 /// flashes through a thread switch; it hides at once, with no fade.
 pub const SCROLL_END_SHOW_DELAY_MS: u64 = 150;
+/// An attachment added to a draft grows in from `MOTION_CHIP_FROM_SCALE`
+/// about its centre as it fades in, over `MOTION_CHIP_IN_MS` on
+/// `MOTION_EASE_SNAP` (T3's `--ease-drawer`).
+pub const MOTION_CHIP_IN_MS: u64 = 300;
+pub const MOTION_CHIP_FROM_SCALE: f32 = 0.95;
 /// A toast's timing: it comes in over `MOTION_DUR_BASE_MS` on the quart,
 /// sliding its own height out from under the edge it hangs on, and leaves
 /// over the same, shrinking to `MOTION_TOAST_OUT_SCALE` as it fades (the
