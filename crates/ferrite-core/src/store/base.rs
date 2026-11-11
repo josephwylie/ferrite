@@ -57,8 +57,10 @@ fn progress(event: &PersistedProgress) -> Carry {
         PersistedProgress::Task { .. } => Carry::Delta("tasks"),
         PersistedProgress::BackgroundSnapshot { .. } => Carry::Snapshot("background"),
         PersistedProgress::Background { .. } => Carry::Delta("background"),
-        // Both end with the turn they belong to.
-        PersistedProgress::Phase { .. } | PersistedProgress::Tool { .. } => Carry::None,
+        // These end with the turn they belong to; a compaction is a row.
+        PersistedProgress::Phase { .. }
+        | PersistedProgress::Tool { .. }
+        | PersistedProgress::Compacted { .. } => Carry::None,
     }
 }
 

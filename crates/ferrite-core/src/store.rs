@@ -969,6 +969,14 @@ enum PersistedProgress {
     BackgroundSnapshot {
         tasks: Vec<StoredBackgroundTask>,
     },
+    Compacted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure: Option<String>,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct StoredBackgroundTask {
@@ -1173,6 +1181,11 @@ impl PersistedProgress {
                     })
                     .collect(),
             },
+            E::Compacted(compacted) => Self::Compacted {
+                before: compacted.before,
+                after: compacted.after,
+                failure: compacted.failure.clone(),
+            },
         }
     }
     fn live(&self) -> crate::progress::ProgressEvent {
@@ -1254,6 +1267,15 @@ impl PersistedProgress {
                     })
                     .collect(),
             },
+            Self::Compacted {
+                before,
+                after,
+                failure,
+            } => E::Compacted(crate::transcript::Compacted {
+                before: *before,
+                after: *after,
+                failure: failure.clone(),
+            }),
         }
     }
 }

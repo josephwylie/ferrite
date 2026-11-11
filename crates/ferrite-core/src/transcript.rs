@@ -96,6 +96,86 @@ pub enum Body {
     /// interrupted. Typed so the turn footer can be drawn and searched
     /// without reparsing its words; `TurnEnd::text` is what it says.
     TurnEnd(TurnEnd),
+    /// The provider compacting the context, and once it has, what it
+    /// reported (T3's compaction divider).
+    Compaction(Compaction),
+}
+
+/// A context compaction: running until the provider moves on, then what
+/// it reported. A count it did not report stays `None`, never guessed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Compaction {
+    pub running: bool,
+    pub report: Compacted,
+}
+
+/// What a provider reports when a compaction ends: the context's tokens
+/// before and after it, or why it failed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Compacted {
+    pub before: Option<u64>,
+    pub after: Option<u64>,
+    pub failure: Option<String>,
+}
+
+impl Compaction {
+    /// Its title (T3's `contextCompactionLabel`): `Compacting context`
+    /// while it runs, `Context compaction failed`, else `Context compacted`.
+    pub fn title(&self) -> &'static str {
+        match () {
+            _ if self.running => "Compacting context",
+            _ if self.report.failure.is_some() => "Context compaction failed",
+            _ => "Context compacted",
+        }
+    }
+
+    /// Both counts, formatted (`367K`, `27.7K`), once it compacted and the
+    /// provider reported both.
+    pub fn counts(&self) -> Option<(String, String)> {
+        let report = &self.report;
+        (!self.running && report.failure.is_none())
+            .then_some(())
+            .and(report.before.zip(report.after))
+            .map(|(before, after)| (format_tokens(before), format_tokens(after)))
+    }
+
+    /// What copy and search see: `Context compacted 367K → 27.7K tokens`,
+    /// `Context compaction failed · <reason>`.
+    pub fn text(&self) -> String {
+        let mut text = self.title().to_owned();
+        if let Some((before, after)) = self.counts() {
+            text = format!("{text} {before} \u{2192} {after} tokens");
+        }
+        if let Some(reason) = self.report.failure.as_deref().filter(|r| !r.is_empty()) {
+            text = format!("{text} \u{b7} {reason}");
+        }
+        text
+    }
+}
+
+/// A token count as T3 writes it (`formatTokens`): K, M, B and T with 2
+/// decimals under 10, 1 under 100 and none from 100, an all-zero fraction
+/// dropped (`367K`, `27.7K`, `1.25M`, `9.99K`); whole under a thousand.
+pub fn format_tokens(count: u64) -> String {
+    let value = count as f64;
+    let Some((scale, unit)) = [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")]
+        .into_iter()
+        .find(|(scale, _)| value >= *scale)
+    else {
+        return count.to_string();
+    };
+    let scaled = value / scale;
+    let digits = match scaled {
+        s if s >= 100. => 0,
+        s if s >= 10. => 1,
+        _ => 2,
+    };
+    let fixed = format!("{scaled:.digits$}");
+    let fixed = match fixed.split_once('.') {
+        Some((whole, fraction)) if fraction.bytes().all(|b| b == b'0') => whole.to_owned(),
+        _ => fixed,
+    };
+    format!("{fixed}{unit}")
 }
 
 /// The row a finished turn leaves behind.
@@ -1953,6 +2033,12 @@ impl Transcript {
                 {
                     self.status = Status::Streaming;
                 }
+                if let ProgressEvent::Compacted(report) = &event {
+                    return Update {
+                        dirty: vec![self.compacted(report.clone())],
+                        ..Update::default()
+                    };
+                }
                 let changed = match &event {
                     ProgressEvent::Phase { phase, detail } => {
                         self.progress.phase != Some(*phase)
@@ -1965,8 +2051,23 @@ impl Transcript {
                 // append rows or interrupt the Markdown currently streaming.
                 let mut dirty = vec![];
                 if changed {
+                    // The provider moved on from compacting: its row settles.
+                    if !matches!(event, ProgressEvent::Phase { phase: Phase::Compacting, .. }) {
+                        dirty.extend(self.settle_compaction());
+                    }
                     if let ProgressEvent::Phase {
-                        phase: phase @ (Phase::Retrying | Phase::Compacting | Phase::Waiting),
+                        phase: Phase::Compacting,
+                        ..
+                    } = event
+                    {
+                        if !self.compacting() {
+                            dirty.push(self.push(Body::Compaction(Compaction {
+                                running: true,
+                                report: Compacted::default(),
+                            })));
+                        }
+                    } else if let ProgressEvent::Phase {
+                        phase: phase @ (Phase::Retrying | Phase::Waiting),
                         detail,
                     } = event
                     {
@@ -3039,7 +3140,56 @@ impl Transcript {
     }
 
     /// Append a Block that no further text can join.
+    /// Whether a compaction runs.
+    fn compacting(&self) -> bool {
+        self.blocks
+            .iter()
+            .any(|block| matches!(&block.body, Body::Compaction(c) if c.running))
+    }
+
+    /// The running compaction settles, the provider having moved on.
+    fn settle_compaction(&mut self) -> Option<BlockId> {
+        self.blocks.iter_mut().rev().find_map(|block| match &mut block.body {
+            Body::Compaction(compaction) if compaction.running => {
+                compaction.running = false;
+                Some(block.id)
+            }
+            _ => None,
+        })
+    }
+
+    /// A compaction's report lands on this turn's running compaction, or
+    /// on the one that settled with nothing reported (Claude says it is
+    /// done before it gives the counts); with neither, on a row of its own.
+    fn compacted(&mut self, report: Compacted) -> BlockId {
+        let turn = self
+            .blocks
+            .iter()
+            .rposition(|block| matches!(block.body, Body::Prompt(_)))
+            .map_or(0, |at| at + 1);
+        let open = self.blocks[turn..].iter_mut().rev().find_map(|block| match &mut block.body {
+            Body::Compaction(compaction)
+                if compaction.running || compaction.report == Compacted::default() =>
+            {
+                Some((block.id, compaction))
+            }
+            _ => None,
+        });
+        if let Some((id, compaction)) = open {
+            compaction.running = false;
+            compaction.report = report;
+            return id;
+        }
+        self.push(Body::Compaction(Compaction {
+            running: false,
+            report,
+        }))
+    }
+
     fn push(&mut self, body: Body) -> BlockId {
+        if matches!(body, Body::TurnEnd(_)) {
+            self.settle_compaction();
+        }
         self.thinking_open = false;
         let id = self.mint();
         let at = (!matches!(body, Body::Prompt(_)))
@@ -3175,6 +3325,7 @@ pub fn plain_text(blocks: &[Block]) -> String {
             Body::Thinking(_) => continue,
             Body::Notice(text) | Body::Meta(text) => text.clone(),
             Body::TurnEnd(end) => end.text(),
+            Body::Compaction(compaction) => compaction.text(),
             // The page is a picture; its words are its title and caption.
             Body::Visual(visual) => format!("● Visual ({})", visual.text().replace('\n', " · ")),
             Body::WrapUp(wrap) => wrap.text(),
@@ -3191,6 +3342,87 @@ pub fn plain_text(blocks: &[Block]) -> String {
 mod tests {
     use super::markdown::spans;
     use super::*;
+
+    #[test]
+    fn token_counts_read_as_t3_writes_them() {
+        for (count, text) in [
+            (367_000, "367K"),
+            (27_700, "27.7K"),
+            (1_250_000, "1.25M"),
+            (9_990, "9.99K"),
+            (1_000, "1K"),
+            (20_000, "20K"),
+            (999, "999"),
+            (3_400_000_000, "3.40B"),
+        ] {
+            assert_eq!(format_tokens(count), text, "{count}");
+        }
+    }
+
+    /// Claude's order: compacting, done (no counts yet), then the boundary
+    /// with them. One row runs, settles and takes the counts; a failure
+    /// says why; a report with no compaction running is a row of its own.
+    #[test]
+    fn a_compaction_is_one_row_that_runs_settles_and_reports() {
+        let phase = |phase| {
+            Input::Event(SessionEvent::Progress {
+                event: ProgressEvent::Phase {
+                    phase,
+                    detail: String::new(),
+                },
+            })
+        };
+        let compacted = |report| {
+            Input::Event(SessionEvent::Progress {
+                event: ProgressEvent::Compacted(report),
+            })
+        };
+        let compactions = |t: &Transcript| -> Vec<Compaction> {
+            t.blocks()
+                .iter()
+                .filter_map(|block| match &block.body {
+                    Body::Compaction(compaction) => Some(compaction.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut t = Transcript::default();
+        t.apply(Input::Prompt("go".into()));
+        t.apply(phase(Phase::Compacting));
+        t.apply(phase(Phase::Compacting));
+        let running = compactions(&t);
+        assert_eq!(running.len(), 1);
+        assert!(running[0].running);
+        assert_eq!(running[0].title(), "Compacting context");
+        t.apply(phase(Phase::Working));
+        assert!(!compactions(&t)[0].running);
+        t.apply(compacted(Compacted {
+            before: Some(367_000),
+            after: Some(27_700),
+            failure: None,
+        }));
+        let done = compactions(&t);
+        assert_eq!(done.len(), 1, "the counts land on the row that settled");
+        assert_eq!(done[0].text(), "Context compacted 367K \u{2192} 27.7K tokens");
+
+        t.apply(phase(Phase::Compacting));
+        t.apply(compacted(Compacted {
+            failure: Some("prompt too long".into()),
+            ..Default::default()
+        }));
+        let failed = &compactions(&t)[1];
+        assert!(!failed.running);
+        assert_eq!(failed.counts(), None);
+        assert_eq!(failed.text(), "Context compaction failed \u{b7} prompt too long");
+
+        t.apply(compacted(Compacted {
+            before: Some(1_000),
+            ..Default::default()
+        }));
+        let alone = &compactions(&t)[2];
+        assert_eq!(alone.counts(), None, "a count not reported is never guessed");
+        assert_eq!(alone.text(), "Context compacted");
+    }
 
     use crate::Decision;
 
@@ -3795,6 +4027,7 @@ mod tests {
             Body::Thinking(thought) => thought.clone(),
             Body::Notice(text) | Body::Meta(text) => text.clone(),
             Body::TurnEnd(end) => end.text(),
+            Body::Compaction(compaction) => compaction.text(),
             Body::Visual(visual) => visual.text(),
             Body::WrapUp(wrap) => wrap.text(),
         }
