@@ -40,7 +40,7 @@ pub(super) fn load(store_dir: &std::path::Path) -> factory::Factory {
 /// A Factory answer as a window's reply.
 pub(super) fn done(answer: Answer) -> Done {
     match answer {
-        Answer::Task(task) => Done::Task { task },
+        Answer::Task(task) | Answer::Duplicate(task) => Done::Task { task },
         Answer::Changed(changed) => Done::Changed { changed },
         Answer::Workflow(workflow) => Done::Workflow { workflow },
         Answer::Step(step) => Done::Step { step },
@@ -594,16 +594,15 @@ impl Server {
     /// A script's submission: its Task, new or the one its identity
     /// already started.
     pub(super) fn api_task_submit(&mut self, params: TaskSubmitParams) -> Result<Value, ApiError> {
-        let before = self.factory.board().tasks.len();
         let submit = Command::Submit {
             workflow: params.workflow,
             identity: params.identity,
             instructions: params.instructions,
         };
         match self.factory_command(submit)? {
-            (Answer::Task(task), _) => {
-                let duplicate = self.factory.board().tasks.len() == before;
-                Ok(json!({ "task": self.task_json(&task)?, "duplicate": duplicate }))
+            (Answer::Task(task), _) => Ok(json!({ "task": self.task_json(&task)?, "duplicate": false })),
+            (Answer::Duplicate(task), _) => {
+                Ok(json!({ "task": self.task_json(&task)?, "duplicate": true }))
             }
             _ => Err(ApiError::new(Code::Failed, "no Task was made")),
         }

@@ -913,7 +913,7 @@ impl State {
                     .iter()
                     .find(|task| task.request.as_deref() == Some(request.as_str()))
                 {
-                    return Ok(Answer::Task(task.id.clone()));
+                    return Ok(Answer::Duplicate(task.id.clone()));
                 }
                 let kind = made.latest().map(|latest| latest.definition.start.kind);
                 if kind != Some(StartKind::External) {

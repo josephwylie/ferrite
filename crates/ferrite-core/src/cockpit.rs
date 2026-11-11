@@ -2568,7 +2568,9 @@ impl Cockpit {
             let board = factory.board();
             self.receive_fixture(ServerMessage::Factory { revision: 0, board });
             return Ok(Some(match answer {
-                crate::factory::Answer::Task(task) => Done::Task { task },
+                crate::factory::Answer::Task(task) | crate::factory::Answer::Duplicate(task) => {
+                    Done::Task { task }
+                }
                 crate::factory::Answer::Changed(changed) => Done::Changed { changed },
                 crate::factory::Answer::Workflow(workflow) => Done::Workflow { workflow },
                 crate::factory::Answer::Step(step) => Done::Step { step },
@@ -2605,7 +2607,9 @@ impl Cockpit {
             let board = factory.board();
             self.receive_fixture(ServerMessage::Factory { revision: 0, board });
             return Ok(Some(match answer {
-                crate::factory::Answer::Task(task) => Done::Task { task },
+                crate::factory::Answer::Task(task) | crate::factory::Answer::Duplicate(task) => {
+                    Done::Task { task }
+                }
                 crate::factory::Answer::Changed(changed) => Done::Changed { changed },
                 crate::factory::Answer::Workflow(workflow) => Done::Workflow { workflow },
                 crate::factory::Answer::Step(step) => Done::Step { step },

@@ -624,6 +624,8 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
     Task(TaskId),
+    /// The Task a repeated submission already started (#225).
+    Duplicate(TaskId),
     Workflow(WorkflowId),
     Step(StepId),
     /// The version a save made, or the latest when nothing changed.

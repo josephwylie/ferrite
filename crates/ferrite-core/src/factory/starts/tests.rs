@@ -743,9 +743,16 @@ mod factory {
             refused(submit(&mut factory, &external, "JIRA-1", "  ")),
             RefusalCode::Invalid
         );
-        let first = submit(&mut factory, &external, "JIRA-1", "Fix it").unwrap();
+        let Answer::Task(first) = submit(&mut factory, &external, "JIRA-1", "Fix it").unwrap()
+        else {
+            panic!("a new Task");
+        };
         let again = submit(&mut factory, &external, "JIRA-1", "Fix it again").unwrap();
-        assert_eq!(first, again, "a repeated identity is the existing Task");
+        assert_eq!(
+            again,
+            Answer::Duplicate(first),
+            "a repeated identity is the existing Task, and says so"
+        );
         assert_eq!(tasks(&factory).len(), 1);
         assert_eq!(
             tasks(&factory)[0].source,
