@@ -263,7 +263,7 @@ pub(crate) struct FoldFace<'a> {
 /// A settled turn's fold (T3's turn fold, MessagesTimeline.tsx:1621-1652),
 /// on the header's frame (`turn_rule`): `Worked for 24m 55s` and its
 /// chevron, right while shut and down while open (the glyphs cross-fading,
-/// never turning), a press target with no ground, the words not
+/// never turning), the whole row a press target with no ground, the words not
 /// selectable. Under the pointer they go `INK_SUBTLE` → `INK_STRONG` over
 /// `motion::FOLD_HOVER`, and the turn's start time (`8:01 pm`) snaps in at
 /// the row's end, taking no room until it shows.
@@ -309,7 +309,7 @@ pub(crate) fn turn_fold(
                 .child(glyph(icons::CHEVRON_DOWN, down))
         },
     );
-    let mut words = div()
+    let words = div()
         .id(button_key.clone())
         .debug_selector(|| "turn-fold-words".into())
         .flex()
@@ -327,15 +327,6 @@ pub(crate) fn turn_fold(
             motion::FOLD_HOVER,
             motion::FOLD_HOVER,
         ));
-    if let Some(toggle) = toggle {
-        words = words
-            .cursor_pointer()
-            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-                cx.stop_propagation();
-                gpui::base::TextSelection::clear(window, cx);
-                toggle(window, cx);
-            });
-    }
     let time = face
         .started
         .filter(|_| hovered || face.targeted.is_some())
@@ -369,6 +360,16 @@ pub(crate) fn turn_fold(
         .on_hover(motion::hover_snap(row_key))
         .child(words)
         .children(time);
+    // The whole row is the press, as its hover time is the whole row's.
+    if let Some(toggle) = toggle {
+        row = row
+            .cursor_pointer()
+            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                cx.stop_propagation();
+                gpui::base::TextSelection::clear(window, cx);
+                toggle(window, cx);
+            });
+    }
     if let Some(focus) = face.targeted {
         row = row
             .bg(theme::paint::RAISED)
