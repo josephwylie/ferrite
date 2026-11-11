@@ -155,6 +155,13 @@ icons![
     "git-pull-request-draft",
     "folder-git-2",
     "pin-off",
+    "undo-2",
+    "alarm-clock",
+    "alarm-clock-off",
+    "folder-plus",
+    "square-pen",
+    "list-filter",
+    "chart-no-axes-column",
 ];
 
 pub const SIDEBAR: &str = "icons/sidebar.svg";
@@ -330,6 +337,16 @@ pub const GIT_PULL_REQUEST_DRAFT: &str = "icons/git-pull-request-draft.svg";
 pub const FOLDER_GIT: &str = "icons/folder-git-2.svg";
 /// A pinned card's pin under the pointer: the press unpins.
 pub const PIN_OFF: &str = "icons/pin-off.svg";
+/// The nav's shelves and chrome (T3's lucide glyphs): a parked row's
+/// Revive, a snoozed row's wake time and Wake, the head's Add project, New
+/// thread and Project filter, the foot's Usage.
+pub const UNDO_2: &str = "icons/undo-2.svg";
+pub const ALARM_CLOCK: &str = "icons/alarm-clock.svg";
+pub const ALARM_CLOCK_OFF: &str = "icons/alarm-clock-off.svg";
+pub const FOLDER_PLUS: &str = "icons/folder-plus.svg";
+pub const SQUARE_PEN: &str = "icons/square-pen.svg";
+pub const LIST_FILTER: &str = "icons/list-filter.svg";
+pub const CHART_NO_AXES_COLUMN: &str = "icons/chart-no-axes-column.svg";
 
 pub struct Assets;
 
@@ -570,7 +587,7 @@ mod tests {
     const TITLE_BAR_ICONS: [&str; 3] = [BACK, FORWARD, DIFF];
 
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
-    const REFRESH_ICONS: [&str; 37] = [
+    const REFRESH_ICONS: [&str; 44] = [
         PANEL_RIGHT,
         SEARCH,
         INBOX,
@@ -608,6 +625,13 @@ mod tests {
         LIST,
         CODE,
         PIN,
+        UNDO_2,
+        ALARM_CLOCK,
+        ALARM_CLOCK_OFF,
+        FOLDER_PLUS,
+        SQUARE_PEN,
+        LIST_FILTER,
+        CHART_NO_AXES_COLUMN,
     ];
 
     fn attr(svg: &str, name: &str) -> String {

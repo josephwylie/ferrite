@@ -435,28 +435,6 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // Composer's own arrows, so they win on the palette's line.
         ("left".into(), "palette::PreviousType", Some("Palette")),
         ("right".into(), "palette::NextType", Some("Palette")),
-        (
-            "up".into(),
-            "notifications::SelectPrevious",
-            Some("Notifications"),
-        ),
-        (
-            "down".into(),
-            "notifications::SelectNext",
-            Some("Notifications"),
-        ),
-        ("enter".into(), "notifications::Open", Some("Notifications")),
-        (
-            "backspace".into(),
-            "notifications::Dismiss",
-            Some("Notifications"),
-        ),
-        (
-            "escape".into(),
-            "notifications::Close",
-            Some("Notifications"),
-        ),
-        ("escape".into(), "nav::CloseView", Some("NavView")),
         ("up".into(), "nav::SelectPrevious", Some("NavTree")),
         ("down".into(), "nav::SelectNext", Some("NavTree")),
         ("enter".into(), "nav::Open", Some("NavTree")),
@@ -464,6 +442,15 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("right".into(), "nav::Unfold", Some("NavTree")),
         ("escape".into(), "nav::CloseView", Some("NavTree")),
         ("f2".into(), "nav::Rename", Some("NavTree")),
+        ("up".into(), "nav::SearchPrevious", Some("NavSearch")),
+        ("down".into(), "nav::SearchNext", Some("NavSearch")),
+        ("enter".into(), "nav::Open", Some("NavSearch")),
+        ("escape".into(), "nav::CloseView", Some("NavSearch")),
+        ("home".into(), "nav::SelectFirst", Some("NavTree")),
+        ("end".into(), "nav::SelectLast", Some("NavTree")),
+        ("menu".into(), "nav::OpenMenu", Some("NavTree")),
+        ("shift-f10".into(), "nav::OpenMenu", Some("NavTree")),
+        (with_primary("z"), "nav::Undo", Some("NavTree")),
         ("up".into(), "shortcuts::ScrollUp", Some("Shortcuts")),
         ("down".into(), "shortcuts::ScrollDown", Some("Shortcuts")),
         ("escape".into(), "shortcuts::Dismiss", Some("Shortcuts")),
@@ -1052,12 +1039,10 @@ mod tests {
                 ("escape", "palette::Dismiss", "Palette"),
                 ("left", "palette::PreviousType", "Palette"),
                 ("right", "palette::NextType", "Palette"),
-                ("up", "notifications::SelectPrevious", "Notifications"),
-                ("down", "notifications::SelectNext", "Notifications"),
-                ("enter", "notifications::Open", "Notifications"),
-                ("backspace", "notifications::Dismiss", "Notifications"),
-                ("escape", "notifications::Close", "Notifications"),
-                ("escape", "nav::CloseView", "NavView"),
+                ("home", "nav::SelectFirst", "NavTree"),
+                ("end", "nav::SelectLast", "NavTree"),
+                ("menu", "nav::OpenMenu", "NavTree"),
+                ("shift-f10", "nav::OpenMenu", "NavTree"),
                 ("up", "shortcuts::ScrollUp", "Shortcuts"),
                 ("down", "shortcuts::ScrollDown", "Shortcuts"),
                 ("escape", "shortcuts::Dismiss", "Shortcuts"),
@@ -1073,10 +1058,6 @@ mod tests {
                     "{platform:?} is missing {key} for {action} in {context}"
                 );
             }
-            assert!(
-                at(&table, "backspace", "composer::Backspace")
-                    < at(&table, "backspace", "notifications::Dismiss")
-            );
             assert!(
                 table.iter().all(|(key, action, _)| {
                     *action != "cockpit::CloseThread" || !key.contains("backspace")

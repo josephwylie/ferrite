@@ -57,8 +57,18 @@ fn hue(name: &str) -> usize {
 /// one glyph); gpui has no `textLength`, so each glyph takes a fixed
 /// `PROJECT_BADGE_GLYPH_W` cell, which spaces any two letters alike.
 pub fn project_badge(name: &str) -> Div {
+    project_badge_saturated(name, 1.0)
+}
+
+/// The badge with its hue's saturation scaled by `saturation`: 0 is T3's
+/// `grayscale` (a slim row at rest), 1 the hue.
+pub fn project_badge_saturated(name: &str, saturation: f32) -> Div {
     let (letters, hue) = project_monogram(name);
     let ink = PROJECT_HUES[hue];
+    let toned = |color: gpui::Hsla| gpui::Hsla {
+        s: color.s * saturation.clamp(0.0, 1.0),
+        ..color
+    };
     div()
         .debug_selector(|| "project-badge".into())
         .flex()
@@ -67,12 +77,12 @@ pub fn project_badge(name: &str) -> Div {
         .justify_center()
         .size(px(NAV_BADGE))
         .rounded(px(NAV_BADGE / 4.0))
-        .bg(rgba((ink << 8) | PROJECT_BADGE_GROUND_ALPHA))
+        .bg(toned(rgba((ink << 8) | PROJECT_BADGE_GROUND_ALPHA).into()))
         .font_family(FONT_CODE)
         .text_size(px(FS_PROJECT_BADGE))
         .line_height(px(NAV_BADGE))
         .font_weight(FontWeight::BOLD)
-        .text_color(rgb(ink))
+        .text_color(toned(rgb(ink).into()))
         .children(letters.chars().map(|letter| {
             div()
                 .flex()

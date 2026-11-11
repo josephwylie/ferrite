@@ -241,17 +241,11 @@ pub const CARD: u32 = 0x1a1a1a;
 /// bottom bar: the plane itself (rule 2).
 pub const FRAME: u32 = CARD;
 /// `#272727` — the sidebar (the nav column): lighter than the plane, as
-/// Claude's sidebar sits over its transcript (sampled from claude/*.png:
-/// the transcript `#191919`, the sidebar `#292428` under the window's
-/// vibrancy, ~14 levels over it; this is that grey without the wallpaper's
-/// tint), so the column reads as its own region and not by its hairline
-/// alone. The owner asked for it darker than Claude's: `#212121`, 8 levels
-/// over the transcript. Its rows step up from it: `SIDEBAR_HOVER` (+8) under
-/// the pointer, `SIDEBAR_SELECTED` (+32, Claude's step) selected, so a
-/// hovered row never reads as the selected one.
-pub const SIDEBAR: u32 = 0x212121;
-pub const SIDEBAR_HOVER: u32 = 0x292929;
-pub const SIDEBAR_SELECTED: u32 = 0x414141;
+/// The nav column's ground (ADR 0040, T3's `--sidebar`): black, under
+/// T3's 3.5% grain (`NAV_GRAIN_OPACITY`), so the column reads as its own
+/// region below the transcript's plane. Its rows wear alpha fills over it
+/// (`NAV_CARD_HOVER`, `NAV_CARD_ACTIVE`, `NAV_CARD_SELECTED`).
+pub const SIDEBAR: u32 = 0x000000;
 /// The standing choice's `✓` in a menu: Claude's check blue
 /// (claude/model-menu.png x1266–1280, y744–755) — the owner's call, the one
 /// hue in a menu that is not state (rule 6).
@@ -372,8 +366,6 @@ pub mod paint {
     pub const PANEL: Paint = FRAME;
     /// The nav column and its rows (`super::SIDEBAR`).
     pub const SIDEBAR: Paint = Paint::solid(super::SIDEBAR);
-    pub const SIDEBAR_HOVER: Paint = Paint::solid(super::SIDEBAR_HOVER);
-    pub const SIDEBAR_SELECTED: Paint = Paint::solid(super::SIDEBAR_SELECTED);
     pub const CHIP_OPEN: Paint = Paint(super::CHIP_OPEN);
     pub const ENV_STRIP: Paint = Paint::solid(super::ENV_STRIP);
     /// A diff's or a code fence's box, on a reading surface (the card, the
@@ -3118,6 +3110,110 @@ pub const NAV_BRANCH_TAIL_MIN: usize = 4;
 /// A branch is cut only when it runs this many characters past its tail.
 pub const NAV_BRANCH_MIN_CUT: usize = 4;
 
+// --- The nav's one list (ADR 0040; `docs/design/t3-reference/sidebar.md`
+// §0-2, §4-13): cards stacked from the top, the Working, Snoozed and
+// Parked shelves anchored over the foot.
+
+/// 1px — between two items of the list (T3's `gap-px`); a card's own 2px
+/// item padding makes its pitch 83.
+pub const NAV_LIST_GAP: f32 = 1.0;
+/// 12px — the list's edge fade (T3's `--fade-size: .75rem`), not the
+/// transcript's `EDGE_FADE`.
+pub const NAV_EDGE_FADE: f32 = 12.0;
+/// The column's surface grain (T3's `surface-grain`): a fractal-noise tile
+/// this wide, painted at this opacity over the whole column.
+pub const NAV_GRAIN_OPACITY: f32 = 0.035;
+pub const NAV_GRAIN_TILE: f32 = 256.0;
+/// White 8% — the column's borders and rules (T3's `--sidebar-border`).
+pub const NAV_BORDER: u32 = 0xffffff14;
+/// The head's and foot's glyphs: the muted ink at 85% over the column
+/// (T3's `--sidebar-icon-color`).
+pub const NAV_ICON_INK: u32 = (INK_SUBTLE << 8) | 0xd9;
+/// A shelf's header (Working, Snoozed, Parked): 32px tall, 2px in from the
+/// sides, 8px inline padding and gaps, 12/500 in `INK_SUBTLE`, the count
+/// flush right in tabular figures, then a `NAV_CHEVRON` turning over
+/// `MOTION_SHELF_CHEVRON_MS`. No hover ground.
+pub const NAV_SHELF_H: f32 = 32.0;
+pub const NAV_SHELF_INSET: f32 = 2.0;
+pub const NAV_SHELF_PAD_X: f32 = SPACE_2;
+pub const NAV_SHELF_GAP: f32 = SPACE_2;
+/// The first `NAV_PARKED_PAGE_FIRST` parked rows show, then `Show 25 more`
+/// pages `NAV_PARKED_PAGE` at a time (T3's settled tail).
+pub const NAV_PARKED_PAGE_FIRST: usize = 10;
+pub const NAV_PARKED_PAGE: usize = 25;
+/// A slim row (Snoozed and Parked): 36px, 10px inline padding and gaps,
+/// its badge at 40% in greyscale until the pointer or the cursor is on
+/// it, its right slot 24px tall and at least 32px wide.
+pub const NAV_SLIM_H: f32 = 36.0;
+pub const NAV_SLIM_PAD_X: f32 = 10.0;
+pub const NAV_SLIM_GAP: f32 = 10.0;
+pub const NAV_SLIM_BADGE_OPACITY: f32 = 0.40;
+pub const NAV_SLIM_SLOT_H: f32 = 24.0;
+pub const NAV_SLIM_SLOT_MIN_W: f32 = 32.0;
+pub const NAV_SLIM_TITLE_REST: u32 = (INK_SECONDARY_LABEL << 8) | 0xb3;
+pub const NAV_REVIVE_GLYPH: f32 = 14.0;
+pub const NAV_WAKE_GLYPH: f32 = 12.0;
+pub const NAV_ALARM_GLYPH: f32 = 12.0;
+/// The head's search row: a 32px field (8px inline padding and gap, 14/500
+/// `INK_SUBTLE`, a 16px glyph), then 28px square buttons 4px apart.
+pub const NAV_SEARCH_H: f32 = 32.0;
+/// The search field's and its results' text (T3's 14px, weight 500).
+pub const FS_NAV_SEARCH: f32 = 14.0;
+pub const NAV_SEARCH_PAD_X: f32 = SPACE_2;
+pub const NAV_SEARCH_GAP: f32 = SPACE_2;
+pub const NAV_SEARCH_ROW_GAP: f32 = SPACE_1;
+pub const NAV_SEARCH_GLYPH: f32 = 16.0;
+pub const NAV_SEARCH_CLEAR_GLYPH: f32 = 12.0;
+pub const NAV_SEARCH_RING: u32 = (FOCUS_RING & 0xffffff00) | 0x27;
+pub const NAV_HEAD_BUTTON: f32 = 28.0;
+/// The foot: 32px square buttons at radius 8, 8px inline padding, 4px
+/// over and 8px under, and the undo notice at 11px on 24px leading.
+pub const NAV_FOOT_BUTTON: f32 = 32.0;
+pub const NAV_FOOT_BUTTON_R: f32 = 8.0;
+/// A foot button with nothing to open (Pull requests on a Thread with no
+/// PR).
+pub const NAV_FOOT_DISABLED_OPACITY: f32 = 0.5;
+/// How long the undo notice stands before it fades out.
+pub const NAV_UNDO_SHOWN_MS: u64 = 5000;
+pub const NAV_FOOT_PAD_TOP: f32 = SPACE_1;
+pub const NAV_FOOT_PAD_BOTTOM: f32 = SPACE_2;
+pub const FS_NAV_NOTICE: f32 = 11.0;
+pub const NAV_NOTICE_LH: f32 = 24.0;
+/// A search result: at least 36px, 10px × 4px padding, 10px gaps, the age
+/// in a fixed 32px column at 55%.
+pub const NAV_RESULT_H: f32 = 36.0;
+pub const NAV_RESULT_PAD_X: f32 = 10.0;
+pub const NAV_RESULT_GAP: f32 = 10.0;
+pub const NAV_RESULT_AGE_W: f32 = 32.0;
+pub const NAV_RESULT_AGE_OPACITY: f32 = 0.55;
+/// The empty list's words: 12px in the muted ink at 60%, centred, 8px ×
+/// 24px padding, 8px between lines.
+pub const NAV_EMPTY_OPACITY: f32 = 0.60;
+pub const NAV_EMPTY_PAD_X: f32 = SPACE_6;
+pub const NAV_EMPTY_PAD_Y: f32 = SPACE_2;
+pub const NAV_EMPTY_GAP: f32 = SPACE_2;
+/// The row hover card: to the right of the card, top-aligned, 4px away,
+/// at most 320px, its lines 12px with 12px icons 6px apart.
+pub const NAV_HOVER_CARD_GAP: f32 = SPACE_1;
+pub const NAV_HOVER_CARD_MAX_W: f32 = 320.0;
+pub const NAV_HOVER_CARD_PAD_X: f32 = SPACE_2;
+pub const NAV_HOVER_CARD_PAD_Y: f32 = SPACE_1;
+pub const NAV_HOVER_CARD_LINE_GAP: f32 = SPACE_1_5;
+pub const NAV_HOVER_CARD_ICON: f32 = 12.0;
+pub const NAV_HOVER_CARD_INK: u32 = (INK_STRONG << 8) | 0xbf;
+/// The glass face (T3's `dropdown-glass`): the float's ground at 80%, a
+/// border of white 10%. gpui draws no backdrop blur.
+pub const NAV_GLASS: u32 = (FLOAT << 8) | 0xcc;
+pub const NAV_GLASS_BORDER: u32 = 0xffffff1a;
+/// The nav's tooltips: 12px, after 150ms, the next within 400ms at once.
+pub const FS_NAV_TOOLTIP: f32 = 12.0;
+pub const NAV_TOOLTIP_DELAY_MS: u64 = 150;
+pub const NAV_TOOLTIP_HANDOFF_MS: u64 = 400;
+/// A list move travels at most this far (T3's `travel(h) = min(h, 40)`).
+pub const MOTION_NAV_LIST_TRAVEL: f32 = 40.0;
+/// More rows than this fading in one update snap instead.
+pub const NAV_LIST_MAX_FADED: usize = 40;
+
 /// The Project badge (`project_badge`): a 16px tile at radius 4, the hue
 /// at 14% under the monogram, mono 700 at 8.25px in two 6px cells.
 pub const NAV_BADGE: f32 = 16.0;
@@ -3377,6 +3473,22 @@ pub const MOTION_CARET_BLINK_MS: u64 = 1_000;
 /// pointer on `MOTION_EASE_STANDARD` (T3's `transition-opacity`), the
 /// card's only fade; under reduced motion it snaps.
 pub const MOTION_RECEDE_MS: u64 = 150;
+/// The nav list's FLIP: a row that moves, enters or leaves travels over
+/// 150ms on `MOTION_EASE_OUT` (T3's `Sidebar.motion.ts`).
+pub const MOTION_NAV_LIST_MS: u64 = 150;
+/// A shelf header's chevron turns over 150ms on `MOTION_EASE_STANDARD`
+/// (Tailwind's `transition-transform`); the shelf itself snaps.
+pub const MOTION_SHELF_CHEVRON_MS: u64 = 150;
+/// A slim row's time gives way to its action over 150ms on
+/// `MOTION_EASE_STANDARD`, and its badge comes up to full colour.
+pub const MOTION_SLIM_ACTION_MS: u64 = 150;
+/// The foot's undo notice fades in and out over 200ms on Tailwind's
+/// `ease-out` (`MOTION_EASE_OUT_TW`).
+pub const MOTION_UNDO_NOTICE_MS: u64 = 200;
+pub const MOTION_EASE_OUT_TW: [f32; 4] = [0.0, 0.0, 0.2, 1.0];
+/// The nav's tooltips enter over 150ms on `MOTION_EASE_STANDARD`, from
+/// `MOTION_FLOAT_FROM_SCALE`.
+pub const MOTION_NAV_TOOLTIP_MS: u64 = 150;
 // (end motion) — append above this line only
 
 #[cfg(test)]
@@ -3452,7 +3564,7 @@ mod tests {
         let readable = &[("INK_STRONG", INK_STRONG)];
         floor(readable, GROUNDS, 4.5);
         floor(readable, RAISED_GROUNDS, 4.5);
-        floor(readable, &[("SIDEBAR_SELECTED", SIDEBAR_SELECTED)], 4.5);
+        floor(readable, &[("NAV_CARD_ACTIVE", over(NAV_CARD_ACTIVE, SIDEBAR))], 4.5);
         // The subtle tier is the floor: AA on the plane, the grounds rows
         // sit on and the raised ones.
         floor(&[("INK_SUBTLE", INK_SUBTLE)], GROUNDS, 4.5);
@@ -3619,8 +3731,6 @@ mod tests {
             (paint::CARD, CARD),
             (paint::FRAME, FRAME),
             (paint::SIDEBAR, SIDEBAR),
-            (paint::SIDEBAR_HOVER, SIDEBAR_HOVER),
-            (paint::SIDEBAR_SELECTED, SIDEBAR_SELECTED),
             (paint::BLOCK, BLOCK),
             (paint::FIELD, FIELD),
             (paint::RAISED, RAISED),
@@ -3642,8 +3752,10 @@ mod tests {
         assert_eq!(paint::WINDOW, paint::CARD);
         assert_eq!(paint::PANEL, paint::FRAME);
         assert_eq!(FRAME, CARD, "one plane");
-        // The sidebar sits a step over the plane; its rows step up from it.
-        assert!(CARD < SIDEBAR && SIDEBAR < SIDEBAR_HOVER && SIDEBAR_HOVER < SIDEBAR_SELECTED);
+        // The sidebar sits below the plane, black; its rows step up from
+        // it in alpha fills, the shown one over the hovered.
+        assert!(SIDEBAR < CARD);
+        assert!(over(NAV_CARD_HOVER, SIDEBAR) < over(NAV_CARD_ACTIVE, SIDEBAR));
         assert_eq!(paint::PRESS, paint::SELECTION_HOVER);
         // Hover is one equal step on every ground (rule 3).
         for ground in [CARD, FRAME, BLOCK, FLOAT] {

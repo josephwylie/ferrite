@@ -24,9 +24,13 @@
 //! | dialog | [`DIALOG_IN`] / [`DIALOG_OUT`] 200ms quart, 0.98 ↔ 1 | the Settings and Project sheets, in ([`dialog_in`]) and out ([`dialog_out`]), over their veil fading both ways over [`VEIL`] ([`veil_in`], [`veil_out`]) |
 //! | palette | [`DIALOG_IN`] in from its top, [`PALETTE_OUT`] 120ms out | the palette and the shortcuts sheet ([`dialog_in_casting`], [`float_out`]), their veil fading over [`PALETTE_VEIL`] 50ms both ways |
 //! | tooltip | [`TOOLTIP_IN`] 120ms ease-snap, 0.98 → 1 | every tooltip (`menu::tooltip`, [`tooltip_in`]) after gpui's 300ms delay; the next one within 200ms shows at once, with no entrance. No exit: gpui drops a tooltip on its frame |
+//! | nav tooltip | [`NAV_TOOLTIP_IN`] 150ms standard, 0.98 → 1 | the nav's tooltips (`menu::nav_tooltip`, `nav::NavTooltip`), T3's: 12px, after 150ms, the next within 400ms at once; scrolling the list dismisses one. No exit, as above |
+//! | nav list | [`NAV_LIST`] 150ms `ease-out`, ±40px | the nav's rows (`nav::flip::ListMotion`, T3's `Sidebar.motion.ts`): a row that moves slides from its old top, one that enters fades in from 40px above (or rides the moved row above it), one that leaves is drawn as a ghost fading 40px down; a move cut short carries on from where it is. Never on first paint, a shelf toggle, a drag, reduced motion, or an update fading more than 40 rows |
+//! | shelf fold | none | a nav shelf (Working, Snoozed, Parked) opens and shuts at once; only its chevron turns, over [`SHELF_CHEVRON`] 150ms standard |
+//! | slim row action | [`SLIM_ACTION`] 150ms standard | under the pointer a slim row's time fades out and its Revive or Wake fades in; its badge comes up from 40% greyscale |
+//! | undo notice | [`UNDO_NOTICE`] 200ms Tailwind `ease-out` | the foot's `Parked, Undo ⌘Z` fades in, and out before it goes |
 //! | sidebar (cmd-B) | none | the column snaps between its width and the rail: no ride, no fade, no per-frame relayout of the board |
 //! | nav card recede | [`RECEDE`] 150ms standard, opacity only | a receded working Thread card (70%) comes up to full under the pointer or the nav's keyboard cursor and goes back as it leaves; its fill and its hover strip snap; reduced motion snaps it too |
-//! | nav folds | [`FOLD`] 150ms `ease-out`, height and opacity | a Project section, a Group's members and Pinned open and shut ([`fold_body`], one [`Reveal`] per fold); only the nav part redraws |
 //! | right panel | none | the Panel (`cockpit/panel.rs`) snaps open and shut and between its own width and a preview's, as Claude's does |
 //! | (Ferrite's) slot slide | [`SLOT_OPEN`] 240ms / [`SLOT_CLOSE`] 200ms, [`EASE_SNAP`] | the Review beside its Pane, in the reader slot (`cockpit/beside.rs`): a [`Reveal`] on its split's share (`Tree::reveal`) slides it in from its far edge while the Pane narrows, every frame, its content laid out at its resting size and clipped so it never re-wraps; closing slides it out, a little quicker, and only then is the slot removed; a flip mid-slide turns around; a seam drag lands it |
 //! | zoom | [`IMAGE_ZOOM`] 240ms | the image viewer's zoom (`image_viewer.rs`): a click between fit and actual size and ⌘= ⌘- ⌘0 ease the picture's scale with an interruptible [`Tween`] on its logarithm, the point under the pointer held still; a pinch and a pan follow the hand with no ease |
@@ -205,6 +209,7 @@ pub const EASE_OVERSHOOT: CubicBezier = CubicBezier::from_points(theme::MOTION_E
 pub const EASE_MORPH: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_MORPH);
 pub const EASE_OUT_CUBIC: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT_CUBIC);
 pub const LINEAR: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_LINEAR);
+pub const EASE_OUT_TW: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT_TW);
 
 // ---------------------------------------------------------------------------
 // The catalog
@@ -279,6 +284,15 @@ pub const VEIL: MotionSpec = spec(theme::MOTION_DIALOG_IN_MS, EASE_OUT_QUART);
 pub const PALETTE_OUT: MotionSpec = spec(theme::MOTION_PALETTE_OUT_MS, EASE_OUT_QUART);
 pub const PALETTE_VEIL: MotionSpec = spec(theme::MOTION_PALETTE_VEIL_MS, EASE_OUT_QUART);
 pub const TOOLTIP_IN: MotionSpec = spec(theme::MOTION_TOOLTIP_IN_MS, EASE_SNAP);
+pub const NAV_TOOLTIP_IN: MotionSpec = spec(theme::MOTION_NAV_TOOLTIP_MS, EASE_STANDARD);
+/// The nav list's FLIP: moves, entrances and ghost exits.
+pub const NAV_LIST: MotionSpec = spec(theme::MOTION_NAV_LIST_MS, EASE_OUT);
+/// A shelf header's chevron.
+pub const SHELF_CHEVRON: MotionSpec = spec(theme::MOTION_SHELF_CHEVRON_MS, EASE_STANDARD);
+/// A slim row's time giving way to its action, and its badge's colour.
+pub const SLIM_ACTION: MotionSpec = spec(theme::MOTION_SLIM_ACTION_MS, EASE_STANDARD);
+/// The foot's undo notice, in and out.
+pub const UNDO_NOTICE: MotionSpec = spec(theme::MOTION_UNDO_NOTICE_MS, EASE_OUT_TW);
 /// The approval card settling into place (`promote_in`).
 pub const PROMOTE_IN: MotionSpec = spec(theme::MOTION_PROMOTE_MS, EASE_OUT_CUBIC);
 /// The working line's label roll (`morph`).
@@ -657,9 +671,15 @@ pub fn tooltip_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
-    entrance(id, TOOLTIP_IN, element, |el, t| {
-        grown(el.opacity(t), t, FROM_TOP_LEFT)
-    })
+    tooltip_in_over(id, TOOLTIP_IN, element)
+}
+
+/// `tooltip_in` over `spec` (the nav's `NAV_TOOLTIP_IN`).
+pub fn tooltip_in_over<E>(id: impl Into<ElementId>, spec: MotionSpec, element: E) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    entrance(id, spec, element, |el, t| grown(el.opacity(t), t, FROM_TOP_LEFT))
 }
 
 /// A sheet's veil darkening in over `spec`: only its ground fades, so the

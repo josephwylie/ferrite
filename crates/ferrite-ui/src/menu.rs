@@ -454,6 +454,57 @@ pub fn tooltip_with_key(
     label: impl Into<SharedString>,
     key: Option<impl Into<SharedString>>,
 ) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
+    keyed_tooltip(label, key, TipFace::BOARD)
+}
+
+/// What a tooltip's face and entrance are: the board's (13px over
+/// `motion::TOOLTIP_IN`, a 200ms hand-off) or the nav's (T3's: 12px over
+/// `motion::NAV_TOOLTIP_IN`, a 400ms hand-off).
+#[derive(Clone, Copy)]
+struct TipFace {
+    size: f32,
+    line: f32,
+    entrance: crate::motion::MotionSpec,
+    handoff: std::time::Duration,
+}
+
+impl TipFace {
+    const BOARD: TipFace = TipFace {
+        size: FS_META,
+        line: LH_META,
+        entrance: crate::motion::TOOLTIP_IN,
+        handoff: gpui::TOOLTIP_HANDOFF,
+    };
+    const NAV: TipFace = TipFace {
+        size: FS_NAV_TOOLTIP,
+        line: LH_META,
+        entrance: crate::motion::NAV_TOOLTIP_IN,
+        handoff: std::time::Duration::from_millis(NAV_TOOLTIP_HANDOFF_MS),
+    };
+}
+
+/// The nav's tooltip (T3's `ui/tooltip.tsx`): `tooltip`'s float at 12px,
+/// fading and growing in over 150ms, the next one within 400ms there at
+/// once. The element opens it after 150ms (`nav::NavTooltip`).
+pub fn nav_tooltip(
+    text: impl Into<SharedString>,
+) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
+    keyed_tooltip(text, None::<SharedString>, TipFace::NAV)
+}
+
+/// `nav_tooltip` naming a bound action's key, as `action_tooltip` does.
+pub fn nav_action_tooltip(
+    label: impl Into<SharedString>,
+    action: &str,
+) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
+    keyed_tooltip(label, components::bound_chord(action), TipFace::NAV)
+}
+
+fn keyed_tooltip(
+    label: impl Into<SharedString>,
+    key: Option<impl Into<SharedString>>,
+    face: TipFace,
+) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
     let label = label.into();
     let key: Option<SharedString> = key.map(Into::into);
     move |window, cx| {
@@ -473,8 +524,8 @@ pub fn tooltip_with_key(
                 )
         })
         .font_family(FONT_UI)
-        .text_size(px(FS_META))
-        .line_height(px(LH_META))
+        .text_size(px(face.size))
+        .line_height(px(face.line))
         .px(px(TOOLTIP_PAD_X))
         .py(px(TOOLTIP_PAD_Y))
         .max_w(px(TOOLTIP_MAX_W))
@@ -482,7 +533,7 @@ pub fn tooltip_with_key(
         .border_color(paint::FLOAT_EDGE)
         .shadow(components::float_shadow())
         .build(window, cx);
-        entering(tip, window, cx)
+        entering_as(tip, face, window, cx)
     }
 }
 
@@ -534,13 +585,28 @@ pub fn tooltip_card(
 /// there at once. A tooltip has no exit: gpui drops it on the frame the
 /// pointer leaves.
 fn entering(tip: gpui::AnyView, window: &gpui::Window, cx: &mut gpui::App) -> gpui::AnyView {
-    let handoff = window.tooltip_shown_within(gpui::TOOLTIP_HANDOFF, cx);
-    cx.new(|_| Entering { tip, handoff }).into()
+    entering_as(tip, TipFace::BOARD, window, cx)
+}
+
+fn entering_as(
+    tip: gpui::AnyView,
+    face: TipFace,
+    window: &gpui::Window,
+    cx: &mut gpui::App,
+) -> gpui::AnyView {
+    let handoff = window.tooltip_shown_within(face.handoff, cx);
+    cx.new(|_| Entering {
+        tip,
+        handoff,
+        entrance: face.entrance,
+    })
+    .into()
 }
 
 struct Entering {
     tip: gpui::AnyView,
     handoff: bool,
+    entrance: crate::motion::MotionSpec,
 }
 
 impl gpui::Render for Entering {
@@ -553,7 +619,7 @@ impl gpui::Render for Entering {
         if self.handoff {
             tip.into_any_element()
         } else {
-            crate::motion::tooltip_in("tooltip-in", tip).into_any_element()
+            crate::motion::tooltip_in_over("tooltip-in", self.entrance, tip).into_any_element()
         }
     }
 }
