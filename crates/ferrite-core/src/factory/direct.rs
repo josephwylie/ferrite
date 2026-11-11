@@ -597,12 +597,19 @@ pub(super) fn follow(
                         Actor::Ferrite,
                         format!("Skipped {} for this task", next.name),
                     );
+                    // A skipped merge Step merged nothing: no merge result
+                    // to route on, and only a confirmed merge completes.
+                    if next.outcome_routes.is_some() {
+                        task.reason = Some(format!(
+                            "{} was skipped for this task, so nothing was merged: merge it \
+                             yourself, or redirect the task to {}.",
+                            next.name, next.name
+                        ));
+                        task.enter(Status::NeedsHuman, effects);
+                        return;
+                    }
                     from = Some(next.id.clone());
-                    // A skipped merge Step passes as if it merged.
-                    route = next
-                        .outcome_routes
-                        .as_ref()
-                        .map_or_else(|| next.on_finished.clone(), |by| by.merged.clone());
+                    route = next.on_finished.clone();
                     continue;
                 }
                 let next = next.clone();

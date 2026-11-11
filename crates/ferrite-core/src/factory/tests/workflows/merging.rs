@@ -673,3 +673,39 @@ fn seen_at(thread: ThreadId, busy: bool, turns: u64) -> BTreeMap<ThreadId, Seen>
         },
     )])
 }
+
+/// Spec: only a confirmed merge completes. A redirect that skips the
+/// merge Step leaves nothing merged, so the Task comes back to the
+/// operator instead of completing.
+#[test]
+fn skipping_the_merge_step_never_completes_the_task_as_merged() {
+    let mut factory = Factory::in_memory();
+    let (id, steps) = merging(&mut factory);
+    let task = task_id(start_on(&mut factory, Some(&id), Some("acme/widgets#12")));
+    factory.step(7, &BTreeMap::new());
+    started(&mut factory, &task, FIRST);
+    factory
+        .command(
+            Command::Redirect {
+                task: task.clone(),
+                direction: Override {
+                    to: steps[0].clone(),
+                    skip: vec![steps[1].clone()],
+                    then: ThenReturn::Routes,
+                    note: String::new(),
+                },
+            },
+            8,
+        )
+        .unwrap();
+    factory.step(9, &BTreeMap::new());
+    started(&mut factory, &task, SECOND);
+    let effects = finished(&mut factory, SECOND, "Built");
+
+    assert_eq!(status(&factory, &task), Status::NeedsHuman);
+    assert_eq!(notified(&effects), [Status::NeedsHuman]);
+    let the_task = the(&factory, &task);
+    assert!(!the_task.delivery.pr.as_ref().unwrap().merged);
+    let reason = the_task.reason.clone().unwrap_or_default();
+    assert!(reason.contains("nothing was merged"), "{reason}");
+}
