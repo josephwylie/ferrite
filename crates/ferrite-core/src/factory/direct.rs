@@ -268,7 +268,7 @@ pub(super) fn answer(
         now_ms,
     );
     task.reason = None;
-    task.enter(Status::Working, effects);
+    task.to_work(effects);
     task.worker = Some(asked.worker);
     task.watch.prompt = Some(super::answer_prompt(task, &asked.text, &text));
     Ok(Answer::Changed(true))

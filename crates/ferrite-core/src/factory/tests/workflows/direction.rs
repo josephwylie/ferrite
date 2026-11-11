@@ -560,9 +560,9 @@ fn rework_reaches_the_recipient_and_every_later_step() {
         Some(Destination::Step(steps[1].clone())),
     )
     .unwrap();
+    let effects = factory.step(21, &at(SECOND, false, 1));
     let held = the(&factory, &task);
     assert_eq!((held.status, held.worker), (Status::Working, Some(SECOND)));
-    let effects = factory.step(21, &at(SECOND, false, 1));
     let told = prompts(&effects);
     assert!(told[0].contains("Rename the flag"), "{}", told[0]);
     assert!(

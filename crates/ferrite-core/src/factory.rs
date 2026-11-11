@@ -983,6 +983,17 @@ impl Task {
         });
     }
 
+    /// Back to work: a Task already Working keeps its place; any other
+    /// waits its turn in Queued, its Worker and what it is to be told
+    /// kept, until the limit has room (the step lets it in).
+    fn to_work(&mut self, effects: &mut Vec<Effect>) {
+        let status = match self.status {
+            Status::Working => Status::Working,
+            _ => Status::Queued,
+        };
+        self.enter(status, effects);
+    }
+
     /// Move to `status`, telling the operator when it is one they hear of.
     fn enter(&mut self, status: Status, effects: &mut Vec<Effect>) {
         self.status = status;
@@ -1389,13 +1400,10 @@ impl State {
                 task.note(now_ms, Actor::Operator, "Resumed the task");
                 task.reason = None;
                 task.keeping.revived_ms = None;
-                match task.worker {
-                    Some(_) => {
-                        task.enter(Status::Working, effects);
-                        task.watch.prompt = Some(resume_prompt(task));
-                    }
-                    // It never had a Worker: the next step starts one.
-                    None => task.enter(Status::Queued, effects),
+                task.to_work(effects);
+                // With no Worker yet, the step starts one when it is let in.
+                if task.worker.is_some() {
+                    task.watch.prompt = Some(resume_prompt(task));
                 }
                 Ok(Answer::Changed(true))
             }
@@ -1475,6 +1483,48 @@ impl State {
         }
     }
 
+    /// Let Queued Tasks into Working, oldest first, while fewer than
+    /// `limit` work: a new one starts its Worker; one back to work keeps
+    /// its Worker, which is told what it was to be told.
+    fn admit(&mut self, now_ms: i64, limit: usize, effects: &mut Vec<Effect>) {
+        let mut working = self
+            .tasks
+            .iter()
+            .filter(|task| task.status == Status::Working)
+            .count();
+        for task in &mut self.tasks {
+            if task.status != Status::Queued || working >= limit {
+                continue;
+            }
+            working += 1;
+            if task.worker.is_some() {
+                let prompt = task.watch.prompt.take();
+                task.enter(Status::Working, effects);
+                task.watch.prompt = prompt;
+                continue;
+            }
+            match task.current_step().cloned() {
+                Some(step) => start_step(task, &step, now_ms, effects),
+                None => {
+                    task.note(
+                        now_ms,
+                        Actor::Ferrite,
+                        format!("Started an agent on {}", agent_label(&task.agent)),
+                    );
+                    effects.push(Effect::StartWorker {
+                        task: task.id.clone(),
+                        project: task.project,
+                        agent: task.agent.clone(),
+                        branch: task.branch.clone(),
+                        worktree: task.worktree.clone(),
+                        prompt: first_prompt(task),
+                    });
+                }
+            }
+            task.enter(Status::Working, effects);
+        }
+    }
+
     fn step(
         &mut self,
         now_ms: i64,
@@ -1483,37 +1533,9 @@ impl State {
         restarted: &std::collections::BTreeSet<ThreadId>,
         effects: &mut Vec<Effect>,
     ) {
-        let mut working = self
-            .tasks
-            .iter()
-            .filter(|task| task.status == Status::Working)
-            .count();
+        self.admit(now_ms, limit, effects);
         for task in &mut self.tasks {
             match task.status {
-                // The excess waits until a Task leaves Working.
-                Status::Queued if working >= limit => {}
-                Status::Queued => {
-                    working += 1;
-                    match task.current_step().cloned() {
-                        Some(step) => start_step(task, &step, now_ms, effects),
-                        None => {
-                            task.note(
-                                now_ms,
-                                Actor::Ferrite,
-                                format!("Started an agent on {}", agent_label(&task.agent)),
-                            );
-                            effects.push(Effect::StartWorker {
-                                task: task.id.clone(),
-                                project: task.project,
-                                agent: task.agent.clone(),
-                                branch: task.branch.clone(),
-                                worktree: task.worktree.clone(),
-                                prompt: first_prompt(task),
-                            });
-                        }
-                    }
-                    task.enter(Status::Working, effects);
-                }
                 Status::Working | Status::NeedsHuman => {
                     let Some(seen) = task.worker.and_then(|thread| workers.get(&thread)) else {
                         continue;
@@ -1561,7 +1583,7 @@ fn enter_step(
     task.reason = None;
     task.keeping.revived_ms = None;
     task.oversight.deciding = deciding;
-    task.enter(Status::Working, effects);
+    task.to_work(effects);
     let earlier = task
         .workers
         .iter()
@@ -1580,9 +1602,18 @@ fn enter_step(
         Some(old) => {
             effects.push(Effect::Park { thread: old });
             task.workers.retain(|each| each.step != step.id);
-            start_step(task, step, now_ms, effects);
+            begin_step(task, step, now_ms, effects);
         }
-        None => start_step(task, step, now_ms, effects),
+        None => begin_step(task, step, now_ms, effects),
+    }
+}
+
+/// A new Worker for `step` now, or, while the Task waits its turn, when
+/// the step lets it in.
+fn begin_step(task: &mut Task, step: &Step, now_ms: i64, effects: &mut Vec<Effect>) {
+    match task.status {
+        Status::Queued => task.worker = None,
+        _ => start_step(task, step, now_ms, effects),
     }
 }
 

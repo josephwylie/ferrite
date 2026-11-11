@@ -358,8 +358,8 @@ fn stop_interrupts_and_resume_continues() {
 
     let resume = || Command::Resume { task: task.clone() };
     factory.command(resume(), 8).unwrap();
-    assert_eq!(status(&factory, &task), Status::Working);
     assert_eq!(prompts(&factory.step(9, &seen(false, 1))).len(), 1);
+    assert_eq!(status(&factory, &task), Status::Working);
     assert_eq!(factory.command(resume(), 10), Ok(Answer::Changed(false)));
     assert!(
         factory.step(11, &seen(false, 1)).is_empty(),
@@ -511,3 +511,112 @@ fn the_board_counts_what_needs_the_operator() {
 
 mod recovery;
 mod workflows;
+
+const OTHER: ThreadId = ThreadId::new(41);
+
+fn both_at_rest(turns: u64) -> BTreeMap<ThreadId, Seen> {
+    [WORKER, OTHER]
+        .into_iter()
+        .map(|thread| {
+            (
+                thread,
+                Seen {
+                    busy: false,
+                    turns,
+                    decision: None,
+                    lost: false,
+                },
+            )
+        })
+        .collect()
+}
+
+fn prompted(effects: &[Effect], to: ThreadId) -> Vec<&str> {
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::Prompt { thread, text } if *thread == to => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Spec: the limit bounds Tasks in Working, however they get there. A
+/// resumed or answered Task waits its turn in Queued, keeping its Worker,
+/// and continues once a place is free.
+#[test]
+fn a_task_back_to_work_waits_its_turn_under_the_limit() {
+    let mut factory = Factory::in_memory();
+    factory.set_limit(1);
+    let first = working(&mut factory);
+    factory
+        .command(Command::Stop { task: first.clone() }, 4)
+        .unwrap();
+    factory.step(5, &both_at_rest(1));
+    let second = start(&mut factory, "Another");
+    factory.step(6, &both_at_rest(1));
+    factory
+        .command(
+            Command::WorkerStarted {
+                task: second.clone(),
+                thread: OTHER,
+                worktree: None,
+            },
+            7,
+        )
+        .unwrap();
+    factory.step(7, &both_at_rest(1));
+
+    factory
+        .command(Command::Resume { task: first.clone() }, 8)
+        .unwrap();
+    let effects = factory.step(9, &both_at_rest(1));
+    assert_eq!(status(&factory, &first), Status::Queued, "no place yet");
+    assert!(prompted(&effects, WORKER).is_empty(), "{effects:?}");
+    assert_eq!(factory.task(&first).unwrap().worker, Some(WORKER));
+
+    factory
+        .command(
+            Command::Ask {
+                worker: OTHER,
+                text: "Which branch?".into(),
+            },
+            10,
+        )
+        .unwrap();
+    let effects = factory.step(11, &both_at_rest(1));
+    assert_eq!(status(&factory, &first), Status::Working, "released");
+    assert_eq!(prompted(&effects, WORKER).len(), 1, "{effects:?}");
+    assert!(prompted(&effects, WORKER)[0].contains("resumed"));
+
+    factory
+        .command(
+            Command::AnswerQuestion {
+                task: second.clone(),
+                text: "main".into(),
+                question: None,
+            },
+            12,
+        )
+        .unwrap();
+    let effects = factory.step(13, &both_at_rest(1));
+    assert_eq!(status(&factory, &second), Status::Queued, "answered, it waits");
+    assert!(prompted(&effects, OTHER).is_empty(), "{effects:?}");
+
+    factory
+        .command(
+            Command::Report {
+                worker: WORKER,
+                outcome: Outcome::Finished {
+                    summary: "Done".into(),
+                },
+            },
+            14,
+        )
+        .unwrap();
+    let effects = factory.step(15, &both_at_rest(1));
+    assert_eq!(status(&factory, &second), Status::Working);
+    let told = prompted(&effects, OTHER);
+    assert_eq!(told.len(), 1, "{effects:?}");
+    assert!(told[0].contains("Their answer: main"), "{told:?}");
+}
