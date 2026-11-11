@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::pr::{MergeOutcome, MergeRoutes};
+use super::starts::{Automation, Start};
 use super::Agent;
 use crate::store::Provider;
 use crate::workspace::registry::ProjectId;
@@ -141,6 +142,9 @@ impl Step {
 pub struct Definition {
     pub name: String,
     pub steps: Vec<Step>,
+    /// How its Tasks start (#225); manually when absent.
+    #[serde(default, skip_serializing_if = "Start::is_default")]
+    pub start: Start,
     #[serde(default, skip_serializing_if = "Approval::is_default")]
     pub approval: Approval,
 }
@@ -264,6 +268,10 @@ pub struct Workflow {
     pub versions: Vec<Version>,
     /// The next Step's number.
     pub next_step: u64,
+    /// Its automatic starts' switch and memory (#225), apart from the
+    /// draft and its versions: saving never turns them on.
+    #[serde(default, skip_serializing_if = "Automation::is_default")]
+    pub automation: Automation,
 }
 
 impl Workflow {
@@ -337,6 +345,7 @@ pub(super) fn from_template(template: Template, workflow: &mut Workflow, agent: 
                 name: "Untitled workflow".into(),
                 steps: vec![only],
                 approval: Approval::default(),
+                start: Start::default(),
             }
         }
         Template::IssueToReviewedPr => {
@@ -398,6 +407,7 @@ pub(super) fn from_template(template: Template, workflow: &mut Workflow, agent: 
                     ..Approval::default()
                 },
                 steps: vec![triage, explore, implement, review, merge, resolve],
+                start: Start::default(),
             }
         }
     };
@@ -796,6 +806,9 @@ impl Definition {
                     );
                 }
             }
+        }
+        for message in self.start.problems() {
+            add(None, message);
         }
         problems.extend(self.approval_problems());
         if !self.steps.is_empty() && self.completion_paths().is_empty() {

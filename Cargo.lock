@@ -2106,6 +2106,7 @@ dependencies = [
  "chrono",
  "dunce",
  "ferrite-reviewr",
+ "iana-time-zone",
  "libc",
  "schemars",
  "serde",

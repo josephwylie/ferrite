@@ -57,6 +57,7 @@ const HEAD_2: &str = "2222222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 #[test]
 fn a_task_takes_its_pr_at_start_as_a_reference_or_a_url() {
     let mut factory = Factory::in_memory();
+    factory.set_limit(10);
     let (id, _) = saved(&mut factory, &[("Build", "Build it")]);
     for given in [
         "acme/widgets#12",

@@ -280,6 +280,20 @@ who decides (`human` or `agent`; an agent needs a deciding Step and
 instructions), what follows approval (`complete` or `step:<id>`) and where
 rework goes (`step:<id>` or `coordinator`).
 
+A Workflow's Tasks can start without the user: on a schedule, from a
+GitHub issue or pull request, or from the user's own script. The start is
+part of the draft (`workflow start`, then save); automatic starts are a
+separate switch that saving never turns on. Turn it on, pause or resume
+it only when the user asks. A script submits Tasks with an identity of
+its own: the same identity again returns the Task it already started.
+
+```bash
+"$F" workflow start w-1 '{"type":"github_issue","github":{"repository":"acme/app","trigger":"labelled","label":"ready-for-agent"}}'
+"$F" workflow automation w-1 on
+"$F" workflow backlog w-1 false
+"$F" task submit w-1 JIRA-12 "Fix the CSV export"
+```
+
 If you are a Worker, report your Task's outcome with one command when you
 are done; your Task is known from your environment, and your outcome is
 read only from it:

@@ -798,6 +798,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         results: Vec::new(),
                         workers: Vec::new(),
                         oversight: Default::default(),
+                        source: None,
                         delivery: Default::default(),
                     }],
                     workflows: Vec::new(),
@@ -919,6 +920,108 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
+            "command_workflow_edit_start",
+            command(
+                23,
+                Op::Workflow {
+                    action: WorkflowAction::EditStart {
+                        workflow: "w-1".into(),
+                        start: crate::factory::Start {
+                            kind: crate::factory::StartKind::Schedule,
+                            schedule: crate::factory::Schedule {
+                                recurrence: crate::factory::Recurrence::Weekdays,
+                                time: Some("09:00".into()),
+                                instructions: "Triage new issues".into(),
+                                missed: crate::factory::Missed::RunOnce,
+                                overlap: crate::factory::Overlap::Queue,
+                                ..Default::default()
+                            },
+                            github: crate::factory::GitHubSource {
+                                repository: Some("acme/app".into()),
+                                ..Default::default()
+                            },
+                        },
+                    },
+                },
+            ),
+        ),
+        (
+            "command_workflow_automation",
+            command(
+                24,
+                Op::Workflow {
+                    action: WorkflowAction::Automation {
+                        workflow: "w-1".into(),
+                        turn: crate::factory::Turn::Pause,
+                    },
+                },
+            ),
+        ),
+        (
+            "command_workflow_backlog",
+            command(
+                25,
+                Op::Workflow {
+                    action: WorkflowAction::Backlog {
+                        workflow: "w-1".into(),
+                        take: true,
+                    },
+                },
+            ),
+        ),
+        (
+            "command_github_labels",
+            command(
+                26,
+                Op::GitHub {
+                    ask: crate::protocol::GitHubAsk::Labels {
+                        repository: "acme/app".into(),
+                    },
+                },
+            ),
+        ),
+        (
+            "reply_names",
+            Sample::Server(ServerMessage::Reply {
+                id: 26,
+                ok: Some(Done::Names {
+                    names: vec!["bug".into(), "ready-for-agent".into()],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "factory_automation",
+            Sample::Server(ServerMessage::Factory {
+                revision: 5,
+                board: serde_json::from_value(serde_json::json!({
+                    "tasks": [{
+                        "id": "t-2", "project": 3, "title": "Login fails",
+                        "instructions": "Login fails\n\nGitHub issue: https://github.com/acme/app/issues/7",
+                        "status": "queued", "agent": { "provider": "claude" },
+                        "branch": "factory/t-2", "activity": [], "created_ms": 1_700_000_000_000_i64,
+                        "request": "https://github.com/acme/app/issues/7",
+                        "source": {
+                            "kind": "issue", "repository": "acme/app", "number": 7,
+                            "url": "https://github.com/acme/app/issues/7",
+                        },
+                    }],
+                    "workflows": [{
+                        "id": "w-1", "project": 3, "next_step": 2,
+                        "draft": { "name": "Intake", "steps": [], "start": {
+                            "type": "github_issue",
+                            "github": { "repository": "acme/app", "trigger": "opened" },
+                        }},
+                        "automation": {
+                            "switch": "on", "error": "gh: HTTP 502", "primed": true,
+                            "seen": ["https://github.com/acme/app/issues/7"],
+                        },
+                    }],
+                }))
+                .unwrap(),
+            }),
+        ),
+        (
             "factory_workflows",
             Sample::Server(ServerMessage::Factory {
                 revision: 4,
@@ -945,9 +1048,11 @@ fn samples() -> Vec<(&'static str, Sample)> {
                                 outcome_routes: None,
                             }],
                             approval: Default::default(),
+                            start: Default::default(),
                         },
                         versions: Vec::new(),
                         next_step: 2,
+                        automation: Default::default(),
                     }],
                 },
             }),

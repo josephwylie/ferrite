@@ -725,6 +725,17 @@ impl Remote {
         })
     }
 
+    /// What a GitHub start's picker lists (#225).
+    pub(crate) fn github_names(
+        &mut self,
+        ask: crate::protocol::GitHubAsk,
+    ) -> io::Result<Receiver<io::Result<Vec<String>>>> {
+        self.ask(Op::GitHub { ask }, |done| match done {
+            Done::Names { names } => Some(names),
+            _ => None,
+        })
+    }
+
     /// Send `op` and answer its reply later, as `read` makes of it.
     fn ask<T: Send + 'static>(
         &mut self,

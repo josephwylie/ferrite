@@ -32,6 +32,7 @@ mod bridge;
 mod browser;
 mod calls;
 mod factory;
+pub mod github;
 mod render;
 mod signals;
 
@@ -375,6 +376,13 @@ struct Server {
     told_factory: Option<u64>,
     /// What a one-off Task's Worker runs on: the operator's defaults.
     factory_agent: crate::factory::Agent,
+    /// What the Factory's GitHub starts are read through (#225): the
+    /// operator's `gh`, or a test's scripted reader.
+    github: Arc<dyn github::GitHub>,
+    /// GitHub reads still out.
+    github_reads: Vec<github::Reading>,
+    /// The Factory's wall clock, in milliseconds: a test passes its own.
+    clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
 impl Server {
@@ -423,6 +431,9 @@ impl Server {
             factory,
             told_factory: None,
             factory_agent: factory::default_agent(&Settings::default()),
+            github: Arc::new(github::Gh),
+            github_reads: Vec::new(),
+            clock: Arc::new(factory::now_ms),
         }
     }
 
@@ -943,6 +954,12 @@ impl Server {
             }
             Op::Task { action } => self.task_command(action),
             Op::Workflow { action } => self.workflow_command(action),
+            Op::GitHub { ask } => {
+                let github = Arc::clone(&self.github);
+                let ask = ask.clone();
+                self.read_off_pump(id, request, move || github::list(&*github, &ask));
+                return;
+            }
             Op::Restart { when } => match self.successor() {
                 Ok(_) => {
                     self.restarting = Some(*when);
@@ -1009,6 +1026,7 @@ impl Server {
         self.default_provider = settings.default_provider;
         self.forge = settings.forge_hosts.review_config();
         self.factory_agent = factory::default_agent(settings);
+        self.factory.set_limit(settings.factory_tasks_at_once);
     }
 
     /// A first send that settled answers the command that started it.

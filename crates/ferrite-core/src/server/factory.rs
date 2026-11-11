@@ -13,7 +13,8 @@ use serde_json::{json, Value};
 use super::Server;
 use crate::api::schema::{
     AgentPromptParams, ReportOutcomeParams, ReportQuestionParams, ReportedOutcome, TaskListParams,
-    TaskParams, TaskRedirectParams, TaskReworkParams, TaskStartParams, WorkflowCreateParams,
+    TaskParams, TaskRedirectParams, TaskReworkParams, TaskStartParams, TaskSubmitParams,
+    WorkflowCreateParams,
 };
 use crate::api::{ApiError, Code};
 use crate::engine::{Launch, ProviderChoice};
@@ -25,7 +26,7 @@ use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
 use crate::{Attention, ThreadId, ThreadOwner};
 
 /// Wall-clock milliseconds, as the Factory's activity is stamped.
-fn now_ms() -> i64 {
+pub(super) fn now_ms() -> i64 {
     crate::clock::now().timestamp_millis()
 }
 
@@ -80,15 +81,25 @@ pub(super) fn default_agent(settings: &Settings) -> Agent {
 }
 
 impl Server {
+    /// The Factory's time now.
+    fn now_ms(&self) -> i64 {
+        (self.clock)()
+    }
+
     /// One pass of the Factory, and its effects carried out. What a
     /// deleted Task's worktree removal left behind is said back.
     pub(super) fn step_factory(&mut self) -> Vec<String> {
         let mut kept = Vec::new();
+        for heard in self.github_answers() {
+            if let Err(refusal) = self.factory.command(heard, self.now_ms()) {
+                crate::log!("server: the Factory did not take a GitHub read: {refusal}");
+            }
+        }
         // Carrying out an effect may answer with a command (a Worker
         // started), whose effects the next round carries out.
         for _ in 0..4 {
             let workers = self.factory_workers();
-            let effects = self.factory.step(now_ms(), &workers);
+            let effects = self.factory.step(self.now_ms(), &workers);
             if effects.is_empty() {
                 break;
             }
@@ -136,7 +147,7 @@ impl Server {
 
     /// One command, and at once what it set off.
     fn factory_command(&mut self, command: Command) -> Result<(Answer, Vec<String>), ApiError> {
-        let answer = self.factory.command(command, now_ms())?;
+        let answer = self.factory.command(command, self.now_ms())?;
         let kept = self.step_factory();
         Ok((answer, kept))
     }
@@ -160,7 +171,7 @@ impl Server {
                         },
                         Err(why) => Command::WorkerFailed { task, why },
                     };
-                if let Err(refusal) = self.factory.command(command, now_ms()) {
+                if let Err(refusal) = self.factory.command(command, self.now_ms()) {
                     crate::log!("server: the Factory did not take a Worker's start: {refusal}");
                 }
             }
@@ -194,6 +205,11 @@ impl Server {
                 }
             }
             Effect::RemoveWorktree { path } => return self.remove_task_worktree(&path),
+            Effect::ReadGitHub {
+                workflow,
+                version,
+                query,
+            } => self.read_github(workflow, version, query),
             Effect::Tidy { task, path } => {
                 let kept = self.remove_task_worktree(&path);
                 let tidied = Command::WorktreeTidied { task, kept };
@@ -536,6 +552,38 @@ impl Server {
             _ => 0,
         };
         self.api_workflow_answer(&workflow, Some(("version", json!(version))))
+    }
+
+    /// An automatic starts' command from the API, answered with the
+    /// Workflow and whether it changed.
+    pub(super) fn api_automate(&mut self, command: Command) -> Result<Value, ApiError> {
+        let workflow = match &command {
+            Command::EditStart { workflow, .. }
+            | Command::Automation { workflow, .. }
+            | Command::Backlog { workflow, .. } => workflow.clone(),
+            _ => unreachable!("only the automatic starts' commands"),
+        };
+        let (answer, _) = self.factory_command(command)?;
+        let changed = answer == Answer::Changed(true);
+        self.api_workflow_answer(&workflow, Some(("changed", json!(changed))))
+    }
+
+    /// A script's submission: its Task, new or the one its identity
+    /// already started.
+    pub(super) fn api_task_submit(&mut self, params: TaskSubmitParams) -> Result<Value, ApiError> {
+        let before = self.factory.board().tasks.len();
+        let submit = Command::Submit {
+            workflow: params.workflow,
+            identity: params.identity,
+            instructions: params.instructions,
+        };
+        match self.factory_command(submit)? {
+            (Answer::Task(task), _) => {
+                let duplicate = self.factory.board().tasks.len() == before;
+                Ok(json!({ "task": self.task_json(&task)?, "duplicate": duplicate }))
+            }
+            _ => Err(ApiError::new(Code::Failed, "no Task was made")),
+        }
     }
 
     /// The Project named, or the one holding `cwd`.

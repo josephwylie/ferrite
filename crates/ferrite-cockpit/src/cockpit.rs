@@ -26,6 +26,7 @@ mod parts;
 mod server;
 mod side_chat;
 mod snooze;
+pub(crate) mod starts;
 pub(crate) mod subagents;
 pub(crate) mod tools;
 mod transcript_glue;
@@ -4768,6 +4769,21 @@ impl CockpitView {
                 }
             },
         )];
+        let at_once = settings.factory_tasks_at_once;
+        let factory = vec![settings::stepper(
+            "settings-factory-limit",
+            "Tasks working at once",
+            "In each Server's Factory · the rest wait in Queued",
+            at_once.to_string().into(),
+            at_once > 1,
+            at_once < starts::MOST_AT_ONCE,
+            {
+                let view = cx.entity().downgrade();
+                move |delta, cx| {
+                    let _ = view.update(cx, |view, cx| view.step_factory_limit(delta, cx));
+                }
+            },
+        )];
         let sounds = vec![
             settings::toggle(
                 "settings-sounds",
@@ -4898,6 +4914,7 @@ impl CockpitView {
                 vec![
                     settings::Group::new(Some("Reading")).rows(reading),
                     settings::Group::new(Some("Threads and navigation")).rows(behaviour),
+                    settings::Group::new(Some("Factory")).rows(factory),
                 ],
             ),
             settings::page(

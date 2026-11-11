@@ -31,12 +31,18 @@ use crate::ThreadId;
 
 mod direct;
 mod pr;
+mod starts;
 mod workflow;
 
 pub use direct::{Answered, Feedback, FeedbackKind, Override, Oversight, Question, ThenReturn};
 pub use pr::{
     evidence_line, short, Delivery, Evidence, EvidenceKind, MergeOutcome, MergeRoutes, PullRequest,
     Revision,
+};
+pub use starts::{when_label, zone_label};
+pub use starts::{
+    Automation, GitHubItem, GitHubQuery, GitHubRead, GitHubSource, Missed, Overlap, Recurrence,
+    Schedule, Source, Start, StartKind, Switch, Trigger, Turn, INTERVAL_HOURS, POLL_MS, WEEKDAYS,
 };
 pub use workflow::{
     Approval, ApprovalChange, Approver, Catalog, Definition, Destination, Problem, Resolved,
@@ -50,6 +56,9 @@ pub type TaskId = String;
 /// Where the Factory keeps itself in the Store's directory.
 pub const FILE_NAME: &str = "factory.json";
 const SCHEMA_VERSION: u32 = 1;
+
+/// How many Tasks work at once unless Settings say otherwise.
+pub const DEFAULT_LIMIT: usize = 3;
 
 /// How long a Worker prompted to report may stay at rest without working
 /// again before its Task needs the operator.
@@ -199,6 +208,9 @@ pub struct Task {
     /// Questions, answers, feedback, approval and this Task's direction.
     #[serde(flatten)]
     pub oversight: Oversight,
+    /// What started it without the operator (#225), if anything did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Source>,
     /// Its pull request, evidence and worktree's fate (#223).
     #[serde(flatten)]
     pub delivery: Delivery,
@@ -437,6 +449,35 @@ pub enum Command {
         workflow: WorkflowId,
         change: ApprovalChange,
     },
+    /// Set how a Workflow's draft starts its Tasks (#225).
+    EditStart {
+        workflow: WorkflowId,
+        start: Start,
+    },
+    /// Turn a Workflow's automatic starts on, pause, resume or off.
+    Automation {
+        workflow: WorkflowId,
+        turn: Turn,
+    },
+    /// Whether to take what already matched when a GitHub start was
+    /// turned on; otherwise it is passed over.
+    Backlog {
+        workflow: WorkflowId,
+        take: bool,
+    },
+    /// What a [`Effect::ReadGitHub`] found, or why it failed.
+    GitHubRead {
+        workflow: WorkflowId,
+        version: u32,
+        result: Result<GitHubRead, String>,
+    },
+    /// A script's Task for a Workflow that starts from one: a repeated
+    /// `identity` is the Task it already started.
+    Submit {
+        workflow: WorkflowId,
+        identity: String,
+        instructions: String,
+    },
     /// A Worker reports its Task's PR head (and which PR, the first
     /// time), known by its own Thread.
     ReportRevision {
@@ -558,6 +599,13 @@ pub enum Effect {
         status: Status,
         title: String,
     },
+    /// Read a GitHub start's matches with the operator's `gh`, off the
+    /// pump; answered with [`Command::GitHubRead`].
+    ReadGitHub {
+        workflow: WorkflowId,
+        version: u32,
+        query: GitHubQuery,
+    },
 }
 
 /// What is written.
@@ -585,6 +633,10 @@ pub struct Factory {
     revision: u64,
     /// Effects decided by commands, handed out by the next step.
     pending: Vec<Effect>,
+    /// How many Tasks may be Working at once (Settings; 3 by default).
+    limit: usize,
+    /// Each GitHub start's reads, kept only while the Server runs.
+    polls: BTreeMap<WorkflowId, starts::Poll>,
 }
 
 impl Factory {
@@ -600,6 +652,8 @@ impl Factory {
             path: None,
             revision: 0,
             pending: Vec::new(),
+            limit: DEFAULT_LIMIT,
+            polls: BTreeMap::new(),
         }
     }
 
@@ -628,6 +682,7 @@ impl Factory {
 
     /// One change, whoever asks. Its effects come out of the next step.
     pub fn command(&mut self, command: Command, now_ms: i64) -> Result<Answer, Refusal> {
+        self.heard(&command);
         self.change(|state, effects| state.command(command, now_ms, effects))
     }
 
@@ -637,10 +692,13 @@ impl Factory {
     pub fn step(&mut self, now_ms: i64, workers: &BTreeMap<ThreadId, Seen>) -> Vec<Effect> {
         // A step that cannot be written decides nothing; the next pass
         // tries again.
+        let limit = self.limit;
         let _ = self.change(|state, effects| {
-            state.step(now_ms, workers, effects);
+            state.step_starts(now_ms, effects);
+            state.step(now_ms, workers, limit, effects);
             Ok(())
         });
+        self.poll(now_ms);
         std::mem::take(&mut self.pending)
     }
 
@@ -687,6 +745,16 @@ impl Factory {
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// How many Tasks may be Working at once.
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+
+    /// Set from Settings; at least one.
+    pub fn set_limit(&mut self, limit: usize) {
+        self.limit = limit.max(1);
     }
 
     pub fn task(&self, id: &str) -> Option<&Task> {
@@ -807,9 +875,11 @@ impl State {
                         name: String::new(),
                         steps: Vec::new(),
                         approval: Approval::default(),
+                        start: Start::default(),
                     },
                     versions: Vec::new(),
                     next_step: 1,
+                    automation: Automation::default(),
                 };
                 workflow::from_template(template, &mut made, &agent);
                 self.workflows.push(made);
@@ -895,6 +965,14 @@ impl State {
                 }
                 if !made.unsaved() {
                     return Ok(Answer::Version(made.latest().map_or(0, |v| v.version)));
+                }
+                // A new start is a new setup: it is never live until the
+                // operator turns it on.
+                if made
+                    .latest()
+                    .is_some_and(|latest| latest.definition.start != made.draft.start)
+                {
+                    made.automation.turn_off();
                 }
                 let version = made.latest().map_or(1, |latest| latest.version + 1);
                 made.versions.push(Version {
@@ -996,6 +1074,7 @@ impl State {
                     results: Vec::new(),
                     workers: Vec::new(),
                     oversight: Oversight::default(),
+                    source: None,
                     delivery: Delivery {
                         pr,
                         ..Delivery::default()
@@ -1143,6 +1222,11 @@ impl State {
                 }
                 Ok(Answer::Changed(true))
             }
+            Command::EditStart { .. }
+            | Command::Automation { .. }
+            | Command::Backlog { .. }
+            | Command::GitHubRead { .. }
+            | Command::Submit { .. } => self.automate(command, now_ms, effects),
             Command::Delete { task } => {
                 let at = self
                     .tasks
@@ -1207,10 +1291,24 @@ impl State {
         }
     }
 
-    fn step(&mut self, now_ms: i64, workers: &BTreeMap<ThreadId, Seen>, effects: &mut Vec<Effect>) {
+    fn step(
+        &mut self,
+        now_ms: i64,
+        workers: &BTreeMap<ThreadId, Seen>,
+        limit: usize,
+        effects: &mut Vec<Effect>,
+    ) {
+        let mut working = self
+            .tasks
+            .iter()
+            .filter(|task| task.status == Status::Working)
+            .count();
         for task in &mut self.tasks {
             match task.status {
+                // The excess waits until a Task leaves Working.
+                Status::Queued if working >= limit => {}
                 Status::Queued => {
+                    working += 1;
                     match task.current_step().cloned() {
                         Some(step) => start_step(task, &step, now_ms, effects),
                         None => {
@@ -1403,6 +1501,9 @@ pub fn workflow_command(
         WorkflowAction::EditApproval { workflow, change } => {
             Command::EditApproval { workflow, change }
         }
+        WorkflowAction::EditStart { workflow, start } => Command::EditStart { workflow, start },
+        WorkflowAction::Automation { workflow, turn } => Command::Automation { workflow, turn },
+        WorkflowAction::Backlog { workflow, take } => Command::Backlog { workflow, take },
         WorkflowAction::Unknown => return None,
     })
 }

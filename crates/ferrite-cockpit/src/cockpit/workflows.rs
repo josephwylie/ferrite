@@ -43,6 +43,10 @@ pub(crate) enum Field {
     SkillSearch,
     /// Agent approval's decision instructions (#222).
     ApprovalInstructions(WorkflowId),
+    /// What each scheduled run's Task is told (#225).
+    ScheduleInstructions(WorkflowId),
+    /// A GitHub start's extra instructions for every Task.
+    ExtraInstructions(WorkflowId),
 }
 
 impl Field {
@@ -54,6 +58,8 @@ impl Field {
             Field::Instructions(..) => "inspector-instructions".into(),
             Field::SkillSearch => "skill-search".into(),
             Field::ApprovalInstructions(_) => "approval-instructions".into(),
+            Field::ScheduleInstructions(_) => "start-schedule-instructions".into(),
+            Field::ExtraInstructions(_) => "start-extra-instructions".into(),
         }
     }
 }
@@ -88,6 +94,8 @@ pub(crate) enum Pick {
     AfterApproval(Destination),
     /// Where the Workflow sends rework.
     ReworkGoesTo(Destination),
+    /// A "Tasks start" setting (#225).
+    Start(super::starts::StartPick),
 }
 
 /// Skills found installed for one Provider in the Project.
@@ -110,6 +118,10 @@ pub(crate) struct Workflows {
     pub(crate) skills: Vec<SkillsFound>,
     /// The inspector shows the approval settings, not a Step.
     pub(crate) approval: bool,
+    /// The inspector shows how Tasks start, not a Step (#225).
+    pub(crate) start_open: bool,
+    /// What the GitHub login lists for a GitHub start's pickers.
+    pub(crate) github: super::starts::GitHubLists,
 }
 
 impl Workflows {
@@ -123,6 +135,8 @@ impl Workflows {
             skills_open: false,
             skills: Vec::new(),
             approval: false,
+            start_open: false,
+            github: Default::default(),
         }
     }
 }
@@ -268,6 +282,7 @@ impl CockpitView {
             view.workflows.selected = Some(workflow);
             view.workflows.step = None;
             view.workflows.focused = None;
+            view.workflows.start_open = false;
         }
         self.ensure_fields(cx);
         cx.notify();
@@ -278,6 +293,7 @@ impl CockpitView {
             view.workflows.step = Some(step);
             view.workflows.focused = None;
             view.workflows.approval = false;
+            view.workflows.start_open = false;
         }
         self.ensure_fields(cx);
         cx.notify();
@@ -427,6 +443,7 @@ impl CockpitView {
                 ));
             }
         }
+        wanted.extend(self.start_fields());
         for (field, text) in wanted {
             let made = self
                 .factory_view
@@ -498,6 +515,10 @@ impl CockpitView {
                     ..Default::default()
                 },
             },
+            Field::ScheduleInstructions(_) | Field::ExtraInstructions(_) => {
+                self.start_field_edited(field, text, cx);
+                return;
+            }
         };
         self.workflow_ask(action, cx);
     }
@@ -577,6 +598,7 @@ impl CockpitView {
 
     /// A discovery that answered: its skills, for the picker and the check.
     pub(super) fn poll_factory_skills(&mut self, cx: &mut Context<Self>) {
+        self.poll_start_lists(cx);
         let Some(view) = self.factory_view.as_mut() else {
             return;
         };
@@ -811,6 +833,7 @@ impl CockpitView {
             }
             Pick::AddAfter(step) => self.add_step(Some(step), cx),
             Pick::Delete(step) => self.delete_step(step, cx),
+            Pick::Start(pick) => self.apply_start_pick(pick, cx),
             Pick::Process(workflow) => {
                 if let Some(sheet) = self
                     .factory_view
@@ -1300,10 +1323,12 @@ impl CockpitView {
         let Some(view) = self.factory_view.as_ref() else {
             return div().into_any_element();
         };
+        // While the start or the approval settings show, no Step's row
+        // is the chosen one.
         let shown = self
             .shown_step()
             .map(|step| step.id.clone())
-            .filter(|_| !view.workflows.approval);
+            .filter(|_| !view.workflows.approval && !self.start_shown());
         let name_field = Field::WorkflowName(workflow.id.clone());
         let mut outline = div()
             .id("outline")
@@ -1332,6 +1357,7 @@ impl CockpitView {
                 }),
             )
             .children(self.text_input(&name_field, "Workflow name", window, cx))
+            .child(self.start_outline_row(workflow, cx))
             .child(
                 div()
                     .flex()
@@ -1648,7 +1674,7 @@ impl CockpitView {
 
     /// One text field: its label over its Composer, ringed while it has
     /// the keyboard.
-    fn text_input(
+    pub(super) fn text_input(
         &self,
         field: &Field,
         label: &'static str,
@@ -1686,6 +1712,9 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         use ferrite_ui::theme::*;
+        if self.start_shown() {
+            return self.start_inspector(workflow, window, cx);
+        }
         if self
             .factory_view
             .as_ref()

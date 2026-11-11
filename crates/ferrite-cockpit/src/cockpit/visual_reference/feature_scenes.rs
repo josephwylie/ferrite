@@ -52,6 +52,9 @@ pub(super) const STATES: &[&str] = &[
     "terminal",
     "factory",
     "factory-workflows",
+    "factory-start-schedule",
+    "factory-start-github",
+    "factory-start-script",
 ];
 
 pub(super) fn handles(state: &str) -> bool {
@@ -97,6 +100,9 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "terminal" => tools("terminal", &[Tool::Terminal], None),
         "factory" => factory(),
         "factory-workflows" => factory_workflows(),
+        "factory-start-schedule" => factory_start(ferrite_core::factory::StartKind::Schedule),
+        "factory-start-github" => factory_start(ferrite_core::factory::StartKind::GithubIssue),
+        "factory-start-script" => factory_start(ferrite_core::factory::StartKind::External),
         _ => unreachable!("`handles` lists every state"),
     }
 }
@@ -963,6 +969,55 @@ fn factory_workflows() -> (Scene, Setup) {
         view.select_step("s-4".into(), cx);
         view.delete_step("s-3".into(), cx);
         view.select_step("s-4".into(), cx);
+    });
+    (scene, setup)
+}
+
+/// A saved Workflow's "Tasks start" settings for one source (#225): a
+/// weekday schedule, an issue start with its repository and label from
+/// the login, or a script's command, each with automatic starts on.
+fn factory_start(kind: ferrite_core::factory::StartKind) -> (Scene, Setup) {
+    use ferrite_core::factory::{GitHubSource, Recurrence, Schedule, Start, StartKind, Trigger};
+    let mut scene = Scene::new(match kind {
+        StartKind::Schedule => "factory-start-schedule",
+        StartKind::External => "factory-start-script",
+        _ => "factory-start-github",
+    });
+    let ferrite = scene.project("ferrite");
+    let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
+    let project = scene.core.project_id(mine).expect("a Project");
+    scene.core.focus_thread(mine);
+    scene.core.fixture_live_factory();
+    scene.core.fixture_github(vec![(
+        "acme/app".into(),
+        vec!["bug".into(), "ready-for-agent".into()],
+    )]);
+    let setup: Setup = Box::new(move |view, _, cx| {
+        view.open_factory(project, cx);
+        view.create_workflow(ferrite_core::factory::Template::IssueToReviewedPr, cx);
+        view.edit_start(
+            |start| {
+                *start = Start {
+                    kind,
+                    schedule: Schedule {
+                        recurrence: Recurrence::Weekdays,
+                        time: Some("09:00".into()),
+                        instructions: "Triage the issues opened since the last run".into(),
+                        ..Schedule::default()
+                    },
+                    github: GitHubSource {
+                        repository: Some("acme/app".into()),
+                        trigger: Trigger::Labelled,
+                        label: Some("ready-for-agent".into()),
+                        extra_instructions: "Open a pull request that closes the issue.".into(),
+                    },
+                }
+            },
+            cx,
+        );
+        view.save_workflow(cx);
+        view.open_start(cx);
+        view.turn_automation(ferrite_core::factory::Turn::On, cx);
     });
     (scene, setup)
 }

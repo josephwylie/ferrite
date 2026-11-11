@@ -358,6 +358,11 @@ pub enum Op {
     Workflow {
         action: WorkflowAction,
     },
+    /// What the operator's `gh` login lists for a GitHub start's pickers
+    /// (#225), read where the Server runs. Replied `names`.
+    GitHub {
+        ask: GitHubAsk,
+    },
     Notice {
         action: NoticeAction,
     },
@@ -555,6 +560,7 @@ impl Op {
             | Op::Project { .. }
             | Op::Task { .. }
             | Op::Workflow { .. }
+            | Op::GitHub { .. }
             | Op::Notice { .. }
             | Op::SettingsChanged
             | Op::CliReplaced { .. }
@@ -891,6 +897,35 @@ pub enum WorkflowAction {
     EditApproval {
         workflow: String,
         change: crate::factory::ApprovalChange,
+    },
+    /// How the draft's Tasks start (#225), whole.
+    EditStart {
+        workflow: String,
+        start: crate::factory::Start,
+    },
+    /// Turn automatic starts on, pause, resume or off.
+    Automation {
+        workflow: String,
+        turn: crate::factory::Turn,
+    },
+    /// Take what already matched when a GitHub start was turned on, or
+    /// pass it over.
+    Backlog {
+        workflow: String,
+        take: bool,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+/// What a GitHub start's pickers list (#225).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GitHubAsk {
+    /// Every repository the login reaches, `owner/name`.
+    Repositories,
+    Labels {
+        repository: String,
     },
     #[serde(other)]
     Unknown,
@@ -1391,6 +1426,10 @@ pub enum Done {
         bases: Vec<WireBase>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         picked: Option<String>,
+    },
+    /// What a `git_hub` ask listed: repositories or labels.
+    Names {
+        names: Vec<String>,
     },
     /// A `pull_request`'s reading: `gh pr view`'s JSON as `gh` printed it
     /// (`workspace::pr_view`), or none when `gh` had nothing to say — no

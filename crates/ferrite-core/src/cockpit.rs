@@ -102,6 +102,10 @@ pub struct Cockpit {
     /// What a fixture world's forge says (`fixture_forge`), by checkout:
     /// answered in place of its CLI. Empty outside fixtures.
     forge_fixture: HashMap<PathBuf, ferrite_reviewr::forge::PrView>,
+    /// What a fixture world's GitHub login lists (`fixture_github`): each
+    /// repository and its labels, in place of `gh`. `None` outside
+    /// fixtures.
+    github_fixture: Option<Vec<(String, Vec<String>)>>,
     /// What a fixture world's disk says is free (`fixture_free_disk`):
     /// answered in place of the volume. `None` outside fixtures.
     free_disk_fixture: Option<u64>,
@@ -240,6 +244,7 @@ impl Cockpit {
             composing: std::collections::BTreeSet::new(),
             forge: Default::default(),
             forge_fixture: HashMap::new(),
+            github_fixture: None,
             free_disk_fixture: None,
             drawn: None,
             told: None,
@@ -2082,6 +2087,39 @@ impl Cockpit {
         }
     }
 
+    /// What a GitHub start's picker lists, read by `gh` where the Server
+    /// runs (or here, when this window runs its agents itself).
+    pub fn github_names(
+        &mut self,
+        ask: crate::protocol::GitHubAsk,
+    ) -> io::Result<Receiver<io::Result<Vec<String>>>> {
+        use crate::protocol::GitHubAsk;
+        if let Some(world) = &self.github_fixture {
+            let names: Vec<String> = match &ask {
+                GitHubAsk::Repositories => world.iter().map(|(name, _)| name.clone()).collect(),
+                GitHubAsk::Labels { repository } => world
+                    .iter()
+                    .find(|(name, _)| name == repository)
+                    .map(|(_, labels)| labels.clone())
+                    .unwrap_or_default(),
+                GitHubAsk::Unknown => Vec::new(),
+            };
+            return Ok(read_here(move || Ok(names)));
+        }
+        match &mut self.link {
+            Link::Server(server) => server.github_names(ask),
+            Link::InProcess(_) => Ok(read_here(move || {
+                use crate::server::github::GitHub;
+                let gh = crate::server::github::Gh;
+                match ask {
+                    GitHubAsk::Repositories => gh.repositories(),
+                    GitHubAsk::Labels { repository } => gh.labels(&repository),
+                    GitHubAsk::Unknown => Ok(Vec::new()),
+                }
+            })),
+        }
+    }
+
     pub fn control(&mut self, thread: ThreadId, action: crate::SessionControl) -> io::Result<()> {
         self.act(
             |engine| engine.control(thread, action.clone()),
@@ -2712,6 +2750,12 @@ impl Cockpit {
         self.forge_fixture.insert(path, view);
     }
 
+    /// A fixture world's GitHub login: the repositories it reaches and
+    /// each one's labels, answered in place of `gh` (#225).
+    pub fn fixture_github(&mut self, repositories: Vec<(String, Vec<String>)>) {
+        self.github_fixture = Some(repositories);
+    }
+
     /// Whether a fixture world's forge answers for the checkout at `path`:
     /// the one PR read tests and captures make, since they never run a CLI.
     pub fn has_forge_fixture(&self, path: &Path) -> bool {
@@ -2768,6 +2812,19 @@ impl Cockpit {
 
     pub fn fixture_task_asks(&self) -> &[crate::protocol::TaskAction] {
         self.task_asks.as_deref().unwrap_or_default()
+    }
+
+    /// A fixture world's Factory hears `command` as a Server's would
+    /// (a GitHub read's answer, say), and the window is told the board.
+    pub fn fixture_factory_command(&mut self, command: crate::factory::Command) {
+        let Some(factory) = self.local_factory.as_mut() else {
+            return;
+        };
+        if let Err(refusal) = factory.command(command, 0) {
+            crate::log!("fixture: the Factory refused: {refusal}");
+        }
+        let board = factory.board();
+        self.receive_fixture(ServerMessage::Factory { revision: 0, board });
     }
 
     /// A fixture world's Task alert, as a Server would say it.
