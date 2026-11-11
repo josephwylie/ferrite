@@ -4,7 +4,7 @@
 //! the input is dispatched to the window itself and the frames are drawn
 //! to an image, through gpui's test support (the `headless` feature).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -28,6 +28,9 @@ const TICK_MS: u64 = 16;
 /// drawn off-screen and driven only by the Server's `window.*` actions.
 /// It runs until it is stopped.
 pub fn run() {
+    // Never the operator's Store: a driven window on it would let any API
+    // caller type into their Threads and answer their Decisions.
+    throwaway("FERRITE_STORE", "");
     let settings_dir = ferrite_core::server::settings_dir();
     let store = ferrite_core::server::store_dir();
     ferrite_core::diagnostics::open(&settings_dir);
@@ -419,4 +422,30 @@ impl Driver {
 
 fn parse(keystroke: &str) -> Result<Keystroke, String> {
     Keystroke::parse(keystroke).map_err(|_| format!("`{keystroke}` is not a keystroke"))
+}
+
+fn temp_root() -> PathBuf {
+    std::env::temp_dir()
+        .canonicalize()
+        .unwrap_or_else(|_| std::env::temp_dir())
+}
+
+/// Refuses any path outside the temp directories: the operator's store
+/// and repos are never touched.
+pub(crate) fn throwaway(var: &str, default: &str) -> PathBuf {
+    let path = PathBuf::from(std::env::var(var).unwrap_or_else(|_| default.to_string()));
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+    let allowed = [
+        temp_root(),
+        PathBuf::from("/private/tmp"),
+        PathBuf::from("/tmp"),
+    ];
+    if !allowed.iter().any(|root| canonical.starts_with(root)) {
+        eprintln!(
+            "ferrite: {var} must be a throwaway path under the temp directory, not {}",
+            path.display()
+        );
+        std::process::exit(2);
+    }
+    canonical
 }

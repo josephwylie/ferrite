@@ -50,6 +50,10 @@ window.
   `driven`; a normal window is never handed an action. With none attached,
   the caller is refused `no_headless_window`. If the window goes before it
   answers, the caller is refused `failed`: the action may have happened.
+- **Only on a throwaway Store.** `--headless` refuses a `FERRITE_STORE`
+  outside the temp directory, the operator's included. A driven window on
+  their Server would let any API caller type into their Threads and answer
+  their Decisions.
 - `window.shot` names a path on the window's computer, and the window
   writes the PNG. Its answer carries the path, the size and the scale, not
   the image.
@@ -59,9 +63,8 @@ window.
 - An agent verifies a UI change by running `ferrite server` and
   `ferrite --headless` on a throwaway Store, then using the `ferrite window`
   commands, without disturbing the operator.
-- The headless window is the operator's production window, with its
-  settings. It chimes and posts notifications as that Store's settings
-  say; a throwaway Store's settings turn them off.
+- The headless window is the production window, with its throwaway
+  Store's settings. It chimes and posts notifications only as those say.
 - Each new kind of input is a `drive::Action` variant, an operation, and a
   case in `headless::act`.
 - A `debug_selector` is the stable handle for a click. An element without

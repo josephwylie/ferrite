@@ -250,37 +250,11 @@ fn running_tool(view: &CockpitView, thread: ThreadId) -> Option<Option<(u32, u32
         })
 }
 
-fn temp_root() -> PathBuf {
-    std::env::temp_dir()
-        .canonicalize()
-        .unwrap_or_else(|_| std::env::temp_dir())
-}
-
-/// Refuses any path outside the temp directories: the operator's store
-/// and repos are never touched.
-fn throwaway(var: &str, default: &str) -> PathBuf {
-    let path = PathBuf::from(std::env::var(var).unwrap_or_else(|_| default.to_string()));
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-    let allowed = [
-        temp_root(),
-        PathBuf::from("/private/tmp"),
-        PathBuf::from("/tmp"),
-    ];
-    if !allowed.iter().any(|root| canonical.starts_with(root)) {
-        eprintln!(
-            "ferrite: {var} must be a throwaway path under the temp directory, not {}",
-            path.display()
-        );
-        std::process::exit(2);
-    }
-    canonical
-}
-
 pub fn capture(output: String) {
     let out = PathBuf::from(output);
     std::fs::create_dir_all(&out).expect("create artifact directory");
-    let repo = throwaway("FERRITE_LIVE_REPO", "/tmp/ferrite-live/repo");
-    let store_dir = throwaway("FERRITE_STORE", "/tmp/ferrite-live/store");
+    let repo = crate::headless::throwaway("FERRITE_LIVE_REPO", "/tmp/ferrite-live/repo");
+    let store_dir = crate::headless::throwaway("FERRITE_STORE", "/tmp/ferrite-live/store");
     let settings_dir = store_dir
         .parent()
         .map(Path::to_path_buf)
