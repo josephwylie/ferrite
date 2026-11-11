@@ -1012,11 +1012,11 @@ impl TranscriptView {
             self.send_anchor = None;
             return;
         };
-        let worked = rows[at + 1..].iter().any(|row| {
-            matches!(
-                row.kind(),
-                RowKind::Activity | RowKind::Group | RowKind::Reasoning
-            )
+        // The running turn's trailing work folds into the live row.
+        let worked = rows[at + 1..].iter().any(|row| match row.kind() {
+            RowKind::Activity | RowKind::Group | RowKind::Reasoning => true,
+            RowKind::LiveTail => !row.blocks().is_empty(),
+            _ => false,
         });
         if worked {
             self.send_anchor = None;
