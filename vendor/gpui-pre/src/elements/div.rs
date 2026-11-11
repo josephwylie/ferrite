@@ -723,6 +723,12 @@ impl Interactivity {
         self.tooltip_show_delay = Some(delay);
     }
 
+    /// Ferrite's patch: within `handoff` of a tooltip drawn, this element's
+    /// shows at once (`TOOLTIP_HANDOFF` otherwise).
+    pub fn tooltip_handoff(&mut self, handoff: Duration) {
+        self.tooltip_handoff = Some(handoff);
+    }
+
     /// Block the mouse from all interactions with elements behind this element's hitbox. Typically
     /// `block_mouse_except_scroll` should be preferred.
     ///
@@ -1671,6 +1677,15 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self.interactivity().tooltip_show_delay(delay);
         self
     }
+
+    /// Ferrite's patch: the fluent [`Interactivity::tooltip_handoff`].
+    fn tooltip_handoff(mut self, handoff: Duration) -> Self
+    where
+        Self: Sized,
+    {
+        self.interactivity().tooltip_handoff(handoff);
+        self
+    }
 }
 
 pub(crate) type MouseDownListener =
@@ -2139,6 +2154,7 @@ pub struct Interactivity {
     pub(crate) hover_listener_mode: HoverListenerMode,
     pub(crate) tooltip_builder: Option<TooltipBuilder>,
     pub(crate) tooltip_show_delay: Option<Duration>,
+    pub(crate) tooltip_handoff: Option<Duration>,
     pub(crate) window_control: Option<WindowControlArea>,
     pub(crate) hitbox_behavior: HitboxBehavior,
     pub(crate) tab_index: Option<isize>,
@@ -3186,6 +3202,7 @@ impl Interactivity {
                     check_is_hovered,
                     check_is_hovered_during_prepaint,
                     self.tooltip_show_delay,
+                    self.tooltip_handoff,
                     window,
                 );
             }
@@ -3675,10 +3692,12 @@ pub(crate) fn register_tooltip_mouse_handlers(
     check_is_hovered: Rc<dyn Fn(&Window) -> bool>,
     check_is_hovered_during_prepaint: Rc<dyn Fn(&Window) -> bool>,
     show_delay: Option<Duration>,
+    handoff: Option<Duration>,
     window: &mut Window,
 ) {
     let current_view = window.current_view();
     let show_delay = show_delay.unwrap_or(DEFAULT_TOOLTIP_SHOW_DELAY);
+    let handoff = handoff.unwrap_or(TOOLTIP_HANDOFF);
 
     window.on_mouse_event({
         let active_tooltip = active_tooltip.clone();
@@ -3694,6 +3713,7 @@ pub(crate) fn register_tooltip_mouse_handlers(
                 current_view,
                 phase,
                 show_delay,
+                handoff,
                 window,
                 cx,
             )
@@ -3739,6 +3759,7 @@ fn handle_tooltip_mouse_move(
     current_view: EntityId,
     phase: DispatchPhase,
     show_delay: Duration,
+    handoff: Duration,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -3798,7 +3819,7 @@ fn handle_tooltip_mouse_move(
             active_tooltip.borrow_mut().take();
         }
         Action::ScheduleShow => {
-            let show_delay = if window.tooltip_shown_within(TOOLTIP_HANDOFF, cx) {
+            let show_delay = if window.tooltip_shown_within(handoff, cx) {
                 Duration::ZERO
             } else {
                 show_delay
