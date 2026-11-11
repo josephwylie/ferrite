@@ -66,3 +66,37 @@ fn details_opens_the_background_work_dialog(cx: &mut TestAppContext) {
         "Escape closes the dialog"
     );
 }
+
+/// One Claude subagent goes by three names (its `Agent` call, its task and
+/// its agent id, joined by aliases): the line counts the agent once.
+#[gpui::test]
+fn one_running_subagent_is_waited_on_once(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject, TranscriptCoverage};
+    let (core, fake) = cockpit("background-one-subagent", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let key = |native: &str| AgentKey::new(Provider::Claude, "ui-fixture", native);
+    let emit = |event: ActivityEvent| {
+        fake.streams.borrow()[0].send(SessionEvent::Activity(event)).unwrap();
+    };
+    let mut info = AgentInfo::new(key("toolu_count"));
+    info.name = Some("Count .txt files in directory".into());
+    info.parent = Some(Subject::Main);
+    info.coverage = TranscriptCoverage::Live;
+    emit(ActivityEvent::Discovered(info));
+    emit(ActivityEvent::Status {
+        key: key("toolu_count"),
+        state: AgentStatus::Working,
+    });
+    for alias in ["task:t1", "agent:a1"] {
+        emit(ActivityEvent::Alias {
+            from: key(alias),
+            to: key("toolu_count"),
+        });
+    }
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.background_work_title(0)).as_deref(),
+        Some("Waiting on a subagent")
+    );
+    assert!(debug_bounds(cx, "background-work-line".into()).is_some());
+}
