@@ -36,6 +36,7 @@ pub use starts::{
     Automation, GitHubItem, GitHubQuery, GitHubRead, GitHubSource, Missed, Overlap, Recurrence,
     Schedule, Source, Start, StartKind, Switch, Trigger, Turn, INTERVAL_HOURS, POLL_MS, WEEKDAYS,
 };
+pub use starts::{when_label, zone_label};
 pub use workflow::{
     Catalog, Definition, Destination, Problem, Resolved, RouteKind, Step, StepChange, StepId,
     Template, Version, Workflow, WorkflowId,

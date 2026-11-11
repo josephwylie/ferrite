@@ -2796,6 +2796,19 @@ impl Cockpit {
         self.receive_fixture(ServerMessage::Factory { revision: 0, board });
     }
 
+    /// A fixture world's Factory hears `command` as a Server's would
+    /// (a GitHub read's answer, say), and the window is told the board.
+    pub fn fixture_factory_command(&mut self, command: crate::factory::Command) {
+        let Some(factory) = self.local_factory.as_mut() else {
+            return;
+        };
+        if let Err(refusal) = factory.command(command, 0) {
+            crate::log!("fixture: the Factory refused: {refusal}");
+        }
+        let board = factory.board();
+        self.receive_fixture(ServerMessage::Factory { revision: 0, board });
+    }
+
     /// A fixture world's Task alert, as a Server would say it.
     pub fn fixture_task_alert(&mut self, alert: ServerMessage) {
         self.receive_fixture(alert);

@@ -237,6 +237,29 @@ impl Schedule {
     }
 }
 
+/// The host's time zone as a schedule's settings name it:
+/// `Australia/Adelaide (UTC+10:30)`.
+pub fn zone_label(now_ms: i64) -> String {
+    let offset = chrono::Local
+        .timestamp_millis_opt(now_ms)
+        .single()
+        .map(|now| now.format("UTC%:z").to_string())
+        .unwrap_or_else(|| "UTC".into());
+    match iana_time_zone::get_timezone() {
+        Ok(name) => format!("{name} ({offset})"),
+        Err(_) => offset,
+    }
+}
+
+/// A host-local time as the settings say it: `Thu 12 Nov, 09:30`.
+pub fn when_label(at_ms: i64) -> String {
+    chrono::Local
+        .timestamp_millis_opt(at_ms)
+        .single()
+        .map(|at| at.format("%a %-d %b, %H:%M").to_string())
+        .unwrap_or_default()
+}
+
 /// What a GitHub start waits for.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,

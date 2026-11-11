@@ -52,6 +52,7 @@ mod settings_window;
 mod side_chat;
 mod stab;
 mod stale_chrome;
+mod starts;
 mod startup;
 mod subagents;
 mod thread_groups;
