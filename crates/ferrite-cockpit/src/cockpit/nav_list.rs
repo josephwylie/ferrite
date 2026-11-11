@@ -50,7 +50,7 @@ impl CockpitView {
                 crate::frame().head_drag(!self.overlay_open(), self.maximized),
                 self.nav_toggle(false, cx),
             ))
-            .child(div())
+            .child(self.search_row(window, cx))
             // Over the list, outside its keys: the field's ⏎ and Esc are its own.
             .children(self.snooze_field())
             .child(
