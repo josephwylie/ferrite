@@ -31,6 +31,7 @@ use crate::ThreadId;
 
 mod direct;
 mod pr;
+mod recovery;
 mod starts;
 mod workflow;
 
@@ -39,6 +40,7 @@ pub use pr::{
     evidence_line, short, Delivery, Evidence, EvidenceKind, MergeOutcome, MergeRoutes, PullRequest,
     Revision,
 };
+pub use recovery::Keeping;
 pub use starts::{when_label, zone_label};
 pub use starts::{
     Automation, GitHubItem, GitHubQuery, GitHubRead, GitHubSource, Missed, Overlap, Recurrence,
@@ -214,6 +216,10 @@ pub struct Task {
     /// Its pull request, evidence and worktree's fate (#223).
     #[serde(flatten)]
     pub delivery: Delivery,
+    /// What restarts and time did to it (#226): its Worker revived, when
+    /// it completed and when it was archived.
+    #[serde(flatten)]
+    pub keeping: Keeping,
 }
 
 /// The version of a Workflow a Task keeps.
@@ -555,6 +561,9 @@ pub struct Seen {
     pub turns: u64,
     /// A Provider Decision waiting in its Session, as it reads.
     pub decision: Option<String>,
+    /// No Session serves it and none ended at rest: its Session closed on
+    /// its own, or the Server restarted, and nothing starts one (#226).
+    pub lost: bool,
 }
 
 /// What the Server carries out, in order.
@@ -637,6 +646,9 @@ pub struct Factory {
     limit: usize,
     /// Each GitHub start's reads, kept only while the Server runs.
     polls: BTreeMap<WorkflowId, starts::Poll>,
+    /// The Workers that were working when it was loaded and have not been
+    /// seen since: lost, it was the restart that lost them (#226).
+    restarted: std::collections::BTreeSet<ThreadId>,
 }
 
 impl Factory {
@@ -654,6 +666,7 @@ impl Factory {
             pending: Vec::new(),
             limit: DEFAULT_LIMIT,
             polls: BTreeMap::new(),
+            restarted: std::collections::BTreeSet::new(),
         }
     }
 
@@ -671,6 +684,12 @@ impl Factory {
                         state.version
                     )));
                 }
+                factory.restarted = state
+                    .tasks
+                    .iter()
+                    .filter(|task| matches!(task.status, Status::Working | Status::NeedsHuman))
+                    .filter_map(|task| task.worker)
+                    .collect();
                 factory.state = state;
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -693,11 +712,17 @@ impl Factory {
         // A step that cannot be written decides nothing; the next pass
         // tries again.
         let limit = self.limit;
+        let restarted = std::mem::take(&mut self.restarted);
         let _ = self.change(|state, effects| {
             state.step_starts(now_ms, effects);
-            state.step(now_ms, workers, limit, effects);
+            state.step(now_ms, workers, limit, &restarted, effects);
             Ok(())
         });
+        // Seen once, a Worker lost later was not lost to the restart.
+        self.restarted = restarted
+            .into_iter()
+            .filter(|thread| !workers.contains_key(thread))
+            .collect();
         self.poll(now_ms);
         std::mem::take(&mut self.pending)
     }
@@ -1079,6 +1104,7 @@ impl State {
                         pr,
                         ..Delivery::default()
                     },
+                    keeping: Keeping::default(),
                 };
                 let started = match &task.workflow {
                     Some(run) => format!(
@@ -1212,6 +1238,7 @@ impl State {
                 }
                 task.note(now_ms, Actor::Operator, "Resumed the task");
                 task.reason = None;
+                task.keeping.revived_ms = None;
                 match task.worker {
                     Some(_) => {
                         task.enter(Status::Working, effects);
@@ -1296,6 +1323,7 @@ impl State {
         now_ms: i64,
         workers: &BTreeMap<ThreadId, Seen>,
         limit: usize,
+        restarted: &std::collections::BTreeSet<ThreadId>,
         effects: &mut Vec<Effect>,
     ) {
         let mut working = self
@@ -1333,6 +1361,14 @@ impl State {
                     let Some(seen) = task.worker.and_then(|thread| workers.get(&thread)) else {
                         continue;
                     };
+                    let cause = match task.worker.is_some_and(|thread| restarted.contains(&thread))
+                    {
+                        true => recovery::Cause::Restart,
+                        false => recovery::Cause::Ended,
+                    };
+                    if recovery::lost(task, seen, cause, now_ms, effects) {
+                        continue;
+                    }
                     if direct::permission(
                         task,
                         seen.decision.as_deref(),
@@ -1364,6 +1400,7 @@ fn enter_step(
     task.step = Some(step.id.clone());
     task.agent = step.agent.clone();
     task.reason = None;
+    task.keeping.revived_ms = None;
     task.oversight.deciding = deciding;
     task.enter(Status::Working, effects);
     let earlier = task

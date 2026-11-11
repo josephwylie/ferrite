@@ -800,6 +800,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         oversight: Default::default(),
                         source: None,
                         delivery: Default::default(),
+                        keeping: Default::default(),
                     }],
                     workflows: Vec::new(),
                 },

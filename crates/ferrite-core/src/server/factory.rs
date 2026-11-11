@@ -133,12 +133,17 @@ impl Server {
                     .iter()
                     .find(|pending| pending.thread == thread)
                     .map(|pending| decision_line(&pending.decision));
+                // Ended at rest, a Session leaves its Activity connected
+                // until the next starts; one that closed on its own, or a
+                // Thread the restart reopened, has neither (#226).
+                let lost = !busy && !view.has_session() && !view.activity().connected();
                 Some((
                     thread,
                     Seen {
                         busy,
                         turns,
                         decision,
+                        lost,
                     },
                 ))
             })

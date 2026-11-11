@@ -606,6 +606,7 @@ fn a_returning_task_continues_or_starts_fresh() {
                 busy: false,
                 turns: 1,
                 decision: None,
+                lost: false,
             },
         )]),
     );

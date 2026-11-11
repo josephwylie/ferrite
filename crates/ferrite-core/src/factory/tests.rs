@@ -49,6 +49,7 @@ fn seen(busy: bool, turns: u64) -> BTreeMap<ThreadId, Seen> {
             busy,
             turns,
             decision: None,
+            lost: false,
         },
     )])
 }
@@ -508,4 +509,5 @@ fn the_board_counts_what_needs_the_operator() {
     assert_eq!(factory.board().needs_you(project_id(2)), 0);
 }
 
+mod recovery;
 mod workflows;

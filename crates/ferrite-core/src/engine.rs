@@ -5296,6 +5296,11 @@ impl<'a> ThreadView<'a> {
         self.state.activity.view()
     }
 
+    /// Whether a Session serves it, or one replacing it is on the way.
+    pub fn has_session(&self) -> bool {
+        self.state.session.is_some() || self.state.replacement.is_some()
+    }
+
     pub fn store_error(&self) -> Option<&'a str> {
         self.state.store_error.as_deref()
     }
