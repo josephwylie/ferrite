@@ -1012,7 +1012,10 @@ fn edited_files_are_in_the_panel_and_one_click_away(cx: &mut TestAppContext) {
         cx.debug_bounds("panel").is_some(),
         "the preview is the Panel's"
     );
-    view.update(cx, |view, cx| view.close_preview(0, cx));
+    // Back to the list the way the operator goes: its Overview tab (ADR
+    // 0039: the file opened in the Files tab, not over the Pane).
+    let overview = cx.debug_bounds("panel-tab-Overview").expect("the Overview tab");
+    cx.simulate_click(overview.center(), gpui::Modifiers::none());
     tick(cx);
     let code = cx
         .debug_bounds("panel-file-1")
