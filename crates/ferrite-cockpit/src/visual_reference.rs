@@ -1353,6 +1353,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
                 view.set_shelf_open(crate::nav::Shelf::Parked, true, cx);
+                view.nav_scroll.scroll_to_bottom();
                 let parked = view
                     .nav_state()
                     .parked
@@ -1432,13 +1433,15 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         // with its clock, Approval, Input, Failed, Done, idle with an age),
         // a worktree, a Thread handed over from Codex, PR chips open,
         // draft, merged and closed, a long branch cut in its middle, Claude
-        // and Codex logos, and the pointer over a receded working card.
+        // and Codex logos, and the pointer over the shown working card,
+        // which its folded Working shelf still draws.
         "navcards" => {
             let (mut scene, branches) = nav();
             nav_card_states(&mut scene);
             let setup: Setup = Box::new(|view, window, cx| {
                 branches(view, window, cx);
-                view.set_shelf_open(crate::nav::Shelf::Working, true, cx);
+                // The shown working card sits at the list's foot.
+                view.nav_scroll.scroll_to_bottom();
                 for (name, reading) in [
                     ("Screenshot harness", fixture_pr(415, PrState::Open, false)),
                     ("Release notes 0.9", fixture_pr(388, PrState::Open, true)),
@@ -2037,7 +2040,17 @@ fn nav_card_states(scene: &mut Scene) {
         .ev(questions("card-words", "card-words-tool"));
 
     let worktree = scene.root.join("work").join("ferrite-pay-api-migration");
-    std::fs::create_dir_all(&worktree).expect("create fixture worktree");
+    let git = |args: &[&str]| {
+        let made = std::process::Command::new("git")
+            .args(["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid"])
+            .args(args)
+            .current_dir(&ferrite)
+            .status()
+            .is_ok_and(|status| status.success());
+        assert!(made, "fixture git {args:?}");
+    };
+    git(&["commit", "-q", "--allow-empty", "-m", "fixture"]);
+    git(&["worktree", "add", "-q", "-b", "pay-api-migration", worktree.to_str().unwrap()]);
     let (migration, feed) = scene.open_in(
         Provider::Claude,
         WorkspaceChoice::ExistingWorktree {
