@@ -1426,6 +1426,7 @@ fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
     let dir = scratch("no-server");
     let core = Cockpit::attach(ferrite_core::cockpit::Attach {
             browser: false,
+            driven: false,
         store: dir.clone(),
         server: ferrite_core::cockpit::Endpoint::Local {
             executable: dir.join("no-such-ferrite"),
@@ -1463,6 +1464,7 @@ fn the_restart_button_answers_its_press(cx: &mut TestAppContext) {
     let dir = scratch("restart-press");
     let core = Cockpit::attach(ferrite_core::cockpit::Attach {
             browser: false,
+            driven: false,
         store: dir.clone(),
         server: ferrite_core::cockpit::Endpoint::Local {
             executable: dir.join("no-such-ferrite"),

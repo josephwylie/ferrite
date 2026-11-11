@@ -219,7 +219,7 @@ def main():
         (root/'settings.json').write_text(json.dumps({'check_for_updates':False, 'start_at_login':False, 'auto_update_clis':False}), encoding='utf-8')
         env = os.environ.copy()
         env.update(FERRITE_STORE=str(root/'threads'), FERRITE_BROWSER_PROFILE=str(root/'profile'),
-                   FERRITE_PROJECTS_BIN=str(root/'no-projects'), TERM='dumb',
+                   TERM='dumb',
                    FERRITE_BROWSER_WINDOW_URL=url, FERRITE_BROWSER_WINDOW_OUTPUT=str(output))
         if args.provider:
             peer = Path(__file__).with_name('browser-window-provider.py').resolve()

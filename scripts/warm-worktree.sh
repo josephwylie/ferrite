@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# warm-worktree.sh — give a new git worktree the main checkout's build, so
-# its first `cargo` run compiles only what its branch changes.
+# warm-worktree.sh — give a git worktree the main checkout's build, so its
+# next `cargo` run compiles only what its branch changes.
 #
 # A worktree builds into its own `target/` (cargo's default): two checkouts
 # sharing one build directory rebuild the GPUI stack each time the other has
@@ -10,19 +10,21 @@
 # so this one starts as a copy-on-write clone of the main checkout's
 # `target/debug`: seconds to make, and no disk until the two differ.
 #
-# Cargo calls a file built when it is older than what was built from it, and
-# a fresh checkout stamps every file with now. So each file here that is
-# byte-for-byte the main checkout's takes that file's time; one that differs
-# keeps its own and is rebuilt. A file of ours that names
-# CARGO_MANIFEST_DIR keeps its own time as well: what is built from it holds
-# the path of the checkout it was built in, and must be built again here to
-# read this checkout's fixtures.
+# Cargo calls a file built when it is older than what was built from it. So
+# each file here that is byte-for-byte the main checkout's takes that file's
+# time, and every other file is stamped now and rebuilt: one that differs,
+# and one git does not track yet. A file of ours that names
+# CARGO_MANIFEST_DIR is stamped now as well: what is built from it holds the
+# path of the checkout it was built in, and must be built again here to read
+# this checkout's fixtures.
 #
-# Run from the worktree's root; `scripts/git-hooks/post-checkout` does, for
+# Run from the worktree's root. `scripts/git-hooks/post-checkout` does, for
 # every new worktree, once `git config core.hooksPath scripts/git-hooks` is
-# set. It does nothing in the main checkout, where a build directory already
-# exists, where the main checkout has none to give, and off macOS (the clone
-# is APFS's).
+# set; `scripts/reclaim-worktree-builds.py` does, for an idle one whose build
+# it has taken away. It does nothing in the main checkout, where a build
+# directory already exists, where the main checkout has none to give, and
+# off macOS (the clone is APFS's). `target/debug/.warmed` marks the moment:
+# what is newer than it was built here.
 
 set -euo pipefail
 
@@ -48,9 +50,12 @@ cd "$HERE"
 git ls-files -z | while IFS= read -r -d '' file; do
   if cmp -s "$MAIN/$file" "$file"; then
     touch -r "$MAIN/$file" "$file"
+  elif [ -f "$file" ]; then
+    touch "$file"
   fi
 done
-git grep -lz CARGO_MANIFEST_DIR -- crates | xargs -0 touch
+git ls-files -z --others --exclude-standard | xargs -0 touch
+{ git grep -lz CARGO_MANIFEST_DIR -- crates || true; } | xargs -0 touch
 
 # Cloned beside its place and moved in, so a clone cut short is never taken
 # for a build directory.
@@ -58,4 +63,5 @@ mkdir -p "$(dirname "$TO")"
 rm -rf "$TO.warming"
 cp -cRp "$FROM" "$TO.warming"
 mv "$TO.warming" "$TO"
+touch "$TO/.warmed"
 echo "warm-worktree: build directory cloned from $MAIN" >&2

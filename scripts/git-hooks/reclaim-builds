@@ -1,0 +1,11 @@
+#!/bin/sh
+#
+# Not a hook itself: what post-commit and post-checkout both do. Commits and
+# checkouts are the clock of scripts/reclaim-worktree-builds.py, which frees
+# disk from idle worktrees' builds when it runs low. Left to finish on its
+# own, so git does not wait for it; what it did is in the main checkout's
+# target/reclaim.log.
+
+main="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
+[ -d "$main/target" ] || exit 0
+scripts/reclaim-worktree-builds.py >>"$main/target/reclaim.log" 2>&1 </dev/null &

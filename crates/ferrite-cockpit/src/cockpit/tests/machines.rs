@@ -141,6 +141,7 @@ fn machines_through(
                 version: "0".into(),
             },
             renderer: None,
+            driven: false,
             defaults: Default::default(),
             bridge,
         },
@@ -208,6 +209,7 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
     let attach = |name: &str| {
         let mut core = Cockpit::attach(Attach {
             browser: false,
+            driven: false,
             store: dir.join(name).join("threads"),
             server: Endpoint::Machine(bridge.clone()),
             client: ferrite_core::protocol::Peer {
@@ -318,6 +320,7 @@ fn a_window_with_only_this_computer_lists_no_machines(cx: &mut TestAppContext) {
                     version: "0".into(),
                 },
                 renderer: None,
+                driven: false,
                 defaults: Default::default(),
                 bridge: needs_sign_in,
             },
@@ -505,6 +508,7 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
             .unwrap();
     let mut core = Cockpit::attach(Attach {
             browser: false,
+            driven: false,
         store: dir.join("window").join("threads"),
         server: Endpoint::Machine(std::sync::Arc::new(Bridge::new(
             "box",
@@ -1387,7 +1391,7 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
     let mut core = Cockpit::attach(Attach {
         store: dir.join("window"), server: Endpoint::Machine(bridge),
         client: ferrite_core::protocol::Peer { name: "browser-preview".into(), version: "0".into() },
-        renderer: None, browser: true, discovery: Box::new(Fake::default()),
+        renderer: None, browser: true, driven: false, discovery: Box::new(Fake::default()),
     }).unwrap();
     ferrite_core::doorbell::until("browser window did not attach", || {
         core.pump(); matches!(core.server(), Some(ServerState::Attached { .. }))
@@ -1553,7 +1557,7 @@ fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(c
     let mut core = Cockpit::attach(Attach {
         store: dir.join("window"), server: Endpoint::Machine(bridge),
         client: ferrite_core::protocol::Peer { name: "browser-preview".into(), version: "0".into() },
-        renderer: None, browser: true, discovery: Box::new(Fake::default()),
+        renderer: None, browser: true, driven: false, discovery: Box::new(Fake::default()),
     }).unwrap();
     ferrite_core::doorbell::until("browser window did not attach", || {
         core.pump(); matches!(core.server(), Some(ServerState::Attached { .. }))

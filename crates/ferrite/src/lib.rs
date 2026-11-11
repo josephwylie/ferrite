@@ -135,6 +135,13 @@ pub fn launch() {
         );
         return;
     }
+    // The window drawn off-screen and driven through the Server's API
+    // (`ferrite_cockpit::headless`, ADR 0038).
+    #[cfg(feature = "headless")]
+    if std::env::args().nth(1).as_deref() == Some("--headless") {
+        ferrite_cockpit::headless::run();
+        return;
+    }
     // The operator's settings live beside the store (`~/.ferrite`), and
     // the log and crash reports beside them: opened first, so everything
     // after is on record.
@@ -277,6 +284,7 @@ pub fn launch() {
                                 version: env!("CARGO_PKG_VERSION").into(),
                             },
                             renderer: Some(renderer),
+                            driven: false,
                             defaults: defaults.clone(),
                             bridge: ferrite_core::machine::Bridge::ssh,
                         },
