@@ -272,8 +272,11 @@ impl CockpitView {
                     .text_color(rgb(INK_STRONG))
                     .child("Archive"),
             )
+            // The note gives way, so Board stays in a narrow board.
             .child(
                 div()
+                    .min_w_0()
+                    .truncate()
                     .text_size(px(FS_META))
                     .text_color(rgb(INK_SUBTLE))
                     .child("Completed tasks, 7 days after they complete or when cleared"),

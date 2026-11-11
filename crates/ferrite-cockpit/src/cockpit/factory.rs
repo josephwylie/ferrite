@@ -509,8 +509,13 @@ impl CockpitView {
             .gap(px(SPACE_3))
             .h(px(CONTROL_H + SPACE_4))
             .px(px(SPACE_4))
+            // The title gives way first, so the head's buttons stay in a
+            // narrow board: text never shrinks below its width otherwise.
             .child(
                 div()
+                    .debug_selector(|| "factory-title".into())
+                    .min_w_0()
+                    .truncate()
                     .font_weight(W_LABEL)
                     .text_color(rgb(INK_STRONG))
                     .child(SharedString::from(format!("{title} \u{b7} Factory"))),
@@ -518,6 +523,7 @@ impl CockpitView {
             .child(
                 div()
                     .debug_selector(|| "factory-count".into())
+                    .flex_shrink_0()
                     .text_size(px(FS_META))
                     .text_color(rgb(INK_SUBTLE))
                     .child(SharedString::from(count)),
@@ -637,7 +643,10 @@ impl CockpitView {
                             .flex()
                             .items_center()
                             .gap(px(SPACE_2))
-                            .h(px(ROW + SPACE_1))
+                            // As tall as Completed's Clear, so the column's
+                            // scroll never clips its top.
+                            .h(px(CONTROL_H))
+                            .flex_shrink_0()
                             .child(ferrite_ui::components::status_dot(status_ink(status)))
                             .child(
                                 div()

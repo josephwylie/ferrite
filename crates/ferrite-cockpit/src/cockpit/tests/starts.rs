@@ -15,7 +15,15 @@ fn shows(cx: &mut gpui::VisualTestContext, selector: &str) -> bool {
     debug_bounds(cx, selector.to_string()).is_some()
 }
 
+/// A click where the operator would make it: a control of the Start
+/// inspector is scrolled into view first.
 fn click(cx: &mut gpui::VisualTestContext, selector: &str) {
+    let inspected = ["start-", "automation-", "backlog-"]
+        .iter()
+        .any(|prefix| selector.starts_with(prefix));
+    if inspected && shows(cx, "inspector-start") {
+        reveal(cx, "inspector-start", selector);
+    }
     let at = bounds(cx, selector.to_string());
     cx.simulate_click(at.center(), gpui::Modifiers::none());
     tick(cx);
@@ -54,7 +62,7 @@ fn starts_window<'a>(
     ]);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     view.update(cx, |view, cx| {
         view.open_factory(project, cx);

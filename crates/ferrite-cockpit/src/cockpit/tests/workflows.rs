@@ -43,7 +43,7 @@ fn workflows_window<'a>(
     core.fixture_live_factory();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     view.update(cx, |view, cx| view.open_factory(project, cx));
     tick(cx);
@@ -480,6 +480,14 @@ fn typed_text_survives_what_happens_around_it(cx: &mut TestAppContext) {
         assert!(
             !note.intersects(&bounds(cx, button.into())),
             "the notice covers {button}"
+        );
+    }
+    let board = bounds(cx, "factory-board".into());
+    for button in ["factory-note-dismiss", "factory-new-task"] {
+        let at = bounds(cx, button.into());
+        assert!(
+            board.left() <= at.left() && at.right() <= board.right(),
+            "{button} in the head: {at:?} in {board:?}"
         );
     }
     click(cx, "factory-note-dismiss");

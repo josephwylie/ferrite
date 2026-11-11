@@ -617,6 +617,7 @@ impl CockpitView {
                 let mut row = div().flex().gap(px(SPACE_2)).child(
                     div()
                         .flex_1()
+                        .min_w_0()
                         .flex()
                         .flex_col()
                         .gap(px(SPACE_1))
@@ -634,6 +635,7 @@ impl CockpitView {
                     row = row.child(
                         div()
                             .flex_1()
+                            .min_w_0()
                             .flex()
                             .flex_col()
                             .gap(px(SPACE_1))
@@ -652,6 +654,7 @@ impl CockpitView {
                     let hours = schedule.interval_hours;
                     div()
                         .flex_1()
+                        .min_w_0()
                         .flex()
                         .flex_col()
                         .gap(px(SPACE_1))
@@ -667,6 +670,7 @@ impl CockpitView {
                 } else {
                     div()
                         .flex_1()
+                        .min_w_0()
                         .flex()
                         .flex_col()
                         .gap(px(SPACE_1))
@@ -834,6 +838,7 @@ impl CockpitView {
         let mut row = div().flex().gap(px(SPACE_2)).child(
             div()
                 .flex_1()
+                .min_w_0()
                 .flex()
                 .flex_col()
                 .gap(px(SPACE_1))
@@ -867,6 +872,7 @@ impl CockpitView {
             row = row.child(
                 div()
                     .flex_1()
+                    .min_w_0()
                     .flex()
                     .flex_col()
                     .gap(px(SPACE_1))
@@ -990,6 +996,7 @@ impl CockpitView {
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
                             .flex()
                             .flex_col()
                             .child(
