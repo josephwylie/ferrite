@@ -23,12 +23,11 @@ use ferrite_core::transcript::{Body, ToolState};
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
 use gpui::{
-    AnyWindowHandle, AppContext as _, Context, Entity, Focusable as _, HeadlessAppContext,
-    Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput,
-    Point, Styled as _, Window,
+    Context, Focusable as _, Modifiers, MouseButton, MouseMoveEvent, PlatformInput, Point, Window,
 };
 
 use crate::cockpit::{CockpitView, Preferences};
+use crate::headless::Driver;
 use crate::palette::PaletteScope;
 use ferrite_pane::transcript::ScrollTarget;
 
@@ -36,9 +35,7 @@ use ferrite_pane::transcript::ScrollTarget;
 type Probe = dyn Fn(&CockpitView) -> bool;
 
 struct Live {
-    cx: HeadlessAppContext,
-    window: AnyWindowHandle,
-    view: Entity<CockpitView>,
+    driver: Driver,
     out: PathBuf,
     log: std::fs::File,
     started: Instant,
@@ -55,37 +52,19 @@ impl Live {
         let _ = writeln!(self.log, "{line}");
     }
 
-    /// One slice of real time, mirrored on the executor's clock: the pump
-    /// runs, the frames the last draw asked for are delivered, a frame is
-    /// drawn.
     fn tick(&mut self, ms: u64) {
-        std::thread::sleep(Duration::from_millis(ms));
-        self.cx.advance_clock(Duration::from_millis(ms));
-        self.cx.run_until_parked();
-        self.cx
-            .update_window(self.window, |_, window, cx| {
-                window.simulate_next_frame(cx);
-                let _ = window.draw(cx);
-            })
-            .expect("the live window stands");
+        self.driver.tick(ms);
     }
 
     fn read<R>(&mut self, f: impl FnOnce(&CockpitView) -> R) -> R {
-        let view = self.view.clone();
-        self.cx.update(|cx| f(view.read(cx)))
+        self.driver.read(|view, _| f(view))
     }
 
     fn act<R>(
         &mut self,
         f: impl FnOnce(&mut CockpitView, &mut Window, &mut Context<CockpitView>) -> R,
     ) -> R {
-        let view = self.view.clone();
-        let out = self
-            .cx
-            .update_window(self.window, |_, window, cx| {
-                view.update(cx, |view, cx| f(view, window, cx))
-            })
-            .expect("the live window stands");
+        let out = self.driver.update(f);
         self.tick(30);
         out
     }
@@ -111,86 +90,38 @@ impl Live {
 
     /// Settle the frame and save `live-<name>.png`.
     fn shot(&mut self, name: &str) {
-        for _ in 0..6 {
-            self.tick(60);
-        }
-        self.cx
-            .update_window(self.window, |_, window, cx| {
-                let _ = window.draw(cx);
-                let _ = window.draw(cx);
-            })
-            .expect("the live window stands");
         let path = self.out.join(format!("live-{name}.png"));
-        match self.cx.capture_screenshot(self.window) {
-            Ok(image) => match image.save(&path) {
-                Ok(()) => self.note(format!("shot {}", path.display())),
-                Err(e) => self.note(format!("FAIL shot {name}: {e}")),
-            },
+        match self.driver.shot(&path) {
+            Ok(_) => self.note(format!("shot {}", path.display())),
             Err(e) => self.note(format!("FAIL shot {name}: {e}")),
         }
     }
 
     fn key(&mut self, keystroke: &str) {
-        let parsed = Keystroke::parse(keystroke).expect("a keystroke");
-        let handled = self
-            .cx
-            .update_window(self.window, |_, window, cx| {
-                window.dispatch_keystroke(parsed, cx)
-            })
-            .expect("the live window stands");
+        let handled = self.driver.key(keystroke).expect("a keystroke");
         self.note(format!(
             "key  {keystroke}{}",
             if handled { "" } else { " (unhandled)" }
         ));
-        self.tick(60);
     }
 
     /// Words typed key by key into whatever holds the keyboard.
     fn type_text(&mut self, text: &str) {
-        for ch in text.chars() {
-            let key = match ch {
-                ' ' => "space".to_string(),
-                ch => ch.to_string(),
-            };
-            let parsed = Keystroke::parse(&key).expect("a typed key");
-            self.cx
-                .update_window(self.window, |_, window, cx| {
-                    window.dispatch_keystroke(parsed, cx)
-                })
-                .expect("the live window stands");
-            self.cx.run_until_parked();
-        }
+        self.driver.type_text(text).expect("typed keys");
         self.note(format!("type {text:?}"));
-        self.tick(60);
-    }
-
-    fn bounds(&mut self, selector: &str) -> Option<gpui::Bounds<gpui::Pixels>> {
-        let selector = selector.to_string();
-        self.cx
-            .update_window(self.window, |_, window, _| window.debug_bounds(&selector))
-            .ok()
-            .flatten()
     }
 
     fn mouse(&mut self, event: PlatformInput) {
-        self.cx
-            .update_window(self.window, |_, window, cx| {
-                window.dispatch_event(event, cx);
-            })
-            .expect("the live window stands");
-        self.tick(30);
+        self.driver.mouse(event);
     }
 
-    /// A left click at the centre of what `selector` drew, the pointer
-    /// moved there first so hover state is honest. False when the last
-    /// frame drew no such element.
+    /// A left click at the centre of what `selector` drew. False when the
+    /// last frame drew no such element.
     fn click(&mut self, selector: &str, modifiers: Modifiers) -> bool {
-        let Some(bounds) = self.bounds(selector) else {
+        let Some(at) = self.driver.click(selector, MouseButton::Left, 1, modifiers) else {
             self.note(format!("FAIL click {selector}: not drawn"));
             return false;
         };
-        let at = bounds.center();
-        self.click_at(at, modifiers);
         self.note(format!(
             "click {selector} at ({:.0}, {:.0})",
             f32::from(at.x),
@@ -200,24 +131,7 @@ impl Live {
     }
 
     fn click_at(&mut self, at: Point<gpui::Pixels>, modifiers: Modifiers) {
-        self.mouse(PlatformInput::MouseMove(MouseMoveEvent {
-            position: at,
-            pressed_button: None,
-            modifiers,
-        }));
-        self.mouse(PlatformInput::MouseDown(MouseDownEvent {
-            button: MouseButton::Left,
-            position: at,
-            modifiers,
-            click_count: 1,
-            first_mouse: false,
-        }));
-        self.mouse(PlatformInput::MouseUp(MouseUpEvent {
-            button: MouseButton::Left,
-            position: at,
-            modifiers,
-            click_count: 1,
-        }));
+        self.driver.click_at(at, MouseButton::Left, 1, modifiers);
     }
 
     /// Put `text` on the focused Composer and send it with ⏎.
@@ -405,22 +319,9 @@ pub fn capture(output: String) {
         .register_project(&repo)
         .expect("register the throwaway repo");
 
-    let platform = gpui::platform::current_platform(true);
-    let mut cx = HeadlessAppContext::with_platform(
-        platform.text_system(),
-        std::sync::Arc::new(ferrite_ui::icons::Assets),
-        gpui::platform::current_headless_renderer,
-    );
-    cx.update(|cx| {
-        ferrite_pane::pane::init_components(cx);
-        ferrite_ui::motion::init(cx);
-        ferrite_ui::register_fonts(cx);
-        crate::frame().bind_keys(
-            ferrite_ui::keymap::bindings(ferrite_ui::keymap::PLATFORM),
-            cx,
-        );
-    });
-    let mut entity = None;
+    let cx = crate::headless::app(ferrite_ui::keymap::bindings(
+        ferrite_ui::keymap::PLATFORM,
+    ));
     let prefs = Preferences {
         settings,
         dir: settings_dir,
@@ -432,25 +333,12 @@ pub fn capture(output: String) {
         unreadable: None,
         keys_refused: Vec::new(),
     };
-    let window = cx
-        .open_window(gpui::size(gpui::px(1440.), gpui::px(900.)), |window, cx| {
-            let view =
-                cx.new(|cx| CockpitView::new_with_settings(core, Provider::Claude, prefs, cx));
-            entity = Some(view.clone());
-            let content = cx.new(|cx| crate::cockpit_window::CockpitWindow::new(view, window, cx));
-            cx.new(|cx| {
-                gpui::component::Root::new(content, window, cx)
-                    .bordered(false)
-                    .bg(ferrite_ui::theme::paint::WINDOW)
-            })
-        })
-        .expect("open the live window");
-    let view = entity.expect("the window built its view");
+    let driver = Driver::open(cx, |cx| {
+        CockpitView::new_with_settings(core, Provider::Claude, prefs, cx)
+    });
     let log = std::fs::File::create(out.join("live-log.txt")).expect("create the live log");
     let mut live = Live {
-        cx,
-        window: window.into(),
-        view,
+        driver,
         out,
         log,
         started: Instant::now(),
@@ -483,12 +371,7 @@ pub fn capture(output: String) {
         live.tick(50);
     }
     live.note(format!("done; claude thread {claude:?}"));
-    let Live { cx, view, .. } = live;
-    drop(view);
-    let hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(cx)));
-    std::panic::set_hook(hook);
+    live.driver.close();
 }
 
 /// The draft on the focused Pane, aimed at `provider`'s cheap model on the
@@ -577,8 +460,7 @@ fn shoot_running_suite(live: &mut Live, thread: ThreadId, turn: usize, name: &st
 /// transcript: the real hover the card opens on. False when none is drawn.
 fn hover_path(live: &mut Live, thread: ThreadId, path: &str) -> Option<Point<gpui::Pixels>> {
     let path = PathBuf::from(path);
-    let anchor = live.cx.update(|cx| {
-        let view = live.view.read(cx);
+    let anchor = live.driver.read(|view, cx| {
         let index = view.pane_for(thread)?;
         let transcript = view.panes[index].transcript()?;
         let scope = transcript.read(cx).namespace();
