@@ -44,6 +44,11 @@ pub struct Block {
     /// names it by: `None` for every other Block and for a prompt sent
     /// before Ferrite kept one, which cannot be rewound to.
     pub prompt_id: Option<String>,
+    /// A prompt sent while its turn ran, folded into that turn (a steer):
+    /// it splits the turn's work rather than starting a turn. Set as the
+    /// prompt applies, so a replay marks it as the live thread did; false
+    /// for every other Block.
+    pub steer: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2223,10 +2228,16 @@ impl Transcript {
             },
             // Folded into the running turn (a steer, HD5/QS4): the turn goes
             // on, its clock, count, plan and diff still its own.
-            Input::Prompt(line) if self.status == Status::Streaming => Update {
-                dirty: vec![self.push(Body::Prompt(line))],
-                ..Update::default()
-            },
+            Input::Prompt(line) if self.status == Status::Streaming => {
+                let id = self.push(Body::Prompt(line));
+                if let Some(block) = self.blocks.last_mut() {
+                    block.steer = true;
+                }
+                Update {
+                    dirty: vec![id],
+                    ..Update::default()
+                }
+            }
             Input::Prompt(line) => {
                 self.turn_diff = None;
                 self.turn_outcome = None;
@@ -3012,6 +3023,7 @@ impl Transcript {
             markdown_run: None,
             sent_at: None,
             prompt_id: None,
+            steer: false,
         });
         self.section.clear();
         id

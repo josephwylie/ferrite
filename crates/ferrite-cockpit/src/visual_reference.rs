@@ -458,6 +458,8 @@ const STATES: &[(&str, &[&str])] = &[
     // claude/answer-done.png), a day after the turn before it.
     ("running", &["app"]),
     ("answer", &["app"]),
+    // The answer's turn fold opened: its work in place under it.
+    ("answer-fold-open", &["app"]),
     // (end WP-A)
 
     // ---- WP-B states (append above the end line)
@@ -533,6 +535,7 @@ const PANEL_CLOSED: &[&str] = &[
     "conversation",
     "running",
     "answer",
+    "answer-fold-open",
     "approval",
     "live",
     "composer",
@@ -759,6 +762,30 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         "conversation" => (conversation(label), none),
         "running" => (running_turn(false), none),
         "answer" => (running_turn(true), none),
+        "answer-fold-open" => {
+            let setup: Setup = Box::new(|view, _, _| {
+                let Some(thread) = view.panes[0].thread() else {
+                    return;
+                };
+                let prompt = view.cockpit.thread(thread).and_then(|open| {
+                    open.transcript()
+                        .blocks()
+                        .iter()
+                        .rev()
+                        .find(|block| {
+                            matches!(block.body, ferrite_core::transcript::Body::Prompt(_))
+                                && !block.steer
+                        })
+                        .map(|block| block.id)
+                });
+                match prompt {
+                    Some(prompt) => view.panes[0]
+                        .toggle_tool(&ferrite_pane::pane::DisclosureId::Turn(prompt)),
+                    None => eprintln!("ferrite: answer-fold-open: no prompt"),
+                }
+            });
+            (running_turn(true), setup)
+        }
         // The pointer resting on the finished answer, as on
         // claude/hover-assistant.png: Copy, Fork and `⋯` under it.
         "answer-hover" => {
@@ -1550,8 +1577,9 @@ fn legacy(state: &str) -> (Scene, Setup) {
 
 /// Claude's running turn (`claude/running.png`) and, `done`, its answer
 /// (`claude/answer-done.png`): a three-step plan, a failed `ls`, then
-/// `sleep 15 && echo done` running 27s in, the working line saying what it
-/// is for and counting the turn's tokens. The turn before it was sent
+/// `sleep 15 && echo done` running 27s in: `Working for 27s` under its
+/// prompt, `Running sleep` its live row. Done, its fold `Worked for …`
+/// shuts over the work, the answer under it. The turn before it was sent
 /// yesterday, so today's opens under its date.
 fn running_turn(done: bool) -> Scene {
     use crate::demo::world;
@@ -3344,132 +3372,5 @@ pub fn motion_preview(output: String) {
             cx.advance_clock(frame);
             cx.run_until_parked();
         }
-    }
-}
-
-/// The working line's token count rolling: the real working line (`pane::working_tail`) over a
-/// turn fed as a provider streams it — thinking, its estimate climbing,
-/// then text and a tool call, a usage report snapping the count up past
-/// 1.0k — drawn on the executor's clock at each 60fps instant, one PNG a
-/// frame (`roll-0000.png` …) for ffmpeg to join.
-pub fn token_roll(output: String) {
-    use ferrite_core::transcript::{Input, Transcript};
-    use gpui::{div, px, IntoElement, ParentElement, Styled};
-    use std::time::Duration;
-
-    struct Line {
-        transcript: Transcript,
-    }
-    impl gpui::Render for Line {
-        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            let tail = ferrite_pane::pane::working_tail(ferrite_pane::pane::WorkingFacts {
-                transcript: &self.transcript,
-                thread: ThreadId::new(1),
-                starting: false,
-                solo: true,
-                focused: true,
-                reduce_motion: false,
-                reasoning_visible: false,
-                effort: Some("medium".into()),
-            })
-            .expect("a streaming turn has a working line");
-            div()
-                .size_full()
-                .flex()
-                .items_center()
-                .px(px(48.))
-                .bg(ferrite_ui::theme::paint::CARD)
-                .font_family(ferrite_ui::theme::FONT_UI)
-                .child(tail.draw(window, cx))
-        }
-    }
-
-    let output = PathBuf::from(output);
-    std::fs::create_dir_all(&output).expect("create artifact directory");
-    let start = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_791_400_000);
-    let clock = crate::demo::world::Fixture::install(start);
-    let platform = gpui::platform::current_platform(true);
-    let mut cx = HeadlessAppContext::with_platform(
-        platform.text_system(),
-        std::sync::Arc::new(ferrite_ui::icons::Assets),
-        gpui::platform::current_headless_renderer,
-    );
-    cx.update(|cx| {
-        ferrite_pane::pane::init_components(cx);
-        ferrite_ui::register_fonts(cx);
-    });
-    let window = cx
-        .open_window(gpui::size(px(720.), px(96.)), |_, cx| {
-            let mut transcript = Transcript::default();
-            transcript.apply(Input::Prompt("Plan the refactor".into()));
-            cx.new(|_| Line { transcript })
-        })
-        .unwrap();
-    cx.run_until_parked();
-    // What the provider says, by frame: thinking first, its estimate
-    // climbing every few frames; then the answer streaming and a call; a
-    // usage report that says more than the estimate.
-    let thinking = |estimated| {
-        vec![
-            SessionEvent::ThinkingTokens { estimated },
-            SessionEvent::Progress {
-                event: ferrite_core::progress::ProgressEvent::Phase {
-                    phase: ferrite_core::progress::Phase::Thinking,
-                    detail: String::new(),
-                },
-            },
-        ]
-    };
-    let script = |frame: u64| -> Vec<SessionEvent> {
-        match frame {
-            frame if frame < 90 && frame % 9 == 0 => thinking(40 + frame * 7),
-            frame if (96..150).contains(&frame) && frame % 6 == 0 => {
-                vec![SessionEvent::TextDelta {
-                    text: "The working line counts the turn as it streams. ".repeat(3),
-                }]
-            }
-            156 => vec![SessionEvent::ToolStarted {
-                id: "build".into(),
-                name: "Bash".into(),
-                input: serde_json::json!({"command": "cargo build", "description": "Building the workspace"}),
-            }],
-            186 => vec![SessionEvent::TokenUsage {
-                total_tokens: 0,
-                input_tokens: 0,
-                cached_input_tokens: 0,
-                output_tokens: 1_480,
-                reasoning_output_tokens: 0,
-                context_window: None,
-            }],
-            _ => Vec::new(),
-        }
-    };
-    let frame = Duration::from_micros(1_000_000 / 60);
-    for at in 0..240u64 {
-        let events = script(at);
-        if !events.is_empty() {
-            cx.update(|cx| {
-                window
-                    .update(cx, |line, _, cx| {
-                        for event in events {
-                            line.transcript.apply(Input::Event(event));
-                        }
-                        cx.notify();
-                    })
-                    .unwrap();
-            });
-        }
-        cx.update_window(window.into(), |_, window, cx| {
-            window.refresh();
-            let _ = window.draw(cx);
-        })
-        .unwrap();
-        cx.capture_screenshot(window.into())
-            .unwrap()
-            .save(output.join(format!("roll-{at:04}.png")))
-            .unwrap();
-        cx.advance_clock(frame);
-        clock.set(start + frame * (at as u32 + 1));
-        cx.run_until_parked();
     }
 }

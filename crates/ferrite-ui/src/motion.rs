@@ -316,6 +316,8 @@ pub const ACTIONS_IN: MotionSpec =
 pub const ACTIONS_OUT: MotionSpec = spec(theme::MOTION_DUR_FAST_MS, EASE_SNAP);
 /// A disclosure chevron's quarter turn.
 pub const CHEVRON: MotionSpec = spec(theme::MOTION_CHEVRON_MS, EASE_STANDARD);
+/// A turn fold's words brightening under the pointer, both ways.
+pub const FOLD_HOVER: MotionSpec = spec(theme::MOTION_FOLD_HOVER_MS, EASE_STANDARD);
 /// A receded working nav card coming up to full opacity under the pointer.
 pub const RECEDE: MotionSpec = spec(theme::MOTION_RECEDE_MS, EASE_STANDARD);
 /// A nav fold opening and shutting (`fold_body`).

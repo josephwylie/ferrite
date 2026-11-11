@@ -296,6 +296,7 @@ fn a_running_command_opens_onto_its_output_so_far(cx: &mut TestAppContext) {
         .send(SessionEvent::ToolOutputDelta { id: "build".into(), text: "Compiling a\n".into() })
         .unwrap();
     tick(cx);
+    open_live(cx);
     view.update(cx, |view, cx| {
         view.panes[0].toggle_tool(&pane::DisclosureId::Tool("build".into()));
         cx.notify();

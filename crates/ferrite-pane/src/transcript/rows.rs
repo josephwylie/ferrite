@@ -9,6 +9,9 @@ use std::{collections::HashMap, hash::Hash, ops::Range, rc::Rc};
 use ferrite_core::transcript::outputs::{self, Output};
 use ferrite_core::transcript::{tools, Block, BlockId, Body, ToolBlock, ToolState};
 
+use super::turns::{self, Fold};
+use crate::pane::DisclosureId;
+
 /// A stable semantic-row identity.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RowId {
@@ -24,8 +27,14 @@ pub(crate) enum RowId {
     Outputs(BlockId),
     /// The `note` under the first prompt (`RowShape::note`).
     Note,
-    /// The working row while a turn runs (`pane::working_tail`).
+    /// The running turn's header (`Working for 11m 24s`), under its prompt.
     Working,
+    /// A settled turn's fold (`Worked for 24m 55s ›`), or a steer's
+    /// (`Continued for …`), named by the prompt it stands under.
+    TurnFold(BlockId),
+    /// The running turn's live row at its tail (`Running sed`, `Thinking`),
+    /// or the starting line or a cut-short plan when no turn runs.
+    LiveTail,
     /// A long thread's date divider, before the first prompt of a new day,
     /// named by that prompt's block.
     Divider(BlockId),
@@ -56,11 +65,10 @@ pub(crate) enum RowKind {
     /// A decision record or a revival note: it hangs on an elbow under the
     /// row it answers.
     Meta,
-    /// A turn's end: its stamp, or (`hangs`) the elbow note that it was
-    /// interrupted or failed.
-    TurnEnd {
-        hangs: bool,
-    },
+    /// The elbow note that a turn was interrupted or failed, hung under
+    /// the row before it. A completed turn's end draws nothing: its fold
+    /// says how long it worked.
+    TurnEnd,
     /// An agent's visual: its call line and the page. It spaces as a
     /// diffed call does: a line above and below it, so the page never sits
     /// flush against the calls around it.
@@ -68,9 +76,13 @@ pub(crate) enum RowKind {
     /// A finished turn's page and file cards, under its answer: half a
     /// line off whatever it follows.
     Outputs,
-    /// The working line, under the newest row while a turn runs: it spaces
-    /// as the work does.
+    /// The running turn's header, under its prompt (`Working for 11m
+    /// 24s`): the row its fold takes once it settles.
     Working,
+    /// A settled turn's fold, or a steer's segment's, under its prompt.
+    TurnFold,
+    /// The live row at a running turn's tail: it spaces as the work does.
+    LiveTail,
     /// The tail row (the Decision), a line under the row before it.
     Tail,
     /// A date divider between turns on different days: a turn's gap above
@@ -95,9 +107,7 @@ impl RowKind {
             Body::Thinking(_) => Self::Reasoning,
             Body::Notice(_) => Self::Notice,
             Body::Meta(_) => Self::Meta,
-            Body::TurnEnd(end) => Self::TurnEnd {
-                hangs: !matches!(end.outcome, ferrite_core::TurnOutcome::Completed),
-            },
+            Body::TurnEnd(_) => Self::TurnEnd,
             // Fallback prose (no Markdown source) is agent prose too.
             Body::Paragraph { .. } | Body::Heading { .. } | Body::Bullet { .. } => {
                 Self::Answer { narration: false }
@@ -129,9 +139,9 @@ pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32)
         return if kind == Prompt { 0. } else { line };
     };
     let call = |kind| matches!(kind, Activity | Group | Visual | Notice);
-    let work = |kind| call(kind) || matches!(kind, Working | Answer { narration: true });
+    let work = |kind| call(kind) || matches!(kind, LiveTail | Answer { narration: true });
     match (previous, kind) {
-        (_, TurnEnd { hangs: true } | Meta) => 0.,
+        (_, TurnEnd | Meta) => 0.,
         (Divider, _) => line,
         (previous, Divider) => gap_before(Some(previous), Prompt, reading),
         (_, Outputs) => theme::tx_half(line),
@@ -140,6 +150,8 @@ pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32)
             theme::tx_turn_gap(line) - theme::MESSAGE_ACTIONS_GAP - theme::MESSAGE_ACTION
         }
         (_, Prompt) => theme::tx_turn_gap(line),
+        // A turn's header and its fold carry their own bottom padding.
+        (Working | TurnFold, _) => theme::TURN_FOLD_PAD_B,
         (previous, Answer { .. }) if call(previous) => theme::tx_work_prose(line),
         (Answer { narration: true }, kind) if call(kind) => theme::tx_work_prose(line),
         (previous, kind) if work(previous) && work(kind) => theme::tx_half(line),
@@ -155,18 +167,21 @@ pub(crate) struct RowShape {
     /// Room over the first row (`TX_PAD_T` in Solo, `TX_PAD_T_BOARD` on a
     /// board).
     pub top_pad: f32,
-    /// The working row's key, while a turn runs.
+    /// The running turn's header key (`Working for …`), while a turn runs.
     pub working: Option<u64>,
+    /// The live row's key at the tail: the running turn's live step, the
+    /// starting line, or a cut-short plan.
+    pub live: Option<u64>,
+    /// The running turn's trailing work is opened (`live_anchor`): its rows
+    /// show above the live row.
+    pub live_open: bool,
+    /// The folds opened, by the prompt each stands under
+    /// (`DisclosureId::Turn`); every other fold is shut.
+    pub open_folds: std::collections::BTreeSet<BlockId>,
     pub tail: Option<u64>,
     pub pending_call: Option<String>,
     /// The model's thinking drawn as `∴` rows; off, it draws nothing.
     pub thinking: bool,
-    /// The running call the working line carries (`carried_call`): set by
-    /// the projection itself.
-    pub carried: Option<String>,
-    /// The line's call is opened (`carried_tool`): its row shows in the
-    /// line's place.
-    pub carried_open: bool,
     /// A muted line under the first prompt (`TranscriptInput::note`).
     pub note: Option<gpui::SharedString>,
 }
@@ -187,6 +202,8 @@ pub(crate) struct TranscriptRow {
     tail_key: Option<u64>,
     /// An outputs row's cards.
     outputs: Rc<[Output]>,
+    /// A fold row's label and hover time.
+    fold: Option<Rc<Fold>>,
 }
 
 impl TranscriptRow {
@@ -218,6 +235,11 @@ impl TranscriptRow {
     /// What an outputs row's cards open; empty for any other row.
     pub(crate) fn outputs(&self) -> &[Output] {
         &self.outputs
+    }
+
+    /// What a fold row says; `None` for any other row.
+    pub(crate) fn fold(&self) -> Option<&Fold> {
+        self.fold.as_deref()
     }
 
     #[cfg(test)]
@@ -368,8 +390,8 @@ pub(crate) fn run_of(tool: &ToolBlock) -> Option<tools::Grouping> {
 /// A block that projects to no row: blank or hidden thinking, an answered
 /// request's record, the `opened in` note, the call a pending Decision
 /// gates, a checklist call that did not fail (the plan draws what it did:
-/// `ToolBlock::draws_row`), a quick turn's end (`pane::turn_stamp`). A group
-/// of calls reads across it.
+/// `ToolBlock::draws_row`), a completed turn's end (its fold says how long
+/// it worked). A group of calls reads across it.
 fn draws_nothing(block: &Block, shape: &RowShape) -> bool {
     if block.markdown.is_some() {
         return false;
@@ -378,16 +400,53 @@ fn draws_nothing(block: &Block, shape: &RowShape) -> bool {
         Body::Thinking(text) => text.trim().is_empty() || !shape.thinking,
         Body::Meta(text) => ferrite_core::transcript::is_decision_record(text),
         Body::Notice(text) => ferrite_core::transcript::is_opened_notice(text),
-        Body::Tool(tool) => {
-            is_gated(tool, shape)
-                || !tool.draws_row()
-                || shape.carried.as_deref() == Some(tool.call.as_str())
-        }
-        Body::TurnEnd(end) => crate::pane::turn_stamp(end).is_none(),
+        Body::Tool(tool) => is_gated(tool, shape) || !tool.draws_row(),
+        Body::TurnEnd(end) => end.completed(),
         // A recap alone only updates the Thread's status.
         Body::WrapUp(wrap) => !wrap.shows_box(),
         _ => false,
     }
+}
+
+/// What one projection reads besides the shape: the blocks it draws no
+/// row for this time — those a shut fold hides, and the running turn's
+/// trailing work its live row stands for. A group reads across them as it
+/// does across a block that draws nothing.
+struct Projection<'a> {
+    shape: &'a RowShape,
+    skipped: std::collections::HashSet<BlockId>,
+}
+
+impl Projection<'_> {
+    fn skips(&self, block: &Block) -> bool {
+        self.skipped.contains(&block.id) || draws_nothing(block, self.shape)
+    }
+}
+
+/// Where the running turn's trailing work starts (`turns::trailing_work`),
+/// while a turn runs: `None` when none does.
+fn live_start(blocks: &[Block], shape: &RowShape) -> Option<usize> {
+    shape.working?;
+    let from = turns::open_turn(blocks).map_or(0, |prompt| prompt + 1);
+    let start = turns::trailing_work(blocks, from, |block| !draws_nothing(block, shape));
+    Some(start)
+}
+
+/// What the live row opens, keying the running turn's trailing work: its
+/// first call's group (`DisclosureId::Group`, the group it settles into),
+/// or with no call there, its first thought's `DisclosureId::Live`.
+pub(crate) fn live_anchor(blocks: &[Block], shape: &RowShape) -> Option<DisclosureId> {
+    let work = &blocks[live_start(blocks, shape)?..];
+    work.iter()
+        .find_map(|block| match &block.body {
+            Body::Tool(tool) => Some(DisclosureId::Group(tool.call.clone())),
+            _ => None,
+        })
+        .or_else(|| {
+            work.iter()
+                .find(|block| matches!(block.body, Body::Thinking(_)))
+                .map(|block| DisclosureId::Live(block.id))
+        })
 }
 
 /// The call a pending Decision gates waits in the Decision itself; it
@@ -400,27 +459,6 @@ fn is_gated(tool: &ToolBlock, shape: &RowShape) -> bool {
             .is_some_and(|pending| gated(&tool.call, pending))
 }
 
-/// The call the working line carries while the turn runs: the routine
-/// call it names (`pane::running_call`), until the call has something of
-/// its own to show (output, a test count). Its row appears once it
-/// finishes, as Claude's does, so nothing says it twice; the line's chevron
-/// opens it sooner.
-pub(crate) fn carried_tool(blocks: &[Block]) -> Option<&ToolBlock> {
-    let tool = crate::pane::running_call(blocks)?;
-    (tools::policy(&tool.name).grouping == tools::Grouping::RollsUp
-        && tool.output.is_none()
-        && tool.progress.is_none())
-    .then_some(tool)
-}
-
-/// The carried call whose row stays hidden: not one the line opened.
-fn carried_call(blocks: &[Block], shape: &RowShape) -> Option<String> {
-    shape.working?;
-    (!shape.carried_open)
-        .then(|| carried_tool(blocks))
-        .flatten()
-        .map(|tool| tool.call.clone())
-}
 
 /// The failed turn end the failure strip speaks for: the last turn's,
 /// when it failed and the strip stands at the tail, so the failure shows
@@ -451,7 +489,7 @@ fn sent_day(block: &Block) -> Option<impl PartialEq + Copy> {
 /// of its run (`run_of`) after it up to the first row that is not one,
 /// reading across blocks that draw nothing. Returns the members' indices
 /// and the index after the run.
-fn group_at(blocks: &[Block], start: usize, shape: &RowShape) -> (Vec<usize>, usize) {
+fn group_at(blocks: &[Block], start: usize, projection: &Projection) -> (Vec<usize>, usize) {
     let run = match &blocks[start].body {
         Body::Tool(tool) => run_of(tool),
         _ => None,
@@ -461,7 +499,7 @@ fn group_at(blocks: &[Block], start: usize, shape: &RowShape) -> (Vec<usize>, us
     let mut index = end;
     while let Some(block) = blocks.get(index) {
         match &block.body {
-            _ if draws_nothing(block, shape) => index += 1,
+            _ if projection.skips(block) => index += 1,
             Body::Tool(tool)
                 if block.markdown.is_none() && run.is_some() && run_of(tool) == run =>
             {
@@ -476,10 +514,27 @@ fn group_at(blocks: &[Block], start: usize, shape: &RowShape) -> (Vec<usize>, us
 }
 
 fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<TranscriptRow>> {
-    let shape = &RowShape {
-        carried: carried_call(blocks, shape),
-        ..shape.clone()
+    let folds: HashMap<BlockId, Fold> = turns::folds(blocks, |block| !draws_nothing(block, shape))
+        .into_iter()
+        .map(|fold| (fold.prompt, fold))
+        .collect();
+    let live = live_start(blocks, shape);
+    let mut projection = Projection {
+        shape,
+        skipped: folds
+            .values()
+            .filter(|fold| !shape.open_folds.contains(&fold.prompt))
+            .flat_map(|fold| fold.hidden.iter().copied())
+            .collect(),
     };
+    if let Some(live) = live.filter(|_| !shape.live_open) {
+        projection
+            .skipped
+            .extend(blocks[live..].iter().map(|block| block.id));
+    }
+    let projection = &projection;
+    // The running turn's prompt, its header under it.
+    let running = shape.working.and(turns::open_turn(blocks));
     let mut rows = Vec::new();
     let row = |id, blocks: &[Block], source: Option<Rc<str>>, kind| TranscriptRow {
         id,
@@ -489,17 +544,29 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
         gap: 0.,
         tail_key: None,
         outputs: Rc::from([]),
+        fold: None,
     };
+    let header = |key| {
+        let mut working = row(RowId::Working, &[], None, RowKind::Working);
+        working.tail_key = Some(key);
+        working
+    };
+    // The running turn's prompt was evicted: its header heads the window.
+    if let (Some(key), None) = (shape.working, running) {
+        rows.push(header(key));
+    }
     let struck = struck_failure(blocks, shape);
     let mut day = None;
     let mut index = 0;
     // Where the turn being read began: after its prompt (or the window's
     // first block, its prompt evicted).
     let mut turn_start = 0;
+    let mut in_turn = false;
     while index < blocks.len() {
         let block = &blocks[index];
         // A turn's end: its cards first, under its answer.
         if let Body::TurnEnd(_) = &block.body {
+            in_turn = false;
             let left = outputs::of_turn(&blocks[turn_start..index]);
             if !left.is_empty() {
                 let mut cards = row(RowId::Outputs(block.id), &[], None, RowKind::Outputs);
@@ -507,11 +574,19 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                 rows.push(cards);
             }
         }
+        if projection.skipped.contains(&block.id) {
+            index += 1;
+            continue;
+        }
         if block.markdown.is_some() {
             let first = block.markdown_run.unwrap_or(block.id);
             let start = index;
             let mut source = String::new();
-            while let Some(markdown) = blocks.get(index).and_then(|block| block.markdown.as_ref()) {
+            while let Some(markdown) = blocks
+                .get(index)
+                .filter(|block| !projection.skipped.contains(&block.id))
+                .and_then(|block| block.markdown.as_ref())
+            {
                 // A section still open when its item ended (its last, with
                 // no newline of its own) closes its paragraph before the next
                 // item's prose: two messages read `…hello.` and `The
@@ -547,7 +622,11 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                     }
                     day = Some(sent);
                 }
-                turn_start = index;
+                // A steer goes on with the turn it folds into.
+                if !in_turn {
+                    turn_start = index;
+                }
+                in_turn = true;
                 let first = rows.iter().all(|row| row.kind != RowKind::Prompt);
                 rows.push(row(
                     RowId::Block(block.id),
@@ -558,13 +637,24 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                 if let Some(note) = shape.note.as_ref().filter(|_| first) {
                     rows.push(row(RowId::Note, &[], Some(note.as_ref().into()), RowKind::Note));
                 }
+                if let Some(fold) = folds.get(&block.id) {
+                    let mut face = row(RowId::TurnFold(block.id), &[], None, RowKind::TurnFold);
+                    face.fold = Some(Rc::new(Fold {
+                        hidden: Vec::new(),
+                        ..fold.clone()
+                    }));
+                    rows.push(face);
+                }
+                if let (Some(key), true) = (shape.working, running == Some(index - 1)) {
+                    rows.push(header(key));
+                }
             }
             Body::Tool(tool) => {
-                if draws_nothing(block, shape) {
+                if projection.skips(block) {
                     continue;
                 }
                 if run_of(tool).is_some() {
-                    let (members, end) = group_at(blocks, index - 1, shape);
+                    let (members, end) = group_at(blocks, index - 1, projection);
                     if members.len() > 1 {
                         let run: Vec<Block> =
                             members.iter().map(|at| blocks[*at].clone()).collect();
@@ -583,8 +673,8 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
             // Hidden thinking; an answered request's record (`allowed
             // Bash`), whose call's own row is its account, as the approved
             // transcript draws it; where the Thread works, which the head
-            // and the Panel say; and a quick turn's end.
-            _ if draws_nothing(block, shape) || struck == Some(index - 1) => {}
+            // and the Panel say; and a completed turn's end.
+            _ if projection.skips(block) || struck == Some(index - 1) => {}
             _ => rows.push(row(
                 RowId::Block(block.id),
                 std::slice::from_ref(block),
@@ -593,10 +683,11 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
             )),
         }
     }
-    if let Some(key) = shape.working {
-        let mut working = row(RowId::Working, &[], None, RowKind::Working);
-        working.tail_key = Some(key);
-        rows.push(working);
+    if let Some(key) = shape.live {
+        let work = live.map_or(&[][..], |live| &blocks[live..]);
+        let mut tail = row(RowId::LiveTail, work, None, RowKind::LiveTail);
+        tail.tail_key = Some(key);
+        rows.push(tail);
     }
     if let Some(key) = shape.tail {
         let mut tail = row(RowId::Tail, &[], None, RowKind::Tail);
@@ -618,7 +709,7 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                 work_after = false;
                 moved_on = true;
             }
-            RowKind::TurnEnd { .. } => work_after = false,
+            RowKind::TurnEnd => work_after = false,
             RowKind::Answer { .. } => {
                 row.kind = RowKind::Answer {
                     narration: work_after,
@@ -769,56 +860,351 @@ mod tests {
             .collect()
     }
 
-    /// While the turn runs, its working line carries the running call: its
-    /// row appears once it finishes, and an agent keeps its own.
-    #[test]
-    fn a_running_call_waits_for_its_end_while_the_working_line_carries_it() {
-        let mut transcript = Transcript::default();
-        prompt(&mut transcript, "go");
-        bash(&mut transcript, "run");
-        let working = RowShape {
+    /// The running turn's shape: its header under its prompt, its live row
+    /// at its tail.
+    fn running() -> RowShape {
+        RowShape {
             working: Some(1),
+            live: Some(2),
             ..shape()
-        };
-        assert_eq!(
-            kinds(&transcript, &working),
-            [RowKind::Prompt, RowKind::Working]
-        );
-        // With no working line (a Decision at the tail), the row shows.
-        assert_eq!(
-            kinds(&transcript, &shape()),
-            [RowKind::Prompt, RowKind::Activity]
-        );
-        settle(&mut transcript, "run", false);
-        assert_eq!(
-            kinds(&transcript, &working),
-            [RowKind::Prompt, RowKind::Activity, RowKind::Working]
-        );
-        call(&mut transcript, "agent", "Agent");
-        assert_eq!(
-            kinds(&transcript, &working),
-            [
-                RowKind::Prompt,
-                RowKind::Activity,
-                RowKind::Activity,
-                RowKind::Working
-            ]
-        );
-        // Only the call the line names: one started before it shows.
+        }
+    }
+
+    /// While a turn runs, its header stands under its prompt and its
+    /// trailing work is one live row at its tail (the running call is no
+    /// longer hidden: the live row is it). Opened, the work shows above the
+    /// live row; prose ends the trailing work, and an agent keeps its own
+    /// row.
+    #[test]
+    fn a_running_turn_heads_with_its_header_and_ends_on_its_live_row() {
+        use RowKind::*;
         let mut transcript = Transcript::default();
         prompt(&mut transcript, "go");
         bash(&mut transcript, "first");
-        bash(&mut transcript, "second");
+        settle(&mut transcript, "first", false);
+        bash(&mut transcript, "run");
+        let rows = TranscriptRows::new(transcript.blocks(), &running(), READING);
+        let ids: Vec<_> = rows.rows().iter().map(|row| row.id().clone()).collect();
+        assert_eq!(ids[1], RowId::Working);
+        assert_eq!(ids[2], RowId::LiveTail);
+        assert_eq!(kinds(&transcript, &running()), [Prompt, Working, LiveTail]);
         assert_eq!(
-            carried_call(transcript.blocks(), &working).as_deref(),
-            Some("second")
+            calls(&rows)[2],
+            (LiveTail, vec!["first".to_string(), "run".into()]),
+            "the live row stands for the trailing work"
         );
-        // And once the named call streams output, its row shows it.
+        assert_eq!(
+            live_anchor(transcript.blocks(), &running()),
+            Some(DisclosureId::Group("first".into()))
+        );
+        let open = RowShape {
+            live_open: true,
+            ..running()
+        };
+        assert_eq!(kinds(&transcript, &open), [Prompt, Working, Group, LiveTail]);
+        // With no turn running (a Session starting), the work shows.
+        let idle = RowShape {
+            live: Some(2),
+            ..shape()
+        };
+        assert_eq!(kinds(&transcript, &idle), [Prompt, Group, LiveTail]);
+        text(&mut transcript, "Looking.");
+        transcript.apply(Input::Event(SessionEvent::ContentBoundary));
+        call(&mut transcript, "agent", "Agent");
+        let rows = TranscriptRows::new(transcript.blocks(), &running(), READING);
+        assert_eq!(
+            calls(&rows),
+            [
+                (Prompt, vec![]),
+                (Working, vec![]),
+                (Group, vec!["first".to_string(), "run".into()]),
+                (Answer { narration: true }, vec![]),
+                (Activity, vec!["agent".to_string()]),
+                (LiveTail, vec![]),
+            ]
+        );
+    }
+
+    /// The live row's reach: a suite counting its tests keeps its own row
+    /// (its bar in view), an earlier turn's work is not the running
+    /// turn's, and thinking alone still opens (by its first thought).
+    #[test]
+    fn the_live_row_stops_at_a_counting_suite_and_an_earlier_turn() {
+        use RowKind::*;
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        bash(&mut transcript, "suite");
         transcript.apply(Input::Event(SessionEvent::ToolOutputDelta {
-            id: "second".into(),
-            text: "compiling\n".into(),
+            id: "suite".into(),
+            text: "running 4 tests\ntest a ... ok\n".into(),
         }));
-        assert_eq!(carried_call(transcript.blocks(), &working), None);
+        assert_eq!(kinds(&transcript, &running()), [Prompt, Working, Activity, LiveTail]);
+
+        // The running turn's prompt gone from the window, an earlier turn
+        // still in it: the live row reaches back to that turn's end, no
+        // further.
+        let mut earlier = Transcript::default();
+        prompt(&mut earlier, "one");
+        bash(&mut earlier, "a");
+        settle(&mut earlier, "a", false);
+        complete(&mut earlier, 2_000);
+        prompt(&mut earlier, "two");
+        earlier.apply(Input::Event(SessionEvent::ThinkingDelta {
+            text: "next".into(),
+        }));
+        let window: Vec<Block> = earlier
+            .blocks()
+            .iter()
+            .filter(|block| !matches!(&block.body, Body::Prompt(text) if text == "two"))
+            .cloned()
+            .collect();
+        let shape = running();
+        let rows = TranscriptRows::new(&window, &shape, READING);
+        assert_eq!(
+            calls(&rows),
+            [
+                (Working, vec![]),
+                (Prompt, vec![]),
+                (TurnFold, vec![]),
+                (LiveTail, vec![]),
+            ]
+        );
+        let thought = window
+            .iter()
+            .find(|block| matches!(block.body, Body::Thinking(_)))
+            .unwrap()
+            .id;
+        assert_eq!(
+            live_anchor(&window, &shape),
+            Some(DisclosureId::Live(thought))
+        );
+    }
+
+    /// The turn's end as the engine records it: its result, then the time
+    /// it took, observed live and kept for replay.
+    fn complete(transcript: &mut Transcript, ms: u64) {
+        transcript.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        }));
+        transcript.apply(Input::CompletionObservation {
+            elapsed_ms: ms,
+            completed_at: "2026-11-09T20:01:30+00:00".into(),
+            input_tokens: None,
+            output_tokens: None,
+        });
+    }
+
+    fn folds(transcript: &Transcript, shape: &RowShape) -> Vec<String> {
+        TranscriptRows::new(transcript.blocks(), shape, READING)
+            .rows()
+            .iter()
+            .filter_map(|row| row.fold().map(|fold| fold.label.clone()))
+            .collect()
+    }
+
+    /// A settled turn's header becomes its fold, shut: every call, thought
+    /// and interim message folds away under it, its final answer stays.
+    /// Opened, the work stands in place under it, in its order.
+    #[test]
+    fn a_settled_turn_folds_its_work_under_its_header() {
+        use RowKind::*;
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        bash(&mut transcript, "a");
+        settle(&mut transcript, "a", false);
+        transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
+            text: "checking".into(),
+        }));
+        text(&mut transcript, "Looking.");
+        transcript.apply(Input::Event(SessionEvent::ContentBoundary));
+        tool(&mut transcript, "r");
+        settle(&mut transcript, "r", false);
+        text(&mut transcript, "Done.");
+        complete(&mut transcript, 2_000);
+        assert_eq!(kinds(&transcript, &shape()), [Prompt, TurnFold, Answer { narration: false }]);
+        assert_eq!(folds(&transcript, &shape()), ["Worked for 2s"]);
+        let prompt = transcript.blocks()[0].id;
+        let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        assert_eq!(rows.get(1).unwrap().id(), &RowId::TurnFold(prompt));
+        let open = RowShape {
+            open_folds: [prompt].into(),
+            ..shape()
+        };
+        assert_eq!(
+            kinds(&transcript, &open),
+            [
+                Prompt,
+                TurnFold,
+                Activity,
+                Reasoning,
+                Answer { narration: true },
+                Activity,
+                Answer { narration: false },
+            ]
+        );
+        // The answer stands the fold's own padding under it.
+        let gaps: Vec<_> = rows.rows().iter().map(|row| row.gap()).collect();
+        assert_eq!(gaps[2], ferrite_ui::theme::TURN_FOLD_PAD_B);
+    }
+
+    /// Any turn folds, however quick (no floor), timed as T3 prints it.
+    #[test]
+    fn a_quick_turn_folds_too() {
+        for (ms, label) in [(2_000, "Worked for 2s"), (4_100, "Worked for 4.1s"), (1_495_000, "Worked for 24m 55s")] {
+            let mut transcript = Transcript::default();
+            prompt(&mut transcript, "go");
+            bash(&mut transcript, "a");
+            settle(&mut transcript, "a", false);
+            text(&mut transcript, "Done.");
+            complete(&mut transcript, ms);
+            assert_eq!(folds(&transcript, &shape()), [label]);
+        }
+    }
+
+    /// No fold where nothing would fold (an answer alone), where the turn
+    /// failed (its every step stays in view), or where its end was never
+    /// written (an older log): its time is not known.
+    #[test]
+    fn a_turn_with_nothing_to_fold_failed_or_unended_has_no_fold() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "hi");
+        text(&mut transcript, "Hello.");
+        complete(&mut transcript, 2_000);
+        assert!(folds(&transcript, &shape()).is_empty());
+
+        let mut failed = Transcript::default();
+        prompt(&mut failed, "go");
+        bash(&mut failed, "a");
+        settle(&mut failed, "a", false);
+        failed.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Error("overloaded".into()),
+            cost_usd: None,
+        }));
+        assert!(folds(&failed, &shape()).is_empty());
+        assert!(kinds(&failed, &shape()).contains(&RowKind::Activity));
+
+        let mut unended = Transcript::default();
+        prompt(&mut unended, "go");
+        bash(&mut unended, "a");
+        settle(&mut unended, "a", false);
+        unended.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        }));
+        prompt(&mut unended, "again");
+        assert!(folds(&unended, &shape()).is_empty());
+    }
+
+    /// What must stay in view stays, shut: a notice, a question put to the
+    /// operator, work still running past the turn (a background call), and
+    /// a call after the answer that failed; one after it that succeeded
+    /// folds.
+    #[test]
+    fn notices_questions_live_work_and_late_failures_stay_in_view() {
+        use RowKind::*;
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        bash(&mut transcript, "a");
+        settle(&mut transcript, "a", false);
+        transcript.apply(Input::Notice("Model switched".into()));
+        call(&mut transcript, "q", "AskUserQuestion");
+        settle(&mut transcript, "q", false);
+        bash(&mut transcript, "bg");
+        text(&mut transcript, "Done.");
+        transcript.apply(Input::Event(SessionEvent::ContentBoundary));
+        bash(&mut transcript, "late-ok");
+        settle(&mut transcript, "late-ok", false);
+        bash(&mut transcript, "late-bad");
+        settle(&mut transcript, "late-bad", true);
+        let running_bg = transcript
+            .blocks()
+            .iter()
+            .any(|block| matches!(&block.body, Body::Tool(tool) if tool.call == "bg"));
+        assert!(running_bg);
+        complete(&mut transcript, 9_000);
+        let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        let shown: Vec<_> = calls(&rows)
+            .into_iter()
+            .map(|(kind, calls)| (kind, calls.join(",")))
+            .collect();
+        // The turn's end retired the foreground call `bg`: it settles to a
+        // row the fold hides unless it ran in the background.
+        assert!(shown.contains(&(Notice, String::new())), "{shown:?}");
+        assert!(shown.contains(&(Activity, "q".into())), "{shown:?}");
+        assert!(shown.contains(&(Activity, "late-bad".into())), "{shown:?}");
+        assert!(!shown.iter().any(|(_, calls)| calls.contains("late-ok")), "{shown:?}");
+        assert!(!shown.iter().any(|(_, calls)| calls == "a"), "{shown:?}");
+        assert_eq!(shown[1].0, TurnFold);
+    }
+
+    /// A steer splits its turn's work: the top fold keeps the whole turn's
+    /// time and folds the work before the steer; the work after it folds
+    /// under a fold of its own under the steer's prompt, each opening on
+    /// its own.
+    #[test]
+    fn a_steer_folds_its_own_segment() {
+        use RowKind::*;
+        let mut transcript = Transcript::default();
+        let sent = |transcript: &mut Transcript, text: &str, stamp: &str| {
+            prompt(transcript, text);
+            transcript.apply(Input::PromptObservation {
+                sent_at: stamp.into(),
+                prompt_id: None,
+            });
+        };
+        sent(&mut transcript, "go", "2026-11-09T20:00:00+00:00");
+        bash(&mut transcript, "a");
+        settle(&mut transcript, "a", false);
+        sent(&mut transcript, "and the docs", "2026-11-09T20:01:00+00:00");
+        bash(&mut transcript, "b");
+        settle(&mut transcript, "b", false);
+        text(&mut transcript, "Done.");
+        complete(&mut transcript, 90_000);
+        assert_eq!(
+            kinds(&transcript, &shape()),
+            [Prompt, TurnFold, Prompt, TurnFold, Answer { narration: false }]
+        );
+        assert_eq!(folds(&transcript, &shape()), ["Worked for 1m 30s", "Continued for 30s"]);
+        let steer = transcript.blocks()[2].id;
+        let open = RowShape {
+            open_folds: [steer].into(),
+            ..shape()
+        };
+        assert_eq!(
+            kinds(&transcript, &open),
+            [Prompt, TurnFold, Prompt, TurnFold, Activity, Answer { narration: false }]
+        );
+    }
+
+    /// The latest turn the operator stopped says so on its fold; an
+    /// earlier one reads as worked.
+    #[test]
+    fn the_latest_stopped_turn_says_you_stopped() {
+        let mut transcript = Transcript::default();
+        let stop = |transcript: &mut Transcript, ms: u64| {
+            transcript.apply(Input::Event(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Interrupted,
+                cost_usd: None,
+            }));
+            transcript.apply(Input::CompletionObservation {
+                elapsed_ms: ms,
+                completed_at: "2026-11-09T20:01:30+00:00".into(),
+                input_tokens: None,
+                output_tokens: None,
+            });
+        };
+        prompt(&mut transcript, "go");
+        bash(&mut transcript, "a");
+        stop(&mut transcript, 4_100);
+        assert_eq!(folds(&transcript, &shape()), ["You stopped after 4.1s"]);
+        prompt(&mut transcript, "again");
+        bash(&mut transcript, "b");
+        stop(&mut transcript, 3_000);
+        assert_eq!(
+            folds(&transcript, &shape()),
+            ["Worked for 4.1s", "You stopped after 3s"]
+        );
     }
 
     /// A failed last turn says so once, in the failure strip at the tail;
@@ -839,7 +1225,7 @@ mod tests {
             tail: Some(1),
             ..shape()
         };
-        let failed = RowKind::TurnEnd { hangs: true };
+        let failed = RowKind::TurnEnd;
         assert!(!kinds(&transcript, &strip).contains(&failed));
         assert!(kinds(&transcript, &shape()).contains(&failed));
         prompt(&mut transcript, "two");
@@ -1358,14 +1744,17 @@ mod tests {
         let block = (line * 1.5).round();
         let answer = Answer { narration: false };
         let narration = Answer { narration: true };
-        let stamp = TurnEnd { hangs: false };
-        let hung = TurnEnd { hangs: true };
+        let hung = TurnEnd;
         assert_eq!(after_answer(READING) + 32., 56.);
         assert_eq!(after_prompt(READING) + 24., 40.);
         for (previous, kind, gap) in [
             (None, Prompt, 0.),
             (None, Activity, line),
-            (Some(stamp), Prompt, 56.),
+            (Some(TurnFold), Prompt, 56.),
+            (Some(Prompt), TurnFold, after_prompt(READING)),
+            (Some(TurnFold), answer, ferrite_ui::theme::TURN_FOLD_PAD_B),
+            (Some(Working), Group, ferrite_ui::theme::TURN_FOLD_PAD_B),
+            (Some(Activity), LiveTail, half),
             (Some(Activity), Prompt, 56.),
             (Some(answer), Prompt, after_answer(READING)),
             (Some(Prompt), narration, after_prompt(READING)),
@@ -1376,11 +1765,10 @@ mod tests {
             (Some(Group), Activity, half),
             (Some(narration), Activity, 22.),
             (Some(Activity), narration, 22.),
-            (Some(narration), Working, half),
+            (Some(narration), LiveTail, half),
             (Some(Visual), Group, half),
             (Some(Activity), answer, 22.),
             (Some(Activity), Reasoning, block),
-            (Some(Activity), stamp, block),
             (Some(answer), hung, 0.),
             (Some(Activity), Meta, 0.),
             (Some(Activity), Tail, block),

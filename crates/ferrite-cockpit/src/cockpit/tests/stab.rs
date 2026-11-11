@@ -952,6 +952,7 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     drop(stream);
     tick(cx);
     tick(cx);
+    open_folds(&view, cx);
 
     let (namespace, blocks, composer) = view.read_with(cx, |view, _| {
         let pane = &view.panes[0];

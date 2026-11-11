@@ -132,7 +132,8 @@ fn keyboard_disclosure_target_is_visible_across_three_targets_and_reverse(cx: &m
         })
         .unwrap();
     tick(cx);
-    // Every call is its own row: two calls, two Tab stops.
+    // The turn's fold is the first stop: Enter opens it, and the target
+    // then walks between it and the calls' group.
     cx.simulate_keystrokes("tab enter");
     tick(cx);
     for keys in ["", "tab", "shift-tab"] {
@@ -290,6 +291,7 @@ fn clicking_a_disclosure_opens_it_without_a_keyboard_ring(cx: &mut TestAppContex
         })
         .unwrap();
     tick(cx);
+    open_folds(&view, cx);
     let group = pane::DisclosureId::Group("clicked-a".into());
     let at = view.read_with(cx, |view, cx| {
         view.panes[0]
@@ -376,6 +378,23 @@ fn tab_walks_a_group_and_enter_opens_it(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
+    // The settled turn's fold is the first stop; Enter opens it, its work
+    // in place under it.
+    let prompt = view.read_with(cx, |view, _| {
+        view.cockpit.thread(thread).unwrap().transcript().blocks()[0].id
+    });
+    let fold = pane::DisclosureId::Turn(prompt);
+    cx.simulate_keystrokes("tab");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.panes[0].targeted_tool(), Some(&fold));
+    });
+    assert!(cx.debug_bounds("tool-group-keys-a").is_none(), "shut, the work folds away");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.panes[0].tool_expanded(fold.clone()), "Enter opens the fold");
+    });
     let group = pane::DisclosureId::Group("keys-a".into());
     cx.simulate_keystrokes("tab");
     tick(cx);
@@ -391,6 +410,8 @@ fn tab_walks_a_group_and_enter_opens_it(cx: &mut TestAppContext) {
             "a shut group's calls are no stops"
         );
     });
+    cx.simulate_keystrokes("tab");
+    tick(cx);
     cx.simulate_keystrokes("tab");
     tick(cx);
     cx.simulate_keystrokes("enter");
