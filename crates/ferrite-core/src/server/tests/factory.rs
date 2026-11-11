@@ -380,7 +380,10 @@ fn a_workflow_task_runs_each_step_with_its_own_agent_and_context() {
     assert_eq!(edited["problems"], serde_json::json!([]), "{edited}");
     let saved = author("workflow.save", serde_json::json!({ "workflow": workflow }));
     assert_eq!(saved["version"], 1, "{saved}");
-    assert!(harness.sessions.try_recv().is_err(), "saving starts nothing");
+    assert!(
+        harness.sessions.try_recv().is_err(),
+        "saving starts nothing"
+    );
 
     let (status, said, refused) = cli(
         &harness.api,
@@ -442,7 +445,11 @@ fn a_workflow_task_runs_each_step_with_its_own_agent_and_context() {
     let launches = harness.launches.lock().unwrap().clone();
     assert_eq!(
         launches.last(),
-        Some(&(Provider::Codex, Some("gpt-test".into()), Some("high".into()))),
+        Some(&(
+            Provider::Codex,
+            Some("gpt-test".into()),
+            Some("high".into())
+        )),
         "{launches:?}"
     );
     let tree = |thread: ThreadId, caller: &mut Caller| {

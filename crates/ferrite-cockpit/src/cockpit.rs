@@ -13,7 +13,6 @@ pub(crate) mod decisions;
 mod drafts;
 pub(crate) mod empty_board;
 pub(crate) mod factory;
-pub(crate) mod workflows;
 mod history;
 mod leaving;
 mod lightbox;
@@ -31,6 +30,7 @@ mod transcript_glue;
 mod updating;
 mod user_commands;
 mod view_head;
+pub(crate) mod workflows;
 
 /// Card triggers' bounds by key, recorded in prepaint.
 type FloatTriggers =

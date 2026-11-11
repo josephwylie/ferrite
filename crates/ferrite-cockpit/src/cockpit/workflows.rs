@@ -652,9 +652,7 @@ impl CockpitView {
         };
         let problems = self.draft_problems();
         let note = if !problems.is_empty() {
-            Some(SharedString::from(
-                "Fix the problems listed before saving.",
-            ))
+            Some(SharedString::from("Fix the problems listed before saving."))
         } else {
             let skills = self.factory_catalog().skills;
             match self.workflow_ask(WorkflowAction::Save { workflow, skills }, cx) {
@@ -1150,15 +1148,12 @@ impl CockpitView {
                 .border_b_1()
                 .border_color(paint::LINE)
                 .text_size(px(FS_META))
-                .child(
-                    div()
-                        .font_weight(W_LABEL)
-                        .text_color(rgb(ATTENTION))
-                        .child(SharedString::from(match problems.len() {
-                            1 => "1 problem: it cannot be saved or run until fixed".to_string(),
-                            n => format!("{n} problems: it cannot be saved or run until fixed"),
-                        })),
-                );
+                .child(div().font_weight(W_LABEL).text_color(rgb(ATTENTION)).child(
+                    SharedString::from(match problems.len() {
+                        1 => "1 problem: it cannot be saved or run until fixed".to_string(),
+                        n => format!("{n} problems: it cannot be saved or run until fixed"),
+                    }),
+                ));
             for (at, problem) in problems.iter().enumerate() {
                 let step = problem.step.clone();
                 list = list.child(
@@ -1446,9 +1441,7 @@ impl CockpitView {
                 cx.new(|_| StepDragPreview(name))
             })
             .drag_over::<StepDrag>(|style, _, _, _| style.bg(paint::SELECTED))
-            .on_drop(cx.listener(move |view, drag: &StepDrag, _, cx| {
-                view.drop_step(drag, at, cx)
-            }))
+            .on_drop(cx.listener(move |view, drag: &StepDrag, _, cx| view.drop_step(drag, at, cx)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
@@ -1624,7 +1617,13 @@ impl CockpitView {
                 })
                 .cursor_pointer()
                 .text_color(rgb(if flagged { BLOCKED } else { INK_STRONG }))
-                .child(div().flex_1().min_w_0().truncate().child(SharedString::from(text)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(SharedString::from(text)),
+                )
                 .child(ferrite_ui::icons::icon(
                     ferrite_ui::icons::CHEVRON_DOWN,
                     ROW_ICON,
@@ -1752,9 +1751,7 @@ impl CockpitView {
             None => String::new(),
         };
         let search = view.workflows.skills_open.then(|| {
-            let filter = self
-                .field_text(&Field::SkillSearch, cx)
-                .unwrap_or_default();
+            let filter = self.field_text(&Field::SkillSearch, cx).unwrap_or_default();
             let mut list = div()
                 .debug_selector(|| "skill-options".into())
                 .flex()
@@ -1910,7 +1907,10 @@ impl CockpitView {
                     .items_center()
                     .gap(px(SPACE_2))
                     .cursor_pointer()
-                    .child(ferrite_ui::components::switch("inspector-fresh-switch", fresh))
+                    .child(ferrite_ui::components::switch(
+                        "inspector-fresh-switch",
+                        fresh,
+                    ))
                     .child(
                         div()
                             .flex()
@@ -1946,9 +1946,9 @@ impl CockpitView {
                         cx,
                     )
                     .debug_selector(|| "inspector-delete".into())
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.delete_step(delete_id.clone(), cx)
-                    })),
+                    .on_click(cx.listener(
+                        move |view, _: &ClickEvent, _, cx| view.delete_step(delete_id.clone(), cx),
+                    )),
                 ),
             )
             .into_any_element()

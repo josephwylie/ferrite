@@ -126,15 +126,15 @@ impl Server {
                 worktree,
                 prompt,
             } => {
-                let command = match self.start_worker(&task, project, agent, branch, worktree, prompt)
-                {
-                    Ok((thread, worktree)) => Command::WorkerStarted {
-                        task,
-                        thread,
-                        worktree,
-                    },
-                    Err(why) => Command::WorkerFailed { task, why },
-                };
+                let command =
+                    match self.start_worker(&task, project, agent, branch, worktree, prompt) {
+                        Ok((thread, worktree)) => Command::WorkerStarted {
+                            task,
+                            thread,
+                            worktree,
+                        },
+                        Err(why) => Command::WorkerFailed { task, why },
+                    };
                 if let Err(refusal) = self.factory.command(command, now_ms()) {
                     crate::log!("server: the Factory did not take a Worker's start: {refusal}");
                 }
@@ -202,10 +202,13 @@ impl Server {
             .project(project)
             .map(|project| project.root.clone())
             .ok_or("its Project is gone")?;
-        let title = self.factory.task(task).map(|task| match task.current_step() {
-            Some(step) => format!("{} \u{b7} {}", task.title, step.name),
-            None => task.title.clone(),
-        });
+        let title = self
+            .factory
+            .task(task)
+            .map(|task| match task.current_step() {
+                Some(step) => format!("{} \u{b7} {}", task.title, step.name),
+                None => task.title.clone(),
+            });
         let workspace = match worktree.filter(|path| path.exists()) {
             Some(path) => WorkspaceChoice::ExistingWorktree { repo, path },
             None => WorkspaceChoice::NamedWorktree {
@@ -452,9 +455,10 @@ impl Server {
         workflow: &str,
         extra: Option<(&str, Value)>,
     ) -> Result<Value, ApiError> {
-        let found = self.factory.workflow(workflow).ok_or_else(|| {
-            ApiError::new(Code::UnknownWorkflow, "no Workflow has that id")
-        })?;
+        let found = self
+            .factory
+            .workflow(workflow)
+            .ok_or_else(|| ApiError::new(Code::UnknownWorkflow, "no Workflow has that id"))?;
         let problems = found.draft.problems(&self.catalog(Vec::new()));
         let mut answer = json!({ "workflow": found, "problems": problems });
         if let Some((key, value)) = extra {

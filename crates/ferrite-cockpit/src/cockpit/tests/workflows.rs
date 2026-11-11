@@ -84,7 +84,10 @@ fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
         names(&view, cx),
         ["Triager", "Explorer", "Implementer", "Reviewer"]
     );
-    assert!(shows(cx, "outline-row-s-1-selected"), "selection on the row");
+    assert!(
+        shows(cx, "outline-row-s-1-selected"),
+        "selection on the row"
+    );
     for row in ["s-1", "s-2", "s-3", "s-4"] {
         let selector = if row == "s-1" {
             format!("outline-row-{row}-selected")
@@ -120,7 +123,13 @@ fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
 
     // Drag: Reviewer let go on the first row takes its place.
     view.update(cx, |view, cx| {
-        let reviewer = view.shown_workflow().unwrap().draft.step("s-4").unwrap().clone();
+        let reviewer = view
+            .shown_workflow()
+            .unwrap()
+            .draft
+            .step("s-4")
+            .unwrap()
+            .clone();
         view.drop_step(&StepDrag::of(&reviewer), 0, cx);
     });
     tick(cx);
@@ -224,12 +233,18 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
         let draft = &view.shown_workflow().unwrap().draft;
         let reviewer = draft.step("s-4").unwrap();
         assert_eq!(reviewer.on_unable, Destination::Step("s-3".into()));
-        assert_eq!(draft.route_label("s-4", &reviewer.on_unable), "Deleted agent");
+        assert_eq!(
+            draft.route_label("s-4", &reviewer.on_unable),
+            "Deleted agent"
+        );
     });
     view.update(cx, |view, cx| view.save_workflow(cx));
     tick(cx);
     view.read_with(cx, |view, _| {
-        assert!(view.shown_workflow().unwrap().versions.is_empty(), "unsaved");
+        assert!(
+            view.shown_workflow().unwrap().versions.is_empty(),
+            "unsaved"
+        );
         assert_eq!(
             view.factory_view.as_ref().unwrap().note.as_deref(),
             Some("Fix the problems listed before saving.")
@@ -307,7 +322,10 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
         )
     });
     tick(cx);
-    assert!(shows(cx, "workflow-problems"), "nothing ends in Completed now");
+    assert!(
+        shows(cx, "workflow-problems"),
+        "nothing ends in Completed now"
+    );
     view.update(cx, |view, cx| {
         view.apply_pick(
             Pick::Route {
@@ -330,7 +348,11 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
             Some("Saved version 1.")
         );
     });
-    assert_eq!(fake.streams.borrow().len(), streams, "saving starts nothing");
+    assert_eq!(
+        fake.streams.borrow().len(),
+        streams,
+        "saving starts nothing"
+    );
     view.update(cx, |view, cx| view.open_new_task(cx));
     tick(cx);
     assert!(shows(cx, "new-task-process"));

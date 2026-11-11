@@ -654,9 +654,7 @@ impl CockpitView {
             (
                 MenuTarget::Thread(thread) | MenuTarget::Pane(thread) | MenuTarget::Snooze(thread),
                 MenuVerb::SnoozeCustom,
-            ) => {
-                self.edit_snooze(thread, window, cx)
-            }
+            ) => self.edit_snooze(thread, window, cx),
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Wake) => {
                 self.snooze_thread(thread, None, cx)
             }

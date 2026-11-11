@@ -13,7 +13,6 @@ mod decisions_parity;
 mod diagnostics;
 mod drafts;
 mod factory;
-mod workflows;
 mod files;
 mod find;
 mod floats_parity;
@@ -71,6 +70,7 @@ mod updating;
 mod user_commands;
 mod visuals;
 mod wall;
+mod workflows;
 mod workspace_binding;
 
 use super::*;

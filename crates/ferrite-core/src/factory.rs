@@ -578,7 +578,10 @@ impl Factory {
     }
 
     pub fn workflow(&self, id: &str) -> Option<&Workflow> {
-        self.state.workflows.iter().find(|workflow| workflow.id == id)
+        self.state
+            .workflows
+            .iter()
+            .find(|workflow| workflow.id == id)
     }
 
     pub fn revision(&self) -> u64 {
@@ -591,15 +594,15 @@ impl Factory {
 
     /// The Task `thread` is (or was) a Worker of.
     pub fn task_of(&self, thread: ThreadId) -> Option<&Task> {
-        self.state
-            .tasks
-            .iter()
-            .find(|task| task.had_worker(thread))
+        self.state.tasks.iter().find(|task| task.had_worker(thread))
     }
 }
 
 fn unknown_step() -> Refusal {
-    Refusal::new(RefusalCode::UnknownStep, "the workflow has no Step with that id")
+    Refusal::new(
+        RefusalCode::UnknownStep,
+        "the workflow has no Step with that id",
+    )
 }
 
 fn unknown_task() -> Refusal {
@@ -618,7 +621,10 @@ impl Task {
 
     /// The Step it is at, in the version it keeps.
     pub fn current_step(&self) -> Option<&Step> {
-        self.workflow.as_ref()?.definition.step(self.step.as_deref()?)
+        self.workflow
+            .as_ref()?
+            .definition
+            .step(self.step.as_deref()?)
     }
 
     fn note(&mut self, at_ms: i64, by: Actor, text: impl Into<String>) {
@@ -765,8 +771,10 @@ impl State {
                 let made = self.workflow_mut(&workflow)?;
                 let problems = made.draft.problems(&catalog);
                 if !problems.is_empty() {
-                    let listed: Vec<String> =
-                        problems.into_iter().map(|problem| problem.message).collect();
+                    let listed: Vec<String> = problems
+                        .into_iter()
+                        .map(|problem| problem.message)
+                        .collect();
                     return Err(Refusal::new(
                         RefusalCode::Invalid,
                         format!("the workflow cannot be saved: {}", listed.join(" ")),
@@ -1069,7 +1077,11 @@ fn route(task: &mut Task, outcome: Outcome, now_ms: i64, effects: &mut Vec<Effec
         Outcome::Finished { summary } => ("finished", &step.on_finished, summary.clone()),
         Outcome::Unable { tried } => ("could not finish", &step.on_unable, tried.clone()),
     };
-    task.note(now_ms, Actor::Agent, format!("{} {said}: {text}", step.name));
+    task.note(
+        now_ms,
+        Actor::Agent,
+        format!("{} {said}: {text}", step.name),
+    );
     task.results.push(StepResult {
         step: step.id.clone(),
         name: step.name.clone(),

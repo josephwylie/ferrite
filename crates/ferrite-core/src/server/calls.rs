@@ -187,10 +187,12 @@ impl Server {
             Method::WorkflowCreate(params) => self.api_workflow_create(params),
             Method::WorkflowList(params) => self.api_workflow_list(params),
             Method::WorkflowGet(params) => self.api_workflow_answer(&params.workflow, None),
-            Method::WorkflowRename(params) => self.api_author(crate::factory::Command::RenameWorkflow {
-                workflow: params.workflow,
-                name: params.name,
-            }),
+            Method::WorkflowRename(params) => {
+                self.api_author(crate::factory::Command::RenameWorkflow {
+                    workflow: params.workflow,
+                    name: params.name,
+                })
+            }
             Method::WorkflowSave(params) => self.api_workflow_save(params.workflow, Vec::new()),
             Method::StepAdd(params) => self.api_author(crate::factory::Command::AddStep {
                 workflow: params.workflow,

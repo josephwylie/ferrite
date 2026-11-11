@@ -199,7 +199,7 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
     ] {
         view.update(cx, |view, cx| {
             view.cockpit.fixture_factory(Board {
-        workflows: Vec::new(),
+                workflows: Vec::new(),
                 tasks: vec![task("t-1", project, status, Some(worker), None, None)],
             });
             view.open_task("t-1", cx);
