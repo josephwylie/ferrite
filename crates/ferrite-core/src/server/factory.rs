@@ -110,6 +110,7 @@ impl Server {
                 }
             }
         }
+        self.tune_coordinators();
         kept
     }
 
@@ -177,6 +178,9 @@ impl Server {
                 }
             }
             Effect::Prompt { thread, text } => {
+                if !self.wake_coordinator(thread, &text) {
+                    return None;
+                }
                 let prompt = AgentPromptParams {
                     thread,
                     text,
@@ -216,7 +220,7 @@ impl Server {
                 agent,
                 prompt,
             } => self.start_coordinator(project, agent, prompt),
-            Effect::Tune { thread, agent } => self.tune(thread, agent),
+            Effect::Tune { thread, agent } => self.retune(thread, agent),
             Effect::Notify {
                 task,
                 project,

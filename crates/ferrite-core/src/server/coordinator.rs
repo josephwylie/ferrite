@@ -83,34 +83,105 @@ impl Server {
         Ok(thread)
     }
 
-    /// An open Thread's Provider, model and effort, from its next turn.
-    pub(super) fn tune(&mut self, thread: ThreadId, agent: Agent) {
-        let Some(view) = self.engine.thread(thread) else {
-            return;
-        };
-        let provider = view.provider();
-        let mut ops = Vec::new();
-        if provider != agent.provider {
-            ops.push(Op::SetProvider {
-                thread,
-                provider: agent.provider,
-                model: agent.model.clone(),
-            });
-        } else {
-            ops.push(Op::SetModel {
-                thread,
-                model: agent.model.clone(),
-            });
+    /// A Coordinator's settings changed: its Session is tuned to them at
+    /// its next rest.
+    pub(super) fn retune(&mut self, thread: ThreadId, _agent: Agent) {
+        self.coordinators_tuned.remove(&thread);
+    }
+
+    /// Each Coordinator at rest whose Session is not on its settings is
+    /// tuned to them, through the doors the Composer's pickers use, so the
+    /// change applies from its next turn. A refusal is not tried again
+    /// until the settings change.
+    pub(super) fn tune_coordinators(&mut self) {
+        let wanted: Vec<(ThreadId, Agent)> = self
+            .factory
+            .board()
+            .coordinators
+            .iter()
+            .filter_map(|coordinator| Some((coordinator.thread?, coordinator.agent.clone()?)))
+            .collect();
+        for (thread, agent) in wanted {
+            if self.coordinators_tuned.get(&thread) == Some(&agent) {
+                continue;
+            }
+            let Some(view) = self.engine.thread(thread) else {
+                continue;
+            };
+            let at_rest = matches!(
+                self.engine.attention(thread),
+                Some(crate::Attention::Idle | crate::Attention::Done)
+            ) && !view.starting()
+                && !self.engine.holds_prompt(thread);
+            if !at_rest {
+                continue;
+            }
+            let provider = view.provider() != agent.provider;
+            let model = agent.model.is_some() && view.model() != agent.model.as_deref();
+            let effort = agent.effort.is_some() && view.effort() != agent.effort.as_deref();
+            let mut ops = Vec::new();
+            if provider {
+                ops.push(Op::SetProvider {
+                    thread,
+                    provider: agent.provider,
+                    model: agent.model.clone(),
+                });
+            } else if model {
+                ops.push(Op::SetModel {
+                    thread,
+                    model: agent.model.clone(),
+                });
+            }
+            if effort {
+                ops.push(Op::SetEffort {
+                    thread,
+                    effort: agent.effort.clone(),
+                });
+            }
+            for op in ops {
+                if let Err(error) = self.execute(op) {
+                    crate::log!("server: the Coordinator could not be tuned: {}", error.message);
+                }
+            }
+            self.coordinators_tuned.insert(thread, agent);
         }
-        ops.push(Op::SetEffort {
-            thread,
-            effort: agent.effort,
-        });
-        for op in ops {
-            if let Err(error) = self.execute(op) {
-                crate::log!("server: the Coordinator could not be tuned: {}", error.message);
+    }
+
+    /// Before a Coordinator is prompted: a parked one is revived; one
+    /// that is gone is started afresh with `text` (false: nothing more to
+    /// send).
+    pub(super) fn wake_coordinator(&mut self, thread: ThreadId, text: &str) -> bool {
+        if self.engine.thread(thread).is_some() {
+            return true;
+        }
+        let Some(project) = self
+            .factory
+            .board()
+            .coordinators
+            .iter()
+            .find(|coordinator| coordinator.thread == Some(thread))
+            .map(|coordinator| coordinator.project)
+        else {
+            return true;
+        };
+        if self.execute(Op::Revive { thread }).is_ok() && self.engine.thread(thread).is_some() {
+            return true;
+        }
+        let now = (self.clock)();
+        let gone = Command::CoordinatorFailed {
+            project,
+            why: "its Thread is gone".into(),
+        };
+        let again = Command::CoordinatorSay {
+            project,
+            text: text.to_string(),
+        };
+        for command in [gone, again] {
+            if let Err(refusal) = self.factory.command(command, now) {
+                crate::log!("server: the Factory did not take a Coordinator's restart: {refusal}");
             }
         }
+        false
     }
 
     /// A window's Coordinator command.

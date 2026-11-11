@@ -189,6 +189,29 @@ fn a_coordinator_that_could_not_start_says_why_and_tries_again() {
     say(&mut factory, "Again").unwrap();
     let starts = coordinator_starts(&factory.step(4, &BTreeMap::new()));
     assert_eq!(starts.len(), 1);
+
+    // One whose Thread is gone starts afresh, briefed again.
+    factory
+        .command(
+            Command::CoordinatorStarted {
+                project: project(),
+                thread: COORDINATOR,
+            },
+            5,
+        )
+        .unwrap();
+    factory
+        .command(
+            Command::CoordinatorFailed {
+                project: project(),
+                why: "its Thread is gone".into(),
+            },
+            6,
+        )
+        .unwrap();
+    say(&mut factory, "Still there?").unwrap();
+    let starts = coordinator_starts(&factory.step(7, &BTreeMap::new()));
+    assert!(starts[0].1.ends_with("Still there?"), "{starts:?}");
 }
 
 /// AC: the Coordinator's Provider, model and effort are the Factory's:

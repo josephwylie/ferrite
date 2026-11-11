@@ -459,6 +459,7 @@ impl State {
             }
             Command::CoordinatorFailed { project, why } => {
                 let coordinator = self.coordinator_mut(project);
+                coordinator.thread = None;
                 coordinator.starting = false;
                 coordinator.waiting.clear();
                 coordinator.error = Some(why);
