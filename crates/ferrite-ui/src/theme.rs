@@ -2315,6 +2315,23 @@ pub const FAILURE_STRIP_PAD_R: f32 = SPACE_1_5;
 pub const FAILURE_STRIP_ICON: f32 = 14.0;
 pub const RETRY_H: f32 = 26.0;
 pub const RETRY_PAD_X: f32 = 10.0;
+
+/// The background-work line at the transcript's foot (T3's
+/// `ThreadNowLine`): 12px muted words, 6px between the 14px icon, the
+/// words and the actions (`BACKGROUND_LINE_ACTIONS_GAP` apart), 4px in at
+/// each side, 8px under it.
+pub const BACKGROUND_LINE_GAP: f32 = SPACE_1_5;
+pub const BACKGROUND_LINE_PAD_X: f32 = SPACE_1;
+pub const BACKGROUND_LINE_PAD_B: f32 = SPACE_2;
+pub const BACKGROUND_LINE_ICON: f32 = 14.0;
+/// The `Background work` dialog (T3's `BackgroundWorkDetails`): a sheet
+/// 512 wide, one section per task 20px apart.
+pub const BACKGROUND_DIALOG_W: f32 = 512.0;
+pub const BACKGROUND_DIALOG_MAX_H: f32 = 560.0;
+pub const BACKGROUND_DIALOG_SECTION_GAP: f32 = 20.0;
+/// What follows the title (`label: activity`) reads at 60% of the muted ink.
+pub const BACKGROUND_LINE_DETAIL_OPACITY: f32 = 0.6;
+pub const BACKGROUND_LINE_ACTIONS_GAP: f32 = 10.0;
 /// The floor a head title keeps however narrow the head (a shorter title
 /// keeps its whole text). There is no cap — a long title takes the width
 /// the head has.
@@ -3835,6 +3852,9 @@ pub const MOTION_SLIM_ACTION_MS: u64 = 150;
 /// The foot's undo notice fades in and out over 200ms on Tailwind's
 /// `ease-out` (`MOTION_EASE_OUT_TW`).
 pub const MOTION_UNDO_NOTICE_MS: u64 = 200;
+/// A line of thread state at the transcript's foot (the background-work
+/// line) fades in over 150ms on Tailwind's `ease-out`.
+pub const MOTION_LINE_IN_MS: u64 = 150;
 pub const MOTION_EASE_OUT_TW: [f32; 4] = [0.0, 0.0, 0.2, 1.0];
 /// The nav's tooltips enter over 150ms on `MOTION_EASE_STANDARD`, from
 /// `MOTION_FLOAT_FROM_SCALE`.

@@ -29,7 +29,7 @@
 //! The title bar keeps one tool, the Panel's toggle (`view_head`), at the
 //! window's right edge; the head row ends short of it.
 
-mod background;
+pub(in crate::cockpit) mod background;
 mod changes;
 pub(crate) mod hunks;
 pub(crate) mod preview;

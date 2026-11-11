@@ -114,10 +114,12 @@ fn failure_words(message: &str) -> SharedString {
 impl CockpitView {
     /// The row after a transcript's last: the pending Decision, as its
     /// card is built for the tail (`CockpitView::decision_tail`, the
-    /// Decision card's owner).
+    /// Decision card's owner), else the failure strip, else the
+    /// background-work line.
     pub(super) fn transcript_tail(&self, index: usize, cx: &App) -> Option<TranscriptTail> {
         self.decision_tail(index, cx)
             .or_else(|| self.failure_tail(index))
+            .or_else(|| self.background_work_tail(index))
     }
 
     /// The failure strip (SPEC §5.9 item 4) under Main's transcript when the

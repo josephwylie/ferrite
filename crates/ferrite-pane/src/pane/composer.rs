@@ -446,9 +446,10 @@ pub(super) struct ComposerStack<'a> {
 /// The Composer stack (theme WP-D): a board cell's compact box
 /// (`compact_composer`), Solo's box (`box_composer`, SPEC §5.5). On a
 /// board the shelf of pending files stands above it (Solo's ride inside
-/// its box, over the text). Running background work has no shelf: it is
-/// in its own rows, the rail and the Background tasks pane, as Claude's. The Pane lays the stack out `flex_shrink_0` below
-/// the body, so the transcript gives way. The Decision row is **not**
+/// its box, over the text). Running background work has no shelf: it is the
+/// transcript's last line (`background_work_line`) and in the rail and the
+/// Background tasks pane. The Pane lays the stack out `flex_shrink_0`
+/// below the body, so the transcript gives way. The Decision row is **not**
 /// here: it is the transcript's tail. While a Decision pends the input
 /// carries the `Decision` key context, so its keys answer with the
 /// keyboard in the Composer (#23).

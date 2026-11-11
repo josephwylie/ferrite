@@ -16,6 +16,7 @@
 //! state word in colour, the last lines dim, the quick answers.
 
 mod agents;
+mod background_work;
 mod compact_composer;
 mod composer;
 mod menus;
@@ -27,6 +28,10 @@ mod work_row;
 mod wrap_up;
 pub(crate) use agents::{is_agent, render_agent, render_agent_card, AgentCardCx, AgentRowCx};
 pub use agents::{AgentClock, AgentFace, AgentFaces, AgentRun};
+pub use background_work::{
+    background_work_line, inline_button, present as present_background_work, BackgroundTask,
+    WorkKind,
+};
 #[cfg(any(test, feature = "test-support"))]
 pub use composer::model_label;
 pub use composer::{

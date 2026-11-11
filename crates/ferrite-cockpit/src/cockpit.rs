@@ -4,6 +4,7 @@
 //! Decision, the held prompt — is folded in core and read from there.
 
 mod agent_pane;
+mod background_work;
 pub(crate) mod beside;
 mod browser;
 #[cfg(feature = "browser-smoke")]
@@ -577,6 +578,12 @@ pub struct CockpitView {
     /// out (`close_project_editor`).
     project_editor_leaving: Option<(ProjectEditor, std::time::Instant)>,
     project_editor_focus: FocusHandle,
+    /// The Thread whose `Background work` dialog is open
+    /// (`background_work.rs`).
+    background_dialog: Option<ThreadId>,
+    /// The tasks `Stop` on the background-work line was pressed for: the
+    /// line reads `Stopping...` until they end.
+    background_stopping: std::collections::HashSet<String>,
     settings_focus: FocusHandle,
     /// Whether the window is maximized, read once per frame in `render`.
     /// The nav's band is drawn without a `Window` in hand, and the two
@@ -1553,6 +1560,8 @@ impl CockpitView {
             project_editor: None,
             project_editor_leaving: None,
             project_editor_focus: cx.focus_handle(),
+            background_dialog: None,
+            background_stopping: Default::default(),
             settings_focus: cx.focus_handle(),
             maximized: false,
             cli_versions: None,
@@ -5607,7 +5616,7 @@ impl CockpitView {
             cx.notify();
             return;
         }
-        if self.close_project_editor(cx) {
+        if self.close_project_editor(cx) || self.close_background_dialog(cx) {
             return;
         }
         if self.snooze_editor.is_some() {
@@ -10583,6 +10592,7 @@ impl CockpitView {
             .children(self.mode_menu_element(window, cx))
             .children(self.settings_element(window, cx))
             .children(self.project_editor_element(window, cx))
+            .children(self.background_dialog_element(window, cx))
             .children(self.toast_float(window, cx))
             .children(self.sheet_floats(window, cx))
             .children(self.lightbox_element(cx))

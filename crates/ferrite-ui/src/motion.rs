@@ -29,6 +29,7 @@
 //! | shelf fold | none | a nav shelf (Working, Snoozed, Parked) opens and shuts at once; only its chevron turns, over [`SHELF_CHEVRON`] 150ms standard |
 //! | slim row action | [`SLIM_ACTION`] 150ms standard | under the pointer a slim row's time fades out and its Revive or Wake fades in; its badge comes up from 40% greyscale |
 //! | undo notice | [`UNDO_NOTICE`] 200ms Tailwind `ease-out` | the foot's `Parked, Undo ⌘Z` fades in, and out before it goes |
+//! | thread-state line | [`LINE_IN`] 150ms Tailwind `ease-out`, opacity only | the background-work line at the transcript's foot fades in when work begins; it goes at once |
 //! | sidebar (cmd-B) | none | the column snaps between its width and the rail: no ride, no fade, no per-frame relayout of the board |
 //! | nav card recede | [`RECEDE`] 150ms standard, opacity only | a receded working Thread card (70%) comes up to full under the pointer or the nav's keyboard cursor and goes back as it leaves; its fill and its hover strip snap; reduced motion snaps it too |
 //! | right panel | none | the Panel (`cockpit/panel.rs`) snaps open and shut and between its own width and a preview's, as Claude's does |
@@ -307,6 +308,8 @@ pub const SHELF_CHEVRON: MotionSpec = spec(theme::MOTION_SHELF_CHEVRON_MS, EASE_
 pub const SLIM_ACTION: MotionSpec = spec(theme::MOTION_SLIM_ACTION_MS, EASE_STANDARD);
 /// The foot's undo notice, in and out.
 pub const UNDO_NOTICE: MotionSpec = spec(theme::MOTION_UNDO_NOTICE_MS, EASE_OUT_TW);
+/// The background-work line arriving at the transcript's foot.
+pub const LINE_IN: MotionSpec = spec(theme::MOTION_LINE_IN_MS, EASE_OUT_TW);
 /// The approval card settling into place (`promote_in`).
 pub const PROMOTE_IN: MotionSpec = spec(theme::MOTION_PROMOTE_MS, EASE_OUT_CUBIC);
 /// The working line's label roll (`morph`).
