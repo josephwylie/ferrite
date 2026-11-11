@@ -2712,11 +2712,14 @@ impl CockpitView {
                         valid.insert(pane::DisclosureId::Reasoning(block.id));
                         valid.insert(pane::DisclosureId::Live(block.id));
                     }
-                    // A turn's fold, or a steer's, by its prompt.
+                    // A turn's fold, or a steer's, by its prompt. A steer
+                    // stays inside its turn, whose card spans all of it.
                     ferrite_core::transcript::Body::Prompt(_) => {
                         valid.insert(pane::DisclosureId::Turn(block.id));
                         valid.insert(pane::DisclosureId::Prompt(block.id));
-                        turn_start = at;
+                        if !block.steer {
+                            turn_start = at;
+                        }
                     }
                     // A changed-files card's Expand all and its folders.
                     ferrite_core::transcript::Body::TurnEnd(_) => {
