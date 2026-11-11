@@ -309,13 +309,15 @@ fn mention_rows_split_name_from_directory() {
 }
 
 /// The slash picker explains the row under the cursor in a card at its
-/// side, so the keys read what the pointer's tooltip does.
+/// side, so the keys read what the pointer's tooltip does: right of the
+/// drawer, where the window has room for it.
 #[gpui::test]
 fn the_slash_picker_explains_its_cursor_row_at_its_side(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("slash-side-tip", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1800.), px(700.)));
     tick(cx);
     fake.streams.borrow()[0]
         .send(SessionEvent::Commands { commands: menu_commands() })
@@ -327,6 +329,37 @@ fn the_slash_picker_explains_its_cursor_row_at_its_side(cx: &mut TestAppContext)
     let rows = cx.debug_bounds("composer-menu-rows").expect("the picker is open");
     let tip = cx.debug_bounds("composer-menu-tip").expect("its cursor row is explained");
     assert!(tip.left() >= rows.right(), "at its side: {tip:?} / {rows:?}");
+    assert!(tip.right() <= px(1800.), "inside the window: {tip:?}");
+    drop(view);
+}
+
+/// A menu's drawer is the box's width, so in a window with no room beside
+/// it for the side card (here the `$` menu's), the card is not drawn
+/// rather than hanging off the window's edge (`float::beside`).
+#[gpui::test]
+fn the_skill_menus_side_card_stays_inside_the_window(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("skill-side-tip", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    let mut commands = menu_commands();
+    commands.push(ferrite_core::SessionCommand {
+        name: "grill-me".into(),
+        description: "A relentless interview".into(),
+        path: None,
+        source: Some(ferrite_core::CommandSource::Skill),
+    });
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Commands { commands })
+        .unwrap();
+    tick(cx);
+    cx.simulate_input("$gri");
+    cx.run_until_parked();
+    tick(cx);
+    assert!(cx.debug_bounds("composer-menu-rows").is_some(), "the skills are open");
+    assert!(cx.debug_bounds("composer-menu-tip").is_none(), "no side has room");
     drop(view);
 }
 
