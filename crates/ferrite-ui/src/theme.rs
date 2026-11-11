@@ -1912,22 +1912,36 @@ pub const COPIED_HOLD_MS: u64 = 1_500;
 /// (`components::edge_fade`).
 pub const EDGE_FADE: f32 = SPACE_6;
 pub const EDGE_FADE_KNEE: f32 = 0.85;
-/// **A turn's cards** (Claude's file and preview cards): under a finished
-/// turn's answer, one card for each page it wrote or named and each other
-/// file it wrote, `OUTPUT_CARD_GAP` apart, each at most `OUTPUT_CARD_W`
-/// wide and `OUTPUT_CARD_H` tall at `R_CARD` on `paint::RAISED` in a 1px
-/// `paint::LINE` ring, `OUTPUT_CARD_PAD` in. A page's leads with its
-/// thumbnail (`OUTPUT_THUMB_W` by the card's inner height, the globe in
-/// `INK_SUBTLE` on `CARD`), a file's with its mark in an
-/// `OUTPUT_ICON_TILE` square; then the name in `INK_STRONG` at `W_LABEL`
-/// over what it is in `INK_SUBTLE` meta type, and at the right a page's
-/// `Open` and `⋯`, a file's `Open in ›`. Its menu is a context menu's.
+/// **A turn's cards** (Claude's preview cards): under a finished turn's
+/// answer, one card for each page it wrote or named, `OUTPUT_CARD_GAP`
+/// apart, each at most `OUTPUT_CARD_W` wide and `OUTPUT_CARD_H` tall at
+/// `R_CARD` on `paint::RAISED` in a 1px `paint::LINE` ring,
+/// `OUTPUT_CARD_PAD` in. It leads with its thumbnail (`OUTPUT_THUMB_W` by
+/// the card's inner height, the globe in `INK_SUBTLE` on `CARD`); then the
+/// name in `INK_STRONG` at `W_LABEL` over what it is in `INK_SUBTLE` meta
+/// type, and at the right `Open` and `⋯`. Its menu is a context menu's.
 pub const OUTPUT_CARD_W: f32 = 400.0;
 pub const OUTPUT_CARD_H: f32 = 56.0;
 pub const OUTPUT_CARD_PAD: f32 = SPACE_2;
 pub const OUTPUT_CARD_GAP: f32 = SPACE_2;
-pub const OUTPUT_ICON_TILE: f32 = 40.0;
 pub const OUTPUT_THUMB_W: f32 = 64.0;
+/// **The changed-files card** (T3's): above the turn's page cards, at the
+/// message's width at `R_CARD` in a 1px `paint::LINE` ring. Its head,
+/// `CHANGES_HEAD_H` tall and `CHANGES_PAD_X` in, reads `N changed files`
+/// with the lines gained in `DIFF_ADDED_SIGN` and lost in
+/// `DIFF_REMOVED_SIGN`, then `Expand all` and `Open diff` at the right.
+/// Under a rule the tree: `CHANGES_ROW_H` rows, a folder (its one-child
+/// chain read as one, `src/ui`) shut until opened, each level
+/// `CHANGES_INDENT_STEP` further in from `CHANGES_INDENT`, its glyph
+/// `CHANGES_GLYPH`; a file's counts at the row's right. A press on a file
+/// opens the Changes Surface on it.
+pub const CHANGES_HEAD_H: f32 = 36.0;
+pub const CHANGES_PAD_X: f32 = 12.0;
+pub const CHANGES_ROW_H: f32 = 28.0;
+pub const CHANGES_INDENT: f32 = 8.0;
+pub const CHANGES_INDENT_STEP: f32 = 14.0;
+pub const CHANGES_GLYPH: f32 = 14.0;
+pub const CHANGES_TREE_PAD_Y: f32 = 4.0;
 /// **The lightbox** (Claude's): an image over the whole window on
 /// `LIGHTBOX_VEIL`, darkening in over `FADE_QUICK`. A bar
 /// `LIGHTBOX_BAR_H` tall along its top holds the file's name at the left

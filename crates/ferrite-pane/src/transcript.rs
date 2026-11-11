@@ -6,6 +6,15 @@
 mod message_menu;
 mod find;
 mod outputs;
+
+/// The folders a changed-files card can open, by their keys
+/// (`DisclosureId::Folder`).
+pub fn changes_folders(
+    changes: &[ferrite_core::transcript::outputs::Changed],
+    root: Option<&std::path::Path>,
+) -> Vec<String> {
+    outputs::folders(&outputs::tree(changes, root))
+}
 mod reply;
 #[cfg(any(test, feature = "test-support"))]
 pub use find::FindState;
@@ -290,6 +299,9 @@ pub enum TranscriptEvent {
     /// A background call's `View live output ▸`: the Background tasks
     /// pane.
     OpenBackground,
+    /// A changed-files card's `Open diff`, or a press on one of its files
+    /// (as the turn named it): the Changes Surface, on that file.
+    OpenChanges(Option<String>),
     /// A wrap-up's next step pressed: its words, sent as the next prompt.
     Send(String),
 }

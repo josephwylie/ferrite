@@ -165,6 +165,11 @@ pub enum DisclosureId {
     Live(BlockId),
     /// A long prompt's clamp, opened (`pane::prompt_clamps`).
     Prompt(BlockId),
+    /// A changed-files card's `Expand all`, by its turn's end.
+    Changes(BlockId),
+    /// One folder of a changed-files card, toggled from where `Expand
+    /// all` leaves it.
+    Folder(BlockId, String),
 }
 impl From<&str> for DisclosureId {
     fn from(call: &str) -> Self {
