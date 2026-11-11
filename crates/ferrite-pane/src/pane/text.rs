@@ -79,41 +79,6 @@ impl<'a> Work<'a> {
         }
     }
 
-    /// `Ran 3 commands`, `Reading 1 file`, `Called github 2 times`: the
-    /// verb in the present tense while one of its calls runs.
-    fn phrase(&self, count: usize, running: bool) -> String {
-        let counted = |active: &str, done: &str, one: &str, many: &str| {
-            let verb = if running { active } else { done };
-            format!("{verb} {count} {}", if count == 1 { one } else { many })
-        };
-        let verb = match self.kind {
-            ToolKind::Command => return counted("Running", "Ran", "command", "commands"),
-            ToolKind::Read => return counted("Reading", "Read", "file", "files"),
-            ToolKind::Edit => return counted("Editing", "Edited", "file", "files"),
-            ToolKind::Write => return counted("Writing", "Wrote", "file", "files"),
-            ToolKind::Search => {
-                return counted("Searching for", "Searched for", "pattern", "patterns")
-            }
-            ToolKind::List => return counted("Listing", "Listed", "directory", "directories"),
-            ToolKind::Fetch => return counted("Fetching", "Fetched", "page", "pages"),
-            ToolKind::WebSearch => return counted("Running", "Ran", "web search", "web searches"),
-            ToolKind::Agent => return counted("Running", "Ran", "agent", "agents"),
-            ToolKind::Findings => {
-                return counted("Reporting", "Reported", "findings report", "findings reports")
-            }
-            ToolKind::Mcp(_) if running => "Calling",
-            ToolKind::Mcp(_) => "Called",
-            ToolKind::Todo | ToolKind::Question | ToolKind::Visual | ToolKind::Other if running => {
-                "Using"
-            }
-            ToolKind::Todo | ToolKind::Question | ToolKind::Visual | ToolKind::Other => "Used",
-        };
-        match count {
-            1 => format!("{verb} {}", self.name),
-            count => format!("{verb} {} {count} times", self.name),
-        }
-    }
-
     /// One call's verb, in the present tense while it runs: `Ran`, `Read`,
     /// `Edited`, `Ran agent`; a tool with no verb of its own is named
     /// (`github`, `TodoWrite`).
@@ -138,65 +103,35 @@ impl<'a> Work<'a> {
         }
     }
 
-    /// Whether a call of this kind takes a literal argument (a command, a
-    /// path, a pattern, a URL), set in Geist Mono; an agent's task, a web
-    /// query or another tool's subject is words, set as the line is.
-    fn literal(&self) -> bool {
-        matches!(
-            self.kind,
-            ToolKind::Command
-                | ToolKind::Read
-                | ToolKind::Edit
-                | ToolKind::Write
-                | ToolKind::Search
-                | ToolKind::List
-                | ToolKind::Fetch
-        )
-    }
-
-    /// An edit or a write: what its group's summary leads with and names.
-    fn changes_files(&self) -> bool {
-        matches!(self.kind, ToolKind::Edit | ToolKind::Write)
-    }
 }
 
-/// A call line as it reads and copies, in three runs: the verb in the app's
-/// words (`Ran `, its space carried when an argument follows; empty when the
-/// row leads with the provider's description), the argument as written
-/// (`cargo test -p ferrite-core`, a path; the description's words; empty when
-/// the call has none) — `literal` when it is a command, a path or a pattern —
-/// and what came of it after its seam (` · 954 passed`), if anything.
+/// A work row's label as it reads and copies (T3's `workEntryDisplayLabel`),
+/// in two runs: the verb in the app's words (`Read `, its space carried when
+/// an argument follows; empty for a command, whose own text is its label,
+/// and for an edit, whose path is) and the argument as written. Nothing
+/// trails it: what came of a call is in its open body.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CallLine {
     pub verb: String,
     pub argument: String,
-    pub literal: bool,
-    pub result: Option<String>,
 }
 
-/// The seam before a call line's result.
+/// The seam before a running agent's summary (`agent_line`).
 pub(crate) const RESULT_SEAM: &str = " \u{b7} ";
 
-/// The tag a failed call wears after its call line, shut or open: the one
-/// red word on the row, so the failure is never behind a click.
+/// The tag a failed agent wears after its line (`call_verdict`).
 pub(crate) const FAILED_TAG: &str = "Failed";
 
 impl CallLine {
-    /// The call line as one Markdown run, so it selects and copies as the
-    /// one line it reads: the verb and the result as words, a literal
-    /// argument as inline code — a path (`path`) as a link that opens it
-    /// (`rich::PATH_SCHEME`) — anything else as words.
+    /// The label as one Markdown run, so it selects and copies as the one
+    /// line it reads: words, a path (`path`) a link that opens it
+    /// (`rich::PATH_SCHEME`).
     pub(crate) fn markdown(&self, path: bool) -> String {
         let mut source = escape_words(&self.verb);
         if path {
             source.push_str(&path_link(&self.argument, &self.argument));
-        } else if self.literal && !self.argument.is_empty() {
-            source.push_str(&code_span(&self.argument));
         } else {
             source.push_str(&escape_words(&self.argument));
-        }
-        if let Some(result) = &self.result {
-            source.push_str(&escape_words(result));
         }
         source
     }
@@ -215,18 +150,13 @@ pub(crate) fn path_link(shown: &str, path: &str) -> String {
     )
 }
 
-/// A call's line as its one Markdown run (`CallLine::markdown`), less a
-/// failed call's verdict (`call_verdict`), which stands apart from it. A
-/// call on a file is drawn in pieces instead (`call_pieces`).
+/// A call's label as its one Markdown run (`CallLine::markdown`). A call on
+/// a file is drawn in pieces instead (`call_pieces`).
 pub(crate) fn call_markdown(tool: &ToolBlock) -> String {
-    let mut line = call_line(tool);
-    if call_failed(tool) {
-        line.result = None;
-    }
-    line.markdown(argument_is_path(tool))
+    call_line(tool).markdown(argument_is_path(tool))
 }
 
-/// A call's line as the row draws it. A call on a file (`Read src/x.rs`)
+/// A call's label as the row draws it. A call on a file (`Read src/x.rs`)
 /// has its path in a run of its own, a link painted over the row's press
 /// overlay so that a click opens the file instead of folding the row; the
 /// verb before it is chrome (`Read `), not text a selection takes, so
@@ -237,8 +167,6 @@ pub(crate) enum CallPieces {
         verb: String,
         /// The path, as Markdown linking to it (`path_link`).
         path: String,
-        /// What came of it, as Markdown, after the path; empty for none.
-        trail: String,
     },
 }
 
@@ -246,29 +174,25 @@ pub(crate) fn call_pieces(tool: &ToolBlock) -> CallPieces {
     if !argument_is_path(tool) {
         return CallPieces::Whole(call_markdown(tool));
     }
-    let mut line = call_line(tool);
-    if call_failed(tool) {
-        line.result = None;
-    }
+    let line = call_line(tool);
     CallPieces::File {
         path: path_link(&line.argument, &line.argument),
-        trail: line.result.as_deref().map(escape_words).unwrap_or_default(),
         verb: line.verb,
     }
 }
 
-/// A failed call's tag after its call line (`Failed`, `Failed · 357 passed;
-/// 2 failed`): its own run, so its lead word alone wears the failure ink and
-/// it stays in view when a long line is cut.
+/// A failed agent's tag after its line (`Failed`, `Failed · 357 passed; 2
+/// failed`): its own run, so its lead word alone wears the failure ink.
 pub(crate) fn call_verdict(tool: &ToolBlock) -> Option<String> {
     if !call_failed(tool) {
         return None;
     }
-    Some(match call_line(tool).result {
-        Some(result) => format!("{FAILED_TAG}{result}"),
+    Some(match call_result(tool) {
+        Some(result) => format!("{FAILED_TAG}{RESULT_SEAM}{result}"),
         None => FAILED_TAG.to_owned(),
     })
 }
+
 
 /// Words as Markdown that reads them exactly: every ASCII punctuation mark
 /// escaped, so nothing in them is markup.
@@ -283,58 +207,25 @@ pub(crate) fn escape_words(text: &str) -> String {
     out
 }
 
-/// Text as one inline code span that reads it exactly: fenced by one more
-/// backtick than its longest run, padded where it starts or ends with one.
-fn code_span(text: &str) -> String {
-    let mut longest = 0;
-    let mut run = 0;
-    for ch in text.chars() {
-        run = if ch == '`' { run + 1 } else { 0 };
-        longest = longest.max(run);
-    }
-    let fence = "`".repeat(longest + 1);
-    let pad = if text.starts_with(['`', ' ']) || text.ends_with(['`', ' ']) {
-        " "
-    } else {
-        ""
-    };
-    format!("{fence}{pad}{text}{pad}{fence}")
-}
 
-/// A call's line. A command whose provider wrote what it is for (Claude's
-/// Bash `description`, carried as `ToolBlock::title`) leads with those
-/// words, the command behind its disclosure (`$ cmd` in its open well);
-/// otherwise the verb and the argument, a command less a leading `cd <dir>
-/// &&` (the open well keeps it).
+/// A call's label: a command's own text less a leading `cd <dir> &&` (the
+/// open body keeps it), an edit's or a write's path, any other call its
+/// verb and argument (`Read src/x.rs`).
 pub(crate) fn call_line(tool: &ToolBlock) -> CallLine {
     let work = Work::of(tool);
-    let result = call_result(tool).map(|result| format!("{RESULT_SEAM}{result}"));
-    if work.kind == ToolKind::Command {
-        if let Some(description) = tool.title.as_deref().filter(|words| !words.is_empty()) {
-            return CallLine {
-                verb: String::new(),
-                argument: description.to_owned(),
-                literal: false,
-                result,
-            };
-        }
-    }
     let argument = tool.argument();
-    let argument = if work.kind == ToolKind::Command {
-        without_cd(&argument).to_owned()
-    } else {
-        argument.into_owned()
+    let (verb, argument) = match work.kind {
+        ToolKind::Command => (String::new(), without_cd(&argument).to_owned()),
+        ToolKind::Edit | ToolKind::Write => (String::new(), argument.into_owned()),
+        _ => {
+            let mut verb = work.verb(tool.state == ToolState::Running).to_owned();
+            if !argument.is_empty() {
+                verb.push(' ');
+            }
+            (verb, argument.into_owned())
+        }
     };
-    let mut verb = work.verb(tool.state == ToolState::Running).to_owned();
-    if !argument.is_empty() {
-        verb.push(' ');
-    }
-    CallLine {
-        verb,
-        argument,
-        literal: work.literal(),
-        result,
-    }
+    CallLine { verb, argument }
 }
 
 /// What the working line says of the call it carries (`working::caption_of`),
@@ -424,195 +315,180 @@ pub(crate) fn agent_line(tool: &ToolBlock) -> (String, std::ops::Range<usize>) {
     (line, range)
 }
 
-/// A group's summary line, as it reads and copies: the provider's own
-/// caption of its calls (`ToolBlock::caption`) where its newest call carries
-/// one, else what its calls did by kind, the first phrase capitalised (`Ran
-/// 12 commands, read 1 file`) — an edit or a write of one file names it
-/// (`edited notes.md`), and either says what its diffs changed (`+5 −1`).
-/// Either way, then what went wrong, in the same words' grey (`(1 failed)`,
-/// `(1 failed, 1 without a result)`). Edits and writes lead (the named file
-/// is the summary's most useful word); the rest keep the order they first
-/// appear. At most `SUMMARY_KINDS` kinds are named; the other calls fold
-/// into `and 2 more`. `marks` are the ranges that wear their own ink: a
-/// named file and its counts.
-///
-/// Provenance: the failure count is Ferrite's own, built from the group's
-/// calls, and always said, so no caption can read a failed group as a clean
-/// one.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct GroupSummary {
-    pub text: String,
-    pub marks: Vec<(std::ops::Range<usize>, SummaryMark)>,
-}
-
-/// What a marked range of a group's summary is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SummaryMark {
-    File,
-    Added,
-    Removed,
-}
-
-/// How many kinds a group's summary names before `and N more`.
-const SUMMARY_KINDS: usize = 2;
-
-/// One kind's share of a group: its calls, whether one runs, the files it
-/// touched (an edit's or a write's) and what their diffs added and removed.
-struct KindTally<'a> {
-    work: Work<'a>,
-    count: usize,
-    running: bool,
-    files: Vec<String>,
-    added: usize,
-    removed: usize,
-}
-
-pub(crate) fn group_summary(members: &[Block]) -> GroupSummary {
-    let caption = group_tools(members)
-        .last()
-        .and_then(|tool| tool.caption.as_deref())
-        .map(str::trim)
-        .filter(|caption| !caption.is_empty());
-    let (mut text, marks) = match caption {
-        Some(caption) => (caption.to_owned(), Vec::new()),
-        None => kinds_summary(members),
-    };
+/// A group's summary line, as it reads and copies (T3 Code's
+/// `summarizeToolGroup`): a group of thoughts alone is `Thought (×3)`;
+/// otherwise its thoughts are left out and its calls are counted by what
+/// they did. MCP calls lead by their integration (`Used github
+/// integration`), then at most two actions are named, the weightier first
+/// chosen (`Action::priority`) and the chosen put in the order they first
+/// appear, and the rest are `performed N other actions`. Joined with `and`,
+/// or an Oxford comma past two: `Ran 4 commands and changed 10 files`.
+/// Always in the past tense, and never a failure: a failed call stands
+/// apart from any group, and a failure tints its row's icon.
+pub(crate) fn group_summary(members: &[Block]) -> String {
     let tools: Vec<&ToolBlock> = group_tools(members).collect();
-    let failed = tools.iter().filter(|tool| call_failed(tool)).count();
-    let unanswered = tools
-        .iter()
-        .filter(|tool| tool.state == ToolState::Unavailable)
-        .count();
-    let stopped = tools
-        .iter()
-        .filter(|tool| tool.state == ToolState::Stopped)
-        .count();
-    let mut wrong = Vec::new();
-    if stopped > 0 {
-        wrong.push(format!("{stopped} {STOPPED}"));
-    }
-    if failed > 0 {
-        wrong.push(format!("{failed} {}", theme::words::FAILED));
-    }
-    if unanswered > 0 {
-        wrong.push(format!(
-            "{unanswered} without {}",
-            if unanswered == 1 {
-                "a result"
-            } else {
-                "results"
-            }
-        ));
-    }
-    if !wrong.is_empty() {
-        text.push_str(&format!(" ({})", wrong.join(", ")));
-    }
-    GroupSummary { text, marks }
-}
-
-/// What a group's calls did by kind, as [`GroupSummary`] words it, and its
-/// marks.
-fn kinds_summary(members: &[Block]) -> (String, Vec<(std::ops::Range<usize>, SummaryMark)>) {
-    let mut kinds: Vec<KindTally> = Vec::new();
-    for tool in group_tools(members) {
-        let work = Work::of(tool);
-        let at = match kinds.iter().position(|tally| tally.work == work) {
-            Some(at) => at,
-            None => {
-                kinds.push(KindTally {
-                    work,
-                    count: 0,
-                    running: false,
-                    files: Vec::new(),
-                    added: 0,
-                    removed: 0,
-                });
-                kinds.len() - 1
-            }
+    if tools.is_empty() {
+        return match members.len() {
+            1 => "Thought".to_owned(),
+            count => format!("Thought (\u{d7}{count})"),
         };
-        let tally = &mut kinds[at];
-        tally.count += 1;
-        tally.running |= tool.state == ToolState::Running;
-        if tally.work.changes_files() {
-            let paths: Vec<&str> = if tool.diffs.is_empty() {
-                vec![tool.summary.as_str()]
-            } else {
-                tool.diffs.iter().map(|diff| diff.path.as_str()).collect()
-            };
-            for path in paths.into_iter().filter(|path| !path.is_empty()) {
-                if !tally.files.iter().any(|seen| seen == path) {
-                    tally.files.push(path.to_owned());
+    }
+    let mut integrations: Vec<&str> = Vec::new();
+    let mut actions: Vec<(Action, Vec<&ToolBlock>)> = Vec::new();
+    for tool in tools.iter().copied() {
+        match Action::of(tool) {
+            None => {
+                let ToolKind::Mcp(server) = tools::policy(&tool.name).kind else {
+                    continue;
+                };
+                if !integrations.contains(&server) {
+                    integrations.push(server);
                 }
             }
-            for diff in &tool.diffs {
-                tally.added += diff.added;
-                tally.removed += diff.removed;
-            }
+            Some(action) => match actions.iter_mut().find(|(seen, _)| *seen == action) {
+                Some((_, calls)) => calls.push(tool),
+                None => actions.push((action, vec![tool])),
+            },
         }
     }
-    // Stable: edits and writes first, the rest in their first order.
-    kinds.sort_by_key(|tally| !tally.work.changes_files());
-    let mut text = String::new();
-    let mut marks = Vec::new();
-    let mut mark = |text: &mut String, words: &str, kind: SummaryMark| {
-        let start = text.len();
-        text.push_str(words);
-        marks.push((start..text.len(), kind));
-    };
-    for (index, tally) in kinds.iter().take(SUMMARY_KINDS).enumerate() {
-        // One file edited or written is named, as the app's summary does.
-        let named = match tally.files.as_slice() {
-            [file] if tally.work.changes_files() => Some(file_name(file)),
-            _ => None,
-        };
-        let phrase = match &named {
-            Some(_) => format!("{} ", tally.work.verb(tally.running)),
-            None => tally.work.phrase(tally.count, tally.running),
-        };
-        if index > 0 {
-            // Only the verb lowers: a server's name keeps its case.
-            text.push_str(", ");
-            let mut chars = phrase.chars();
-            if let Some(first) = chars.next() {
-                text.extend(first.to_lowercase());
-                text.push_str(chars.as_str());
-            }
+    let mut chosen: Vec<usize> = (0..actions.len()).collect();
+    chosen.sort_by_key(|at| (actions[*at].0.priority(), *at));
+    chosen.truncate(2);
+    chosen.sort_unstable();
+    let mut labels = Vec::new();
+    if !integrations.is_empty() {
+        let noun = if integrations.len() == 1 {
+            "integration"
         } else {
-            text.push_str(&phrase);
-        }
-        if let Some(name) = named {
-            mark(&mut text, &name, SummaryMark::File);
-        }
-        if tally.added > 0 {
-            text.push(' ');
-            mark(&mut text, &format!("+{}", tally.added), SummaryMark::Added);
-        }
-        if tally.removed > 0 {
-            text.push(' ');
-            mark(
-                &mut text,
-                &format!("\u{2212}{}", tally.removed),
-                SummaryMark::Removed,
-            );
-        }
+            "integrations"
+        };
+        labels.push(format!("Used {} {noun}", sentence_list(&integrations)));
     }
-    let more: usize = kinds
-        .iter()
-        .skip(SUMMARY_KINDS)
-        .map(|tally| tally.count)
-        .sum();
-    if more > 0 {
-        text.push_str(&format!(" and {more} more"));
+    let integrated = tools.len() - actions.iter().map(|(_, calls)| calls.len()).sum::<usize>();
+    let named: usize = chosen.iter().map(|at| actions[*at].1.len()).sum();
+    labels.extend(
+        chosen
+            .iter()
+            .map(|at| actions[*at].0.label(&actions[*at].1)),
+    );
+    let rest = tools.len() - integrated - named;
+    if rest > 0 {
+        labels.push(format!(
+            "Performed {rest} other {}",
+            if rest == 1 { "action" } else { "actions" }
+        ));
     }
-    (text, marks)
+    let labels: Vec<String> = labels
+        .into_iter()
+        .enumerate()
+        .map(|(index, label)| {
+            if index == 0 {
+                return label;
+            }
+            let mut chars = label.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_lowercase().chain(chars).collect()
+            })
+        })
+        .collect();
+    sentence_list(&labels)
 }
 
-/// A path's last component (`src/notes.md` → `notes.md`).
-fn file_name(path: &str) -> String {
-    std::path::Path::new(path).file_name().map_or_else(
-        || path.to_owned(),
-        |name| name.to_string_lossy().into_owned(),
-    )
+/// `a`, `a and b`, `a, b, and c`.
+fn sentence_list(items: &[impl AsRef<str>]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.as_ref().to_owned(),
+        [first, second] => format!("{} and {}", first.as_ref(), second.as_ref()),
+        [init @ .., last] => {
+            let init: Vec<&str> = init.iter().map(AsRef::as_ref).collect();
+            format!("{}, and {}", init.join(", "), last.as_ref())
+        }
+    }
+}
+
+/// What a call counts toward in its group's summary (T3's
+/// `ToolGroupAction`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Action {
+    Command,
+    Edit,
+    Agent,
+    Read,
+    CodeSearch,
+    WebSearch,
+    Browser,
+    Other,
+}
+
+impl Action {
+    /// `None` for an integration's call (an MCP server's), which the
+    /// summary names by its integration instead.
+    fn of(tool: &ToolBlock) -> Option<Self> {
+        let policy = tools::policy(&tool.name);
+        Some(match policy.kind {
+            ToolKind::Command => Self::Command,
+            ToolKind::Edit | ToolKind::Write => Self::Edit,
+            ToolKind::Agent => Self::Agent,
+            ToolKind::Read | ToolKind::List => Self::Read,
+            ToolKind::Search => Self::CodeSearch,
+            ToolKind::Fetch | ToolKind::WebSearch => Self::WebSearch,
+            _ if policy.icon == tools::ToolIcon::Browser => Self::Browser,
+            ToolKind::Mcp(server) if server != "ferrite" => return None,
+            _ => Self::Other,
+        })
+    }
+
+    /// Which actions a summary names first: what changed things, then what
+    /// read them, then the rest.
+    fn priority(self) -> u8 {
+        match self {
+            Self::Command | Self::Edit | Self::Agent => 0,
+            Self::Read | Self::CodeSearch | Self::WebSearch | Self::Browser => 1,
+            Self::Other => 2,
+        }
+    }
+
+    fn label(self, calls: &[&ToolBlock]) -> String {
+        let counted = |count: usize, verb: &str, one: &str, many: &str| {
+            format!("{verb} {count} {}", if count == 1 { one } else { many })
+        };
+        let times = |count: usize, verb: &str| counted(count, verb, "time", "times");
+        let count = calls.len();
+        match self {
+            Self::Command => counted(count, "Ran", "command", "commands"),
+            Self::Edit => counted(changed_files(calls), "Changed", "file", "files"),
+            Self::Agent => counted(count, "Ran", "agent", "agents"),
+            Self::Read => counted(count, "Read", "file", "files"),
+            Self::CodeSearch => times(count, "Searched code"),
+            Self::WebSearch => times(count, "Searched the web"),
+            Self::Browser => times(count, "Used browser"),
+            Self::Other => counted(count, "Used", "tool", "tools"),
+        }
+    }
+}
+
+/// How many files a group's edits changed: the distinct paths their diffs
+/// (or, with none, their arguments) name, and one for each edit that names
+/// none.
+fn changed_files(edits: &[&ToolBlock]) -> usize {
+    let mut paths = std::collections::BTreeSet::new();
+    let mut unnamed = 0;
+    for edit in edits {
+        let named: Vec<&str> = if edit.diffs.is_empty() {
+            [edit.summary.as_str()]
+                .into_iter()
+                .filter(|path| !path.is_empty() && !path.contains(char::is_whitespace))
+                .collect()
+        } else {
+            edit.diffs.iter().map(|diff| diff.path.as_str()).collect()
+        };
+        if named.is_empty() {
+            unnamed += 1;
+        }
+        paths.extend(named);
+    }
+    paths.len() + unnamed
 }
 
 /// A group's calls, in order.
@@ -756,17 +632,11 @@ pub(crate) fn collect_block_text(
             let (text, _) = inline(spans);
             let _ = selection.line(block.id, text, Vec::new());
         }
+        // A thought's one-line preview is its label, not text; open, its
+        // whole body is.
         Body::Thinking(thought) => {
-            if !thought.trim().is_empty() {
-                match reasoning_text(thought).1 {
-                    None => {
-                        let _ = selection.markdown(block.id, thought.trim().to_owned());
-                    }
-                    Some(details) if expanded => {
-                        let _ = selection.markdown(block.id, details);
-                    }
-                    Some(_) => {}
-                }
+            if expanded && !thought.trim().is_empty() {
+                let _ = selection.markdown(block.id, thought.trim().to_owned());
             }
         }
         Body::Notice(text) | Body::Meta(text) => {
@@ -790,22 +660,20 @@ pub(crate) fn collect_block_text(
 pub(crate) fn collect_group_text(
     members: &[Block],
     expanded: bool,
-    member_expanded: impl Fn(&ToolBlock) -> bool,
+    member_expanded: impl Fn(&Block) -> bool,
     selection: &TextRuns,
 ) {
     let Some(leader) = members.first() else {
         return;
     };
-    let _ = selection.line(leader.id, group_summary(members).text, Vec::new());
+    let _ = selection.line(leader.id, group_summary(members), Vec::new());
     let drawn: Vec<&Block> = if expanded {
         members.iter().collect()
     } else {
         group_live(members)
     };
     for block in drawn {
-        if let Body::Tool(tool) = &block.body {
-            collect_tool_text(block.id, tool, member_expanded(tool), selection);
-        }
+        collect_block_text(block, member_expanded(block), &[], selection);
     }
 }
 
@@ -824,15 +692,9 @@ fn collect_tool_text(block: BlockId, tool: &ToolBlock, expanded: bool, selection
         CallPieces::Whole(call) => {
             let _ = selection.markdown(block, call);
         }
-        CallPieces::File { path, trail, .. } => {
+        CallPieces::File { path, .. } => {
             let _ = selection.markdown(block, path);
-            if !trail.is_empty() {
-                let _ = selection.markdown(block, trail);
-            }
         }
-    }
-    if let Some(verdict) = call_verdict(tool) {
-        let _ = selection.line(block, verdict, Vec::new());
     }
     if !expanded {
         return;
@@ -933,10 +795,10 @@ mod tests {
         assert_eq!(words(&transcript), ["Ran sed", "Failed cargo"]);
     }
 
-    /// A call row reads in the UI face: only its literal argument is a
-    /// code span (mono); a description is words.
+    /// A command's row reads its command (T3's); the provider's
+    /// description is the working line's.
     #[test]
-    fn a_call_row_is_words_but_its_command() {
+    fn a_command_row_reads_its_command_not_its_description() {
         let mut transcript = Transcript::default();
         for (id, input) in [
             ("bare", serde_json::json!({"command": "cargo test"})),
@@ -954,7 +816,7 @@ mod tests {
         let rows: Vec<String> = group_tools(transcript.blocks())
             .map(call_markdown)
             .collect();
-        assert_eq!(rows, ["Running `cargo test`", "Wait a while"]);
+        assert_eq!(rows, ["cargo test", "sleep 15"]);
     }
 
     /// The working line carries a call in its description where the
@@ -1000,56 +862,119 @@ mod tests {
         );
     }
 
-    /// The provider's caption on a group's newest call stands for Ferrite's
-    /// tally, and the group's failures are still said after it; a caption
-    /// on an older call does not speak for the calls after it.
-    #[test]
-    fn a_provider_caption_reads_with_the_failure_suffix() {
-        let mut transcript = Transcript::default();
-        read(&mut transcript, "a", true);
-        read(&mut transcript, "b", false);
-        transcript.apply(Input::Event(SessionEvent::ToolSummary {
-            ids: vec!["a".into(), "b".into()],
-            summary: "Read the two configs".into(),
+    fn call(transcript: &mut Transcript, id: &str, name: &str, input: serde_json::Value) {
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: id.into(),
+            name: name.into(),
+            input,
         }));
-        let summary = group_summary(transcript.blocks());
-        assert_eq!(summary.text, "Read the two configs (1 failed)");
-        assert!(summary.marks.is_empty());
+    }
 
-        read(&mut transcript, "c", false);
+    fn settle(transcript: &mut Transcript, id: &str) {
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: id.into(),
+            output: "ok".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        }));
+    }
+
+    fn summary(build: impl FnOnce(&mut Transcript)) -> String {
+        let mut transcript = Transcript::default();
+        build(&mut transcript);
+        group_summary(transcript.blocks())
+    }
+
+    fn command(transcript: &mut Transcript, id: &str) {
+        call(transcript, id, "Bash", serde_json::json!({ "command": "ls" }));
+        settle(transcript, id);
+    }
+
+    fn edit(transcript: &mut Transcript, id: &str, path: &str) {
+        call(transcript, id, "Edit", serde_json::json!({ "file_path": path }));
+        settle(transcript, id);
+    }
+
+    /// T3's grammar: two actions named with `and`, an edit counted by the
+    /// distinct files it changed, singular at one.
+    #[test]
+    fn a_group_summary_names_two_actions_in_the_past_tense() {
         assert_eq!(
-            group_summary(transcript.blocks()).text,
-            "Read 3 files (1 failed)"
+            summary(|t| {
+                for at in 0..4 {
+                    command(t, &format!("c{at}"));
+                }
+                for at in 0..12 {
+                    edit(t, &format!("e{at}"), &format!("src/{}.rs", at % 10));
+                }
+            }),
+            "Ran 4 commands and changed 10 files"
+        );
+        assert_eq!(summary(|t| command(t, "a")), "Ran 1 command");
+        assert_eq!(
+            summary(|t| {
+                edit(t, "a", "src/a.rs");
+                edit(t, "b", "src/a.rs");
+            }),
+            "Changed 1 file"
+        );
+        // Still running, still the past tense; a failure says nothing.
+        assert_eq!(
+            summary(|t| {
+                command(t, "a");
+                call(t, "b", "Bash", serde_json::json!({ "command": "make" }));
+                read(t, "c", true);
+            }),
+            "Ran 2 commands and read 1 file"
         );
     }
 
-    /// A denied call, and one cut off by a stopped turn, are stopped, not
-    /// failed: the group says so and the row's tag is no red `Failed`.
+    /// The weightier actions are chosen, then put in the order they first
+    /// appeared; the rest are other actions, after an Oxford comma.
     #[test]
-    fn a_group_counts_what_the_operator_stopped() {
-        let mut transcript = Transcript::default();
-        read(&mut transcript, "a", false);
-        transcript.apply(Input::Event(SessionEvent::ToolStarted {
-            id: "b".into(),
-            name: "Bash".into(),
-            input: serde_json::json!({"command": "rm -rf build"}),
-        }));
-        transcript.apply(Input::Answered {
-            allowed: false,
-            tool_name: "Bash".into(),
-        });
-        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
-            id: "b".into(),
-            output: "The user doesn't want to proceed".into(),
-            is_error: true,
-            result: ferrite_core::ToolResult::Opaque,
-        }));
-        let stopped = group_tools(transcript.blocks()).last().unwrap().clone();
-        assert_eq!(stopped.state, ToolState::Stopped);
-        assert_eq!(call_verdict(&stopped), None, "stopped is not failed");
-        assert_eq!(call_result(&stopped).as_deref(), Some("stopped"));
-        assert!(group_summary(transcript.blocks())
-            .text
-            .ends_with("(1 stopped)"));
+    fn a_group_summary_counts_what_it_does_not_name() {
+        assert_eq!(
+            summary(|t| {
+                read(t, "r", false);
+                call(t, "g", "Grep", serde_json::json!({ "pattern": "x" }));
+                command(t, "c");
+                edit(t, "e", "a.rs");
+                call(t, "o", "SomethingNew", serde_json::json!({}));
+            }),
+            "Ran 1 command, changed 1 file, and performed 3 other actions"
+        );
+        assert_eq!(
+            summary(|t| {
+                call(t, "a", "mcp__github__get_issue", serde_json::json!({}));
+                call(t, "b", "mcp__linear__get_issue", serde_json::json!({}));
+                command(t, "c");
+            }),
+            "Used github and linear integrations and ran 1 command"
+        );
+    }
+
+    /// Thoughts alone are counted as thoughts; beside calls they are not
+    /// counted at all.
+    #[test]
+    fn a_group_of_thoughts_reads_thought() {
+        let thought = |t: &mut Transcript, text: &str| {
+            t.apply(Input::Event(SessionEvent::ThinkingDelta { text: text.into() }));
+            t.apply(Input::Event(SessionEvent::ContentBoundary));
+        };
+        assert_eq!(
+            summary(|t| {
+                thought(t, "one");
+                thought(t, "two");
+                thought(t, "three");
+            }),
+            "Thought (\u{d7}3)"
+        );
+        assert_eq!(
+            summary(|t| {
+                thought(t, "one");
+                command(t, "a");
+            }),
+            "Ran 1 command"
+        );
     }
 }

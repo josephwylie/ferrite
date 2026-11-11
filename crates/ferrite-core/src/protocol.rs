@@ -2145,6 +2145,7 @@ fn main_outgoing(input: &Input, duration: Option<Duration>) -> Outgoing {
         )
         | Input::Prompt(_)
         | Input::PromptObservation { .. }
+        | Input::ClockObservation { .. }
         | Input::Rewind { .. }
         | Input::CompletionObservation { .. } => unreachable!("the log keeps {input:?}"),
     };

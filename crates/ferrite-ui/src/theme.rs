@@ -700,11 +700,10 @@ pub const DIFF_REMOVED_WORD_ALPHA: f32 = 0.2765;
 /// A diff row's sign: the only hued glyph on the row.
 pub const DIFF_ADDED_SIGN: u32 = GREEN;
 pub const DIFF_REMOVED_SIGN: u32 = RED;
-/// How far the working caption's shimmer lifts its colour toward white at
-/// the crest (`components::shimmer`): Claude's clay crests near `#ffe1d3`.
+/// How far a shimmer over an ink other than `INK_SUBTLE` lifts it toward
+/// white at its crest (`components::shimmer_crest`); over `INK_SUBTLE` it
+/// crests at `INK_STRONG`, as T3's does.
 pub const SHIMMER_LIFT: f32 = 0.75;
-/// Claude's shimmer crest: the prototype's gradient's middle stop.
-pub const SHIMMER_CREST_CLAUDE: u32 = 0xffe1d3;
 
 // ------------------------------------------------------------- the float
 //
@@ -1537,16 +1536,9 @@ pub const HUNK_MAX_ROWS: usize = 24;
 /// 20px — an invisible hit area, not a drawn thing: a disclosure's gutter
 /// target (the whole row toggles too) and a prompt action's button.
 pub const TOOL_DISCLOSURE_HIT: f32 = GUTTER_W;
-/// **The tool group's card** (`pane::render_tool_group`, Claude's measured
-/// card, geometry.md "Tool group (open)"): each call's row
-/// `TOOL_CARD_ROW_H` for its line, its words `TOOL_CARD_INSET` in from the
-/// card's edges, the card hanging `CARD_OUTSET` past the column's left
-/// edge so its rows' words sit a step inside the prose.
-pub const TOOL_CARD_ROW_H: f32 = 36.0;
-pub const TOOL_CARD_INSET: f32 = SPACE_3;
 /// 4px — **one left edge** (Claude's): text sits on the transcript column
-/// and every card's ring hangs this far outside it — the tool group, the
-/// task list, a fence, a Decision.
+/// and every card's ring hangs this far outside it — the task list, a
+/// fence, a Decision.
 pub const CARD_OUTSET: f32 = SPACE_1;
 /// One cell of the transcript grid at reading size `size`: Geist Mono's
 /// advance (`CODE_ADVANCE`), 7.8px at Standard.
@@ -1558,12 +1550,6 @@ pub fn tx_cell(size: f32) -> f32 {
 /// mark in its first cell, the content column after its second.
 pub fn tx_gutter(size: f32) -> f32 {
     2.0 * tx_cell(size)
-}
-
-/// A drawn transcript mark (`∴`) at reading size `size`: sized like a glyph
-/// of the face, 12px at Standard (`GLYPH_BOX`).
-pub fn tx_mark(size: f32) -> f32 {
-    (size * GLYPH_BOX / FS_PROSE).round()
 }
 
 /// Half a transcript line, whole pixels: the prompt band's padding above
@@ -1611,8 +1597,49 @@ pub const TX_COLUMN_MAX_W: f32 = 736.0;
 /// The reading column's width in a transcript `width` wide: the width less
 /// the insets, at most `TX_COLUMN_MAX_W`.
 pub fn tx_column(width: f32, solo: bool) -> f32 {
-    (width - 2. * tx_inset(solo)).min(TX_COLUMN_MAX_W)
+    (width - 2. * tx_inset_at(width, solo)).min(TX_COLUMN_MAX_W)
 }
+
+/// A Solo transcript's side padding (T3's chat canvas): `TX_INSET_WIDE`
+/// from `TX_INSET_BREAK` wide up, `TX_INSET_NARROW` under it. Either clears
+/// the minimap rail (`MINIMAP_W`).
+pub const TX_INSET_WIDE: f32 = 48.0;
+pub const TX_INSET_NARROW: f32 = 12.0;
+pub const TX_INSET_BREAK: f32 = 640.0;
+
+/// The transcript column's inset in a transcript `width` wide: a Solo
+/// Pane's by its width, a Group Pane's `TX_INSET_GROUP`.
+pub fn tx_inset_at(width: f32, solo: bool) -> f32 {
+    match solo {
+        true if width >= TX_INSET_BREAK => TX_INSET_WIDE,
+        true => TX_INSET_NARROW,
+        false => TX_INSET_GROUP,
+    }
+}
+
+/// **The transcript's ground**: T3's timeline is black (`TX_GROUND`); a
+/// Group Pane is a card on the board and keeps `CARD`.
+pub const TX_GROUND: u32 = 0x000000;
+
+pub fn tx_ground(solo: bool) -> u32 {
+    if solo {
+        TX_GROUND
+    } else {
+        CARD
+    }
+}
+
+/// T3's top fade (`topbar-scroll-fade`) over `EDGE_FADE`, as the ground's
+/// alpha from the edge: its mask's stops inverted.
+pub const TX_TOP_FADE_STOPS: [(f32, f32); 7] = [
+    (0.0, 1.0),
+    (0.10, 0.90),
+    (0.24, 0.70),
+    (0.42, 0.42),
+    (0.62, 0.18),
+    (0.82, 0.04),
+    (1.0, 0.0),
+];
 
 /// The transcript column's inset for a Solo (`solo`) or a Group Pane.
 pub fn tx_inset(solo: bool) -> f32 {
@@ -1688,8 +1715,8 @@ pub const MINIMAP_BAND_HOVER: u32 = 0xffffff1c;
 
 /// The room over a transcript's first row: a Solo Pane's `TX_PAD_T`, a
 /// board Pane's `TX_PAD_T_BOARD`, so a first prompt's bubble never meets
-/// the head's rule.
-pub const TX_PAD_T: f32 = LH_UI;
+/// the head's rule (T3's `h-4` top spacer in Solo).
+pub const TX_PAD_T: f32 = SPACE_4;
 pub const TX_PAD_T_BOARD: f32 = SPACE_3;
 /// What a prompt band's chip line adds below it: the prototype's chip is an
 /// `inline-flex` box seated on its icon's synthesized baseline, which lifts
@@ -1738,6 +1765,59 @@ pub const TURN_FOLD_TIME: f32 = 12.0;
 /// The compacting header's icon, `TURN_FOLD_ICON_GAP` before its words.
 pub const TURN_FOLD_ICON: f32 = 12.0;
 pub const TURN_FOLD_ICON_GAP: f32 = SPACE_2;
+/// **Work rows** (T3 Code's `WorkLogLine`): every call, thought and update
+/// is a row at least `WORK_ROW_H` tall, `WORK_ROW_TEXT` on `WORK_ROW_LINE`
+/// in `INK_SUBTLE` (an update's words `INK_STRONG` at `WORK_UPDATE_ALPHA`),
+/// `WORK_ROW_PAD_X` in from the column and `WORK_ROW_PAD_Y` over and under
+/// it alone (none in a group's list). It leads with a `WORK_ICON` glyph
+/// centred in a `WORK_GUTTER` cell, `INK_SUBTLE` at `WORK_ICON_ALPHA` and
+/// stroked `WORK_ICON_STROKE` (Lucide's own), then `WORK_GAP`, the one-line
+/// label cut with `…`, then at the end its time (`WORK_TIME` type,
+/// `WORK_TIME_END` off the chevron slot) shown only under the pointer and
+/// taking no room at rest, and a `WORK_CHEVRON_SLOT` holding a
+/// `WORK_CHEVRON` chevron at `WORK_ICON_ALPHA`, turned a quarter over
+/// `MOTION_WORK_CHEVRON_MS` when open and kept, invisible, on a row that
+/// cannot open. Rows touch; the run stands `WORK_LOG_PAD_B` off what
+/// follows (`rows::gap_before`). A failed call's icon is `TOOL_ERROR_ICON`
+/// at `TOOL_ERROR_ALPHA`, its words no different.
+pub const WORK_ROW_H: f32 = 24.0;
+pub const WORK_ROW_TEXT: f32 = 14.0;
+pub const WORK_ROW_LINE: f32 = 22.75;
+pub const WORK_ROW_PAD_X: f32 = 2.0;
+pub const WORK_ROW_PAD_Y: f32 = 2.0;
+pub const WORK_ROW_RADIUS: f32 = 6.0;
+pub const WORK_ICON: f32 = 16.0;
+pub const WORK_GUTTER: f32 = 24.0;
+pub const WORK_GAP: f32 = 6.0;
+pub const WORK_ICON_STROKE: f32 = 2.0 * WORK_ICON / 24.0;
+pub const WORK_ICON_ALPHA: f32 = 0.7;
+pub const WORK_UPDATE_ALPHA: f32 = 0.8;
+pub const WORK_TIME: f32 = 12.0;
+pub const WORK_TIME_END: f32 = SPACE_1;
+pub const WORK_CHEVRON_SLOT: f32 = 16.0;
+pub const WORK_CHEVRON: f32 = 12.0;
+pub const MOTION_WORK_CHEVRON_MS: u64 = 200;
+pub const WORK_LOG_PAD_B: f32 = SPACE_2;
+pub const TOOL_ERROR_ICON: u32 = 0xfca5a5;
+pub const TOOL_ERROR_ALPHA: f32 = 0.4;
+/// **A work row's detail** (T3's `WorkLogDetails`): a thought's body and an
+/// error's message stand `WORK_DETAIL_INDENT` in, past the icon gutter, a
+/// thought's at most `THOUGHT_BODY_MAX_H` tall and scrolling in itself; a
+/// command's output at most `COMMAND_OUTPUT_MAX_H`, any other call's body
+/// `FALLBACK_BODY_MAX_H`, in `WORK_DETAIL_CODE` mono.
+pub const WORK_DETAIL_INDENT: f32 = 28.0;
+pub const THOUGHT_BODY_MAX_H: f32 = 384.0;
+pub const COMMAND_OUTPUT_MAX_H: f32 = 320.0;
+pub const FALLBACK_BODY_MAX_H: f32 = 256.0;
+pub const WORK_DETAIL_CODE: f32 = 11.0;
+/// **An open group's list** (T3's `ExpandedWorkGroupEntries`): its rows
+/// plainly, no card, no rules, at most `WORK_LIST_MAX_H` (or half the view,
+/// whichever is less) plus what its opened rows add, scrolling in itself;
+/// `WORK_LIST_FADE` fades at whichever edge has rows past it, and
+/// `WORK_LIST_PAD_B` under it.
+pub const WORK_LIST_MAX_H: f32 = 288.0;
+pub const WORK_LIST_FADE: f32 = SPACE_6;
+pub const WORK_LIST_PAD_B: f32 = SPACE_1;
 /// **Message actions**: a prompt's (its send time and `Copy`, under its
 /// bubble's right edge) and a turn's answer's (`Copy` and the time it
 /// finished, under its left edge), `MESSAGE_ACTIONS_GAP` under the message,
@@ -3549,12 +3629,12 @@ pub const MOTION_PULSE_TICK_MS: u64 = 33;
 /// Desktop's four-dot glyph does.
 /// Drawn at the display's rate, never stepped.
 pub const MOTION_WORKING_MARK_MS: u64 = 2_500;
-/// 2.4s — one sweep of the shimmer's crest across the working caption,
-/// left to right.
-pub const MOTION_SHIMMER_MS: u64 = 2_400;
-/// The crest's half-width, as a fraction of the caption's width (the
-/// prototype's 35%–50%–65% stops over a 300% gradient).
-pub const SHIMMER_HALF_WIDTH: f32 = 0.45;
+/// 2.2s — one sweep of a live label's shine (T3's `live-tool-shine` and
+/// `ActivityShimmerOverlay`), left to right in `SHIMMER_STEPS` steps, its
+/// window a fixed `SHIMMER_BAND` wide whatever the label's width.
+pub const MOTION_SHIMMER_MS: u64 = 2_200;
+pub const SHIMMER_STEPS: usize = 30;
+pub const SHIMMER_BAND: f32 = 72.0;
 /// 1.0s — the focused Composer's caret: a hard blink, shown for the first
 /// half of the period and hidden for the second (500 on, 500 off), as
 /// both reference apps blink theirs.

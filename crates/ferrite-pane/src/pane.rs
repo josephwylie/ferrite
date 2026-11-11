@@ -23,6 +23,7 @@ mod output;
 mod text;
 mod usage;
 mod working;
+mod work_row;
 mod wrap_up;
 pub(crate) use agents::{is_agent, render_agent};
 pub use agents::{AgentFace, AgentFaces, AgentRun};
@@ -1179,7 +1180,7 @@ fn pane_shell(edge: PaneEdge) -> Div {
         .min_h_0()
         .min_w_0()
         .rounded(px(radius))
-        .bg(theme::paint::CARD)
+        .bg(rgb(theme::tx_ground(edge == PaneEdge::Flush)))
         .font_family(theme::FONT_UI)
         .overflow_hidden()
 }
@@ -2814,66 +2815,6 @@ pub fn binding_label(workspace: Option<&WorkspaceBinding>) -> SharedString {
 // for the nav's rows; the header's binding slot is the display-only branch
 // text now.
 
-// ----------------------------------------------------------- Block render
-
-/// The text left after the first `n` whitespace-separated words.
-fn skip_words(text: &str, n: usize) -> &str {
-    let mut rest = text.trim_start();
-    for _ in 0..n {
-        match rest.find(char::is_whitespace) {
-            Some(cut) => rest = rest[cut..].trim_start(),
-            None => return "",
-        }
-    }
-    rest
-}
-
-/// A preview of received text, never a second provider reasoning channel.
-/// Keep a short first line in the header; disclose only what follows it.
-/// The disclosure never repeats what the header already shows: where the
-/// first line was cut to fit, the details open on the rest of that line and
-/// run into the paragraphs under it, so expanding reads as a continuation
-/// rather than the same sentence twice.
-pub fn reasoning_text(thought: &str) -> (String, Option<String>) {
-    let thought = thought.trim();
-    let (first, rest) = thought.split_once('\n').unwrap_or((thought, ""));
-    let first = first.trim();
-    let heading = first
-        .strip_prefix("**")
-        .and_then(|text| text.strip_suffix("**"))
-        .or_else(|| {
-            let text = first.trim_start_matches('#');
-            (text.len() < first.len() && text.starts_with(' ')).then(|| text.trim())
-        })
-        .unwrap_or(first);
-    let summary = ferrite_core::progress::one_line(heading, 160);
-    let rest = rest.trim();
-    // `one_line` cuts the header at 160 characters and marks the cut with
-    // `…`. The disclosure picks the line up from the last word the header
-    // shows, so expanding continues the sentence instead of repeating it —
-    // and that one word is shared, because the cut can land mid-word and
-    // half a word is no place to resume reading. The tail runs through
-    // `one_line` too: a header and its continuation are one sentence, so
-    // they collapse whitespace the same way.
-    let tail = summary
-        .strip_suffix('…')
-        .map(|shown| skip_words(heading, shown.split_whitespace().count().saturating_sub(1)))
-        .map(|tail| ferrite_core::progress::one_line(tail, usize::MAX))
-        .unwrap_or_default();
-    let tail = tail.as_str();
-    let details = match (tail.is_empty(), rest.is_empty()) {
-        (true, true) => None,
-        (true, false) => Some(rest.to_owned()),
-        (false, true) => Some(tail.to_owned()),
-        (false, false) => Some(format!("{tail}\n\n{rest}")),
-    };
-    (summary, details)
-}
-
-pub(crate) fn reasoning_has_details(thought: &str) -> bool {
-    reasoning_text(thought).1.is_some()
-}
-
 // ---------------------------------------------------------- transcript rows
 
 /// The grid a transcript row is set on (the WP-A grammar in `theme.rs`):
@@ -2932,11 +2873,6 @@ impl Grid {
         theme::tx_gutter(self.size)
     }
 
-    /// A drawn mark's box (`∴`).
-    pub(crate) fn mark(self) -> f32 {
-        theme::tx_mark(self.size)
-    }
-
     /// Half a line, whole pixels.
     pub fn half(self) -> f32 {
         theme::tx_half(self.line)
@@ -2959,12 +2895,6 @@ pub(crate) fn mark_gutter(grid: Grid, mark: impl IntoElement) -> Div {
 /// open body, a diff): Geist Mono whatever face the transcript reads in.
 pub(crate) fn on_cells(row: Div) -> Div {
     row.font_family(theme::FONT_CODE)
-}
-
-/// A transcript row led by its mark, then its words (the caller's next
-/// child, `flex_1 min_w_0`); wrapped lines hang under the words.
-fn grid_row(mark: Div) -> Div {
-    div().flex().items_start().w_full().min_w_0().child(mark)
 }
 
 /// A row on the column's edge, as every row's words are.
@@ -2992,8 +2922,8 @@ impl RowCx<'_> {
 }
 
 /// A tool row's disclosure state: whether its details (its output fold,
-/// its diffs) are open, whether it stands in a group's card, and the
-/// keyboard's target and toggle.
+/// its diffs) are open, whether it stands in a group's list, the keyboard's
+/// target and toggle, and when it began.
 pub(crate) struct ToolCx {
     pub expanded: bool,
     pub grouped: bool,
@@ -3001,6 +2931,8 @@ pub(crate) struct ToolCx {
     /// Its work running in the background: `View live output ▸`, pressed
     /// to open the Background tasks pane (`working::background_link`).
     pub live: Option<AnyElement>,
+    /// Its block's stamp (`Block::at`): the row's hover time.
+    pub at: Option<String>,
 }
 
 /// One Block as a transcript row, in the terminal grammar of `theme.rs`'s
@@ -3079,84 +3011,85 @@ pub(crate) fn render_block(
         // A blank thought from an older log (redacted thinking, before the
         // fold learned to drop it) draws nothing — not even its margin.
         Body::Thinking(thought) if thought.trim().is_empty() => div().into_any_element(),
-        // Reasoning is agent prose one ink down, under the drawn `∴`,
-        // `INK_SUBTLE`, never italic. A short thought shows whole; a long one
-        // is its first line with the rest disclosed.
+        // A thought (T3's): the brain, the thought flattened to one line
+        // and cut, always with its chevron. Open, the row reads `Thought`
+        // and the whole thought stands under it past the icon gutter, at
+        // full ink, at most `THOUGHT_BODY_MAX_H` tall and scrolling in
+        // itself.
         Body::Thinking(thought) => {
-            let (summary, details) = reasoning_text(thought);
-            let mark = || mark_gutter(grid, icon(icons::REASONING, grid.mark(), TEXT_FAINT));
-            let Some(details) = details else {
-                // Nothing more was supplied. Keep the whole short block
-                // visible, wrapped and selectable without a false disclosure.
-                return row
-                    .child(
-                        grid_row(mark()).text_color(rgb(INK_SUBTLE)).child(
-                            div().flex_1().min_w_0().child(
-                                selection
-                                    .markdown(block.id, thought.trim().to_owned())
-                                    .muted(),
-                            ),
-                        ),
-                    )
-                    .into_any_element();
+            let (overlay, _, targeted) = disclosure_parts(disclosure);
+            let label = if expanded {
+                SharedString::from("Thought")
+            } else {
+                SharedString::from(ferrite_core::progress::one_line(thought, usize::MAX))
             };
-            let (overlay, chevron, targeted) = disclosure_parts(disclosure);
-            let header = grid_row(mark())
-                .id(SharedString::from(format!("reasoning-row-{:?}", block.id)))
-                .group(DISCLOSURE_ROW)
-                .relative()
-                .child(
-                    div()
-                        .debug_selector(|| "reasoning-summary".into())
-                        .min_w_0()
-                        .truncate()
-                        .child(SharedString::from(summary)),
-                )
-                .children(chevron)
-                .children(overlay);
+            let header = work_row::work_row(work_row::WorkRow {
+                key: SharedString::from(format!("reasoning-row-{:?}", block.id)),
+                icon: ferrite_core::transcript::tools::ToolIcon::Brain,
+                failed: false,
+                error: false,
+                label: div()
+                    .debug_selector(|| "reasoning-summary".into())
+                    .min_w_0()
+                    .truncate()
+                    .child(label)
+                    .into_any_element(),
+                ink: work_row::tool_ink(),
+                at: block.at.clone(),
+                slot: work_row::Slot::Chevron { open: expanded },
+                listed: false,
+                press: overlay,
+            })
+            .group(DISCLOSURE_ROW);
             let header = Disclosure::ground(targeted, header);
-            let mut body = gpui::component::collapsible::Collapsible::new()
-                .w_full()
-                .open(expanded)
-                .child(header);
-            if expanded {
-                body = body.content(
-                    content_row(grid).child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(selection.markdown(block.id, details.clone()).muted()),
-                    ),
-                );
-            }
-            row.text_color(rgb(INK_SUBTLE))
-                .child(body)
-                .into_any_element()
+            let body = expanded.then(|| {
+                div()
+                    .id(SharedString::from(format!("reasoning-body-{:?}", block.id)))
+                    .debug_selector(|| "reasoning-body".into())
+                    .ml(px(theme::WORK_DETAIL_INDENT))
+                    .px(px(theme::WORK_ROW_PAD_X))
+                    .py(px(theme::SPACE_1))
+                    .max_h(px(theme::THOUGHT_BODY_MAX_H))
+                    .overflow_y_scroll()
+                    .text_color(rgb(INK_STRONG))
+                    .child(selection.markdown(block.id, thought.trim().to_owned()))
+            });
+            row.child(header).children(body).into_any_element()
         }
-        // A notice: an activity line, its words cut at the column's edge
-        // with the whole of it one hover away. A Decision
-        // never leaves one (it is its own row, at the tail).
+        // A notice: an update's work row (T3's), its words `INK_STRONG` at
+        // `WORK_UPDATE_ALPHA`, cut at the column's edge with the whole of
+        // it one hover away. A Decision never leaves one (it is its own row,
+        // at the tail).
         Body::Notice(text) => {
             let highlights = separators(text);
             let text = SharedString::from(text.clone());
-            let words = div().child(
-                div()
-                    .id(SharedString::from(format!("notice-{:?}", block.id)))
-                    .debug_selector({
-                        let id = block.id;
-                        move || format!("notice-{id:?}")
-                    })
-                    .flex_shrink(1.)
-                    .min_w_0()
-                    .tooltip(ferrite_ui::menu::tooltip(text.clone()))
-                    .child(edge_cut(
-                        grid.line,
-                        INK_SUBTLE,
-                        selection.line(block.id, text, highlights),
-                    )),
-            );
-            row.child(activity_line(grid, None, words))
-                .into_any_element()
+            let label = div()
+                .id(SharedString::from(format!("notice-{:?}", block.id)))
+                .debug_selector({
+                    let id = block.id;
+                    move || format!("notice-{id:?}")
+                })
+                .flex_shrink(1.)
+                .min_w_0()
+                .tooltip(ferrite_ui::menu::tooltip(text.clone()))
+                .child(edge_cut(
+                    theme::WORK_ROW_LINE,
+                    INK_STRONG,
+                    selection.line(block.id, text, highlights),
+                ));
+            row.child(work_row::work_row(work_row::WorkRow {
+                key: SharedString::from(format!("notice-row-{:?}", block.id)),
+                icon: ferrite_core::transcript::tools::ToolIcon::Zap,
+                failed: false,
+                error: false,
+                label: label.into_any_element(),
+                ink: work_row::update_ink(),
+                at: block.at.clone(),
+                slot: work_row::Slot::Empty,
+                listed: false,
+                press: None,
+            }))
+            .into_any_element()
         }
         // A decision record (`allowed Write`) or a revival note, under the
         // row it answers.
@@ -3210,6 +3143,7 @@ pub(crate) fn render_block(
                 grouped: false,
                 disclosure,
                 live: None,
+                at: block.at.clone(),
             },
         ),
     }
@@ -4169,23 +4103,17 @@ pub(crate) fn activity_note(grid: Grid) -> Div {
         .text_color(rgb(INK_SUBTLE))
 }
 
-/// A tool call (the reference's `List a directory that doesn't exist
-/// Failed ▸`): one muted line in the app's words (`text::call_line`) — the
-/// provider's description where it wrote one, else the verb and the
-/// argument (a literal one a step brighter on no chip, a path a link), and a
-/// test run's verdict after a `·` — then a failed call's `Failed` tag in
-/// `BLOCKED` (`text::call_verdict`), then its chevron. No icon, no time, no
-/// preview of what it printed: a shut row says only what it did and whether
-/// it failed. Under it while it runs: a suite's bar.
+/// A tool call as T3 Code's work row draws it (`work_row`): its kind's icon
+/// (`tools::policy`, tinted `TOOL_ERROR_ICON` when it failed), its label in
+/// the app's words (`text::call_line`: a command's text, an edit's path,
+/// `Read src/x.rs`), its time under the pointer, and its chevron slot. No
+/// result trails it and no `Failed` word: what came of a call is in its
+/// open body. Under it while it runs: a suite's bar.
 ///
-/// Open, a call shows its body (`call_body`, Claude's): its input in a quiet
-/// well (a command's `$ cmd`), a failed command's `Exit code N`, what it
-/// printed as plain mono — `SPACE_3` under its line and `SPACE_1` over the
-/// card's next seam in a group's card; alone, in a card of its own, the
-/// group card's (`CARD_RING` at `R_CARD`, `CARD_OUTSET` past the
-/// column, its body `TOOL_CARD_INSET` in, `SPACE_3` top and bottom) — then
-/// its diffs. Opening and shutting snap. The whole
-/// line is the pointer's toggle; the keyboard's disclosure target wears
+/// Open, a call shows its body (`call_body`): its input, a failed
+/// command's `Exit code N`, what it printed as plain mono, then its diffs,
+/// on the column with no card. Opening and shutting snap. The whole row is
+/// the pointer's toggle; the keyboard's disclosure target wears
 /// `paint::RAISED`.
 pub(crate) fn render_tool(
     block: BlockId,
@@ -4194,90 +4122,57 @@ pub(crate) fn render_tool(
     state: ToolCx,
 ) -> AnyElement {
     let grid = row_cx.grid();
-    let small = grid.activity();
     let selection = row_cx.selection;
     let ToolCx {
         expanded,
         grouped,
         disclosure,
         live,
+        at,
     } = state;
-    let (overlay, chevron, targeted) = disclosure_parts(disclosure);
-    // One run on one line at its own width, cut with `…` at the row's edge:
-    // it selects and copies as one line, and never spills onto the rows
-    // under it. The run hangs a cell past its box (`rich::Markdown`); the
-    // box makes room for it. A failed call's tag follows the cut, its lead
-    // word in the failure ink (rule 6: colour on the word). Runs register
-    // as they are built: the call line first, then its tag.
+    let (overlay, _, targeted) = disclosure_parts(disclosure);
+    let slot = if overlay.is_some() {
+        work_row::Slot::Chevron { open: expanded }
+    } else {
+        work_row::Slot::Empty
+    };
     let run = |markdown: String| {
         selection
             .markdown(block, markdown)
             .ink(INK_SUBTLE)
             .activity()
     };
-    // One run on one line, or — for a call on a file — its path alone, after
-    // the verb, which is chrome.
-    let (verb, call, trail) = match text::call_pieces(tool) {
-        text::CallPieces::Whole(call) => (None, run(call), None),
-        text::CallPieces::File { verb, path, trail } => {
-            let path = run(path);
-            (Some(verb), path, (!trail.is_empty()).then(|| run(trail)))
-        }
-    };
-    let verdict = text::call_verdict(tool).map(|verdict| {
-        let mut highlights = separators(&verdict);
-        highlights.insert(
-            0,
-            (
-                0..text::FAILED_TAG.len(),
-                HighlightStyle {
-                    color: Some(rgb(BLOCKED).into()),
-                    ..Default::default()
-                },
-            ),
-        );
+    // One run on one line at its own width, cut with `…` at the row's
+    // edge; a call on a file has its path in a run of its own after the
+    // verb, which is chrome.
+    let cut = |markdown: String| {
         div()
-            .debug_selector(|| "tool-verdict".into())
-            .flex_shrink_0()
-            .whitespace_nowrap()
-            .ml(px(theme::SPACE_2))
-            .child(selection.line(block, verdict, highlights))
-    });
-    let call = div()
-        .debug_selector(|| "tool-call".into())
-        .flex_shrink(1.)
-        .min_w_0()
-        .child(edge_cut(
-            grid.line,
-            INK_SUBTLE,
-            div().pr(px(small.cell())).child(call),
-        ));
-    let trail = trail.map(|trail| div().flex_shrink_0().child(trail));
-    let row_selector = format!("tool-row-{}", tool.call);
-    // What stands after the row's press overlay is pressed itself rather
-    // than unfolding the row: the live link, and a call's file path.
-    let line = match verb {
-        None => {
-            let words = div().child(call).children(verdict).children(chevron);
-            activity_line(grid, None, words).children(overlay)
-        }
-        Some(verb) => {
-            let words = div().flex_shrink_0().whitespace_nowrap().child(verb);
-            let rest = div()
-                .flex()
-                .items_center()
-                .min_w_0()
-                .child(call)
-                .children(trail)
-                .children(verdict)
-                .children(chevron);
-            activity_line(grid, None, words)
-                .children(overlay)
-                .child(rest)
-        }
-    }
-    .id(SharedString::from(row_selector.clone()))
-    .debug_selector(move || row_selector.clone())
+            .debug_selector(|| "tool-call".into())
+            .flex_shrink(1.)
+            .min_w_0()
+            .child(edge_cut(theme::WORK_ROW_LINE, INK_SUBTLE, run(markdown)))
+    };
+    let label = match text::call_pieces(tool) {
+        text::CallPieces::Whole(call) => div().flex().min_w_0().child(cut(call)),
+        text::CallPieces::File { verb, path } => div()
+            .flex()
+            .items_center()
+            .min_w_0()
+            .child(div().flex_shrink_0().whitespace_nowrap().child(verb))
+            .child(cut(path)),
+    };
+    let row = work_row::work_row(work_row::WorkRow {
+        key: SharedString::from(format!("tool-row-{}", tool.call)),
+        icon: ferrite_core::transcript::tools::policy(&tool.name).icon,
+        failed: text::call_failed(tool),
+        error: false,
+        label: label.into_any_element(),
+        ink: work_row::tool_ink(),
+        at,
+        slot,
+        listed: grouped,
+        press: overlay,
+    })
     .group(DISCLOSURE_ROW)
     .children(live);
     let mut card = div()
@@ -4285,7 +4180,7 @@ pub(crate) fn render_tool(
         .flex_col()
         .w_full()
         .min_w_0()
-        .child(target_ground(targeted, line));
+        .child(target_ground(targeted, row));
     if let Some(progress) = tool.progress.filter(|_| tool.state == ToolState::Running) {
         card = card.child(running_tests(&tool.call, progress, grid));
     }
@@ -4294,31 +4189,11 @@ pub(crate) fn render_tool(
         // or shut (Claude's); a click opens it in the lightbox.
         let gallery: std::sync::Arc<[std::path::PathBuf]> = [path.clone()].into();
         let picture = inline_image(block, 0, &path, &gallery, row_cx.preview);
-        card = card.child(if grouped {
-            div()
-                .px(px(theme::TOOL_CARD_INSET))
-                .py(px(theme::SPACE_3))
-                .child(picture)
-        } else {
-            div().mt(px(theme::PROMPT_IMAGE_GAP)).child(picture)
-        });
+        card = card.child(div().mt(px(theme::PROMPT_IMAGE_GAP)).child(picture));
     }
     if expanded {
         if let Some(body) = call_body(block, tool, grid, selection) {
-            card = card.child(if grouped {
-                body.mt(px(theme::SPACE_3)).pb(px(theme::SPACE_1))
-            } else {
-                div()
-                    .debug_selector(|| "tool-card".into())
-                    .mt(px(theme::SPACE_1))
-                    .ml(px(-theme::CARD_OUTSET))
-                    .px(px(theme::TOOL_CARD_INSET))
-                    .py(px(theme::SPACE_3))
-                    .rounded(px(theme::R_CARD))
-                    .border_1()
-                    .border_color(theme::paint::CARD_RING)
-                    .child(body)
-            });
+            card = card.child(body.mt(px(theme::WORK_ROW_PAD_Y)).pb(px(theme::SPACE_2)));
         }
         for each in &tool.diffs {
             card = card.child(render_diff(Some((selection, block)), each, grid));
@@ -4340,92 +4215,85 @@ fn shown_image(tool: &ToolBlock) -> Option<std::path::PathBuf> {
 }
 
 /// A group's disclosure state: the keyboard's target and the pointer's
-/// toggle over its summary, and how its members draw —
-/// every call while open; while shut, the call still working
-/// (`text::group_live`). They draw after the summary, so their text
-/// registers after its own.
+/// toggle over its header, how its members draw — every member while open;
+/// while shut, the call still working (`text::group_live`) — and, open,
+/// the list's scroll (`GroupList`). Members draw after the header, so
+/// their text registers after its own.
 pub(crate) struct GroupCx<'a> {
     pub disclosure: Option<Disclosure>,
     pub members: Box<dyn FnOnce() -> Vec<AnyElement> + 'a>,
+    /// Open: the list's scroll, and whether a member is opened in it.
+    pub list: Option<(&'a GroupList, bool)>,
+    /// The transcript's height, for the list's cap (half of it at most).
+    pub view_h: f32,
+    /// The transcript's ground (`theme::tx_ground`), for the list's fades.
+    pub ground: u32,
 }
 
-/// A run of calls under one summary (`text::group_summary`), an activity
-/// line as a call's is (`activity_line`): `Ran 2 commands (1 failed) ▸`,
-/// all in `INK_SUBTLE` — only a named file (`INK_STRONG`) and its diff counts wear
-/// their own ink; the failure is red on its call's row, not here. The whole
-/// line is the pointer's toggle — it lifts to `INK_STRONG` under the pointer, its
-/// chevron always shown, a quarter turned when open — and the keyboard's
-/// (`ToolDisclosure`), wearing `paint::RAISED` when targeted.
-///
-/// Under it, the calls stand in one card (Claude's): a `CARD_RING`
-/// hairline at `R_CARD`, no fill, hanging `CARD_OUTSET` past the
-/// column; each call the row it would be alone, its words `TOOL_CARD_INSET`
-/// in, `TOOL_CARD_ROW_H` for its line, a `LINE` hairline between rows. Open,
-/// every call; shut, a working call alone, so a live suite's bar stays in
-/// view. Opening and shutting snap.
+/// An open group's list scroll, kept by the transcript per group, so its
+/// offset holds across re-projection, scrolling away and thread switches.
+#[derive(Default)]
+pub(crate) struct GroupList {
+    handle: gpui::ScrollHandle,
+}
+
+/// A run of work under one summary (`text::group_summary`), T3 Code's
+/// group: its header a work row (the group's icon, the summary, its time
+/// under the pointer, no chevron: the whole row is the toggle), and, open,
+/// its members as plain work rows touching in a list — no card, no rules —
+/// at most `WORK_LIST_MAX_H` or half the transcript tall (uncapped while a
+/// member is opened in it, so an open member is never trapped), scrolling
+/// in itself, `WORK_LIST_FADE` fades at whichever edge has rows past it,
+/// pinned to its end while it is there. Shut, a working call alone stands
+/// under it, so a live suite's bar stays in view. Opening and shutting snap.
 pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupCx) -> AnyElement {
-    let grid = row_cx.grid();
     let GroupCx {
         disclosure,
         members: draw_members,
+        list,
+        view_h,
+        ground,
     } = state;
     let Some(leader) = members.first() else {
         return div().into_any_element();
     };
-    let leader_call = match &leader.body {
-        Body::Tool(tool) => tool.call.clone(),
-        _ => format!("{:?}", leader.id),
-    };
-    let (overlay, chevron, targeted, focus) = match disclosure {
+    let leader_key = text::group_tools(members)
+        .next()
+        .map_or_else(|| format!("{:?}", leader.id), |tool| tool.call.clone());
+    let (overlay, targeted, focus) = match disclosure {
         Some(Disclosure {
             overlay,
-            chevron,
             targeted,
             focus,
             ..
-        }) => (overlay, chevron, targeted, focus),
-        None => (None, None, false, None),
+        }) => (overlay, targeted, focus),
+        None => (None, false, None),
     };
     let summary = text::group_summary(members);
-    let mut highlights = separators(&summary.text);
-    for (range, mark) in &summary.marks {
-        let ink = match mark {
-            text::SummaryMark::File => INK_STRONG,
-            text::SummaryMark::Added => RUNNING,
-            text::SummaryMark::Removed => BLOCKED,
-        };
-        highlights.push((
-            range.clone(),
-            HighlightStyle {
-                color: Some(rgb(ink).into()),
-                ..Default::default()
-            },
+    let label = div()
+        .debug_selector(|| "tool-group-summary".into())
+        .flex_shrink(1.)
+        .min_w_0()
+        .child(edge_cut(
+            theme::WORK_ROW_LINE,
+            INK_SUBTLE,
+            row_cx
+                .selection
+                .line(leader.id, summary.clone(), separators(&summary)),
         ));
-    }
-    // Highlights apply in order: the seams and the marks interleave.
-    highlights.sort_by_key(|(range, _)| range.start);
-    let words = div()
-        .child(
-            div()
-                .debug_selector(|| "tool-group-summary".into())
-                .flex_shrink(1.)
-                .min_w_0()
-                .group_hover(DISCLOSURE_ROW, |style| style.text_color(rgb(INK_STRONG)))
-                .child(edge_cut(
-                    grid.line,
-                    INK_SUBTLE,
-                    row_cx
-                        .selection
-                        .line(leader.id, summary.text.clone(), highlights),
-                )),
-        )
-        .children(chevron);
-    let row_selector = format!("tool-group-{leader_call}");
-    let mut header = activity_line(grid, None, words)
-        .id(SharedString::from(row_selector.clone()))
-        .debug_selector(move || row_selector.clone())
-        .group(DISCLOSURE_ROW)
-        .children(overlay);
+    let mut header = work_row::work_row(work_row::WorkRow {
+        key: SharedString::from(format!("tool-group-{leader_key}")),
+        icon: work_row::group_icon(members),
+        failed: false,
+        error: false,
+        label: label.into_any_element(),
+        ink: work_row::tool_ink(),
+        at: leader.at.clone(),
+        slot: work_row::Slot::None,
+        listed: false,
+        press: overlay,
+    })
+    .group(DISCLOSURE_ROW);
     if targeted {
         header = header.bg(theme::paint::RAISED).child(
             div()
@@ -4438,30 +4306,17 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
         }
     }
     let drawn = draw_members();
-    let pad_y = ((theme::TOOL_CARD_ROW_H - grid.line) / 2.).max(0.);
-    let card = (!drawn.is_empty()).then(|| {
-        div()
-            .debug_selector(|| "tool-group-members".into())
+    let members = (!drawn.is_empty()).then(|| {
+        let rows = div()
             .flex()
             .flex_col()
+            .w_full()
             .min_w_0()
-            .mt(px(theme::SPACE_1))
-            .ml(px(-theme::CARD_OUTSET))
-            .rounded(px(theme::R_CARD))
-            .border_1()
-            .border_color(theme::paint::CARD_RING)
-            .overflow_hidden()
-            .children(drawn.into_iter().enumerate().map(|(at, member)| {
-                div()
-                    .w_full()
-                    .min_w_0()
-                    .px(px(theme::TOOL_CARD_INSET))
-                    .py(px(pad_y))
-                    .when(at > 0, |row| {
-                        row.border_t_1().border_color(theme::paint::CARD_RING)
-                    })
-                    .child(member)
-            }))
+            .children(drawn);
+        match list {
+            None => rows.into_any_element(),
+            Some((list, opened)) => group_list(&leader_key, list, opened, view_h, ground, rows),
+        }
     });
     div()
         .flex()
@@ -4471,7 +4326,72 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
         .flex_shrink_0()
         .text_color(rgb(INK_SUBTLE))
         .child(header)
-        .children(card)
+        .children(members)
+        .into_any_element()
+}
+
+/// An open group's list (T3's `ExpandedWorkGroupEntries`): its rows in a
+/// box that scrolls in itself past its cap, fading at an edge only while
+/// rows lie past it, and following its end while it is there.
+fn group_list(
+    key: &str,
+    list: &GroupList,
+    opened: bool,
+    view_h: f32,
+    ground: u32,
+    rows: Div,
+) -> AnyElement {
+    let handle = &list.handle;
+    let scrolled = -f32::from(handle.offset().y);
+    let max = f32::from(handle.max_offset().y);
+    if max > 0. && scrolled >= max - 1. {
+        handle.scroll_to_bottom();
+    }
+    let cap = (!opened).then(|| {
+        let half = if view_h > 0. { view_h / 2. } else { f32::MAX };
+        theme::WORK_LIST_MAX_H.min(half)
+    });
+    let fade = |rising: bool| {
+        components::fade(
+            rgb(ground).into(),
+            rising,
+            theme::WORK_LIST_FADE,
+            &[(0., 1.), (1., 0.)],
+        )
+        .absolute()
+        .left_0()
+        .right_0()
+    };
+    div()
+        .debug_selector(|| "tool-group-members".into())
+        .relative()
+        .w_full()
+        .min_w_0()
+        .pb(px(theme::WORK_LIST_PAD_B))
+        .child(
+            div()
+                .id(SharedString::from(format!("tool-group-list-{key}")))
+                .w_full()
+                .min_w_0()
+                .when_some(cap, |scroller, cap| scroller.max_h(px(cap)))
+                .overflow_y_scroll()
+                .track_scroll(handle)
+                .child(rows),
+        )
+        .when(scrolled > 1., |list| {
+            list.child(
+                fade(false)
+                    .debug_selector(|| "tool-group-fade-top".into())
+                    .top_0(),
+            )
+        })
+        .when(max - scrolled > 1., |list| {
+            list.child(
+                fade(true)
+                    .debug_selector(|| "tool-group-fade-bottom".into())
+                    .bottom(px(theme::WORK_LIST_PAD_B)),
+            )
+        })
         .into_any_element()
 }
 
@@ -5392,7 +5312,8 @@ mod tests {
         );
     }
 
-    /// A call line is one line, however long or many-lined its command:
+    /// A call's work row is one row tall, however long or many-lined its
+    /// command:
     /// the argument is the command's first line, cut with `…` at the row's
     /// edge, and the row under it starts where it ends (the overlap bug).
     #[gpui::test]
@@ -5448,7 +5369,8 @@ mod tests {
         });
         cx.simulate_resize(size(px(520.), px(900.)));
         cx.run_until_parked();
-        let line = px(Grid::pane(Default::default(), false).line);
+        let tall = px(theme::WORK_ROW_H + 2. * theme::WORK_ROW_PAD_Y);
+        let line = px(theme::WORK_ROW_LINE);
         let rows = [
             cx.debug_bounds("tool-row-multi")
                 .expect("the heredoc's call line"),
@@ -5458,8 +5380,8 @@ mod tests {
         cx.update(|_, cx| {
             for ((row, call), answer) in rows.iter().zip(calls).zip(answers) {
                 assert!(
-                    (row.size.height - line).abs() <= px(0.5),
-                    "one line tall: {row:?} / {line:?}"
+                    (row.size.height - tall).abs() <= px(0.5),
+                    "one row tall: {row:?} / {tall:?}"
                 );
                 let words = crate::rich::testing::bounds(
                     &format!("thinking-pane-block-test-{call:?}"),
@@ -5496,7 +5418,7 @@ mod tests {
         transcript.apply(Input::Prompt("reconcile".into()));
         for (id, command, output, error) in [
             ("g1", "python3 match.py", "12 matched", false),
-            ("g2", "grep -n adelaide notes.md", "", true),
+            ("g2", "grep -n adelaide notes.md", "", false),
         ] {
             transcript.apply(Input::Event(SessionEvent::ToolStarted {
                 id: id.into(),
@@ -5531,17 +5453,14 @@ mod tests {
                 .join("\n")
         };
         let shut = copied(&view, cx);
-        assert!(
-            shut.contains("Ran 2 commands, reading 1 file (1 failed)"),
-            "{shut}"
-        );
+        assert!(shut.contains("Ran 2 commands and read 1 file"), "{shut}");
         // Shut, it draws its working call alone: a call on a file copies as
         // its path, its verb being chrome.
         assert!(
             shut.contains("[notes\\.md](<ferrite-path:notes.md>)"),
             "{shut}"
         );
-        assert!(!shut.contains("python3 match.py"), "{shut}");
+        assert!(!shut.contains("python3 match\\.py"), "{shut}");
         assert!(cx.debug_bounds("tool-group-g1").is_some());
         assert!(cx.debug_bounds("tool-row-g1").is_none());
         assert!(cx.debug_bounds("tool-row-g3").is_some(), "the live call");
@@ -5553,39 +5472,33 @@ mod tests {
         cx.run_until_parked();
         let open = copied(&view, cx);
         for text in [
-            "python3 match.py",
-            "grep -n adelaide",
-            "Failed",
+            "python3 match\\.py",
+            "grep \\-n adelaide",
             "[notes\\.md](<ferrite-path:notes.md>)",
         ] {
             assert!(open.contains(text), "{text}: {open}");
         }
         // A shut call previews nothing it printed.
         assert!(!open.contains("12 matched"), "{open}");
-        // The calls stand in a card hanging `CARD_OUTSET` past the
-        // column, their words `TOOL_CARD_INSET` in from its edge.
+        // The calls are work rows on the summary's edge, under it, no card
+        // and no rules: listed, they touch, `WORK_ROW_H` apart.
         let summary = cx.debug_bounds("tool-group-g1").unwrap();
-        let card = cx.debug_bounds("tool-group-members").unwrap();
+        let list = cx.debug_bounds("tool-group-members").unwrap();
         let member = cx.debug_bounds("tool-row-g1").unwrap();
-        assert!(
-            ((summary.left() - card.left()) - px(theme::CARD_OUTSET)).abs() <= px(1.0),
-            "{card:?} {summary:?}"
-        );
-        assert!(
-            ((member.left() - card.left()) - px(theme::TOOL_CARD_INSET + 1.)).abs() <= px(1.0),
-            "{member:?} {card:?}"
-        );
-        assert!(card.top() >= summary.bottom(), "the card hangs under it");
+        assert!((member.left() - summary.left()).abs() <= px(1.0), "{member:?} {summary:?}");
+        assert!(list.top() >= summary.bottom(), "the list hangs under it");
         let second = cx.debug_bounds("tool-row-g2").unwrap();
         assert!(
-            ((second.top() - member.top()) - px(theme::TOOL_CARD_ROW_H)).abs() <= px(1.5),
+            ((second.top() - member.top()) - px(theme::WORK_ROW_H)).abs() <= px(0.5),
             "rows {} apart: {member:?} {second:?}",
-            theme::TOOL_CARD_ROW_H
+            theme::WORK_ROW_H
         );
+        assert!(cx.debug_bounds("tool-group-fade-top").is_none());
+        assert!(cx.debug_bounds("tool-group-fade-bottom").is_none());
 
-        // A call opened in the card draws Claude's body, no box of its own:
-        // its `$ cmd` in a well `SPACE_3` under its line, what it printed
-        // under that. A success says nothing.
+        // A call opened in the list draws Claude's body, no box of its own:
+        // its `$ cmd` in a well under its line, what it printed under that.
+        // A success says nothing.
         view.update(cx, |view, cx| {
             view.expanded.insert("g1".into());
             cx.notify();
@@ -5595,19 +5508,16 @@ mod tests {
         let line = cx.debug_bounds("tool-row-g1").unwrap();
         let well = cx.debug_bounds("tool-input").unwrap();
         let output = cx.debug_bounds("tool-output").unwrap();
-        assert!(
-            ((well.top() - line.bottom()) - px(theme::SPACE_3)).abs() <= px(1.0),
-            "{line:?} {well:?}"
-        );
+        assert!(well.top() >= line.bottom(), "{line:?} {well:?}");
         assert!(output.top() > well.bottom(), "{well:?} {output:?}");
         assert!(cx.debug_bounds("tool-card").is_none(), "no card in a card");
         assert!(cx.debug_bounds("tool-exit").is_none(), "a success is quiet");
     }
 
-    /// A call opened alone stands in the group's card, its body the same;
-    /// a failed command says its exit code over what it printed.
+    /// A call opened alone draws the same body under its row, no card; a
+    /// failed command says its exit code over what it printed.
     #[gpui::test]
-    fn a_call_opened_alone_stands_in_its_own_card(cx: &mut TestAppContext) {
+    fn a_failed_command_opened_alone_says_its_exit_over_its_output(cx: &mut TestAppContext) {
         let mut transcript = Transcript::default();
         transcript.apply(Input::Prompt("list it".into()));
         transcript.apply(Input::Event(SessionEvent::ToolStarted {
@@ -5633,15 +5543,11 @@ mod tests {
         });
         cx.run_until_parked();
         let line = cx.debug_bounds("tool-row-s1").unwrap();
-        let card = cx.debug_bounds("tool-card").unwrap();
         let well = cx.debug_bounds("tool-input").unwrap();
         let exit = cx.debug_bounds("tool-exit").unwrap();
         let output = cx.debug_bounds("tool-output").unwrap();
-        assert!(
-            ((line.left() - card.left()) - px(theme::CARD_OUTSET)).abs() <= px(1.0),
-            "{line:?} {card:?}"
-        );
-        assert!(card.top() >= line.bottom(), "{line:?} {card:?}");
+        assert!(cx.debug_bounds("tool-card").is_none());
+        assert!(well.top() >= line.bottom(), "{line:?} {well:?}");
         assert!(
             well.bottom() <= exit.top() && exit.bottom() <= output.top(),
             "{well:?} {exit:?} {output:?}"
@@ -5649,7 +5555,7 @@ mod tests {
     }
 
     #[test]
-    fn a_group_summary_names_its_work_in_order_and_tense() {
+    fn a_shut_group_keeps_only_its_working_call_in_view() {
         let mut transcript = Transcript::default();
         let mut call = |id: &str, name: &str, input: serde_json::Value, done: Option<bool>| {
             transcript.apply(Input::Event(SessionEvent::ToolStarted {
@@ -5694,19 +5600,6 @@ mod tests {
             None,
         );
         let blocks = transcript.blocks();
-        // Two kinds named, the other calls counted, the failure said in
-        // the same words.
-        assert_eq!(
-            text::group_summary(blocks).text,
-            "Searched for 1 pattern, read 2 files and 3 more (1 failed)"
-        );
-        let summary = text::group_summary(&blocks[..2]);
-        assert_eq!(summary.text, "Searched for 1 pattern, read 1 file");
-        assert!(summary.marks.is_empty());
-        assert_eq!(
-            text::group_summary(&blocks[..3]).text,
-            "Searched for 1 pattern, read 2 files (1 failed)"
-        );
         assert_eq!(
             text::group_live(blocks).first().map(|block| block.id),
             Some(blocks[5].id)
@@ -5734,7 +5627,7 @@ mod tests {
         let reasoning: Vec<_> = blocks
             .iter()
             .filter(|block| {
-                matches!(&block.body, Body::Thinking(text) if reasoning_text(text).1.is_some())
+                matches!(&block.body, Body::Thinking(text) if !text.trim().is_empty())
             })
             .map(|block| block.id)
             .collect();
@@ -5785,8 +5678,8 @@ mod tests {
             "code registers its source: {all}"
         );
         assert!(
-            all.contains("Ran `cargo test`"),
-            "tool pieces compose the call: {all}"
+            all.contains("cargo test"),
+            "a command's row is its command: {all}"
         );
         // An edit's diff shows only once its call is opened.
         assert_eq!(
@@ -5794,18 +5687,14 @@ mod tests {
             0,
             "the edit's diff waits for its call to open: {all}"
         );
-        // A shut failure registers its `Failed` tag, not what it printed
-        // (that waits for its call to open, below); the test run says
-        // `· 42 passed` after its call line. No `└` elbow joins the run.
-        assert!(all.contains("Failed"), "the failure's tag: {all}");
+        // A shut call registers its row alone: no verdict trails it (a
+        // failure is its icon's tint, chrome), and what it printed waits
+        // for it to open, below. No `└` elbow joins the run.
         assert!(
             !all.contains("applied"),
             "a shut call previews nothing: {all}"
         );
-        assert!(
-            all.contains("Ran `cargo test` \u{b7} 42 passed"),
-            "the verdict: {all}"
-        );
+        assert!(!all.contains("42 passed"), "no verdict: {all}");
         assert!(!all.contains("└"), "no elbow: {all}");
 
         view.update(cx, |view, cx| {
@@ -6200,13 +6089,13 @@ mod tests {
             progress: None,
         };
         let failed = ToolState::Failed("boom".into());
-        // The verb in the app's words, the argument as written, the result
-        // after its seam.
+        // A command reads as itself and an edit as its path (T3's); any
+        // other call is its verb in the app's words, then its argument.
         for (name, verb) in [
-            ("Bash", "Ran "),
+            ("Bash", ""),
             ("Read", "Read "),
-            ("Edit", "Edited "),
-            ("Write", "Wrote "),
+            ("Edit", ""),
+            ("Write", ""),
             ("Grep", "Searched for "),
             ("Task", "Ran agent "),
         ] {
@@ -6217,30 +6106,16 @@ mod tests {
         assert_eq!(
             text::call_line(&running),
             text::CallLine {
-                verb: "Running ".into(),
+                verb: String::new(),
                 argument: "cargo test".into(),
-                literal: true,
-                result: None,
             }
         );
-        // A failure is the row's tag, not a preview after a seam.
         let make = tool("Bash", "make", failed);
-        assert_eq!(text::call_line(&make).result, None);
         assert_eq!(text::call_verdict(&make).as_deref(), Some("Failed"));
         assert_eq!(
             text::call_verdict(&tool("Bash", "make", ToolState::Ok)),
             None
         );
-        // A shut row previews nothing a command printed.
-        let printed = ToolBlock {
-            caption: None,
-            background: None,
-            image: false,
-            findings: Vec::new(),
-            result_line: Some("16:HOLD={".into()),
-            ..tool("Bash", "python3 prep.py --hold", ToolState::Ok)
-        };
-        assert_eq!(text::call_line(&printed).result, None);
         // Where the command ran is not the row's business.
         assert_eq!(
             text::call_line(&tool(
@@ -6251,8 +6126,7 @@ mod tests {
             .argument,
             "python3 match.py"
         );
-        // The provider's description leads, as words; the command waits
-        // behind the disclosure.
+        // The provider's description is the working line's, not the row's.
         let described = ToolBlock {
             caption: None,
             background: None,
@@ -6265,25 +6139,13 @@ mod tests {
             text::call_line(&described),
             text::CallLine {
                 verb: String::new(),
-                argument: "List a directory that doesn't exist".into(),
-                literal: false,
-                result: None,
+                argument: "ls /definitely-missing-dir".into(),
             }
         );
-        // One Markdown run that reads exactly as written: words escaped, a
-        // literal argument one code span, a path a file link.
-        let line = text::CallLine {
-            verb: "Ran ".into(),
-            argument: "echo `a` *b*".into(),
-            literal: true,
-            result: Some(" \u{b7} [ok]".into()),
-        };
-        assert_eq!(line.markdown(false), "Ran ``echo `a` *b*`` \u{b7} \\[ok\\]");
+        // One Markdown run that reads exactly as written: a path a file link.
         let read = text::CallLine {
             verb: "Read ".into(),
             argument: "src/a_b.rs".into(),
-            literal: true,
-            result: None,
         };
         assert_eq!(
             read.markdown(true),

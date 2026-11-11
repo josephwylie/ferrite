@@ -66,7 +66,7 @@ icons![
     "resend",
     "ferrite-mono",
     // ---- WP-A icons (append names above the end line)
-    "reasoning",
+
     // (end WP-A)
 
     // ---- WP-B icons (append names above the end line)
@@ -155,13 +155,23 @@ icons![
     "git-pull-request-draft",
     "folder-git-2",
     "pin-off",
+    // A transcript work row's gutter (T3 Code's `TimelineToolActivityIcon`).
+    "square-pen",
+    "eye",
+    "brain",
+    "hammer",
+    "wrench",
+    "bot",
+    "zap",
+    "message-circle",
+    "list-todo",
+    "app-window",
     // The Composer and its model picker (T3's): a skill token's cube, the
     // steer glyph, the picker's favourites, Fast, its permission chevron,
     // a worktree in the workspace menu.
     "box",
     "corner-up-right",
     "star",
-    "zap",
     "chevron-up",
     "folder-git",
     // The Panel's Surfaces: a side chat's delete, the Changes toolbar's
@@ -213,8 +223,6 @@ pub const RESEND: &str = "icons/resend.svg";
 pub const FERRITE_MONO: &str = "icons/ferrite-mono.svg";
 
 // ---- WP-A icon names (append consts above the end line)
-/// `∴` (not in Geist Mono): the reasoning row's gutter mark, three dots.
-pub const REASONING: &str = "icons/reasoning.svg";
 // (end WP-A)
 
 // ---- WP-B icon names (append consts above the end line)
@@ -348,6 +356,17 @@ pub const GIT_PULL_REQUEST_DRAFT: &str = "icons/git-pull-request-draft.svg";
 pub const FOLDER_GIT: &str = "icons/folder-git-2.svg";
 /// A pinned card's pin under the pointer: the press unpins.
 pub const PIN_OFF: &str = "icons/pin-off.svg";
+/// A transcript work row's glyphs (`tools::ToolIcon`), Lucide's.
+pub const SQUARE_PEN: &str = "icons/square-pen.svg";
+pub const EYE: &str = "icons/eye.svg";
+pub const BRAIN: &str = "icons/brain.svg";
+pub const HAMMER: &str = "icons/hammer.svg";
+pub const WRENCH: &str = "icons/wrench.svg";
+pub const BOT: &str = "icons/bot.svg";
+pub const ZAP: &str = "icons/zap.svg";
+pub const MESSAGE_CIRCLE: &str = "icons/message-circle.svg";
+pub const LIST_TODO: &str = "icons/list-todo.svg";
+pub const APP_WINDOW: &str = "icons/app-window.svg";
 /// A skill token's cube (Lucide's `box`, T3's skill chip), stroked
 /// `theme::SKILL_ICON_STROKE`.
 pub const BOX: &str = "icons/box.svg";
@@ -355,8 +374,6 @@ pub const BOX: &str = "icons/box.svg";
 pub const CORNER_UP_RIGHT: &str = "icons/corner-up-right.svg";
 /// A favourite model.
 pub const STAR: &str = "icons/star.svg";
-/// The Fast speed.
-pub const ZAP: &str = "icons/zap.svg";
 pub const CHEVRON_UP: &str = "icons/chevron-up.svg";
 /// An existing worktree in the workspace menu (`FOLDER_GIT` is a new one).
 pub const FOLDER_GIT_EXISTING: &str = "icons/folder-git.svg";
@@ -525,13 +542,13 @@ mod tests {
             COPY,
             RESEND,
             FERRITE_MONO,
-            REASONING,
             IMAGE,
             BOARD,
         ]
         .into_iter()
         .chain(REFRESH_ICONS)
         .chain(TITLE_BAR_ICONS)
+        .chain(WORK_ROW_ICONS)
         {
             let bytes = Assets
                 .load(key)
@@ -577,6 +594,7 @@ mod tests {
         .into_iter()
         .chain(REFRESH_ICONS)
         .chain(TITLE_BAR_ICONS)
+        .chain(WORK_ROW_ICONS)
         {
             let bytes = Assets.load(key).unwrap().unwrap();
             let svg = std::str::from_utf8(&bytes).unwrap();
@@ -625,6 +643,29 @@ mod tests {
 
     /// The title bar's line icons (Wave 2), in the family.
     const TITLE_BAR_ICONS: [&str; 3] = [BACK, FORWARD, DIFF];
+
+    /// A work row's Lucide glyphs.
+    const WORK_ROW_ICONS: [&str; 10] = [
+        SQUARE_PEN,
+        EYE,
+        BRAIN,
+        HAMMER,
+        WRENCH,
+        BOT,
+        ZAP,
+        MESSAGE_CIRCLE,
+        LIST_TODO,
+        APP_WINDOW,
+    ];
+
+    /// A work row's glyph strokes Lucide's own weight, 1.33px at 16.
+    #[test]
+    fn a_work_row_icon_strokes_lucides_weight() {
+        let key = format!("{BRAIN}@16/{}", theme::WORK_ICON_STROKE);
+        let bytes = Assets.load(&key).unwrap().unwrap();
+        let drawn = std::str::from_utf8(&bytes).unwrap();
+        assert!((drawn_stroke(drawn, 16.0) - 4.0 / 3.0).abs() < 0.001);
+    }
 
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
     const REFRESH_ICONS: [&str; 37] = [

@@ -386,7 +386,7 @@ fn a_long_first_line_leaves_its_fold_in_the_row(cx: &mut TestAppContext) {
         cx.simulate_resize(gpui::size(px(width), px(900.)));
         tick(cx);
         let row = cx.debug_bounds("tool-row-summary").expect("the call's row");
-        let chevron = cx.debug_bounds("disclosure-chevron").expect("its `›`");
+        let chevron = cx.debug_bounds("work-row-chevron").expect("its `›`");
         assert!(
             chevron.right() <= row.right() + px(0.5),
             "at {width}px the `›` stays in the row: {chevron:?} / {row:?}"

@@ -3432,6 +3432,9 @@ impl Engine {
                     }
                 }
                 let content_changed = event_changes_content(&event);
+                if content_changed && !matches!(&event, SessionEvent::Activity(_)) {
+                    observe_clock(thread);
+                }
                 let applied = match &event {
                     SessionEvent::Activity(event) => {
                         thread.activity.apply(ActivityInput::Observe {
@@ -5834,6 +5837,20 @@ fn control_kind(action: &crate::SessionControl) -> crate::ControlKind {
         crate::SessionControl::BackgroundTasks => crate::ControlKind::BackgroundTasks,
         crate::SessionControl::SetPermissionMode { .. } => crate::ControlKind::SetPermissionMode,
     }
+}
+
+/// Record and apply the wall clock's minute when it has moved since the
+/// Thread's last observation, so the block the next event starts is
+/// stamped with it (`Block::at`) on replay as it is live.
+fn observe_clock(thread: &mut Thread) {
+    let at = crate::clock::minute_stamp();
+    if thread.transcript().clock() == Some(at.as_str()) {
+        return;
+    }
+    if let Err(error) = thread.writer.record_clock(&at) {
+        thread.report_store_error(error);
+    }
+    thread.apply(Input::ClockObservation { at });
 }
 
 fn completion_observation(

@@ -158,6 +158,44 @@ pub fn exact_label(at: DateTime<Local>) -> String {
     format!("{}, {}", at.format("%A %-d %B %Y"), label(at))
 }
 
+/// [`now_stamp`] cut to its minute: what a transcript row's time shows, so
+/// a log keeps one clock line per minute it was busy.
+pub fn minute_stamp() -> String {
+    use chrono::Timelike;
+    let now = now();
+    now.with_second(0)
+        .unwrap_or(now)
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+}
+
+/// A transcript row's time as T3 Code words it (`formatChatTimestamp`):
+/// `8:01 pm` today, `yesterday at 8:01 pm`, `11/9 8:01 pm` before that,
+/// and `11/9/2025 8:01 pm` in another year.
+pub fn day_aware_label(at: DateTime<Local>, now: DateTime<Local>) -> String {
+    use chrono::Datelike;
+    match (now.date_naive() - at.date_naive()).num_days() {
+        0 => label(at),
+        1 => format!("yesterday at {}", label(at)),
+        _ if at.year() == now.year() => format!("{} {}", at.format("%-m/%-d"), label(at)),
+        _ => format!("{} {}", at.format("%-m/%-d/%Y"), label(at)),
+    }
+}
+
+/// The tooltip over [`day_aware_label`] (T3's
+/// `formatChatTimestampTooltip`): `8:01 pm, 9th November 2026`.
+pub fn day_aware_tooltip(at: DateTime<Local>) -> String {
+    use chrono::Datelike;
+    let day = at.day();
+    let suffix = match (day % 10, day % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!("{}, {day}{suffix} {}", label(at), at.format("%B %Y"))
+}
+
 /// The day `at` fell on, for a list grouped by day (the bell's): how many
 /// days before `now` it was and its heading, `Today`, `Yesterday`, else the
 /// weekday. A time after `now` (clocks disagree) counts as today. `None`
@@ -272,6 +310,25 @@ impl Drop for ThreadFixture {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn a_row_time_names_its_day_once_it_is_not_today() {
+        let at = |year: i32, month: u32, day: u32| {
+            Local
+                .with_ymd_and_hms(year, month, day, 20, 1, 0)
+                .single()
+                .expect("an unambiguous local time")
+        };
+        let now = at(2026, 11, 10) + chrono::Duration::hours(2);
+        assert_eq!(day_aware_label(at(2026, 11, 10), now), "8:01 pm");
+        assert_eq!(day_aware_label(at(2026, 11, 9), now), "yesterday at 8:01 pm");
+        assert_eq!(day_aware_label(at(2026, 11, 2), now), "11/2 8:01 pm");
+        assert_eq!(day_aware_label(at(2025, 11, 9), now), "11/9/2025 8:01 pm");
+        assert_eq!(day_aware_tooltip(at(2026, 11, 9)), "8:01 pm, 9th November 2026");
+        assert_eq!(day_aware_tooltip(at(2026, 11, 1)), "8:01 pm, 1st November 2026");
+        assert_eq!(day_aware_tooltip(at(2026, 11, 12)), "8:01 pm, 12th November 2026");
+        assert_eq!(day_aware_tooltip(at(2026, 11, 23)), "8:01 pm, 23rd November 2026");
+    }
 
     #[test]
     fn recent_days_are_named_for_six_days_and_no_further() {
