@@ -2540,6 +2540,9 @@ pub const COMPOSER_SELECTION: u32 = TEXT_SELECTION_WASH;
 pub const SKILL_INK: u32 = 0xb261be;
 pub const FILE_INK: u32 = 0x0090cd;
 pub const MENTION_INK: u32 = 0x0096af;
+/// A Thread linked in prose (`oklch(0.62 0.12 190)`): the same chip as a
+/// file link, a teal accent.
+pub const THREAD_INK: u32 = 0x009c96;
 pub const SKILL_ICON_STROKE: f32 = 1.85;
 pub const TOKEN_ICON: f32 = FS_COMPOSER;
 /// Between a sent token's icon and its name (T3's `gap-[0.2em]`).

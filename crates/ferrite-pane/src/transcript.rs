@@ -299,6 +299,9 @@ pub enum TranscriptEvent {
     /// A background call's `View live output ▸`: the Background tasks
     /// pane.
     OpenBackground,
+    /// A Thread link in prose (`[title](ferrite-thread:12)`) pressed: land
+    /// on that Thread.
+    OpenThread(ferrite_core::ThreadId),
     /// A changed-files card's `Open diff`, or a press on one of its files
     /// (as the turn named it): the Changes Surface, on that file.
     OpenChanges(Option<String>),
@@ -618,17 +621,27 @@ impl TranscriptView {
     }
 
     /// Route ⌘-click on this transcript's path targets to
-    /// `TranscriptEvent::OpenReader`.
+    /// `TranscriptEvent::OpenReader`, and its Thread links to `OpenThread`.
     fn register_scope(&self, cx: &mut Context<Self>) {
         let weak = cx.entity().downgrade();
         crate::file_links::register_scope(
             self.input.namespace.clone(),
             cx.entity_id(),
-            Rc::new(move |path, line, _window, cx| {
-                let _ = weak.update(cx, |_, cx| {
-                    cx.emit(TranscriptEvent::OpenReader { path, line });
-                });
-            }),
+            crate::file_links::ScopeRoute {
+                reader: Rc::new({
+                    let weak = weak.clone();
+                    move |path, line, _window, cx| {
+                        let _ = weak.update(cx, |_, cx| {
+                            cx.emit(TranscriptEvent::OpenReader { path, line });
+                        });
+                    }
+                }),
+                thread: Rc::new(move |thread, _window, cx| {
+                    let _ = weak.update(cx, |_, cx| {
+                        cx.emit(TranscriptEvent::OpenThread(thread));
+                    });
+                }),
+            },
             cx,
         );
     }

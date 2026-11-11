@@ -2114,6 +2114,9 @@ impl CockpitView {
                 }
                 cx.notify();
             }
+            ferrite_pane::transcript::TranscriptEvent::OpenThread(thread) => {
+                self.focus_thread(*thread, cx);
+            }
             ferrite_pane::transcript::TranscriptEvent::OpenBackground => {
                 self.focus_pane(index);
                 if let Some(thread) = self.panes[index].thread() {

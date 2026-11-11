@@ -8,6 +8,7 @@ pub mod file_links;
 pub mod find;
 pub mod image_viewer;
 pub mod line;
+mod link_chip;
 pub mod mark;
 pub mod page;
 pub mod pane;
@@ -33,6 +34,10 @@ mod tests {
                 include_str!("pane/compact_composer.rs"),
             ),
             ("pane/composer.rs", include_str!("pane/composer.rs")),
+            (
+                "pane/background_work.rs",
+                include_str!("pane/background_work.rs"),
+            ),
             ("pane/menus.rs", include_str!("pane/menus.rs")),
             ("pane/output.rs", include_str!("pane/output.rs")),
             ("pane/usage.rs", include_str!("pane/usage.rs")),
@@ -50,6 +55,7 @@ mod tests {
             ("preview.rs", include_str!("preview.rs")),
             ("prompt_drop.rs", include_str!("prompt_drop.rs")),
             ("file_links.rs", include_str!("file_links.rs")),
+            ("link_chip.rs", include_str!("link_chip.rs")),
         ]);
     }
 }
