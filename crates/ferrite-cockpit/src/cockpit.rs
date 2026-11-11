@@ -5602,6 +5602,11 @@ impl CockpitView {
     }
 
     fn interrupt(&mut self, _: &Interrupt, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(transcript) = self.panes[self.focused()].transcript() {
+            if transcript.update(cx, |transcript, cx| transcript.dismiss_offer(cx)) {
+                return;
+            }
+        }
         if self.context_checks.take().is_some() {
             cx.notify();
             return;
@@ -10173,7 +10178,7 @@ impl CockpitView {
                 .is_some_and(|find| find.holds_focus(window, cx))
                 || pane.transcript().is_some_and(|view| {
                     let view = view.read(cx);
-                    view.find_holds_focus(window, cx) || view.reply_card_holds_focus(window, cx)
+                    view.find_holds_focus(window, cx)
                 })
         });
         // The list keeps the keyboard it was handed until the operator

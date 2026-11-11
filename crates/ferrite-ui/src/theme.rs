@@ -1980,38 +1980,29 @@ pub const SHADOW_PILL: u32 = 0x0000001a;
 /// **The send anchor**: a sent prompt lands this far below the
 /// transcript's top (T3's `CHAT_LIST_ANCHOR_OFFSET`).
 pub const TX_SEND_ANCHOR_OFFSET: f32 = 16.0;
-/// **Reply to a selection** (Claude's `SelectionTooltip`): a drag that
-/// selects a passage ends with a pill centred over its first line, its foot
-/// `SELECTION_REPLY_GAP` above it (under its last when there is no room
-/// above; never on the selected text): `Start a side chat` | `Reply` (`FS_UI`,
-/// body weight, `INK_STRONG`), each `SELECTION_REPLY_PAD_X` either side
-/// and `SELECTION_REPLY_PAD_Y` above and below (Claude's 12 and 6), a
-/// `FLOAT_EDGE` hairline `SELECTION_REPLY_DIVIDER_H` tall between them.
-/// The pill is a float (`paint::FLOAT` inside its `FLOAT_EDGE` ring, the
-/// float shadow), an action lit `FLOAT_HOVER` under the pointer
-/// (claude/selection-pill.png). Its radius is Claude's 8, the one pill off
-/// the three-radius family.
-pub const SELECTION_REPLY_GAP: f32 = SPACE_1_5;
-pub const SELECTION_REPLY_PAD_X: f32 = SPACE_3;
-pub const SELECTION_REPLY_PAD_Y: f32 = SPACE_1_5;
-pub const SELECTION_REPLY_DIVIDER_H: f32 = 14.0;
-pub const SELECTION_REPLY_RADIUS: f32 = 8.0;
-/// **The Reply card** (Claude's, `claude/reply-popover.png`): what `Reply`
-/// opens over the selection. A float `REPLY_CARD_W` wide, `REPLY_CARD_PAD`
-/// inside its ring: the passage in `INK_SUBTLE`, cut at
-/// `REPLY_CARD_QUOTE_LINES` lines with an ellipsis, then a one-line field
-/// (`Reply to Claude`) `REPLY_CARD_GAP` under it and the send button at its
-/// right. Sent, it becomes a tile in the Composer's tray
-/// (`claude/reply-sent-chip.png`), an image card's size, ring and `×`: the
-/// typed words behind a quote bar at its top, cut at `REPLY_TILE_LINES`, a
-/// muted `Reply` at its foot, on the file chip's `RAISED` ground.
-pub const REPLY_CARD_W: f32 = 280.0;
-pub const REPLY_CARD_PAD: f32 = SPACE_3;
-pub const REPLY_CARD_GAP: f32 = SPACE_2;
-pub const REPLY_CARD_QUOTE_LINES: usize = 2;
-/// The field wraps and grows a row at a time (the Composer's own ease) up to
-/// this many, the card growing upward from its foot; past it the field scrolls.
-pub const REPLY_CARD_FIELD_ROWS: usize = 4;
+/// **Cite a selection** (T3's `AssistantSelectionToolbar`): a drag that
+/// selects a passage ends with a glass button at the pointer, `Cite` (the
+/// Quote icon `SELECTION_CITE_ICON` then its words, 12px medium), beside
+/// `Start a side chat`. `SELECTION_CITE_H` tall, fully rounded inside a 1px
+/// `FLOAT_EDGE` ring, padded `SELECTION_CITE_PAD_X`, the float shadow, on
+/// `paint::FLOAT` (no backdrop blur in GPUI). It stands where the mouse went
+/// up, held `SELECTION_CITE_EDGE` inside the window; with the pointer more
+/// than `SELECTION_CITE_NEAR` from the selection, `SELECTION_CITE_BELOW`
+/// under its last line. A double or triple click shows it after
+/// `SELECTION_CITE_MULTI_CLICK_MS`.
+pub const SELECTION_CITE_H: f32 = 24.0;
+pub const SELECTION_CITE_PAD_X: f32 = 7.0;
+pub const SELECTION_CITE_ICON: f32 = 14.0;
+pub const SELECTION_CITE_ICON_GAP: f32 = SPACE_1_5;
+pub const SELECTION_CITE_GAP: f32 = SPACE_1_5;
+pub const SELECTION_CITE_EDGE: f32 = 8.0;
+pub const SELECTION_CITE_NEAR: f32 = 8.0;
+pub const SELECTION_CITE_BELOW: f32 = 4.0;
+pub const SELECTION_CITE_MULTI_CLICK_MS: u64 = 500;
+/// A sent Reply in the Composer's tray (`claude/reply-sent-chip.png`), an
+/// image card's size, ring and `×`: the typed words behind a quote bar at
+/// its top, cut at `REPLY_TILE_LINES`, a muted `Reply` at its foot, on the
+/// file chip's `RAISED` ground.
 pub const REPLY_TILE_LINES: usize = 3;
 /// **The side chat** (Claude's, `claude/sidechat-open.png`): the right
 /// pane's other body, `SIDE_CHAT_W` wide beside the thread, which reflows

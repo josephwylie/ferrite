@@ -524,8 +524,7 @@ fn send_landed() -> (Scene, Setup) {
 
 // ---------------------------------------------------------------- reply card
 
-/// `Reply` pressed on a passage of the answer (`claude/reply-popover.png`):
-/// the card over the selection, and a sent reply waiting in the tray
+/// A sent reply waiting in the tray beside an image
 /// (`claude/reply-sent-chip.png`).
 fn reply_card() -> (Scene, Setup) {
     let scene = conversation("reply-card");
@@ -545,19 +544,6 @@ fn reply_card() -> (Scene, Setup) {
                 cx,
             );
         });
-        if let Some(transcript) = view.panes[index].transcript() {
-            let line = gpui::Bounds::new(
-                gpui::point(gpui::px(560.), gpui::px(430.)),
-                gpui::size(gpui::px(320.), gpui::px(20.)),
-            );
-            transcript.update(cx, |transcript, cx| {
-                transcript.fixture_reply_card(
-                    "Both commands ran. ls /definitely-missing-dir failed as expected, and sleep 15 && echo done ran in the foreground this time.",
-                    vec![line],
-                    cx,
-                )
-            });
-        }
     });
     (scene, setup)
 }

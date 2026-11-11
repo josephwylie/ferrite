@@ -479,22 +479,11 @@ fn a_sweep_across_a_tool_row_copies_its_text_and_never_its_chrome(cx: &mut TestA
     );
 }
 
-/// A selection's Reply pill is offered once a drag has selected a passage,
+/// A selection's Cite button is offered once a drag has selected a passage,
 /// in the focused transcript.
 fn offered(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
     view.read_with(cx, |view, cx| {
         view.panes[0].transcript().unwrap().read(cx).reply_offered()
-    })
-}
-
-/// Whether the transcript's Reply card is open.
-fn card_open(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
-    view.read_with(cx, |view, cx| {
-        view.panes[0]
-            .transcript()
-            .unwrap()
-            .read(cx)
-            .reply_card_open()
     })
 }
 
@@ -514,15 +503,13 @@ fn drag(
     (from, to)
 }
 
-/// A selection's Reply (Claude's): a drag offers the pill centred over the
-/// selection; Reply on it opens the Reply card above the selection, its
-/// field taking the keyboard. ⏎ makes a Reply card in the Composer's tray
-/// (the draft's words untouched) and closes the card without sending a
-/// message. Replies stack, each card's × removes it, and the sent prompt
-/// carries them ahead of its words as block quotes with the words typed,
-/// its bubble drawing the quote rows.
+/// A selection's Cite (T3's): a drag offers the glass button where the
+/// mouse went up; Cite makes a Reply card in the Composer's tray (the
+/// draft's words untouched) without sending a message. Cites stack, each
+/// card's × removes it, and the sent prompt carries them ahead of its words
+/// as block quotes, its bubble drawing the quote rows.
 #[gpui::test]
-fn a_selections_reply_opens_a_card_that_becomes_a_tray_card_and_sends(cx: &mut TestAppContext) {
+fn a_selections_cite_becomes_a_tray_card_and_sends(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("selection-reply", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -551,55 +538,27 @@ fn a_selections_reply_opens_a_card_that_becomes_a_tray_card_and_sends(cx: &mut T
     tick(cx);
     assert!(!offered(&view, cx));
 
-    // "al|ph|a" on one line: the pill centres over the run, above it.
-    let (from, to) = drag(&view, cx, (3, 2), (3, 4));
-    assert!(offered(&view, cx), "the drag offers its Reply");
-    let pill = cx.debug_bounds("selection-reply").expect("the pill draws");
+    // "al|ph|a" on one line: the button's corner is where the mouse went up,
+    // 24 tall.
+    let (_, to) = drag(&view, cx, (3, 2), (3, 4));
+    assert!(offered(&view, cx), "the drag offers its Cite");
+    let cite = cx.debug_bounds("selection-reply-quote").expect("Cite draws");
     assert!(
-        (pill.center().x - (from.x + to.x) / 2.).abs() < px(1.),
-        "centred over the selection: {pill:?} against {from:?}..{to:?}"
+        (cite.left() - to.x).abs() < px(1.) && (cite.top() - to.y).abs() < px(1.),
+        "at the pointer: {cite:?} against {to:?}"
     );
-    assert!(
-        pill.bottom() < from.y,
-        "above it: {pill:?} against {from:?}"
-    );
+    assert!((cite.size.height - px(ferrite_ui::theme::SELECTION_CITE_H)).abs() < px(1.));
 
-    // Reply opens the card, anchored just above the selection, over the
-    // transcript: nothing reaches the Composer yet.
-    let reply = cx.debug_bounds("selection-reply-quote").expect("and Reply");
-    cx.simulate_click(reply.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert!(!offered(&view, cx), "the pill gives way");
-    assert!(card_open(&view, cx));
-    let card = cx.debug_bounds("reply-card").expect("the card draws");
-    assert!(card.bottom() <= from.y, "above the selection: {card:?}");
-    assert!(
-        (card.size.width - px(ferrite_ui::theme::REPLY_CARD_W)).abs() < px(1.),
-        "its token width: {card:?}"
-    );
-    assert!(cx.debug_bounds("reply-card-quote").is_some());
-    assert!(
-        cx.debug_bounds("reply-card-placeholder").is_some(),
-        "an empty field says Reply to Claude"
-    );
-    assert!(cx.debug_bounds("reply-card-send").is_some());
-    view.read_with(cx, |view, cx| {
-        assert!(view.panes[0].composer.read(cx).replies().is_empty());
-    });
-
-    // Typing and ⏎ hand the reply over as a tray card; no message goes.
+    // Cite hands the passage to the tray at once: no card, no message.
     let sent_before = fake.sent.borrow().len();
-    cx.simulate_input("why?");
+    cx.simulate_click(cite.center(), gpui::Modifiers::none());
     tick(cx);
-    assert!(cx.debug_bounds("reply-card-placeholder").is_none());
-    cx.simulate_keystrokes("enter");
-    tick(cx);
-    assert!(!card_open(&view, cx), "sending closes the card");
+    assert!(!offered(&view, cx), "the button gives way");
     assert_eq!(fake.sent.borrow().len(), sent_before, "no message is sent");
     view.read_with(cx, |view, cx| {
         let composer = view.panes[0].composer.read(cx);
         assert_eq!(composer.text(), "Look:", "the draft's words stay as typed");
-        assert_eq!(composer.replies(), [Reply::new("ph", "why?")]);
+        assert_eq!(composer.replies(), [Reply::new("ph", "")]);
     });
     let chip = cx.debug_bounds("tray-reply-0").expect("a tray card");
     assert!(
@@ -607,24 +566,16 @@ fn a_selections_reply_opens_a_card_that_becomes_a_tray_card_and_sends(cx: &mut T
             && (chip.size.height - px(ferrite_ui::theme::COMPOSER_THUMB)).abs() < px(1.),
         "an attachment tile's square: {chip:?}"
     );
-    assert!(cx.debug_bounds("tray-reply-0-words").is_some());
-    assert!(cx.debug_bounds("tray-reply-0-badge").is_some());
 
     // A second passage, across lines, stacks beside the first.
     drag(&view, cx, (4, 3), (5, 4));
-    let reply = cx.debug_bounds("selection-reply-quote").expect("and Reply");
-    cx.simulate_click(reply.center(), gpui::Modifiers::none());
-    tick(cx);
-    cx.simulate_input("and this?");
-    cx.simulate_keystrokes("enter");
+    let cite = cx.debug_bounds("selection-reply-quote").expect("Cite");
+    cx.simulate_click(cite.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
             view.panes[0].composer.read(cx).replies(),
-            [
-                Reply::new("ph", "why?"),
-                Reply::new("vo\nchar", "and this?")
-            ]
+            [Reply::new("ph", ""), Reply::new("vo\nchar", "")]
         );
     });
     assert!(cx.debug_bounds("tray-reply-1").is_some());
@@ -638,17 +589,17 @@ fn a_selections_reply_opens_a_card_that_becomes_a_tray_card_and_sends(cx: &mut T
     view.read_with(cx, |view, cx| {
         assert_eq!(
             view.panes[0].composer.read(cx).replies(),
-            [Reply::new("vo\nchar", "and this?")]
+            [Reply::new("vo\nchar", "")]
         );
     });
 
-    // The main send carries the quote and its reply ahead of the words
-    // (the ×'s press handed the line the keyboard back).
+    // The main send carries the quote ahead of the words (the ×'s press
+    // handed the line the keyboard back).
     cx.simulate_keystrokes("enter");
     tick(cx);
     assert_eq!(
         fake.sent.borrow().last().map(String::as_str),
-        Some("> vo\n> char\n\n\u{21a9} and this?\n\nLook:")
+        Some("> vo\n> char\n\nLook:")
     );
     view.read_with(cx, |view, cx| {
         let composer = view.panes[0].composer.read(cx);
@@ -664,10 +615,11 @@ fn a_selections_reply_opens_a_card_that_becomes_a_tray_card_and_sends(cx: &mut T
     );
 }
 
-/// Esc closes the Reply card, sending nothing; a press elsewhere does too.
+/// Escape dismisses the Cite button, and only the button: nothing is
+/// quoted or sent, and it is not an interrupt.
 #[gpui::test]
-fn the_reply_card_closes_on_escape_and_on_a_press_elsewhere(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("reply-card-close", 1);
+fn escape_dismisses_the_cite_button(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("cite-escape", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -676,49 +628,23 @@ fn the_reply_card_closes_on_escape_and_on_a_press_elsewhere(cx: &mut TestAppCont
             text: "zero\n\none\n\ntwo\n\nalpha beta gamma\n\nbravo delta\n\n".into(),
         })
         .unwrap();
-    fake.streams.borrow()[0]
-        .send(SessionEvent::TurnEnded {
-            outcome: ferrite_core::TurnOutcome::Completed,
-            cost_usd: None,
-        })
-        .unwrap();
     tick(cx);
-    let open_card = |cx: &mut gpui::VisualTestContext| {
-        drag(&view, cx, (3, 6), (3, 10));
-        let reply = cx.debug_bounds("selection-reply-quote").expect("Reply");
-        cx.simulate_click(reply.center(), gpui::Modifiers::none());
-        tick(cx);
-        assert!(card_open(&view, cx));
-    };
-
-    open_card(cx);
-    cx.simulate_input("half a thought");
+    drag(&view, cx, (3, 6), (3, 10));
+    assert!(offered(&view, cx));
     cx.simulate_keystrokes("escape");
     tick(cx);
-    assert!(!card_open(&view, cx), "esc closes the card");
-    assert!(cx.debug_bounds("reply-card").is_none());
+    assert!(!offered(&view, cx), "esc dismisses the button");
+    assert!(cx.debug_bounds("selection-reply").is_none());
+    assert_eq!(*fake.interrupts.borrow(), 0, "the turn was not interrupted");
     view.read_with(cx, |view, cx| {
         assert!(view.panes[0].composer.read(cx).replies().is_empty());
-        assert!(fake.sent.borrow().is_empty() && view.panes[0].composer.read(cx).text().is_empty());
     });
-
-    open_card(cx);
-    let away = caret(&view, cx, 4, 2);
-    cx.simulate_click(away, gpui::Modifiers::none());
-    tick(cx);
-    assert!(!card_open(&view, cx), "a press elsewhere closes it");
-
-    // Nothing typed, nothing sent: ⏎ on an empty field keeps the card.
-    open_card(cx);
-    cx.simulate_keystrokes("enter");
-    tick(cx);
-    assert!(card_open(&view, cx));
 }
 
-/// Claude's pill holds `Start a side chat` before `Reply`: it docks the
-/// side chat's pane beside the Thread — the passage quoted in its field —
-/// and asks the agent for a fork, which the pane takes: the window stays on
-/// the Thread. An agent that cannot fork offers Reply alone.
+/// `Start a side chat` stands beside Cite: it docks the side chat's pane
+/// beside the Thread — the passage quoted in its field — and asks the agent
+/// for a fork, which the pane takes: the window stays on the Thread. An
+/// agent that cannot fork offers Cite alone.
 #[gpui::test]
 fn a_selections_side_chat_docks_a_pane_with_the_passage_quoted(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("selection-side-chat", 1);
@@ -741,9 +667,9 @@ fn a_selections_side_chat_docks_a_pane_with_the_passage_quoted(cx: &mut TestAppC
     drag(&view, cx, (0, 2), (0, 4));
     let side = cx
         .debug_bounds("selection-side-chat")
-        .expect("the pill offers a side chat");
-    let reply = cx.debug_bounds("selection-reply-quote").expect("and Reply");
-    assert!(side.right() <= reply.left(), "the side chat first");
+        .expect("the selection offers a side chat");
+    let reply = cx.debug_bounds("selection-reply-quote").expect("and Cite");
+    assert!(reply.right() <= side.left(), "Cite first");
     let pill = cx.debug_bounds("selection-reply").unwrap();
     assert!(pill.contains(&side.center()) && pill.contains(&reply.center()));
     cx.simulate_click(side.center(), gpui::Modifiers::none());
@@ -764,7 +690,7 @@ fn a_selections_side_chat_docks_a_pane_with_the_passage_quoted(cx: &mut TestAppC
     });
     assert!(cx.debug_bounds("side-chat").is_some());
 
-    // Without a fork behind it, the pill is Reply alone.
+    // Without a fork behind it, the button is Cite alone.
     *fake.native_controls.borrow_mut() = false;
     view.update(cx, |view, cx| {
         let owner = view.focused_thread().unwrap();
@@ -776,9 +702,8 @@ fn a_selections_side_chat_docks_a_pane_with_the_passage_quoted(cx: &mut TestAppC
     assert!(cx.debug_bounds("selection-side-chat").is_none());
 }
 
-/// The pill goes when its selection does (a press away), and fades out
-/// on a scroll. There is no esc:
-/// Claude's has none, and esc keeps its Interrupt.
+/// The Cite button goes when its selection does (a press away), and fades
+/// out on a scroll.
 #[gpui::test]
 fn a_selections_reply_goes_with_its_selection_and_on_a_scroll(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("selection-reply-dismiss", 1);
@@ -934,12 +859,11 @@ fn copied(cx: &mut gpui::VisualTestContext) -> Option<String> {
     clipboard(cx)
 }
 
-/// The owner's pill bug: the selection's pill stays while its selection
-/// does — the pointer moving onto it, and frames that reuse the Panes,
-/// keep it — and a press on it fires; a double-click's word offers it as
-/// a drag's passage does.
+/// The Cite button stays while its selection does — the pointer moving onto
+/// it, and frames that reuse the Panes, keep it — and a press on it quotes;
+/// a double-click's word offers it as a drag's passage does.
 #[gpui::test]
-fn the_reply_pill_stays_under_the_pointer_and_its_press_fires(cx: &mut TestAppContext) {
+fn the_cite_button_stays_under_the_pointer_and_its_press_fires(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("reply-pill-hover", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -958,39 +882,43 @@ fn the_reply_pill_stays_under_the_pointer_and_its_press_fires(cx: &mut TestAppCo
     tick(cx);
 
     drag(&view, cx, (0, 6), (0, 10));
-    let pill = cx.debug_bounds("selection-reply").expect("the pill draws");
-    cx.simulate_mouse_move(pill.center(), None, gpui::Modifiers::none());
+    let button = cx.debug_bounds("selection-reply").expect("the button draws");
+    cx.simulate_mouse_move(button.center(), None, gpui::Modifiers::none());
     tick(cx);
     redraw_chrome_only(&view, cx);
-    assert!(offered(&view, cx), "the pointer on the pill keeps it");
-    let reply = cx
+    assert!(offered(&view, cx), "the pointer on the button keeps it");
+    let cite = cx
         .debug_bounds("selection-reply-quote")
         .expect("still drawn under the pointer");
-    cx.simulate_click(reply.center(), gpui::Modifiers::none());
+    cx.simulate_click(cite.center(), gpui::Modifiers::none());
     tick(cx);
-    assert!(card_open(&view, cx), "its press opens the Reply card");
-    cx.simulate_keystrokes("escape");
-    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(
+            view.panes[0].composer.read(cx).replies(),
+            [Reply::new("beta", "")],
+            "its press quotes the passage"
+        );
+    });
 
-    // A double-click's word offers it too.
+    // A double-click's word offers it too, after T3's multi-click wait.
     let word = caret(&view, cx, 1, 8);
     press(cx, word, 1);
     cx.simulate_mouse_up(word, gpui::MouseButton::Left, gpui::Modifiers::none());
     press(cx, word, 2);
     cx.simulate_mouse_up(word, gpui::MouseButton::Left, gpui::Modifiers::none());
     tick(cx);
-    assert!(offered(&view, cx), "a double-click's word offers the pill");
+    cx.executor().advance_clock(Duration::from_millis(
+        ferrite_ui::theme::SELECTION_CITE_MULTI_CLICK_MS + 50,
+    ));
+    tick(cx);
+    assert!(offered(&view, cx), "a double-click's word offers the button");
     assert!(cx.debug_bounds("selection-reply").is_some());
 }
 
-/// The owner's placement bug: the pill stood wherever the pointer let go,
-/// over the chat. Claude's (and now Ferrite's) stands by the selection:
-/// over its first line, centred on it, `SELECTION_REPLY_GAP` clear, never
-/// on the selected text — whichever way the drag went — and under its
-/// last line when the transcript has no room above; always inside the
-/// transcript's column.
+/// The button is held inside the window (T3's 8px) however the drag ended:
+/// a release at the window's far corner pulls it back in.
 #[gpui::test]
-fn the_reply_pill_stands_clear_of_the_selection_not_at_the_pointer(cx: &mut TestAppContext) {
+fn the_cite_button_is_held_inside_the_window(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("reply-pill-place", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -1007,53 +935,15 @@ fn the_reply_pill_stands_clear_of_the_selection_not_at_the_pointer(cx: &mut Test
         })
         .unwrap();
     tick(cx);
-    let column = view.read_with(cx, |view, cx| {
-        view.panes[0]
-            .transcript()
-            .unwrap()
-            .read(cx)
-            .scroll()
-            .bounds()
-    });
-    let check = |cx: &mut gpui::VisualTestContext, case: &str| {
-        let pill = cx.debug_bounds("selection-reply").expect("the pill draws");
-        let rects = cx.update(|window, cx| gpui::base::TextSelection::painted_bounds(window, cx));
-        assert!(!rects.is_empty(), "{case}: the selection paints");
-        for rect in &rects {
-            assert!(!pill.intersects(rect), "{case}: {pill:?} covers {rect:?}");
-        }
-        let top = rects
-            .iter()
-            .map(|rect| rect.top())
-            .fold(px(f32::MAX), |a, b| a.min(b));
-        let gap = top - pill.bottom();
-        assert!(
-            gap >= px(4.) && gap <= px(ferrite_ui::theme::SELECTION_REPLY_GAP + 1.),
-            "{case}: just above the first line, {gap:?} clear"
-        );
-        assert!(
-            pill.left() >= column.left() && pill.right() <= column.right(),
-            "{case}: inside the column {column:?}: {pill:?}"
-        );
-        pill
-    };
-
-    // Along a line with room above it: centred over the run.
-    let (from, to) = drag(&view, cx, (1, 0), (1, 5));
-    let pill = check(cx, "a drag along a line");
-    let middle = (from.x + to.x) / 2.;
+    drag(&view, cx, (1, 2), (3, 4));
+    let button = cx.debug_bounds("selection-reply").expect("the button draws");
+    let edge = px(ferrite_ui::theme::SELECTION_CITE_EDGE);
     assert!(
-        (pill.center().x - middle).abs() < px(8.),
-        "centred over the run at {middle:?}: {pill:?}"
-    );
-
-    redraw_chrome_only(&view, cx);
-    // Down across lines, let go far below the first line.
-    let (from, to) = drag(&view, cx, (1, 2), (3, 4));
-    let pill = check(cx, "a drag down");
-    assert!(
-        pill.bottom() < from.y && (pill.center().y - to.y).abs() > px(40.),
-        "by the selection's first line, not the pointer at {to:?}"
+        button.left() >= edge
+            && button.top() >= edge
+            && button.right() <= px(1000.) - edge
+            && button.bottom() <= px(700.) - edge,
+        "inside the window: {button:?}"
     );
 }
 
@@ -1109,63 +999,3 @@ fn a_prompt_with_three_replies_draws_each_quote_with_its_words(cx: &mut TestAppC
     );
 }
 
-/// A reply longer than the field's line wraps and grows the card a row at a
-/// time, upward from its foot (the selection stays uncovered), up to
-/// `REPLY_CARD_FIELD_ROWS`, past which the field scrolls instead.
-#[gpui::test]
-fn a_long_reply_grows_the_card_upward_to_a_few_rows(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("reply-card-grows", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-    fake.streams.borrow()[0]
-        .send(SessionEvent::TextDelta {
-            text: "zero\n\none\n\ntwo\n\nalpha\n\nbravo\n\ncharlie\n\n".into(),
-        })
-        .unwrap();
-    fake.streams.borrow()[0]
-        .send(SessionEvent::TurnEnded {
-            outcome: ferrite_core::TurnOutcome::Completed,
-            cost_usd: None,
-        })
-        .unwrap();
-    tick(cx);
-    let (from, _) = drag(&view, cx, (3, 2), (3, 4));
-    let reply = cx.debug_bounds("selection-reply-quote").expect("Reply");
-    cx.simulate_click(reply.center(), gpui::Modifiers::none());
-    tick(cx);
-    let settle = |cx: &mut gpui::VisualTestContext| {
-        for _ in 0..3 {
-            cx.executor().advance_clock(Duration::from_millis(
-                ferrite_ui::theme::MOTION_COMPOSER_GROW_MS,
-            ));
-            cx.update(|window, cx| window.simulate_next_frame(cx));
-            cx.run_until_parked();
-        }
-    };
-    let one = cx.debug_bounds("reply-card").expect("the card");
-    cx.simulate_input("words that run on and on until the field has to wrap them onto a second line");
-    settle(cx);
-    let two = cx.debug_bounds("reply-card").unwrap();
-    assert!(two.size.height > one.size.height, "wrapped: {one:?} -> {two:?}");
-    assert!(
-        (two.bottom() - one.bottom()).abs() < px(1.),
-        "it grows upward, its foot where it was: {one:?} -> {two:?}"
-    );
-    assert!(two.bottom() <= from.y, "never over the selection: {two:?}");
-    // Pasted, not typed: one edit, where typing it is 570 keystrokes.
-    cx.update(|_, cx| {
-        cx.write_to_clipboard(ClipboardItem::new_string("more words to wrap ".repeat(30)))
-    });
-    cx.simulate_keystrokes("cmd-v");
-    settle(cx);
-    let many = cx.debug_bounds("reply-card").unwrap();
-    let most = one.size.height
-        + px((ferrite_ui::theme::REPLY_CARD_FIELD_ROWS - 1) as f32 * ferrite_ui::theme::COMPOSER_ROW_H);
-    assert!(
-        many.size.height <= most + px(1.),
-        "capped at {} rows: {many:?}",
-        ferrite_ui::theme::REPLY_CARD_FIELD_ROWS
-    );
-    assert!(many.top() >= px(0.), "on screen: {many:?}");
-}
