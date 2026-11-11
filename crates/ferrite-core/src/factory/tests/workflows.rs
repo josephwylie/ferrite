@@ -95,6 +95,7 @@ fn run(factory: &mut Factory, id: &str, instructions: &str) -> TaskId {
             agent: agent(),
             request: None,
             workflow: Some(id.into()),
+            pr: None,
         },
         6,
     ) {
@@ -221,7 +222,14 @@ fn workflows_are_made_blank_or_from_the_template_renamed_and_several_per_project
     assert_eq!(names(&factory, &blank), ["Agent"]);
     assert_eq!(
         names(&factory, &example),
-        ["Triager", "Explorer", "Implementer", "Reviewer"]
+        [
+            "Triager",
+            "Explorer",
+            "Implementer",
+            "Reviewer",
+            "Merge agent",
+            "Conflict resolver"
+        ]
     );
     assert_eq!(
         workflow(&factory, &example).draft.name,
@@ -413,6 +421,7 @@ fn an_unsaved_workflow_cannot_run() {
                 agent: agent(),
                 request: None,
                 workflow: Some(id),
+                pr: None,
             },
             1,
         )
@@ -717,4 +726,5 @@ fn workflows_survive_a_reload() {
 }
 
 mod direction;
+mod merging;
 mod coordinator;

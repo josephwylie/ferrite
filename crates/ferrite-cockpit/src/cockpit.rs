@@ -11,6 +11,7 @@ mod browser_smoke;
 mod context_menu;
 pub(crate) mod coordinator;
 pub(crate) mod decisions;
+mod delivery;
 pub(crate) mod direction;
 mod drafts;
 pub(crate) mod empty_board;

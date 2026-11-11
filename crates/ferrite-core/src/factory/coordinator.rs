@@ -374,6 +374,7 @@ impl State {
                 agent,
                 request: None,
                 workflow,
+                pr: None,
             },
             Act::Save { workflow, .. } => Command::SaveWorkflow { workflow, catalog },
             Act::Automation { workflow } => Command::Automation {

@@ -699,6 +699,11 @@ impl State {
             agent,
             request: Some(request),
             workflow: Some(workflow.to_string()),
+            // A pull request that starts a Task is its PR (#223).
+            pr: match &source {
+                Source::PullRequest { url, .. } => Some(url.clone()),
+                _ => None,
+            },
         };
         let Answer::Task(id) = self.command(start, now_ms, effects)? else {
             unreachable!("a start answers with its Task");

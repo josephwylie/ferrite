@@ -12,6 +12,7 @@ mod core_transcript_parity;
 mod decision_cards;
 mod decisions_parity;
 mod diagnostics;
+mod delivery;
 mod direction;
 mod drafts;
 mod factory;

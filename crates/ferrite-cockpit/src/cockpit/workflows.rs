@@ -804,17 +804,7 @@ impl CockpitView {
             Pick::Select(workflow) => self.select_workflow(workflow, cx),
             Pick::Create(template) => self.create_workflow(template, cx),
             Pick::Route { step, kind, to } => {
-                let change = match kind {
-                    RouteKind::Finished => StepChange {
-                        on_finished: Some(to),
-                        ..Default::default()
-                    },
-                    RouteKind::Unable => StepChange {
-                        on_unable: Some(to),
-                        ..Default::default()
-                    },
-                };
-                self.edit_step(step, change, cx);
+                self.edit_step(step, StepChange::route(kind, to), cx);
             }
             Pick::Provider(step, provider) => {
                 self.discover_skills(provider);
@@ -905,17 +895,14 @@ impl CockpitView {
         let Some(workflow) = self.shown_workflow() else {
             return Vec::new();
         };
-        let current = match kind {
-            RouteKind::Finished => &step.on_finished,
-            RouteKind::Unable => &step.on_unable,
-        };
+        let current = step.route(kind);
         workflow
             .draft
             .route_options(&step.id, kind)
             .into_iter()
             .map(|to| {
                 let item = ferrite_ui::menu::Item::new(workflow.draft.route_label(&step.id, &to))
-                    .checked(&to == current);
+                    .checked(Some(&to) == current);
                 (
                     item,
                     Pick::Route {
@@ -1522,10 +1509,7 @@ impl CockpitView {
         let route = |kind: RouteKind, to: &Destination, cx: &mut Context<Self>| {
             let label = workflow.draft.route_label(&step.id, to);
             let broken = workflow.draft.broken(&step.id, to).is_some();
-            let which = match kind {
-                RouteKind::Finished => "finished",
-                RouteKind::Unable => "unable",
-            };
+            let which = kind.word();
             let selector = format!(
                 "outline-route-{}-{which}{}",
                 step.id,
@@ -1586,8 +1570,12 @@ impl CockpitView {
                         ),
                 )
         };
-        let finished = route(RouteKind::Finished, &step.on_finished, cx);
-        let unable = route(RouteKind::Unable, &step.on_unable, cx);
+        // One route per merge result when it routes by them (#223).
+        let routes: Vec<_> = step
+            .routes()
+            .into_iter()
+            .map(|(kind, to)| route(kind, to, cx))
+            .collect();
         let more_id = step.id.clone();
         let more_key = format!("{key}-more");
         let drag = StepDrag {
@@ -1704,8 +1692,7 @@ impl CockpitView {
                             .child(provider_mark(step.agent.provider))
                             .child(SharedString::from(meta.join(" \u{b7} "))),
                     )
-                    .child(finished)
-                    .child(unable),
+                    .children(routes),
             )
             .into_any_element()
     }
@@ -1999,6 +1986,8 @@ impl CockpitView {
 
         let fresh = step.fresh;
         let fresh_id = step.id.clone();
+        let by_merge = step.outcome_routes.is_some();
+        let merge_id = step.id.clone();
         let workflow_id = workflow.id.clone();
         let name_field = Field::StepName(workflow_id.clone(), step.id.clone());
         let instructions_field = Field::Instructions(workflow_id, step.id.clone());
@@ -2123,6 +2112,50 @@ impl CockpitView {
                             fresh_id.clone(),
                             StepChange {
                                 fresh: Some(!fresh),
+                                ..Default::default()
+                            },
+                            cx,
+                        )
+                    })),
+            )
+            .child(
+                div()
+                    .id("inspector-merge")
+                    .debug_selector(move || {
+                        if by_merge {
+                            "inspector-merge-on".into()
+                        } else {
+                            "inspector-merge".into()
+                        }
+                    })
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_2))
+                    .cursor_pointer()
+                    .child(ferrite_ui::components::switch(
+                        "inspector-merge-switch",
+                        by_merge,
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child("Route by merge result")
+                            .child(
+                                div()
+                                    .text_size(px(FS_META))
+                                    .text_color(rgb(INK_SUBTLE))
+                                    .child(
+                                        "One route per result in place of When finished. Only \
+                                         a confirmed merge can complete the task.",
+                                    ),
+                            ),
+                    )
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        view.edit_step(
+                            merge_id.clone(),
+                            StepChange {
+                                by_merge_result: Some(!by_merge),
                                 ..Default::default()
                             },
                             cx,

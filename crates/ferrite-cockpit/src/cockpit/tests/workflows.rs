@@ -73,6 +73,9 @@ fn selected(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Str
 #[gpui::test]
 fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
     let (view, cx, fake, project) = workflows_window(cx, "workflows-outline", |_| {});
+    // The template's six agents, the Merge agent's seven routes, all in view.
+    cx.simulate_resize(gpui::size(px(1600.), px(1800.)));
+    tick(cx);
     let streams = fake.streams.borrow().len();
     click(cx, "factory-tab-workflows");
     assert!(shows(cx, "workflows-empty"), "a fresh Project has none");
@@ -82,7 +85,14 @@ fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
     click(cx, "context-menu-row-1");
     assert_eq!(
         names(&view, cx),
-        ["Triager", "Explorer", "Implementer", "Reviewer"]
+        [
+            "Triager",
+            "Explorer",
+            "Implementer",
+            "Reviewer",
+            "Merge agent",
+            "Conflict resolver"
+        ]
     );
     assert!(
         shows(cx, "outline-row-s-1-selected"),
@@ -110,7 +120,14 @@ fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(
         names(&view, cx),
-        ["Triager", "Implementer", "Explorer", "Reviewer"]
+        [
+            "Triager",
+            "Implementer",
+            "Explorer",
+            "Reviewer",
+            "Merge agent",
+            "Conflict resolver"
+        ]
     );
     view.read_with(cx, |view, _| {
         let draft = &view.shown_workflow().unwrap().draft;
@@ -135,19 +152,26 @@ fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(
         names(&view, cx),
-        ["Reviewer", "Triager", "Implementer", "Explorer"]
+        [
+            "Reviewer",
+            "Triager",
+            "Implementer",
+            "Explorer",
+            "Merge agent",
+            "Conflict resolver"
+        ]
     );
 
     // Add: a new agent at the end, chosen.
     click(cx, "outline-add");
-    assert_eq!(names(&view, cx).len(), 5);
+    assert_eq!(names(&view, cx).len(), 7);
     assert_eq!(selected(&view, cx), "New agent");
 
     // Delete from its row's menu: the destructive row asks twice.
-    click(cx, "outline-row-s-5-more");
+    click(cx, "outline-row-s-7-more");
     click(cx, "context-menu-row-3");
     click(cx, "context-menu-row-3");
-    assert_eq!(names(&view, cx).len(), 4);
+    assert_eq!(names(&view, cx).len(), 6);
 
     // A second Workflow, Blank, renamed by typing.
     click(cx, "workflow-new");
@@ -326,7 +350,18 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
         assert_eq!(view.shown_step().unwrap().skills, ["code-review", "triage"]);
     });
 
-    // A route picked on a row: Reviewer finished → Coordinator.
+    // A route picked on a row: Reviewer finished → Coordinator, and the
+    // Merge agent's confirmed merge (#223) → Needs human.
+    view.update(cx, |view, cx| {
+        view.apply_pick(
+            Pick::Route {
+                step: "s-5".into(),
+                kind: RouteKind::Merge(ferrite_core::factory::MergeOutcome::Merged),
+                to: Destination::Human,
+            },
+            cx,
+        )
+    });
     view.update(cx, |view, cx| {
         view.apply_pick(
             Pick::Route {

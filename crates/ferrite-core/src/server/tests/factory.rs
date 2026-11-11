@@ -219,6 +219,7 @@ fn a_task_is_stopped_resumed_and_deleted_leaving_dirty_work_alone() {
                     instructions: instructions.into(),
                     request: Some(format!("ask-{id}")),
                     workflow: None,
+                    pr: None,
                 },
             },
         );
@@ -476,4 +477,5 @@ fn a_workflow_task_runs_each_step_with_its_own_agent_and_context() {
 }
 
 mod direction;
+mod merging;
 mod coordinator;

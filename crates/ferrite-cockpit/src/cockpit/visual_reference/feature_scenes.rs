@@ -1091,6 +1091,7 @@ fn factory_coordinator() -> (Scene, Setup) {
             agent: agent.clone(),
             request: None,
             workflow: Some("w-1".into()),
+            pr: None,
         },
         Command::RenameWorkflow {
             workflow: "w-1".into(),

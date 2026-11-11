@@ -749,6 +749,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         instructions: "Fix the flaky login test".into(),
                         request: Some("board-1".into()),
                         workflow: None,
+                        pr: None,
                     },
                 },
             ),
@@ -787,6 +788,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                             at_ms: 1_700_000_000_000,
                             by: crate::factory::Actor::Agent,
                             text: "Unable to finish: No access to the staging database".into(),
+                            revision: None,
                         }],
                         created_ms: 1_700_000_000_000,
                         request: None,
@@ -797,6 +799,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         workers: Vec::new(),
                         oversight: Default::default(),
                         source: None,
+                        delivery: Default::default(),
                     }],
                     workflows: Vec::new(),
                     ..Default::default()
@@ -813,6 +816,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         instructions: "Fix the flaky login test".into(),
                         request: Some("board-2".into()),
                         workflow: Some("w-1".into()),
+                        pr: None,
                     },
                 },
             ),
@@ -1135,6 +1139,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                                 on_finished: crate::factory::Destination::Complete,
                                 on_unable: crate::factory::Destination::Human,
                                 fresh: false,
+                                outcome_routes: None,
                             }],
                             approval: Default::default(),
                             start: Default::default(),
@@ -2340,6 +2345,96 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     },
                 },
             ),
+        ),
+        (
+            "command_task_start_pr",
+            command(
+                21,
+                Op::Task {
+                    action: TaskAction::Start {
+                        project,
+                        instructions: "Ship the flag".into(),
+                        request: Some("board-3".into()),
+                        workflow: Some("w-1".into()),
+                        pr: Some("acme/widgets#12".into()),
+                    },
+                },
+            ),
+        ),
+        (
+            "factory_pull_request",
+            Sample::Server(ServerMessage::Factory {
+                revision: 5,
+                board: serde_json::from_value(serde_json::json!({
+                    "tasks": [{
+                        "id": "t-1",
+                        "project": project,
+                        "title": "Ship the flag",
+                        "instructions": "Ship the flag",
+                        "status": "completed",
+                        "agent": { "provider": "claude" },
+                        "branch": "factory/t-1",
+                        "activity": [{
+                            "at_ms": 1_700_000_000_000_i64,
+                            "by": "tool",
+                            "text": "Build reported: cargo test: 12 passed",
+                            "revision": 1,
+                        }],
+                        "created_ms": 1_700_000_000_000_i64,
+                        "workflow": {
+                            "id": "w-1",
+                            "version": 1,
+                            "definition": {
+                                "name": "Ship it",
+                                "steps": [{
+                                    "id": "s-1",
+                                    "name": "Merge agent",
+                                    "instructions": "Merge it",
+                                    "skills": [],
+                                    "provider": "claude",
+                                    "on_finished": "complete",
+                                    "on_unable": "human",
+                                    "fresh": false,
+                                    "outcome_routes": {
+                                        "merged": "complete",
+                                        "conflict": "step:s-2",
+                                        "pending": "wait",
+                                        "denied": "human",
+                                        "head_changed": "human",
+                                        "unknown": "coordinator",
+                                    },
+                                }],
+                            },
+                        },
+                        "results": [{
+                            "step": "s-1",
+                            "name": "Merge agent",
+                            "outcome": { "merge": { "result": "merged", "summary": "MERGED" } },
+                        }],
+                        "pr": {
+                            "repository": "acme/widgets",
+                            "number": 12,
+                            "revisions": [{
+                                "revision": 1,
+                                "head": "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                "by": "Build",
+                                "at_ms": 1_700_000_000_000_i64,
+                            }],
+                            "approved": 1,
+                            "merged": true,
+                        },
+                        "evidence": [{
+                            "kind": "decision",
+                            "by": "You",
+                            "text": "Approved",
+                            "revision": 1,
+                            "at_ms": 1_700_000_000_000_i64,
+                        }],
+                        "kept": "The worktree has uncommitted changes, so it was left in place.",
+                    }],
+                }))
+                .unwrap(),
+            }),
         ),
     ]
 }

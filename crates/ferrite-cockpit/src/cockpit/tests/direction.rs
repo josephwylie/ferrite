@@ -318,7 +318,7 @@ fn approval_settings_choose_who_approves_and_list_what_completes(cx: &mut TestAp
     core.fixture_live_factory();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
+    cx.simulate_resize(gpui::size(px(1600.), px(1800.)));
     tick(cx);
     view.update(cx, |view, cx| view.open_factory(project, cx));
     tick(cx);
@@ -334,7 +334,7 @@ fn approval_settings_choose_who_approves_and_list_what_completes(cx: &mut TestAp
         let draft = &view.shown_workflow().unwrap().draft;
         assert_eq!(
             draft.completion_paths(),
-            ["Your approval marks the task complete"]
+            ["Merge agent reports merge confirmed"]
         );
     });
 

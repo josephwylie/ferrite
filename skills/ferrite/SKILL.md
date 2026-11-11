@@ -313,6 +313,27 @@ verified) or `rejected` (your reasons):
 "$F" report outcome rejected "The changelog entry is missing"
 ```
 
+A Task can carry a pull request (`task start … --pr owner/repo#12` or its
+URL). Report its head each time you push, naming the PR the first time,
+and keep what a check showed as evidence; both are tied to the PR's
+current revision:
+
+```bash
+"$F" report revision 1111111aaaa --pr acme/widgets#12
+"$F" report evidence "cargo test: 12 passed"
+```
+
+A Step that routes by merge result (`step edit … --by-merge-result
+--on-conflict step:s-6`) reports one of six results, `merged` only once
+the merge is confirmed: `merged`, `conflict`, `pending`, `denied`,
+`head_changed` (the PR is not at the approved revision) or `unknown`.
+Only `merged` may route to Completed; `--on-pending wait` keeps waiting.
+
+```bash
+"$F" report outcome merged "gh pr view shows MERGED at 2b3c4d5"
+"$F" report outcome unknown "gh pr merge timed out"
+```
+
 ### The Coordinator
 
 Each Project's Factory has one **Coordinator** (an agent Thread the

@@ -196,6 +196,10 @@ operations! {
         "Take, or pass over, what already matched when a GitHub start was turned on.";
     TaskSubmit(TaskSubmitParams) => "task.submit", ["workflow", "identity", "instructions"],
         "Submit a Task to a Workflow that starts from your own script; a repeated identity returns its Task.";
+    ReportRevision(ReportRevisionParams) => "report.revision", ["head"],
+        "A Worker reports its Task's PR head (and which PR, the first time): each new head is a revision.";
+    ReportEvidence(ReportEvidenceParams) => "report.evidence", ["text"],
+        "A Worker keeps what a check or tool showed as evidence, about the PR's current revision.";
     ProposalRaise(ProposalRaiseParams) => "proposal.raise", ["act"],
         "The Coordinator proposes starting a Task, saving a version, automatic starts or a redirect; nothing happens until the user accepts.";
     ProposalList(TaskListParams) => "proposal.list", [],
@@ -467,6 +471,10 @@ pub struct TaskStartParams {
     /// else it is one-off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
+    /// Its pull request, which every Step works on:
+    /// `owner/repository#number` or its URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -485,7 +493,9 @@ pub struct TaskParams {
 /// What a Worker reports: `finished` (`summary` says what it did) or
 /// `unable` to finish (`summary` says what it tried); an agent deciding
 /// an approval reports `approved` (what it verified) or `rejected` (its
-/// reasons).
+/// reasons); a merge Step reports `merged` (only once confirmed),
+/// `conflict`, `pending`, `denied`, `head_changed` or `unknown`, with
+/// what showed it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReportedOutcome {
@@ -493,6 +503,12 @@ pub enum ReportedOutcome {
     Unable,
     Approved,
     Rejected,
+    Merged,
+    Conflict,
+    Pending,
+    Denied,
+    HeadChanged,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -501,6 +517,28 @@ pub struct ReportOutcomeParams {
     pub summary: String,
     /// The reporting Worker's own Thread: the CLI sends
     /// `FERRITE_THREAD_ID`, so its Task is known from where it runs.
+    pub worker: ThreadId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReportRevisionParams {
+    /// The PR's head commit hash.
+    pub head: String,
+    /// Which PR (`owner/repository#number` or its URL): needed the first
+    /// time, when the Task has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<String>,
+    /// The reporting Worker's own Thread (the CLI sends
+    /// `FERRITE_THREAD_ID`).
+    pub worker: ThreadId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReportEvidenceParams {
+    /// What a command or tool showed: `<the command>: <what it showed>`.
+    pub text: String,
+    /// The reporting Worker's own Thread (the CLI sends
+    /// `FERRITE_THREAD_ID`).
     pub worker: ThreadId,
 }
 

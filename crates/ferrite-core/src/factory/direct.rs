@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::pr::EvidenceKind;
 use super::{
     Actor, Answer, Approver, Destination, Effect, Outcome, Refusal, RefusalCode, Resolved, Status,
     Step, StepId, StepResult, Task, Watch,
@@ -133,7 +134,7 @@ fn not_now(message: impl Into<String>) -> Refusal {
 
 impl Task {
     /// Who a question or a permission is from: its Step's name.
-    fn asker(&self) -> String {
+    pub(super) fn asker(&self) -> String {
         self.current_step()
             .map(|step| step.name.clone())
             .unwrap_or_else(|| "The agent".into())
@@ -260,6 +261,12 @@ pub(super) fn answer(
         Actor::Operator,
         format!("Answered {}: {text}", asked.asker),
     );
+    task.evidence(
+        EvidenceKind::Decision,
+        "You",
+        format!("Answered {}: {text}", asked.asker),
+        now_ms,
+    );
     task.reason = None;
     task.enter(Status::Working, effects);
     task.worker = Some(asked.worker);
@@ -277,6 +284,7 @@ pub(super) fn approve_command(
         return Ok(Answer::Changed(false));
     }
     task.note(now_ms, Actor::Operator, "Approved");
+    task.evidence(EvidenceKind::Decision, "You", "Approved", now_ms);
     approved(task, now_ms, effects);
     Ok(Answer::Changed(true))
 }
@@ -323,6 +331,12 @@ pub(super) fn rework(
         now_ms,
         Actor::Operator,
         format!("Requested rework from {label}: {feedback}"),
+    );
+    task.evidence(
+        EvidenceKind::Decision,
+        "You",
+        format!("Requested rework from {label}: {feedback}"),
+        now_ms,
     );
     task.oversight.feedback.push(Feedback {
         kind: FeedbackKind::Rework,
@@ -409,6 +423,7 @@ pub(super) fn redirect(
     }
     said.push("The saved workflow is unchanged.".into());
     task.note(now_ms, Actor::Operator, said.join(" "));
+    task.evidence(EvidenceKind::Decision, "You", said.join(" "), now_ms);
     task.oversight.question = None;
     task.oversight.permission = None;
     task.oversight.deciding = false;
@@ -445,6 +460,17 @@ pub(super) fn reported(
                 "you are deciding the approval: report approved or rejected",
             ))
         }
+        (Outcome::Merge { .. }, _) if step.outcome_routes.is_none() || decides => {
+            return Err(invalid(
+                "this agent does not merge: report finished or unable",
+            ))
+        }
+        (Outcome::Finished { .. }, false) if step.outcome_routes.is_some() => {
+            return Err(invalid(
+                "you merge: report the result, one of merged, conflict, pending, denied, \
+                 head_changed or unknown",
+            ))
+        }
         _ => {}
     }
     let (said, text) = match &outcome {
@@ -452,11 +478,21 @@ pub(super) fn reported(
         Outcome::Unable { tried } => ("could not finish", tried.clone()),
         Outcome::Approved { summary } => ("approves", summary.clone()),
         Outcome::Rejected { reasons } => ("does not approve", reasons.clone()),
+        Outcome::Merge { result, summary } => (
+            "reports",
+            format!("{}: {summary}", result.label().to_lowercase()),
+        ),
     };
     task.note(
         now_ms,
         Actor::Agent,
         format!("{} {said}: {text}", step.name),
+    );
+    task.evidence(
+        EvidenceKind::Conclusion,
+        step.name.clone(),
+        format!("{said}: {text}"),
+        now_ms,
     );
     task.results.push(StepResult {
         step: step.id.clone(),
@@ -511,6 +547,18 @@ pub(super) fn reported(
         Outcome::Unable { tried } => {
             follow(task, Some(&step.id), step.on_unable, tried, now_ms, effects)
         }
+        Outcome::Merge { result, summary } => {
+            if result == super::MergeOutcome::Merged {
+                if let Some(pr) = task.delivery.pr.as_mut() {
+                    pr.merged = true;
+                }
+            }
+            let route = step
+                .outcome_routes
+                .as_ref()
+                .map_or(Destination::Human, |routes| routes.get(result).clone());
+            follow(task, Some(&step.id), route, summary, now_ms, effects)
+        }
     }
     Ok(())
 }
@@ -550,7 +598,11 @@ pub(super) fn follow(
                         format!("Skipped {} for this task", next.name),
                     );
                     from = Some(next.id.clone());
-                    route = next.on_finished.clone();
+                    // A skipped merge Step passes as if it merged.
+                    route = next
+                        .outcome_routes
+                        .as_ref()
+                        .map_or_else(|| next.on_finished.clone(), |by| by.merged.clone());
                     continue;
                 }
                 let next = next.clone();
@@ -574,6 +626,23 @@ pub(super) fn follow(
                     format!("{name} sent the task to the Coordinator: {text}")
                 });
                 task.oversight.consult = Some(super::coordinator::routed(task, &name, &text));
+                task.enter(Status::NeedsHuman, effects);
+            }
+            Resolved::Wait if task.worker.is_some() => {
+                task.note(
+                    now_ms,
+                    Actor::Ferrite,
+                    format!("{name} keeps waiting: {text}"),
+                );
+                task.reason = None;
+                task.watch = Watch {
+                    prompt: Some(super::pr::waiting_prompt(task)),
+                    at_rest: true,
+                    ..Watch::default()
+                };
+            }
+            Resolved::Wait => {
+                task.reason = Some(text);
                 task.enter(Status::NeedsHuman, effects);
             }
             Resolved::Broken => {
@@ -650,6 +719,7 @@ fn enter_approval(
 /// Approved, by the operator or the deciding agent: what follows approval
 /// runs (a Step, or Completed).
 fn approved(task: &mut Task, now_ms: i64, effects: &mut Vec<Effect>) {
+    super::pr::approved(task, now_ms);
     task.oversight.to_me = false;
     task.oversight.deciding = false;
     task.oversight.direction = None;
@@ -734,7 +804,8 @@ pub(super) fn decision_section(task: &Task) -> String {
          operator would.\n\n{instructions}\n\nWhat is being approved: {what}\n\nReport your \
          decision with one command:\n\n    {report} approved \"<what you verified>\"\n\nor, if \
          it should not be approved:\n\n    {report} rejected \"<your reasons>\"\n\nIf only the \
-         operator can decide, ask them:\n\n    {question} \"<your question>\"\n",
+         operator can decide, ask them:\n\n    {question} \"<your question>\"\n{evidence}",
+        evidence = super::pr::evidence_section(task),
         report = super::REPORT,
         question = super::QUESTION,
     )

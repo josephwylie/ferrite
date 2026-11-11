@@ -819,6 +819,9 @@ pub enum TaskAction {
         request: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workflow: Option<String>,
+        /// Its pull request: `owner/repository#number` or a URL (#223).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pr: Option<String>,
     },
     Stop {
         task: String,

@@ -680,6 +680,15 @@ mod factory {
             made.pull_request(),
             Some("https://github.com/acme/app/pull/31")
         );
+        let carried = made
+            .delivery
+            .pr
+            .as_ref()
+            .expect("the PR is the Task's (#223)");
+        assert_eq!(
+            (carried.repository.as_str(), carried.number),
+            ("acme/app", 31)
+        );
         assert!(
             made.instructions.contains("gh pr checkout 31"),
             "{}",
@@ -760,6 +769,7 @@ mod factory {
                         agent: agent(),
                         request: None,
                         workflow: None,
+                        pr: None,
                     },
                     t0(),
                 )

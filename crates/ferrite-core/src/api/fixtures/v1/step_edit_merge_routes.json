@@ -1,0 +1,1 @@
+{"id":"1","method":"step.edit","params":{"workflow":"w-1","step":"s-5","by_merge_result":true,"on_conflict":"step:s-6","on_pending":"wait"}}

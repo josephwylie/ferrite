@@ -214,6 +214,21 @@ impl Server {
                 step: params.step,
             }),
             Method::ReportQuestion(params) => self.api_ask(params),
+            Method::ReportRevision(params) => self.api_worker_said(
+                params.worker,
+                crate::factory::Command::ReportRevision {
+                    worker: params.worker,
+                    head: params.head,
+                    pr: params.pr,
+                },
+            ),
+            Method::ReportEvidence(params) => self.api_worker_said(
+                params.worker,
+                crate::factory::Command::ReportEvidence {
+                    worker: params.worker,
+                    text: params.text,
+                },
+            ),
             Method::TaskAnswer(params) => {
                 let task = params.task.clone();
                 self.api_task_command(

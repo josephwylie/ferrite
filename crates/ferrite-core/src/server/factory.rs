@@ -215,6 +215,13 @@ impl Server {
                 version,
                 query,
             } => self.read_github(workflow, version, query),
+            Effect::Tidy { task, path } => {
+                let kept = self.remove_task_worktree(&path);
+                let tidied = Command::WorktreeTidied { task, kept };
+                if let Err(refusal) = self.factory.command(tidied, now_ms()) {
+                    crate::log!("server: the Factory did not take a worktree's removal: {refusal}");
+                }
+            }
             Effect::StartCoordinator {
                 project,
                 agent,
@@ -371,6 +378,7 @@ impl Server {
                 instructions,
                 request,
                 workflow,
+                pr,
             } => {
                 let start = Command::Start {
                     project,
@@ -378,6 +386,7 @@ impl Server {
                     agent: self.factory_agent.clone(),
                     request,
                     workflow,
+                    pr,
                 };
                 let (answer, _) = self.factory_command(start).map_err(wire)?;
                 Ok(Some(done(answer)))
@@ -455,6 +464,7 @@ impl Server {
             agent: self.factory_agent.clone(),
             request: None,
             workflow: params.workflow,
+            pr: params.pr,
         };
         match self.factory_command(start)? {
             (Answer::Task(task), _) => Ok(json!({ "task": self.task_json(&task)? })),
@@ -667,6 +677,17 @@ impl Server {
             ReportedOutcome::Unable => Outcome::Unable { tried: summary },
             ReportedOutcome::Approved => Outcome::Approved { summary },
             ReportedOutcome::Rejected => Outcome::Rejected { reasons: summary },
+            merge => Outcome::Merge {
+                result: match merge {
+                    ReportedOutcome::Merged => factory::MergeOutcome::Merged,
+                    ReportedOutcome::Conflict => factory::MergeOutcome::Conflict,
+                    ReportedOutcome::Pending => factory::MergeOutcome::Pending,
+                    ReportedOutcome::Denied => factory::MergeOutcome::Denied,
+                    ReportedOutcome::HeadChanged => factory::MergeOutcome::HeadChanged,
+                    _ => factory::MergeOutcome::Unknown,
+                },
+                summary,
+            },
         };
         self.api_worker_said(
             params.worker,
@@ -688,7 +709,11 @@ impl Server {
     }
 
     /// A Worker's report or question, answered with its Task.
-    fn api_worker_said(&mut self, worker: ThreadId, command: Command) -> Result<Value, ApiError> {
+    pub(super) fn api_worker_said(
+        &mut self,
+        worker: ThreadId,
+        command: Command,
+    ) -> Result<Value, ApiError> {
         let (answer, _) = self.factory_command(command)?;
         let task = self
             .factory
