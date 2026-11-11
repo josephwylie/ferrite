@@ -741,13 +741,9 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
             .unwrap()
             .activity();
         let faces = crate::cockpit::transcript_glue::agent_faces(activity);
-        assert_eq!(
-            faces.get("Atlas"),
-            Some(&ferrite_pane::pane::AgentFace {
-                run: ferrite_pane::pane::AgentRun::Running,
-                summary: Some("Reading nav.rs".into()),
-            })
-        );
+        let face = faces.get("Atlas").unwrap();
+        assert_eq!(face.run, ferrite_pane::pane::AgentRun::Running);
+        assert_eq!(face.summary.as_deref(), Some("Reading nav.rs"));
     });
     assert!(
         cx.debug_bounds("live-call").is_none(),
@@ -779,6 +775,50 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(view.read_with(cx, |view, _| !view.agent_drills.is_open(thread)));
     assert!(cx.debug_bounds("agent-running").is_none(), "settled");
+}
+
+/// Agents started together draw T3's subagent card: shut, its trigger
+/// alone over 24px avatars; pressed, it snaps open on their rows, the
+/// working one's dot running, each row the way into its agent.
+#[gpui::test]
+fn agents_started_together_draw_one_card_that_opens_on_their_rows(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("subagents-card", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    for name in ["Atlas", "Birch", "Cedar"] {
+        agent_call(&fake, name);
+    }
+    child(&fake, "Atlas", AgentStatus::Working);
+    child(&fake, "Birch", AgentStatus::Idle);
+    child(&fake, "Cedar", AgentStatus::Idle);
+    tick(cx);
+    let trigger = cx.debug_bounds("agent-card-Atlas").expect("one card");
+    assert!(cx.debug_bounds("agent-card-title").is_some());
+    assert!(cx.debug_bounds("agent-card-status").is_some());
+    assert!(
+        cx.debug_bounds("agent-row-Atlas").is_none(),
+        "shut, the card is its trigger alone"
+    );
+    cx.simulate_click(trigger.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    let panel = cx.debug_bounds("agent-card-panel").expect("it snaps open");
+    for row in ["agent-row-Atlas", "agent-row-Birch", "agent-row-Cedar"] {
+        let bounds = cx.debug_bounds(row).unwrap_or_else(|| panic!("{row}"));
+        assert!(panel.contains(&bounds.center()), "{row} in the panel");
+    }
+    let dot = cx.debug_bounds("agent-running").expect("the working agent's dot");
+    assert_eq!(dot.size.width, px(ferrite_ui::theme::AGENT_DOT));
+    let open = cx.debug_bounds("agent-open-Birch").expect("the row opens");
+    cx.simulate_click(open.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.agent_drills.subject(thread),
+            Some(&Subject::Subagent(key("Birch")))
+        );
+    });
 }
 
 /// The keyboard reaches an agent's row: Tab lands on it, ↵ opens its

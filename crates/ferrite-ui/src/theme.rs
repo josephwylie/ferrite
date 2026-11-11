@@ -1598,6 +1598,43 @@ pub const DIVIDER_PAD_Y: f32 = SPACE_1;
 pub const DIVIDER_ICON: f32 = 12.0;
 pub const DIVIDER_LABEL_GAP: f32 = SPACE_1_5;
 
+/// **A subagent** (T3's `SubagentTimelineLink`): an `AGENT_ROW_PAD_X` ×
+/// `AGENT_ROW_PAD_Y` row at `AGENT_ROW_RADIUS`, `AGENT_ROW_GAP` between its
+/// parts, the `paint::HOVER` ground under the pointer: its `AGENT_AVATAR`
+/// disc (a 1px `LINE` ring at 70% on `AGENT_AVATAR_FILL`, cut
+/// `AGENT_RING` from the ground) holding the `AGENT_AVATAR_ICON` bot, an
+/// `AGENT_DOT` status dot at its foot; its task in `FS_BADGE` at `W_LABEL`
+/// over `AGENT_DETAIL_FS` on `AGENT_DETAIL_LH`; its time; an
+/// `AGENT_CHEVRON` `›`.
+pub const AGENT_ROW_GAP: f32 = 10.0;
+pub const AGENT_ROW_PAD_X: f32 = SPACE_2;
+pub const AGENT_ROW_PAD_Y: f32 = SPACE_1_5;
+pub const AGENT_ROW_RADIUS: f32 = SPACE_1_5;
+pub const AGENT_AVATAR: f32 = SPACE_6;
+pub const AGENT_AVATAR_ICON: f32 = 14.0;
+pub const AGENT_AVATAR_FILL: u32 = 0xffffff08;
+pub const AGENT_RING: f32 = 2.0;
+pub const AGENT_DOT: f32 = SPACE_2;
+pub const AGENT_DETAIL_FS: f32 = 11.0;
+pub const AGENT_DETAIL_LH: f32 = 18.0;
+pub const AGENT_CHEVRON: f32 = 14.0;
+/// **A subagent card** (T3's `V2SubagentGroup`): its trigger
+/// `AGENT_CARD_PAD_Y` above and below and `AGENT_CARD_PAD_R` at its right,
+/// at most `AGENT_AVATARS` avatars overlapping by `AGENT_AVATAR_OVERLAP`
+/// and a `+N` disc in `AGENT_MORE_FS` (the status line's size too);
+/// settled and shut, it recedes to `AGENT_CARD_SETTLED_OPACITY`. Open, its
+/// rows stand in a panel `AGENT_PANEL_MARGIN_Y` off it, `AGENT_PANEL_PAD`
+/// in, at `AGENT_PANEL_RADIUS` in a `LINE` ring at 60% on `CARD` at 30%.
+pub const AGENT_CARD_PAD_Y: f32 = SPACE_2;
+pub const AGENT_CARD_PAD_R: f32 = 13.0;
+pub const AGENT_AVATARS: usize = 3;
+pub const AGENT_AVATAR_OVERLAP: f32 = SPACE_1_5;
+pub const AGENT_MORE_FS: f32 = 10.0;
+pub const AGENT_CARD_SETTLED_OPACITY: f32 = 0.55;
+pub const AGENT_PANEL_MARGIN_Y: f32 = SPACE_1;
+pub const AGENT_PANEL_PAD: f32 = SPACE_1;
+pub const AGENT_PANEL_RADIUS: f32 = SPACE_2;
+
 /// A Standard-size step at reading size `reading`, whole pixels.
 pub fn tx_scaled(step: f32, reading: f32) -> f32 {
     (step * reading / FS_PROSE).round()
@@ -1664,15 +1701,6 @@ pub const TX_TOP_FADE_STOPS: [(f32, f32); 7] = [
     (0.82, 0.04),
     (1.0, 0.0),
 ];
-
-/// The transcript column's inset for a Solo (`solo`) or a Group Pane.
-pub fn tx_inset(solo: bool) -> f32 {
-    if solo {
-        TX_INSET_SOLO
-    } else {
-        TX_INSET_GROUP
-    }
-}
 
 /// **The prompt bubble** (T3's `UserMessageRow`): right-aligned,
 /// shrinking to its words, never wider than `PROMPT_BUBBLE_MAX_W` of the

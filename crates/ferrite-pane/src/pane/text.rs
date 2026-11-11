@@ -5,11 +5,6 @@
 use super::*;
 use ferrite_core::transcript::tools::{self, ToolKind};
 
-/// What a call whose result never came says after its call line.
-pub(super) const NO_RESULT: &str = "no result";
-/// What a call the operator stopped says (a denial, or the turn's stop).
-pub(super) const STOPPED: &str = "stopped";
-
 /// How a turn's end reads in the transcript, if it says anything: an
 /// interrupted or failed one, as core words it (`failed · 0.1s ·
 /// <message>`). A completed turn says nothing at its end: its fold, at its
@@ -116,12 +111,6 @@ pub(crate) struct CallLine {
     pub argument: String,
 }
 
-/// The seam before a running agent's summary (`agent_line`).
-pub(crate) const RESULT_SEAM: &str = " \u{b7} ";
-
-/// The tag a failed agent wears after its line (`call_verdict`).
-pub(crate) const FAILED_TAG: &str = "Failed";
-
 impl CallLine {
     /// The label as one Markdown run, so it selects and copies as the one
     /// line it reads: words, a path (`path`) a link that opens it
@@ -179,18 +168,6 @@ pub(crate) fn call_pieces(tool: &ToolBlock) -> CallPieces {
         path: path_link(&line.argument, &line.argument),
         verb: line.verb,
     }
-}
-
-/// A failed agent's tag after its line (`Failed`, `Failed · 357 passed; 2
-/// failed`): its own run, so its lead word alone wears the failure ink.
-pub(crate) fn call_verdict(tool: &ToolBlock) -> Option<String> {
-    if !call_failed(tool) {
-        return None;
-    }
-    Some(match call_result(tool) {
-        Some(result) => format!("{FAILED_TAG}{RESULT_SEAM}{result}"),
-        None => FAILED_TAG.to_owned(),
-    })
 }
 
 
@@ -268,52 +245,52 @@ fn without_cd(command: &str) -> &str {
     }
 }
 
-/// What a shut call row says after its call line: a test run's verdict
-/// (`954 passed`; a failed run's `357 passed; 2 failed` after its tag) and a
-/// call whose result never came (`no result`). Nothing else previews on a
-/// shut row: a command's output, a read's size and a failure's words are
-/// behind its disclosure, the failure itself in the row's `Failed` tag.
-fn call_result(tool: &ToolBlock) -> Option<String> {
-    match &tool.state {
-        ToolState::Running => None,
-        ToolState::Unavailable => Some(NO_RESULT.to_owned()),
-        ToolState::Stopped => Some(STOPPED.to_owned()),
-        ToolState::Failed(_) | ToolState::Ok => {
-            // A tally only: an early failure's elbow heads with the run's
-            // first line, which is no verdict.
-            test_elbow(tool)
-                .map(|elbow| elbow.rest)
-                .filter(|rest| rest.contains("passed"))
-        }
+
+/// An agent row's first line (`agents::render_agent`): its task (the
+/// provider's description), or `Agent` with none.
+pub(crate) fn agent_title(tool: &ToolBlock) -> String {
+    let task = tool.argument();
+    if task.is_empty() {
+        "Agent".into()
+    } else {
+        task.into_owned()
     }
 }
 
-/// An agent call's line, as it reads and copies (`agents::render_agent`):
-/// `Ran agent Count .rs files`, and the range of its task, the words the
-/// row brightens; while the agent runs, `Running agent …` and what it is
-/// doing after the seam (its summary, carried as the call's result line
-/// while it runs: `AgentFaces::apply`).
-pub(crate) fn agent_line(tool: &ToolBlock) -> (String, std::ops::Range<usize>) {
-    let running = tool.state == ToolState::Running;
-    let mut line = Work::of(tool).verb(running).to_owned();
-    let task = tool.argument();
-    if !task.is_empty() {
-        line.push(' ');
-    }
-    let start = line.len();
-    line.push_str(&task);
-    let range = start..line.len();
-    if let Some(summary) = tool
-        .result_line
+/// An agent row's second line (T3's): what it is doing while it runs (its
+/// progress, carried as the call's result line: `AgentFaces::apply`), else
+/// its standing.
+pub(crate) fn agent_detail(tool: &ToolBlock) -> String {
+    let standing = super::agents::Standing::of(tool);
+    tool.result_line
         .as_deref()
         .map(str::trim)
-        .filter(|summary| running && !summary.is_empty())
-    {
-        line.push_str(RESULT_SEAM);
-        line.push_str(summary);
-    }
-    (line, range)
+        .filter(|summary| standing == super::agents::Standing::Running && !summary.is_empty())
+        .map_or_else(|| standing.word().to_owned(), str::to_owned)
 }
+
+/// A subagent card's title: `3 subagents`.
+pub(crate) fn agent_card_title(tools: &[&ToolBlock]) -> String {
+    format!("{} subagents", tools.len())
+}
+
+/// How a card's agents stand (T3's `subagentDisplay`): `1 working · 2
+/// done`, counted in that order, then failed and stopped.
+pub(crate) fn agent_card_status(tools: &[&ToolBlock]) -> String {
+    use super::agents::Standing::*;
+    [(Running, "working"), (Done, "done"), (Failed, "failed"), (Stopped, "stopped")]
+        .into_iter()
+        .filter_map(|(standing, word)| {
+            let count = tools
+                .iter()
+                .filter(|tool| super::agents::Standing::of(tool) == standing)
+                .count();
+            (count > 0).then(|| format!("{count} {word}"))
+        })
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ")
+}
+
 
 /// A group's summary line, as it reads and copies (T3 Code's
 /// `summarizeToolGroup`): a group of thoughts alone is `Thought (×3)`;
@@ -508,21 +485,27 @@ pub(crate) fn call_failed(tool: &ToolBlock) -> bool {
 }
 
 /// The calls a shut group shows under its summary while it works, drawn
-/// whole (a suite's bar, a command's live line): its newest running call —
-/// or, in an agents' card, every agent still running, since they run side
-/// by side. Settled, a shut group shows nothing under it.
+/// whole (a suite's bar, a command's live line): its newest running call.
+/// A subagent card shut shows its trigger alone (T3's); settled, a shut
+/// group shows nothing under it.
 pub(crate) fn group_live(members: &[Block]) -> Vec<&Block> {
-    let running = members.iter().filter(
-        |block| matches!(&block.body, Body::Tool(tool) if tool.state == ToolState::Running),
-    );
-    let agents = group_tools(members)
-        .next()
-        .is_some_and(super::agents::is_agent);
-    if agents {
-        running.collect()
-    } else {
-        running.last().into_iter().collect()
+    if is_agent_card(members) {
+        return Vec::new();
     }
+    members
+        .iter()
+        .filter(|block| matches!(&block.body, Body::Tool(tool) if tool.state == ToolState::Running))
+        .last()
+        .into_iter()
+        .collect()
+}
+
+/// Whether a group is agents started together: T3's subagent card
+/// (`agents::render_agent_card`).
+pub(crate) fn is_agent_card(members: &[Block]) -> bool {
+    group_tools(members)
+        .next()
+        .is_some_and(super::agents::is_agent)
 }
 
 /// Whether an opened call that is not a command echoes its input: only
@@ -668,7 +651,13 @@ pub(crate) fn collect_group_text(
     let Some(leader) = members.first() else {
         return;
     };
-    let _ = selection.line(leader.id, group_summary(members), Vec::new());
+    if is_agent_card(members) {
+        let tools: Vec<_> = group_tools(members).collect();
+        let _ = selection.line(leader.id, agent_card_title(&tools), Vec::new());
+        let _ = selection.line(leader.id, agent_card_status(&tools), Vec::new());
+    } else {
+        let _ = selection.line(leader.id, group_summary(members), Vec::new());
+    }
     let drawn: Vec<&Block> = if expanded {
         members.iter().collect()
     } else {
@@ -684,10 +673,8 @@ pub(crate) fn collect_group_text(
 /// output or another call's details, then its diffs.
 fn collect_tool_text(block: BlockId, tool: &ToolBlock, expanded: bool, selection: &TextRuns) {
     if super::agents::is_agent(tool) {
-        let _ = selection.line(block, agent_line(tool).0, Vec::new());
-        if let Some(verdict) = call_verdict(tool) {
-            let _ = selection.line(block, verdict, Vec::new());
-        }
+        let _ = selection.line(block, agent_title(tool), Vec::new());
+        let _ = selection.line(block, agent_detail(tool), Vec::new());
         return;
     }
     match call_pieces(tool) {

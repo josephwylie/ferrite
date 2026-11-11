@@ -1257,15 +1257,13 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
                 .unwrap()
         })
     };
-    // Measured, not just declared: the first turn's answer (its actions
-    // row under it, counted in) to the second prompt is the turn step.
-    let turn = ferrite_ui::theme::tx_turn_gap(
-        ferrite_pane::pane::Grid::pane(Default::default(), true).line,
-    );
+    // Measured, not just declared: the first turn's answer to the second
+    // prompt is its meta row and T3's row padding.
+    use ferrite_ui::theme::{MESSAGE_ACTION, MESSAGE_ACTIONS_GAP, PROMPT_BUBBLE_PAD_Y, TX_ROW_PAD};
     assert_eq!(
         line(prompts[1]).top() - answer.bottom(),
-        px(turn + ferrite_ui::theme::PROMPT_BUBBLE_PAD_Y),
-        "turns sit the turn step and the bubble's padding apart"
+        px(MESSAGE_ACTIONS_GAP + MESSAGE_ACTION + TX_ROW_PAD + PROMPT_BUBBLE_PAD_Y),
+        "turns sit the meta row, the padding and the bubble's padding apart"
     );
 }
 

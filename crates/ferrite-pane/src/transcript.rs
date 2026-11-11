@@ -1692,14 +1692,25 @@ impl TranscriptView {
     ) -> AnyElement {
         let block = stamped.id;
         if pane::is_agent(tool) {
+            let face = self.input.agents.get(&tool.call);
             let open = view
-                .filter(|_| self.input.agents.get(&tool.call).is_some())
+                .filter(|_| face.is_some())
                 .map(|view| agent_opener(&tool.call, view.clone()));
             let targeted = self
                 .tool_targeted(DisclosureId::Tool(tool.call.clone()))
                 .then_some(&self.input.disclosure_focus);
-            let live = background_opener(tool, view);
-            return pane::render_agent(block, tool, row_cx, open, targeted, live);
+            return pane::render_agent(
+                block,
+                tool,
+                row_cx,
+                pane::AgentRowCx {
+                    clock: face.and_then(|face| face.clock),
+                    open,
+                    targeted,
+                    live: background_opener(tool, view),
+                    ground: theme::tx_ground(self.input.solo),
+                },
+            );
         }
         let call = DisclosureId::Tool(tool.call.clone());
         let expanded = self.tool_state(&call) == DisclosureState::Expanded;
@@ -1755,6 +1766,31 @@ impl TranscriptView {
         let disclosure = view
             .clone()
             .map(|view| self.disclosure_control(&id, true, view));
+        if pane::is_agent_card(row.blocks()) {
+            let clock = pane::AgentClock::longest(
+                pane::group_tools(row.blocks())
+                    .filter_map(|tool| self.input.agents.get(&tool.call)?.clock),
+            );
+            let rows = if expanded {
+                row.blocks()
+                    .iter()
+                    .map(|block| self.render_work(block, row_cx, view.as_ref(), true))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            return pane::render_agent_card(
+                row.blocks(),
+                row_cx,
+                pane::AgentCardCx {
+                    disclosure,
+                    open: expanded,
+                    clock,
+                    rows,
+                    ground: theme::tx_ground(self.input.solo),
+                },
+            );
+        }
         let opened = expanded
             && row
                 .blocks()
@@ -2068,6 +2104,7 @@ impl TranscriptView {
         let measured = self.pinned_h.clone();
         let goal = self.estimated_tops().0.get(index).copied().unwrap_or(0.);
         let weak = cx.entity().downgrade();
+        let remask = weak.clone();
         let id = gpui::ElementId::from(SharedString::from(format!(
             "transcript-pinned-{}",
             self.input.namespace
@@ -2096,8 +2133,16 @@ impl TranscriptView {
                 .left_0()
                 .right_0()
                 .top(shift)
-                .on_children_prepainted(move |bounds, _, _| {
+                // The list masks its top by the band's height: a band that
+                // changed height lays the list out again under it.
+                .on_children_prepainted(move |bounds, window, cx| {
                     if let Some(bounds) = bounds.first() {
+                        if (measured.get() - bounds.size.height).abs() > px(0.5) {
+                            let remask = remask.clone();
+                            window.defer(cx, move |_, cx| {
+                                let _ = remask.update(cx, |_, cx| cx.notify());
+                            });
+                        }
                         measured.set(bounds.size.height);
                     }
                 })

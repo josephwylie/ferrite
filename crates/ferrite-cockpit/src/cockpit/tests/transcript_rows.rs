@@ -349,13 +349,13 @@ fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppCont
         let fold = cx.debug_bounds("turn-fold").unwrap();
         let tools = cx.debug_bounds("tool-group-spacing-0").unwrap();
         let answer = cx.debug_bounds("transcript-answer").unwrap();
-        // The fold stands the prompt step under the bubble, the opened work
-        // its padding under the fold's rule; consecutive calls fold into
-        // one summary line.
-        let line = pane::Grid::pane(Default::default(), true).line;
+        // The fold stands T3's row padding under the prompt's actions,
+        // the opened work its padding under the fold's rule; consecutive
+        // calls fold into one summary line.
+        use ferrite_ui::theme::{PROMPT_ACTIONS_GAP, TURN_FOLD_PAD_T, TX_ROW_PAD};
         assert_eq!(
             fold.top() - prompt.bottom(),
-            px(ferrite_ui::theme::tx_after_prompt(line) + ferrite_ui::theme::TURN_FOLD_PAD_T)
+            px(PROMPT_ACTIONS_GAP + ferrite_ui::theme::MESSAGE_ACTION + TX_ROW_PAD + TURN_FOLD_PAD_T)
         );
         let rule = fold.bottom() + px(ferrite_ui::theme::TURN_FOLD_TEXT_B + 1.);
         assert_eq!(tools.top() - rule, px(ferrite_ui::theme::TURN_FOLD_PAD_B));
@@ -363,11 +363,11 @@ fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppCont
             cx.debug_bounds("tool-row-spacing-1").is_none(),
             "a shut group draws no call rows"
         );
-        // The turn's last prose is its answer, the prose step under the
-        // work.
+        // The turn's last prose is its answer, the work log's padding
+        // under the work.
         assert_eq!(
             answer.top() - tools.bottom(),
-            px(ferrite_ui::theme::tx_work_prose(line))
+            px(ferrite_ui::theme::WORK_LOG_PAD_B)
         );
         // Its actions stand under it, the first icon's ink on the prose's
         // edge.
@@ -1415,4 +1415,37 @@ fn a_hovered_fold_shows_its_turns_start_time(cx: &mut TestAppContext) {
     tick(cx);
     let time = cx.debug_bounds("turn-fold-time").expect("the start time on hover");
     assert!(time.right() <= fold.right() && time.left() > cx.debug_bounds("turn-fold-words").unwrap().right());
+}
+
+/// T3's user bubble, 12 in, its words clamped to 176 past 8 lines under `Show full message`, which opens it whole and
+/// reads `Show less`.
+#[gpui::test]
+fn a_long_prompt_clamps_under_show_full_message(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("long-prompt", 1);
+    let thread = core.threads()[0];
+    core.send(thread, (0..12).map(|n| format!("Line {n}\n")).collect());
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    let clamped = cx
+        .debug_bounds("transcript-prompt-clamped")
+        .expect("past 8 lines it clamps");
+    assert_eq!(clamped.size.height, px(ferrite_ui::theme::PROMPT_CLAMP_H));
+    let bubble = cx.debug_bounds("transcript-prompt").unwrap();
+    assert_eq!(
+        bubble.size.height,
+        px(ferrite_ui::theme::PROMPT_CLAMP_H + 2. * ferrite_ui::theme::PROMPT_BUBBLE_PAD_Y)
+    );
+    let toggle = cx.debug_bounds("prompt-clamp-toggle").expect("Show full message");
+    assert_eq!(
+        toggle.top() - bubble.bottom(),
+        px(ferrite_ui::theme::PROMPT_CLAMP_TOGGLE_GAP)
+    );
+    assert!(toggle.right() <= bubble.right() + px(0.5), "right-aligned");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("transcript-prompt-clamped").is_none(), "open, whole");
+    let open = cx.debug_bounds("transcript-prompt").unwrap();
+    assert!(open.size.height > bubble.size.height);
+    assert!(cx.debug_bounds("prompt-clamp-toggle").is_some(), "Show less");
 }

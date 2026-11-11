@@ -18,7 +18,7 @@ use gpui::{App, ClipboardItem, Context, IntoElement, SharedString, Window};
 use super::CockpitView;
 use ferrite_core::activity::{ActivityView, AgentStatus};
 use ferrite_core::transcript::BlockId;
-use ferrite_pane::pane::{AgentFace, AgentFaces, AgentRun};
+use ferrite_pane::pane::{AgentClock, AgentFace, AgentFaces, AgentRun};
 use ferrite_pane::transcript::{PromptAction, ScrollTarget, TranscriptTail};
 
 /// Whether a sent prompt's Edit, Rewind and Fork can be asked of `open`
@@ -75,7 +75,24 @@ pub(super) fn agent_faces(activity: ActivityView<'_>) -> AgentFaces {
                 (!detail.is_empty()).then(|| detail.to_owned())
             })
             .flatten();
-        faces.insert(call, AgentFace { run, summary });
+        let transcript = agent.transcript();
+        let clock = match transcript.turn_started() {
+            Some(at) if run == AgentRun::Running => Some(AgentClock::Since(at)),
+            _ => transcript.blocks().iter().rev().find_map(|block| match &block.body {
+                ferrite_core::transcript::Body::TurnEnd(end) => end
+                    .elapsed_ms
+                    .map(|ms| AgentClock::Took(std::time::Duration::from_millis(ms))),
+                _ => None,
+            }),
+        };
+        faces.insert(
+            call,
+            AgentFace {
+                run,
+                summary,
+                clock,
+            },
+        );
     }
     faces
 }

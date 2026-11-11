@@ -25,8 +25,8 @@ mod usage;
 mod working;
 mod work_row;
 mod wrap_up;
-pub(crate) use agents::{is_agent, render_agent};
-pub use agents::{AgentFace, AgentFaces, AgentRun};
+pub(crate) use agents::{is_agent, render_agent, render_agent_card, AgentCardCx, AgentRowCx};
+pub use agents::{AgentClock, AgentFace, AgentFaces, AgentRun};
 #[cfg(any(test, feature = "test-support"))]
 pub use composer::model_label;
 pub use composer::{
@@ -43,7 +43,7 @@ use composer::{
 pub use menus::{menu_item, menu_popover, menu_row, picker_row, picker_section, MenuRow};
 use output::{call_body, diff_rows, hunk_rows, render_diff, running_tests, DiffRow};
 pub use output::{diff_number_cells, test_elbow, DiffKind, DiffPaint, TestElbow};
-pub(crate) use text::{collect_block_text, collect_group_text, group_live};
+pub(crate) use text::{collect_block_text, collect_group_text, group_live, group_tools, is_agent_card};
 pub use usage::{
     compact_count, context_meter_segments, context_segments, context_usage, ctx_meter_ink,
     plan_usage_fraction, plan_usage_ring, usage_ink,
@@ -3547,11 +3547,22 @@ pub(crate) fn prompt_row(
                 )
             })
     });
-    let toggle = face.clamp.map(|clamp| {
-        div()
-            .mt(px(theme::PROMPT_CLAMP_TOGGLE_GAP))
-            .child(clamp.toggle)
-    });
+    // A clamped bubble and its toggle stand `PROMPT_CLAMP_TOGGLE_GAP` apart.
+    let bubble = match face.clamp {
+        Some(clamp) => Some(
+            div()
+                .flex()
+                .flex_col()
+                .items_end()
+                .gap(px(theme::PROMPT_CLAMP_TOGGLE_GAP))
+                .w_full()
+                .min_w_0()
+                .children(bubble)
+                .child(clamp.toggle)
+                .into_any_element(),
+        ),
+        None => bubble.map(IntoElement::into_any_element),
+    };
     let images: Vec<_> = gallery
         .iter()
         .enumerate()
@@ -3587,8 +3598,7 @@ pub(crate) fn prompt_row(
             )
         })
         .children(quotes)
-        .children(bubble)
-        .children(toggle);
+        .children(bubble);
     div()
         .id(SharedString::from(format!("prompt-{:?}", block.id)))
         .relative()
@@ -6159,7 +6169,6 @@ mod tests {
             output: None,
             progress: None,
         };
-        let failed = ToolState::Failed("boom".into());
         // A command reads as itself and an edit as its path (T3's); any
         // other call is its verb in the app's words, then its argument.
         for (name, verb) in [
@@ -6180,12 +6189,6 @@ mod tests {
                 verb: String::new(),
                 argument: "cargo test".into(),
             }
-        );
-        let make = tool("Bash", "make", failed);
-        assert_eq!(text::call_verdict(&make).as_deref(), Some("Failed"));
-        assert_eq!(
-            text::call_verdict(&tool("Bash", "make", ToolState::Ok)),
-            None
         );
         // Where the command ran is not the row's business.
         assert_eq!(
