@@ -618,6 +618,17 @@ impl Server {
             ReportedOutcome::Unable => Outcome::Unable { tried: summary },
             ReportedOutcome::Approved => Outcome::Approved { summary },
             ReportedOutcome::Rejected => Outcome::Rejected { reasons: summary },
+            merge => Outcome::Merge {
+                result: match merge {
+                    ReportedOutcome::Merged => factory::MergeOutcome::Merged,
+                    ReportedOutcome::Conflict => factory::MergeOutcome::Conflict,
+                    ReportedOutcome::Pending => factory::MergeOutcome::Pending,
+                    ReportedOutcome::Denied => factory::MergeOutcome::Denied,
+                    ReportedOutcome::HeadChanged => factory::MergeOutcome::HeadChanged,
+                    _ => factory::MergeOutcome::Unknown,
+                },
+                summary,
+            },
         };
         self.api_worker_said(
             params.worker,
@@ -639,7 +650,7 @@ impl Server {
     }
 
     /// A Worker's report or question, answered with its Task.
-    fn api_worker_said(&mut self, worker: ThreadId, command: Command) -> Result<Value, ApiError> {
+    pub(super) fn api_worker_said(&mut self, worker: ThreadId, command: Command) -> Result<Value, ApiError> {
         let (answer, _) = self.factory_command(command)?;
         let task = self
             .factory

@@ -214,6 +214,8 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "task.rework",
             "task.redirect",
             "workflow.approval",
+            "report.revision",
+            "report.evidence",
         ]
     );
 }
@@ -495,6 +497,15 @@ fn samples() -> Vec<Request> {
                 rework_to: Some(crate::factory::Destination::Step("s-3".into())),
             },
         })),
+        request(Method::ReportRevision(ReportRevisionParams {
+            head: "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            pr: Some("acme/widgets#12".into()),
+            worker: thread(),
+        })),
+        request(Method::ReportEvidence(ReportEvidenceParams {
+            text: "cargo test: 12 passed".into(),
+            worker: thread(),
+        })),
     ]
 }
 
@@ -523,6 +534,37 @@ fn thread_start() -> ThreadStartParams {
 /// Requests a later parameter changed, frozen beside the operations' own.
 fn later_samples() -> Vec<(&'static str, Request)> {
     vec![
+        (
+            "task_start_pr",
+            request(Method::TaskStart(TaskStartParams {
+                instructions: "Ship the flag".into(),
+                project: Some("3".into()),
+                cwd: None,
+                workflow: Some("w-1".into()),
+                pr: Some("https://github.com/acme/widgets/pull/12".into()),
+            })),
+        ),
+        (
+            "report_outcome_merge",
+            request(Method::ReportOutcome(ReportOutcomeParams {
+                outcome: ReportedOutcome::HeadChanged,
+                summary: "The head is 2222222, not the approved 1111111".into(),
+                worker: thread(),
+            })),
+        ),
+        (
+            "step_edit_merge_routes",
+            request(Method::StepEdit(StepEditParams {
+                workflow: "w-1".into(),
+                step: "s-5".into(),
+                change: crate::factory::StepChange {
+                    by_merge_result: Some(true),
+                    on_conflict: Some(crate::factory::Destination::Step("s-6".into())),
+                    on_pending: Some(crate::factory::Destination::Wait),
+                    ..Default::default()
+                },
+            })),
+        ),
         (
             "task_start_workflow",
             request(Method::TaskStart(TaskStartParams {
@@ -1525,5 +1567,80 @@ fn a_ready_wait_answers_once_the_agent_is_up_and_at_rest() {
     assert_eq!(
         wait.observe(starting(), at(start, 20_000)),
         Some(Settled::NotReady)
+    );
+}
+
+/// A Task's PR at start, a Worker's revisions, evidence and merge
+/// results, and a Step's routes by merge result are CLI commands (#223).
+#[test]
+fn pull_requests_and_merging_parse_from_the_cli() {
+    assert_eq!(
+        parse(
+            "task.start",
+            &["Ship it", "--workflow", "w-1", "--pr", "acme/widgets#12"]
+        ),
+        Ok(Method::TaskStart(TaskStartParams {
+            instructions: "Ship it".into(),
+            project: None,
+            cwd: Some(PathBuf::from("/work/app")),
+            workflow: Some("w-1".into()),
+            pr: Some("acme/widgets#12".into()),
+        }))
+    );
+    assert_eq!(
+        parse("report.revision", &["abc1234", "--pr", "acme/widgets#12"]),
+        Ok(Method::ReportRevision(ReportRevisionParams {
+            head: "abc1234".into(),
+            pr: Some("acme/widgets#12".into()),
+            worker: ThreadId::new(7),
+        }))
+    );
+    assert_eq!(
+        parse("report.evidence", &["cargo test: 12 passed"]),
+        Ok(Method::ReportEvidence(ReportEvidenceParams {
+            text: "cargo test: 12 passed".into(),
+            worker: ThreadId::new(7),
+        }))
+    );
+    for (word, outcome) in [
+        ("merged", ReportedOutcome::Merged),
+        ("conflict", ReportedOutcome::Conflict),
+        ("pending", ReportedOutcome::Pending),
+        ("denied", ReportedOutcome::Denied),
+        ("head_changed", ReportedOutcome::HeadChanged),
+        ("unknown", ReportedOutcome::Unknown),
+    ] {
+        assert_eq!(
+            parse("report.outcome", &[word, "what gh said"]),
+            Ok(Method::ReportOutcome(ReportOutcomeParams {
+                outcome,
+                summary: "what gh said".into(),
+                worker: ThreadId::new(7),
+            }))
+        );
+    }
+    assert_eq!(
+        parse(
+            "step.edit",
+            &[
+                "w-1",
+                "s-5",
+                "--by-merge-result",
+                "--on-conflict",
+                "step:s-6",
+                "--on-pending",
+                "wait",
+            ]
+        ),
+        Ok(Method::StepEdit(StepEditParams {
+            workflow: "w-1".into(),
+            step: "s-5".into(),
+            change: crate::factory::StepChange {
+                by_merge_result: Some(true),
+                on_conflict: Some(crate::factory::Destination::Step("s-6".into())),
+                on_pending: Some(crate::factory::Destination::Wait),
+                ..Default::default()
+            },
+        }))
     );
 }
