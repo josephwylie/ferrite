@@ -84,15 +84,24 @@ fn a_task_takes_its_pr_at_start_as_a_reference_or_a_url() {
         let refused = start_on(&mut factory, Some(&id), Some(bad)).unwrap_err();
         assert_eq!(refused.code, RefusalCode::Invalid, "{bad}");
     }
-    assert_eq!(factory.board().tasks.len(), before, "a bad PR starts nothing");
+    assert_eq!(
+        factory.board().tasks.len(),
+        before,
+        "a bad PR starts nothing"
+    );
 
     let one_off = task_id(start_on(&mut factory, None, Some("acme/widgets#7")));
-    assert_eq!(the(&factory, &one_off).delivery.pr.as_ref().unwrap().number, 7);
+    assert_eq!(
+        the(&factory, &one_off).delivery.pr.as_ref().unwrap().number,
+        7
+    );
 
     let effects = factory.step(7, &BTreeMap::new());
     let prompts: Vec<String> = starts(&effects).into_iter().map(|(_, _, p)| p).collect();
     assert!(
-        prompts.iter().all(|prompt| prompt.contains("## Pull request")),
+        prompts
+            .iter()
+            .all(|prompt| prompt.contains("## Pull request")),
         "{prompts:?}"
     );
     assert!(prompts
@@ -158,11 +167,9 @@ fn a_worker_reports_the_pr_and_each_revision_with_who_reported_it() {
     assert_eq!(kept, [(1, HEAD_1, "Build"), (2, HEAD_2, "Fix")]);
     assert_eq!(pr.current().unwrap().revision, 2);
     let activity = &the(&factory, &task).activity;
-    assert!(activity
-        .iter()
-        .any(|entry| entry.by == Actor::Agent
-            && entry.text.contains("revision 2")
-            && entry.revision == Some(2)));
+    assert!(activity.iter().any(|entry| entry.by == Actor::Agent
+        && entry.text.contains("revision 2")
+        && entry.revision == Some(2)));
 }
 
 fn merge_report(
@@ -197,7 +204,11 @@ fn problems(factory: &Factory, id: &str) -> Vec<String> {
 fn merging(factory: &mut Factory) -> (WorkflowId, Vec<StepId>) {
     let (id, steps) = saved(
         factory,
-        &[("Build", "Build it"), ("Merge", "Merge it"), ("Resolve", "Resolve it")],
+        &[
+            ("Build", "Build it"),
+            ("Merge", "Merge it"),
+            ("Resolve", "Resolve it"),
+        ],
     );
     edit(
         factory,
@@ -301,7 +312,10 @@ fn a_step_routes_by_merge_result_and_only_merged_may_complete() {
             "Merge \u{b7} Access denied cannot keep waiting: only Checks pending waits.",
         ]
     );
-    assert_eq!(save(&mut factory, &id).unwrap_err().code, RefusalCode::Invalid);
+    assert_eq!(
+        save(&mut factory, &id).unwrap_err().code,
+        RefusalCode::Invalid
+    );
 
     edit(
         &mut factory,
@@ -331,7 +345,10 @@ fn each_merge_result_follows_its_route_and_only_merged_completes() {
     let prompt = &starts(&effects)[0].2;
     assert!(prompt.contains("acme/widgets#12"), "{prompt}");
     assert!(prompt.contains("report outcome head_changed"), "{prompt}");
-    assert!(prompt.contains("Confirm the PR actually merged"), "{prompt}");
+    assert!(
+        prompt.contains("Confirm the PR actually merged"),
+        "{prompt}"
+    );
     started(&mut factory, &task, SECOND);
 
     assert_eq!(
@@ -342,6 +359,8 @@ fn each_merge_result_follows_its_route_and_only_merged_completes() {
 
     // Pending: the same Worker keeps waiting.
     merge_report(&mut factory, SECOND, MergeOutcome::Pending, "CI running").unwrap();
+    let effects = factory.step(9, &seen_at(SECOND, true, 0));
+    assert!(prompts(&effects).is_empty(), "told once its turn is over");
     let effects = factory.step(9, &seen_at(SECOND, false, 1));
     assert_eq!(status(&factory, &task), Status::Working);
     assert!(notified(&effects).is_empty(), "waiting is silent");
@@ -351,11 +370,21 @@ fn each_merge_result_follows_its_route_and_only_merged_completes() {
     assert!(waited[0].contains("still pending"), "{waited:?}");
 
     // Conflict: the resolver starts, then hands back to Merge.
-    merge_report(&mut factory, SECOND, MergeOutcome::Conflict, "Conflicts in lib.rs").unwrap();
+    merge_report(
+        &mut factory,
+        SECOND,
+        MergeOutcome::Conflict,
+        "Conflicts in lib.rs",
+    )
+    .unwrap();
     let effects = factory.step(10, &BTreeMap::new());
     let resolver = starts(&effects);
     assert_eq!(resolver.len(), 1);
-    assert!(resolver[0].2.contains("\"Resolve\" agent"), "{}", resolver[0].2);
+    assert!(
+        resolver[0].2.contains("\"Resolve\" agent"),
+        "{}",
+        resolver[0].2
+    );
     assert_ne!(status(&factory, &task), Status::Completed);
     started(&mut factory, &task, THIRD);
     revision(&mut factory, THIRD, HEAD_2, None).unwrap();
@@ -433,7 +462,11 @@ fn an_unconfirmed_merge_is_reconciled_before_any_retry() {
         .collect();
     assert_eq!(told.len(), 1, "{effects:?}");
     assert!(told[0].contains("## Reconcile first"), "{}", told[0]);
-    assert!(told[0].contains("acme/widgets#12 is already merged"), "{}", told[0]);
+    assert!(
+        told[0].contains("acme/widgets#12 is already merged"),
+        "{}",
+        told[0]
+    );
 }
 
 /// AC: approval records the revision approved; a later revision is not
@@ -551,12 +584,12 @@ fn a_merged_task_tidies_its_worktree_and_otherwise_says_why_it_stays() {
         task: task.clone(),
         kept: kept.map(str::to_string),
     };
+    assert_eq!(factory.command(tidied(None), 10), Ok(Answer::Changed(true)));
+    assert_eq!(the(&factory, &task).worktree, None);
     assert_eq!(
         factory.command(tidied(None), 10),
-        Ok(Answer::Changed(true))
+        Ok(Answer::Changed(false))
     );
-    assert_eq!(the(&factory, &task).worktree, None);
-    assert_eq!(factory.command(tidied(None), 10), Ok(Answer::Changed(false)));
 
     // A dirty checkout stays, and the Task says why.
     let mut factory = Factory::in_memory();
@@ -606,14 +639,14 @@ fn the_template_merges_after_approval_and_resolves_conflicts_through_review() {
         named("Conflict resolver"),
     );
     assert_eq!(draft.approval.after, Destination::Step(merge.id.clone()));
-    let routes = merge.outcome_routes.clone().expect("routes by merge result");
+    let routes = merge
+        .outcome_routes
+        .clone()
+        .expect("routes by merge result");
     assert_eq!(routes.conflict, Destination::Step(resolve.id.clone()));
     assert_eq!(routes.merged, Destination::Complete);
     assert_eq!(resolve.on_finished, Destination::Step(review.id.clone()));
-    assert_eq!(
-        draft.problems(&Catalog::default()),
-        Vec::<Problem>::new()
-    );
+    assert_eq!(draft.problems(&Catalog::default()), Vec::<Problem>::new());
 }
 
 fn finished_report(factory: &mut Factory, worker: ThreadId) -> Result<Answer, Refusal> {

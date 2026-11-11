@@ -111,7 +111,10 @@ impl PullRequest {
     }
 
     pub fn url(&self) -> String {
-        format!("https://github.com/{}/pull/{}", self.repository, self.number)
+        format!(
+            "https://github.com/{}/pull/{}",
+            self.repository, self.number
+        )
     }
 
     /// The latest revision reported.
@@ -172,7 +175,16 @@ pub struct Evidence {
 /// What a merge Step's Worker reports: six distinct results, of which
 /// only `merged` may complete the Task.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
     schemars::JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]

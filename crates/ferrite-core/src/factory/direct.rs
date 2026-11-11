@@ -635,6 +635,7 @@ pub(super) fn follow(
                 task.reason = None;
                 task.watch = Watch {
                     prompt: Some(super::pr::waiting_prompt(task)),
+                    at_rest: true,
                     ..Watch::default()
                 };
             }

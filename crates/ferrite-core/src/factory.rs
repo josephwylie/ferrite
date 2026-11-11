@@ -240,6 +240,10 @@ pub struct Watch {
     /// Someone else prompted it (the operator): take the baseline afresh.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rebase: bool,
+    /// Hold `prompt` until the Worker is at rest: it reported mid-turn
+    /// and its turn is still running (#223, a merge Step kept waiting).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub at_rest: bool,
 }
 
 impl Watch {
@@ -1312,7 +1316,11 @@ fn at_rest_rule(task: &mut Task, seen: &Seen, now_ms: i64, effects: &mut Vec<Eff
     let Some(thread) = task.worker else {
         return;
     };
+    if task.watch.at_rest && seen.busy {
+        return;
+    }
     if let Some(text) = task.watch.prompt.take() {
+        task.watch.at_rest = false;
         effects.push(Effect::Prompt { thread, text });
         task.watch.baseline = seen.turns;
         task.watch.nudged_ms = None;
