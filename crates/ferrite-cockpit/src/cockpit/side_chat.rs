@@ -512,8 +512,6 @@ impl CockpitView {
             solo: false,
             focused: true,
             reduce_motion: cx.reduce_motion(),
-            reasoning_visible: false,
-            effort: self.thread_effort(&open),
         });
         let workspace =
             ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
@@ -561,7 +559,6 @@ impl CockpitView {
             expanded: disclosure.0,
             target: disclosure.1,
             disclosure_focus: disclosure.2,
-            working_reasoning: None,
             working,
             tail: None,
             pending_call: None,

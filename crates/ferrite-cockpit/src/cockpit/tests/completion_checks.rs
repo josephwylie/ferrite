@@ -495,6 +495,7 @@ fn small_tool_output_copies_blank_lines_and_trailing_spaces_exactly(cx: &mut Tes
         })
         .unwrap();
     tick(cx);
+    open_live(cx);
     // Open the call: its open body holds what it printed, exactly.
     view.update(cx, |view, cx| {
         view.panes[0].toggle_tool(&pane::DisclosureId::Tool("exact".into()));
@@ -545,8 +546,7 @@ fn received_reasoning_is_shown_once_during_live_to_settled_handoff(cx: &mut Test
         tick(cx);
         let historical = historical_count(cx, source);
         let live = usize::from(
-            cx.debug_bounds("progress-caption-Checking the supplied spacing and tool results")
-                .is_some(),
+            cx.debug_bounds("live-thought").is_some(),
         );
         assert_eq!(historical+live,1,"plain and formatted supplied summaries both require one visible presentation: {source}");
     }
@@ -562,9 +562,7 @@ fn received_reasoning_is_shown_once_during_live_to_settled_handoff(cx: &mut Test
         1,
         "completion retains exactly one historical summary"
     );
-    assert!(cx
-        .debug_bounds("progress-caption-Checking the supplied spacing and tool results")
-        .is_none());
+    assert!(cx.debug_bounds("live-thought").is_none());
 }
 
 #[gpui::test]

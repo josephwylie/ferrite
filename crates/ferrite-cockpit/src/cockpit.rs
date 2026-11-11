@@ -1924,14 +1924,9 @@ impl CockpitView {
                 .map(std::path::Path::to_path_buf);
         let solo = self.cockpit.roster().fullscreen().is_some()
             || matches!(self.cockpit.roster().view(), View::Solo);
-        // While the turn runs, its working line is the transcript's last
-        // row (`pane::working_tail`), over a Decision that waits.
-        let progress = subject_view.transcript().progress().caption();
-        let reasoning_visible = progress.as_ref().is_some_and(|caption| {
-            self.panes[index].transcript().is_some_and(|transcript| {
-                transcript.read(cx).received_reasoning_is_visible(caption)
-            })
-        });
+        // While the turn runs, its header under its prompt and its live
+        // row at the tail (`pane::working_tail`), over a Decision that
+        // waits.
         let working = pane::working_tail(pane::WorkingFacts {
             transcript: subject_view.transcript(),
             thread,
@@ -1939,8 +1934,6 @@ impl CockpitView {
             solo,
             focused,
             reduce_motion: cx.reduce_motion(),
-            reasoning_visible,
-            effort: self.thread_effort(&open),
         });
         let agents = transcript_glue::agent_faces(open.activity());
         let rewind = transcript_glue::rewind_gate(&open);
@@ -2003,9 +1996,6 @@ impl CockpitView {
             expanded: disclosure.0,
             target: disclosure.1,
             disclosure_focus: disclosure.2,
-            working_reasoning: progress
-                .filter(|_| working.is_some())
-                .map(|caption| (caption.to_string(), reasoning_visible)),
             working,
             tail,
             pending_call,
@@ -2132,11 +2122,6 @@ impl CockpitView {
                 // ⌘-click on a path: the Thread's preview, in the Panel.
                 self.focus_pane(index);
                 self.open_preview_from(index, path.clone(), *line, cx);
-            }
-            // The working line's words were chosen against the last layout:
-            // choose them again.
-            ferrite_pane::transcript::TranscriptEvent::ReasoningShown => {
-                self.sync_transcript(index, cx);
             }
             ferrite_pane::transcript::TranscriptEvent::OpenAgent(call) => {
                 self.open_agent_from(index, call.clone(), cx);
@@ -2754,6 +2739,11 @@ impl CockpitView {
                     }
                     ferrite_core::transcript::Body::Thinking(_) => {
                         valid.insert(pane::DisclosureId::Reasoning(block.id));
+                        valid.insert(pane::DisclosureId::Live(block.id));
+                    }
+                    // A turn's fold, or a steer's, by its prompt.
+                    ferrite_core::transcript::Body::Prompt(_) => {
+                        valid.insert(pane::DisclosureId::Turn(block.id));
                     }
                     _ => {}
                 }

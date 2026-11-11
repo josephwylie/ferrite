@@ -408,6 +408,8 @@ pub mod paint {
     pub const CARD_RING: Paint = Paint::solid(super::CARD_RING);
     pub const FIELD_RING: Paint = Paint::solid(super::FIELD_RING);
     pub const BLOCK_RING: Paint = Paint::solid(super::BLOCK_RING);
+    /// The rule under a turn's header and fold.
+    pub const TURN_FOLD_RULE: Paint = Paint(super::TURN_FOLD_RULE);
 
     /// The prompt band: a field that occludes what scrolls under it.
     pub const PROMPT_BAND: Paint = FIELD;
@@ -1389,10 +1391,13 @@ pub fn init_components(cx: &mut gpui::App) {
 //   a line and a half off; a row that answers the one above it sits flush.
 //   The space above a row is chosen at reconcile from the row before it
 //   (`rows::gap_before`) and is part of the row's identity.
-// - **The turn's end.** A turn that took `TURN_STAMP_MIN_MS` or more closes
-//   on `Worked for 5m 22s`, `INK_SUBTLE`, a `LINE` running on to the
-//   column's end; a quicker one says nothing. A failed or interrupted turn
-//   says `failed · 0.1s · <message>`, the lead word in its state ink.
+// - **The turn's header and fold** (ADR 0038). A running turn opens under
+//   its prompt with `Working for 11m 24s` over a faint rule (`TURN_FOLD_*`),
+//   its live step at its tail (`Running sed`, `Thinking`). Once it settles
+//   that row is the fold, `Worked for 24m 55s ›`, shut: the turn's work
+//   folds away under it, leaving the answer and what must stay in view
+//   (`transcript::turns`). A failed turn keeps every step and says `failed ·
+//   0.1s · <message>`, the lead word in its state ink.
 // - **Failure** is a word: a failed call's line stays in the work's ink and
 //   its verdict (`· failed`) follows the cut, `failed` in `BLOCKED`; what
 //   it printed reads as output does.
@@ -1615,13 +1620,34 @@ pub const TEST_BAR_EASE_MS: u64 = 300;
 pub const PATH_UNDERLINE_W: f32 = 1.0;
 pub const PATH_UNDERLINE_OFFSET: f32 = 3.0;
 // ---- transcript app pass (owner: transcript.rs and its rows)
-/// A completed turn closes with `Worked for 5m 22s` only when it took at
-/// least this long: a quick answer needs no receipt. An interrupted or
-/// failed turn always says so.
-pub const TURN_STAMP_MIN_MS: u64 = 30_000;
-/// The turn stamp's rule runs from its words to the column's end, this far
-/// after them.
-pub const TURN_STAMP_RULE_GAP: f32 = SPACE_3;
+/// **A turn's header and fold** (T3's `WorkingTimelineRow` and turn fold,
+/// MessagesTimeline.tsx:1621-1652; ADR 0038): `Working for 11m 24s` under
+/// the running turn's prompt, the same row `Worked for 24m 55s ›` once it
+/// settles, at any duration. `TURN_FOLD_PAD_T` above the words,
+/// `TURN_FOLD_TEXT_B` under them to a 1px rule of `TURN_FOLD_RULE` (T3's
+/// `--border` at 60%, white 4.8%) the column's width, then the row's own
+/// `TURN_FOLD_PAD_B` (`rows::gap_before`). The words are `TURN_FOLD_TEXT` on
+/// `TURN_FOLD_LINE` in `INK_SUBTLE`, tabular, on a `TURN_FOLD_ROW_H` row
+/// inset `TURN_FOLD_INSET`; the fold's chevron (`TURN_FOLD_CHEVRON`) stands
+/// `TURN_FOLD_GAP` after them, and the row keeps `TURN_FOLD_END` at its
+/// end. Under the pointer the words and chevron go to `INK_STRONG` over
+/// `MOTION_FOLD_HOVER_MS`, and the turn's start time snaps in at the end.
+pub const TURN_FOLD_PAD_T: f32 = SPACE_1;
+pub const TURN_FOLD_TEXT_B: f32 = SPACE_2;
+pub const TURN_FOLD_PAD_B: f32 = 6.0;
+pub const TURN_FOLD_RULE: u32 = 0xffffff0c;
+pub const TURN_FOLD_TEXT: f32 = 14.0;
+pub const TURN_FOLD_LINE: f32 = 22.75;
+pub const TURN_FOLD_ROW_H: f32 = 24.0;
+pub const TURN_FOLD_INSET: f32 = SPACE_1;
+pub const TURN_FOLD_END: f32 = 2.0;
+pub const TURN_FOLD_CHEVRON: f32 = 14.0;
+pub const TURN_FOLD_GAP: f32 = SPACE_1;
+/// The fold's hover time: 12px, `SPACE_1` off the row's end.
+pub const TURN_FOLD_TIME: f32 = 12.0;
+/// The compacting header's icon, `TURN_FOLD_ICON_GAP` before its words.
+pub const TURN_FOLD_ICON: f32 = 12.0;
+pub const TURN_FOLD_ICON_GAP: f32 = SPACE_2;
 /// **Message actions**: a prompt's (its send time and `Copy`, under its
 /// bubble's right edge) and a turn's answer's (`Copy` and the time it
 /// finished, under its left edge), `MESSAGE_ACTIONS_GAP` under the message,
@@ -3158,6 +3184,9 @@ pub const MOTION_PRESS_SCALE: f32 = 0.975;
 /// A disclosure chevron turns its quarter over `MOTION_DUR_FAST_MS` on
 /// `MOTION_EASE_STANDARD` (Claude's `TurnStatus` caret).
 pub const MOTION_CHEVRON_MS: u64 = MOTION_DUR_FAST_MS;
+/// A turn fold's words and chevron brighten under the pointer over 150ms
+/// on `MOTION_EASE_STANDARD` (T3's default `transition-colors`).
+pub const MOTION_FOLD_HOVER_MS: u64 = 150;
 /// A nav fold (a Project, a Group, Pinned) opens and shuts over 150ms on
 /// the `ease-out` keyword, height and opacity (Claude's
 /// `sidebar-group-expand`).

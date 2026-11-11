@@ -12,6 +12,7 @@ pub use find::FindState;
 mod rows;
 pub use rows::gated;
 mod scroll;
+mod turns;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -27,7 +28,7 @@ use gpui::{
 };
 
 use self::{
-    rows::{carried_tool, RowId, RowKind, RowShape, TranscriptRow, TranscriptRows},
+    rows::{live_anchor, RowId, RowKind, RowShape, TranscriptRow, TranscriptRows},
     scroll::TranscriptScroll,
 };
 use crate::{
@@ -63,37 +64,16 @@ impl std::fmt::Debug for TranscriptTail {
     }
 }
 
-/// What the working line draws to open the call it carries: the chevron's
-/// state, and what a press does (the transcript toggles the call's
-/// disclosure). The transcript owns the state, so the line is handed it.
+/// What the live row draws to open the running turn's trailing work: its
+/// state, and what a press does (the transcript toggles the work's
+/// disclosure). The transcript owns the state, so the row is handed it.
 #[derive(Clone)]
 pub(crate) struct LineDisclosure {
     pub open: bool,
     pub toggle: Rc<dyn Fn(&mut Window, &mut App)>,
 }
 
-/// The working row (`pane::working_tail`): like a `TranscriptTail`, but
-/// drawn with the disclosure of the call it carries, when it carries one.
-#[derive(Clone)]
-pub struct WorkingTail {
-    pub key: u64,
-    pub(crate) render: Rc<dyn Fn(Option<LineDisclosure>, &mut Window, &mut App) -> AnyElement>,
-}
-
-impl WorkingTail {
-    /// The line drawn alone, with no call to open.
-    pub fn draw(&self, window: &mut Window, cx: &mut App) -> AnyElement {
-        (self.render)(None, window, cx)
-    }
-}
-
-impl std::fmt::Debug for WorkingTail {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WorkingTail")
-            .field("key", &self.key)
-            .finish_non_exhaustive()
-    }
-}
+pub use crate::pane::WorkingTail;
 
 /// A keyboard step through the transcript (`TranscriptView::page`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,14 +140,9 @@ pub struct TranscriptInput {
     pub expanded: HashSet<DisclosureId>,
     pub target: Option<DisclosureId>,
     pub disclosure_focus: FocusHandle,
-    /// The working row while a turn runs (`pane::working_tail`), after the
-    /// last row.
+    /// The running turn's header and live row (`pane::working_tail`): the
+    /// header under its prompt, the live row after the last row.
     pub working: Option<WorkingTail>,
-    /// The live reasoning caption the working line names, and whether the
-    /// Cockpit took its own row for in view when it chose the line's words:
-    /// once laid out, if that is wrong, the transcript says so
-    /// (`TranscriptEvent::ReasoningShown`) and the line is chosen again.
-    pub working_reasoning: Option<(String, bool)>,
     /// The row after the last (the pending Decision).
     pub tail: Option<TranscriptTail>,
     /// The call a pending Decision gates: hidden while it waits.
@@ -250,21 +225,31 @@ impl TranscriptInput {
 
     /// What the rows are projected with.
     fn shape(&self) -> RowShape {
-        RowShape {
+        let mut shape = RowShape {
             top_pad: if self.solo {
                 theme::TX_PAD_T
             } else {
                 theme::TX_PAD_T_BOARD
             },
-            working: self.working.as_ref().map(|working| working.key),
+            working: self.working.as_ref().and_then(|working| working.header_key()),
+            live: self.working.as_ref().map(|working| working.key),
+            live_open: false,
+            open_folds: self
+                .expanded
+                .iter()
+                .filter_map(|id| match id {
+                    DisclosureId::Turn(prompt) => Some(*prompt),
+                    _ => None,
+                })
+                .collect(),
             tail: self.tail.as_ref().map(|tail| tail.key),
             pending_call: self.pending_call.clone(),
             thinking: self.thinking,
-            carried: None,
-            carried_open: carried_tool(&self.blocks)
-                .is_some_and(|tool| self.expanded.contains(&DisclosureId::Tool(tool.call.clone()))),
             note: self.note.clone(),
-        }
+        };
+        shape.live_open =
+            live_anchor(&self.blocks, &shape).is_some_and(|anchor| self.expanded.contains(&anchor));
+        shape
     }
 }
 
@@ -277,9 +262,6 @@ pub enum TranscriptEvent {
         path: PathBuf,
         line: Option<u32>,
     },
-    /// The live reasoning caption's own row came into or left view, against
-    /// what the working line was chosen for (`working_reasoning`).
-    ReasoningShown,
     /// A press on an agent call's row: open the subagent it started.
     OpenAgent(String),
     /// A press on a sent prompt's Edit, Rewind or Fork, at `at`.
@@ -508,7 +490,6 @@ impl TranscriptView {
                 target: None,
                 disclosure_focus: cx.focus_handle(),
                 working: None,
-                working_reasoning: None,
                 tail: None,
                 pending_call: None,
                 workspace: None,
@@ -688,7 +669,7 @@ impl TranscriptView {
                 .rows()
                 .iter()
                 .rev()
-                .find(|row| !matches!(row.kind(), RowKind::Working | RowKind::Tail))
+                .find(|row| !matches!(row.kind(), RowKind::Working | RowKind::LiveTail | RowKind::Tail))
                 .map(|row| row.id().clone());
             let delta =
                 self.rows
@@ -760,7 +741,7 @@ impl TranscriptView {
             return;
         };
         for row in &rows[at + 1..] {
-            if !matches!(row.kind(), RowKind::Working | RowKind::Tail) {
+            if !matches!(row.kind(), RowKind::Working | RowKind::LiveTail | RowKind::Tail) {
                 self.arrivals.insert(
                     row.id().clone(),
                     Arrival::new(arrival_fade(row.kind()), now),
@@ -853,7 +834,7 @@ impl TranscriptView {
             .rows()
             .iter()
             .rev()
-            .find(|row| !matches!(row.kind(), RowKind::Working | RowKind::Tail))
+            .find(|row| !matches!(row.kind(), RowKind::Working | RowKind::LiveTail | RowKind::Tail))
             .map(|row| &**row)
     }
 
@@ -926,41 +907,6 @@ impl TranscriptView {
     #[cfg(any(test, feature = "test-support"))]
     pub fn is_following_tail(&self) -> bool {
         self.scroll.is_following_tail()
-    }
-
-    /// After a layout: if the live reasoning's own row is in view where the
-    /// working line was chosen as if it were not (or the other way round),
-    /// ask for the line again.
-    fn check_reasoning_shown(&self, cx: &mut Context<Self>) {
-        if let Some((caption, assumed)) = &self.input.working_reasoning {
-            if self.received_reasoning_is_visible(caption) != *assumed {
-                cx.emit(TranscriptEvent::ReasoningShown);
-            }
-        }
-    }
-
-    /// Whether the received reasoning caption's own row is mounted in the
-    /// viewport. Cockpit uses this to keep the pinned live caption from
-    /// duplicating historical prose.
-    pub fn received_reasoning_is_visible(&self, caption: &str) -> bool {
-        // The newest content row: the working row and the Decision stand
-        // after it.
-        let newest = self
-            .rows
-            .rows()
-            .iter()
-            .rposition(|row| !matches!(row.kind(), RowKind::Working | RowKind::Tail));
-        self.rows.rows().iter().enumerate().any(|(index, row)| {
-            // Parent Pane rendering asks before the list's first child has
-            // measured. At the followed tail the newest row is nevertheless
-            // visible; once geometry exists, use its exact bounds.
-            (self.scroll.item_is_visible(index)
-                || (self.scroll.is_following_tail() && Some(index) == newest))
-                && row.blocks().iter().any(|block| {
-                    matches!(&block.body, Body::Thinking(thought)
-                        if pane::reasoning_text(thought).0 == caption)
-                })
-        })
     }
 
     /// The next prompt to arrive scrolls to the top of the view, leaving
@@ -1122,7 +1068,7 @@ impl TranscriptView {
     fn collect_row_text(&self, row: &TranscriptRow, selection: &TextRuns) {
         if matches!(
             row.kind(),
-            RowKind::Tail | RowKind::Working | RowKind::Divider
+            RowKind::Tail | RowKind::Working | RowKind::LiveTail | RowKind::TurnFold | RowKind::Divider
         ) {
             return;
         }
@@ -1240,9 +1186,10 @@ impl TranscriptView {
         pane::WrapUpFace::Spent(used.cloned().or_else(sent_after))
     }
 
-    /// The chevron on the working line, when the line carries a call.
+    /// The live row's press, when the running turn has trailing work: it
+    /// opens that work's rows above it (`rows::live_anchor`).
     fn line_disclosure(&self, view: Entity<Self>) -> Option<LineDisclosure> {
-        let call = DisclosureId::Tool(carried_tool(&self.input.blocks)?.call.clone());
+        let call = live_anchor(&self.input.blocks, &self.input.shape())?;
         Some(LineDisclosure {
             open: self.tool_state(&call) == DisclosureState::Expanded,
             toggle: Rc::new(move |_, cx| {
@@ -1251,6 +1198,35 @@ impl TranscriptView {
                 })
             }),
         })
+    }
+
+    /// A settled turn's fold (`pane::turn_fold`): a press toggles it
+    /// (`DisclosureId::Turn`), opening the turn's work in place under it.
+    fn render_fold(&self, fold: &turns::Fold, view: Option<Entity<Self>>) -> AnyElement {
+        let id = DisclosureId::Turn(fold.prompt);
+        let open = self.tool_state(&id) == DisclosureState::Expanded;
+        let targeted = self
+            .tool_targeted(&id)
+            .then_some(&self.input.disclosure_focus);
+        let toggle = view.map(|view| -> Rc<dyn Fn(&mut Window, &mut App)> {
+            let id = id.clone();
+            Rc::new(move |_, cx| {
+                view.update(cx, |view, cx| {
+                    view.clear_output_selection(cx);
+                    cx.emit(TranscriptEvent::ToggleDisclosure(id.clone()));
+                })
+            })
+        });
+        pane::turn_fold(
+            pane::FoldFace {
+                key: SharedString::from(format!("turn-fold-{}-{id:?}", self.input.namespace)),
+                label: &fold.label,
+                started: fold.started.as_deref(),
+                open,
+                targeted,
+            },
+            toggle,
+        )
     }
 
     fn render_row(
@@ -1262,13 +1238,22 @@ impl TranscriptView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if row.kind() == RowKind::Working {
-            return match (&self.input.working, window) {
-                (Some(working), Some(window)) => {
-                    let disclosure = view.and_then(|view| self.line_disclosure(view));
-                    (working.render)(disclosure, window, cx)
-                }
-                _ => div().into_any_element(),
+            return match &self.input.working {
+                Some(working) => working.header(),
+                None => div().into_any_element(),
             };
+        }
+        if row.kind() == RowKind::LiveTail {
+            return match &self.input.working {
+                Some(working) => {
+                    let disclosure = view.and_then(|view| self.line_disclosure(view));
+                    working.live(row.blocks(), disclosure)
+                }
+                None => div().into_any_element(),
+            };
+        }
+        if let Some(fold) = row.fold() {
+            return self.render_fold(fold, view);
         }
         if row.kind() == RowKind::Outputs {
             return self.render_outputs(row, cx);
@@ -1642,8 +1627,9 @@ impl TranscriptView {
     }
 
     /// Every disclosure the rows draw, in order: the keyboard's stops. A
-    /// call with details, a long thought, a group — and, while a group is
-    /// open, its calls; while shut, the call it shows working.
+    /// turn's fold, a call with details, a long thought, a group — and,
+    /// while a group is open, its calls; while shut, the call it shows
+    /// working.
     pub fn disclosures(&self) -> Vec<DisclosureId> {
         let mut stops = Vec::new();
         let call = |stops: &mut Vec<DisclosureId>, block: &ferrite_core::transcript::Block| {
@@ -1662,6 +1648,12 @@ impl TranscriptView {
         };
         for row in self.rows.rows() {
             match row.kind() {
+                // A fold opens and shuts from the keys too (↵, Space).
+                RowKind::TurnFold => {
+                    if let Some(fold) = row.fold() {
+                        stops.push(DisclosureId::Turn(fold.prompt));
+                    }
+                }
                 RowKind::Group => {
                     let Some(id) = Self::group_id(row) else {
                         continue;
@@ -2303,7 +2295,7 @@ impl Mark {
         match row.kind() {
             RowKind::Prompt => return Some(Self::Prompt),
             RowKind::Tail => return Some(Self::Decision),
-            RowKind::Working => return None,
+            RowKind::Working | RowKind::LiveTail => return None,
             _ => {}
         }
         let mut pass = false;
@@ -2631,7 +2623,6 @@ impl Render for TranscriptView {
         let reading = self.input.reading_size;
         let inset = theme::tx_inset(solo);
         let pad_b = theme::body_pad_b(solo);
-        let check_reasoning = self.input.working_reasoning.is_some();
         let list = div()
             .on_children_prepainted(move |_, window, cx| {
                 let anchored = scroll.did_layout();
@@ -2762,16 +2753,6 @@ impl Render for TranscriptView {
                             let _ = weak.update(cx, |_, cx| cx.notify());
                         });
                     }
-                }
-                // The working line's words depend on whether the live
-                // reasoning's own row is in view: check against this layout,
-                // while there is a line to choose (a deferred call costs a
-                // frame, so an idle transcript asks nothing).
-                if check_reasoning {
-                    let weak = weak.clone();
-                    window.defer(cx, move |_, cx| {
-                        let _ = weak.update(cx, |view, cx| view.check_reasoning_shown(cx));
-                    });
                 }
                 if anchored || settled {
                     // Lay this transcript (and the Pane around it) out again

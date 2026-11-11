@@ -46,11 +46,23 @@ fn reasoning_rows(fake: &Fake, from: usize, to: usize) {
             })
             .unwrap();
     }
+    end_turn(&stream[0]);
+}
+
+/// The fixture's turn ends, so its thoughts stand as rows of their own,
+/// not behind the running turn's live row.
+fn end_turn(stream: &Sender<SessionEvent>) {
+    stream
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
 }
 
 fn short_reasoning_rows(fake: &Fake, from: usize, to: usize) -> Vec<String> {
     let stream = fake.streams.borrow();
-    (from..to)
+    let rows = (from..to)
         .map(|row| {
             let text = format!("logical selection row {row:03}");
             stream[0]
@@ -63,7 +75,9 @@ fn short_reasoning_rows(fake: &Fake, from: usize, to: usize) -> Vec<String> {
                 .unwrap();
             text
         })
-        .collect()
+        .collect();
+    end_turn(&stream[0]);
+    rows
 }
 
 fn thinking_id(
@@ -616,6 +630,7 @@ fn partial_thinking_selection_survives_a_wrapping_resize(cx: &mut TestAppContext
             snapshot: false,
         })
         .unwrap();
+    end_turn(&fake.streams.borrow()[0]);
     tick(cx);
     expand_reasoning_rows(&view, cx);
 
@@ -1310,12 +1325,14 @@ fn a_live_appended_row_fades_in_and_then_rests(cx: &mut TestAppContext) {
             input: serde_json::json!({"command": "cargo test"}),
         })
         .unwrap();
-    // Its first output gives it a row of its own (until then the working
-    // line carries it).
+    // Its failure gives it a row of its own (until then the live row
+    // stands for it).
     fake.streams.borrow()[0]
-        .send(SessionEvent::ToolOutputDelta {
+        .send(SessionEvent::ToolCompleted {
             id: "arrival-run".into(),
-            text: "Compiling\n".into(),
+            output: "error: build failed".into(),
+            is_error: true,
+            result: ferrite_core::ToolResult::Opaque,
         })
         .unwrap();
     tick(cx);
@@ -2882,6 +2899,7 @@ fn a_read_rows_path_opens_in_files_and_its_verb_unfolds_the_row(cx: &mut TestApp
         })
         .unwrap();
     tick(cx);
+    open_live(cx);
     let row = cx.debug_bounds("tool-row-read-notes").expect("the Read row");
     let path = cx.debug_bounds("tool-call").expect("its path");
     assert!(path.left() > row.left() + px(8.), "the verb stands before the path");

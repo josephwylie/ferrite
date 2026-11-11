@@ -77,6 +77,7 @@ fn reasoning_discloses_body_without_repeating_its_heading(cx: &mut TestAppContex
         })
         .unwrap();
     tick(cx);
+    open_live(cx);
     let id = view.read_with(cx, |view, _| {
         view.cockpit
             .thread(view.panes[0].thread().unwrap())
@@ -160,6 +161,7 @@ fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
+    open_live(cx);
     let reasoning = view.read_with(cx, |view, cx| {
         let pane = &view.panes[0];
         let thread = pane.thread().unwrap();
@@ -333,21 +335,30 @@ fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppCont
             cost_usd: None,
         })
         .unwrap();
+    tick(cx);
+    // The settled turn's fold heads it, shut, its work folded away; the
+    // answer stands its padding under the fold's rule. A press opens it.
+    assert!(cx.debug_bounds("turn-stamp").is_none(), "no stamp at the end");
+    assert!(cx.debug_bounds("tool-group-spacing-0").is_none());
+    let fold = cx.debug_bounds("turn-fold-words").expect("the turn's fold");
+    cx.simulate_click(fold.center(), gpui::Modifiers::none());
     for width in [1000., 720.] {
         cx.simulate_resize(gpui::size(px(width), px(700.)));
         tick(cx);
         let prompt = cx.debug_bounds("transcript-prompt").unwrap();
+        let fold = cx.debug_bounds("turn-fold").unwrap();
         let tools = cx.debug_bounds("tool-group-spacing-0").unwrap();
         let answer = cx.debug_bounds("transcript-answer").unwrap();
-        // A quick turn closes on no stamp (`TURN_STAMP_MIN_MS`).
-        assert!(cx.debug_bounds("turn-stamp").is_none());
-        // The work stands the prompt step under the bubble; consecutive
-        // calls fold into one summary line.
+        // The fold stands the prompt step under the bubble, the opened work
+        // its padding under the fold's rule; consecutive calls fold into
+        // one summary line.
         let line = pane::Grid::pane(Default::default(), true).line;
         assert_eq!(
-            tools.top() - prompt.bottom(),
-            px(ferrite_ui::theme::tx_after_prompt(line))
+            fold.top() - prompt.bottom(),
+            px(ferrite_ui::theme::tx_after_prompt(line) + ferrite_ui::theme::TURN_FOLD_PAD_T)
         );
+        let rule = fold.bottom() + px(ferrite_ui::theme::TURN_FOLD_TEXT_B + 1.);
+        assert_eq!(tools.top() - rule, px(ferrite_ui::theme::TURN_FOLD_PAD_B));
         assert!(
             cx.debug_bounds("tool-row-spacing-1").is_none(),
             "a shut group draws no call rows"
@@ -518,8 +529,6 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
             input: serde_json::json!({ "file_path": "/workspace/pending" }),
         })
         .unwrap();
-    // A later call for the working line to carry, so the pending one
-    // above keeps its row.
     stream[0]
         .send(SessionEvent::ToolStarted {
             id: "toolu_11".into(),
@@ -529,6 +538,8 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
         .unwrap();
     drop(stream);
     tick(cx);
+    // The trailing calls stand behind the live row: open them.
+    open_live(cx);
 
     view.read_with(cx, |view, cx| {
         let transcript = view.cockpit.thread(thread).unwrap().transcript();
@@ -745,6 +756,7 @@ fn streaming_output_preserves_native_selection_scroll_and_command_identity(
         })
         .unwrap();
     tick(cx);
+    open_live(cx);
     let chevron = view.read_with(cx, |view, cx| {
         view.panes[0].tool_bounds("stream", cx).unwrap().center()
     });
@@ -840,30 +852,28 @@ fn native_progress_follows_the_tail_and_metadata_refreshes_the_wall(cx: &mut Tes
         .unwrap();
     tick(cx);
     cx.debug_bounds("transcript-progress")
-        .expect("the live line is the transcript's last row");
-    cx.debug_bounds("progress-metadata")
-        .expect("live metadata shares the working line");
+        .expect("the live row is the transcript's last row");
     assert!(
-        cx.debug_bounds("progress-caption-Working").is_some(),
-        "visible reasoning is not duplicated in the pinned row"
+        cx.debug_bounds("live-thinking").is_some(),
+        "with no call running, the live row thinks"
     );
-    assert!(
-        cx.debug_bounds("progress-caption-Thinking").is_none(),
-        "the working line never reads Thinking"
-    );
+    cx.debug_bounds("live-thought")
+        .expect("the trailing thought stands over the live row, once");
     view.update(cx, |view, cx| {
         view.panes[0]
             .transcript()
             .unwrap()
-            .update(cx, |transcript, _| {
+            .update(cx, |transcript, cx| {
                 transcript.scroll().pause_following_tail();
                 transcript.scroll().set_offset(gpui::point(px(0.), px(0.)));
+                // As a wheel's scroll does: the transcript draws again.
+                cx.notify();
             });
         cx.notify();
     });
     cx.run_until_parked();
-    // The working line is the transcript's last row: scrolled back, it is
-    // out of view with the tail, and the way back to both is in view.
+    // The live row is the transcript's last row: scrolled back, it is out
+    // of view with the tail, and the way back to both is in view.
     assert!(
         cx.debug_bounds("jump-to-latest").is_some(),
         "scrolled away from a working tail, jump to latest is offered"
@@ -905,8 +915,7 @@ fn native_progress_follows_the_tail_and_metadata_refreshes_the_wall(cx: &mut Tes
         .unwrap();
     tick(cx);
     assert!(
-        cx.debug_bounds("progress-caption-Checking fold call sites")
-            .is_none(),
+        cx.debug_bounds("transcript-progress").is_none() && cx.debug_bounds("live-thought").is_none(),
         "completed turns stop their live indication"
     );
 }
@@ -1054,9 +1063,18 @@ fn keyboard_cycles_tool_controls_and_enter_toggles_without_submitting(cx: &mut T
         .unwrap();
     drop(stream);
     tick(cx);
+    open_folds(&view, cx);
     cx.simulate_input("unsent draft");
 
-    // Every call is its own row: one Tab stop per call.
+    // The turn's fold is the first stop; then every call is its own row:
+    // one Tab stop per call.
+    cx.simulate_keystrokes("tab");
+    view.read_with(cx, |view, _| {
+        assert!(matches!(
+            view.panes[0].targeted_tool(),
+            Some(pane::DisclosureId::Turn(_))
+        ));
+    });
     cx.simulate_keystrokes("tab");
     view.read_with(cx, |view, _| {
         assert!(view.panes[0].tool_targeted("toolu_9"));
@@ -1230,11 +1248,11 @@ fn a_drag_in_a_scrolled_back_transcript_selects_the_rows_under_the_pointer(
     assert_eq!(clipboard(cx).as_deref(), Some(expected.join("\n").as_str()));
 }
 
-/// The working line carries the running call, with a chevron that opens it
-/// (as Claude's `▸` after the clock does): its row shows in the line's
-/// place, and shuts again.
+/// The live row stands for the running turn's trailing work (`Running
+/// sleep`); a press opens that work's own rows above it, and shuts them
+/// again.
 #[gpui::test]
-fn the_working_lines_chevron_opens_the_call_it_carries(cx: &mut TestAppContext) {
+fn the_live_row_opens_the_work_it_stands_for(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("working-line-disclosure", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -1255,23 +1273,135 @@ fn the_working_lines_chevron_opens_the_call_it_carries(cx: &mut TestAppContext) 
             .count()
     };
     view.read_with(cx, |view, _| {
-        assert_eq!(running_rows(view), 0, "the line carries the call");
+        assert_eq!(running_rows(view), 0, "the live row stands for the call");
     });
-    let chevron = cx
-        .debug_bounds("progress-disclosure")
-        .expect("the line carrying a call has a chevron")
+    let live = cx
+        .debug_bounds("live-call")
+        .expect("the live row names the running call")
         .center();
-    cx.simulate_click(chevron, gpui::Modifiers::none());
+    cx.simulate_click(live, gpui::Modifiers::none());
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
-        assert!(view.panes[0].tool_expanded("wait"));
+        assert!(view.panes[0].tool_expanded(pane::DisclosureId::Group("wait".into())));
         assert_eq!(running_rows(view), 1, "opened: the call's own row shows");
     });
-    let chevron = cx.debug_bounds("progress-disclosure").unwrap().center();
-    cx.simulate_click(chevron, gpui::Modifiers::none());
+    let live = cx.debug_bounds("live-call").unwrap().center();
+    cx.simulate_click(live, gpui::Modifiers::none());
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
-        assert!(!view.panes[0].tool_expanded("wait"));
+        assert!(!view.panes[0].tool_expanded(pane::DisclosureId::Group("wait".into())));
         assert_eq!(running_rows(view), 0);
     });
+}
+
+/// A turn opens with `Working for …` under its prompt, its running call
+/// the live row at its tail (not hidden: the live row is it). Once it
+/// settles, the header's place is the fold, `Worked for …`, shut over its
+/// work with only the answer under it; a press opens the work in place and
+/// another shuts it, the chevron swapping glyphs.
+#[gpui::test]
+fn a_turn_heads_with_working_for_and_settles_into_its_fold(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("turn-fold", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Edit the file".into());
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let send = |event| fake.streams.borrow()[0].send(event).unwrap();
+    send(SessionEvent::ToolStarted {
+        id: "fold-sed".into(),
+        name: "Bash".into(),
+        input: serde_json::json!({"command": "sed -i '' 's/a/b/' lib.rs"}),
+    });
+    tick(cx);
+    let prompt = cx.debug_bounds("transcript-prompt").unwrap();
+    let header = cx.debug_bounds("turn-working").expect("the running turn's header");
+    let live = cx.debug_bounds("live-call").expect("the live row");
+    assert!(header.top() > prompt.bottom() && live.top() > header.bottom());
+    assert!(cx.debug_bounds("turn-fold").is_none());
+    send(SessionEvent::ToolCompleted {
+        id: "fold-sed".into(),
+        output: String::new(),
+        is_error: false,
+        result: ferrite_core::ToolResult::Opaque,
+    });
+    send(SessionEvent::TextDelta {
+        text: "Edited.\n\n".into(),
+    });
+    send(SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Completed,
+        cost_usd: None,
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("turn-working").is_none());
+    assert!(cx.debug_bounds("transcript-progress").is_none());
+    let fold = cx.debug_bounds("turn-fold").expect("the settled turn's fold");
+    let answer = cx.debug_bounds("transcript-answer").unwrap();
+    assert!(answer.top() > fold.bottom());
+    assert!(cx.debug_bounds("turn-fold-shut").is_some());
+    assert!(cx.debug_bounds("tool-row-fold-sed").is_none(), "shut, the work folds away");
+    let words = cx.debug_bounds("turn-fold-words").unwrap();
+    cx.simulate_click(words.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("turn-fold-open").is_some());
+    let call = cx.debug_bounds("tool-row-fold-sed").expect("opened, the work shows");
+    assert!(call.top() > fold.bottom() && call.bottom() < cx.debug_bounds("transcript-answer").unwrap().top());
+    // The open state is the turn's: a next turn projects the rows again
+    // and leaves it open.
+    view.update(cx, |view, _| view.cockpit.send(thread, "And again".into()));
+    send(SessionEvent::TextDelta {
+        text: "Again.\n\n".into(),
+    });
+    send(SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Completed,
+        cost_usd: None,
+    });
+    tick(cx);
+    assert!(
+        cx.debug_bounds("tool-row-fold-sed").is_some(),
+        "the fold stays open across a re-projection"
+    );
+    let words = cx.debug_bounds("turn-fold-words").unwrap();
+    cx.simulate_click(words.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("tool-row-fold-sed").is_none());
+    assert!(cx.debug_bounds("turn-fold-shut").is_some());
+}
+
+/// The pointer on a fold brings in the turn's start time at the row's
+/// end; it takes no room at rest.
+#[gpui::test]
+fn a_hovered_fold_shows_its_turns_start_time(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("turn-fold-time", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Run it".into());
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let send = |event| fake.streams.borrow()[0].send(event).unwrap();
+    send(SessionEvent::ToolStarted {
+        id: "time-run".into(),
+        name: "Bash".into(),
+        input: serde_json::json!({"command": "cargo test"}),
+    });
+    send(SessionEvent::ToolCompleted {
+        id: "time-run".into(),
+        output: "ok".into(),
+        is_error: false,
+        result: ferrite_core::ToolResult::Opaque,
+    });
+    send(SessionEvent::TextDelta {
+        text: "Passed.\n\n".into(),
+    });
+    send(SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Completed,
+        cost_usd: None,
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("turn-fold-time").is_none());
+    let fold = cx.debug_bounds("turn-fold").unwrap();
+    cx.simulate_mouse_move(fold.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    let time = cx.debug_bounds("turn-fold-time").expect("the start time on hover");
+    assert!(time.right() <= fold.right() && time.left() > cx.debug_bounds("turn-fold-words").unwrap().right());
 }
