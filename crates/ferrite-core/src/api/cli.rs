@@ -25,10 +25,7 @@ use crate::settings::Settings;
 
 /// The agent skill: how an agent in one Thread drives the others. Bundled,
 /// so the printed skill always matches this binary.
-pub const SKILL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../skills/ferrite/SKILL.md"
-));
+pub const SKILL: &str = include_str!("../../../../skills/ferrite/SKILL.md");
 
 /// Run the CLI when `args` (the process's, program first) are its; `None`
 /// leaves them to the app. The exit status otherwise. `settings_dir` is

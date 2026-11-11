@@ -15,8 +15,9 @@ use crate::activity::{ActivityInput, AgentKey, ExecutionEvent};
 use crate::engine::{Delivery, QueueItem};
 
 fn fixtures(kind: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src/protocol/fixtures")
+    // Cargo runs a crate's tests in the crate's own directory.
+    std::path::absolute("src/protocol/fixtures")
+        .unwrap()
         .join(kind)
 }
 

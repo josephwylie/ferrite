@@ -17,7 +17,8 @@ use ferrite_core::transcript::{Input, Transcript};
 use ferrite_core::{SessionEvent, TurnOutcome};
 
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{name}"))
+    // Cargo runs a crate's tests in the crate's own directory.
+    std::path::absolute(format!("tests/fixtures/{name}")).unwrap()
 }
 
 /// A fresh per-test store directory.

@@ -238,6 +238,7 @@ impl CockpitView {
                 "Files",
                 Some("cockpit::ToggleFiles"),
             ),
+            TitleTool::Browser => ("open-browser", icons::GLOBE, "Open browser", None),
             TitleTool::More => ("title-more", icons::ELLIPSIS, "More", None),
         };
         let pressed = matches!(tool, TitleTool::Tool(tool) if self.tool_pressed(tool));
@@ -259,6 +260,11 @@ impl CockpitView {
             match tool {
                 TitleTool::Tool(tool) => view.press_tool(tool, cx),
                 TitleTool::Split => view.open_palette_beside(window, cx),
+                TitleTool::Browser => {
+                    if let Some(thread) = view.focused_thread() {
+                        view.open_browser(thread, cx);
+                    }
+                }
                 TitleTool::More => {
                     if let Some(thread) = view.focused_thread() {
                         view.open_context_menu(
@@ -406,27 +412,33 @@ enum TitleTool {
     Split,
     /// One of Claude's: the rail, Terminal, Changes or Files.
     Tool(Tool),
+    /// The Thread's Conversation browser.
+    Browser,
     /// Claude's `⋯`: the checkout in Finder, its path.
     More,
 }
 
-/// Which tools show: the rail for any Thread; Terminal, Changes, Files
-/// and `⋯` need a checkout on this computer (a machine's is not on this
-/// disk); a board of Panes already has them side by side, so it offers no
-/// split.
+/// Which tools show: the rail and the browser for any Thread; Terminal,
+/// Changes, Files and `⋯` need a checkout on this computer (a machine's is
+/// not on this disk); a board of Panes already has them side by side, so
+/// it offers no split.
 fn title_tools(checkout: bool, on_machine: bool, grid_board: bool) -> Vec<TitleTool> {
     let mut tools = Vec::new();
     if !grid_board {
         tools.push(TitleTool::Split);
     }
     tools.push(TitleTool::Tool(Tool::Rail));
-    if checkout && !on_machine {
+    let local = checkout && !on_machine;
+    if local {
         tools.extend([
             TitleTool::Tool(Tool::Terminal),
             TitleTool::Tool(Tool::Changes),
             TitleTool::Tool(Tool::Files),
-            TitleTool::More,
         ]);
+    }
+    tools.push(TitleTool::Browser);
+    if local {
+        tools.push(TitleTool::More);
     }
     tools
 }
@@ -532,22 +544,23 @@ mod tests {
     /// Each tool shows only with something behind it.
     #[test]
     fn a_title_tool_shows_only_with_its_surface() {
-        use TitleTool::{Split, More, Tool};
+        use TitleTool::{Browser, Split, More, Tool};
         let all = [
             Split,
             Tool(T::Rail),
             Tool(T::Terminal),
             Tool(T::Changes),
             Tool(T::Files),
+            Browser,
             More,
         ];
         assert_eq!(title_tools(true, false, false), all);
         assert_eq!(
             title_tools(true, true, false),
-            [Split, Tool(T::Rail)],
+            [Split, Tool(T::Rail), Browser],
             "a machine's checkout is not on this disk"
         );
-        assert_eq!(title_tools(false, false, false), [Split, Tool(T::Rail)]);
+        assert_eq!(title_tools(false, false, false), [Split, Tool(T::Rail), Browser]);
         assert_eq!(
             title_tools(true, false, true),
             all[1..],
