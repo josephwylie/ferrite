@@ -109,6 +109,53 @@ fn open_in_opens_its_submenu_beside_the_menu(cx: &mut TestAppContext) {
     );
 }
 
+/// A row's `⋯` menu stays in the window: under its button where there is
+/// room, over it (the same gap above) near the window's foot, and never
+/// past the window's edge.
+#[gpui::test]
+fn a_menu_from_a_button_stays_in_the_window(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("row-menu-in-window", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let gap = px(ferrite_ui::theme::MENU_UNDER_GAP);
+    let open_under = |cx: &mut gpui::VisualTestContext, top: f32| {
+        let button =
+            gpui::Bounds::new(gpui::point(px(300.), px(top)), gpui::size(px(24.), px(24.)));
+        view.update(cx, |view, cx| {
+            view.open_context_menu_under(MenuTarget::Thread(thread), button, cx)
+        });
+        tick(cx);
+        let menu = cx.debug_bounds("context-menu").expect("the menu");
+        view.update(cx, |view, cx| {
+            view.context_menu = None;
+            cx.notify();
+        });
+        tick(cx);
+        (button, menu)
+    };
+
+    let (button, menu) = open_under(cx, 100.);
+    assert!(
+        (menu.top() - button.bottom() - gap).abs() <= px(1.),
+        "under it: {menu:?} {button:?}"
+    );
+    assert!((menu.right() - button.right()).abs() <= px(1.));
+
+    for top in [560., 700., 770.] {
+        let (button, menu) = open_under(cx, top);
+        assert!(
+            menu.bottom() <= px(800.) && menu.top() >= px(0.),
+            "in the window from {top}: {menu:?}"
+        );
+        assert!(
+            (button.top() - menu.bottom() - gap).abs() <= px(1.),
+            "over it near the foot: {menu:?} {button:?}"
+        );
+    }
+}
+
 /// Mark as unread, for a Thread off the screen that has been read: its
 /// newest Notice needs the operator again, until it is next seen.
 #[gpui::test]
