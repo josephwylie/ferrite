@@ -387,6 +387,8 @@ struct Server {
     github: Arc<dyn github::GitHub>,
     /// GitHub reads still out.
     github_reads: Vec<github::Reading>,
+    /// Task PR head reads still out (#223).
+    head_reads: Vec<github::HeadReading>,
     /// The Factory's wall clock, in milliseconds: a test passes its own.
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
@@ -441,6 +443,7 @@ impl Server {
             coordinators_tuned: Default::default(),
             github: Arc::new(github::Gh),
             github_reads: Vec::new(),
+            head_reads: Vec::new(),
             clock: Arc::new(|| crate::clock::now().timestamp_millis()),
         }
     }

@@ -220,6 +220,11 @@ impl Server {
                 version,
                 query,
             } => self.read_github(workflow, version, query),
+            Effect::ReadHead {
+                task,
+                repository,
+                number,
+            } => self.read_head(task, repository, number),
             Effect::Tidy { task, path } => {
                 let kept = self.remove_task_worktree(&path);
                 let tidied = Command::WorktreeTidied { task, kept };

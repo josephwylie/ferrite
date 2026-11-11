@@ -469,7 +469,8 @@ impl Factory {
             | Approve { task: id }
             | Rework { task: id, .. }
             | Redirect { task: id, .. }
-            | WorktreeTidied { task: id, .. } => task(id),
+            | WorktreeTidied { task: id, .. }
+            | GitHubHead { task: id, .. } => task(id),
             Report { worker: thread, .. }
             | OperatorSaid { worker: thread, .. }
             | Ask { worker: thread, .. }
@@ -587,6 +588,7 @@ impl Factory {
             | Command::WorkerStarted { .. }
             | Command::WorkerFailed { .. }
             | Command::WorktreeTidied { .. }
+            | Command::GitHubHead { .. }
             | Command::Stop { .. }
             | Command::Resume { .. }
             | Command::Approve { .. }

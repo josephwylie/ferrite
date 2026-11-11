@@ -735,3 +735,58 @@ fn a_merge_step_is_nudged_and_resumed_with_the_results_it_reports() {
     assert!(told[0].contains("report outcome merged"), "{}", told[0]);
     assert!(!told[0].contains("report outcome finished"), "{}", told[0]);
 }
+
+/// G2: a Task's PR head is read from GitHub when it starts, so it has a
+/// first revision before any Worker reports one; a Worker's later report
+/// of another head is its own revision, and the same head is no new one.
+#[test]
+fn a_tasks_pr_head_is_read_from_github_when_it_starts() {
+    let mut factory = Factory::in_memory();
+    let (id, _) = saved(&mut factory, &[("Build", "Build it")]);
+    let task = task_id(start_on(&mut factory, Some(&id), Some("acme/widgets#12")));
+    let effects = factory.step(7, &BTreeMap::new());
+    assert!(
+        effects.contains(&Effect::ReadHead {
+            task: task.clone(),
+            repository: "acme/widgets".into(),
+            number: 12,
+        }),
+        "{effects:?}"
+    );
+    started(&mut factory, &task, FIRST);
+    assert_eq!(
+        factory.command(
+            Command::GitHubHead {
+                task: task.clone(),
+                head: Ok(HEAD_1.into()),
+            },
+            8,
+        ),
+        Ok(Answer::Changed(true))
+    );
+    let pr = the(&factory, &task).delivery.pr.clone().unwrap();
+    let kept: Vec<(u32, &str, &str)> = pr
+        .revisions
+        .iter()
+        .map(|each| (each.revision, each.head.as_str(), each.by.as_str()))
+        .collect();
+    assert_eq!(kept, [(1, HEAD_1, "GitHub")]);
+    assert_eq!(
+        revision(&mut factory, FIRST, HEAD_1, None),
+        Ok(Answer::Changed(false))
+    );
+    revision(&mut factory, FIRST, HEAD_2, None).unwrap();
+    let pr = the(&factory, &task).delivery.pr.clone().unwrap();
+    assert_eq!(pr.current().unwrap().by, "Build");
+    assert_eq!(pr.current().unwrap().revision, 2);
+
+    // A Task with no PR reads nothing.
+    let plain = task_id(start_on(&mut factory, Some(&id), None));
+    let effects = factory.step(9, &BTreeMap::new());
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::ReadHead { task, .. } if *task == plain)),
+        "{effects:?}"
+    );
+}

@@ -16,6 +16,8 @@ use crate::server::github::GitHub;
 struct Scripted {
     answers: Mutex<VecDeque<Result<GitHubRead, String>>>,
     asked: Mutex<Vec<GitHubQuery>>,
+    /// Each PR's head, by repository and number.
+    heads: Mutex<std::collections::HashMap<(String, u64), String>>,
 }
 
 impl Scripted {
@@ -47,6 +49,15 @@ impl GitHub for Scripted {
             "acme/app" => Ok(vec!["bug".into(), "ready-for-agent".into()]),
             _ => Err(format!("{repository}: not found")),
         }
+    }
+
+    fn head(&self, repository: &str, number: u64) -> Result<String, String> {
+        self.heads
+            .lock()
+            .unwrap()
+            .get(&(repository.to_string(), number))
+            .cloned()
+            .ok_or_else(|| format!("{repository}#{number}: not found"))
     }
 }
 
@@ -578,4 +589,30 @@ fn starts_that_arrived_during_a_restart_are_handled_once() {
         midnight() + 2 * HOUR,
         "the schedule's next run is kept"
     );
+}
+
+/// G2: a Task with a PR has its head read from GitHub (the scripted
+/// reader, off the pump), so its first revision exists before any Worker
+/// reports one.
+#[test]
+fn a_tasks_pr_head_is_read_from_github() {
+    let world = world("starts-pr-head");
+    world.github.heads.lock().unwrap().insert(
+        ("acme/app".into(), 7),
+        "abcdef1234567890abcdef1234567890abcdef12".into(),
+    );
+    world.ok(
+        "task.start",
+        serde_json::json!({ "instructions": "Review it", "cwd": world.repo, "pr": "acme/app#7" }),
+    );
+    let tasks = world.tasks_until(|tasks| {
+        tasks.first().is_some_and(|task| {
+            task["pr"]["revisions"]
+                .as_array()
+                .is_some_and(|r| !r.is_empty())
+        })
+    });
+    let revision = &tasks[0]["pr"]["revisions"][0];
+    assert_eq!(revision["by"], "GitHub", "{revision}");
+    assert_eq!(revision["head"], "abcdef1234567890abcdef1234567890abcdef12");
 }

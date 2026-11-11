@@ -575,6 +575,12 @@ pub enum Command {
         task: TaskId,
         kept: Option<String>,
     },
+    /// What a [`Effect::ReadHead`] found: the PR's head commit, or why it
+    /// could not be read.
+    GitHubHead {
+        task: TaskId,
+        head: Result<String, String>,
+    },
     /// The Completed column's Clear: `project`'s Completed Tasks go to the
     /// Archive now (#226).
     Clear {
@@ -728,6 +734,13 @@ pub enum Effect {
     Tidy {
         task: TaskId,
         path: PathBuf,
+    },
+    /// Read the head commit of `task`'s pull request with the operator's
+    /// `gh`, off the pump; answered with [`Command::GitHubHead`] (#223).
+    ReadHead {
+        task: TaskId,
+        repository: String,
+        number: u64,
     },
     /// Toast, chime and system notification in the windows.
     Notify {
@@ -1340,6 +1353,9 @@ impl State {
                 pr::tidied(self.task_mut(&task)?, kept, now_ms)
             }
             Command::Clear { project } => Ok(self.clear(project, now_ms)),
+            Command::GitHubHead { task, head } => {
+                Ok(pr::read_head(self.task_mut(&task)?, head, now_ms))
+            }
             Command::CreateWorkflow {
                 project,
                 template,
@@ -1444,6 +1460,7 @@ impl State {
                 continue;
             }
             changed = true;
+            pr::read_when_started(task, effects);
             if task.worker.is_some() {
                 let prompt = task.watch.prompt.take();
                 task.enter(Status::Working, effects);

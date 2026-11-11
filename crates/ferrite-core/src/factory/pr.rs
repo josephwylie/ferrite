@@ -459,6 +459,65 @@ pub(super) fn context(task: &Task) -> String {
     out
 }
 
+/// A Task with a PR whose head nobody has read yet: GitHub is asked,
+/// so it has a first revision before any Worker reports one (G2).
+pub(super) fn read_when_started(task: &Task, effects: &mut Vec<Effect>) {
+    if let Some(pr) = task
+        .delivery
+        .pr
+        .as_ref()
+        .filter(|pr| pr.revisions.is_empty())
+    {
+        effects.push(Effect::ReadHead {
+            task: task.id.clone(),
+            repository: pr.repository.clone(),
+            number: pr.number,
+        });
+    }
+}
+
+/// What GitHub said the PR's head is: a new revision when it moved, by
+/// GitHub; why it could not say, in the activity.
+pub(super) fn read_head(task: &mut Task, head: Result<String, String>, now_ms: i64) -> Answer {
+    let Some(pr) = task.delivery.pr.as_mut() else {
+        return Answer::Changed(false);
+    };
+    let label = pr.label();
+    let head = match head {
+        Ok(head) => head.trim().to_string(),
+        Err(why) => {
+            task.note(
+                now_ms,
+                Actor::Ferrite,
+                format!("Could not read {label}'s head from GitHub: {why}"),
+            );
+            return Answer::Changed(true);
+        }
+    };
+    if !(7..=64).contains(&head.len()) || !head.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Answer::Changed(false);
+    }
+    if pr.current().is_some_and(|each| each.head == head) {
+        return Answer::Changed(false);
+    }
+    let revision = pr.current().map_or(1, |each| each.revision + 1);
+    pr.revisions.push(Revision {
+        revision,
+        head: head.clone(),
+        by: "GitHub".into(),
+        at_ms: now_ms,
+    });
+    task.note(
+        now_ms,
+        Actor::Tool,
+        format!(
+            "GitHub shows {label} at revision {revision} (head {})",
+            short(&head)
+        ),
+    );
+    Answer::Changed(true)
+}
+
 /// A completed Task with a merged PR has its worktree removed (never
 /// forced, its branch kept); otherwise it stays, and the Task says why.
 pub(super) fn tidy(task: &mut Task, effects: &mut Vec<Effect>) {

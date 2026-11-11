@@ -23,6 +23,8 @@ pub trait GitHub: Send + Sync {
     fn repositories(&self) -> Result<Vec<String>, String>;
     /// A repository's labels.
     fn labels(&self, repository: &str) -> Result<Vec<String>, String>;
+    /// A pull request's head commit.
+    fn head(&self, repository: &str, number: u64) -> Result<String, String>;
 }
 
 /// The operator's own `gh`.
@@ -30,6 +32,9 @@ pub struct Gh;
 
 /// A read still out: whose, of which version, and its answer to come.
 pub(super) type Reading = (String, u32, mpsc::Receiver<Result<GitHubRead, String>>);
+
+/// A Task's PR head read still out.
+pub(super) type HeadReading = (String, mpsc::Receiver<Result<String, String>>);
 
 impl Server {
     /// Read a GitHub start on a thread of its own; the next pass hears it.
@@ -43,9 +48,33 @@ impl Server {
         self.github_reads.push((workflow, version, answered));
     }
 
+    /// Read a Task's PR head on a thread of its own; the next pass hears
+    /// it.
+    pub(super) fn read_head(&mut self, task: String, repository: String, number: u64) {
+        let (answer, answered) = mpsc::channel();
+        let github = Arc::clone(&self.github);
+        std::thread::spawn(move || {
+            crate::spawn::serve_the_operator();
+            let _ = answer.send(github.head(&repository, number));
+        });
+        self.head_reads.push((task, answered));
+    }
+
     /// What each finished read found, as the commands they are.
     pub(super) fn github_answers(&mut self) -> Vec<Command> {
         let mut heard = Vec::new();
+        self.head_reads
+            .retain(|(task, answer)| match answer.try_recv() {
+                Ok(head) => {
+                    heard.push(Command::GitHubHead {
+                        task: task.clone(),
+                        head,
+                    });
+                    false
+                }
+                Err(mpsc::TryRecvError::Empty) => true,
+                Err(mpsc::TryRecvError::Disconnected) => false,
+            });
         self.github_reads
             .retain(|(workflow, version, answer)| match answer.try_recv() {
                 Ok(result) => {
@@ -290,6 +319,14 @@ impl GitHub for Gh {
     fn labels(&self, repository: &str) -> Result<Vec<String>, String> {
         let path = format!("repos/{repository}/labels?per_page=100");
         names(&["api", "--paginate", &path, "-q", ".[].name"])
+    }
+
+    fn head(&self, repository: &str, number: u64) -> Result<String, String> {
+        let path = format!("repos/{repository}/pulls/{number}");
+        names(&["api", &path, "-q", ".head.sha"])?
+            .into_iter()
+            .next()
+            .ok_or_else(|| format!("GitHub said nothing of {repository}#{number}'s head"))
     }
 }
 
