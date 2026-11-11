@@ -679,7 +679,14 @@ impl CockpitView {
                             Provider::Codex => PROVIDER_CODEX,
                         },
                     ))
-                    .child(SharedString::from(core_factory::agent_label(&task.agent))),
+                    .child(SharedString::from(match task.current_step() {
+                        Some(step) => format!(
+                            "{} \u{b7} {}",
+                            step.name,
+                            core_factory::agent_label(&task.agent)
+                        ),
+                        None => core_factory::agent_label(&task.agent),
+                    })),
             )
             .children(outcome_line(task).map(|line| {
                 div()
@@ -922,6 +929,16 @@ impl CockpitView {
                             fact("Worktree", ferrite_ui::components::home_relative(path))
                         }))
                         .child(fact("Agent", core_factory::agent_label(&task.agent)))
+                        .children(task.workflow.as_ref().map(|run| {
+                            fact(
+                                "Workflow",
+                                format!("{} \u{b7} version {}", run.definition.name, run.version),
+                            )
+                        }))
+                        .children(
+                            task.current_step()
+                                .map(|step| fact("Step", step.name.clone())),
+                        )
                         .child(
                             div()
                                 .pt(px(SPACE_2))
