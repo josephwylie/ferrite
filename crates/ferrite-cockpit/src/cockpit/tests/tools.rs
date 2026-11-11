@@ -315,8 +315,11 @@ fn the_tabs_survive_a_restart(cx: &mut TestAppContext) {
     assert_eq!(tabs, [SurfaceId::Overview, SurfaceId::Changes, SurfaceId::Background]);
     assert_eq!(active, Some(SurfaceId::Changes));
     assert!(cx.debug_bounds("changes").is_some(), "its body, read again");
+    // Maximized, the board beside the full column falls under its least:
+    // the nav rails, and the Panel takes the rail's room.
+    assert!(cx.debug_bounds("nav-rail").is_some());
     let width = cx.debug_bounds("panel").unwrap().size.width;
-    assert_eq!(width, px(1900. - NAV_WIDTH - DOCK_THREAD_MIN_W), "maximized");
+    assert_eq!(width, px(1900. - NAV_FOLDED_W - DOCK_THREAD_MIN_W), "maximized");
 }
 
 /// On overflow a chevron stands at the end with more to show, and scrolls
