@@ -647,18 +647,18 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         );
     }
     field = field.children(drop_hint);
-    // The `/` or `@` popover paints above the stack — deferred, so it
-    // escapes the Pane's clip and draws over the transcript (#24) — from
-    // the box's left edge, at most `SLASH_MENU_W` wide.
+    // The `/`, `@` or `$` menu is a drawer standing on the box's top edge
+    // (T3's `ComposerBanner`), as wide as the box — deferred, so it
+    // escapes the Pane's clip and draws over the transcript (#24).
     if let Some(menu) = menu {
         field = field.child(deferred(
             div()
+                .debug_selector(|| "composer-menu-drawer".into())
                 .absolute()
                 .bottom(relative(1.))
                 .left_0()
                 .right_0()
-                .mb(px(theme::FLOAT_OFFSET))
-                .child(div().max_w(px(theme::SLASH_MENU_W)).child(menu)),
+                .child(menu),
         ));
     }
     composer_stack(None, true)

@@ -6319,24 +6319,11 @@ impl CockpitView {
             })
             .collect();
         if rows.is_empty() {
-            let note = if loading {
+            rows.push(note_row(if loading {
                 "Searching workspace skills..."
             } else {
                 "No skills found. Try / to browse provider commands."
-            };
-            rows.push(Row {
-                row: pane::MenuRow {
-                    insert: "".into(),
-                    name: note.into(),
-                    detail: "".into(),
-                    matched: Vec::new(),
-                    prose_detail: true,
-                    inert: true,
-                    tag: None,
-                },
-                active: false,
-                consequence: Consequence::Inert,
-            });
+            }));
         }
         Some(Popover {
             scroll: ScrollHandle::new(),
@@ -6455,7 +6442,7 @@ impl CockpitView {
                     );
                 }
                 let status = if menu.pending.is_some() {
-                    Some(("Loading commands…", ""))
+                    Some(("Searching workspace skills...", ""))
                 } else {
                     menu.error
                         .as_deref()
@@ -6477,7 +6464,7 @@ impl CockpitView {
                     });
                 }
                 if rows.is_empty() {
-                    return None;
+                    return standalone.then(|| note_popover(identity, NO_COMMAND));
                 }
                 return Some(Popover {
                     scroll: ScrollHandle::new(),
@@ -6558,9 +6545,10 @@ impl CockpitView {
                     },
                 );
             }
-            // No match, no popover — there is nothing to pick.
+            // A command line with no match says so; a `/word` in prose
+            // that names nothing is prose, and opens nothing.
             if rows.is_empty() {
-                return None;
+                return standalone.then(|| note_popover(pane.identity, NO_COMMAND));
             }
             return Some(Popover {
                 scroll: ScrollHandle::new(),
@@ -6619,7 +6607,7 @@ impl CockpitView {
                     rows: vec![Row {
                         row: pane::MenuRow {
                             insert: SharedString::default(),
-                            name: "Searching files…".into(),
+                            name: "Searching workspace files...".into(),
                             matched: Vec::new(),
                             detail: SharedString::default(),
                             prose_detail: true,
@@ -6660,7 +6648,7 @@ impl CockpitView {
             })
             .collect();
         if rows.is_empty() {
-            return None;
+            return Some(note_popover(pane.identity, NO_FILES));
         }
         Some(Popover {
             scroll: ScrollHandle::new(),
@@ -7003,6 +6991,9 @@ impl CockpitView {
                                 active: false,
                             })
                             .collect();
+                        if open.rows.is_empty() {
+                            open.rows = vec![note_row(NO_FILES)];
+                        }
                         open.selected = 0;
                     }
                     cx.notify();
@@ -8913,7 +8904,7 @@ impl CockpitView {
     /// import rows through `pane::menu_row` (slash descriptions in one
     /// aligned column), band rows through `pane::picker_row` with the
     /// strong check on the standing choice; an inert explanation
-    /// ("Searching files…", a refusal) is a `menu_note`. The rows scroll
+    /// ("Searching workspace files...", a refusal) is a `menu_note`. The rows scroll
     /// inside the popover's cap.
     fn menu_surface(&self, open: &Popover, cx: &mut Context<Self>) -> AnyElement {
         fn wire<E: InteractiveElement + IntoElement + 'static>(
@@ -9028,7 +9019,12 @@ impl CockpitView {
             .map(|row| row.row.detail.clone());
         let row_top = open.selected as f32 * ferrite_ui::theme::FLOAT_ROW_H
             + f32::from(open.scroll.offset().y);
-        let popover = pane::menu_popover()
+        let cap = if open.kind.follows_text() {
+            ferrite_ui::theme::SLASH_MENU_MAX_H
+        } else {
+            ferrite_ui::theme::MENU_MAX_H
+        };
+        let popover = pane::menu_popover(cap)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
@@ -9974,6 +9970,41 @@ fn slash_token(text: &str, cursor: usize) -> Option<(usize, &str)> {
         .next()
         .map_or(start == 0, char::is_alphabetic);
     valid.then_some((start, filter))
+}
+
+/// T3's empty Composer menus' words.
+const NO_COMMAND: &str = "No matching command.";
+const NO_FILES: &str = "No matching files or folders.";
+
+/// A Composer menu's one inert line: what it is searching, or that
+/// nothing matched.
+fn note_row(note: &'static str) -> Row {
+    Row {
+        row: pane::MenuRow {
+            insert: "".into(),
+            name: note.into(),
+            detail: "".into(),
+            matched: Vec::new(),
+            prose_detail: true,
+            inert: true,
+            tag: None,
+        },
+        active: false,
+        consequence: Consequence::Inert,
+    }
+}
+
+/// A Composer menu holding only `note_row(note)`.
+fn note_popover(pane: PaneIdentity, note: &'static str) -> Popover {
+    Popover {
+        scroll: ScrollHandle::new(),
+        revealed: Default::default(),
+        hold: None,
+        pane,
+        kind: Kind::Commands,
+        rows: vec![note_row(note)],
+        selected: 0,
+    }
 }
 
 /// The `$` token the caret sits in (T3's skill trigger): the `$`'s byte

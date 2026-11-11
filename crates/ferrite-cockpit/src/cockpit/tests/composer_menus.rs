@@ -1096,3 +1096,38 @@ fn picking_a_mention_on_a_codex_thread_stages_the_pill(cx: &mut TestAppContext) 
         );
     });
 }
+
+/// T3's empty menu: a command line that names nothing says so in the
+/// drawer standing on the box's top edge; a `/word` in prose opens nothing.
+#[gpui::test]
+fn a_command_line_with_no_match_says_so_in_the_drawer(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("menu-no-match", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Commands {
+            commands: menu_commands(),
+        })
+        .unwrap();
+    tick(cx);
+    cx.simulate_input("/zzzq");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        let open = view.popover.as_ref().expect("the drawer stays");
+        assert_eq!(open.rows[0].name.as_ref(), "No matching command.");
+    });
+    let drawer = cx.debug_bounds("composer-menu-drawer").expect("the drawer");
+    let field = cx.debug_bounds("composer-block").expect("the box");
+    assert_eq!(drawer.bottom(), field.top(), "on the box's top edge");
+    assert_eq!(drawer.size.width, field.size.width, "as wide as the box");
+
+    view.update(cx, |view, cx| {
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.set(String::new(), cx));
+    });
+    cx.simulate_input("read notes/zzzq");
+    tick(cx);
+    view.read_with(cx, |view, _| assert!(view.popover.is_none(), "prose opens nothing"));
+}

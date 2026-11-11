@@ -20,7 +20,7 @@ fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut 
     view.read_with(cx, |view, _| {
         assert_eq!(
             view.popover.as_ref().unwrap().rows[0].name.as_ref(),
-            "Loading commands…"
+            "Searching workspace skills..."
         );
     });
     tx.send(Ok(menu_commands())).unwrap();
@@ -56,7 +56,7 @@ fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut 
         view.sync_menu(cx);
         assert_eq!(
             view.popover.as_ref().unwrap().rows[0].name.as_ref(),
-            "Loading commands…"
+            "Searching workspace skills..."
         );
     });
     next_tx

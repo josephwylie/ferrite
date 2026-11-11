@@ -2614,6 +2614,8 @@ pub const TOKEN_PAD_X: f32 = SPACE_2;
 /// third of every row empty. A longer description cuts and keeps its
 /// tooltip.
 pub const SLASH_MENU_W: f32 = 480.0;
+/// The `/`, `@` and `$` drawer's cap (T3's `max-h-72`); its rows scroll.
+pub const SLASH_MENU_MAX_H: f32 = 288.0;
 /// The Composer's menus at Claude's widths: the model picker (names only,
 /// a model's description in its tooltip), its effort submenu, the
 /// permission-mode menu (a name and its one line), and the `+` menu. The
