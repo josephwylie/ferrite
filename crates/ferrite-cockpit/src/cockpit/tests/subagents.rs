@@ -915,7 +915,7 @@ fn an_opened_agent_is_a_panel_tab(cx: &mut TestAppContext) {
     tick(cx);
     let wide = cx.debug_bounds("panel").unwrap();
     assert!(wide.size.width > pane.size.width * 2., "maximized: {wide:?}");
-    let maximize = cx.debug_bounds("panel-maximize").unwrap();
+    let maximize = cx.debug_bounds("panel-restore").unwrap();
     cx.simulate_click(maximize.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(

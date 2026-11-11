@@ -2794,7 +2794,7 @@ impl CockpitView {
     }
 
     /// How much of the window the nav holds right now: the full column, or
-    /// nothing — folded by cmd-b, or by a window too narrow for the column
+    /// the rail — folded by cmd-b, or by a window too narrow for the column
     /// (`nav_railed`).
     fn nav_width(&self) -> f32 {
         if self.nav_measure_full.get() {
