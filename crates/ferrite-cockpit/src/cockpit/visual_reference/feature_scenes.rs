@@ -20,7 +20,7 @@ use ferrite_reviewr::model::{ChangeKind, ChangedFile, Comment, Rev, Scope as Rev
 use ferrite_reviewr::search::{CodeHit, FileHit, SearchResults};
 use gpui::{AppContext, Focusable};
 
-use super::{conversation, Scene, Setup};
+use super::{conversation, Feed, Scene, Setup};
 use crate::cockpit::panel::Opener;
 use crate::cockpit::surfaces::{SurfaceId, ThreadSurfaces};
 use crate::review::ReviewView;
@@ -58,6 +58,13 @@ pub(super) const STATES: &[&str] = &[
     "panel-pr",
     "scroll-to-end",
     "send-landed",
+    "composer-tokens",
+    "composer-stop",
+    "head-breadcrumb",
+    "background-work",
+    "compaction",
+    "long-prompt",
+    "cite",
 ];
 
 pub(super) fn handles(state: &str) -> bool {
@@ -108,6 +115,13 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "panel-pr" => panel_pr(),
         "scroll-to-end" => scroll_to_end(),
         "send-landed" => send_landed(),
+        "composer-tokens" => composer_tokens(),
+        "composer-stop" => composer_stop(),
+        "head-breadcrumb" => head_breadcrumb(),
+        "background-work" => background_work(),
+        "compaction" => compaction(),
+        "long-prompt" => long_prompt(),
+        "cite" => cite(),
         _ => unreachable!("`handles` lists every state"),
     }
 }
@@ -929,6 +943,142 @@ fn lightbox() -> (Scene, Setup) {
         view.panes[0]
             .preview
             .open(gallery[1].clone(), None, &gallery, window, cx);
+    });
+    (scene, setup)
+}
+
+// ------------------------------------------------- composer, head, transcript
+
+/// The Composer's line with a skill (`$review`) and a picked file
+/// (`@path`) as tokens: no ground, the kind's accent and icon.
+fn composer_tokens() -> (Scene, Setup) {
+    use ferrite_core::{CommandSource, SessionCommand};
+    let mut scene = conversation("composer-tokens");
+    let feed = Feed(scene.feeds.borrow()[0].clone());
+    feed.ev(SessionEvent::Commands {
+        commands: vec![SessionCommand {
+            name: "review".into(),
+            description: "Review the changes since a fixed point".into(),
+            path: None,
+            source: Some(CommandSource::Skill),
+        }],
+    });
+    scene.core.pump();
+    let setup: Setup = Box::new(|view, _, cx| {
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.set(
+                "Run $review on @crates/ferrite-pane/src/pane.rs and report".into(),
+                cx,
+            );
+            composer.stage_chip("@crates/ferrite-pane/src/pane.rs".into(), cx);
+        });
+    });
+    (scene, setup)
+}
+
+/// A turn running with text typed: stop beside send.
+fn composer_stop() -> (Scene, Setup) {
+    let mut scene = Scene::new("composer-stop");
+    let ferrite = scene.project("ferrite");
+    let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Composer queue polish");
+    scene
+        .core
+        .send(thread, "Tighten the queued prompt rows.".into());
+    feed.boot(Provider::Claude, 64_000)
+        .text("Checking how the stack clips when three or more rows are held");
+    scene.core.pump();
+    let setup: Setup = Box::new(|view, _, cx| {
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.set("Also keep the take-back key".into(), cx));
+    });
+    (scene, setup)
+}
+
+/// Solo's breadcrumb with the Thread's title under the pointer, its chevron
+/// shown.
+fn head_breadcrumb() -> (Scene, Setup) {
+    let scene = conversation("head-breadcrumb");
+    let setup: Setup = Box::new(|view, window, cx| {
+        if let Some(thread) = view.focused_thread() {
+            ferrite_ui::motion::hover_listener(
+                format!("view-title-hover-{}", thread.get()).into(),
+            )(&true, window, cx);
+        }
+    });
+    (scene, setup)
+}
+
+/// The transcript's foot while two commands run in the background: the
+/// line over the Composer.
+fn background_work() -> (Scene, Setup) {
+    use ferrite_core::progress::{BackgroundTask, ProgressEvent, TaskStatus};
+    let mut scene = conversation("background-work");
+    let feed = Feed(scene.feeds.borrow()[0].clone());
+    feed.ev(SessionEvent::Progress {
+        event: ProgressEvent::BackgroundSnapshot {
+            tasks: ["cargo test --workspace", "npm run dev"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, label)| BackgroundTask {
+                    id: format!("task:{index}"),
+                    label: label.into(),
+                    detail: "local_bash".into(),
+                    status: TaskStatus::Working,
+                })
+                .collect(),
+        },
+    });
+    scene.core.pump();
+    (scene, Box::new(|_, _, _| {}))
+}
+
+/// A compaction in the middle of the conversation: `Context compacted 367K
+/// to 27.7K tokens`.
+fn compaction() -> (Scene, Setup) {
+    use ferrite_core::progress::ProgressEvent;
+    use ferrite_core::transcript::Compacted;
+    let mut scene = conversation("compaction");
+    let feed = Feed(scene.feeds.borrow()[0].clone());
+    feed.ev(SessionEvent::Progress {
+        event: ProgressEvent::Compacted(Compacted {
+            before: Some(367_000),
+            after: Some(27_700),
+            failure: None,
+        }),
+    });
+    scene.core.pump();
+    (scene, Box::new(|_, _, _| {}))
+}
+
+/// A prompt past the clamp: over 600 characters.
+fn long_prompt() -> (Scene, Setup) {
+    let mut scene = Scene::new("long-prompt");
+    let ferrite = scene.project("ferrite");
+    let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Audit the pane crate");
+    let paragraph = "Walk every module under the pane crate and list which of them still hold a second owner of the same state, then say what the single owner would be and what it would cost to move. ";
+    scene.core.send(thread, paragraph.repeat(5));
+    feed.boot(Provider::Claude, 64_000)
+        .text("Starting with the transcript module.")
+        .end(0.03);
+    scene.core.pump();
+    (scene, Box::new(|_, _, _| {}))
+}
+
+/// The glass Cite button over a passage of the answer, beside Start a side
+/// chat.
+fn cite() -> (Scene, Setup) {
+    let scene = conversation("cite");
+    let setup: Setup = Box::new(|view, _, cx| {
+        if let Some(transcript) = view.panes[view.focused()].transcript() {
+            transcript.update(cx, |transcript, cx| {
+                transcript.fixture_cite(
+                    "The nav rows jump by a line when a Thread starts streaming.",
+                    gpui::point(gpui::px(520.), gpui::px(380.)),
+                    cx,
+                )
+            });
+        }
     });
     (scene, setup)
 }

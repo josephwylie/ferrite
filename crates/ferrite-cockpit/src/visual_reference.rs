@@ -460,6 +460,9 @@ const STATES: &[(&str, &[&str])] = &[
     ("error-turn", &["wide", "app"]),
     ("toolgroups", &["app", "narrow"]),
     ("toolgroups-open", &["app", "narrow"]),
+    // A group past its cap: the expanded list scrolls inside 288px, faded
+    // at the edge with more behind it.
+    ("toolgroup-overflow", &["app"]),
     // ---- WP-A states (append above the end line)
     // Claude's running turn and its answer (claude/running.png,
     // claude/answer-done.png), a day after the turn before it.
@@ -552,6 +555,7 @@ const PANEL_CLOSED: &[&str] = &[
     "composer",
     "subagents",
     "toolgroups-open",
+    "toolgroup-overflow",
     "modelpicker",
     "modemenu",
     "plusmenu",
@@ -820,6 +824,19 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 use ferrite_pane::pane::DisclosureId;
                 view.panes[0].toggle_tool(&DisclosureId::Group("probe-1".into()));
                 view.panes[0].toggle_tool(&DisclosureId::Tool("probe-3".into()));
+                if let Some(transcript) = view.panes[0].transcript() {
+                    transcript.update(cx, |transcript, cx| {
+                        transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
+                    });
+                }
+            });
+            (scene, setup)
+        }
+        "toolgroup-overflow" => {
+            let scene = tool_group_overflow();
+            let setup: Setup = Box::new(|view, _, cx| {
+                use ferrite_pane::pane::DisclosureId;
+                view.panes[0].toggle_tool(&DisclosureId::Group("overflow-0".into()));
                 if let Some(transcript) = view.panes[0].transcript() {
                     transcript.update(cx, |transcript, cx| {
                         transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
@@ -2485,6 +2502,30 @@ fn tool_groups(label: &str) -> Scene {
             "description": "Enter the bills as drafts",
         }),
     );
+    scene
+}
+
+/// One group of twenty reads, opened: its list is capped (`WORK_LIST_MAX_H`)
+/// and scrolls inside, faded at the bottom edge where more lies behind it.
+fn tool_group_overflow() -> Scene {
+    let mut scene = Scene::new("toolgroup-overflow");
+    let ferrite = scene.project("ferrite");
+    let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Audit the crate layout");
+    scene
+        .core
+        .send(thread, "Read every module under the pane crate.".into());
+    feed.boot(Provider::Claude, 64_000);
+    for index in 0..20 {
+        let id = format!("overflow-{index}");
+        feed.tool(
+            &id,
+            "Read",
+            serde_json::json!({ "file_path": format!("crates/ferrite-pane/src/module_{index:02}.rs") }),
+        )
+        .ok(&id, &"line\n".repeat(40));
+    }
+    feed.text("All twenty modules read; none holds a second owner.\n\n");
+    feed.end(0.02);
     scene
 }
 

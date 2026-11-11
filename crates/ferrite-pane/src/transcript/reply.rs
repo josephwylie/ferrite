@@ -33,6 +33,8 @@ use ferrite_ui::{icons, motion, theme};
 /// before a click could land), where the pointer let go, when it appears,
 /// and when a scroll began to fade it.
 pub(super) struct SelectionReply {
+    /// A reference scene's, offered with no selection behind it.
+    staged: bool,
     passage: Option<String>,
     at: Point<Pixels>,
     appears: Instant,
@@ -75,6 +77,7 @@ impl TranscriptView {
             let passage = crate::quote::passage(&selected);
             view.reply = (passage.is_some() || crate::quote::too_long(&selected)).then(|| {
                 SelectionReply {
+                    staged: false,
                     passage,
                     at,
                     appears: cx.background_executor().now() + delay,
@@ -129,6 +132,20 @@ impl TranscriptView {
         offered
     }
 
+    /// The button on offer at `at` for `passage` (a reference scene's: no
+    /// pointer drags a selection there).
+    #[cfg(feature = "visual-reference")]
+    pub fn fixture_cite(&mut self, passage: &str, at: Point<Pixels>, cx: &mut Context<Self>) {
+        self.reply = Some(SelectionReply {
+            staged: true,
+            passage: Some(passage.to_string()),
+            at,
+            appears: cx.background_executor().now(),
+            fading: None,
+        });
+        cx.notify();
+    }
+
     /// Whether the Cite button is on offer — what the tests read.
     #[cfg(any(test, feature = "test-support"))]
     pub fn reply_offered(&self) -> bool {
@@ -146,7 +163,10 @@ impl TranscriptView {
         if self.reply.is_none() {
             return None;
         }
-        if !self.input.focused || !gpui::base::TextSelection::has_selection(window, cx) {
+        let staged = self.reply.as_ref().is_some_and(|reply| reply.staged);
+        if !staged
+            && (!self.input.focused || !gpui::base::TextSelection::has_selection(window, cx))
+        {
             self.reply = None;
             return None;
         }
