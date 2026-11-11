@@ -5,16 +5,161 @@
 //! to an image, through gpui's test support (the `headless` feature).
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ferrite_ui::keymap::Binding;
+use ferrite_core::drive::{Action, Answer, Click, Find, Keys, Press, Shot, Target, Text};
+use ferrite_core::settings::Settings;
+use ferrite_ui::keymap::{self, Binding};
 use gpui::{
     AnyWindowHandle, App, AppContext as _, Context, Entity, HeadlessAppContext, Keystroke,
     Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput, Point,
     Styled as _, Window,
 };
 
-use crate::cockpit::CockpitView;
+use crate::cockpit::{CockpitView, Preferences};
+use crate::machines::{Machines, Reach};
+
+/// How often the window's clock moves while nothing drives it: the
+/// Server's updates and the API's actions wait at most this long.
+const TICK_MS: u64 = 16;
+
+/// `ferrite --headless`: the production window on this Store's Server,
+/// drawn off-screen and driven only by the Server's `window.*` actions.
+/// It runs until it is stopped.
+pub fn run() {
+    let settings_dir = ferrite_core::server::settings_dir();
+    let store = ferrite_core::server::store_dir();
+    ferrite_core::diagnostics::open(&settings_dir);
+    let (settings, unreadable) = match Settings::load(&settings_dir) {
+        Ok(settings) => (settings, None),
+        Err(e) => {
+            ferrite_core::log!("settings.json could not be read: {e}");
+            (Settings::default(), Some(e.to_string()))
+        }
+    };
+    let (keys, keys_refused) = keymap::with_user_keys(keymap::PLATFORM, &settings.keys);
+    let defaults = Arc::new(Mutex::new(
+        ferrite_core::spawner::SessionDefaults::from_settings(&settings),
+    ));
+    let mut cx = app(keys);
+    let machines = cx.new(|_| {
+        Machines::new(
+            Reach {
+                settings_dir: settings_dir.clone(),
+                store: store.clone(),
+                executable: std::env::current_exe().unwrap_or_default(),
+                client: ferrite_core::protocol::Peer {
+                    name: "ferrite".into(),
+                    version: env!("CARGO_PKG_VERSION").into(),
+                },
+                renderer: None,
+                driven: true,
+                defaults: defaults.clone(),
+                bridge: ferrite_core::machine::Bridge::ssh,
+            },
+            &settings.machines,
+            None,
+        )
+    });
+    let core = match cx.update(|cx| machines.update(cx, |machines, _| machines.cockpit())) {
+        Ok(core) => core,
+        Err(e) => {
+            eprintln!("ferrite --headless: cannot reach the Ferrite server: {e}");
+            std::process::exit(1);
+        }
+    };
+    let provider = settings.default_provider;
+    let prefs = Preferences {
+        settings,
+        dir: settings_dir,
+        defaults,
+        titler: true,
+        cli_updates: false,
+        ferrite_updates: false,
+        whats_new: None,
+        unreadable,
+        keys_refused,
+    };
+    let mut driver = Driver::open(cx, |cx| {
+        CockpitView::new_with_settings(core, provider, prefs, cx).with_machines(machines)
+    });
+    eprintln!(
+        "ferrite --headless: pid {}, on the server of {}",
+        std::process::id(),
+        store.display()
+    );
+    loop {
+        driver.pass(TICK_MS);
+        for (request, action) in driver.update(|view, _, _| view.cockpit.take_drives()) {
+            let answer = act(&mut driver, action);
+            driver.update(|view, _, _| view.cockpit.driven(request, answer));
+        }
+    }
+}
+
+/// Carry out one action, as the operator's hands would.
+fn act(driver: &mut Driver, action: Action) -> Result<Answer, String> {
+    let not_drawn = |selector: &str| format!("nothing drawn as `{selector}`");
+    match action {
+        Action::Key(Keys { keys }) => {
+            let pressed: Vec<&str> = keys.iter().map(String::as_str).collect();
+            let handled = driver.keys(&pressed)?;
+            let unhandled = keys
+                .into_iter()
+                .zip(handled)
+                .filter_map(|(key, handled)| (!handled).then_some(key))
+                .collect();
+            Ok(Answer::Pressed { unhandled })
+        }
+        Action::Type(Text { text }) => driver.type_text(&text).map(|()| Answer::Typed),
+        Action::Click(Click { at, press }) => {
+            let (button, clicks) = match press {
+                Press::Single => (MouseButton::Left, 1),
+                Press::Double => (MouseButton::Left, 2),
+                Press::Right => (MouseButton::Right, 1),
+            };
+            let modifiers = Modifiers::default();
+            let at = match at {
+                Target::Selector(selector) => driver
+                    .click(&selector, button, clicks, modifiers)
+                    .ok_or_else(|| not_drawn(&selector))?,
+                Target::Point { x, y } => {
+                    let at = gpui::point(gpui::px(x as f32), gpui::px(y as f32));
+                    driver.click_at(at, button, clicks, modifiers);
+                    at
+                }
+            };
+            Ok(Answer::Clicked {
+                x: at.x.into(),
+                y: at.y.into(),
+            })
+        }
+        Action::Find(Find { selector }) => {
+            let bounds = driver
+                .bounds(&selector)
+                .ok_or_else(|| not_drawn(&selector))?;
+            Ok(Answer::Found {
+                x: bounds.origin.x.into(),
+                y: bounds.origin.y.into(),
+                width: bounds.size.width.into(),
+                height: bounds.size.height.into(),
+            })
+        }
+        Action::Shot(Shot { path }) => {
+            if !path.is_absolute() {
+                return Err(format!("a shot's path is absolute, not {}", path.display()));
+            }
+            let saved = driver.shot(&path)?;
+            Ok(Answer::Shot {
+                path,
+                width: saved.width,
+                height: saved.height,
+                scale: saved.scale,
+            })
+        }
+    }
+}
 
 /// The app every off-screen window lives in: real text, the Cockpit's
 /// components and fonts, and `keys` bound.
@@ -127,14 +272,27 @@ impl Driver {
     /// A keystroke (`cmd-,`, `escape`), as typed: true when something
     /// took it.
     pub fn key(&mut self, keystroke: &str) -> Result<bool, String> {
-        let parsed = parse(keystroke)?;
-        let handled = self
-            .cx
-            .update_window(self.window, |_, window, cx| {
-                window.dispatch_keystroke(parsed, cx)
-            })
-            .expect("the off-screen window stands");
-        self.tick(60);
+        self.keys(&[keystroke]).map(|handled| handled[0])
+    }
+
+    /// Keystrokes pressed in order, each given time to land; none when
+    /// one is not a keystroke. Whether something took each.
+    pub fn keys(&mut self, keystrokes: &[&str]) -> Result<Vec<bool>, String> {
+        let parsed = keystrokes
+            .iter()
+            .map(|keystroke| parse(keystroke))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut handled = Vec::new();
+        for keystroke in parsed {
+            handled.push(
+                self.cx
+                    .update_window(self.window, |_, window, cx| {
+                        window.dispatch_keystroke(keystroke, cx)
+                    })
+                    .expect("the off-screen window stands"),
+            );
+            self.tick(60);
+        }
         Ok(handled)
     }
 
