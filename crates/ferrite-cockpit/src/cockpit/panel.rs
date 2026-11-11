@@ -45,6 +45,7 @@ pub(crate) use pull_request::PrAction;
 pub(crate) use strip::Opener;
 #[cfg(test)]
 pub(crate) use strip::tab_scroll_step;
+pub(crate) use strip::soft_key_cap;
 
 /// The panel's own state on the cockpit.
 pub(crate) struct Panel {

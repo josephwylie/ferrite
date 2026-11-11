@@ -128,12 +128,10 @@ pub(crate) fn work_row(row: WorkRow) -> Stateful<Div> {
         .items_center()
         .justify_center()
         .size(px(theme::WORK_GUTTER))
-        .child(icons::icon_stroked(
-            glyph(icon),
-            theme::WORK_ICON,
-            theme::WORK_ICON_STROKE,
-            icon_ink,
-        ));
+        .child(
+            icons::icon_stroked(glyph(icon), theme::WORK_ICON, theme::WORK_ICON_STROKE, INK_SUBTLE)
+                .text_color(icon_ink),
+        );
     let selector = key.clone();
     div()
         .id(key.clone())

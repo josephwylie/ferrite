@@ -1233,7 +1233,11 @@ impl CockpitView {
                     if let Some(index) = self.pane_for(thread) {
                         self.focus_pane(index);
                     }
-                    self.open_provider_picker(thread, cx);
+                    if command == Command::Effort {
+                        self.open_effort_picker(thread, cx);
+                    } else {
+                        self.open_provider_picker(thread, cx);
+                    }
                 }
             }
             Command::PermissionMode => {

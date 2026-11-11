@@ -222,3 +222,61 @@ fn the_title_tools_stand_against_the_panel(cx: &mut TestAppContext) {
     assert!(title.right() < tools.left(), "the title runs short of them");
     assert!(head.right() >= cx.debug_bounds("panel-toggle").unwrap().right());
 }
+
+/// T3's breadcrumb: the Solo head reads project / title, `/` between.
+/// The project starts a new Thread in it; the title's chevron shows only
+/// under the pointer; a right-click anywhere on the head opens the
+/// Thread's menu.
+#[gpui::test]
+fn the_solo_head_is_a_project_then_title_breadcrumb(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("head-breadcrumb", 1);
+    let thread = core.threads()[0];
+    let here = core.project_id(thread).expect("a bound Thread");
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let project = cx.debug_bounds("view-head-project").expect("the project");
+    let slash = cx.debug_bounds("view-head-separator").expect("a `/`");
+    let title = cx.debug_bounds("view-title").expect("the title");
+    assert!(
+        project.right() <= slash.left() && slash.right() <= title.left(),
+        "project / title: {project:?} {slash:?} {title:?}"
+    );
+    assert!(
+        cx.debug_bounds("project-badge").is_some_and(|badge| project.contains(&badge.center())),
+        "the project leads with its badge"
+    );
+    assert!(
+        cx.debug_bounds("view-title-chevron-shown").is_none(),
+        "no chevron at rest"
+    );
+    cx.simulate_mouse_move(title.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        cx.debug_bounds("view-title-chevron-shown").is_some(),
+        "the chevron under the pointer"
+    );
+
+    cx.simulate_mouse_down(title.center(), gpui::MouseButton::Right, gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(
+            view.context_menu
+                .as_ref()
+                .is_some_and(|menu| menu.target == MenuTarget::Thread(thread)),
+            "right-click opens the Thread's menu"
+        );
+    });
+    view.update(cx, |view, cx| {
+        view.context_menu = None;
+        cx.notify();
+    });
+    tick(cx);
+
+    cx.simulate_click(project.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        let draft = view.panes[view.focused()].draft().expect("a new Thread");
+        assert_eq!(draft.binding.project(), here, "in the head's project");
+    });
+}

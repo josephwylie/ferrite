@@ -345,8 +345,8 @@ fn a_working_clock_turns_over_on_its_pane(cx: &mut TestAppContext) {
     assert_ne!(after, before, "the Pane redrew its clock");
 }
 
-/// A choice menu: the model picker opens placed over its chip with no
-/// frame asked for beyond its own, and its drawn cursor follows the arrows.
+/// The model picker opens placed over its box with no frame asked for
+/// beyond its own, and its cursor follows the arrows.
 /// The chip is Solo's (SPEC §5.5): the board's Pane fills it first.
 #[gpui::test]
 fn the_model_picker_opens_placed_and_its_cursor_follows_the_arrows(cx: &mut TestAppContext) {
@@ -361,36 +361,25 @@ fn the_model_picker_opens_placed_and_its_cursor_follows_the_arrows(cx: &mut Test
     b.view
         .update(b.cx, |view, cx| view.open_provider_picker(thread, cx));
     frames(b.cx, 300);
-    let drawn = ferrite_ui::menu::testing::drawn();
-    assert_eq!(drawn.lit, None, "at rest no row is filled (Claude's)");
     let menu =
-        b.cx.debug_bounds("choice-menu")
+        b.cx.debug_bounds("model-picker")
             .expect("the picker is open");
     b.cx.update(|window, _| window.refresh());
     frames(b.cx, 50);
     assert_eq!(
-        b.cx.debug_bounds("choice-menu"),
+        b.cx.debug_bounds("model-picker"),
         Some(menu),
         "already where a full redraw puts it"
     );
+    let cursor = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.popover.as_ref().map(|open| open.selected))
+    };
+    let start = cursor(&b.view, b.cx);
     b.cx.simulate_keystrokes("down");
     frames(b.cx, 50);
-    let moved = ferrite_ui::menu::testing::drawn().cursor;
-    assert!(
-        moved.is_some() && moved != drawn.cursor,
-        "↓ moves the drawn cursor: {:?} → {moved:?}",
-        drawn.cursor
-    );
-    assert_eq!(
-        ferrite_ui::menu::testing::drawn().lit,
-        moved,
-        "the keyboard's cursor row is filled"
-    );
+    let moved = cursor(&b.view, b.cx);
+    assert_ne!(moved, start, "↓ moves the cursor");
     b.cx.simulate_keystrokes("up");
     frames(b.cx, 50);
-    assert_eq!(
-        ferrite_ui::menu::testing::drawn().cursor,
-        drawn.cursor,
-        "and ↑ back"
-    );
+    assert_eq!(cursor(&b.view, b.cx), start, "and ↑ back");
 }

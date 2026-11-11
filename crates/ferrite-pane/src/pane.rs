@@ -31,9 +31,10 @@ pub use agents::{AgentFace, AgentFaces, AgentRun};
 pub use composer::model_label;
 pub use composer::{
     attach_button, composer_footer, composer_row_limit, env_strip, env_word, flat_facts_text,
-    mode_chip, model_effort_chip, offers_import, permission_mode_label, queued_close, queued_count,
-    queued_edit, queued_send_now, queued_sends_now, queued_takes_back, send_button, send_is_stop,
-    toolbar_chip, ComposerControls,
+    mode_chip, model_effort_chip, offers_import, ModelChip, permission_mode_label, queued_close, queued_count,
+    primary_actions, queued_edit, queued_send_now, queued_sends_now, queued_takes_back, send_button,
+    stop_button,
+    toolbar_chip, ComposerControls, PrimaryActions,
 };
 use composer::{
     composer_region, composer_stack, env_face, ghost_row, placeholder, queue_card, ComposerStack,
@@ -3290,46 +3291,69 @@ fn skill_named<'a>(
     skills.iter().find(|skill| skill.name == name)
 }
 
-/// A skill in a sent prompt (Claude's, `claude/parity/skill-sent-bubble.png`,
-/// `skill-hover.png`): `SKILL_INK` on no ground, in the prompt's face, a
-/// faint blue wash behind it under the pointer, and a card above it — the
-/// full name in `INK_SUBTLE`, then the catalogue's description, as the `/` picker reads it — wrapped at
-/// `SKILL_TIP_W`.
+/// A skill in a sent prompt, the Composer's token (T3's
+/// `SkillInlineText`): the cube (`icons::BOX`, 1em) then the name at
+/// `W_LABEL` in `SKILL_INK`, on no ground, underlined under the pointer,
+/// and a card above it: the full name in `INK_SUBTLE`, the catalogue's
+/// description, and `View instructions` where the skill names its
+/// SKILL.md, which a click opens.
 pub(crate) fn skill_token(
     label: &str,
     skill: &ferrite_core::SessionCommand,
     window: &mut gpui::Window,
 ) -> (gpui::Size<gpui::Pixels>, AnyElement) {
-    let style = window.text_style();
+    let label = label.trim_start_matches(['/', '$']).to_string();
+    let mut style = window.text_style();
+    style.font_weight = theme::W_LABEL;
     let size = style.font_size.to_pixels(window.rem_size());
     let shaped = window.text_system().shape_line(
-        SharedString::from(label.to_string()),
+        SharedString::from(label.clone()),
         size,
         &[style.to_run(label.len())],
         None,
     );
-    let width = shaped.width();
+    let icon_side = f32::from(size);
+    let gap = icon_side * theme::TOKEN_ICON_GAP_EM;
+    let width = shaped.width() + px(icon_side + gap);
     let line = window.line_height();
     let name = skill.name.clone();
-    let description = skill.description.clone();
+    let mut body = skill.description.clone();
+    if skill.path.is_some() {
+        body.push_str("\n\nView instructions");
+    }
+    let instructions = skill.path.clone().map(std::path::PathBuf::from);
     let element = div()
         .id(SharedString::from(format!("prompt-skill-{name}")))
         .debug_selector({
             let name = name.clone();
             move || format!("prompt-skill-{name}")
         })
+        .flex()
+        .items_center()
+        .gap(px(gap))
         .w(width)
         .h(line)
-        .rounded(px(theme::R_CONTROL))
+        .font_weight(theme::W_LABEL)
         .text_color(rgb(theme::SKILL_INK))
         .whitespace_nowrap()
-        .hover(|style| style.bg(gpui::rgba(theme::SKILL_HOVER)))
+        .hover(|style| style.underline())
+        .when_some(instructions, |token, path| {
+            token
+                .cursor_pointer()
+                .on_click(move |_, _, cx| cx.open_with_system(&path))
+        })
         .tooltip(ferrite_ui::menu::tooltip_card(
-            format!("/{name}"),
-            description,
+            format!("${name}"),
+            body,
             theme::SKILL_TIP_W,
         ))
-        .child(SharedString::from(label.to_string()))
+        .child(ferrite_ui::icons::icon_stroked(
+            ferrite_ui::icons::BOX,
+            icon_side,
+            theme::SKILL_ICON_STROKE,
+            theme::SKILL_INK,
+        ))
+        .child(SharedString::from(label))
         .into_any_element();
     (gpui::size(width, line), element)
 }
@@ -4703,11 +4727,11 @@ mod tests {
         }));
         assert_eq!(
             placeholder(false, false, Some(&answered), Some("Run the tests")).text(),
-            "Run the tests \u{b7} \u{21e5} accept"
+            "Run the tests \u{21e5} Tab"
         );
         assert_eq!(
             placeholder(false, true, None, Some("Run the tests")).text(),
-            "Describe a task or ask a question",
+            "Ask anything. @ files, $ skills, / commands",
             "a draft has no conversation to predict from"
         );
     }
@@ -4780,7 +4804,14 @@ mod tests {
                 let chip = |selector: &'static str, loading| {
                     div()
                         .debug_selector(move || selector.into())
-                        .child(model_effort_chip("Sonnet 4.5".into(), None, loading))
+                        .child(model_effort_chip(ModelChip {
+                            mark: ferrite_ui::provider::mark(Provider::Claude),
+                            model: "Sonnet 4.5".into(),
+                            effort: None,
+                            loading,
+                            open: false,
+                            group: selector.into(),
+                        }))
                 };
                 div()
                     .flex()
@@ -6612,7 +6643,7 @@ mod tests {
         let empty = Transcript::default();
         assert_eq!(
             placeholder(false, false, Some(&empty), None).text(),
-            "Describe a task or ask a question",
+            "Ask anything. @ files, $ skills, / commands",
             "an empty Thread asks for its first prompt, as a draft does"
         );
         let mut live = Transcript::default();
@@ -6623,11 +6654,11 @@ mod tests {
         }));
         assert_eq!(
             placeholder(false, false, Some(&live), None).text(),
-            "Type / for commands"
+            "Ask anything. @ files, $ skills, / commands"
         );
         assert_eq!(
             placeholder(true, false, Some(&live), None).text(),
-            "Type / for commands"
+            "Ask anything. @ files, $ skills, / commands"
         );
         let mut running = Transcript::default();
         running.apply(Input::Prompt("fix the decoder".into()));
@@ -6646,11 +6677,11 @@ mod tests {
         }));
         assert_eq!(
             placeholder(false, false, Some(&closed), None).text(),
-            "Type / for commands"
+            "Ask anything. @ files, $ skills, / commands"
         );
         assert_eq!(
             placeholder(false, true, None, None).text(),
-            "Describe a task or ask a question"
+            "Ask anything. @ files, $ skills, / commands"
         );
 
         // A landed prediction is the line, verbatim and unadorned — it is a
@@ -6671,11 +6702,11 @@ mod tests {
         // A Decision and a dead Session both outrank it.
         assert_eq!(
             placeholder(true, false, Some(&answered), Some("Run the tests")).text(),
-            "Type / for commands"
+            "Ask anything. @ files, $ skills, / commands"
         );
         assert_eq!(
             placeholder(false, false, Some(&closed), Some("Run the tests")).text(),
-            "Type / for commands"
+            "Ask anything. @ files, $ skills, / commands"
         );
 
         // No line names a message or ends in an ellipsis.

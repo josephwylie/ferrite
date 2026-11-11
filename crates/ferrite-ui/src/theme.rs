@@ -45,9 +45,10 @@
 //!    never by a second grey, an inset or a gap that reads. A Solo Pane is
 //!    the plane itself, flush and unringed (`PaneEdge::Flush`); a Group's
 //!    Panes keep a `CARD_RING` hairline round their cells, at `R_CARD`.
-//!    **Three radii**: `R_CONTROL` 6 (controls, rows, chips), `R_CARD` 10
-//!    (bubbles, cards, the Decision box) and `R_FLOAT` 12 (the Composer,
-//!    menus, popovers, sheets); dots, pills and the send circle round.
+//!    **Four radii**: `R_CONTROL` 6 (controls, rows, chips), `R_CARD` 10
+//!    (bubbles, cards, the Decision box), `R_FLOAT` 12 (menus, popovers,
+//!    sheets) and `R_COMPOSER` 16 (the Solo Composer); dots, pills and the
+//!    send circle round.
 //!    **Two line greys**: `LINE` #303030 for seams, dividers and table
 //!    rules, `CARD_RING` #222222 for a card's ring. A raised surface edges
 //!    itself a step over its own fill (`FIELD_RING` the Composer's,
@@ -905,9 +906,14 @@ pub const R_CONTROL: f32 = 6.0;
 /// tool or comment card, the failure strip, the panel's file block, a sent
 /// image's thumbnail.
 pub const R_CARD: f32 = 10.0;
-/// 12px — the Composer and every float: menus, popovers, the palette,
-/// sheets. The kit's `radius_lg`.
+/// 12px — every float: menus, popovers, the palette, sheets. The kit's
+/// `radius_lg`.
 pub const R_FLOAT: f32 = 12.0;
+/// 16px — the Solo Composer's box (T3's `rounded-2xl`), its ring and its
+/// top highlight.
+pub const R_COMPOSER: f32 = 16.0;
+/// The Solo box's top highlight (T3's dark `inset-shadow-2xs`): white 3%.
+pub const COMPOSER_TOP_HIGHLIGHT: u32 = 0xffffff08;
 /// 2px — meter segments and other tiny marks.
 pub const R_TIGHT: f32 = 2.0;
 
@@ -940,6 +946,22 @@ pub const TITLEBAR_H: f32 = 44.0;
 /// (13). Off the scale: the mockups' head.
 pub const VIEW_HEAD_PAD_X: f32 = 20.0;
 pub const VIEW_HEAD_GAP: f32 = 10.0;
+/// Solo's breadcrumb (T3's `ChatHeader`): items `HEAD_CRUMB_GAP` apart,
+/// `/` between them. The Project's badge `HEAD_BADGE` (T3's
+/// `size-3.5`), `HEAD_BADGE_GAP` before its name, which stops at
+/// `HEAD_PROJECT_MAX_W` (`max-w-40`); a parent Thread gives way down to
+/// `HEAD_PARENT_MIN_W`, its ellipsis; the title keeps
+/// `VIEW_TITLE_MIN_W`, its chevron (`HEAD_CHEVRON`) `HEAD_CHEVRON_GAP`
+/// after it. A machine's badge sits on `HEAD_ENV_GROUND` (`BLUE` at 12%).
+pub const HEAD_CRUMB_GAP: f32 = 12.0;
+pub const HEAD_BADGE: f32 = 14.0;
+pub const HEAD_BADGE_GAP: f32 = 6.0;
+pub const HEAD_PROJECT_MAX_W: f32 = 160.0;
+pub const HEAD_PARENT_MIN_W: f32 = 16.0;
+pub const VIEW_TITLE_MIN_W: f32 = 40.0;
+pub const HEAD_CHEVRON: f32 = 14.0;
+pub const HEAD_CHEVRON_GAP: f32 = 4.0;
+pub const HEAD_ENV_GROUND: u32 = 0x8cb9f41f;
 /// The history arrows (Claude's `‹ ›`, claude/answer-done.png x 126 and
 /// 153), at `HISTORY_X` in the head row: `ICON_BUTTON` doors edge to edge, a 28pt pitch, the glyph
 /// `NAV_TOGGLE_GLYPH`. At an end the arrow is disabled in `INK_SUBTLE`:
@@ -1056,6 +1078,9 @@ pub const SURFACE_EMPTY_ROW_PAD_X: f32 = 10.0;
 pub const KEY_CAP_SOFT: f32 = 20.0;
 pub const KEY_CAP_SOFT_R: f32 = 4.0;
 pub const KEY_CAP_SOFT_GROUND: u32 = 0xffffff12;
+/// The outline key cap (T3's `Kbd variant="outline"`, `border-foreground/15`):
+/// the Composer's `⇥ Tab` after a predicted follow-up.
+pub const KEY_CAP_OUTLINE_EDGE: u32 = 0xffffff26;
 /// The Panel while its Preview tab shows (SPEC §5.6.3): `PANEL_PREVIEW_SHARE`
 /// of the window, held between `PANEL_PREVIEW_MIN_W` and
 /// `PANEL_PREVIEW_MAX_W` — wide enough to read code at its own size — and
@@ -2327,7 +2352,7 @@ pub const ENV_STRIP: u32 = 0x262626;
 pub const ENV_STRIP_H: f32 = 38.0;
 pub const ENV_STRIP_INSET: f32 = SPACE_3;
 pub const ENV_STRIP_PAD_X: f32 = SPACE_2;
-pub const ENV_MARK: f32 = 14.0;
+pub const ENV_MARK: f32 = 12.0;
 pub const ENV_MARK_GAP: f32 = SPACE_1_5;
 pub const ENV_CHIP_GAP: f32 = SPACE_3;
 // (end WP-C) — append above this line only
@@ -2340,7 +2365,7 @@ pub const ENV_CHIP_GAP: f32 = SPACE_3;
 /// under the reading column: at most `TX_COLUMN_MAX_W` wide, centred as
 /// the transcript is, and never nearer the card's sides and foot than
 /// `COMPOSER_INSET` (the shelf keeps the same column):
-/// `paint::FIELD` at `R_FLOAT`, a 1px `FIELD_RING` laid outside it (it takes
+/// `paint::FIELD` at `R_COMPOSER`, a 1px `FIELD_RING` laid outside it (it takes
 /// no layout).
 ///
 /// - **The working line** is not the stack's: it is the transcript's last
@@ -2410,21 +2435,24 @@ pub const PLACEHOLDER_GAP: f32 = CARET_W + SPACE_1;
 /// One selection colour app-wide: the Composer paints the transcript's
 /// native selection wash under its selected runs.
 pub const COMPOSER_SELECTION: u32 = TEXT_SELECTION_WASH;
-/// A chip in the Composer's line — a picked `@` mention, a `/command`
-/// the Session knows: `LINK_INK` (a path, a command: the link blue) on a
-/// `MENTION_CHIP` ground (that blue at 16%) at `R_CONTROL`, the ground
-/// `MENTION_CHIP_INSET_Y` inside the row and reaching `MENTION_CHIP_PAD_X`
-/// past the token either side (at most half into the space beside it).
-pub const MENTION_INK: u32 = LINK_INK;
-pub const MENTION_CHIP: u32 = 0x7aa8ee29;
-pub const MENTION_CHIP_PAD_X: f32 = 3.0;
-pub const MENTION_CHIP_INSET_Y: f32 = 1.0;
-/// A skill (`/name`) in the Composer's line and in a sent prompt (Claude's,
-/// `claude/parity/slash-picked.png`, `skill-sent-bubble.png`): blue ink and
-/// no ground. Under the pointer in a bubble it takes `SKILL_HOVER`, a faint
-/// blue wash behind the token alone (`skill-hover.png`).
-pub const SKILL_INK: u32 = 0x5ea1ea;
-pub const SKILL_HOVER: u32 = 0x5ea1ea26;
+/// A token in the Composer's line and in a sent prompt (T3's context
+/// chips, `contextChipAccents.ts`, all at L 0.62): no ground, `W_LABEL`, the
+/// kind's accent, underlined only under the pointer. A skill (`$name`) is
+/// `SKILL_INK` (`oklch(0.62 0.16 322)`) after Lucide's cube
+/// (`icons::BOX`, stroked `SKILL_ICON_STROKE`); a file (`@path`)
+/// `FILE_INK` (`oklch(0.62 0.136 237)`) after its type icon; a `/command`
+/// the Session knows `MENTION_INK` (`oklch(0.62 0.11 215)`), no icon. The
+/// icon is `TOKEN_ICON` (1em) square, standing where the sigil was.
+pub const SKILL_INK: u32 = 0xb261be;
+pub const FILE_INK: u32 = 0x0090cd;
+pub const MENTION_INK: u32 = 0x0096af;
+pub const SKILL_ICON_STROKE: f32 = 1.85;
+pub const TOKEN_ICON: f32 = FS_COMPOSER;
+/// Between a sent token's icon and its name (T3's `gap-[0.2em]`).
+pub const TOKEN_ICON_GAP_EM: f32 = 0.2;
+/// A selected token's wash (T3's node selection): the one selection
+/// colour, at this radius.
+pub const TOKEN_SELECTION_R: f32 = 4.0;
 /// The skill's card above it: the description wraps at this width.
 pub const SKILL_TIP_W: f32 = 260.0;
 /// The panel's Context section (`pane::context_usage`): its stacked bar
@@ -2576,9 +2604,31 @@ pub const TOOL_CHIP_LOGO: f32 = 13.0;
 /// readable; a longer label (a provider's native mode) cuts here
 /// (`pane::composer_toolbar`).
 pub const TOOLBAR_LEAD_MAX_W: f32 = 180.0;
-/// The send circle (28) and its arrow (14).
-pub const COMPOSER_SEND: f32 = 28.0;
+/// The send circle (T3's `sm:h-8 sm:w-8`, 32) and its arrow (14), growing
+/// to `MOTION_SEND_HOVER_SCALE` under the pointer.
+pub const COMPOSER_SEND: f32 = 32.0;
 pub const COMPOSER_SEND_ICON: f32 = 14.0;
+pub const MOTION_SEND_HOVER_SCALE: f32 = 1.05;
+/// T3's send arrow strokes 1.8 at 14.
+pub const SEND_ARROW_STROKE: f32 = 1.8;
+/// The send circle lit (T3's `--message-action`, its dark `--primary`
+/// `oklch(0.571 0.21 264)`), under the pointer that mixed 90% with the
+/// background, its white arrow and its inset top highlight (white 16%).
+/// `PRIMARY` stays the dialogs' neutral primary.
+pub const SEND_LIT: u32 = 0x346bf1;
+pub const SEND_LIT_HOVER: u32 = 0x2f60d9;
+pub const ON_SEND_LIT: u32 = 0xffffff;
+pub const SEND_LIT_HIGHLIGHT: u32 = 0xffffff29;
+/// Stop (T3's interrupt, `sm:size-7`): a 28 circle in its dark destructive
+/// (red-500 mixed 90% with white) at 90%, the full colour under the
+/// pointer, a white 8 square at radius 1.5 (`icons::STOP` drawn at 12).
+/// Not `RED`, which is the text hue.
+pub const COMPOSER_STOP: f32 = 28.0;
+pub const COMPOSER_STOP_ICON: f32 = 12.0;
+pub const STOP: u32 = 0xfb414ae6;
+pub const STOP_HOVER: u32 = 0xfb414aff;
+/// Between stop and send while both stand.
+pub const PRIMARY_ACTIONS_GAP: f32 = SPACE_2;
 /// The Solo box is one row, as Claude's: the `+` (`COMPOSER_ATTACH`), the
 /// line, the send circle, `COMPOSER_ROW_GAP` apart, `COMPOSER_ROW_PAD`
 /// inside the box — 44 high at one row, the `+` glyph 14 in and the line
@@ -2662,15 +2712,73 @@ pub const TOKEN_PAD_X: f32 = SPACE_2;
 /// third of every row empty. A longer description cuts and keeps its
 /// tooltip.
 pub const SLASH_MENU_W: f32 = 480.0;
-/// The Composer's menus at Claude's widths: the model picker (names only,
-/// a model's description in its tooltip), its effort submenu, the
-/// permission-mode menu (a name and its one line), and the `+` menu. The
-/// submenu opens `SUBMENU_GAP` beside its menu.
-pub const MODEL_PICKER_W: f32 = 260.0;
+/// The Workspace menu once it offers a previous worktree, kept
+/// `MENU_WINDOW_MARGIN` inside each window edge (T3's
+/// `min(21rem, 100vw - 2rem)`).
+pub const WORKSPACE_MENU_W: f32 = 336.0;
+pub const MENU_WINDOW_MARGIN: f32 = 16.0;
+/// The `/`, `@` and `$` drawer's cap (T3's `max-h-72`); its rows scroll.
+pub const SLASH_MENU_MAX_H: f32 = 288.0;
+/// The Composer's menus at Claude's widths: an effort ladder, the
+/// permission menu (its segmented modes over the hovered mode's line), and
+/// the `+` menu. A submenu opens `SUBMENU_GAP` beside its menu.
 pub const EFFORT_MENU_W: f32 = 318.0;
 pub const MODE_MENU_W: f32 = 316.0;
 pub const ATTACH_MENU_W: f32 = 228.0;
 pub const SUBMENU_GAP: f32 = 2.0;
+/// The model picker (T3's docked `ProviderModelPicker`): one popover over
+/// the Composer with no padding of its own, its columns a provider rail
+/// (`w-11`, `p-1 gap-1`), the searchable list (rail and list together
+/// `max-w-90`) and the Reasoning column (`w-48`), then a footer. The
+/// columns stand `MODEL_PICKER_H` tall whatever they show (`h-86.5`), so a
+/// tab, a search or a model with more rungs never resizes it.
+pub const MODEL_PICKER_H: f32 = 346.0;
+pub const MODEL_PICKER_LIST_W: f32 = 360.0;
+pub const MODEL_PICKER_RAIL_W: f32 = 44.0;
+pub const MODEL_PICKER_RAIL_PAD: f32 = SPACE_1;
+/// A rail button's provider mark (`size-5` in its `size-6` box).
+pub const MODEL_PICKER_RAIL_ICON: f32 = 20.0;
+/// The rail's selected pill: `right-1 h-5 w-0.75 rounded-full`, sliding
+/// between buttons (`RAIL_SLIDE`).
+pub const MODEL_PICKER_PILL_W: f32 = 3.0;
+pub const MODEL_PICKER_PILL_H: f32 = 20.0;
+/// The search row (`px-3 pt-2.5`, a 26 input over its rule, `pb-1.5`).
+pub const MODEL_PICKER_SEARCH_H: f32 = 26.0;
+pub const MODEL_PICKER_SEARCH_ICON: f32 = 16.0;
+/// A model row (`min-h-7 rounded-sm px-2 py-1 gap-2`), a list padded 4
+/// round its rows, 2 between them.
+pub const MODEL_PICKER_ROW_H: f32 = 28.0;
+pub const MODEL_PICKER_ROW_GAP: f32 = 2.0;
+pub const MODEL_PICKER_ROW_R: f32 = 4.0;
+/// The search row's and the column head's air over them (`pt-2.5`).
+pub const MODEL_PICKER_INSET_T: f32 = 10.0;
+pub const MODEL_PICKER_MARK: f32 = 16.0;
+pub const REASONING_W: f32 = 192.0;
+/// The Reasoning column's head (`h-8.25`, a rule under it, `px-3 pt-2.5`)
+/// and its rungs (`h-8 rounded-sm px-2`).
+pub const REASONING_HEAD_H: f32 = 33.0;
+pub const REASONING_ROW_H: f32 = 32.0;
+/// The picker's grounds over `paint::FLOAT`: the rail white 3% × 30%
+/// (`bg-muted/30`), the list and the column white 3% × 40%, their edges
+/// the border at 70%, a row under the pointer foreground 9%, a rail
+/// button foreground 10%.
+pub const MODEL_PICKER_RAIL_GROUND: u32 = 0xffffff02;
+pub const MODEL_PICKER_LIST_GROUND: u32 = 0xffffff03;
+pub const MODEL_PICKER_EDGE: u32 = 0xffffff0e;
+pub const MODEL_PICKER_ROW_HOVER: u32 = 0xefefef17;
+pub const MODEL_PICKER_RAIL_HOVER: u32 = 0xefefef1a;
+/// A segmented control (T3's `FOOTER_SEGMENT` in `rounded-lg bg-input/40
+/// p-0.5`): its track white 11% × 40%, the checked segment 11% × 72%;
+/// segments 24 high.
+pub const SEGMENT_TRACK: u32 = 0xffffff0b;
+pub const SEGMENT_CHECKED: u32 = 0xffffff14;
+pub const SEGMENT_H: f32 = 24.0;
+pub const SEGMENT_TRACK_PAD: f32 = 2.0;
+pub const SEGMENT_TRACK_R: f32 = 8.0;
+/// The picker footer's permissions button (`h-7 rounded-md px-2`).
+pub const PICKER_FOOT_BUTTON_H: f32 = 28.0;
+/// A permission menu's preview of the hovered mode (`min-h-8 text-xs`).
+pub const MODE_PREVIEW_MIN_H: f32 = 32.0;
 /// A form field or a sheet's text button: one row in a cell of padding,
 /// inside a 1px edge at `R_CONTROL` (a field's the `FIELD_RING` hairline,
 /// `CONTROL_FOCUS` while it holds the caret).

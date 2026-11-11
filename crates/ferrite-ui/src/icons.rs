@@ -166,6 +166,14 @@ icons![
     "message-circle",
     "list-todo",
     "app-window",
+    // The Composer and its model picker (T3's): a skill token's cube, the
+    // steer glyph, the picker's favourites, Fast, its permission chevron,
+    // a worktree in the workspace menu.
+    "box",
+    "corner-up-right",
+    "star",
+    "chevron-up",
+    "folder-git",
     // The Panel's Surfaces: a side chat's delete, the Changes toolbar's
     // view tools.
     "trash-2",
@@ -359,6 +367,16 @@ pub const ZAP: &str = "icons/zap.svg";
 pub const MESSAGE_CIRCLE: &str = "icons/message-circle.svg";
 pub const LIST_TODO: &str = "icons/list-todo.svg";
 pub const APP_WINDOW: &str = "icons/app-window.svg";
+/// A skill token's cube (Lucide's `box`, T3's skill chip), stroked
+/// `theme::SKILL_ICON_STROKE`.
+pub const BOX: &str = "icons/box.svg";
+/// The send circle while a turn runs: what is typed steers it.
+pub const CORNER_UP_RIGHT: &str = "icons/corner-up-right.svg";
+/// A favourite model.
+pub const STAR: &str = "icons/star.svg";
+pub const CHEVRON_UP: &str = "icons/chevron-up.svg";
+/// An existing worktree in the workspace menu (`FOLDER_GIT` is a new one).
+pub const FOLDER_GIT_EXISTING: &str = "icons/folder-git.svg";
 /// A side chat's delete, in its Surface's head.
 pub const TRASH: &str = "icons/trash-2.svg";
 /// The Changes toolbar: Stacked and Split, Wrap, Whitespace, Hide test
@@ -374,17 +392,16 @@ pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
-        let drawn = path.rsplit_once('@').and_then(|(path, drawn)| {
+        let (path, drawn) = match path.rsplit_once('@').and_then(|(path, drawn)| {
             let (size, stroke) = drawn.split_once('/').unwrap_or((drawn, ""));
             let stroke = if stroke.is_empty() {
                 theme::ICON_STROKE
             } else {
                 stroke.parse().ok()?
             };
-            Some((path, size.parse::<f32>().ok()?, stroke))
-        });
-        let (path, drawn) = match drawn {
-            Some((path, size, stroke)) => (path, Some((size, stroke))),
+            Some((path, (size.parse::<f32>().ok()?, stroke)))
+        }) {
+            Some((path, drawn)) => (path, Some(drawn)),
             None => (path, None),
         };
         Ok(ICONS
@@ -419,29 +436,29 @@ pub fn icon(path: &'static str, size: f32, color: u32) -> Svg {
         .text_color(rgb(color))
 }
 
-/// [`icon`] stroked `stroke` px at its `size` rather than
-/// `theme::ICON_STROKE`, in `color` (its alpha kept): a work row's Lucide
-/// glyph at Lucide's own weight (`theme::WORK_ICON_STROKE`).
-pub fn icon_stroked(path: &'static str, size: f32, stroke: f32, color: gpui::Hsla) -> Svg {
-    svg()
-        .path(SharedString::from(format!("{path}@{size}/{stroke}")))
-        .w(px(size))
-        .h(px(size))
-        .flex_shrink_0()
-        .text_color(color)
+/// [`icon`] stroked `stroke` px instead of `theme::ICON_STROKE`: a glyph
+/// whose reference draws it heavier (T3's skill cube, its send arrow).
+pub fn icon_stroked(path: &'static str, size: f32, stroke: f32, color: u32) -> Svg {
+    icon(path, size, color).path(stroked_key(path, size, stroke))
+}
+
+/// The asset key `icon_stroked` draws, for an element that paints the SVG
+/// itself (`Window::paint_svg`).
+pub fn stroked_key(path: &str, size: f32, stroke: f32) -> SharedString {
+    format!("{path}@{size}/{stroke}").into()
 }
 
 /// The key of `path` drawn `size` px square: `Assets` strokes it at
-/// `theme::ICON_STROKE` for that size. gpui rasterises an SVG per key and
-/// device size, and hands `AssetSource::load` only the key, so the size
-/// rides in it.
+/// `theme::ICON_STROKE` for that size (or at the stroke after a `/`,
+/// `icon_stroked`). gpui rasterises an SVG per key and device size, and
+/// hands `AssetSource::load` only the key, so the size rides in it.
 fn drawn_at(path: &str, size: f32) -> SharedString {
     format!("{path}@{size}").into()
 }
 
 /// `svg` with every `stroke-width` set so that, scaled from its viewBox to
-/// `size` px, it strokes `theme::ICON_STROKE`. An SVG with no stroke (a
-/// fill logomark) is returned as it is.
+/// `size` px, it strokes `stroke` px. An SVG with no stroke (a fill
+/// logomark) is returned as it is.
 fn stroke_at(svg: &[u8], size: f32, stroke: f32) -> Vec<u8> {
     let Ok(text) = std::str::from_utf8(svg) else {
         return svg.to_vec();

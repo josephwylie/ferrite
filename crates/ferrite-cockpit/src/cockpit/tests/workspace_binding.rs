@@ -180,10 +180,10 @@ fn the_branch_chip_offers_the_checkout_its_other_branch_and_both_new_branch_mode
         assert_eq!(
             rows,
             vec![
-                ("feature/checked-out", "checked out", true),
+                ("Current checkout", "feature/checked-out", true),
                 (default.as_str(), "existing branch", false),
                 ("New branch", "in the project checkout", false),
-                ("New branch + worktree", "in an isolated checkout", false),
+                ("New worktree", "in an isolated checkout", false),
             ]
         );
     });
@@ -216,8 +216,6 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
         assert!(out.status.success(), "git {args:?}: {out:?}");
     }
     // Whatever this machine's `git init` called each first branch.
-    let default_one = ferrite_core::workspace::checkout_branch(&repo_one).expect("a branch");
-    let default_two = ferrite_core::workspace::checkout_branch(&repo_two).expect("a branch");
     let fake = Fake::default();
     let store = Store::open(base.join("threads")).unwrap();
     let core = Cockpit::new(store, Box::new(fake));
@@ -298,10 +296,10 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
         assert_eq!(
             labels,
             vec![
-                default_two.as_str(),
-                "ferrite/wt-1",
+                "Current checkout",
+                "Previous worktree (ferrite/wt-1)",
                 "New branch",
-                "New branch + worktree"
+                "New worktree"
             ],
             "the chosen repo's checkout, its worktree, then the fresh starts"
         );
@@ -329,7 +327,7 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
         let labels: Vec<&str> = band.rows.iter().map(|row| row.name.as_ref()).collect();
         assert_eq!(
             labels,
-            vec![default_one.as_str(), "New branch", "New branch + worktree"],
+            vec!["Current checkout", "New branch", "New worktree"],
             "the other repo's own checkout, and nothing from the first"
         );
     });
@@ -373,12 +371,12 @@ fn the_workspace_chip_lists_the_repos_other_worktrees_and_local_branches(cx: &mu
         assert_eq!(
             rows,
             vec![
-                ("trunk", "checked out", true),
-                ("feature/wt", "worktree · wt-feature", false),
+                ("Current checkout", "trunk", true),
+                ("Previous worktree (feature/wt)", "wt-feature", false),
                 ("main", "existing branch", false),
                 ("topic/spare", "existing branch", false),
                 ("New branch", "in the project checkout", false),
-                ("New branch + worktree", "in an isolated checkout", false),
+                ("New worktree", "in an isolated checkout", false),
             ]
         );
     });
@@ -493,9 +491,9 @@ fn a_repo_without_a_main_branch_offers_no_main_row(cx: &mut TestAppContext) {
         assert_eq!(
             rows,
             vec![
-                ("trunk", "checked out"),
+                ("Current checkout", "trunk"),
                 ("New branch", "in the project checkout"),
-                ("New branch + worktree", "in an isolated checkout"),
+                ("New worktree", "in an isolated checkout"),
             ]
         );
     });
@@ -777,7 +775,7 @@ fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
     });
     assert_eq!(spawned() - before, 0, "a frame asked git for the chip");
     cx.run_until_parked();
-    // The menu's first row is the checkout exactly as the chip names it.
+    // The menu's first row names the checkout's branch.
     let checkout_row = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, _| {
             let open = view.popover.as_ref().expect("the workspace menu is open");
@@ -796,7 +794,7 @@ fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
     toggle_menu(&view, cx);
     assert_eq!(
         checkout_row(&view, cx),
-        ("feature/drafted".to_string(), "checked out".to_string())
+        ("Current checkout".to_string(), "feature/drafted".to_string())
     );
     cx.run_until_parked();
     toggle_menu(&view, cx);
@@ -808,13 +806,13 @@ fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
     assert_eq!(spawned() - before, 0, "opening the menu asked git");
     assert_eq!(
         checkout_row(&view, cx),
-        ("feature/drafted".to_string(), "checked out".to_string()),
+        ("Current checkout".to_string(), "feature/drafted".to_string()),
         "the last answer stands until the fresh one lands"
     );
     cx.run_until_parked();
     assert_eq!(
         checkout_row(&view, cx),
-        ("feature/moved".to_string(), "checked out".to_string())
+        ("Current checkout".to_string(), "feature/moved".to_string())
     );
 }
 

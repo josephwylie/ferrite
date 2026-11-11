@@ -89,16 +89,16 @@ fn the_context_section_reads_the_window_and_the_ring_the_plan(cx: &mut TestAppCo
     );
 }
 
-/// The model picker rests above its chip in the Composer's toolbar
-/// (SPEC §5.5): its foot `MODEL_PICKER_GAP` over the chip, its right
-/// edge at the chip's (Claude's), inside the Composer, every row one menu
-/// row high.
+/// The model picker hangs over the Composer (T3's docked picker, `side=
+/// "top" align="start"`): its foot `MODEL_PICKER_GAP` over the box, its
+/// left edge at its chip's, inside the window, a model row one
+/// `MODEL_PICKER_ROW_H` high.
 #[gpui::test]
-fn the_model_picker_rests_above_the_bar_inside_the_window(cx: &mut TestAppContext) {
+fn the_model_picker_hangs_over_the_box_from_its_chip(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("model-picker-place", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(900.), px(700.)));
+    cx.simulate_resize(gpui::size(px(1600.), px(800.)));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
@@ -107,99 +107,22 @@ fn the_model_picker_rests_above_the_bar_inside_the_window(cx: &mut TestAppContex
         cx.update(|window, _| window.refresh());
         cx.run_until_parked();
     }
-    let menu = cx.debug_bounds("choice-menu").expect("the picker is open");
+    let menu = cx.debug_bounds("model-picker").expect("the picker is open");
     let chip = debug_bounds(cx, format!("model-picker-{}", thread.get()))
         .expect("the model chip rides the toolbar");
     let composer = cx.debug_bounds("composer-block").unwrap();
     assert!(
-        (menu.bottom() - (chip.top() - px(ferrite_ui::theme::MODEL_PICKER_GAP))).abs() <= px(1.),
-        "FL-13: the picker's foot 7px over its chip: {menu:?} / {chip:?}"
+        (menu.bottom() - (composer.top() - px(ferrite_ui::theme::MODEL_PICKER_GAP))).abs()
+            <= px(1.5),
+        "its foot over the box: {menu:?} / {composer:?}"
     );
     assert!(
-        (menu.size.width - px(ferrite_ui::theme::MODEL_PICKER_W)).abs() <= px(1.),
-        "Claude's compact model menu: {menu:?}"
+        (menu.left() - chip.left()).abs() <= px(1.5),
+        "from its chip's left: {menu:?} / {chip:?}"
     );
-    assert!(menu.right() <= composer.right() + px(1.5));
-    assert!(
-        (menu.right() - chip.right()).abs() <= px(1.5),
-        "anchored on its chip, not the window's edge: {menu:?} / {chip:?}"
-    );
-    let row = cx.debug_bounds("choice-row-1").expect("a live model row");
-    // Terminal-native (WP-E): a float row is one grid row.
-    assert_eq!(row.size.height, px(ferrite_ui::theme::FLOAT_ROW_H));
-}
-
-/// Claude's model menu: the effort is a row under the models, `Effort
-/// <level> ›`, its levels in a submenu that opens beside the menu (feet
-/// level, `SUBMENU_GAP` apart) — by → from the keys or the pointer resting
-/// on the row — and a pick there sets the Thread's effort and closes both.
-#[gpui::test]
-fn the_model_picker_opens_its_effort_as_a_submenu(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{EFFORT_MENU_W, SUBMENU_GAP};
-    let (core, _fake) = cockpit("model-picker-effort", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let ladder = view.read_with(cx, |view, _| view.effort_ladder(thread));
-    let Some((steps, _, _)) = ladder else {
-        panic!("the premise: the default model takes an effort");
-    };
-    view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
-    tick(cx);
-    let menu = cx.debug_bounds("choice-menu").expect("the picker is open");
-    let row = cx
-        .debug_bounds("choice-submenu-row-0")
-        .expect("the effort row rides the model picker");
-    assert!(
-        cx.debug_bounds("choice-submenu").is_none(),
-        "shut until asked"
-    );
-    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
-    tick(cx);
-    let sub = cx
-        .debug_bounds("choice-submenu")
-        .expect("resting on the row opens the submenu");
-    assert!(
-        (sub.size.width - px(EFFORT_MENU_W)).abs() <= px(1.),
-        "{sub:?}"
-    );
-    assert!(
-        (sub.left() - menu.right() - px(SUBMENU_GAP)).abs() <= px(1.5),
-        "beside the menu: {sub:?} / {menu:?}"
-    );
-    assert!((sub.bottom() - menu.bottom()).abs() <= px(1.), "feet level");
-    let last = steps.len() - 1;
-    let pick = cx
-        .debug_bounds(Box::leak(format!("choice-sub-{last}").into_boxed_str()))
-        .expect("every level is a row");
-    cx.simulate_click(pick.center(), gpui::Modifiers::none());
-    tick(cx);
-    view.read_with(cx, |view, _| {
-        assert!(view.popover.is_none(), "a pick closes the picker");
-        assert_eq!(
-            view.cockpit.thread(thread).unwrap().effort(),
-            Some(steps[last].as_str())
-        );
-    });
-}
-
-/// Claude's effort menu tags its middle rung `Recommended`.
-#[gpui::test]
-fn the_effort_menu_tags_medium_recommended(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("effort-recommended", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    tick(cx);
-    let tags = view.update(cx, |view, cx| {
-        let menu = view.effort_submenu(0, cx).expect("the default model takes an effort");
-        menu.choices
-            .iter()
-            .map(|choice| (choice.label.to_string(), choice.badge.as_ref().map(ToString::to_string)))
-            .collect::<Vec<_>>()
-    });
-    assert!(tags.contains(&("Medium".into(), Some("Recommended".into()))), "{tags:?}");
-    assert_eq!(tags.iter().filter(|(_, badge)| badge.is_some()).count(), 1);
+    assert!(menu.right() <= px(1600.));
+    let row = cx.debug_bounds("model-picker-row-0").expect("a model row");
+    assert_eq!(row.size.height, px(ferrite_ui::theme::MODEL_PICKER_ROW_H));
 }
 
 /// A tray image that cannot be read is a red-ringed `Failed` tile; one that
@@ -280,28 +203,6 @@ fn a_draft_band_menu_hangs_off_its_chip_in_the_bar(cx: &mut TestAppContext) {
     assert!(
         rows.bottom() <= chip.top() - px(ferrite_ui::theme::FLOAT_OFFSET),
         "it rests above its chip: {rows:?} / {chip:?}"
-    );
-}
-
-/// Claude's model menu leads with the model in force, its ✓ in the check
-/// blue and no digit; the chip that opened it wears the pressed fill.
-#[gpui::test]
-fn the_model_menu_leads_with_the_model_in_force(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("model-menu-first", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
-    tick(cx);
-    let first = cx.debug_bounds("choice-row-0").expect("a first row");
-    let check = cx
-        .debug_bounds("float-check")
-        .expect("a ✓ on the model in force");
-    assert!(
-        first.contains(&check.center()),
-        "the ✓ row leads: {check:?} / {first:?}"
     );
 }
 
@@ -543,31 +444,18 @@ fn a_tray_image_is_a_thumbnail_card(cx: &mut TestAppContext) {
     });
 }
 
-/// The skill tokens the first Pane's line last drew in blue.
+/// The skill tokens the first Pane's line last drew in `SKILL_INK`.
 fn skill_ranges(
     view: &gpui::Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
 ) -> Vec<std::ops::Range<usize>> {
-    view.read_with(cx, |view, cx| {
-        view.panes[0].composer.read(cx).skill_ranges().to_vec()
-    })
+    view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).skill_ranges())
 }
 
-/// The chip grounds the first Pane's line last drew.
-fn chip_grounds(
-    view: &gpui::Entity<CockpitView>,
-    cx: &mut gpui::VisualTestContext,
-) -> Vec<gpui::Bounds<Pixels>> {
-    view.read_with(cx, |view, cx| {
-        view.panes[0].composer.read(cx).chip_grounds().to_vec()
-    })
-}
-
-/// The owner's first case: on a Codex Thread whose Session lists the
-/// `to-spec` skill, `/to-spec` typed out in full (no pick) draws in
-/// blue with no ground, and sends as the plain text it reads.
+/// A typed skill on a Codex Thread is a skill token, and the caret steps
+/// over it: an edit can never break it into prose that half-matches.
 #[gpui::test]
-fn a_typed_skill_on_a_codex_thread_draws_as_a_chip(cx: &mut TestAppContext) {
+fn a_typed_skill_on_a_codex_thread_is_one_token(cx: &mut TestAppContext) {
     let (core, fake, _checkout) = bound_cockpit("typed-skill-chip", Provider::Codex);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -586,28 +474,95 @@ fn a_typed_skill_on_a_codex_thread_draws_as_a_chip(cx: &mut TestAppContext) {
 
     cx.simulate_input("/to-spec now");
     tick(cx);
-    // Claude's skill is blue ink and no ground (`SKILL_INK`).
-    assert!(
-        chip_grounds(&view, cx).is_empty(),
-        "no ground behind a skill"
-    );
-    assert_eq!(skill_ranges(&view, cx), [0..8], "`/to-spec` is blue");
+    assert_eq!(skill_ranges(&view, cx), [0..8], "`/to-spec` is a skill");
 
-    // An edit that breaks the token unmakes the chip.
-    cx.simulate_keystrokes("home right right right right right right right right");
+    cx.simulate_keystrokes("home right");
     cx.simulate_input("s");
     tick(cx);
-    assert_eq!(composer_text(&view, cx), "/to-specs now");
+    assert_eq!(
+        composer_text(&view, cx),
+        "/to-specs now",
+        "→ steps over the token whole, so the letter lands after it"
+    );
     assert!(
         skill_ranges(&view, cx).is_empty(),
         "`/to-specs` is no skill"
     );
+    cx.simulate_keystrokes("backspace end backspace backspace backspace");
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "/to-spec ");
+    cx.simulate_keystrokes("backspace backspace");
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "", "⌫ after the token takes it whole");
 }
 
-/// The owner's second case: a skill picked after prose (↵) draws as a
-/// chip at the end of the sentence.
+/// T3's grammar: `$` opens the skills, and the pick lands as a `$name`
+/// skill token, which goes on the wire as the `/name` the providers read.
+/// `/` still opens the commands.
 #[gpui::test]
-fn a_skill_picked_after_prose_draws_as_a_chip(cx: &mut TestAppContext) {
+fn dollar_opens_the_skills_and_the_pick_is_a_skill_token(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("dollar-skills", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let mut commands = menu_commands();
+    commands.push(ferrite_core::SessionCommand {
+        name: "grill-me".into(),
+        description: "A relentless interview".into(),
+        path: None,
+        source: Some(ferrite_core::CommandSource::Skill),
+    });
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Commands { commands })
+        .unwrap();
+    tick(cx);
+
+    cx.simulate_input("plan it $gri");
+    tick(cx);
+    let rows = menu_names(&view, cx);
+    assert_eq!(rows, ["grill-me"], "only skills under `$`");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "plan it $grill-me ");
+    assert_eq!(skill_ranges(&view, cx), [8..17], "the pick is a skill token");
+    cx.simulate_input("now");
+    cx.simulate_keystrokes("escape enter");
+    tick(cx);
+    assert_eq!(fake.sent.borrow().as_slice(), ["plan it /grill-me now"]);
+
+    cx.simulate_input("$5 and $zzz");
+    tick(cx);
+    assert_eq!(
+        menu_names(&view, cx),
+        ["No skills found. Try / to browse provider commands."]
+    );
+    view.update(cx, |view, cx| {
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.set(String::new(), cx));
+    });
+    cx.simulate_input("/com");
+    tick(cx);
+    assert!(
+        menu_names(&view, cx).contains(&"commit".to_string()),
+        "`/` still opens the commands"
+    );
+}
+
+/// The open Composer menu's row names, top first.
+fn menu_names(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<String> {
+    view.read_with(cx, |view, _| {
+        view.popover
+            .as_ref()
+            .map(|open| open.rows.iter().map(|row| row.row.name.to_string()).collect())
+            .unwrap_or_default()
+    })
+}
+
+/// The owner's second case: a skill picked after prose (↵) is a skill
+/// token at the end of the sentence.
+#[gpui::test]
+fn a_skill_picked_after_prose_is_a_token(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("picked-skill-chip", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -634,9 +589,8 @@ fn a_skill_picked_after_prose_draws_as_a_chip(cx: &mut TestAppContext) {
         composer_text(&view, cx),
         "details for their venue /mattpocock-skills:grill-with-docs "
     );
-    assert!(chip_grounds(&view, cx).is_empty(), "blue ink, no ground");
     let ranges = skill_ranges(&view, cx);
-    assert_eq!(ranges.len(), 1, "the pick is blue: {ranges:?}");
+    assert_eq!(ranges.len(), 1, "the pick is a skill: {ranges:?}");
     assert_eq!(ranges[0].start, "details for their venue ".len());
 }
 
@@ -662,7 +616,13 @@ fn a_restored_draft_keeps_its_skill_chip_and_sends_plain_text(cx: &mut TestAppCo
         });
     });
     tick(cx);
-    assert_eq!(skill_ranges(&view, cx).len(), 2, "both commands are blue");
+    let commands = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .composer
+            .read(cx)
+            .drawn_tokens(ferrite_pane::composer::TokenKind::Command)
+    });
+    assert_eq!(commands.len(), 2, "both commands are tokens");
 
     cx.simulate_keystrokes("escape enter");
     tick(cx);
@@ -713,7 +673,7 @@ fn a_skill_in_a_sent_bubble_is_blue_with_its_description_on_hover(cx: &mut TestA
         .expect("the skill draws as its own inline token");
     let bubble = cx.debug_bounds("transcript-prompt").expect("the bubble");
     assert!(
-        bubble.contains(&skill.center()) && skill.size.width < bubble.size.width / 2.,
+        bubble.contains(&skill.center()) && skill.right() < bubble.right() - px(100.),
         "inside the bubble, just the token: {skill:?} in {bubble:?}"
     );
     assert!(
