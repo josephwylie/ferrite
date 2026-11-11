@@ -6324,6 +6324,18 @@ mod tests {
             .argument,
             "python3 match.py"
         );
+        // A read of the checkout's file by its real path, the Thread in the
+        // checkout through a symlink, reads relative (`Read f01.txt`).
+        let (real, link) = crate::file_links::tests::symlinked_checkout("call-line");
+        let mut read = tool("Read", &real.join("f01.txt").to_string_lossy(), ToolState::Ok);
+        crate::transcript::relative_call(&mut read, &link);
+        assert_eq!(
+            text::call_line(&read),
+            text::CallLine {
+                verb: "Read ".into(),
+                argument: "f01.txt".into(),
+            }
+        );
         // The provider's description is the working line's, not the row's.
         let described = ToolBlock {
             caption: None,

@@ -445,6 +445,26 @@ pub(crate) struct TargetContext {
 
 thread_local! {
     static EXISTS: RefCell<HashMap<PathBuf, bool>> = RefCell::new(HashMap::new());
+    static REAL: RefCell<HashMap<PathBuf, Option<PathBuf>>> = RefCell::new(HashMap::new());
+}
+
+/// `path` under the Thread's checkout `root`, relative; `None` outside it.
+/// The one place a path is read against the checkout: the agent may name
+/// its files by their real path (`/private/tmp/repo/a.rs`) while the Thread
+/// stands in the checkout through a symlink (`/tmp/repo`, as on macOS), so
+/// `root`'s real path counts as the checkout too (resolved once per root).
+pub fn inside_checkout<'a>(path: &'a Path, root: &Path) -> Option<&'a Path> {
+    if let Ok(inside) = path.strip_prefix(root) {
+        return Some(inside);
+    }
+    let real = REAL.with(|cache| {
+        cache
+            .borrow_mut()
+            .entry(root.to_path_buf())
+            .or_insert_with(|| std::fs::canonicalize(root).ok().filter(|real| real != root))
+            .clone()
+    })?;
+    path.strip_prefix(real).ok()
 }
 
 /// Whether a file exists, asked once per path (the answer is drawn every
@@ -490,7 +510,7 @@ impl TargetContext {
         } else {
             root.join(raw)
         };
-        (path.starts_with(root) && is_file(&path)).then_some(path)
+        (inside_checkout(&path, root).is_some() && is_file(&path)).then_some(path)
     }
 }
 
@@ -711,7 +731,7 @@ pub(crate) fn web_base(remote: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     #[test]
     fn paths_are_encoded_and_source_locations_do_not_reach_the_os() {
@@ -742,6 +762,33 @@ mod tests {
             dir.join("report one.md")
         );
     }
+    /// A checkout and a symlink to it, as `/tmp` is to `/private/tmp` on
+    /// macOS: (the checkout's real path, the link the Thread stands in).
+    pub(crate) fn symlinked_checkout(name: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ferrite-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("repo")).unwrap();
+        std::fs::write(dir.join("repo/f01.txt"), "file 01\n").unwrap();
+        std::os::unix::fs::symlink(dir.join("repo"), dir.join("link")).unwrap();
+        (std::fs::canonicalize(dir.join("repo")).unwrap(), dir.join("link"))
+    }
+
+    /// The agent names a file by its real path while the Thread stands in
+    /// the checkout through a symlink: the file is still the checkout's.
+    #[test]
+    fn a_checkout_reached_through_a_symlink_holds_its_real_paths() {
+        let (real, link) = symlinked_checkout("inside-checkout");
+        let named = real.join("f01.txt");
+        assert_eq!(inside_checkout(&named, &link), Some(Path::new("f01.txt")));
+        assert_eq!(inside_checkout(&link.join("f01.txt"), &link), Some(Path::new("f01.txt")));
+        assert_eq!(inside_checkout(Path::new("/elsewhere/f01.txt"), &link), None);
+        let context = TargetContext {
+            workspace: Some(link),
+            known: Vec::new(),
+        };
+        assert_eq!(context.resolve(&named.to_string_lossy()), Some(named), "a file chip");
+    }
+
     #[test]
     fn relative_paths_use_the_threads_checkout() {
         let checkout = std::env::temp_dir().join("project/.worktrees/task");

@@ -247,9 +247,7 @@ pub fn request_detail(
         .unwrap_or_else(|| decision.description.clone());
     let path = cwd
         .and_then(|cwd| {
-            std::path::Path::new(&path)
-                .strip_prefix(cwd)
-                .ok()
+            ferrite_pane::file_links::inside_checkout(std::path::Path::new(&path), cwd)
                 .map(|rest| rest.to_string_lossy().into_owned())
         })
         .unwrap_or(path);

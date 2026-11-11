@@ -142,10 +142,11 @@ fn survives_restart(_: ThreadId, id: &SurfaceId) -> bool {
 }
 
 /// The least width the Panel shows `active` at, in a window `window` wide
-/// (ADR 0039's floor per kind): the sections' `PANEL_W`; a reading width
-/// for a file, the browser or a pull request; most of the room for Files and Changes; the
-/// side chat's for a shell, a side chat or an agent.
-fn floor_w(active: Option<&SurfaceId>, window: f32) -> f32 {
+/// beside a nav drawn `nav` wide (ADR 0039's floor per kind): the
+/// sections' `PANEL_W`; a reading width for a file, the browser or a pull
+/// request; most of the content area for Files and Changes; the side
+/// chat's for a shell, a side chat or an agent.
+fn floor_w(active: Option<&SurfaceId>, window: f32, nav: f32) -> f32 {
     use ferrite_ui::theme::*;
     match active {
         None | Some(SurfaceId::Overview | SurfaceId::Background) => PANEL_W,
@@ -153,28 +154,29 @@ fn floor_w(active: Option<&SurfaceId>, window: f32) -> f32 {
             (window * PANEL_PREVIEW_SHARE).clamp(PANEL_PREVIEW_MIN_W, PANEL_PREVIEW_MAX_W)
         }
         Some(SurfaceId::Files | SurfaceId::Changes) => {
-            ((window - NAV_WIDTH).max(0.) * FILES_SHARE).max(FILES_MIN_W)
+            ((window - nav).max(0.) * FILES_SHARE).max(FILES_MIN_W)
         }
         Some(SurfaceId::Terminal(_)) => TERMINAL_W,
         Some(SurfaceId::SideChat(_) | SurfaceId::Agent(_)) => SIDE_CHAT_W,
     }
 }
 
-/// The most the Panel takes in a window `window` wide: all but the nav and
-/// the board's least, and never under `PANEL_W`.
-fn most_w(window: f32) -> f32 {
+/// The most the Panel takes in a window `window` wide beside a nav drawn
+/// `nav` wide (the column or the rail): all but the nav and the board's
+/// least, and never under `PANEL_W`.
+fn most_w(window: f32, nav: f32) -> f32 {
     use ferrite_ui::theme::*;
-    (window - NAV_WIDTH - DOCK_THREAD_MIN_W).max(PANEL_W)
+    (window - nav - DOCK_THREAD_MIN_W).max(PANEL_W)
 }
 
 /// How wide a Thread's Panel draws: maximized, all it can take; else its
 /// width, at least its shown kind's floor, at most all it can take.
-fn panel_w(state: &ThreadSurfaces, window: f32) -> f32 {
-    let most = most_w(window);
+fn panel_w(state: &ThreadSurfaces, window: f32, nav: f32) -> f32 {
+    let most = most_w(window, nav);
     if state.maximized {
         most
     } else {
-        state.width.max(floor_w(state.active.as_ref(), window)).min(most)
+        state.width.max(floor_w(state.active.as_ref(), window, nav)).min(most)
     }
 }
 
@@ -376,7 +378,7 @@ impl CockpitView {
             self.panel.scrolls.entry(thread).or_default();
             let window_w = self.panel.window_w;
             let active = self.active_surface(thread);
-            let floor = floor_w(active.as_ref(), window_w);
+            let floor = floor_w(active.as_ref(), window_w, self.nav_width());
             // A Panel never changed reads its floor without being made.
             if self.panel.surfaces.get(thread).is_some_and(|state| state.width < floor) {
                 self.surfaces_mut(thread).width = floor;
@@ -401,12 +403,13 @@ impl CockpitView {
             return 0.;
         };
         let window = self.panel.window_w;
+        let nav = self.nav_width();
         match self.panes[index].thread() {
             Some(thread) => match self.panel.surfaces.get(thread) {
-                Some(state) => panel_w(state, window),
-                None => floor_w(Some(&SurfaceId::Overview), window).min(most_w(window)),
+                Some(state) => panel_w(state, window, nav),
+                None => floor_w(Some(&SurfaceId::Overview), window, nav).min(most_w(window, nav)),
             },
-            None => floor_w(Some(&SurfaceId::Browser), window).min(most_w(window)),
+            None => floor_w(Some(&SurfaceId::Browser), window, nav).min(most_w(window, nav)),
         }
     }
 
@@ -511,8 +514,9 @@ impl CockpitView {
             return;
         };
         let window = self.panel.window_w;
-        let floor = floor_w(self.active_surface(thread).as_ref(), window);
-        let width = (window - f32::from(position.x)).clamp(floor, most_w(window).max(floor));
+        let nav = self.nav_width();
+        let floor = floor_w(self.active_surface(thread).as_ref(), window, nav);
+        let width = (window - f32::from(position.x)).clamp(floor, most_w(window, nav).max(floor));
         let state = self.surfaces_mut(thread);
         if state.maximized {
             state.set_maximized(false);
@@ -773,26 +777,31 @@ mod tests {
     #[test]
     fn the_panel_is_never_under_its_kinds_floor() {
         let window = 1900.;
-        assert_eq!(panel_w(&showing(SurfaceId::Overview, 0.), window), PANEL_W);
-        assert_eq!(panel_w(&showing(SurfaceId::Terminal(1), 0.), window), TERMINAL_W);
+        let nav = NAV_WIDTH;
+        assert_eq!(panel_w(&showing(SurfaceId::Overview, 0.), window, nav), PANEL_W);
+        assert_eq!(panel_w(&showing(SurfaceId::Terminal(1), 0.), window, nav), TERMINAL_W);
         assert_eq!(
-            panel_w(&showing(SurfaceId::File("a".into()), 0.), window),
+            panel_w(&showing(SurfaceId::File("a".into()), 0.), window, nav),
             (window * PANEL_PREVIEW_SHARE).clamp(PANEL_PREVIEW_MIN_W, PANEL_PREVIEW_MAX_W)
         );
-        let files = panel_w(&showing(SurfaceId::Files, 0.), window);
+        let files = panel_w(&showing(SurfaceId::Files, 0.), window, nav);
         assert!((files - 0.6 * (window - NAV_WIDTH)).abs() < 1., "{files}");
-        assert_eq!(panel_w(&showing(SurfaceId::Overview, 600.), window), 600.);
+        let railed = panel_w(&showing(SurfaceId::Files, 0.), window, NAV_FOLDED_W);
+        assert!((railed - 0.6 * (window - NAV_FOLDED_W)).abs() < 1., "{railed}");
+        assert_eq!(panel_w(&showing(SurfaceId::Overview, 600.), window, nav), 600.);
     }
 
-    /// Maximized, or dragged past it, the board keeps its least.
+    /// Maximized, or dragged past it, the board keeps its least beside the
+    /// nav as drawn: the column, or the rail.
     #[test]
     fn maximized_leaves_the_board_its_least() {
         let window = 1900.;
         let mut state = showing(SurfaceId::Overview, 0.);
         state.maximized = true;
-        assert_eq!(panel_w(&state, window), window - NAV_WIDTH - DOCK_THREAD_MIN_W);
+        assert_eq!(panel_w(&state, window, NAV_WIDTH), window - NAV_WIDTH - DOCK_THREAD_MIN_W);
+        assert_eq!(panel_w(&state, 1440., NAV_FOLDED_W), 1440. - NAV_FOLDED_W - DOCK_THREAD_MIN_W);
         state.maximized = false;
         state.width = 5000.;
-        assert_eq!(panel_w(&state, window), window - NAV_WIDTH - DOCK_THREAD_MIN_W);
+        assert_eq!(panel_w(&state, window, NAV_WIDTH), window - NAV_WIDTH - DOCK_THREAD_MIN_W);
     }
 }

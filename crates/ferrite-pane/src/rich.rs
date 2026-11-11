@@ -2129,6 +2129,159 @@ let count = 2;
         assert_eq!(chip.size.width, want, "the chip is its measured width");
     }
 
+    /// The test platform's text system with the code face half again as
+    /// wide as the prose's, as Geist Mono is wider than the UI face.
+    struct WideCode;
+
+    impl WideCode {
+        const CODE: gpui::FontId = gpui::FontId(2);
+
+        fn scale(font_id: gpui::FontId) -> f32 {
+            if font_id == Self::CODE { 1.5 } else { 1. }
+        }
+    }
+
+    impl gpui::PlatformTextSystem for WideCode {
+        fn add_fonts(&self, _: Vec<std::borrow::Cow<'static, [u8]>>) -> gpui::Result<()> {
+            Ok(())
+        }
+        fn all_font_names(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn font_id(&self, font: &gpui::Font) -> gpui::Result<gpui::FontId> {
+            Ok(if font.family.as_ref() == theme::FONT_CODE {
+                Self::CODE
+            } else {
+                gpui::FontId(1)
+            })
+        }
+        fn font_metrics(&self, font_id: gpui::FontId) -> gpui::FontMetrics {
+            gpui::NoopTextSystem.font_metrics(font_id)
+        }
+        fn typographic_bounds(
+            &self,
+            font_id: gpui::FontId,
+            glyph: gpui::GlyphId,
+        ) -> gpui::Result<gpui::Bounds<f32>> {
+            gpui::NoopTextSystem.typographic_bounds(font_id, glyph)
+        }
+        fn advance(
+            &self,
+            font_id: gpui::FontId,
+            glyph: gpui::GlyphId,
+        ) -> gpui::Result<gpui::Size<f32>> {
+            let advance = gpui::NoopTextSystem.advance(font_id, glyph)?;
+            Ok(gpui::size(advance.width * Self::scale(font_id), 0.))
+        }
+        fn glyph_for_char(&self, font_id: gpui::FontId, ch: char) -> Option<gpui::GlyphId> {
+            gpui::NoopTextSystem.glyph_for_char(font_id, ch)
+        }
+        fn glyph_raster_bounds(
+            &self,
+            params: &gpui::RenderGlyphParams,
+        ) -> gpui::Result<gpui::Bounds<gpui::DevicePixels>> {
+            gpui::NoopTextSystem.glyph_raster_bounds(params)
+        }
+        fn rasterize_glyph(
+            &self,
+            params: &gpui::RenderGlyphParams,
+            bounds: gpui::Bounds<gpui::DevicePixels>,
+        ) -> gpui::Result<(gpui::Size<gpui::DevicePixels>, Vec<u8>)> {
+            gpui::NoopTextSystem.rasterize_glyph(params, bounds)
+        }
+        fn layout_line(
+            &self,
+            text: &str,
+            font_size: gpui::Pixels,
+            runs: &[gpui::FontRun],
+        ) -> gpui::LineLayout {
+            let mut layout = gpui::NoopTextSystem.layout_line(text, font_size, &[]);
+            let em = font_size * 0.6;
+            let mut x = px(0.);
+            let mut start = 0;
+            layout.runs = runs
+                .iter()
+                .map(|run| {
+                    let glyphs = text[start..start + run.len]
+                        .char_indices()
+                        .map(|(ix, ch)| {
+                            let glyph = gpui::ShapedGlyph {
+                                id: gpui::GlyphId(ch.len_utf16() as u32),
+                                position: gpui::point(x, px(0.)),
+                                index: start + ix,
+                                is_emoji: false,
+                            };
+                            x += em * Self::scale(run.font_id);
+                            glyph
+                        })
+                        .collect();
+                    start += run.len;
+                    gpui::ShapedRun {
+                        font_id: run.font_id,
+                        glyphs,
+                    }
+                })
+                .collect();
+            layout.width = x;
+            layout
+        }
+        fn recommended_rendering_mode(
+            &self,
+            font_id: gpui::FontId,
+            font_size: gpui::Pixels,
+        ) -> gpui::TextRenderingMode {
+            gpui::NoopTextSystem.recommended_rendering_mode(font_id, font_size)
+        }
+    }
+
+    /// A line of inline code chips and a file chip wraps at what it draws:
+    /// the code is measured in its mono face, so the chip after it never
+    /// runs past the view's edge (the column plus its hang cell). The test
+    /// platform shapes every face alike, so `WideCode` widens the code face.
+    #[test]
+    fn code_before_a_file_chip_wraps_inside_the_column() {
+        let source = "Changed `apple` to `banana` and `cherry` so it now reads `banana 1` in [f01.txt](f01.txt) and I started one background subagent to count the `.txt` files.";
+        let mut cx = gpui::HeadlessAppContext::new(std::sync::Arc::new(WideCode));
+        cx.update(|cx| {
+            crate::pane::init_components(cx);
+            ferrite_ui::register_fonts(cx);
+        });
+        let edge = px(theme::tx_cell(theme::FS_PROSE));
+        let selector = Box::leak(
+            format!("file-attachment-{}", std::env::temp_dir().join("f01.txt").display())
+                .into_boxed_str(),
+        );
+        for width in (240..=560).step_by(4) {
+            let width = px(width as f32);
+            let window = cx
+                .open_window(gpui::size(width, px(400.)), |window, cx| {
+                    let preview = crate::preview::Preview::new(cx);
+                    let view = cx.new(|_| LinkFixture {
+                        cache: TextCache::default(),
+                        source: source.into(),
+                        cwd: std::env::temp_dir(),
+                        preview,
+                        font_size: theme::FS_PROSE,
+                        line_height: None,
+                    });
+                    cx.new(|cx| gpui::component::Root::new(view, window, cx).bordered(false))
+                })
+                .unwrap();
+            cx.run_until_parked();
+            let chip = cx
+                .update_window(window.into(), |_, window, cx| {
+                    let _ = window.draw(cx);
+                    window.debug_bounds(selector)
+                })
+                .unwrap()
+                .expect("the file chip");
+            assert!(
+                chip.right() <= width + edge,
+                "the chip ends inside the view at {width:?}: {chip:?}"
+            );
+        }
+    }
+
     /// `[title](ferrite-thread:12)` draws as a chip standing on its line,
     /// and a path link's chip leads with its icon (wider than the name).
     #[gpui::test]

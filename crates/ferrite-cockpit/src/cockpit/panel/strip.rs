@@ -304,11 +304,14 @@ impl CockpitView {
                 self.surface_tab(thread, at, id, active.as_ref() == Some(id), cx)
             }))
             .child(self.surface_plus(thread, cx));
-        let maximize = ferrite_pane::preview::head_door(
-            "panel-maximize",
-            "panel-maximize".into(),
-            if maximized { icons::MINIMIZE } else { icons::MAXIMIZE },
-        )
+        // Each face its own id: a tooltip shown before the toggle belongs to
+        // the old face and goes with it, not left reading the old label.
+        let (id, glyph) = if maximized {
+            ("panel-restore", icons::MINIMIZE)
+        } else {
+            ("panel-maximize", icons::MAXIMIZE)
+        };
+        let maximize = ferrite_pane::preview::head_door(id, id.into(), glyph)
         .occlude()
         .tooltip(ferrite_ui::menu::tooltip(if maximized {
             "Restore panel size"

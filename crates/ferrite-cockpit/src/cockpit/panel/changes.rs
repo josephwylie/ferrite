@@ -163,7 +163,7 @@ impl CockpitView {
         let dir = path
             .parent()
             .map(|dir| {
-                cwd.and_then(|cwd| dir.strip_prefix(cwd).ok())
+                cwd.and_then(|cwd| ferrite_pane::file_links::inside_checkout(dir, cwd))
                     .unwrap_or(dir)
                     .display()
                     .to_string()

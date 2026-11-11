@@ -591,8 +591,9 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
     let struck = struck_failure(blocks, shape);
     let mut day = None;
     let mut index = 0;
-    // Where the turn being read began: after its prompt (or the window's
-    // first block, its prompt evicted).
+    // Where the turn being read began: at its prompt, after the turn
+    // before it (a turn the agent starts itself, a background task's
+    // notification, has no prompt), or the window's first block.
     let mut turn_start = 0;
     let mut in_turn = false;
     while index < blocks.len() {
@@ -606,6 +607,7 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                 cards.outputs = left.into();
                 rows.push(cards);
             }
+            turn_start = index + 1;
         }
         if projection.skipped.contains(&block.id) {
             index += 1;
@@ -1029,6 +1031,25 @@ mod tests {
             input_tokens: None,
             output_tokens: None,
         });
+    }
+
+    /// A turn the agent starts itself (a background task's notification)
+    /// has no prompt of its own: its card shows only its own edits, so the
+    /// turn before it keeps the only card for the edit it made.
+    #[test]
+    fn a_turn_with_no_prompt_has_no_card_for_the_turn_before() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        edit(&mut transcript, "e1", "src/lib.rs");
+        complete(&mut transcript, 1_000);
+        text(&mut transcript, "The background task finished.");
+        complete(&mut transcript, 1_000);
+        let cards = TranscriptRows::new(transcript.blocks(), &shape(), READING)
+            .rows()
+            .iter()
+            .filter(|row| row.kind() == RowKind::Outputs)
+            .count();
+        assert_eq!(cards, 1);
     }
 
     fn folds(transcript: &Transcript, shape: &RowShape) -> Vec<String> {

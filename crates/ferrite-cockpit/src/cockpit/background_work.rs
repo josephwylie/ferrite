@@ -61,7 +61,7 @@ fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
     // While Main's turn runs its agents are rows of the transcript; once it
     // has ended, the ones still working are what the Thread waits on.
     if !open.busy() {
-        for (call, agent) in open.activity().invocations() {
+        for (names, agent) in open.activity().named_agents() {
             let working = matches!(
                 agent.status(),
                 AgentStatus::Working
@@ -72,17 +72,25 @@ fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
             if !working {
                 continue;
             }
+            // The name the transcript holds a call by, for the label and
+            // the drill-in.
+            let call = names
+                .iter()
+                .find(|name| transcript.tool(name).is_some())
+                .or(names.first())
+                .cloned();
             work.push(Work {
                 task: BackgroundTask {
                     kind: WorkKind::Subagent,
-                    label: transcript
-                        .tool(&call)
+                    label: call
+                        .as_deref()
+                        .and_then(|call| transcript.tool(call))
                         .map(|tool| label(tool).to_string())
                         .unwrap_or_default(),
                     launched: agent.transcript().turn_started(),
                 },
                 id: None,
-                call: Some(call),
+                call,
             });
         }
     }
@@ -90,6 +98,15 @@ fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
 }
 
 impl CockpitView {
+    /// The background work line's title for Pane `index`, as it draws.
+    #[cfg(test)]
+    pub(super) fn background_work_title(&self, index: usize) -> Option<String> {
+        let open = self.cockpit.thread(self.panes.get(index)?.thread()?)?;
+        let tasks: Vec<BackgroundTask> =
+            running_work(&open).into_iter().map(|work| work.task).collect();
+        pane::present_background_work(&tasks, !open.busy()).map(|presented| presented.title)
+    }
+
     /// The line under Main's transcript, none while nothing runs in the
     /// background.
     pub(super) fn background_work_tail(&self, index: usize) -> Option<TranscriptTail> {

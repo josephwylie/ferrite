@@ -113,24 +113,25 @@ fn relative_paths(input: &mut TranscriptInput) {
     let Some(root) = input.workspace.clone() else {
         return;
     };
-    let inside = |path: &str| -> Option<String> {
-        std::path::Path::new(path)
-            .strip_prefix(&root)
-            .ok()
-            .filter(|rest| !rest.as_os_str().is_empty())
-            .map(|rest| rest.to_string_lossy().into_owned())
-    };
     for block in &mut input.blocks {
-        let Body::Tool(tool) = &mut block.body else {
-            continue;
-        };
-        // The diffs keep their whole paths: a hunk's section is read off
-        // the file on disk (`pane::file_section`).
-        if pane::argument_is_path(tool) {
-            if let Some(path) = inside(&tool.summary) {
-                tool.summary = path;
-            }
+        if let Body::Tool(tool) = &mut block.body {
+            relative_call(tool, &root);
         }
+    }
+}
+
+/// One call's path argument, relative inside `root`. The diffs keep their
+/// whole paths: a hunk's section is read off the file on disk
+/// (`pane::file_section`).
+pub(crate) fn relative_call(tool: &mut ferrite_core::transcript::ToolBlock, root: &std::path::Path) {
+    if !pane::argument_is_path(tool) {
+        return;
+    }
+    if let Some(inside) =
+        crate::file_links::inside_checkout(std::path::Path::new(&tool.summary), root)
+            .filter(|rest| !rest.as_os_str().is_empty())
+    {
+        tool.summary = inside.to_string_lossy().into_owned();
     }
 }
 
