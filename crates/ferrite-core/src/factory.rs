@@ -121,6 +121,14 @@ impl Status {
         matches!(self, Status::NeedsHuman | Status::Approval)
     }
 
+    /// Stop is offered (story 23).
+    pub fn stoppable(self) -> bool {
+        matches!(
+            self,
+            Status::Queued | Status::Working | Status::NeedsHuman | Status::Approval
+        )
+    }
+
     /// Delete is offered.
     pub fn deletable(self) -> bool {
         matches!(self, Status::Queued | Status::Stopped | Status::Completed)
@@ -1370,10 +1378,7 @@ impl State {
             }
             Command::Stop { task } => {
                 let task = self.task_mut(&task)?;
-                if !matches!(
-                    task.status,
-                    Status::Queued | Status::Working | Status::NeedsHuman
-                ) {
+                if !task.status.stoppable() {
                     return Ok(Answer::Changed(false));
                 }
                 task.note(now_ms, Actor::Operator, "Stopped the task");

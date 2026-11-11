@@ -804,3 +804,25 @@ fn a_deciding_run_is_nudged_and_resumed_to_report_its_decision() {
     assert!(told[0].contains("report outcome approved"), "{}", told[0]);
     assert!(!told[0].contains("report outcome finished"), "{}", told[0]);
 }
+
+/// Story 23: a Task waiting in Ready to approve can be stopped too.
+#[test]
+fn a_task_ready_to_approve_can_be_stopped() {
+    let mut factory = Factory::in_memory();
+    let (id, _) = three(&mut factory);
+    let task = ready(&mut factory, &id);
+    assert_eq!(
+        command(&mut factory, Command::Stop { task: task.clone() }),
+        Ok(Answer::Changed(true))
+    );
+    let effects = factory.step(21, &BTreeMap::new());
+    assert_eq!(notified(&effects), [Status::Stopped]);
+    let stopped = the(&factory, &task);
+    assert_eq!(stopped.status, Status::Stopped);
+    assert_eq!(stopped.reason.as_deref(), Some("Stopped by you"));
+    assert_eq!(
+        command(&mut factory, Command::Approve { task: task.clone() }),
+        Ok(Answer::Changed(false)),
+        "nothing waits to be approved now"
+    );
+}

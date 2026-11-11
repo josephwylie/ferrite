@@ -826,10 +826,7 @@ impl CockpitView {
                         None => "Archived".to_string(),
                     })),
             );
-        } else if matches!(
-            task.status,
-            Status::Queued | Status::Working | Status::NeedsHuman
-        ) {
+        } else if task.status.stoppable() {
             let task = id.clone();
             actions = actions.child(
                 ferrite_ui::components::secondary_button("task-stop", None, "Stop", cx)
