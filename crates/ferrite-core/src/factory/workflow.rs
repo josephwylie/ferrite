@@ -20,26 +20,28 @@ pub type WorkflowId = String;
 pub type StepId = String;
 
 /// Where a reported outcome sends a Task. `Next` follows the outline's
-/// order, so reordering keeps a chain. ("Ready to approve" arrives with
-/// the approval slice.)
+/// order, so reordering keeps a chain.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Destination {
     /// The Step after this one in the outline.
     Next,
     /// A named Step, by id: it may have been deleted since, and stays.
     Step(StepId),
+    /// Ready to approve: the operator, or the agent they chose, decides.
+    Approval,
     Complete,
     Human,
     Coordinator,
 }
 
 impl Destination {
-    /// Its wire word: `next`, `step:<id>`, `complete`, `human`,
-    /// `coordinator`.
+    /// Its wire word: `next`, `step:<id>`, `approval`, `complete`,
+    /// `human`, `coordinator`.
     pub fn word(&self) -> String {
         match self {
             Destination::Next => "next".into(),
             Destination::Step(id) => format!("step:{id}"),
+            Destination::Approval => "approval".into(),
             Destination::Complete => "complete".into(),
             Destination::Human => "human".into(),
             Destination::Coordinator => "coordinator".into(),
@@ -53,6 +55,7 @@ impl std::str::FromStr for Destination {
     fn from_str(word: &str) -> Result<Self, String> {
         Ok(match word {
             "next" => Destination::Next,
+            "approval" => Destination::Approval,
             "complete" => Destination::Complete,
             "human" => Destination::Human,
             "coordinator" => Destination::Coordinator,
@@ -60,7 +63,7 @@ impl std::str::FromStr for Destination {
                 Some(id) if !id.is_empty() => Destination::Step(id.to_string()),
                 _ => {
                     return Err(format!(
-                        "`{word}` is no route: next, step:<id>, complete, human or coordinator"
+                        "`{word}` is no route: next, step:<id>, approval, complete, human or coordinator"
                     ))
                 }
             },
@@ -101,7 +104,7 @@ pub struct Step {
     pub fresh: bool,
 }
 
-/// What a Workflow says: its name and its Steps, in order.
+/// What a Workflow says: its name, its Steps in order, and who approves.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Definition {
     pub name: String,
@@ -109,6 +112,108 @@ pub struct Definition {
     /// How its Tasks start (#225); manually when absent.
     #[serde(default, skip_serializing_if = "Start::is_default")]
     pub start: Start,
+    #[serde(default, skip_serializing_if = "Approval::is_default")]
+    pub approval: Approval,
+}
+
+/// Who decides a result routed to Ready to approve.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Approver {
+    #[default]
+    Human,
+    Agent,
+}
+
+/// A Workflow's approval settings (#222).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Approval {
+    #[serde(default)]
+    pub by: Approver,
+    /// The Step that decides when `by` is an agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<StepId>,
+    /// What the deciding agent verifies, returns, and when it may approve.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub instructions: String,
+    /// What runs once approved: Completed or a Step.
+    #[serde(default = "complete")]
+    pub after: Destination,
+    /// Where rework goes unless the operator chooses for one Task: a Step
+    /// or the Coordinator.
+    #[serde(default = "coordinator")]
+    pub rework_to: Destination,
+}
+
+fn complete() -> Destination {
+    Destination::Complete
+}
+
+fn coordinator() -> Destination {
+    Destination::Coordinator
+}
+
+impl Default for Approval {
+    fn default() -> Self {
+        Self {
+            by: Approver::Human,
+            step: None,
+            instructions: String::new(),
+            after: Destination::Complete,
+            rework_to: Destination::Coordinator,
+        }
+    }
+}
+
+impl Approval {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// A change to a Workflow's approval: each field given is set. An empty
+/// `step` clears the deciding Step.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ApprovalChange {
+    /// `human` or `agent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<Approver>,
+    /// The deciding Step's id (`s-1`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
+    /// The decision instructions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    /// `complete` or `step:<id>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub after: Option<Destination>,
+    /// `step:<id>` or `coordinator`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub rework_to: Option<Destination>,
+}
+
+impl ApprovalChange {
+    pub(super) fn apply(self, approval: &mut Approval) {
+        if let Some(by) = self.by {
+            approval.by = by;
+        }
+        if let Some(step) = self.step {
+            approval.step = (!step.trim().is_empty()).then_some(step);
+        }
+        if let Some(instructions) = self.instructions {
+            approval.instructions = instructions;
+        }
+        if let Some(after) = self.after {
+            approval.after = after;
+        }
+        if let Some(rework_to) = self.rework_to {
+            approval.rework_to = rework_to;
+        }
+    }
 }
 
 /// One saved version.
@@ -199,15 +304,16 @@ pub(super) fn from_template(template: Template, workflow: &mut Workflow, agent: 
         step
     };
     workflow.draft = match template {
-        Template::Blank => Definition {
-            name: "Untitled workflow".into(),
-            steps: vec![{
-                let mut only = step("Agent", "", &[]);
-                only.on_finished = Destination::Complete;
-                only
-            }],
-            start: Start::default(),
-        },
+        Template::Blank => {
+            let mut only = step("Agent", "", &[]);
+            only.on_finished = Destination::Complete;
+            Definition {
+                name: "Untitled workflow".into(),
+                steps: vec![only],
+                approval: Approval::default(),
+                start: Start::default(),
+            }
+        }
         Template::IssueToReviewedPr => {
             let triage = step(
                 "Triager",
@@ -234,11 +340,15 @@ pub(super) fn from_template(template: Template, workflow: &mut Workflow, agent: 
                  and what they showed.",
                 &["code-review"],
             );
-            review.on_finished = Destination::Complete;
+            review.on_finished = Destination::Approval;
             review.on_unable = Destination::Step(implement.id.clone());
             review.fresh = true;
             Definition {
                 name: "Issue to reviewed PR".into(),
+                approval: Approval {
+                    rework_to: Destination::Step(implement.id.clone()),
+                    ..Approval::default()
+                },
                 steps: vec![triage, explore, implement, review],
                 start: Start::default(),
             }
@@ -349,6 +459,9 @@ pub struct Problem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub step: Option<StepId>,
     pub message: String,
+    /// It is about the approval settings.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub approval: bool,
 }
 
 /// A route's two kinds, as the outline labels them.
@@ -393,6 +506,7 @@ impl Definition {
                 Some(step) => Resolved::Step(step),
                 None => Resolved::Broken,
             },
+            Destination::Approval => Resolved::Approval,
             Destination::Complete => Resolved::Complete,
             Destination::Human => Resolved::Human,
             Destination::Coordinator => Resolved::Coordinator,
@@ -417,6 +531,7 @@ impl Definition {
                 Some(step) => named(step),
                 None => "Deleted agent".into(),
             },
+            Destination::Approval => "Ready to approve".into(),
             Destination::Complete => "Completed".into(),
             Destination::Human => "Needs human".into(),
             Destination::Coordinator => "Coordinator".into(),
@@ -435,6 +550,7 @@ impl Definition {
             RouteKind::Finished => next
                 .chain(others)
                 .chain([
+                    Destination::Approval,
                     Destination::Complete,
                     Destination::Human,
                     Destination::Coordinator,
@@ -468,6 +584,7 @@ impl Definition {
             problems.push(Problem {
                 step: step.map(|step| step.id.clone()),
                 message,
+                approval: false,
             })
         };
         if self.name.trim().is_empty() {
@@ -531,18 +648,78 @@ impl Definition {
         for message in self.start.problems() {
             add(None, message);
         }
+        problems.extend(self.approval_problems());
         if !self.steps.is_empty() && self.completion_paths().is_empty() {
-            add(
-                None,
-                "No route ends in Completed. Route an outcome to Completed.".into(),
-            );
+            problems.push(Problem {
+                step: None,
+                message: "No route ends in Completed. Route an outcome to Completed, or set \
+                          After approval to mark the task complete."
+                    .into(),
+                approval: false,
+            });
         }
         problems
+    }
+
+    /// What is wrong with the approval settings: agent approval needs a
+    /// deciding Step that exists and written instructions; what follows
+    /// approval and where rework goes must lead somewhere.
+    pub fn approval_problems(&self) -> Vec<Problem> {
+        let mut problems = Vec::new();
+        let mut add = |message: &str| {
+            problems.push(Problem {
+                step: None,
+                message: message.into(),
+                approval: true,
+            })
+        };
+        let approval = &self.approval;
+        if approval.by == Approver::Agent {
+            match approval.step.as_deref() {
+                None => add("Agent approval: choose the agent that decides."),
+                Some(id) if self.step(id).is_none() => {
+                    add("Agent approval: the deciding agent was deleted. Choose another.")
+                }
+                Some(_) => {}
+            }
+            if approval.instructions.trim().is_empty() {
+                add(
+                    "Agent approval: write the decision instructions (what to verify, what \
+                     evidence to return, when it may approve without you).",
+                );
+            }
+        }
+        match &approval.after {
+            Destination::Complete => {}
+            Destination::Step(id) if self.step(id).is_some() => {}
+            Destination::Step(_) => add("After approval runs a deleted agent. Choose another."),
+            _ => add("After approval: choose Completed or an agent."),
+        }
+        match &approval.rework_to {
+            Destination::Coordinator => {}
+            Destination::Step(id) if self.step(id).is_some() => {}
+            Destination::Step(_) => add("Rework goes to a deleted agent. Choose another."),
+            _ => add("Rework goes to: choose an agent or the Coordinator."),
+        }
+        problems
+    }
+
+    /// Some route leads to Ready to approve.
+    pub fn reaches_approval(&self) -> bool {
+        self.steps.iter().any(|step| {
+            step.on_finished == Destination::Approval || step.on_unable == Destination::Approval
+        })
     }
 
     /// The routes that end in Completed, said as the operator reads them.
     pub fn completion_paths(&self) -> Vec<String> {
         let mut paths = Vec::new();
+        if self.reaches_approval() && self.approval.after == Destination::Complete {
+            paths.push(match self.approval.by {
+                Approver::Human => "Your approval marks the task complete".to_string(),
+                Approver::Agent => "Approval by the deciding agent marks the task complete".into(),
+            });
+        }
         for step in &self.steps {
             if step.on_finished == Destination::Complete {
                 paths.push(format!("{} reports finished", step.name));
@@ -559,6 +736,7 @@ impl Definition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Resolved<'a> {
     Step(&'a Step),
+    Approval,
     Complete,
     Human,
     Coordinator,

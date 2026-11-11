@@ -75,7 +75,13 @@ pub(crate) struct GitHubLists {
 /// The half-hour times a schedule offers.
 fn times() -> Vec<String> {
     (0..48)
-        .map(|half| format!("{:02}:{}", half / 2, if half % 2 == 1 { "30" } else { "00" }))
+        .map(|half| {
+            format!(
+                "{:02}:{}",
+                half / 2,
+                if half % 2 == 1 { "30" } else { "00" }
+            )
+        })
         .collect()
 }
 
@@ -211,7 +217,12 @@ impl CockpitView {
     }
 
     /// What was typed in one of the start's fields goes to the draft.
-    pub(crate) fn start_field_edited(&mut self, field: &Field, text: String, cx: &mut Context<Self>) {
+    pub(crate) fn start_field_edited(
+        &mut self,
+        field: &Field,
+        text: String,
+        cx: &mut Context<Self>,
+    ) {
         match field {
             Field::ScheduleInstructions(_) => {
                 self.edit_start(|start| start.schedule.instructions = text, cx)
@@ -280,9 +291,7 @@ impl CockpitView {
         };
         let lists = &mut view.workflows.github;
         let mut heard = false;
-        for listing in
-            std::iter::once(&mut lists.repositories).chain(lists.labels.values_mut())
-        {
+        for listing in std::iter::once(&mut lists.repositories).chain(lists.labels.values_mut()) {
             let Listing::Pending(pending) = listing else {
                 continue;
             };
@@ -432,7 +441,11 @@ impl CockpitView {
     // ----------------------------------------------------------- drawing
 
     /// The outline's row for the start, above the agents.
-    pub(super) fn start_outline_row(&self, workflow: &Workflow, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn start_outline_row(
+        &self,
+        workflow: &Workflow,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         use ferrite_ui::theme::*;
         let selected = self.start_shown();
         let key = if selected {
@@ -682,8 +695,7 @@ impl CockpitView {
                             .child(label("On".into()))
                             .child(Self::start_chooser(
                                 "start-weekday",
-                                core_factory::WEEKDAYS[usize::from(schedule.weekday.min(6))]
-                                    .into(),
+                                core_factory::WEEKDAYS[usize::from(schedule.weekday.min(6))].into(),
                                 false,
                                 false,
                                 Self::weekday_picks(&start),
@@ -1058,10 +1070,12 @@ impl CockpitView {
                         )
                         .debug_selector(|| "automation-turn".into())
                         .disabled(!can)
-                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.turn_automation(turn, cx);
-                        })),
+                        .on_click(cx.listener(
+                            move |view, _: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                view.turn_automation(turn, cx);
+                            },
+                        )),
                     ),
             );
         if let Some(error) = &automation.error {
@@ -1115,10 +1129,12 @@ impl CockpitView {
                                     cx,
                                 )
                                 .debug_selector(|| "backlog-new-only".into())
-                                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                                    cx.stop_propagation();
-                                    view.answer_backlog(false, cx);
-                                })),
+                                .on_click(cx.listener(
+                                    |view, _: &ClickEvent, _, cx| {
+                                        cx.stop_propagation();
+                                        view.answer_backlog(false, cx);
+                                    },
+                                )),
                             )
                             .child(
                                 ferrite_ui::components::secondary_button(
@@ -1128,10 +1144,12 @@ impl CockpitView {
                                     cx,
                                 )
                                 .debug_selector(|| "backlog-take".into())
-                                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                                    cx.stop_propagation();
-                                    view.answer_backlog(true, cx);
-                                })),
+                                .on_click(cx.listener(
+                                    |view, _: &ClickEvent, _, cx| {
+                                        cx.stop_propagation();
+                                        view.answer_backlog(true, cx);
+                                    },
+                                )),
                             ),
                     ),
             );

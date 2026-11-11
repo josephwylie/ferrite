@@ -10,6 +10,7 @@ mod browser;
 mod browser_smoke;
 mod context_menu;
 pub(crate) mod decisions;
+pub(crate) mod direction;
 mod drafts;
 pub(crate) mod empty_board;
 pub(crate) mod factory;
@@ -11090,6 +11091,7 @@ impl CockpitView {
             .children(self.settings_element(window, cx))
             .children(self.project_editor_element(window, cx))
             .children(self.new_task_sheet(window, cx))
+            .children(self.direct_sheet(window, cx))
             .children(self.toast_float(window, cx))
             .children(self.sheet_floats(window, cx))
             .children(self.lightbox_element(cx))

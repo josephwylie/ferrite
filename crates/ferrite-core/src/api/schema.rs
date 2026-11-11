@@ -173,6 +173,18 @@ operations! {
         "Move a Step to a place in the outline (0 is first).";
     StepDelete(StepParams) => "step.delete", ["workflow", "step"],
         "Delete a Step; routes to it stay, flagged.";
+    ReportQuestion(ReportQuestionParams) => "report.question", ["text"],
+        "A Worker asks the operator; its Task waits in Needs human for the answer.";
+    TaskAnswer(TaskAnswerParams) => "task.answer", ["task", "text"],
+        "Answer a Task's question: the agent that asked continues with it.";
+    TaskApprove(TaskParams) => "task.approve", ["task"],
+        "Approve a Task that is Ready to approve: what follows approval runs.";
+    TaskRework(TaskReworkParams) => "task.rework", ["task", "feedback"],
+        "Send a Task back with feedback, to the Workflow's rework recipient or one chosen.";
+    TaskRedirect(TaskRedirectParams) => "task.redirect", ["task", "to"],
+        "Send one Task to a Step, skipping Steps, then its routes or back to you. The Workflow is unchanged.";
+    WorkflowApproval(WorkflowApprovalParams) => "workflow.approval", ["workflow"],
+        "Change who approves a Workflow's draft: you or an agent, its instructions, what follows, where rework goes.";
     WorkflowStart(WorkflowStartParams) => "workflow.start", ["workflow", "start"],
         "Set how a Workflow's draft starts Tasks: manual, schedule, github_issue, github_pr or external.";
     WorkflowAutomation(WorkflowAutomationParams) => "workflow.automation", ["workflow", "turn"],
@@ -456,12 +468,16 @@ pub struct TaskParams {
 }
 
 /// What a Worker reports: `finished` (`summary` says what it did) or
-/// `unable` to finish (`summary` says what it tried).
+/// `unable` to finish (`summary` says what it tried); an agent deciding
+/// an approval reports `approved` (what it verified) or `rejected` (its
+/// reasons).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReportedOutcome {
     Finished,
     Unable,
+    Approved,
+    Rejected,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -471,6 +487,60 @@ pub struct ReportOutcomeParams {
     /// The reporting Worker's own Thread: the CLI sends
     /// `FERRITE_THREAD_ID`, so its Task is known from where it runs.
     pub worker: ThreadId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReportQuestionParams {
+    /// What the Worker needs the operator to decide.
+    pub text: String,
+    /// The asking Worker's own Thread (the CLI sends `FERRITE_THREAD_ID`).
+    pub worker: ThreadId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskAnswerParams {
+    pub task: String,
+    pub text: String,
+    /// The question's id (`task.get`'s `question.id`): an answer to an
+    /// earlier one changes nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskReworkParams {
+    pub task: String,
+    /// What should change; every later Step is told it.
+    pub feedback: String,
+    /// `step:<id>` or `coordinator`; else the Workflow's rework recipient.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskRedirectParams {
+    pub task: String,
+    /// The Step that takes it (`s-2`).
+    pub to: String,
+    /// Steps passed over for this Task, as if they had finished.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skip: Vec<String>,
+    /// `routes` (the default) or `me`: return it to you to approve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub then: Option<crate::factory::ThenReturn>,
+    /// Context for the agent that takes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Each change given is made: `by` (`human` or `agent`), the deciding
+/// `step`, its `instructions`, `after` (`complete` or `step:<id>`) and
+/// `rework_to` (`step:<id>` or `coordinator`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowApprovalParams {
+    pub workflow: String,
+    #[serde(flatten)]
+    pub change: crate::factory::ApprovalChange,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

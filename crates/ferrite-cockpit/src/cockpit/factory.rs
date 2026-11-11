@@ -82,6 +82,8 @@ pub(crate) struct FactoryView {
     pub(crate) workflows: super::workflows::Workflows,
     /// The open Factory picker's rows.
     pub(crate) picks: Vec<(ferrite_ui::menu::Item, super::workflows::Pick)>,
+    /// Answers, rework and redirects being written, and their sheets.
+    pub(crate) direct: super::direction::Direct,
 }
 
 /// A system notification's tag for a Task.
@@ -103,7 +105,7 @@ fn status_ink(status: Status) -> u32 {
 /// What a card says under its title: the result, the stop reason.
 fn outcome_line(task: &Task) -> Option<String> {
     match task.status {
-        Status::Completed => task.result.clone(),
+        Status::Completed | Status::Approval => task.result.clone(),
         Status::NeedsHuman | Status::Stopped => task.reason.clone(),
         _ => None,
     }
@@ -130,6 +132,7 @@ impl CockpitView {
                     surface: super::workflows::Surface::Board,
                     workflows,
                     picks: Vec::new(),
+                    direct: Default::default(),
                 })
             }
         }
@@ -148,7 +151,9 @@ impl CockpitView {
             view.open = Some(task.to_string());
             view.tab = TaskTab::Overview;
             view.note = None;
+            view.direct.focused = None;
         }
+        self.ensure_drafts(task, cx);
         cx.notify();
     }
 
@@ -168,7 +173,7 @@ impl CockpitView {
     }
 
     /// The open Task, as the board says it now.
-    fn open_task_now(&self) -> Option<&Task> {
+    pub(super) fn open_task_now(&self) -> Option<&Task> {
         let id = self.factory_view.as_ref()?.open.as_deref()?;
         self.cockpit.factory().task(id)
     }
@@ -219,6 +224,9 @@ impl CockpitView {
                 view.open = None;
             }
         }
+        if let Some(open) = self.open_task_now().map(|task| task.id.clone()) {
+            self.ensure_drafts(&open, cx);
+        }
         self.ensure_fields(cx);
         cx.notify();
     }
@@ -229,6 +237,9 @@ impl CockpitView {
         let view = self.factory_view.as_ref()?;
         if let Some(sheet) = &view.sheet {
             return Some(sheet.instructions.read(cx).focus_handle(cx));
+        }
+        if let Some(focus) = self.direct_focus(cx) {
+            return Some(focus);
         }
         if let Some(focus) = self.workflows_focus(cx) {
             return Some(focus);
@@ -681,8 +692,13 @@ impl CockpitView {
                     ))
                     .child(SharedString::from(match task.current_step() {
                         Some(step) => format!(
-                            "{} \u{b7} {}",
+                            "{}{} \u{b7} {}",
                             step.name,
+                            if task.oversight.deciding {
+                                " \u{b7} approval decision"
+                            } else {
+                                ""
+                            },
                             core_factory::agent_label(&task.agent)
                         ),
                         None => core_factory::agent_label(&task.agent),
@@ -799,7 +815,10 @@ impl CockpitView {
                     .child(ferrite_ui::components::status_dot(status_ink(task.status)))
                     .child(task.status.word())
                     .child("\u{b7}")
-                    .child(SharedString::from(core_factory::agent_label(&task.agent))),
+                    .child(SharedString::from(core_factory::agent_label(&task.agent)))
+                    .when(task.oversight.deciding, |line| {
+                        line.child("\u{b7} approval decision")
+                    }),
             )
             .child(actions);
 
@@ -836,141 +855,159 @@ impl CockpitView {
             );
         }
 
-        let content: AnyElement =
-            match tab {
-                TaskTab::Overview => {
-                    let line = |label: &'static str, text: String| {
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(SPACE_0_5))
-                            .child(
-                                div()
-                                    .text_size(px(FS_META))
-                                    .text_color(rgb(INK_SUBTLE))
-                                    .child(label),
-                            )
-                            .child(div().child(SharedString::from(text)))
-                    };
+        let content: AnyElement = match tab {
+            TaskTab::Overview => {
+                let line = |label: &'static str, text: String| {
                     div()
-                        .debug_selector(|| "task-overview".into())
                         .flex()
                         .flex_col()
-                        .gap(px(SPACE_3))
-                        .p(px(SPACE_4))
-                        .children(task.result.clone().map(|result| line("Result", result)))
-                        .children(task.reason.clone().map(|reason| line("Why", reason)))
-                        .child(line("Status", task.status.word().to_string()))
-                        .into_any_element()
-                }
-                TaskTab::Activity => {
-                    let mut list = div()
-                        .id("task-activity")
-                        .debug_selector(|| "task-activity".into())
-                        .flex()
-                        .flex_col()
-                        .gap(px(SPACE_2))
-                        .p(px(SPACE_4))
-                        .overflow_y_scroll();
-                    for (at, entry) in task.activity.iter().enumerate() {
-                        let who = match entry.by {
-                            Actor::Ferrite => "Ferrite",
-                            Actor::Agent => "Agent",
-                            Actor::Operator => "You",
-                        };
-                        list = list.child(
+                        .gap(px(SPACE_0_5))
+                        .child(
                             div()
-                                .debug_selector(move || format!("task-activity-{at}"))
-                                .flex()
-                                .gap(px(SPACE_2))
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .w(px(64.))
-                                        .text_size(px(FS_META))
-                                        .text_color(rgb(INK_SUBTLE))
-                                        .child(who),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .child(SharedString::from(entry.text.clone())),
-                                ),
-                        );
-                    }
-                    list.into_any_element()
-                }
-                TaskTab::Context => {
-                    let fact = |label: &'static str, text: String| {
+                                .text_size(px(FS_META))
+                                .text_color(rgb(INK_SUBTLE))
+                                .child(label),
+                        )
+                        .child(div().child(SharedString::from(text)))
+                };
+                div()
+                    .id("task-overview")
+                    .debug_selector(|| "task-overview".into())
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SPACE_3))
+                    .p(px(SPACE_4))
+                    .children(
+                        task.result
+                            .clone()
+                            .filter(|_| task.status != Status::Approval)
+                            .map(|result| line("Result", result)),
+                    )
+                    .children(
+                        task.reason
+                            .clone()
+                            .filter(|_| {
+                                task.oversight.question.is_none() && task.status != Status::Approval
+                            })
+                            .map(|reason| line("Why", reason)),
+                    )
+                    .child(line("Status", task.status.word().to_string()))
+                    .children(self.task_say(task, window, cx))
+                    .into_any_element()
+            }
+            TaskTab::Activity => {
+                let mut list = div()
+                    .id("task-activity")
+                    .debug_selector(|| "task-activity".into())
+                    .flex()
+                    .flex_col()
+                    .gap(px(SPACE_2))
+                    .p(px(SPACE_4))
+                    .overflow_y_scroll();
+                for (at, entry) in task.activity.iter().enumerate() {
+                    let who = match entry.by {
+                        Actor::Ferrite => "Ferrite",
+                        Actor::Agent => "Agent",
+                        Actor::Operator => "You",
+                    };
+                    list = list.child(
                         div()
+                            .debug_selector(move || format!("task-activity-{at}"))
                             .flex()
                             .gap(px(SPACE_2))
                             .child(
                                 div()
                                     .flex_shrink_0()
-                                    .w(px(80.))
+                                    .w(px(64.))
                                     .text_size(px(FS_META))
                                     .text_color(rgb(INK_SUBTLE))
-                                    .child(label),
+                                    .child(who),
                             )
-                            .child(div().flex_1().min_w_0().child(SharedString::from(text)))
-                    };
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(SharedString::from(entry.text.clone())),
+                            ),
+                    );
+                }
+                list.into_any_element()
+            }
+            TaskTab::Context => {
+                let fact = |label: &'static str, text: String| {
                     div()
-                        .id("task-context")
-                        .debug_selector(|| "task-context".into())
                         .flex()
-                        .flex_col()
                         .gap(px(SPACE_2))
-                        .p(px(SPACE_4))
-                        .overflow_y_scroll()
-                        .child(fact("Branch", task.branch.clone()))
-                        .children(task.worktree.as_ref().map(|path| {
-                            fact("Worktree", ferrite_ui::components::home_relative(path))
-                        }))
-                        .child(fact("Agent", core_factory::agent_label(&task.agent)))
-                        .children(task.workflow.as_ref().map(|run| {
-                            fact(
-                                "Workflow",
-                                format!("{} \u{b7} version {}", run.definition.name, run.version),
-                            )
-                        }))
-                        .children(
-                            task.current_step()
-                                .map(|step| fact("Step", step.name.clone())),
-                        )
                         .child(
                             div()
-                                .pt(px(SPACE_2))
+                                .flex_shrink_0()
+                                .w(px(80.))
                                 .text_size(px(FS_META))
                                 .text_color(rgb(INK_SUBTLE))
-                                .child("Instructions"),
+                                .child(label),
                         )
-                        .child(
-                            div()
-                                .debug_selector(|| "task-instructions".into())
-                                .child(SharedString::from(task.instructions.clone())),
+                        .child(div().flex_1().min_w_0().child(SharedString::from(text)))
+                };
+                div()
+                    .id("task-context")
+                    .debug_selector(|| "task-context".into())
+                    .flex()
+                    .flex_col()
+                    .gap(px(SPACE_2))
+                    .p(px(SPACE_4))
+                    .overflow_y_scroll()
+                    .child(fact("Branch", task.branch.clone()))
+                    .children(
+                        task.worktree.as_ref().map(|path| {
+                            fact("Worktree", ferrite_ui::components::home_relative(path))
+                        }),
+                    )
+                    .child(fact("Agent", core_factory::agent_label(&task.agent)))
+                    .children(task.workflow.as_ref().map(|run| {
+                        fact(
+                            "Workflow",
+                            format!("{} \u{b7} version {}", run.definition.name, run.version),
                         )
-                        .into_any_element()
-                }
-                TaskTab::Worker => match self.pane_for_worker(task) {
-                    Some(index) => div()
-                        .debug_selector(|| "task-worker".into())
-                        .flex_1()
-                        .min_h_0()
-                        .flex()
-                        .flex_col()
-                        .p(px(SPACE_2))
-                        .child(self.pane_slot(index, Level::Transcript, window, cx))
-                        .into_any_element(),
-                    None => div()
-                        .debug_selector(|| "task-worker-none".into())
-                        .p(px(SPACE_4))
-                        .text_color(rgb(INK_SUBTLE))
-                        .child("No agent is working on this task right now.")
-                        .into_any_element(),
-                },
-            };
+                    }))
+                    .children(
+                        task.current_step()
+                            .map(|step| fact("Step", step.name.clone())),
+                    )
+                    .child(
+                        div()
+                            .pt(px(SPACE_2))
+                            .text_size(px(FS_META))
+                            .text_color(rgb(INK_SUBTLE))
+                            .child("Instructions"),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "task-instructions".into())
+                            .child(SharedString::from(task.instructions.clone())),
+                    )
+                    .into_any_element()
+            }
+            TaskTab::Worker => match self.pane_for_worker(task) {
+                Some(index) => div()
+                    .debug_selector(|| "task-worker".into())
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .p(px(SPACE_2))
+                    .child(self.pane_slot(index, Level::Transcript, window, cx))
+                    .into_any_element(),
+                None => div()
+                    .debug_selector(|| "task-worker-none".into())
+                    .p(px(SPACE_4))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child("No agent is working on this task right now.")
+                    .into_any_element(),
+            },
+        };
 
         Some(
             div()

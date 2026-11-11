@@ -66,7 +66,9 @@ fn starts_window<'a>(
 }
 
 fn start(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Start {
-    view.read_with(cx, |view, _| view.shown_workflow().unwrap().draft.start.clone())
+    view.read_with(cx, |view, _| {
+        view.shown_workflow().unwrap().draft.start.clone()
+    })
 }
 
 /// Choose row `row` of the picker `selector` opens.
@@ -211,10 +213,18 @@ fn each_source_shows_its_own_settings_and_keeps_what_was_typed(cx: &mut TestAppC
     let command = crate::cockpit::starts::script_command("/Apps/Ferrite/ferrite", &workflow);
     assert_eq!(
         command,
-        format!("\"/Apps/Ferrite/ferrite\" task submit {workflow} \"<identity>\" \"<instructions>\"")
+        format!(
+            "\"/Apps/Ferrite/ferrite\" task submit {workflow} \"<identity>\" \"<instructions>\""
+        )
     );
 
-    click(cx, "outline-row-s-1");
+    // The row's number, clear of the route choosers in the middle.
+    let row = bounds(cx, "outline-row-s-1".to_string());
+    cx.simulate_click(
+        row.origin + gpui::point(gpui::px(12.), gpui::px(12.)),
+        gpui::Modifiers::none(),
+    );
+    tick(cx);
     assert!(shows(cx, "inspector"), "a Step's inspector again");
     assert!(!shows(cx, "inspector-start"));
 }
@@ -258,7 +268,9 @@ fn automatic_starts_are_a_switch_apart_from_saving(cx: &mut TestAppContext) {
     assert!(shows(cx, "automation-off"));
     click(cx, "automation-turn");
     let switch = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| view.shown_workflow().unwrap().automation.switch)
+        view.read_with(cx, |view, _| {
+            view.shown_workflow().unwrap().automation.switch
+        })
     };
     assert_eq!(switch(&view, cx), Switch::Off, "nothing saved to turn on");
 

@@ -1,0 +1,1 @@
+{"type":"command","id":26,"op":"workflow","action":{"kind":"edit_approval","workflow":"w-1","change":{"by":"agent","step":"s-4","instructions":"Approve when the checks pass","after":"complete","rework_to":"step:s-3"}}}

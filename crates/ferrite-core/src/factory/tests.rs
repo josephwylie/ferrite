@@ -42,7 +42,14 @@ const WORKER: ThreadId = ThreadId::new(40);
 
 /// What the Server tells the step of each Worker it sees.
 fn seen(busy: bool, turns: u64) -> BTreeMap<ThreadId, Seen> {
-    BTreeMap::from([(WORKER, Seen { busy, turns })])
+    BTreeMap::from([(
+        WORKER,
+        Seen {
+            busy,
+            turns,
+            decision: None,
+        },
+    )])
 }
 
 fn status(factory: &Factory, task: &TaskId) -> Status {

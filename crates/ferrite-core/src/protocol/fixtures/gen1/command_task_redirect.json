@@ -1,0 +1,1 @@
+{"type":"command","id":25,"op":"task","action":{"kind":"redirect","task":"t-1","direction":{"to":"s-3","skip":["s-2"],"then":"me","note":"Only the docs changed"}}}

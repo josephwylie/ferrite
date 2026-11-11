@@ -237,7 +237,17 @@ owns, `owner: {"task": "t-1"}`) does it. Start one only when the user asks.
 "$F" task stop t-1
 "$F" task resume t-1
 "$F" task delete t-1
+"$F" task answer t-1 "Call the flag --fast"
+"$F" task approve t-1
+"$F" task rework t-1 "Add a test for the flag" --to step:s-3
+"$F" task redirect t-1 s-3 --skip s-2 --then me --note "Only the docs changed"
 ```
+
+A Task waits in Needs human for a question (`task answer`) and in Ready to
+approve for approval (`task approve`, or `task rework` with feedback).
+`task redirect` sends one Task to a Step, skipping Steps, then following
+the routes or returning it to the user (`--then me`); the saved Workflow
+is unchanged. Do these only when the user asks.
 
 `task start` uses the Project holding the CLI's directory when no
 `--project` is given. `task delete` takes a Queued, Stopped or Completed
@@ -246,8 +256,8 @@ answer says why), and its branch always stays.
 
 A **Workflow** is the user's own process for a Project: ordered **Steps**,
 each an agent with a name, instructions, skills, provider, model, effort,
-and routes for "finished" and "unable" (`next`, `step:<id>`, `complete`,
-`human`, `coordinator`). Change one only when the user asks; saving makes
+and routes for "finished" and "unable" (`next`, `step:<id>`, `approval`,
+`complete`, `human`, `coordinator`). Change one only when the user asks; saving makes
 a numbered version and starts nothing, and a draft with problems is
 refused with every problem listed. A Task started on a Workflow
 (`task start … --workflow w-1`) keeps the version it started with.
@@ -261,8 +271,14 @@ refused with every problem listed. A Task started on a Workflow
 "$F" step edit w-1 s-3 --name Reviewer --instructions "Review the PR" --skills code-review --on-unable step:s-2 --fresh
 "$F" step move w-1 s-3 0
 "$F" step delete w-1 s-3
+"$F" workflow approval w-1 --by agent --step s-4 --instructions "Approve when the checks pass" --after complete --rework-to step:s-3
 "$F" workflow save w-1
 ```
+
+A route to `approval` waits in Ready to approve. `workflow approval` says
+who decides (`human` or `agent`; an agent needs a deciding Step and
+instructions), what follows approval (`complete` or `step:<id>`) and where
+rework goes (`step:<id>` or `coordinator`).
 
 A Workflow's Tasks can start without the user: on a schedule, from a
 GitHub issue or pull request, or from the user's own script. The start is
@@ -285,6 +301,16 @@ read only from it:
 ```bash
 "$F" report outcome finished "Fixed the race in the login fixture"
 "$F" report outcome unable "Tried X and Y; blocked on Z"
+"$F" report question "Should the flag default to on?"
+```
+
+A question holds your Task until the user answers; end your turn after
+asking. When you decide an approval, report `approved` (what you
+verified) or `rejected` (your reasons):
+
+```bash
+"$F" report outcome approved "All checks pass on the reviewed PR"
+"$F" report outcome rejected "The changelog entry is missing"
 ```
 
 ## Another machine

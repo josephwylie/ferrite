@@ -263,6 +263,22 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
         assert!(rows.contains(&"Triager".to_string()), "{rows:?}");
     });
     click(cx, "context-menu-row-0");
+    // The approval's rework recipient was the Implementer too (#222).
+    view.read_with(cx, |view, _| {
+        let draft = &view.shown_workflow().unwrap().draft;
+        assert_eq!(
+            draft
+                .approval_problems()
+                .iter()
+                .map(|problem| problem.message.as_str())
+                .collect::<Vec<_>>(),
+            ["Rework goes to a deleted agent. Choose another."]
+        );
+    });
+    view.update(cx, |view, cx| {
+        view.apply_pick(Pick::ReworkGoesTo(Destination::Step("s-1".into())), cx)
+    });
+    tick(cx);
     assert!(!shows(cx, "workflow-problems"), "fixed");
 
     // An unavailable model is flagged, not replaced; so is a skill.

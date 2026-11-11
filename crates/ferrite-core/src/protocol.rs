@@ -824,6 +824,29 @@ pub enum TaskAction {
     Delete {
         task: String,
     },
+    /// Answer the Task's question (`question`, its id).
+    Answer {
+        task: String,
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        question: Option<u64>,
+    },
+    Approve {
+        task: String,
+    },
+    /// Rework with `feedback`, to `to` (the Workflow's recipient when
+    /// none).
+    Rework {
+        task: String,
+        feedback: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to: Option<crate::factory::Destination>,
+    },
+    /// One Task's direction; the saved Workflow is unchanged.
+    Redirect {
+        task: String,
+        direction: crate::factory::Override,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -866,6 +889,11 @@ pub enum WorkflowAction {
         workflow: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         skills: Vec<(crate::store::Provider, Vec<String>)>,
+    },
+    /// Who approves the draft's results, and what follows (#222).
+    EditApproval {
+        workflow: String,
+        change: crate::factory::ApprovalChange,
     },
     /// How the draft's Tasks start (#225), whole.
     EditStart {
