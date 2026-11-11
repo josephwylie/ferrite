@@ -35,17 +35,6 @@ fn told(caller: &mut Caller, thread: ThreadId, text: &str) -> String {
     }
 }
 
-/// Stop the Server as `ferrite server stop` does and serve its Store
-/// again: a restart.
-fn restart(harness: Harness) -> Harness {
-    let mut control = attach(&harness.address);
-    control.command(226, Op::Stop { when: When::Now });
-    assert_eq!(harness.server.join().unwrap(), 0);
-    gone(&harness.address);
-    gone(&harness.api);
-    serve_in(harness.dir.clone(), None)
-}
-
 fn said(task: &serde_json::Value) -> Vec<(String, String)> {
     task["activity"]
         .as_array()

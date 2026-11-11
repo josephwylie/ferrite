@@ -19,6 +19,17 @@ fn factory_project(name: &str) -> (Harness, String, PathBuf) {
     (harness, project, repo)
 }
 
+/// Stop the Server as `ferrite server stop` does and serve its Store
+/// again: a restart.
+fn restart(harness: Harness) -> Harness {
+    let mut control = attach(&harness.address);
+    control.command(226, Op::Stop { when: When::Now });
+    assert_eq!(harness.server.join().unwrap(), 0);
+    gone(&harness.address);
+    gone(&harness.api);
+    serve_in(harness.dir.clone(), None)
+}
+
 /// Ask until `done` holds of the Task's JSON, for at most five seconds.
 fn task_until(
     caller: &mut Caller,

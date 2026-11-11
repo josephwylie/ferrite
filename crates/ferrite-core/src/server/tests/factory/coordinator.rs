@@ -574,3 +574,57 @@ fn the_coordinator_cannot_act_only_propose() {
         1
     );
 }
+
+/// G5: across a restart a pending proposal is still there to accept, and
+/// accepted it runs; the Coordinator's own Thread is revived on the next
+/// word, the same Thread, told it.
+#[test]
+fn a_proposal_and_the_coordinator_survive_a_restart() {
+    let (harness, project, _repo) = factory_project("coordinator-restart");
+    let (thread, agent) = coordinator(&harness, &project);
+    let proposal = raise(
+        &harness,
+        thread,
+        serde_json::json!({ "act": "start", "instructions": "Fix the toolbar overflow" }),
+    );
+    turn_ends(&agent);
+
+    let harness = restart(harness);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(harness.sessions.try_recv().is_err(), "nothing revived yet");
+    let listed = ok(
+        &harness,
+        "proposal.list",
+        serde_json::json!({ "project": project }),
+    );
+    assert_eq!(listed["proposals"][0]["id"], proposal, "{listed}");
+    assert_eq!(listed["proposals"][0]["status"], "pending", "{listed}");
+
+    let said = ok(
+        &harness,
+        "coordinator.say",
+        serde_json::json!({ "project": project, "text": "Still there?" }),
+    );
+    assert_eq!(
+        said["coordinator"]["thread"],
+        serde_json::json!(thread),
+        "{said}"
+    );
+    let _revived = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .expect("its Session revived for the word");
+    let mut caller = call(&harness);
+    told(&mut caller, thread, "Still there?");
+
+    let accepted = ok(
+        &harness,
+        "proposal.accept",
+        serde_json::json!({ "proposal": proposal }),
+    );
+    assert_eq!(accepted["proposal"]["status"], "accepted", "{accepted}");
+    let tasks = caller.answer("t", "task.list", serde_json::json!({}));
+    let tasks = tasks["result"]["tasks"].as_array().cloned().unwrap();
+    assert_eq!(tasks.len(), 1, "{tasks:?}");
+    assert_eq!(tasks[0]["instructions"], "Fix the toolbar overflow");
+}
