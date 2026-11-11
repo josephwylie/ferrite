@@ -464,7 +464,11 @@ impl CockpitView {
                 rows.push(Some((menu::Item::new("Wake thread"), MenuVerb::Wake)));
             }
 
-            rows.push(Some((key("Park thread", "A"), MenuVerb::Park)));
+            let park = match self.menu_threads(thread).len() {
+                1 => key("Park thread", "A"),
+                count => menu::Item::new(format!("Park ({count})")).shortcut("A"),
+            };
+            rows.push(Some((park, MenuVerb::Park)));
         }
         rows.push(Some((
             key("Delete thread", "D").destructive(),
@@ -671,6 +675,12 @@ impl CockpitView {
             (MenuTarget::Thread(thread), MenuVerb::Unpin) => self.set_pinned(thread, false, cx),
             // One act: a Group member leaves its Group and parks
             // (`Cockpit::park_thread`), straight into the parked rows.
+            (MenuTarget::Thread(thread), MenuVerb::Park) if self.menu_threads(thread).len() > 1 => {
+                let threads = self.menu_threads(thread);
+                self.nav_picked.clear();
+                self.park_listed(&threads, cx);
+                self.parked_changed(cx);
+            }
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Park) => {
                 self.close_pane(PaneIdentity::Thread(thread), cx);
                 // A Thread parked from the nav may have had no Pane in

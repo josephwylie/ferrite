@@ -648,14 +648,14 @@ fn subagents(fake: &Fake, stream: usize, count: usize) {
     }
 }
 
-/// A nav title truncates against what its row leaves it. At the nav's own
-/// width, a member of the shown Group on a long worktree branch that runs
-/// five subagents is one line: its title pinned to the row's text width
-/// less the room its mark needs, if it has one. The branch and the count
-/// are never on the line, so a long branch can never squeeze the title.
+/// A card's title takes its whole line. At the nav's own width, a member
+/// of the shown Group on a long worktree branch that runs five subagents
+/// is a 78px card: its title pinned to the card's text width, its branch
+/// cut in its middle on line 3 inside the card, so a long branch can
+/// never squeeze the title. The subagent count is never on the card.
 #[gpui::test]
-fn a_nav_title_takes_what_its_mark_leaves(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{NAV_ROW_H, NAV_ROW_PAD_X, NAV_TREE_INDENT};
+fn a_card_title_takes_its_line_and_the_branch_its_own(cx: &mut TestAppContext) {
+    use ferrite_ui::theme::{NAV_CARD_H, NAV_ROW_PAD_X, NAV_TREE_INDENT};
     let (view, fake, cx, _group) = board("nav-title-first", 2, cx);
     subagents(&fake, 0, 5);
     subagents(&fake, 1, 5);
@@ -699,34 +699,28 @@ fn a_nav_title_takes_what_its_mark_leaves(cx: &mut TestAppContext) {
     );
     for thread in &threads {
         let id = thread.get();
-        let row = view.read_with(cx, |view, _| view.thread_row(*thread));
-        let (subagents, branch) = view.read_with(cx, |view, _| {
-            let facts = view.facts.get(*thread);
-            (
-                facts.map_or(0, |facts| facts.subagents),
-                facts.and_then(|facts| facts.status.as_ref()?.branch.clone()),
-            )
-        });
-        assert_eq!(subagents, 5);
-        assert_eq!(branch.as_deref(), Some(long_branch));
         let title = bounds(cx, format!("nav-title-{id}"));
-        let whole_row = bounds(cx, format!("nav-thread-{id}"));
-        assert_eq!(whole_row.size.height, px(NAV_ROW_H), "one line");
-        // The shown Group starts on its Project's label, its
-        // members a step further; a member's title takes the line but for
-        // the room its mark needs.
+        let card = bounds(cx, format!("nav-thread-{id}"));
+        assert_eq!(card.size.height, px(NAV_CARD_H), "three lines");
+        // The shown Group starts on its Project's label, its members a
+        // step further; a member's title takes the rest of the line.
         let member_x = NAV_ROW_PAD_X + NAV_TREE_INDENT;
-        let marked = crate::nav::state_mark(row.status).is_some();
-        let expected = crate::nav::title_w(crate::nav::RowPlace::Member(0), marked);
+        let expected = card.size.width - px(member_x + NAV_ROW_PAD_X);
         assert!(
-            (title.size.width - px(expected)).abs() < px(0.5),
-            "the title takes what its mark leaves: {title:?}, {expected}"
+            (title.size.width - expected).abs() < px(0.5),
+            "the title takes its line: {title:?}, {expected:?}"
         );
         assert!(
-            (title.left() - (whole_row.left() + px(member_x))).abs() < px(0.5),
+            (title.left() - (card.left() + px(member_x))).abs() < px(0.5),
             "the title starts at the member's edge"
         );
-        for gone in ["nav-branch", "nav-subagents", "nav-mark"] {
+        let branch = bounds(cx, format!("nav-card-branch-{id}"));
+        assert!(
+            branch.right() <= card.right() - px(NAV_ROW_PAD_X) + px(0.5),
+            "the branch is cut inside the card: {branch:?}"
+        );
+        assert!(branch.top() >= title.bottom(), "on line 3");
+        for gone in ["nav-subagents", "nav-mark"] {
             assert!(
                 debug_bounds(cx, format!("{gone}-{id}")).is_none(),
                 "{gone} is the tooltip's, not the line's"

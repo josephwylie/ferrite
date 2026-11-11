@@ -222,6 +222,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "nav::Open"
         | "nav::Fold"
         | "nav::Unfold"
+        | "nav::Rename"
         | "shortcuts::ScrollUp"
         | "shortcuts::ScrollDown"
         | "shortcuts::Dismiss"

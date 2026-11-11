@@ -510,6 +510,7 @@ const STATES: &[(&str, &[&str])] = &[
     ("navlist", &["app"]),
     ("navhover", &["app"]),
     ("navkeys", &["app"]),
+    ("navcards", &["app"]),
     ("palettefilter", &["app"]),
     // (end WP-G)
 
@@ -838,9 +839,8 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
-        // The focused row's `⋯` pressed, as on claude/row-menu.png: the
-        // pointer on the row stands its button, and the menu opens under
-        // it once a frame has drawn it.
+        // The focused card right-clicked, as on claude/row-menu.png: the
+        // menu opens at the card's title once a frame has drawn it.
         "contextmenu" => {
             let (scene, _) = nav();
             let setup: Setup = Box::new(|view, window, cx| {
@@ -848,7 +848,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 ferrite_ui::motion::hover_listener(format!("nav-thread-0-{}", thread.get()).into())(
                     &true, window, cx,
                 );
-                press_more_when_drawn(thread, 8, false, window, cx);
+                right_click_when_drawn(thread, 8, false, window, cx);
             });
             (scene, setup)
         }
@@ -860,7 +860,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 ferrite_ui::motion::hover_listener(format!("nav-thread-0-{}", thread.get()).into())(
                     &true, window, cx,
                 );
-                press_more_when_drawn(thread, 8, true, window, cx);
+                right_click_when_drawn(thread, 8, true, window, cx);
             });
             (scene, setup)
         }
@@ -1352,15 +1352,58 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
+        // The nav's Thread cards in every status (Working with its clock,
+        // Approval, Failed, Done, idle with an age), with PR chips open,
+        // draft, merged and closed, a long branch cut in its middle, Claude
+        // and Codex logos, and the pointer over a receded working card.
+        "navcards" => {
+            let (scene, branches) = nav();
+            let setup: Setup = Box::new(|view, window, cx| {
+                use ferrite_core::workspace::{PrState, PullRequest};
+                branches(view, window, cx);
+                view.show_nav_view(crate::nav::NavView::Inbox, None, cx);
+                let named = |view: &CockpitView, name: &str| {
+                    view.cockpit
+                        .threads()
+                        .into_iter()
+                        .find(|thread| view.facts.name(*thread).as_ref() == name)
+                        .unwrap_or_else(|| panic!("the fixture's {name}"))
+                };
+                let pr = |number, state, draft| PullRequest {
+                    number,
+                    state,
+                    draft,
+                    url: None,
+                    title: Some("Thread cards in the nav".into()),
+                    checks: None,
+                    runs: Vec::new(),
+                };
+                for (name, reading) in [
+                    ("Screenshot harness", pr(415, PrState::Open, false)),
+                    ("Release notes 0.9", pr(388, PrState::Open, true)),
+                    ("Board card sync", pr(207, PrState::Merged, false)),
+                    ("Checkout copy review", pr(96, PrState::Closed, false)),
+                ] {
+                    let thread = named(view, name);
+                    view.facts.pr_answered(thread, Some(reading));
+                }
+                let running = named(view, "Retained transcript rendering");
+                crate::nav::card_hover(crate::nav::NavCursor::thread(running, None).key, true)(
+                    &true, window, cx,
+                );
+                cx.notify();
+            });
+            (scene, setup)
+        }
         // (end WP-G)
         _ => legacy(state),
     }
 }
 
-/// Open `thread`'s row menu from its `⋯` as a press does, on the first
-/// frame (of `frames`) that has drawn the button; `submenu`, with its
-/// first row's submenu open.
-fn press_more_when_drawn(
+/// Open `thread`'s row menu as a right click on its card's title does, on
+/// the first frame (of `frames`) that has drawn the card; `submenu`, with
+/// its first row's submenu open.
+fn right_click_when_drawn(
     thread: ThreadId,
     frames: usize,
     submenu: bool,
@@ -1368,15 +1411,15 @@ fn press_more_when_drawn(
     cx: &mut Context<CockpitView>,
 ) {
     cx.on_next_frame(window, move |view, window, cx| {
-        match window.debug_bounds(&format!("nav-more-0-{}", thread.get())) {
-            Some(button) => {
-                view.open_context_menu_under(MenuTarget::Thread(thread), button, cx);
+        match window.debug_bounds(&format!("nav-title-{}", thread.get())) {
+            Some(title) => {
+                view.open_context_menu(MenuTarget::Thread(thread), title.center(), cx);
                 if submenu {
                     view.open_submenu(0, super::context_menu::Submenu::OpenIn, cx);
                 }
             }
-            None if frames > 0 => press_more_when_drawn(thread, frames - 1, submenu, window, cx),
-            None => eprintln!("ferrite: contextmenu: the row's `⋯` never drew"),
+            None if frames > 0 => right_click_when_drawn(thread, frames - 1, submenu, window, cx),
+            None => eprintln!("ferrite: contextmenu: the card never drew"),
         }
     });
 }
