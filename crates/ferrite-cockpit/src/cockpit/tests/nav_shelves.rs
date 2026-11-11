@@ -304,6 +304,17 @@ fn the_keyboard_walks_the_list_and_follows_a_parked_thread(cx: &mut TestAppConte
         );
         assert!(view.nav_state().parked.iter().any(|row| row.thread == thread));
     });
+    for key in ["shift-f10", "menu"] {
+        cx.simulate_keystrokes(key);
+        tick(cx);
+        let target = view.read_with(cx, |view, _| view.context_menu.as_ref().map(|menu| menu.target));
+        assert_eq!(target, Some(MenuTarget::Thread(thread)), "{key} opens the cursor's menu");
+        view.update(cx, |view, cx| {
+            view.context_menu = None;
+            cx.notify();
+        });
+        tick(cx);
+    }
 }
 
 /// The Filter menu lists every Project to filter by, and the Groups,

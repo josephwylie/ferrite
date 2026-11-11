@@ -12469,10 +12469,6 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// cmd-i: the Inbox, shown or back to the tree
-    /// (§5.1.2, FL-16). Showing it closes the floats over it, puts its
-    /// cursor on the first row and hands it the keyboard (its keys ride
-    /// the `Notifications` context).
     /// ⌘I (and the Bar's needs-you count): the list takes the keys on its
     /// first card (ADR 0040); again, they go back to the board.
     fn toggle_notifications(
