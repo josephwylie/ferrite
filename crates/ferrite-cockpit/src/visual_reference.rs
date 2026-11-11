@@ -2505,7 +2505,7 @@ fn tool_groups(label: &str) -> Scene {
     scene
 }
 
-/// One group of twenty reads, opened: its list is capped (`WORK_LIST_MAX_H`)
+/// One group of twenty reads in a turn still running, opened: its list is capped (`WORK_LIST_MAX_H`)
 /// and scrolls inside, faded at the bottom edge where more lies behind it.
 fn tool_group_overflow() -> Scene {
     let mut scene = Scene::new("toolgroup-overflow");
@@ -2524,8 +2524,7 @@ fn tool_group_overflow() -> Scene {
         )
         .ok(&id, &"line\n".repeat(40));
     }
-    feed.text("All twenty modules read; none holds a second owner.\n\n");
-    feed.end(0.02);
+    scene.core.pump();
     scene
 }
 
