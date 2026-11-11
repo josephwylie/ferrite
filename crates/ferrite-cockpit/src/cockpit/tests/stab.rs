@@ -727,6 +727,33 @@ fn a_draft_body_says_how_to_start(cx: &mut TestAppContext) {
     );
 }
 
+/// The hero's project word is a medium-weight switcher, and under 448 of
+/// window height the lead words give way and leave it standing alone.
+#[gpui::test]
+fn the_hero_drops_its_lead_words_in_a_short_window(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("hero-short", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
+    tick(cx);
+    let tall = cx.debug_bounds("start-hero").expect("the start hero");
+    let word = cx
+        .debug_bounds("start-hero-project")
+        .expect("the project word");
+    cx.simulate_resize(gpui::size(px(1200.), px(ferrite_ui::theme::HERO_SHORT_WINDOW - 48.)));
+    tick(cx);
+    let short = cx.debug_bounds("start-hero").expect("the hero stays");
+    assert!(
+        short.size.width < tall.size.width,
+        "the lead words are gone: {tall:?} -> {short:?}"
+    );
+    assert!(
+        cx.debug_bounds("start-hero-project").is_some(),
+        "the project word stays ({word:?})"
+    );
+}
+
 /// On the empty board the titlebar says nothing either (ADR 0014): no
 /// name, no build badge (F-10: Settings › About keeps that).
 #[gpui::test]

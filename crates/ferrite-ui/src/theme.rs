@@ -2427,6 +2427,15 @@ pub const BAR_MARK: f32 = 11.0;
 pub const HERO_MARK: f32 = 48.0;
 pub const HERO_MARK_INK: u32 = TEXT_FAINT;
 pub const HERO_MARK_GAP: f32 = 28.0;
+/// Under this window height the hero's lead words give way and the project
+/// word stands alone (T3's `max-height: 28rem`).
+pub const HERO_SHORT_WINDOW: f32 = 448.0;
+/// The Project switcher's word and rule as alphas of `INK_SUBTLE` (T3's
+/// muted at 60% over a rule at 35%; 80% and 60% under the pointer).
+pub const HERO_SWITCHER_INK: u32 = 0x99;
+pub const HERO_SWITCHER_INK_HOVER: u32 = 0xcc;
+pub const HERO_SWITCHER_RULE: u32 = 0x59;
+pub const HERO_SWITCHER_RULE_HOVER: u32 = 0x99;
 /// **The env strip** over an empty Thread's or a draft's box, Codex's
 /// (codex/home.png): #282828 between the plane #181818 and the box #363636
 /// there — here the step between `CARD` and `FIELD` — `ENV_STRIP_H` tall
