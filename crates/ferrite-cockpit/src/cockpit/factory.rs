@@ -968,12 +968,7 @@ impl CockpitView {
                                     .text_color(rgb(INK_SUBTLE))
                                     .child(who),
                             )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(SharedString::from(text)),
-                            ),
+                            .child(div().flex_1().min_w_0().child(SharedString::from(text))),
                     );
                 }
                 list.into_any_element()
@@ -1109,7 +1104,9 @@ impl CockpitView {
                     .id("new-task-instructions")
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|view, _: &MouseDownEvent, _, cx| view.focus_new_task_pr(false, cx)),
+                        cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                            view.focus_new_task_pr(false, cx)
+                        }),
                     )
                     .child(crate::project_editor::text_field(
                         "Instructions".into(),
@@ -1124,7 +1121,9 @@ impl CockpitView {
                     .debug_selector(|| "new-task-pr".into())
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|view, _: &MouseDownEvent, _, cx| view.focus_new_task_pr(true, cx)),
+                        cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                            view.focus_new_task_pr(true, cx)
+                        }),
                     )
                     .child(crate::project_editor::text_field(
                         "Pull request (optional): owner/repository#number or its URL".into(),

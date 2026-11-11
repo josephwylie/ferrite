@@ -670,9 +670,8 @@ impl CockpitView {
                 }
             }
             if let Some(approving) = super::delivery::approving_line(task) {
-                ready = ready.child(
-                    meta(approving).debug_selector(|| "task-approval-revision".into()),
-                );
+                ready =
+                    ready.child(meta(approving).debug_selector(|| "task-approval-revision".into()));
             }
             if !task.delivery.evidence.is_empty() {
                 ready = ready

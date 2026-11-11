@@ -879,11 +879,9 @@ impl Definition {
                 paths.push(match kind {
                     RouteKind::Finished => format!("{} reports finished", step.name),
                     RouteKind::Unable => format!("{} reports it could not finish", step.name),
-                    RouteKind::Merge(outcome) => format!(
-                        "{} reports {}",
-                        step.name,
-                        outcome.label().to_lowercase()
-                    ),
+                    RouteKind::Merge(outcome) => {
+                        format!("{} reports {}", step.name, outcome.label().to_lowercase())
+                    }
                 });
             }
         }

@@ -73,6 +73,9 @@ fn selected(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Str
 #[gpui::test]
 fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
     let (view, cx, fake, project) = workflows_window(cx, "workflows-outline", |_| {});
+    // The template's six agents, the Merge agent's seven routes, all in view.
+    cx.simulate_resize(gpui::size(px(1600.), px(1800.)));
+    tick(cx);
     let streams = fake.streams.borrow().len();
     click(cx, "factory-tab-workflows");
     assert!(shows(cx, "workflows-empty"), "a fresh Project has none");

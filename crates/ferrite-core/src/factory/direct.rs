@@ -474,9 +474,10 @@ pub(super) fn reported(
         Outcome::Unable { tried } => ("could not finish", tried.clone()),
         Outcome::Approved { summary } => ("approves", summary.clone()),
         Outcome::Rejected { reasons } => ("does not approve", reasons.clone()),
-        Outcome::Merge { result, summary } => {
-            ("reports", format!("{}: {summary}", result.label().to_lowercase()))
-        }
+        Outcome::Merge { result, summary } => (
+            "reports",
+            format!("{}: {summary}", result.label().to_lowercase()),
+        ),
     };
     task.note(
         now_ms,

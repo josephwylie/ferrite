@@ -163,7 +163,10 @@ fn the_new_task_sheet_sends_its_pr(cx: &mut TestAppContext) {
             instructions, pr, ..
         }] => {
             assert_eq!(instructions, "Ship the flag");
-            assert_eq!(pr.as_deref(), Some("https://github.com/acme/widgets/pull/12"));
+            assert_eq!(
+                pr.as_deref(),
+                Some("https://github.com/acme/widgets/pull/12")
+            );
         }
         other => panic!("{other:?}"),
     }
@@ -194,7 +197,15 @@ fn a_step_routes_by_merge_result_with_a_route_per_result(cx: &mut TestAppContext
         view.create_workflow(Template::IssueToReviewedPr, cx);
     });
     tick(cx);
-    for kind in ["merged", "conflict", "pending", "denied", "head_changed", "unknown", "unable"] {
+    for kind in [
+        "merged",
+        "conflict",
+        "pending",
+        "denied",
+        "head_changed",
+        "unknown",
+        "unable",
+    ] {
         assert!(shows(cx, &format!("outline-route-s-5-{kind}")), "{kind}");
     }
     assert!(!shows(cx, "outline-route-s-5-finished"));

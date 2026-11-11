@@ -142,27 +142,20 @@ impl CockpitView {
                         .flex()
                         .gap(px(SPACE_2))
                         .text_size(px(FS_META))
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_color(rgb(INK_STRONG))
-                                .child(SharedString::from(format!(
-                                    "Revision {} \u{b7} {}",
-                                    each.revision,
-                                    core_factory::short(&each.head)
-                                ))),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_color(rgb(INK_SUBTLE))
-                                .child(SharedString::from(format!(
-                                    "Reported by {}{}",
-                                    each.by,
-                                    if approved { " \u{b7} approved" } else { "" }
-                                ))),
-                        ),
+                        .child(div().flex_shrink_0().text_color(rgb(INK_STRONG)).child(
+                            SharedString::from(format!(
+                                "Revision {} \u{b7} {}",
+                                each.revision,
+                                core_factory::short(&each.head)
+                            )),
+                        ))
+                        .child(div().flex_1().min_w_0().text_color(rgb(INK_SUBTLE)).child(
+                            SharedString::from(format!(
+                                "Reported by {}{}",
+                                each.by,
+                                if approved { " \u{b7} approved" } else { "" }
+                            )),
+                        )),
                 );
             }
             out.push(section.into_any_element());

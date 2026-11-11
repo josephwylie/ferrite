@@ -650,7 +650,11 @@ impl Server {
     }
 
     /// A Worker's report or question, answered with its Task.
-    pub(super) fn api_worker_said(&mut self, worker: ThreadId, command: Command) -> Result<Value, ApiError> {
+    pub(super) fn api_worker_said(
+        &mut self,
+        worker: ThreadId,
+        command: Command,
+    ) -> Result<Value, ApiError> {
         let (answer, _) = self.factory_command(command)?;
         let task = self
             .factory
