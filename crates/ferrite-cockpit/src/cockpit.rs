@@ -2111,6 +2111,26 @@ impl CockpitView {
                     self.open_background(thread, cx);
                 }
             }
+            ferrite_pane::transcript::TranscriptEvent::OpenChanges(path) => {
+                self.focus_pane(index);
+                let Some(thread) = self.panes[index].thread() else {
+                    return;
+                };
+                match path {
+                    Some(path) => {
+                        let root = self.thread_path(thread);
+                        let relative = root
+                            .as_deref()
+                            .and_then(|root| std::path::Path::new(path).strip_prefix(root).ok())
+                            .map_or_else(|| path.clone(), |path| path.display().to_string());
+                        self.show_changes_of(thread, &relative, cx);
+                    }
+                    None => {
+                        self.upsert_surface(thread, surfaces::SurfaceId::Changes, cx);
+                        cx.notify();
+                    }
+                }
+            }
         }
     }
 
@@ -2680,7 +2700,9 @@ impl CockpitView {
             .and_then(|open| open.activity().subject(&self.panes[index].selected))
             .map(|subject| subject.transcript())
         {
-            for block in transcript.blocks() {
+            let blocks = transcript.blocks();
+            let mut turn_start = 0;
+            for (at, block) in blocks.iter().enumerate() {
                 match &block.body {
                     ferrite_core::transcript::Body::Tool(tool) => {
                         valid.insert(pane::DisclosureId::Tool(tool.call.clone()));
@@ -2693,6 +2715,21 @@ impl CockpitView {
                     // A turn's fold, or a steer's, by its prompt.
                     ferrite_core::transcript::Body::Prompt(_) => {
                         valid.insert(pane::DisclosureId::Turn(block.id));
+                        valid.insert(pane::DisclosureId::Prompt(block.id));
+                        turn_start = at;
+                    }
+                    // A changed-files card's Expand all and its folders.
+                    ferrite_core::transcript::Body::TurnEnd(_) => {
+                        valid.insert(pane::DisclosureId::Changes(block.id));
+                        for output in ferrite_core::transcript::outputs::of_turn(&blocks[turn_start..at]) {
+                            if let ferrite_core::transcript::outputs::Output::Changes(changes) = output {
+                                valid.extend(
+                                    ferrite_pane::transcript::changes_folders(&changes, self.thread_path(thread).as_deref())
+                                        .into_iter()
+                                        .map(|folder| pane::DisclosureId::Folder(block.id, folder)),
+                                );
+                            }
+                        }
                     }
                     _ => {}
                 }

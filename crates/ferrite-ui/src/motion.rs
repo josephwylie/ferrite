@@ -42,7 +42,7 @@
 //! | approval promote | [`PROMOTE_IN`] 220ms ease-out cubic | the approval card: from 0.75, 6px above, scale 0.97 from its top ([`promote_in`]) |
 //! | label roll | [`MORPH`] 180ms | the working line's words when they change ([`morph`]) |
 //! | count tick | [`COUNT`] 120ms quart | the working line's token count ticks to each new reading: only the cells that change cross-fade, drifting `MOTION_COUNT_DRIFT` (2pt) up, tabular so nothing shifts; a new turn's count lands; drawn by the loops overlay, so only the count redraws (`odometer::rolling_count`) |
-//! | message actions | [`ACTIONS_IN`] 120ms after 100ms / [`ACTIONS_OUT`] 60ms, ease-snap | a message's actions under the pointer ([`hover_listener_with`]) |
+//! | message actions | [`ACTIONS_IN`] / [`ACTIONS_OUT`] 200ms, standard | a message's actions under the pointer ([`hover_listener_with`]) |
 //! | send scroll | `MOTION_SCROLL_MAX_MS` 200ms at most, [`EASE_STANDARD`] | a send's prompt eases up to the top of the transcript (`TX_SEND_ANCHOR_OFFSET` below it) for Chromium's smooth-scroll length, `min(√Δpx, 12) / 60` s, re-measured each frame so rows growing under it are absorbed; any scroll by the operator stops it where it stands; the bubble's pop starts when it lands (`transcript/scroll.rs`) |
 //! | scroll to end | shows `SCROLL_END_SHOW_DELAY_MS` 150ms after it is wanted, hides at once; its click rides the send scroll's ease to the tail | the transcript's Scroll to end pill: no fade either way, its ring blending over [`HOVER_FADE`] |
 //! | chip in | [`CHIP_IN`] 300ms ease-snap, 0.95 → 1 about its centre | an attachment added to a draft's tray ([`chip_in`]); never what the tray held when it was first drawn, nor a sent prompt's |
@@ -324,10 +324,10 @@ pub const HOVER_SNAP: MotionSpec = spec(0, EASE_OUT_QUART);
 /// A button's press and release (`pressable`).
 pub const PRESS_IN: MotionSpec = spec(theme::MOTION_DUR_FAST_MS, EASE_OUT_QUART);
 pub const PRESS_OUT: MotionSpec = spec(theme::MOTION_DUR_SLOW_MS, EASE_OVERSHOOT);
-/// A message's actions under the pointer: in after a beat, out at once.
-pub const ACTIONS_IN: MotionSpec =
-    spec(theme::MOTION_DUR_SNAP_MS, EASE_SNAP).after(theme::MOTION_ACTIONS_DELAY_MS);
-pub const ACTIONS_OUT: MotionSpec = spec(theme::MOTION_DUR_FAST_MS, EASE_SNAP);
+/// A message's actions under the pointer: T3's `transition-opacity
+/// duration-200`, in and out, with no wait.
+pub const ACTIONS_IN: MotionSpec = spec(theme::MOTION_DUR_BASE_MS, EASE_STANDARD);
+pub const ACTIONS_OUT: MotionSpec = ACTIONS_IN;
 /// A disclosure chevron's quarter turn.
 pub const CHEVRON: MotionSpec = spec(theme::MOTION_CHEVRON_MS, EASE_STANDARD);
 /// A transcript work row's chevron (T3's `transition-transform
@@ -2268,12 +2268,14 @@ mod tests {
     #[test]
     fn a_delay_holds_then_moves() {
         let ms = Duration::from_millis;
-        assert_eq!(ACTIONS_IN.duration(), ms(220));
-        assert_eq!(ACTIONS_IN.progress_at(ms(0)), 0.0);
-        assert_eq!(ACTIONS_IN.progress_at(ms(100)), 0.0, "still waiting");
-        let mid = ACTIONS_IN.progress_at(ms(160));
+        let delayed = spec(120, EASE_SNAP).after(100);
+        assert_eq!(delayed.duration(), ms(220));
+        assert_eq!(delayed.progress_at(ms(0)), 0.0);
+        assert_eq!(delayed.progress_at(ms(100)), 0.0, "still waiting");
+        let mid = delayed.progress_at(ms(160));
         assert!(mid > 0.0 && mid < 1.0, "moving {mid}");
-        assert_eq!(ACTIONS_IN.progress_at(ms(220)), 1.0);
+        assert_eq!(delayed.progress_at(ms(220)), 1.0);
+        assert_eq!(ACTIONS_IN.duration(), ms(200), "a message's actions do not wait");
         assert_eq!(HOVER_SNAP.progress_at(ms(0)), 1.0, "a snap lands at once");
     }
 

@@ -429,6 +429,16 @@ pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
                 // permission-mode change, even at rest. Only a compaction's
                 // end says which state ended, with its `compact_result`.
                 None => value["compact_result"].as_str().map(|result| {
+                    if result == "failed" {
+                        events.push(SessionEvent::Progress {
+                            event: ProgressEvent::Compacted(crate::transcript::Compacted {
+                                failure: Some(
+                                    value["compact_error"].as_str().unwrap_or_default().into(),
+                                ),
+                                ..Default::default()
+                            }),
+                        });
+                    }
                     phase(
                         Phase::Working,
                         match (result, value["compact_error"].as_str()) {
@@ -439,7 +449,17 @@ pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
                     )
                 }),
             },
-            Some("compact_boundary") => Some(phase(Phase::Working, "Context compacted".into())),
+            Some("compact_boundary") => {
+                let metadata = &value["compact_metadata"];
+                events.push(SessionEvent::Progress {
+                    event: ProgressEvent::Compacted(crate::transcript::Compacted {
+                        before: metadata["pre_tokens"].as_u64(),
+                        after: metadata["post_tokens"].as_u64(),
+                        failure: None,
+                    }),
+                });
+                Some(phase(Phase::Working, "Context compacted".into()))
+            }
             Some("thinking_tokens") => {
                 if let Some(estimated) = value["estimated_tokens"].as_u64() {
                     events.push(SessionEvent::ThinkingTokens { estimated });
@@ -1781,6 +1801,37 @@ mod tests {
                 weekly: Some(RateLimitWindow {
                     used_fraction: 0.08,
                     resets_at: Some(22),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn a_compaction_reports_its_counts_and_its_failure() {
+        let boundary: Value = serde_json::from_str(
+            r#"{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual","pre_tokens":27445,"post_tokens":1192}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_events_value(&boundary)[0],
+            SessionEvent::Progress {
+                event: ProgressEvent::Compacted(crate::transcript::Compacted {
+                    before: Some(27_445),
+                    after: Some(1_192),
+                    failure: None,
+                }),
+            }
+        );
+        let failed: Value = serde_json::from_str(
+            r#"{"type":"system","subtype":"status","status":null,"compact_result":"failed","compact_error":"prompt too long"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_events_value(&failed)[0],
+            SessionEvent::Progress {
+                event: ProgressEvent::Compacted(crate::transcript::Compacted {
+                    failure: Some("prompt too long".into()),
+                    ..Default::default()
                 }),
             }
         );

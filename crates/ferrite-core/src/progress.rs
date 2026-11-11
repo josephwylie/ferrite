@@ -113,6 +113,9 @@ pub enum ProgressEvent {
     BackgroundSnapshot {
         tasks: Vec<BackgroundTask>,
     },
+    /// The provider compacted the context: the token counts it reported
+    /// before and after, or why it failed (`transcript::Compaction`).
+    Compacted(crate::transcript::Compacted),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -323,6 +326,8 @@ impl Progress {
                     })
                     .collect();
             }
+            // History, not live state: the transcript keeps it.
+            ProgressEvent::Compacted(_) => {}
         }
     }
 
@@ -728,6 +733,7 @@ impl ProgressEvent {
                 .iter()
                 .map(|task| task.id.len() + task.label.len() + task.detail.len() + 16)
                 .sum(),
+            Self::Compacted(report) => report.failure.as_ref().map_or(16, |f| f.len() + 16),
         }
         .saturating_add(64)
     }

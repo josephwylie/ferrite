@@ -227,7 +227,7 @@ fn native_keys<E: gpui::InteractiveElement>(element: E) -> E {
 /// on the plane, inset on the transcript's axes, so the rows it docks over
 /// do not show through. For a question this frame is the island
 /// `QuestionFit` measures.
-fn request_frame(card: impl IntoElement, overlay: bool, solo: bool) -> Div {
+fn request_frame(card: impl IntoElement, overlay: bool, solo: bool, inset: f32) -> Div {
     native_keys(
         div()
             .w_full()
@@ -242,10 +242,9 @@ fn request_frame(card: impl IntoElement, overlay: bool, solo: bool) -> Div {
             .when(overlay, |frame| {
                 frame
                     .bg(theme::paint::CARD)
-                    // The transcript column's inset, Solo's or a Group
-                    // Pane's.
-                    .pl(px(theme::tx_inset(solo) - theme::CARD_OUTSET))
-                    .pr(px(theme::tx_inset(solo)))
+                    // The transcript column's inset (`Cards::inset`).
+                    .pl(px(inset - theme::CARD_OUTSET))
+                    .pr(px(inset))
                     .py(px(theme::DECISION_PAD_Y))
             })
             .when(!overlay, |frame| frame.ml(px(-theme::CARD_OUTSET)))
@@ -804,6 +803,7 @@ impl CockpitView {
             short,
             overlay,
             solo: !self.grid_board(),
+            inset: theme::tx_inset_at(0., !self.grid_board()),
             requests,
         })
     }
@@ -817,12 +817,17 @@ impl CockpitView {
     ) -> Option<AnyElement> {
         // Below the short-Pane height a question body keeps two option rows
         // and scrolls, so its head and answer row stay in reach.
-        let short = self
+        let rect = self
             .pane_rects(window)
             .into_iter()
             .find(|(at, _)| *at == index)
-            .is_some_and(|(_, rect)| rect.h < theme::DECISION_SHORT_PANE_H);
-        self.decision_cards(index, true, short)?.render(window, cx)
+            .map(|(_, rect)| rect);
+        let short = rect.is_some_and(|rect| rect.h < theme::DECISION_SHORT_PANE_H);
+        let mut cards = self.decision_cards(index, true, short)?;
+        if let Some(rect) = rect {
+            cards.inset = theme::tx_inset_at(rect.w, cards.solo);
+        }
+        cards.render(window, cx)
     }
 
     fn send_form(
@@ -1168,6 +1173,9 @@ pub(super) struct Cards {
     /// The Pane is Solo's: the transcript column's inset, and the hint line
     /// under the box.
     pub(super) solo: bool,
+    /// The overlay's inset on the transcript's axes: the column's at the
+    /// Pane's width (`theme::tx_inset_at`).
+    pub(super) inset: f32,
     /// The requests shown, each with whether its agent works on meanwhile.
     pub(super) requests: Vec<(PendingDecision, bool)>,
 }
@@ -1580,6 +1588,7 @@ impl Cards {
             decision::approval_card(serial, children),
             self.overlay,
             self.solo,
+            self.inset,
         )
         .into_any_element()
     }
@@ -1904,6 +1913,7 @@ impl Cards {
             decision::card(handle.serial, children),
             self.overlay,
             self.solo,
+            self.inset,
         )
         .into_any_element()
     }
@@ -1981,6 +1991,7 @@ impl Cards {
             decision::card(handle.serial, children),
             self.overlay,
             self.solo,
+            self.inset,
         )
         .into_any_element()
     }
@@ -2290,7 +2301,7 @@ impl Cards {
         // The frame is the island QuestionFit measures: it carries the dock
         // gap as well as the card, so `required` counts every pixel the
         // overlay must hold.
-        request_frame(decision::card(handle.serial, children), overlay, self.solo)
+        request_frame(decision::card(handle.serial, children), overlay, self.solo, self.inset)
             .when(overlay, |frame| {
                 frame.on_prepaint(measure(QuestionMeasure::Island))
             })

@@ -168,13 +168,13 @@ fn a_prompts_code_is_drawn_as_code() {
     ));
 }
 
-/// Answers underline a link at rest (the Claude app's links), keep a
+/// Answers underline a link under the pointer (T3's links), keep a
 /// column of numbers left-aligned as Claude's tables do, and frame their
 /// images like a prompt's.
 #[test]
 fn answers_underline_links_keep_columns_left_and_frame_images() {
     let style = ferrite_pane::rich::style(px(ferrite_ui::theme::FS_UI));
-    assert!(!style.link_underline_on_hover());
+    assert!(style.link_underline_on_hover());
     assert!(!style.numeric_columns_right());
     let cell = ferrite_ui::theme::tx_cell(ferrite_ui::theme::FS_PROSE);
     assert_eq!(
