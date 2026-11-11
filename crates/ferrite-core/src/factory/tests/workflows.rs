@@ -677,7 +677,7 @@ fn human_and_coordinator_routes_wait_for_the_operator() {
 
 /// Deleting a Task parks every Worker it had.
 #[test]
-fn deleting_a_task_parks_all_its_workers() {
+fn deleting_a_task_deletes_all_its_workers() {
     let mut factory = Factory::in_memory();
     let (id, _) = saved(
         &mut factory,
@@ -697,11 +697,11 @@ fn deleting_a_task_parks_all_its_workers() {
         .unwrap();
     let effects = factory.step(13, &BTreeMap::new());
     assert!(
-        effects.contains(&Effect::Park { thread: FIRST }),
+        effects.contains(&Effect::DeleteThread { thread: FIRST }),
         "{effects:?}"
     );
     assert!(
-        effects.contains(&Effect::Park { thread: SECOND }),
+        effects.contains(&Effect::DeleteThread { thread: SECOND }),
         "{effects:?}"
     );
 }

@@ -269,3 +269,154 @@ fn an_unreadable_store_is_reported_and_never_started_afresh() {
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     std::fs::remove_dir_all(fresh.parent().unwrap()).unwrap();
 }
+
+const DAY: i64 = 24 * 3_600_000;
+
+fn complete(factory: &mut Factory, task: &str, at_ms: i64) {
+    let worker = factory.task(task).unwrap().worker.unwrap();
+    factory
+        .command(
+            Command::Report {
+                worker,
+                outcome: Outcome::Finished {
+                    summary: "Done".into(),
+                },
+            },
+            at_ms,
+        )
+        .unwrap();
+    factory.step(at_ms, &BTreeMap::new());
+}
+
+fn archived(factory: &Factory, query: &str) -> Vec<TaskId> {
+    factory
+        .board()
+        .archive(project(), query)
+        .map(|task| task.id.clone())
+        .collect()
+}
+
+fn on_board(factory: &Factory) -> Vec<TaskId> {
+    factory
+        .board()
+        .on_board(project())
+        .map(|task| task.id.clone())
+        .collect()
+}
+
+/// AC: a Completed Task leaves the board for the Archive 7 days after it
+/// completed, on the passed-in clock, and not before; the Archive is
+/// searched by title and instructions.
+#[test]
+fn completed_tasks_move_to_the_archive_after_seven_days() {
+    let mut factory = Factory::in_memory();
+    let task = working(&mut factory);
+    complete(&mut factory, &task, 100);
+    assert_eq!(on_board(&factory), vec![task.clone()]);
+    factory.step(100 + 7 * DAY - 1, &BTreeMap::new());
+    assert_eq!(on_board(&factory), vec![task.clone()], "not yet");
+    assert!(archived(&factory, "").is_empty());
+
+    factory.step(100 + 7 * DAY, &BTreeMap::new());
+    assert!(on_board(&factory).is_empty(), "gone from the board");
+    assert_eq!(archived(&factory, ""), vec![task.clone()]);
+    assert_eq!(factory.task(&task).unwrap().status, Status::Completed);
+    assert_eq!(archived(&factory, "FLAKY"), vec![task.clone()], "title");
+    assert!(archived(&factory, "deploy").is_empty());
+}
+
+/// AC: Clear moves the Project's Completed Tasks to the Archive at once,
+/// and nothing else; a second Clear changes nothing. The Archive searches
+/// instructions too.
+#[test]
+fn clear_archives_a_projects_completed_tasks_at_once() {
+    let mut factory = Factory::in_memory();
+    factory.set_limit(5);
+    let done = working(&mut factory);
+    complete(&mut factory, &done, 10);
+    let open = start(&mut factory, "Rename the flag\nKeep the old one as an alias");
+    let elsewhere = factory
+        .command(
+            Command::Start {
+                project: project_id(2),
+                instructions: "Another project's".into(),
+                agent: agent(),
+                request: None,
+                workflow: None,
+                pr: None,
+            },
+            11,
+        )
+        .unwrap();
+    let cleared = factory.command(Command::Clear { project: project() }, 12);
+    assert_eq!(cleared, Ok(Answer::Changed(true)));
+    assert_eq!(archived(&factory, ""), vec![done.clone()]);
+    assert_eq!(on_board(&factory), vec![open.clone()]);
+    assert_eq!(
+        factory.command(Command::Clear { project: project() }, 13),
+        Ok(Answer::Changed(false))
+    );
+    let Answer::Task(elsewhere) = elsewhere else {
+        panic!()
+    };
+    assert!(factory.task(&elsewhere).unwrap().keeping.archived_ms.is_none());
+
+    let mut factory = Factory::in_memory();
+    let task = start(&mut factory, "Tidy\nThe README mentions the old deploy script");
+    factory.step(1, &BTreeMap::new());
+    worker_up(&mut factory, &task, WORKER);
+    complete(&mut factory, &task, 20);
+    factory
+        .command(Command::Clear { project: project() }, 21)
+        .unwrap();
+    assert_eq!(archived(&factory, "deploy script"), vec![task.clone()]);
+}
+
+/// AC: a completed Task's Workers are parked once at rest (never while
+/// the reporting turn still runs) and kept; only deleting the Task
+/// deletes them.
+#[test]
+fn workers_are_parked_on_completion_and_deleted_only_with_the_task() {
+    let mut factory = Factory::in_memory();
+    let task = working(&mut factory);
+    report(
+        &mut factory,
+        Outcome::Finished {
+            summary: "Done".into(),
+        },
+    )
+    .unwrap();
+    let parks = |effects: &[Effect]| {
+        effects
+            .iter()
+            .filter(|effect| matches!(effect, Effect::Park { .. }))
+            .count()
+    };
+    let effects = factory.step(20, &seen(true, 0));
+    assert_eq!(parks(&effects), 0, "its turn still runs: {effects:?}");
+    let effects = factory.step(21, &seen(false, 1));
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|effect| matches!(effect, Effect::Park { thread } if *thread == WORKER))
+            .count(),
+        1,
+        "{effects:?}"
+    );
+    assert_eq!(parks(&factory.step(22, &seen(false, 1))), 0, "once");
+    assert_eq!(factory.task(&task).unwrap().worker, Some(WORKER), "kept");
+
+    let effects = {
+        factory
+            .command(Command::Delete { task: task.clone() }, 23)
+            .unwrap();
+        factory.step(24, &BTreeMap::new())
+    };
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::DeleteThread { thread } if *thread == WORKER)),
+        "{effects:?}"
+    );
+    assert_eq!(parks(&effects), 0, "{effects:?}");
+}

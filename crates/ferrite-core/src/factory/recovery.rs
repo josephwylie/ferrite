@@ -18,6 +18,15 @@ pub struct Keeping {
     /// operator's Resume) starts without it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revived_ms: Option<i64>,
+    /// When it completed, as the step first saw it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_ms: Option<i64>,
+    /// When it left the board for the Archive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_ms: Option<i64>,
+    /// Its Workers were parked once it completed and they were at rest.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub parked: bool,
 }
 
 /// Why a Worker has no Session.

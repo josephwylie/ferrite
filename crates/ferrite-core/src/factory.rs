@@ -29,12 +29,14 @@ use crate::store::Provider;
 use crate::workspace::registry::ProjectId;
 use crate::ThreadId;
 
+mod archive;
 mod direct;
 mod pr;
 mod recovery;
 mod starts;
 mod workflow;
 
+pub use archive::ARCHIVE_AFTER_MS;
 pub use direct::{Answered, Feedback, FeedbackKind, Override, Oversight, Question, ThenReturn};
 pub use pr::{
     evidence_line, short, Delivery, Evidence, EvidenceKind, MergeOutcome, MergeRoutes, PullRequest,
@@ -506,6 +508,11 @@ pub enum Command {
         task: TaskId,
         kept: Option<String>,
     },
+    /// The Completed column's Clear: `project`'s Completed Tasks go to the
+    /// Archive now (#226).
+    Clear {
+        project: ProjectId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -591,6 +598,10 @@ pub enum Effect {
         thread: ThreadId,
     },
     Park {
+        thread: ThreadId,
+    },
+    /// Delete a deleted Task's Worker for good, open or parked (#226).
+    DeleteThread {
         thread: ThreadId,
     },
     /// Remove a deleted Task's worktree, only if its checkout is clean;
@@ -757,6 +768,7 @@ impl Factory {
             recovery::unstarted(state, &unstarted, now_ms, effects);
             state.step_starts(now_ms, effects);
             state.step(now_ms, workers, limit, &restarted, effects);
+            state.step_archive(now_ms, workers, effects);
             Ok(())
         });
         // Seen once, a Worker lost later was not lost to the restart.
@@ -1313,16 +1325,15 @@ impl State {
                     ));
                 }
                 let task = self.tasks.remove(at);
-                let mut parked = Vec::new();
-                for thread in task
-                    .worker
-                    .into_iter()
-                    .chain(task.workers.iter().map(|each| each.thread))
-                {
-                    if !parked.contains(&thread) {
-                        parked.push(thread);
-                        effects.push(Effect::Park { thread });
+                // Its Workers go with it, and only with it (#226).
+                let mut gone = task.every_worker();
+                for thread in &task.oversight.superseded {
+                    if !gone.contains(thread) {
+                        gone.push(*thread);
                     }
+                }
+                for thread in gone {
+                    effects.push(Effect::DeleteThread { thread });
                 }
                 if let Some(path) = task.worktree {
                     effects.push(Effect::RemoveWorktree { path });
@@ -1356,6 +1367,7 @@ impl State {
             Command::WorktreeTidied { task, kept } => {
                 pr::tidied(self.task_mut(&task)?, kept, now_ms)
             }
+            Command::Clear { project } => Ok(self.clear(project, now_ms)),
             authoring => self.author(authoring, now_ms),
         }
     }

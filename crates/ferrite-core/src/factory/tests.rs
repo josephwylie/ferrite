@@ -373,7 +373,7 @@ fn stop_interrupts_and_resume_continues() {
 }
 
 /// Delete is for a Task that is Queued, Stopped or Completed; it hands
-/// back the Worker to park and the worktree to remove.
+/// back the Worker to delete and the worktree to remove.
 #[test]
 fn only_a_queued_stopped_or_completed_task_is_deleted() {
     let mut factory = Factory::in_memory();
@@ -393,7 +393,7 @@ fn only_a_queued_stopped_or_completed_task_is_deleted() {
     assert_eq!(
         effects,
         vec![
-            Effect::Park { thread: WORKER },
+            Effect::DeleteThread { thread: WORKER },
             Effect::RemoveWorktree {
                 path: "/repo/.worktrees/factory/t-1".into()
             }

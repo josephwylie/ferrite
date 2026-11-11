@@ -207,6 +207,16 @@ impl Server {
                     }
                 }
             }
+            Effect::DeleteThread { thread } => {
+                if self.engine.groups().of(thread).is_some() {
+                    let _ = self.execute(crate::protocol::Op::Group {
+                        change: (&crate::groups::GroupChange::Leave { thread }).into(),
+                    });
+                }
+                if let Err(error) = self.execute(crate::protocol::Op::Delete { thread }) {
+                    crate::log!("server: a Worker could not be deleted: {}", error.message);
+                }
+            }
             Effect::RemoveWorktree { path } => return self.remove_task_worktree(&path),
             Effect::ReadGitHub {
                 workflow,
