@@ -333,7 +333,7 @@ fn approval_settings_choose_who_approves_and_list_what_completes(cx: &mut TestAp
         let draft = &view.shown_workflow().unwrap().draft;
         assert_eq!(
             draft.completion_paths(),
-            ["Your approval marks the task complete"]
+            ["Merge agent reports merge confirmed"]
         );
     });
 

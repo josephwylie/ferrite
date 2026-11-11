@@ -179,7 +179,7 @@ pub(crate) fn segmented<T: Copy + PartialEq + 'static>(
 }
 
 /// A section of the Task's Overview: its label over its content.
-fn section(selector: &'static str, title: impl Into<SharedString>) -> Div {
+pub(super) fn section(selector: &'static str, title: impl Into<SharedString>) -> Div {
     use ferrite_ui::theme::*;
     div()
         .debug_selector(move || selector.to_string())
@@ -198,7 +198,7 @@ fn section(selector: &'static str, title: impl Into<SharedString>) -> Div {
         )
 }
 
-fn meta(text: impl Into<SharedString>) -> Div {
+pub(super) fn meta(text: impl Into<SharedString>) -> Div {
     use ferrite_ui::theme::*;
     div()
         .text_size(px(FS_META))
@@ -669,7 +669,16 @@ impl CockpitView {
                     ));
                 }
             }
-            if !task.results.is_empty() {
+            if let Some(approving) = super::delivery::approving_line(task) {
+                ready = ready.child(
+                    meta(approving).debug_selector(|| "task-approval-revision".into()),
+                );
+            }
+            if !task.delivery.evidence.is_empty() {
+                ready = ready
+                    .child(meta("Evidence"))
+                    .child(super::delivery::evidence_list(task));
+            } else if !task.results.is_empty() {
                 let mut evidence = div()
                     .debug_selector(|| "task-evidence".into())
                     .flex()
@@ -681,6 +690,7 @@ impl CockpitView {
                         core_factory::Outcome::Unable { tried } => ("could not finish", tried),
                         core_factory::Outcome::Approved { summary } => ("approved", summary),
                         core_factory::Outcome::Rejected { reasons } => ("did not approve", reasons),
+                        core_factory::Outcome::Merge { summary, .. } => ("merge result", summary),
                     };
                     evidence = evidence.child(
                         div()

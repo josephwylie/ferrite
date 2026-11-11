@@ -63,6 +63,10 @@ pub(crate) struct NewTask {
     error: Option<SharedString>,
     /// The process it runs: a Workflow's latest version, else one-off.
     pub(crate) workflow: Option<core_factory::WorkflowId>,
+    /// Its optional pull request, `owner/repository#number` or a URL
+    /// (#223), and whether that field has the keyboard.
+    pub(crate) pr: Entity<Composer>,
+    pub(crate) pr_focused: bool,
 }
 
 /// What the Factory view shows.
@@ -236,7 +240,12 @@ impl CockpitView {
     pub(super) fn factory_focus(&self, window: &Window, cx: &gpui::App) -> Option<FocusHandle> {
         let view = self.factory_view.as_ref()?;
         if let Some(sheet) = &view.sheet {
-            return Some(sheet.instructions.read(cx).focus_handle(cx));
+            let field = if sheet.pr_focused {
+                &sheet.pr
+            } else {
+                &sheet.instructions
+            };
+            return Some(field.read(cx).focus_handle(cx));
         }
         if let Some(focus) = self.direct_focus(cx) {
             return Some(focus);
@@ -276,7 +285,11 @@ impl CockpitView {
         };
         let instructions = cx.new(Composer::new);
         instructions.update(cx, |field, cx| field.set_role(Role::Field(None), cx));
+        let pr = cx.new(Composer::new);
+        pr.update(cx, |field, cx| field.set_role(Role::Field(None), cx));
         view.sheet = Some(NewTask {
+            pr,
+            pr_focused: false,
             instructions,
             request: format!(
                 "window-{}-{}",
@@ -286,6 +299,19 @@ impl CockpitView {
             error: None,
             workflow: None,
         });
+        cx.notify();
+    }
+
+    /// The New task sheet's keyboard goes to its PR field, or back to
+    /// the instructions.
+    pub(crate) fn focus_new_task_pr(&mut self, pr: bool, cx: &mut Context<Self>) {
+        if let Some(sheet) = self
+            .factory_view
+            .as_mut()
+            .and_then(|view| view.sheet.as_mut())
+        {
+            sheet.pr_focused = pr;
+        }
         cx.notify();
     }
 
@@ -307,6 +333,7 @@ impl CockpitView {
             return;
         };
         let instructions = sheet.instructions.read(cx).text().trim().to_string();
+        let pr = Some(sheet.pr.read(cx).text().trim().to_string()).filter(|pr| !pr.is_empty());
         let error = if instructions.is_empty() {
             Some(SharedString::from("Say what the task is."))
         } else {
@@ -315,6 +342,7 @@ impl CockpitView {
                 instructions,
                 request: Some(sheet.request.clone()),
                 workflow: sheet.workflow.clone(),
+                pr,
             };
             match self.cockpit.task(action) {
                 Ok(Some(Done::Task { task })) => {
@@ -716,6 +744,14 @@ impl CockpitView {
                     .line_clamp(3)
                     .child(SharedString::from(line))
             }))
+            .children(super::delivery::card_line(task).map(|line| {
+                let pr_key = format!("factory-card-{}-pr", task.id);
+                div()
+                    .debug_selector(move || pr_key.clone())
+                    .text_size(px(FS_META))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(SharedString::from(line))
+            }))
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 let shut = view
                     .factory_view
@@ -896,6 +932,7 @@ impl CockpitView {
                     )
                     .child(line("Status", task.status.word().to_string()))
                     .children(self.task_say(task, window, cx))
+                    .children(self.task_delivery(task, cx))
                     .into_any_element()
             }
             TaskTab::Activity => {
@@ -912,6 +949,11 @@ impl CockpitView {
                         Actor::Ferrite => "Ferrite",
                         Actor::Agent => "Agent",
                         Actor::Operator => "You",
+                        Actor::Tool => "Tool",
+                    };
+                    let text = match entry.revision {
+                        Some(revision) => format!("{} \u{b7} revision {revision}", entry.text),
+                        None => entry.text.clone(),
                     };
                     list = list.child(
                         div()
@@ -930,7 +972,7 @@ impl CockpitView {
                                 div()
                                     .flex_1()
                                     .min_w_0()
-                                    .child(SharedString::from(entry.text.clone())),
+                                    .child(SharedString::from(text)),
                             ),
                     );
                 }
@@ -966,6 +1008,7 @@ impl CockpitView {
                         }),
                     )
                     .child(fact("Agent", core_factory::agent_label(&task.agent)))
+                    .children(task.delivery.pr.as_ref().map(|pr| fact("PR", pr.url())))
                     .children(task.workflow.as_ref().map(|run| {
                         fact(
                             "Workflow",
@@ -1047,6 +1090,7 @@ impl CockpitView {
             .read(cx)
             .focus_handle(cx)
             .is_focused(window);
+        let pr_focused = sheet.pr.read(cx).focus_handle(cx).is_focused(window);
         let process = match sheet
             .workflow
             .as_deref()
@@ -1060,12 +1104,35 @@ impl CockpitView {
             None => "One-off: a single agent".into(),
         };
         let mut body = crate::project_editor::body()
-            .child(crate::project_editor::text_field(
-                "Instructions".into(),
-                sheet.instructions.clone(),
-                focused,
-                "new-task-instructions-focused",
-            ))
+            .child(
+                div()
+                    .id("new-task-instructions")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|view, _: &MouseDownEvent, _, cx| view.focus_new_task_pr(false, cx)),
+                    )
+                    .child(crate::project_editor::text_field(
+                        "Instructions".into(),
+                        sheet.instructions.clone(),
+                        focused,
+                        "new-task-instructions-focused",
+                    )),
+            )
+            .child(
+                div()
+                    .id("new-task-pr")
+                    .debug_selector(|| "new-task-pr".into())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|view, _: &MouseDownEvent, _, cx| view.focus_new_task_pr(true, cx)),
+                    )
+                    .child(crate::project_editor::text_field(
+                        "Pull request (optional): owner/repository#number or its URL".into(),
+                        sheet.pr.clone(),
+                        pr_focused,
+                        "new-task-pr-focused",
+                    )),
+            )
             .child(
                 div()
                     .flex()
