@@ -648,3 +648,14 @@ fn a_task_back_to_work_waits_its_turn_under_the_limit() {
     assert_eq!(told.len(), 1, "{effects:?}");
     assert!(told[0].contains("Their answer: main"), "{told:?}");
 }
+
+/// B9: one rule for how many Tasks may work at once, the Factory's.
+#[test]
+fn the_limit_is_kept_within_its_range() {
+    let mut factory = Factory::in_memory();
+    factory.set_limit(0);
+    assert_eq!(factory.limit(), 1);
+    factory.set_limit(50);
+    assert_eq!(factory.limit(), *LIMIT_RANGE.end());
+    assert_eq!(clamp_limit(5), 5);
+}

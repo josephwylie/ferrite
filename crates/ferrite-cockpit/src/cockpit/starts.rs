@@ -90,9 +90,6 @@ pub(crate) fn script_command(executable: &str, workflow: &str) -> String {
     format!("\"{executable}\" task submit {workflow} \"<identity>\" \"<instructions>\"")
 }
 
-/// The most Tasks Settings let work at once.
-pub(crate) const MOST_AT_ONCE: usize = 12;
-
 impl CockpitView {
     /// Settings' stepper on how many Factory Tasks work at once.
     pub(crate) fn step_factory_limit(&mut self, delta: i32, cx: &mut Context<Self>) {
@@ -100,8 +97,7 @@ impl CockpitView {
         let next = if delta == 0 {
             core_factory::DEFAULT_LIMIT
         } else {
-            now.saturating_add_signed(delta as isize)
-                .clamp(1, MOST_AT_ONCE)
+            core_factory::clamp_limit(now.saturating_add_signed(delta as isize))
         };
         if next != now {
             self.change_settings(|settings| settings.factory_tasks_at_once = next, cx);
