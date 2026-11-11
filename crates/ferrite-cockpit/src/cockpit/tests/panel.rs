@@ -268,11 +268,11 @@ fn the_palette_toggles_the_panel(cx: &mut TestAppContext) {
     assert!(view.read_with(cx, |view, _| !view.prefs.settings.panel_shown));
 }
 
-/// The panel is one scroll of sections, Claude's, with no tabs:
+/// A Thread's Panel opens on its Overview tab, one scroll of sections:
 /// Environment, then Changes and Context once they have something to say
 /// (no filler line stands in for them). Opening it from hidden shows it.
 #[gpui::test]
-fn the_panel_is_one_scroll_of_sections(cx: &mut TestAppContext) {
+fn the_overview_is_one_scroll_of_sections(cx: &mut TestAppContext) {
     let (view, cx) = solo("panel-sections", 1, 1600., cx);
     let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
     for section in ["panel-environment-head", "panel-environment-machine"] {
@@ -281,9 +281,7 @@ fn the_panel_is_one_scroll_of_sections(cx: &mut TestAppContext) {
     for section in ["panel-changes-head", "panel-context-head"] {
         assert!(cx.debug_bounds(section).is_none(), "empty: {section}");
     }
-    for tab in ["panel-tab-Overview", "panel-tab-Preview"] {
-        assert!(cx.debug_bounds(tab).is_none(), "no tabs: {tab}");
-    }
+    assert!(cx.debug_bounds("panel-tab-Overview").is_some(), "its one tab");
     assert!(cx.debug_bounds("panel-pr").is_none(), "no pull request yet");
 
     view.update(cx, |view, cx| view.toggle_panel_now(cx));

@@ -143,6 +143,7 @@ impl TranscriptView {
         find.bar.report().revealed.set(None);
         find.reveal = crate::find::REVEAL_FRAMES;
         if !self.scroll.item_is_visible(row) {
+            self.operator_scrolled();
             self.runway.set(Runway::default());
             self.scroll.scroll_to(row, px(0.));
         }

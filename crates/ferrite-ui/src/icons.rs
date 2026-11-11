@@ -66,7 +66,7 @@ icons![
     "resend",
     "ferrite-mono",
     // ---- WP-A icons (append names above the end line)
-    "reasoning",
+
     // (end WP-A)
 
     // ---- WP-B icons (append names above the end line)
@@ -145,6 +145,51 @@ icons![
     "pin",
     "clock",
     // (end UI refresh)
+    // A side chat's Surface tab (Lucide's messages-square, T3's).
+    "messages-square",
+    // The nav's Thread card (T3 Code's): its status words' glyphs, the PR
+    // chip's draft, the worktree on its checkout line, a pin's undo.
+    "shield-question",
+    "message-circle-question",
+    "circle-alert",
+    "git-pull-request-draft",
+    "folder-git-2",
+    "pin-off",
+    "undo-2",
+    "alarm-clock",
+    "alarm-clock-off",
+    "folder-plus",
+    "list-filter",
+    "chart-no-axes-column",
+    // A transcript work row's gutter (T3 Code's `TimelineToolActivityIcon`).
+    "square-pen",
+    "eye",
+    "brain",
+    "hammer",
+    "wrench",
+    "bot",
+    "zap",
+    "message-circle",
+    "list-todo",
+    "app-window",
+    // The Composer and its model picker (T3's): a skill token's cube, the
+    // steer glyph, the picker's favourites, Fast, its permission chevron,
+    // a worktree in the workspace menu.
+    "box",
+    "corner-up-right",
+    "star",
+    "chevron-up",
+    "quote",
+    "folder-git",
+    // The Panel's Surfaces: a side chat's delete, the Changes toolbar's
+    // view tools.
+    "trash-2",
+    "rows-3",
+    "columns-2",
+    "text-wrap",
+    "pilcrow",
+    "flask-conical-off",
+    "folder-tree",
 ];
 
 pub const SIDEBAR: &str = "icons/sidebar.svg";
@@ -185,8 +230,6 @@ pub const RESEND: &str = "icons/resend.svg";
 pub const FERRITE_MONO: &str = "icons/ferrite-mono.svg";
 
 // ---- WP-A icon names (append consts above the end line)
-/// `∴` (not in Geist Mono): the reasoning row's gutter mark, three dots.
-pub const REASONING: &str = "icons/reasoning.svg";
 // (end WP-A)
 
 // ---- WP-B icon names (append consts above the end line)
@@ -307,23 +350,83 @@ pub const CODE: &str = "icons/code.svg";
 pub const PIN: &str = "icons/pin.svg";
 pub const CLOCK: &str = "icons/clock.svg";
 // (end UI refresh)
+/// A side chat: its Surface tab and the + menu's row.
+pub const MESSAGES_SQUARE: &str = "icons/messages-square.svg";
+/// A Thread card's status (`nav::card`): an approval or plan waits, a
+/// question waits, a run failed or its tests fail.
+pub const SHIELD_QUESTION: &str = "icons/shield-question.svg";
+pub const MESSAGE_CIRCLE_QUESTION: &str = "icons/message-circle-question.svg";
+pub const CIRCLE_ALERT: &str = "icons/circle-alert.svg";
+/// A draft PR on a Thread card's chip.
+pub const GIT_PULL_REQUEST_DRAFT: &str = "icons/git-pull-request-draft.svg";
+/// A Thread working in a worktree, on its card's checkout line.
+pub const FOLDER_GIT: &str = "icons/folder-git-2.svg";
+/// A pinned card's pin under the pointer: the press unpins.
+pub const PIN_OFF: &str = "icons/pin-off.svg";
+/// The nav's shelves and chrome (T3's lucide glyphs): a parked row's
+/// Revive, a snoozed row's wake time and Wake, the head's Add project, New
+/// thread and Project filter, the foot's Usage.
+pub const UNDO_2: &str = "icons/undo-2.svg";
+pub const ALARM_CLOCK: &str = "icons/alarm-clock.svg";
+pub const ALARM_CLOCK_OFF: &str = "icons/alarm-clock-off.svg";
+pub const FOLDER_PLUS: &str = "icons/folder-plus.svg";
+pub const LIST_FILTER: &str = "icons/list-filter.svg";
+pub const CHART_NO_AXES_COLUMN: &str = "icons/chart-no-axes-column.svg";
+/// A transcript work row's glyphs (`tools::ToolIcon`), Lucide's.
+pub const SQUARE_PEN: &str = "icons/square-pen.svg";
+pub const EYE: &str = "icons/eye.svg";
+pub const BRAIN: &str = "icons/brain.svg";
+pub const HAMMER: &str = "icons/hammer.svg";
+pub const WRENCH: &str = "icons/wrench.svg";
+pub const BOT: &str = "icons/bot.svg";
+pub const ZAP: &str = "icons/zap.svg";
+pub const MESSAGE_CIRCLE: &str = "icons/message-circle.svg";
+pub const LIST_TODO: &str = "icons/list-todo.svg";
+pub const APP_WINDOW: &str = "icons/app-window.svg";
+/// A skill token's cube (Lucide's `box`, T3's skill chip), stroked
+/// `theme::SKILL_ICON_STROKE`.
+pub const BOX: &str = "icons/box.svg";
+/// The send circle while a turn runs: what is typed steers it.
+pub const CORNER_UP_RIGHT: &str = "icons/corner-up-right.svg";
+/// A favourite model.
+pub const STAR: &str = "icons/star.svg";
+pub const CHEVRON_UP: &str = "icons/chevron-up.svg";
+/// `Cite` on a selection.
+pub const QUOTE: &str = "icons/quote.svg";
+/// An existing worktree in the workspace menu (`FOLDER_GIT` is a new one).
+pub const FOLDER_GIT_EXISTING: &str = "icons/folder-git.svg";
+/// A side chat's delete, in its Surface's head.
+pub const TRASH: &str = "icons/trash-2.svg";
+/// The Changes toolbar: Stacked and Split, Wrap, Whitespace, Hide test
+/// files, File tree.
+pub const ROWS: &str = "icons/rows-3.svg";
+pub const COLUMNS: &str = "icons/columns-2.svg";
+pub const TEXT_WRAP: &str = "icons/text-wrap.svg";
+pub const PILCROW: &str = "icons/pilcrow.svg";
+pub const FLASK_OFF: &str = "icons/flask-conical-off.svg";
+pub const FOLDER_TREE: &str = "icons/folder-tree.svg";
 
 pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
-        let (path, size) = match path
-            .rsplit_once('@')
-            .map(|(path, size)| (path, size.parse()))
-        {
-            Some((path, Ok(size))) => (path, Some(size)),
-            _ => (path, None),
+        let (path, drawn) = match path.rsplit_once('@').and_then(|(path, drawn)| {
+            let (size, stroke) = drawn.split_once('/').unwrap_or((drawn, ""));
+            let stroke = if stroke.is_empty() {
+                theme::ICON_STROKE
+            } else {
+                stroke.parse().ok()?
+            };
+            Some((path, (size.parse::<f32>().ok()?, stroke)))
+        }) {
+            Some((path, drawn)) => (path, Some(drawn)),
+            None => (path, None),
         };
         Ok(ICONS
             .iter()
             .find(|(name, _)| *name == path)
-            .map(|(_, bytes)| match size {
-                Some(size) => Cow::Owned(stroke_at(bytes, size)),
+            .map(|(_, bytes)| match drawn {
+                Some((size, stroke)) => Cow::Owned(stroke_at(bytes, size, stroke)),
                 None => Cow::Borrowed(*bytes),
             })
             .or_else(|| gpui::assets::Assets::get(path).map(|asset| asset.data)))
@@ -351,18 +454,30 @@ pub fn icon(path: &'static str, size: f32, color: u32) -> Svg {
         .text_color(rgb(color))
 }
 
+/// [`icon`] stroked `stroke` px instead of `theme::ICON_STROKE`: a glyph
+/// whose reference draws it heavier (T3's skill cube, its send arrow).
+pub fn icon_stroked(path: &'static str, size: f32, stroke: f32, color: u32) -> Svg {
+    icon(path, size, color).path(stroked_key(path, size, stroke))
+}
+
+/// The asset key `icon_stroked` draws, for an element that paints the SVG
+/// itself (`Window::paint_svg`).
+pub fn stroked_key(path: &str, size: f32, stroke: f32) -> SharedString {
+    format!("{path}@{size}/{stroke}").into()
+}
+
 /// The key of `path` drawn `size` px square: `Assets` strokes it at
-/// `theme::ICON_STROKE` for that size. gpui rasterises an SVG per key and
-/// device size, and hands `AssetSource::load` only the key, so the size
-/// rides in it.
+/// `theme::ICON_STROKE` for that size (or at the stroke after a `/`,
+/// `icon_stroked`). gpui rasterises an SVG per key and device size, and
+/// hands `AssetSource::load` only the key, so the size rides in it.
 fn drawn_at(path: &str, size: f32) -> SharedString {
     format!("{path}@{size}").into()
 }
 
 /// `svg` with every `stroke-width` set so that, scaled from its viewBox to
-/// `size` px, it strokes `theme::ICON_STROKE`. An SVG with no stroke (a
-/// fill logomark) is returned as it is.
-fn stroke_at(svg: &[u8], size: f32) -> Vec<u8> {
+/// `size` px, it strokes `stroke` px. An SVG with no stroke (a fill
+/// logomark) is returned as it is.
+fn stroke_at(svg: &[u8], size: f32, stroke: f32) -> Vec<u8> {
     let Ok(text) = std::str::from_utf8(svg) else {
         return svg.to_vec();
     };
@@ -373,7 +488,7 @@ fn stroke_at(svg: &[u8], size: f32) -> Vec<u8> {
     let Some(view) = view else {
         return svg.to_vec();
     };
-    let width = format!("{}", theme::ICON_STROKE * view / size);
+    let width = format!("{}", stroke * view / size);
     let mut pieces = text.split(r#"stroke-width=""#);
     let mut out = pieces.next().unwrap_or_default().to_string();
     for piece in pieces {
@@ -445,13 +560,13 @@ mod tests {
             COPY,
             RESEND,
             FERRITE_MONO,
-            REASONING,
             IMAGE,
             BOARD,
         ]
         .into_iter()
         .chain(REFRESH_ICONS)
         .chain(TITLE_BAR_ICONS)
+        .chain(WORK_ROW_ICONS)
         {
             let bytes = Assets
                 .load(key)
@@ -497,6 +612,7 @@ mod tests {
         .into_iter()
         .chain(REFRESH_ICONS)
         .chain(TITLE_BAR_ICONS)
+        .chain(WORK_ROW_ICONS)
         {
             let bytes = Assets.load(key).unwrap().unwrap();
             let svg = std::str::from_utf8(&bytes).unwrap();
@@ -546,8 +662,31 @@ mod tests {
     /// The title bar's line icons (Wave 2), in the family.
     const TITLE_BAR_ICONS: [&str; 3] = [BACK, FORWARD, DIFF];
 
+    /// A work row's Lucide glyphs.
+    const WORK_ROW_ICONS: [&str; 10] = [
+        SQUARE_PEN,
+        EYE,
+        BRAIN,
+        HAMMER,
+        WRENCH,
+        BOT,
+        ZAP,
+        MESSAGE_CIRCLE,
+        LIST_TODO,
+        APP_WINDOW,
+    ];
+
+    /// A work row's glyph strokes Lucide's own weight, 1.33px at 16.
+    #[test]
+    fn a_work_row_icon_strokes_lucides_weight() {
+        let key = format!("{BRAIN}@16/{}", theme::WORK_ICON_STROKE);
+        let bytes = Assets.load(&key).unwrap().unwrap();
+        let drawn = std::str::from_utf8(&bytes).unwrap();
+        assert!((drawn_stroke(drawn, 16.0) - 4.0 / 3.0).abs() < 0.001);
+    }
+
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
-    const REFRESH_ICONS: [&str; 37] = [
+    const REFRESH_ICONS: [&str; 44] = [
         PANEL_RIGHT,
         SEARCH,
         INBOX,
@@ -585,6 +724,13 @@ mod tests {
         LIST,
         CODE,
         PIN,
+        UNDO_2,
+        ALARM_CLOCK,
+        ALARM_CLOCK_OFF,
+        FOLDER_PLUS,
+        SQUARE_PEN,
+        LIST_FILTER,
+        CHART_NO_AXES_COLUMN,
     ];
 
     fn attr(svg: &str, name: &str) -> String {

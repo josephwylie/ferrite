@@ -114,16 +114,6 @@ pub fn launch() {
         );
         return;
     }
-    // The working line's rolling token count (`visual_reference::token_roll`).
-    #[cfg(feature = "visual-reference")]
-    if std::env::args().nth(1).as_deref() == Some("--token-roll") {
-        cockpit::visual_reference::token_roll(
-            std::env::args()
-                .nth(2)
-                .expect("an output directory is required"),
-        );
-        return;
-    }
     // Visuals' agent screenshots (`visual::shots::snapshots`).
     #[cfg(feature = "visual-reference")]
     if std::env::args().nth(1).as_deref() == Some("--visual-snapshots") {

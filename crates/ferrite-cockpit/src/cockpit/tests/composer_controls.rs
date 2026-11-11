@@ -249,7 +249,8 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
                 state: ferrite_core::RunState::Running,
             }),
         );
-        view.pick(pick, window, cx);
+        let _ = window;
+        view.pick_model_row(pick, cx);
         let menu = view.popover.as_ref().expect("explanation stays open");
         assert_eq!(menu.hold, Some(TUNING_BUSY_HINT));
         assert!(menu.rows.iter().all(|row| row.inert));
@@ -258,24 +259,14 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
         view.open_effort_picker(thread, cx);
         let menu = view.popover.as_ref().unwrap();
         assert_eq!(menu.hold, Some(TUNING_BUSY_HINT));
-        assert!(menu.rows.iter().all(|row| row.inert));
-        // SPEC §5.5: each busy choice is disabled with the reason in its
-        // tooltip; no inert note row says it inside the menu.
-        let drawn = view.choice_menu(
-            0,
-            Kind::Effort,
-            gpui::component::button::Button::new("effort-trigger"),
-            cx,
-        );
-        assert!(!drawn.choices.is_empty());
-        for choice in &drawn.choices {
-            assert!(choice.disabled, "{} is disabled", choice.label);
-            assert_eq!(choice.why.as_deref(), Some(TUNING_BUSY_HINT));
-            assert_ne!(choice.label.as_ref(), TUNING_BUSY_HINT);
-        }
-        let menu = view.popover.as_ref().unwrap();
+        // SPEC §5.5: each busy choice is disabled, the reason its tooltip.
+        let Kind::Provider(picker) = &menu.kind else {
+            panic!("the model picker");
+        };
+        assert!(!picker.efforts.is_empty());
+        assert!(picker.efforts.iter().all(|rung| rung.inert));
         assert_eq!(
-            menu.rows.iter().find(|row| row.active).unwrap().name,
+            picker.efforts.iter().find(|rung| rung.active).unwrap().name,
             "High"
         );
     });
@@ -296,8 +287,11 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
             .expect("finishing keeps the picker open");
         assert_eq!(menu.hold, None);
         assert!(menu.rows.iter().any(|row| !row.inert));
+        let Kind::Provider(picker) = &menu.kind else {
+            panic!("the model picker");
+        };
         assert_eq!(
-            menu.rows.iter().find(|row| row.active).unwrap().name,
+            picker.efforts.iter().find(|rung| rung.active).unwrap().name,
             "High"
         );
     });
@@ -318,7 +312,10 @@ fn a_tuning_change_waiting_on_the_provider_holds_the_pickers(cx: &mut TestAppCon
         view.open_effort_picker(thread, cx);
         let menu = view.popover.as_ref().unwrap();
         assert_eq!(menu.hold, Some(TUNING_PENDING_HINT));
-        assert!(menu.rows.iter().all(|row| row.inert));
+        let Kind::Provider(picker) = &menu.kind else {
+            panic!("the model picker");
+        };
+        assert!(picker.efforts.iter().all(|rung| rung.inert));
     });
     fake.effort_answers
         .borrow_mut()
@@ -335,9 +332,12 @@ fn a_tuning_change_waiting_on_the_provider_holds_the_pickers(cx: &mut TestAppCon
             .as_ref()
             .expect("the answer keeps the picker open");
         assert_eq!(menu.hold, None);
-        assert!(menu.rows.iter().any(|row| !row.inert));
+        let Kind::Provider(picker) = &menu.kind else {
+            panic!("the model picker");
+        };
+        assert!(picker.efforts.iter().any(|rung| !rung.inert));
         assert_eq!(
-            menu.rows.iter().find(|row| row.active).unwrap().name,
+            picker.efforts.iter().find(|rung| rung.active).unwrap().name,
             "High"
         );
     });
@@ -520,14 +520,14 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
             "the eight-line draft stays inside its cell: {editor:?} / {cell:?}"
         );
         if width == 900. {
-            // The working line is the transcript's last row now.
+            // The live row is the transcript's last row now.
             let progress = cx.debug_bounds("transcript-progress").unwrap();
             assert!(
                 progress.bottom() <= editor.top(),
                 "the complete live status stays above the box: {progress:?} / {editor:?}"
             );
-            // One transcript line: the working line sits on the prose grid.
-            assert!(progress.size.height <= px(ferrite_ui::theme::LH_PROSE));
+            // One row: the live row stands on the fold's row height.
+            assert!(progress.size.height <= px(ferrite_ui::theme::TURN_FOLD_ROW_H));
         }
     }
     view.update(cx, |view, cx| {
@@ -610,9 +610,8 @@ fn the_toolbar_chips_open_their_pickers_with_and_without_a_session(cx: &mut Test
         view.read_with(cx, |view, _| {
             assert!(view.mode_picker.is_some(), "the mode chip opens its menu");
         });
-        // Row 0 is the menu's `Mode` heading.
         let item = cx
-            .debug_bounds("choice-row-1")
+            .debug_bounds("mode-segment-0")
             .expect("the mode menu is drawn");
         assert!(item.bottom() <= mode.top(), "{item:?} rests above {mode:?}");
         view.update(cx, |view, cx| {
@@ -621,20 +620,20 @@ fn the_toolbar_chips_open_their_pickers_with_and_without_a_session(cx: &mut Test
         });
         tick(cx);
         // The model and its effort are one chip: it opens the model
-        // picker, the effort a submenu row there.
+        // picker, the effort its Reasoning column.
         let at = chip("model-picker", cx);
         cx.simulate_click(at.center(), gpui::Modifiers::none());
         cx.run_until_parked();
         tick(cx);
         view.read_with(cx, |view, _| {
             let open = view.popover.as_ref().expect("the chip opens its picker");
-            assert_eq!(open.kind.picker_slot(), Some((false, false)));
+            assert!(matches!(open.kind, Kind::Provider(_)));
         });
-        let menu = cx.debug_bounds("choice-menu").expect("the picker is drawn");
+        let menu = cx.debug_bounds("model-picker").expect("the picker is drawn");
         assert!(menu.bottom() <= at.top(), "{menu:?} above {at:?}");
         assert!(
-            cx.debug_bounds("choice-submenu-row-0").is_some(),
-            "the effort rides the model picker as a submenu row"
+            cx.debug_bounds("model-picker-reasoning").is_some(),
+            "the effort rides the model picker as its column"
         );
         view.update(cx, |view, cx| {
             view.popover = None;
@@ -959,4 +958,103 @@ fn a_sent_prompt_shows_stop_before_its_first_event(cx: &mut TestAppContext) {
         cx.debug_bounds("composer-stop").is_some(),
         "stop stands from the send"
     );
+}
+
+/// T3's primary actions: while a turn runs with something typed, stop (a
+/// 28 circle) stands beside send (a 32 circle), so the operator can steer
+/// or interrupt from the same row. Each does its own act.
+#[gpui::test]
+fn a_running_turn_with_text_shows_stop_beside_send(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("stop-beside-send", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Go".into());
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    assert!(cx.debug_bounds("composer-stop").is_some(), "stop alone");
+    assert!(cx.debug_bounds("composer-send").is_none(), "no send when empty");
+    view.update(cx, |view, cx| {
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.set("Also this".into(), cx));
+    });
+    tick(cx);
+    let stop = cx.debug_bounds("composer-stop").expect("stop stays");
+    let send = cx.debug_bounds("composer-send").expect("send joins it");
+    assert!(stop.right() <= send.left(), "stop before send: {stop:?} / {send:?}");
+    assert_eq!(stop.size.width, px(28.));
+    assert_eq!(send.size.width, px(32.));
+    cx.simulate_click(stop.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(*fake.interrupts.borrow(), 1, "stop interrupts");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[0].composer.read(cx).text(), "Also this", "and keeps the text");
+    });
+}
+
+/// T3's model trigger: the provider's mark leads the chip, then the model,
+/// then the effort.
+#[gpui::test]
+fn the_model_chip_leads_with_its_providers_mark(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("model-chip-mark", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let chip = debug_bounds(cx, format!("model-picker-{}", thread.get())).expect("the chip");
+    let mark = debug_bounds(
+        cx,
+        format!("model-chip-{:?}-mark", PaneIdentity::Thread(thread)),
+    )
+    .expect("the provider's mark");
+    assert!(chip.contains(&mark.center()), "{mark:?} in {chip:?}");
+    assert_eq!(mark.size.width, px(ferrite_ui::theme::MODEL_PICKER_MARK));
+    assert!(
+        mark.left() - chip.left() <= px(ferrite_ui::theme::FOOTER_CHIP_PAD_X + 1.),
+        "the mark leads: {mark:?} / {chip:?}"
+    );
+}
+
+/// The effort chip's door, `/effort`, and the palette's `effort` open the
+/// model picker with the keyboard in its Reasoning column, its cursor on
+/// the level in force; the model chip opens it on the list.
+#[gpui::test]
+fn effort_opens_the_picker_on_its_reasoning_column(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("effort-opens-reasoning", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    cx.simulate_input("/effort");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    let column = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            let open = view.popover.as_ref().expect("the picker is open");
+            let Kind::Provider(picker) = &open.kind else {
+                panic!("the model picker");
+            };
+            (
+                picker.column,
+                picker.efforts.iter().position(|rung| rung.active),
+                picker.effort_cursor,
+            )
+        })
+    };
+    let (at, active, cursor) = column(&view, cx);
+    assert_eq!(at, Column::Reasoning, "/effort lands in the column");
+    assert_eq!(Some(cursor), active, "on the level in force");
+    assert!(cx.debug_bounds("model-picker-reasoning").is_some());
+    view.update(cx, |view, cx| {
+        view.popover = None;
+        cx.notify();
+    });
+    tick(cx);
+    let chip = debug_bounds(cx, format!("model-picker-{}", thread.get())).expect("the chip");
+    cx.simulate_click(chip.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(column(&view, cx).0, Column::List, "the chip opens on the list");
 }

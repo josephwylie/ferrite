@@ -1,4 +1,5 @@
 mod attention_alerts;
+mod background_work;
 mod boards;
 mod changes;
 mod checks;
@@ -28,6 +29,7 @@ mod loops_overlay;
 mod machines;
 mod nav_list;
 mod nav_parity;
+mod nav_shelves;
 mod navigation;
 mod output_cards;
 mod panel;
@@ -56,6 +58,7 @@ mod thread_groups;
 mod terminal;
 mod tools;
 mod transcript_pointer;
+mod send_scroll;
 mod transcript_rows;
 mod ui_a;
 mod ui_b;
@@ -365,6 +368,18 @@ fn did_something_now(store: &std::path::Path, thread: ThreadId) {
     writeln!(log, "{record}").unwrap();
 }
 
+/// Every Thread's checkout says no branch, whatever branch this checkout
+/// (the fixtures' workspace) is on: its card hugs its two lines.
+fn without_checkouts(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+    view.update(cx, |view, cx| {
+        let threads = view.cockpit.threads();
+        view.facts
+            .set_branches(threads.into_iter().map(|thread| (thread, None)).collect());
+        view.notify_part(parts::Part::Nav, cx);
+    });
+    cx.run_until_parked();
+}
+
 fn cockpit(name: &str, panes: usize) -> (Cockpit, Fake) {
     let fake = Fake::default();
     let dir = scratch(name);
@@ -458,10 +473,87 @@ fn spoken(fake: &Fake, stream: usize) {
         .unwrap();
 }
 
+/// Open every settled turn's fold on Pane 0 (`DisclosureId::Turn`), for a
+/// test whose subject is the work rows the fold hides.
+fn open_folds(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+    view.update(cx, |view, cx| {
+        let Some(thread) = view.panes[0].thread() else {
+            return;
+        };
+        let prompts: Vec<_> = view
+            .cockpit
+            .thread(thread)
+            .unwrap()
+            .transcript()
+            .blocks()
+            .iter()
+            .filter(|block| matches!(block.body, Body::Prompt(_)))
+            .map(|block| pane::DisclosureId::Turn(block.id))
+            .collect();
+        for fold in prompts {
+            if !view.panes[0].tool_expanded(fold.clone()) {
+                view.panes[0].toggle_tool(&fold);
+            }
+        }
+        cx.notify();
+    });
+    tick(cx);
+}
+
+/// Press the running turn's live row, opening the trailing work it stands
+/// for, for a test whose subject is those rows.
+fn open_live(cx: &mut gpui::VisualTestContext) {
+    let live = cx
+        .debug_bounds("live-call")
+        .or_else(|| cx.debug_bounds("live-thinking"))
+        .expect("the live row")
+        .center();
+    cx.simulate_click(live, gpui::Modifiers::none());
+    tick(cx);
+}
+
 fn tick(cx: &mut gpui::VisualTestContext) {
     cx.executor()
         .advance_clock(Duration::from_millis(PUMP_MS * 4));
     cx.run_until_parked();
+}
+
+/// `thread`'s Panel tabs, in order, and the one it shows (ADR 0039).
+fn panel_tabs(
+    view: &gpui::Entity<CockpitView>,
+    thread: ThreadId,
+    cx: &mut gpui::VisualTestContext,
+) -> (Vec<super::surfaces::SurfaceId>, Option<super::surfaces::SurfaceId>) {
+    view.read_with(cx, |view, _| {
+        let tabs = view
+            .panel
+            .surfaces
+            .get(thread)
+            .map_or_else(|| vec![super::surfaces::SurfaceId::Overview], |state| state.tabs.clone());
+        (tabs, view.active_surface(thread))
+    })
+}
+
+/// Opening `id` twice through `open` leaves one tab for it, shown: the
+/// Panel's one door (`upsert_surface`).
+fn opens_once(
+    view: &gpui::Entity<CockpitView>,
+    thread: ThreadId,
+    id: super::surfaces::SurfaceId,
+    cx: &mut gpui::VisualTestContext,
+    mut open: impl FnMut(&gpui::Entity<CockpitView>, &mut gpui::VisualTestContext),
+) {
+    for time in ["first", "second"] {
+        open(view, cx);
+        tick(cx);
+        let (tabs, active) = panel_tabs(view, thread, cx);
+        assert_eq!(
+            tabs.iter().filter(|tab| **tab == id).count(),
+            1,
+            "{time} open of {id:?}: one tab in {tabs:?}"
+        );
+        assert_eq!(active.as_ref(), Some(&id), "{time} open shows it");
+    }
 }
 
 /// Move the executor's clock `by` in one step, as a machine waking from
@@ -533,6 +625,7 @@ fn pr_with_checks() -> ferrite_core::workspace::PullRequest {
         state: PrState::Open,
         draft: false,
         url: Some("https://github.com/o/r/pull/48".into()),
+        title: None,
         checks: Some(CheckState::Failing),
         runs: vec![
             run(
@@ -829,26 +922,4 @@ fn composer_text(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestCont
     view.read_with(cx, |view, cx| {
         view.panes[0].composer.read(cx).text().to_string()
     })
-}
-
-fn drag_nav(cx: &mut gpui::VisualTestContext, source: &'static str, target: &'static str) {
-    let source = cx.debug_bounds(source).unwrap();
-    let target = cx.debug_bounds(target).unwrap();
-    let source = gpui::point(source.right() - px(5.), source.center().y);
-    cx.simulate_mouse_down(source, gpui::MouseButton::Left, gpui::Modifiers::none());
-    cx.simulate_mouse_move(
-        gpui::point(source.x - px(30.), source.y),
-        gpui::MouseButton::Left,
-        gpui::Modifiers::none(),
-    );
-    cx.simulate_mouse_move(
-        target.center(),
-        gpui::MouseButton::Left,
-        gpui::Modifiers::none(),
-    );
-    cx.simulate_mouse_up(
-        target.center(),
-        gpui::MouseButton::Left,
-        gpui::Modifiers::none(),
-    );
 }

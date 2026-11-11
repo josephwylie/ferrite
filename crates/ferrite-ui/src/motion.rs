@@ -24,8 +24,14 @@
 //! | dialog | [`DIALOG_IN`] / [`DIALOG_OUT`] 200ms quart, 0.98 ↔ 1 | the Settings and Project sheets, in ([`dialog_in`]) and out ([`dialog_out`]), over their veil fading both ways over [`VEIL`] ([`veil_in`], [`veil_out`]) |
 //! | palette | [`DIALOG_IN`] in from its top, [`PALETTE_OUT`] 120ms out | the palette and the shortcuts sheet ([`dialog_in_casting`], [`float_out`]), their veil fading over [`PALETTE_VEIL`] 50ms both ways |
 //! | tooltip | [`TOOLTIP_IN`] 120ms ease-snap, 0.98 → 1 | every tooltip (`menu::tooltip`, [`tooltip_in`]) after gpui's 300ms delay; the next one within 200ms shows at once, with no entrance. No exit: gpui drops a tooltip on its frame |
+//! | nav tooltip | [`NAV_TOOLTIP_IN`] 150ms standard, 0.98 → 1 | the nav's tooltips (`menu::nav_tooltip`, `nav::NavTooltip`), T3's: 12px, after 150ms, the next within 400ms at once; scrolling the list dismisses one. No exit, as above |
+//! | nav list | [`NAV_LIST`] 150ms `ease-out`, ±40px | the nav's rows (`nav::flip::ListMotion`, T3's `Sidebar.motion.ts`): a row that moves slides from its old top, one that enters fades in from 40px above (or rides the moved row above it), one that leaves is drawn as a ghost fading 40px down; a move cut short carries on from where it is. Never on first paint, a shelf toggle, a drag, reduced motion, or an update fading more than 40 rows |
+//! | shelf fold | none | a nav shelf (Working, Snoozed, Parked) opens and shuts at once; only its chevron turns, over [`SHELF_CHEVRON`] 150ms standard |
+//! | slim row action | [`SLIM_ACTION`] 150ms standard | under the pointer a slim row's time fades out and its Revive or Wake fades in; its badge comes up from 40% greyscale |
+//! | undo notice | [`UNDO_NOTICE`] 200ms Tailwind `ease-out` | the foot's `Parked, Undo ⌘Z` fades in, and out before it goes |
+//! | thread-state line | [`LINE_IN`] 150ms Tailwind `ease-out`, opacity only | the background-work line at the transcript's foot fades in when work begins; it goes at once |
 //! | sidebar (cmd-B) | none | the column snaps between its width and the rail: no ride, no fade, no per-frame relayout of the board |
-//! | nav folds | [`FOLD`] 150ms `ease-out`, height and opacity | a Project section, a Group's members and Pinned open and shut ([`fold_body`], one [`Reveal`] per fold); only the nav part redraws |
+//! | nav card recede | [`RECEDE`] 150ms standard, opacity only | a receded working Thread card (70%) comes up to full under the pointer or the nav's keyboard cursor and goes back as it leaves; its fill and its hover strip snap; reduced motion snaps it too |
 //! | right panel | none | the Panel (`cockpit/panel.rs`) snaps open and shut and between its own width and a preview's, as Claude's does |
 //! | (Ferrite's) slot slide | [`SLOT_OPEN`] 240ms / [`SLOT_CLOSE`] 200ms, [`EASE_SNAP`] | the Review beside its Pane, in the reader slot (`cockpit/beside.rs`): a [`Reveal`] on its split's share (`Tree::reveal`) slides it in from its far edge while the Pane narrows, every frame, its content laid out at its resting size and clipped so it never re-wraps; closing slides it out, a little quicker, and only then is the slot removed; a flip mid-slide turns around; a seam drag lands it |
 //! | zoom | [`IMAGE_ZOOM`] 240ms | the image viewer's zoom (`image_viewer.rs`): a click between fit and actual size and ⌘= ⌘- ⌘0 ease the picture's scale with an interruptible [`Tween`] on its logarithm, the point under the pointer held still; a pinch and a pan follow the hand with no ease |
@@ -37,8 +43,12 @@
 //! | approval promote | [`PROMOTE_IN`] 220ms ease-out cubic | the approval card: from 0.75, 6px above, scale 0.97 from its top ([`promote_in`]) |
 //! | label roll | [`MORPH`] 180ms | the working line's words when they change ([`morph`]) |
 //! | count tick | [`COUNT`] 120ms quart | the working line's token count ticks to each new reading: only the cells that change cross-fade, drifting `MOTION_COUNT_DRIFT` (2pt) up, tabular so nothing shifts; a new turn's count lands; drawn by the loops overlay, so only the count redraws (`odometer::rolling_count`) |
-//! | message actions | [`ACTIONS_IN`] 120ms after 100ms / [`ACTIONS_OUT`] 60ms, ease-snap | a message's actions under the pointer ([`hover_listener_with`]) |
-//! | jump to latest | [`JUMP_FADE`] 200ms | the transcript's jump button fades in and out, answering no pointer while it goes |
+//! | message actions | [`ACTIONS_IN`] / [`ACTIONS_OUT`] 200ms, standard | a message's actions under the pointer ([`hover_listener_with`]) |
+//! | send scroll | `MOTION_SCROLL_MAX_MS` 200ms at most, [`EASE_STANDARD`] | a send's prompt eases up to the top of the transcript (`TX_SEND_ANCHOR_OFFSET` below it) for Chromium's smooth-scroll length, `min(√Δpx, 12) / 60` s, re-measured each frame so rows growing under it are absorbed; any scroll by the operator stops it where it stands; the bubble's pop starts when it lands (`transcript/scroll.rs`) |
+//! | scroll to end | shows `SCROLL_END_SHOW_DELAY_MS` 150ms after it is wanted, hides at once; its click rides the send scroll's ease to the tail | the transcript's Scroll to end pill: no fade either way, its ring blending over [`HOVER_FADE`] |
+//! | chip in | [`CHIP_IN`] 300ms ease-snap, 0.95 → 1 about its centre | an attachment added to a draft's tray ([`chip_in`]); never what the tray held when it was first drawn, nor a sent prompt's |
+//! | find bar | [`FADE_QUICK`] 150ms, opacity only | the transcript's find bar fades in ([`fade_in`]); it goes at once |
+//! | notices | [`FADE_QUICK`] 150ms, opacity only | a notice over or in the Composer (a draft's failed start) fades in ([`fade_in`]); it goes at once. The approval card keeps [`PROMOTE_IN`], the queue strip none |
 //! | usage ring | [`USAGE_ARC`] 300ms / [`USAGE_INK`] 200ms, quart | the footer's plan-usage ring moving to a new reading ([`settle`]); first paint lands |
 //! | row-in | [`ROW_IN`] 180ms, opacity only | a preview opening in the Panel, or another document replacing it, and a Panel tab's body when the operator picks the tab, from 0.3 ([`swap_in`]) |
 //! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`SCROLLBAR_FADE`] 100ms | a thumb appears on the first scroll frame, holds 1.4s, then fades, and widens 4 → 6px under the pointer (`scrollbar::step_widen`); idle, nothing is drawn |
@@ -48,6 +58,16 @@
 //! a height tween, as Claude's tool steps do: its rows are one item of a
 //! virtualized list inside a kit `Collapsible`, and an item mid-reveal
 //! would clip rows the pointer can already reach.
+//!
+//! **What stays still** (T3 Code leaves these unanimated; do not add
+//! motion to them): menus, context menus and the `/` and `@` menus
+//! (`MENU_IN` 0ms); the Composer's height after a send clears it; the
+//! scroll on a send's release to the tail, on Composer or footer growth
+//! while following, on idle tail growth, on the anchor holding its place
+//! as its own row resizes, and on restoring a thread's position; Scroll to
+//! end's show and hide; a tool group's body (only its chevron turns);
+//! streamed text's place (it fades, it never slides or scales); and the
+//! sidebar's, the Panel's and the terminal drawer's widths.
 //!
 //! **What a frame costs.** gpui asks for an animation's next frame by
 //! notifying the view drawing it, and redraws that view's ancestors with
@@ -204,6 +224,7 @@ pub const EASE_OVERSHOOT: CubicBezier = CubicBezier::from_points(theme::MOTION_E
 pub const EASE_MORPH: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_MORPH);
 pub const EASE_OUT_CUBIC: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT_CUBIC);
 pub const LINEAR: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_LINEAR);
+pub const EASE_OUT_TW: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT_TW);
 
 // ---------------------------------------------------------------------------
 // The catalog
@@ -278,6 +299,17 @@ pub const VEIL: MotionSpec = spec(theme::MOTION_DIALOG_IN_MS, EASE_OUT_QUART);
 pub const PALETTE_OUT: MotionSpec = spec(theme::MOTION_PALETTE_OUT_MS, EASE_OUT_QUART);
 pub const PALETTE_VEIL: MotionSpec = spec(theme::MOTION_PALETTE_VEIL_MS, EASE_OUT_QUART);
 pub const TOOLTIP_IN: MotionSpec = spec(theme::MOTION_TOOLTIP_IN_MS, EASE_SNAP);
+pub const NAV_TOOLTIP_IN: MotionSpec = spec(theme::MOTION_NAV_TOOLTIP_MS, EASE_STANDARD);
+/// The nav list's FLIP: moves, entrances and ghost exits.
+pub const NAV_LIST: MotionSpec = spec(theme::MOTION_NAV_LIST_MS, EASE_OUT);
+/// A shelf header's chevron.
+pub const SHELF_CHEVRON: MotionSpec = spec(theme::MOTION_SHELF_CHEVRON_MS, EASE_STANDARD);
+/// A slim row's time giving way to its action, and its badge's colour.
+pub const SLIM_ACTION: MotionSpec = spec(theme::MOTION_SLIM_ACTION_MS, EASE_STANDARD);
+/// The foot's undo notice, in and out.
+pub const UNDO_NOTICE: MotionSpec = spec(theme::MOTION_UNDO_NOTICE_MS, EASE_OUT_TW);
+/// The background-work line arriving at the transcript's foot.
+pub const LINE_IN: MotionSpec = spec(theme::MOTION_LINE_IN_MS, EASE_OUT_TW);
 /// The approval card settling into place (`promote_in`).
 pub const PROMOTE_IN: MotionSpec = spec(theme::MOTION_PROMOTE_MS, EASE_OUT_CUBIC);
 /// The working line's label roll (`morph`).
@@ -295,21 +327,32 @@ pub const HOVER_SNAP: MotionSpec = spec(0, EASE_OUT_QUART);
 /// A button's press and release (`pressable`).
 pub const PRESS_IN: MotionSpec = spec(theme::MOTION_DUR_FAST_MS, EASE_OUT_QUART);
 pub const PRESS_OUT: MotionSpec = spec(theme::MOTION_DUR_SLOW_MS, EASE_OVERSHOOT);
-/// A message's actions under the pointer: in after a beat, out at once.
-pub const ACTIONS_IN: MotionSpec =
-    spec(theme::MOTION_DUR_SNAP_MS, EASE_SNAP).after(theme::MOTION_ACTIONS_DELAY_MS);
-pub const ACTIONS_OUT: MotionSpec = spec(theme::MOTION_DUR_FAST_MS, EASE_SNAP);
+/// A message's actions under the pointer: T3's `transition-opacity
+/// duration-200`, in and out, with no wait.
+pub const ACTIONS_IN: MotionSpec = spec(theme::MOTION_DUR_BASE_MS, EASE_STANDARD);
+pub const ACTIONS_OUT: MotionSpec = ACTIONS_IN;
 /// A disclosure chevron's quarter turn.
 pub const CHEVRON: MotionSpec = spec(theme::MOTION_CHEVRON_MS, EASE_STANDARD);
+/// A transcript work row's chevron (T3's `transition-transform
+/// duration-200`): the nav's and the Panel's keep `CHEVRON`.
+pub const WORK_CHEVRON: MotionSpec = spec(theme::MOTION_WORK_CHEVRON_MS, EASE_STANDARD);
+/// A turn fold's words brightening under the pointer, both ways.
+pub const FOLD_HOVER: MotionSpec = spec(theme::MOTION_FOLD_HOVER_MS, EASE_STANDARD);
+/// A receded working nav card coming up to full opacity under the pointer.
+pub const RECEDE: MotionSpec = spec(theme::MOTION_RECEDE_MS, EASE_STANDARD);
 /// A nav fold opening and shutting (`fold_body`).
 pub const FOLD: MotionSpec = spec(theme::MOTION_FOLD_MS, EASE_OUT);
-/// Jump to latest showing and going.
-pub const JUMP_FADE: MotionSpec = spec(theme::MOTION_JUMP_FADE_MS, EASE_STANDARD);
+pub const TAB_SCROLL: MotionSpec = spec(theme::MOTION_TAB_SCROLL_MS, EASE_STANDARD);
+/// An attachment added to a draft growing in (`chip_in`).
+pub const CHIP_IN: MotionSpec = spec(theme::MOTION_CHIP_IN_MS, EASE_SNAP);
 /// The usage ring's arc and ink moving to a new reading.
 pub const USAGE_ARC: MotionSpec = spec(theme::MOTION_USAGE_ARC_MS, EASE_OUT_QUART);
 pub const USAGE_INK: MotionSpec = spec(theme::MOTION_USAGE_INK_MS, EASE_OUT_QUART);
 /// A switch's knob.
 pub const SWITCH: MotionSpec = spec(theme::MOTION_SWITCH_MS, EASE_OVERSHOOT);
+/// The model picker rail's pill sliding between providers (T3's
+/// `transition-[top] duration-200 ease-out`).
+pub const RAIL_SLIDE: MotionSpec = spec(theme::MOTION_DUR_BASE_MS, EASE_OUT);
 /// A scrollbar thumb fading out and widening.
 pub const SCROLLBAR_FADE: MotionSpec = spec(theme::MOTION_SCROLLBAR_FADE_MS, EASE_STANDARD);
 /// A board slot sliding in beside its owner, and out again a little
@@ -614,6 +657,22 @@ where
     entrance(id, spec, element, move |el, t| el.opacity(lerp(0.0, to, t)))
 }
 
+/// An attachment added to a draft (T3's tray, `@starting-style`): opacity
+/// up and scale from `MOTION_CHIP_FROM_SCALE` about its centre over
+/// [`CHIP_IN`].
+pub fn chip_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    entrance(id, CHIP_IN, element, |el, t| {
+        scaled(
+            el.opacity(t),
+            lerp(theme::MOTION_CHIP_FROM_SCALE, 1.0, t),
+            FROM_CENTRE,
+        )
+    })
+}
+
 /// `code-approval-promote` for the approval card: from
 /// `MOTION_PROMOTE_FROM_OPACITY`, `MOTION_PROMOTE_DROP` above its place
 /// and `MOTION_PROMOTE_FROM_SCALE` about its top, it settles over
@@ -654,9 +713,15 @@ pub fn tooltip_in<E>(id: impl Into<ElementId>, element: E) -> impl IntoElement
 where
     E: Styled + IntoElement + 'static,
 {
-    entrance(id, TOOLTIP_IN, element, |el, t| {
-        grown(el.opacity(t), t, FROM_TOP_LEFT)
-    })
+    tooltip_in_over(id, TOOLTIP_IN, element)
+}
+
+/// `tooltip_in` over `spec` (the nav's `NAV_TOOLTIP_IN`).
+pub fn tooltip_in_over<E>(id: impl Into<ElementId>, spec: MotionSpec, element: E) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    entrance(id, spec, element, |el, t| grown(el.opacity(t), t, FROM_TOP_LEFT))
 }
 
 /// A sheet's veil darkening in over `spec`: only its ground fades, so the
@@ -1891,10 +1956,20 @@ fn press_key(key: &str) -> SharedString {
 /// so the press lands where it rests. Its frames ride the hover blends'
 /// (the view that painted the hover draws them). Reduced motion: no squish.
 pub fn pressable<E: InteractiveElement + Styled>(element: E, key: SharedString) -> E {
+    pressable_lifting(element, key, 1.0)
+}
+
+/// [`pressable`] that also grows to `lift` with `key`'s hover blend.
+pub fn pressable_lifting<E: InteractiveElement + Styled>(
+    element: E,
+    key: SharedString,
+    lift: f32,
+) -> E {
     let pressed = hover_t(&press_key(&key));
+    let hovered = if lift == 1.0 { 0.0 } else { hover_t(&key) };
     let mut element = scaled(
         element,
-        lerp(1.0, theme::MOTION_PRESS_SCALE, pressed),
+        lerp(1.0, lift, hovered) * lerp(1.0, theme::MOTION_PRESS_SCALE, pressed),
         FROM_CENTRE,
     );
     let (down, up, away) = (key.clone(), key.clone(), key);
@@ -2196,12 +2271,14 @@ mod tests {
     #[test]
     fn a_delay_holds_then_moves() {
         let ms = Duration::from_millis;
-        assert_eq!(ACTIONS_IN.duration(), ms(220));
-        assert_eq!(ACTIONS_IN.progress_at(ms(0)), 0.0);
-        assert_eq!(ACTIONS_IN.progress_at(ms(100)), 0.0, "still waiting");
-        let mid = ACTIONS_IN.progress_at(ms(160));
+        let delayed = spec(120, EASE_SNAP).after(100);
+        assert_eq!(delayed.duration(), ms(220));
+        assert_eq!(delayed.progress_at(ms(0)), 0.0);
+        assert_eq!(delayed.progress_at(ms(100)), 0.0, "still waiting");
+        let mid = delayed.progress_at(ms(160));
         assert!(mid > 0.0 && mid < 1.0, "moving {mid}");
-        assert_eq!(ACTIONS_IN.progress_at(ms(220)), 1.0);
+        assert_eq!(delayed.progress_at(ms(220)), 1.0);
+        assert_eq!(ACTIONS_IN.duration(), ms(200), "a message's actions do not wait");
         assert_eq!(HOVER_SNAP.progress_at(ms(0)), 1.0, "a snap lands at once");
     }
 

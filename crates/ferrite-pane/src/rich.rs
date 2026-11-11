@@ -439,9 +439,14 @@ impl gpui::RenderOnce for Markdown {
         );
         // Headings scale with the reading size the answer row set.
         let base = window.text_style().font_size.to_pixels(window.rem_size());
-        // The view runs a cell past its column for a line's trailing space
-        // (below); its blocks take that cell back.
-        let text_style = hung_style(window.rem_size(), base);
+        // A view of prose runs a cell past its column for a line's trailing
+        // space (below); its blocks take that cell back. A single line
+        // never wraps, so runs on its column.
+        let text_style = if self.single_line {
+            style_at(window.rem_size(), base)
+        } else {
+            hung_style(window.rem_size(), base)
+        };
         let text_style = if self.muted {
             // A thought stays one step down the ink ladder, headings too.
             (1..=6).fold(
@@ -545,6 +550,15 @@ impl gpui::RenderOnce for Markdown {
                         cx,
                     ));
                 }
+                if let Some(id) = url.strip_prefix(THREAD_SCHEME) {
+                    let thread = ferrite_core::ThreadId::new(id.parse().ok()?);
+                    return Some(crate::link_chip::thread_chip(
+                        thread,
+                        label,
+                        scope.clone(),
+                        window,
+                    ));
+                }
                 // An issue ref and an activity line's path stay native links
                 // (their underline under the pointer); a click opens them.
                 if url.starts_with(ISSUE_SCHEME) || url.starts_with(PATH_SCHEME) {
@@ -578,8 +592,10 @@ impl gpui::RenderOnce for Markdown {
             // A line's trailing space hangs past its edge, as CSS lets it:
             // GPUI counts it when wrapping, so a word that ends within a
             // cell of the edge would wrap a line early. The view runs one
-            // cell past its column; its words still end inside it.
-            .mr(px(-hang))
+            // cell past its column; its words still end inside it. A single
+            // line never wraps, and its box must hold all of its words:
+            // `pane::EdgeCut` clips to it.
+            .when(!self.single_line, |view| view.mr(px(-hang)))
             .min_w_0()
             // Use natural height inside the transcript's own scroll container.
             .max_lines(if self.single_line { 1 } else { usize::MAX })
@@ -854,6 +870,9 @@ fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
 pub(crate) const CHIP_SCHEME: &str = "ferrite-chip:";
 /// A prompt's skill: `[/name](<ferrite-skill:name>)`, drawn in `SKILL_INK`.
 pub(crate) const SKILL_SCHEME: &str = "ferrite-skill:";
+/// A Thread linked in prose: `[title](ferrite-thread:12)`, drawn as
+/// `link_chip::thread_chip`.
+pub(crate) const THREAD_SCHEME: &str = "ferrite-thread:";
 /// The scheme `file_links::link_targets` gives an issue ref (`#212`).
 pub(crate) const ISSUE_SCHEME: &str = "issue:";
 /// The scheme of a path in an activity line (a call's argument, a
@@ -894,13 +913,13 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
     let code_cell = theme::tx_cell(code_size);
     let mut style = TextViewStyle::default()
         .with_dark(true)
-        .with_foreground(rgb(theme::INK_STRONG).into())
+        .with_foreground(theme::prose_ink())
         .with_muted_foreground(rgb(theme::INK_SUBTLE).into())
-        // Links and paths read `LINK_INK`, underlined at rest, as the
-        // Claude app's are.
+        // Links and paths read `LINK_INK`, underlined only under the
+        // pointer, as T3's are.
         .with_link(rgb(theme::LINK_INK).into())
         .with_link_underline(Some(rgb(theme::LINK_INK).into()))
-        .with_link_underline_on_hover(false)
+        .with_link_underline_on_hover(true)
         // An image in an answer sits in the prompt image's frame:
         // `IMAGE_CELLS` wide at the prose's size, a 1px `LINE` edge.
         .with_image(
@@ -1044,21 +1063,6 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
         style = style.with_heading(level, heading(level, base));
     }
     style
-}
-
-/// The inline-code chip as an element's look (a prose path,
-/// `attachments::inline_file`): `INLINE_CODE_INK` mono at body weight on
-/// the `INLINE_CODE_CHIP` ground at `R_CONTROL`, `INLINE_CODE_PAD_X` either side —
-/// the chip the Markdown flow paints from `inline_code_wash` around a code
-/// span.
-pub(crate) fn code_chip<E: Styled>(element: E) -> E {
-    element
-        .px(px(theme::INLINE_CODE_PAD_X))
-        .bg(theme::paint::INLINE_CODE_CHIP)
-        .rounded(px(theme::R_CONTROL))
-        .font_family(theme::FONT_CODE)
-        .font_weight(theme::W_BODY)
-        .text_color(rgb(theme::INLINE_CODE_INK))
 }
 
 /// The inline-code chip's wash (SPEC §5.4's `padding: 1px 5px`): its
@@ -2103,8 +2107,9 @@ let count = 2;
     }
 
     /// A file link is measured in the face and size it is drawn in (the
-    /// prose's), so a name that fits `INLINE_FILE_MAX_W` is drawn whole:
-    /// `transcript.rs:405` at the app's width is never ellipsized.
+    /// prose's, at medium weight), so a name that fits `INLINE_FILE_MAX_W`
+    /// is drawn whole: `transcript.rs:405` at the app's width is never
+    /// ellipsized.
     #[gpui::test]
     fn a_file_chip_that_fits_is_drawn_whole(cx: &mut TestAppContext) {
         let (_, cx) = fixture(cx, "Built in [transcript.rs](transcript.rs:405), then.");
@@ -2112,35 +2117,38 @@ let count = 2;
         cx.run_until_parked();
         let chip = card(cx, "transcript.rs");
         let want = cx.update(|window, _| {
-            crate::attachments::inline_file_width(
-                "transcript.rs",
-                ":405",
-                false,
-                px(theme::FS_PROSE),
-                window,
-            )
+            crate::link_chip::Chip {
+                icon: ferrite_ui::icons::FILE,
+                ink: theme::MENTION_INK,
+                name: "transcript.rs",
+                location: ":405",
+            }
+            .width(px(theme::FS_PROSE), window)
         });
         assert!(want < px(theme::INLINE_FILE_MAX_W), "{want:?}");
-        assert_eq!(
-            chip.size.width,
-            want + px(2.0 * theme::INLINE_CODE_PAD_X),
-            "the chip is its measured width and its padding"
-        );
-        // The name box holds its whole shaped width: nothing to ellipsize.
-        let name = cx.update(|window, _| {
-            let mut face = window.text_style();
-            face.font_family = theme::FONT_CODE.into();
-            window
-                .text_system()
-                .shape_line(
-                    "transcript.rs".into(),
-                    px(theme::FS_PROSE),
-                    &[face.to_run("transcript.rs".len())],
-                    None,
-                )
-                .width()
+        assert_eq!(chip.size.width, want, "the chip is its measured width");
+    }
+
+    /// `[title](ferrite-thread:12)` draws as a chip standing on its line,
+    /// and a path link's chip leads with its icon (wider than the name).
+    #[gpui::test]
+    fn a_thread_link_is_a_chip_on_the_line(cx: &mut TestAppContext) {
+        let (_, cx) = fixture(cx, "See [Fix the build](ferrite-thread:12) for that.");
+        cx.simulate_resize(gpui::size(px(720.), px(200.)));
+        cx.run_until_parked();
+        let chip = cx
+            .debug_bounds("thread-link-12")
+            .expect("the thread link is a chip");
+        let want = cx.update(|window, _| {
+            crate::link_chip::Chip {
+                icon: ferrite_ui::icons::MESSAGES_SQUARE,
+                ink: theme::THREAD_INK,
+                name: "Fix the build",
+                location: "",
+            }
+            .width(px(theme::FS_PROSE), window)
         });
-        assert!(chip.size.width >= name, "{chip:?} holds {name:?}");
+        assert_eq!(chip.size.width, want);
     }
 
     /// A file link to an image opens it in the Pane's lightbox, as every
@@ -2818,19 +2826,20 @@ mod style_tests {
         rgb(value).into()
     }
 
-    /// SPEC §5.4: prose `INK_STRONG`, strong `W_STRONG` `INK_STRONG`,
-    /// links and paths `LINK_INK` underlined at rest, inline code
+    /// Prose `INK_STRONG` at 90% (T3's `text-foreground/90`), strong
+    /// `W_STRONG` `INK_STRONG`, links and paths `LINK_INK` underlined under
+    /// the pointer, inline code
     /// a `RAISED` chip, a fence in the block box.
     #[test]
     fn prose_is_prose_ink_with_semibold_strong_and_link_blue_links() {
         let style = style(px(theme::FS_UI));
-        assert_eq!(style.foreground(), solid(theme::INK_STRONG));
+        assert_eq!(style.foreground(), solid(theme::INK_STRONG).opacity(0.9));
         assert_eq!(style.strong().font_weight, Some(theme::W_STRONG));
         assert_eq!(style.strong().color, Some(solid(theme::INK_STRONG)));
         assert_eq!(style.link(), solid(theme::LINK_INK));
-        // The underline is the link's own ink, painted at rest.
+        // The underline is the link's own ink, painted under the pointer.
         assert_eq!(style.link_underline(), Some(solid(theme::LINK_INK)));
-        assert!(!style.link_underline_on_hover());
+        assert!(style.link_underline_on_hover());
         assert_eq!(style.inline_code_font().as_deref(), Some(theme::FONT_CODE));
         assert_eq!(style.inline_code_wash(), Some(inline_code_wash()));
         assert_eq!(

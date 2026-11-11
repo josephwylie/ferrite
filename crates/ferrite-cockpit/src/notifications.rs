@@ -24,11 +24,6 @@ use ferrite_ui::components;
 use ferrite_ui::pointer::{Pointer, PointerPressed};
 use ferrite_ui::theme::*;
 
-gpui::actions!(
-    notifications,
-    [SelectNext, SelectPrevious, Open, Dismiss, Close]
-);
-
 /// A toast's quick answer to its request (`1 allow`, `3 deny`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuickAnswer {

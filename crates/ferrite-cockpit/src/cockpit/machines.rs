@@ -134,17 +134,10 @@ impl CockpitView {
         if let Some(index) = index {
             cx.emit(GoToMachine {
                 index,
-                open: Some({
-                    let alert = Alert {
-                        away: None,
-                        ..alert
-                    };
-                    if self.needs_you_shown() {
-                        Landing::Inbox(alert)
-                    } else {
-                        Landing::Alert(alert)
-                    }
-                }),
+                open: Some(Landing::Alert(Alert {
+                    away: None,
+                    ..alert
+                })),
             });
         }
     }
@@ -168,12 +161,12 @@ impl CockpitView {
             return;
         }
         match self.landing.take().filter(|_| !expired) {
-            Some((Landing::Alert(alert) | Landing::Inbox(alert), _))
+            Some((Landing::Alert(alert), _))
                 if alert.target.wants(self.cockpit.notifications()) =>
             {
                 self.notice_verb(alert.open_verb(), cx)
             }
-            Some((Landing::Alert(alert) | Landing::Inbox(alert), _)) => {
+            Some((Landing::Alert(alert), _)) => {
                 self.notice_verb(Verb::OpenThread(alert.thread), cx);
             }
             None => {}

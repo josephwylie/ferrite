@@ -34,7 +34,7 @@ fn a_window_crossing_its_threshold_toasts_once(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn notifications_keep_focus_until_escape_closes_the_needs_you_view(cx: &mut TestAppContext) {
+fn cmd_i_holds_the_list_until_escape_gives_the_keys_back(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("needs-you-escape", 1);
     core.send(core.threads()[0], "keep working".into());
     bind_production_keys(cx);
@@ -45,15 +45,15 @@ fn notifications_keep_focus_until_escape_closes_the_needs_you_view(cx: &mut Test
     // An unrelated render must leave the Popover's dismiss handler focused.
     view.update(cx, |_, cx| cx.notify());
     tick(cx);
-    view.read_with(cx, |view, _| assert!(view.needs_you_shown()));
+    view.read_with(cx, |view, _| assert!(view.nav_keys_held));
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert_eq!(
         *fake.interrupts.borrow(),
         0,
-        "Escape only dismisses the Inbox"
+        "Escape only gives the list's keys back"
     );
-    view.read_with(cx, |view, _| assert!(!view.needs_you_shown()));
+    view.read_with(cx, |view, _| assert!(!view.nav_keys_held));
     cx.simulate_keystrokes("escape");
     assert_eq!(
         *fake.interrupts.borrow(),
@@ -63,7 +63,7 @@ fn notifications_keep_focus_until_escape_closes_the_needs_you_view(cx: &mut Test
 }
 
 #[gpui::test]
-fn notifications_scroll_to_and_open_the_oldest_row(cx: &mut TestAppContext) {
+fn the_list_scrolls_to_and_opens_its_last_card(cx: &mut TestAppContext) {
     // One finish per Thread: a Thread's repeats fold into one row, so
     // a long list is many Threads.
     const THREADS: usize = 24;
@@ -82,9 +82,14 @@ fn notifications_scroll_to_and_open_the_oldest_row(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(1080.)));
     tick(cx);
-    cx.simulate_keystrokes("cmd-i");
-    tick(cx);
-    let first = cx.debug_bounds("notice-row-0").unwrap();
+    let active: Vec<ThreadId> = view.read_with(cx, |view, _| {
+        view.nav_state().active.iter().map(|row| row.thread).collect()
+    });
+    assert_eq!(active.len(), THREADS, "one card per Thread");
+    let card = |thread: ThreadId| -> &'static str {
+        format!("nav-thread-{}", thread.get()).leak()
+    };
+    let first = cx.debug_bounds(card(active[0])).unwrap();
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: first.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-10000.))),
@@ -92,20 +97,16 @@ fn notifications_scroll_to_and_open_the_oldest_row(cx: &mut TestAppContext) {
         touch_phase: gpui::TouchPhase::default(),
     });
     cx.run_until_parked();
-    let last = cx
-        .debug_bounds("notice-row-23")
-        .expect("one row per Thread");
+    let last_thread = active[THREADS - 1];
+    let last = cx.debug_bounds(card(last_thread)).unwrap();
     assert!(
         last.bottom() < px(1080.),
-        "oldest Notice must scroll into the window: {last:?}"
+        "the last card must scroll into the window: {last:?}"
     );
     cx.simulate_click(last.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {
-        assert!(
-            view.needs_you_shown(),
-            "opening a Notice keeps Inbox visible"
-        )
+        assert_eq!(view.focused_thread(), Some(last_thread));
     });
 }
 
@@ -284,13 +285,9 @@ fn opening_a_notice_lands_on_its_pane_and_reads_it(cx: &mut TestAppContext) {
         assert_eq!(view.focused(), 0);
         view.cockpit.notifications().newest().unwrap()
     });
-    view.update(cx, |view, cx| {
-        view.nav_view = nav::NavView::Inbox;
-        view.notice_verb(Verb::Open(id), cx);
-    });
+    view.update(cx, |view, cx| view.notice_verb(Verb::Open(id), cx));
     view.read_with(cx, |view, _| {
         assert_eq!(view.focused(), 2, "focus landed on the finished Pane");
-        assert!(view.needs_you_shown());
         assert!(view.cockpit.notifications().get(id).unwrap().read);
     });
     view.update(cx, |view, cx| view.notice_verb(Verb::Dismiss(id), cx));
@@ -730,7 +727,7 @@ fn contract_request_notice_opens_its_owning_child(cx: &mut TestAppContext) {
             Subject::Subagent(key.clone())
         );
         assert!(view.cockpit.notifications().decision(&id).unwrap().read);
-        assert!(!view.needs_you_shown());
+        assert!(!view.nav_keys_held);
     });
 }
 
@@ -753,16 +750,8 @@ fn inbox_tracks_open_threads_independently_of_notices(cx: &mut TestAppContext) {
         2,
         "idle open Threads need handling without Notices"
     );
-    view.update(cx, |view, _| {
-        view.facts.fixture_forget_last_used(threads[0]);
-        view.prefs.settings.activity_shows.priority = false;
-        view.prefs.settings.activity_shows.pinned = false;
-    });
-    assert_eq!(
-        inbox(cx).len(),
-        2,
-        "unknown age and old Activity preferences cannot hide Inbox work"
-    );
+    view.update(cx, |view, _| view.facts.fixture_forget_last_used(threads[0]));
+    assert_eq!(inbox(cx).len(), 2, "an unknown age cannot hide Inbox work");
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
             text: "working".into(),
@@ -790,7 +779,7 @@ fn inbox_tracks_open_threads_independently_of_notices(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn inbox_empty_working_decision_and_keyboard_park(cx: &mut TestAppContext) {
+fn the_list_empty_over_working_then_a_decision_parks_from_the_keyboard(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("inbox-empty-working", 3);
     let threads = core.threads();
     for thread in &threads {
@@ -803,10 +792,10 @@ fn inbox_empty_working_decision_and_keyboard_park(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.needs_you_rows(cx).is_empty());
-        assert_eq!(view.inbox(&view.nav_state()).working.len(), 3);
+        assert_eq!(view.nav_state().working.len(), 3);
     });
-    assert!(cx.debug_bounds("nav-needs-you-empty").is_some());
-    assert!(cx.debug_bounds("nav-inbox-working").is_some());
+    assert!(cx.debug_bounds("nav-empty").is_some());
+    assert!(cx.debug_bounds("nav-shelf-working").is_some());
     fake.streams.borrow()[1]
         .send(decision("inbox-approval"))
         .unwrap();
@@ -824,36 +813,41 @@ fn inbox_empty_working_decision_and_keyboard_park(cx: &mut TestAppContext) {
         view.read_with(cx, |view, cx| view.needs_you_rows(cx).len()),
         1
     );
-    // Park the only Inbox row; the two agents still working remain visible.
-    cx.simulate_keystrokes("cmd-w");
+    // Park the only Active card; the two agents still working remain.
+    cx.simulate_keystrokes("home cmd-w");
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.needs_you_rows(cx).is_empty());
-        assert_eq!(view.inbox(&view.nav_state()).working.len(), 2);
-        assert_eq!(view.needs_you.cursor, 0);
+        assert_eq!(view.nav_state().working.len(), 2);
+        assert_eq!(view.cockpit.parked().unwrap(), vec![threads[1]]);
     });
-    assert!(cx.debug_bounds("nav-needs-you-empty").is_some());
-    assert!(cx.debug_bounds("nav-inbox-working").is_some());
+    assert!(cx.debug_bounds("nav-empty").is_some());
+    assert!(cx.debug_bounds("nav-shelf-working").is_some());
 }
 
+/// ⌘W while the list holds the keys parks the cursor's card, and the
+/// cursor goes with its Thread into the folded Parked shelf, so the next
+/// move starts over from the top.
 #[gpui::test]
-fn inbox_keyboard_parks_middle_first_and_final_rows(cx: &mut TestAppContext) {
+fn the_keyboard_parks_the_cursors_card_and_the_cursor_follows_it(cx: &mut TestAppContext) {
     let (core, _) = cockpit("inbox-park-cursor", 3);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
-    let bell = cx.debug_bounds("nav-activity").unwrap();
-    cx.simulate_click(bell.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert!(
-        view.read_with(cx, |view, _| view.needs_you_shown()),
-        "bell opens the same Inbox as cmd-i"
-    );
-    cx.simulate_keystrokes("down cmd-w");
+    let active: Vec<ThreadId> = view.read_with(cx, |view, _| {
+        view.nav_state().active.iter().map(|row| row.thread).collect()
+    });
+    assert_eq!(active.len(), 3);
+    cx.simulate_keystrokes("cmd-i down cmd-w");
     tick(cx);
     view.read_with(cx, |view, cx| {
+        assert_eq!(view.cockpit.parked().unwrap(), vec![active[1]]);
         assert_eq!(view.needs_you_rows(cx).len(), 2);
-        assert!(view.needs_you.cursor < 2);
+        assert_eq!(
+            view.nav_cursor.as_ref().map(|cursor| cursor.item),
+            Some(nav::NavItem::Thread(active[1])),
+            "the cursor follows its Thread into the Parked shelf"
+        );
     });
     cx.simulate_keystrokes("up cmd-w");
     tick(cx);
@@ -861,7 +855,7 @@ fn inbox_keyboard_parks_middle_first_and_final_rows(cx: &mut TestAppContext) {
         view.read_with(cx, |view, cx| view.needs_you_rows(cx).len()),
         1
     );
-    cx.simulate_keystrokes("cmd-w");
+    cx.simulate_keystrokes("home cmd-w");
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.needs_you_rows(cx).is_empty());
@@ -935,7 +929,7 @@ fn stopped_failures_and_interruptions_remain_inbox(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(view.needs_you_rows(cx).len(), 2);
-        assert!(view.inbox(&view.nav_state()).working.is_empty());
+        assert!(view.nav_state().working.is_empty());
     });
 }
 
@@ -1009,38 +1003,35 @@ fn inbox_completion_keeps_keyboard_park_on_the_selected_thread(cx: &mut TestAppC
 }
 
 #[gpui::test]
-fn opening_inbox_rows_keeps_inbox_mode(cx: &mut TestAppContext) {
+fn pressing_a_card_opens_its_thread_and_the_list_stays(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("inbox-stays-open", 2);
     let threads = core.threads();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
+    let card = |thread: ThreadId| -> &'static str {
+        format!("nav-thread-{}", thread.get()).leak()
+    };
     cx.simulate_keystrokes("cmd-i");
     tick(cx);
-    let row = cx.debug_bounds("notice-row-1").unwrap();
+    let row = cx.debug_bounds(card(threads[1])).unwrap();
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(view.focused_thread(), Some(threads[1]));
-        assert!(
-            view.needs_you_shown(),
-            "opening an Inbox Thread keeps the queue visible"
-        );
     });
+    assert!(cx.debug_bounds(card(threads[0])).is_some(), "the list stays");
     fake.streams.borrow()[0]
         .send(decision("stay-in-inbox"))
         .unwrap();
     tick(cx);
-    let row = cx.debug_bounds("notice-row-0").unwrap();
+    let row = cx.debug_bounds(card(threads[0])).unwrap();
     cx.simulate_click(row.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(view.focused_thread(), Some(threads[0]));
-        assert!(
-            view.needs_you_shown(),
-            "opening a Decision keeps the queue visible"
-        );
     });
+    assert!(cx.debug_bounds(card(threads[1])).is_some(), "the list stays");
 }
 
 #[gpui::test]
@@ -1063,7 +1054,7 @@ fn snooze_hides_a_thread_until_woken_and_new_decisions_wake_it(cx: &mut TestAppC
             .needs_you_rows(cx)
             .iter()
             .any(|row| row.thread == threads[0]));
-        assert_eq!(view.inbox(&view.nav_state()).snoozed.len(), 1);
+        assert_eq!(view.nav_state().snoozed.len(), 1);
     });
     fake.streams.borrow()[0]
         .send(decision("wake-snoozed-thread"))
@@ -1074,17 +1065,21 @@ fn snooze_hides_a_thread_until_woken_and_new_decisions_wake_it(cx: &mut TestAppC
             .needs_you_rows(cx)
             .iter()
             .any(|row| row.thread == threads[0]));
-        assert!(view.inbox(&view.nav_state()).snoozed.is_empty());
+        assert!(view.nav_state().snoozed.is_empty());
     });
 }
 
 #[gpui::test]
-fn working_shelf_starts_collapsed_and_expands_to_one_line_rows(cx: &mut TestAppContext) {
-    let (mut core, _) = cockpit("working-shelf", 1);
+fn working_shelf_starts_folded_and_opens_to_cards(cx: &mut TestAppContext) {
+    let (mut core, _) = cockpit("working-shelf", 2);
     let thread = core.threads()[0];
+    let other = core.threads()[1];
     core.send(thread, "work".into());
     bind_production_keys(cx);
-    let (_, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    without_checkouts(&view, cx);
+    view.update(cx, |view, cx| view.focus_thread(other, cx));
     tick(cx);
     cx.simulate_keystrokes("cmd-i");
     tick(cx);
@@ -1093,14 +1088,14 @@ fn working_shelf_starts_collapsed_and_expands_to_one_line_rows(cx: &mut TestAppC
         cx.debug_bounds(key).is_none(),
         "Working is hidden by default"
     );
-    let heading = cx.debug_bounds("nav-inbox-working").unwrap();
+    let heading = cx.debug_bounds("nav-shelf-working").unwrap();
     cx.simulate_click(heading.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(
         cx.debug_bounds(key).unwrap().size.height,
-        px(ferrite_ui::theme::NAV_ROW_H)
+        px(ferrite_ui::theme::NAV_CARD_H_SHORT)
     );
-    let heading = cx.debug_bounds("nav-inbox-working").unwrap();
+    let heading = cx.debug_bounds("nav-shelf-working").unwrap();
     cx.simulate_click(heading.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds(key).is_none());

@@ -433,7 +433,7 @@ const DIAMOND_GLYPH: &str = "\u{25c6}";
 
 impl WallCard {
     /// Fold one Thread's wall reading, with its calls' clocks: a settled
-    /// call's line carries its time (`● Bash(cargo test) 1m01s`). The
+    /// call's line carries its time (`● Bash(cargo test) 1m 1s`). The
     /// activity phrase stays a status word — naming the running tool would
     /// put `Instruments::of` on every tile every rebuild during streaming.
     pub fn of(

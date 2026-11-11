@@ -1,6 +1,6 @@
-//! A finished turn's cards (`ferrite_pane::transcript::outputs`): a file it
-//! wrote gets a file card whose `Open in ›` offers Finder and the default
-//! app, and whose press reads it in the Panel; a page it wrote or named
+//! A finished turn's cards (`ferrite_pane::transcript::outputs`): the
+//! files it changed get T3's changed-files card, whose files open the
+//! Changes Surface; a page it wrote or named
 //! gets a page card whose `Open` shows it beside the transcript — the
 //! Panel's page card, its title menu, expand and × — and, with no engine
 //! in this build, the "can't show" note with the browser a click away.
@@ -37,8 +37,8 @@ fn wrote(stream: &std::sync::mpsc::Sender<SessionEvent>, id: &str, path: &str, l
 }
 
 /// A turn that wrote `notes.md` and `site/index.html` and named a local
-/// server, finished, in a 1600 × 900 window: its cards are the note's
-/// (0), the page's (1) and the server's (2).
+/// server, finished, in a 1600 × 900 window: its changed-files card, then
+/// the page's card (0) and the server's (1).
 fn turn<'a>(
     name: &str,
     cx: &'a mut TestAppContext,
@@ -97,51 +97,56 @@ fn menu_labels(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> 
     })
 }
 
+/// The files a turn changed draw T3's changed-files card above its page
+/// cards: its head, then the tree, a folder shut until pressed, and a
+/// press on a file opens the Changes Surface.
 #[gpui::test]
-fn a_written_file_gets_a_card_that_opens_it(cx: &mut TestAppContext) {
-    let (view, workspace, cx) = turn("output-file-card", cx);
+fn the_files_a_turn_changed_draw_one_card_that_opens_the_diff(cx: &mut TestAppContext) {
+    let (view, _, cx) = turn("output-changes-card", cx);
     hide_panel(&view, cx);
     let card = cx
-        .debug_bounds("file-card-0")
-        .expect("the written file has its card under the answer");
-    assert!(
-        f32::from(card.size.width) <= ferrite_ui::theme::OUTPUT_CARD_W + 0.5,
-        "a card is at most OUTPUT_CARD_W wide"
-    );
+        .debug_bounds("changes-card")
+        .expect("the changed files have their card under the answer");
+    let head = cx.debug_bounds("changes-card-head").unwrap();
     assert_eq!(
-        f32::from(card.size.height),
-        ferrite_ui::theme::OUTPUT_CARD_H
+        f32::from(head.size.height),
+        ferrite_ui::theme::CHANGES_HEAD_H
     );
-    // Open in ›: Finder and the default app, from the card's own menu.
-    let open_in = cx
-        .debug_bounds("file-card-open-in-0")
-        .expect("the card offers Open in");
-    assert!(card.contains(&open_in.center()), "at the card's right");
-    cx.simulate_click(open_in.center(), gpui::Modifiers::none());
+    assert!(card.contains(&cx.debug_bounds("changes-card-expand").unwrap().center()));
+    assert!(card.contains(&cx.debug_bounds("changes-card-open").unwrap().center()));
+    let page = cx.debug_bounds("page-card-0").expect("then the page card");
+    assert!(page.top() > card.bottom(), "the changes card comes first");
+
+    // Folders first, shut; the file at the root shows.
+    let folder = cx
+        .debug_bounds("changes-folder-site")
+        .expect("the page's folder is a row");
+    let file = cx.debug_bounds("changes-file-notes.md").unwrap();
+    assert!(folder.top() < file.top(), "folders before files");
+    assert_eq!(
+        f32::from(file.size.height),
+        ferrite_ui::theme::CHANGES_ROW_H
+    );
+    assert!(cx.debug_bounds("changes-file-site/index.html").is_none());
+    cx.simulate_click(folder.center(), gpui::Modifiers::none());
     tick(cx);
-    assert!(cx.debug_bounds("output-menu").is_some(), "its menu opens");
-    assert!(cx.debug_bounds("output-menu-row-0").is_some());
-    assert!(cx.debug_bounds("output-menu-row-1").is_some());
+    let inner = cx
+        .debug_bounds("changes-file-site/index.html")
+        .expect("a press opens the folder");
+    let file = cx.debug_bounds("changes-file-notes.md").unwrap();
     assert!(
-        view.read_with(cx, |view, _| view.panes[0].preview.document().is_none()),
-        "Open in is the menu, not the preview"
+        inner.top() >= folder.bottom() && inner.bottom() <= file.top(),
+        "its file under it, above the root's"
     );
-    // A press on the card itself reads the file in the Panel.
-    let card = cx.debug_bounds("file-card-0").unwrap();
-    cx.simulate_click(
-        gpui::point(card.left() + px(8.), card.center().y),
-        gpui::Modifiers::none(),
-    );
-    tick(cx);
-    assert!(cx.debug_bounds("output-menu").is_none(), "the menu goes");
-    cx.simulate_click(
-        gpui::point(card.left() + px(8.), card.center().y),
-        gpui::Modifiers::none(),
-    );
+
+    // A file opens the Changes Surface.
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let file = cx.debug_bounds("changes-file-notes.md").unwrap();
+    cx.simulate_click(file.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.files_active_path(view.panes[0].thread().unwrap())),
-        Some(workspace.join("notes.md"))
+        panel_tabs(&view, thread, cx).1,
+        Some(crate::cockpit::surfaces::SurfaceId::Changes)
     );
 }
 
@@ -150,15 +155,15 @@ fn a_page_card_opens_the_page_beside_the_transcript(cx: &mut TestAppContext) {
     let (view, workspace, cx) = turn("output-page-card", cx);
     hide_panel(&view, cx);
     assert!(
-        cx.debug_bounds("page-card-1").is_some(),
+        cx.debug_bounds("page-card-0").is_some(),
         "the written page has its card"
     );
     assert!(
-        cx.debug_bounds("page-card-more-2").is_some(),
+        cx.debug_bounds("page-card-more-1").is_some(),
         "and the server it named, with its ⋯"
     );
     let open = cx
-        .debug_bounds("page-card-open-1")
+        .debug_bounds("page-card-open-0")
         .expect("a page card offers Open");
     cx.simulate_click(open.center(), gpui::Modifiers::none());
     tick(cx);
@@ -195,17 +200,17 @@ fn a_page_card_opens_the_page_beside_the_transcript(cx: &mut TestAppContext) {
     });
     tick(cx);
 
-    // Expand: the Panel takes all the board can give, and back.
+    // Maximize: the Panel takes all the board can give, and back.
     let wide = f32::from(panel.size.width);
-    let expand = cx.debug_bounds("preview-expand").expect("an expand door");
+    let expand = cx.debug_bounds("panel-maximize").expect("a maximize door");
     cx.simulate_click(expand.center(), gpui::Modifiers::none());
     tick(cx);
     let expanded = f32::from(cx.debug_bounds("panel").unwrap().size.width);
-    use ferrite_ui::theme::{NAV_WIDTH, PANEL_PREVIEW_BOARD_MIN};
-    let most = 1600. - NAV_WIDTH - PANEL_PREVIEW_BOARD_MIN;
+    use ferrite_ui::theme::{DOCK_THREAD_MIN_W, NAV_WIDTH};
+    let most = 1600. - NAV_WIDTH - DOCK_THREAD_MIN_W;
     assert!(expanded > wide, "expanded is wider: {expanded} vs {wide}");
     assert!((expanded - most).abs() < 1., "{expanded} vs {most}");
-    let expand = cx.debug_bounds("preview-expand").unwrap();
+    let expand = cx.debug_bounds("panel-maximize").unwrap();
     cx.simulate_click(expand.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(
@@ -213,12 +218,14 @@ fn a_page_card_opens_the_page_beside_the_transcript(cx: &mut TestAppContext) {
         wide
     );
 
-    // × closes it, and the hidden Panel with it.
-    let close = cx.debug_bounds("preview-close").expect("a ×");
-    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    // Closing its tab closes the page.
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let page = crate::cockpit::surfaces::SurfaceId::File(workspace.join("site/index.html"));
+    assert!(panel_tabs(&view, thread, cx).0.contains(&page), "the page is a File tab");
+    view.update(cx, |view, cx| view.close_surface(thread, &page, cx));
     tick(cx);
-    assert!(cx.debug_bounds("panel").is_none());
-    assert!(view.read_with(cx, |view, _| !view.panel.expanded));
+    assert!(!panel_tabs(&view, thread, cx).0.contains(&page));
+    assert!(cx.debug_bounds("preview-page-title").is_none());
 }
 
 #[gpui::test]
@@ -231,7 +238,7 @@ fn a_local_server_uses_the_thread_browser_preview(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("browser-preview").is_some(), "local addresses use the browser controls");
     assert!(cx.debug_bounds("preview-page").is_none(), "the sealed HTML host is reserved for files");
-    assert!(cx.debug_bounds("preview-expand").is_some());
+    assert!(cx.debug_bounds("panel-maximize").is_some(), "the Panel's one maximize");
 }
 
 /// A settled `ReportFindings` call, opened, draws its findings grouped by
@@ -294,6 +301,7 @@ fn a_running_command_opens_onto_its_output_so_far(cx: &mut TestAppContext) {
         .send(SessionEvent::ToolOutputDelta { id: "build".into(), text: "Compiling a\n".into() })
         .unwrap();
     tick(cx);
+    open_live(cx);
     view.update(cx, |view, cx| {
         view.panes[0].toggle_tool(&pane::DisclosureId::Tool("build".into()));
         cx.notify();
@@ -306,4 +314,64 @@ fn a_running_command_opens_onto_its_output_so_far(cx: &mut TestAppContext) {
     tick(cx);
     let after = cx.debug_bounds("tool-output").expect("still shown").size.height;
     assert!(after > before, "it fills as output arrives: {before:?} -> {after:?}");
+}
+
+/// A steered turn's changed-files card spans the whole turn, so a folder
+/// the operator opened on it stays open as the transcript moves on, even
+/// when its file was written before the steer.
+#[gpui::test]
+fn a_steered_turns_opened_folder_stays_open(cx: &mut TestAppContext) {
+    let (mut core, fake, workspace) = bound_cockpit("steered-folder", Provider::Claude);
+    let first = core.threads()[0];
+    core.send(first, "write the site".into());
+    std::fs::create_dir_all(workspace.join("site")).unwrap();
+    std::fs::create_dir_all(workspace.join("docs")).unwrap();
+    std::fs::write(workspace.join("site/index.html"), "<p>x</p>").unwrap();
+    std::fs::write(workspace.join("docs/b.md"), "b").unwrap();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    let stream = fake.streams.borrow()[0].clone();
+    wrote(&stream, "w1", "site/index.html", "<p>x</p>");
+    stream
+        .send(SessionEvent::Queue(ferrite_core::QueueEvent::Started {
+            historical: false,
+            client_id: "steer-1".into(),
+            text: Some("and the docs".into()),
+        }))
+        .unwrap();
+    wrote(&stream, "w2", "docs/b.md", "b");
+    stream.send(SessionEvent::TextDelta { text: "Done.".into() }).unwrap();
+    stream
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    hide_panel(&view, cx);
+    let steered = view.read_with(cx, |view, _| {
+        let thread = view.cockpit.threads()[0];
+        view.cockpit
+            .thread(thread)
+            .unwrap()
+            .transcript()
+            .blocks()
+            .iter()
+            .any(|block| block.steer)
+    });
+    assert!(steered, "premise: the turn holds a steer");
+    let folder = cx.debug_bounds("changes-folder-site").expect("the site folder");
+    cx.simulate_click(folder.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        cx.debug_bounds("changes-file-site/index.html").is_some(),
+        "premise: the press opened it"
+    );
+    stream.send(SessionEvent::TextDelta { text: "More.".into() }).unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("changes-file-site/index.html").is_some(),
+        "the folder the operator opened stays open"
+    );
 }

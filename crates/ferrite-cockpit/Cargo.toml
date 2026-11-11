@@ -43,12 +43,15 @@ gpui = { package = "gpui-kit", version = "=0.6.0" }
 gpui-base = "=0.6.0"
 # The demo script builds real provider events, whose payloads are the vendors'
 # own JSON. Already in the tree via ferrite-core.
+serde = { workspace = true }
 serde_json = { workspace = true }
 # Same platform already used by GPUI Kit; enable its framebuffer test hook only.
 gpui-reference-platform = { package = "gpui-pre-platform", version = "=0.3.3", features = ["test-support"], optional = true }
 url = "2"
 # System notifications' channels. Already in the tree via gpui.
 futures = "0.3"
+# The nav's surface grain (`nav::list::grain`). Already in the tree via gpui.
+image = { version = "0.25.1", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 # The smoke render needs a window; gpui's own test harness provides a headless
@@ -60,5 +63,3 @@ ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }
 ferrite-pane = { path = "../ferrite-pane", features = ["test-support"] }
 # The window's frame the app installs (ADR 0035): the tests draw it too.
 ferrite-frame = { path = "../ferrite-frame" }
-# The image viewer's tests draw their images. Already in the tree via gpui.
-image = { version = "0.25.1", default-features = false, features = ["png"] }

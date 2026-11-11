@@ -431,6 +431,18 @@ pub struct SessionCommand {
     pub source: Option<CommandSource>,
 }
 
+impl SessionCommand {
+    /// Whether it is a skill, the Composer's `$name`: one Codex lists with
+    /// its SKILL.md, or one the operator, the project or a plugin installed.
+    pub fn is_skill(&self) -> bool {
+        self.path.is_some()
+            || matches!(
+                self.source,
+                Some(CommandSource::Skill | CommandSource::Plugin { .. })
+            )
+    }
+}
+
 /// Where a `/` command comes from.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]

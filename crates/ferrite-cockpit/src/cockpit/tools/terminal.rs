@@ -1,14 +1,14 @@
-//! The Terminal (Claude's, `terminal-open.png`, `terminal-tabs.png`,
-//! `terminal-more-menu.png`, `terminal-menu.png`): a column of the dock
-//! holding the user's shell in the Thread's folder — `ferrite-terminal`'s
-//! grid — with nothing more than Claude's: tabs, copy and paste, and
-//! `Attach as context`.
+//! The Terminal (Claude's, `terminal-open.png`, `terminal-more-menu.png`,
+//! `terminal-menu.png`): the user's shell in the Thread's folder —
+//! `ferrite-terminal`'s grid — one shell a Panel Surface (`Terminal N`, ADR
+//! 0039), with nothing more than Claude's: copy and paste, and `Attach as
+//! context`.
 //!
-//! - **Head:** `Terminal` and a `+`; with a second tab each is `Terminal N`
-//!   with its own ×, the shown one on a pill. At the right `⋯`, expand and
-//!   close. Closing a tab, or the column, ends its shell; a shell that exits
-//!   on its own closes its tab.
-//! - **`⋯`:** Cursor style ›, Blink cursor, Copy on select, Scrollback ›.
+//! - **Opening:** ⌘J brings the Thread's last shell forward, or starts its
+//!   first; the Panel's `+` menu (Terminal, T) starts another. Closing its
+//!   tab ends its shell; a shell that exits on its own closes its tab.
+//! - **Its row:** `⋯` — Cursor style ›, Blink cursor, Copy on select,
+//!   Scrollback ›.
 //! - **Right-click:** Attach selection as context (with a selection), Copy,
 //!   Paste, Select all, Clear terminal. A selection also hangs the
 //!   `Attach as context` pill over itself.
@@ -21,7 +21,6 @@ use ferrite_ui::icons;
 use ferrite_ui::theme;
 
 use super::*;
-use crate::cockpit::view_head::Column;
 use crate::cockpit::context_menu::Submenu;
 
 /// What a Terminal menu row does.
@@ -49,15 +48,16 @@ pub(crate) enum Sub {
 const SCROLLBACKS: [usize; 3] = [1_000, theme::TERMINAL_SCROLLBACK, 100_000];
 
 struct Tab {
-    name: SharedString,
+    /// `Terminal N`'s N, and its Surface's (`SurfaceId::Terminal`).
+    number: u64,
     view: Entity<TerminalView>,
 }
 
+#[derive(Default)]
 pub(crate) struct Terminals {
     tabs: Vec<Tab>,
-    active: usize,
-    /// Tabs made, which names the next.
-    made: usize,
+    /// Shells started, which numbers the next.
+    made: u64,
 }
 
 /// What the `⋯` menu sets, for every terminal of the window.
@@ -88,16 +88,9 @@ fn scrollback_label(lines: usize) -> String {
 }
 
 impl CockpitView {
-    /// The Terminal door opened for `thread`: its first shell starts.
-    pub(in crate::cockpit) fn ensure_terminal(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if !self.tools.terminals.contains_key(&thread) {
-            self.tools.terminals.insert(thread, Terminals { tabs: Vec::new(), active: 0, made: 0 });
-            self.new_terminal_tab(thread, cx);
-        }
-    }
-
-    /// `+`: one more shell in the Thread's folder, shown.
-    fn new_terminal_tab(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    /// One more shell in the Thread's folder, its Surface opened and
+    /// shown (⌘J's first, the `+` menu's Terminal).
+    pub(in crate::cockpit) fn new_terminal_surface(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         let Some(directory) = self.thread_path(thread) else {
             return;
         };
@@ -115,17 +108,12 @@ impl CockpitView {
             cockpit.terminal_event(thread, view, event, cx)
         })
         .detach();
-        let Some(terminals) = self.tools.terminals.get_mut(&thread) else {
-            return;
-        };
+        let terminals = self.tools.terminals.entry(thread).or_default();
         terminals.made += 1;
-        terminals.tabs.push(Tab {
-            name: format!("Terminal {}", terminals.made).into(),
-            view,
-        });
-        terminals.active = terminals.tabs.len() - 1;
+        let number = terminals.made;
+        terminals.tabs.push(Tab { number, view });
         self.tools.terminal_focus_wanted = true;
-        cx.notify();
+        self.upsert_surface(thread, SurfaceId::Terminal(number), cx);
     }
 
     fn terminal_event(
@@ -152,48 +140,49 @@ impl CockpitView {
                 self.open_context_menu(MenuTarget::Terminal(thread), *at, cx)
             }
             TerminalEvent::Exited => {
-                if let Some(at) = self.terminal_index(thread, &view) {
-                    self.close_terminal_tab(thread, at, cx);
+                if let Some(number) = self.terminal_number(thread, &view) {
+                    self.end_terminal(thread, number, cx);
+                    self.forget_surface(thread, &SurfaceId::Terminal(number));
                 }
             }
             TerminalEvent::Title(_) => {}
         }
     }
 
-    fn terminal_index(&self, thread: ThreadId, view: &Entity<TerminalView>) -> Option<usize> {
+    fn terminal_number(&self, thread: ThreadId, view: &Entity<TerminalView>) -> Option<u64> {
         self.tools
             .terminals
             .get(&thread)?
             .tabs
             .iter()
-            .position(|tab| tab.view == *view)
+            .find(|tab| tab.view == *view)
+            .map(|tab| tab.number)
     }
 
-    /// The tab's ×: its shell ends. The last one takes the column with it.
-    pub(in crate::cockpit) fn close_terminal_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
+    /// Shell `number` of `thread` ends: its tab closed, or it exited.
+    pub(in crate::cockpit) fn end_terminal(&mut self, thread: ThreadId, number: u64, cx: &mut Context<Self>) {
         let Some(terminals) = self.tools.terminals.get_mut(&thread) else {
             return;
         };
-        if at < terminals.tabs.len() {
-            terminals.tabs.remove(at);
-        }
+        terminals.tabs.retain(|tab| tab.number != number);
         if terminals.tabs.is_empty() {
-            self.press_tool(Tool::Terminal, cx);
-            return;
+            self.tools.terminals.remove(&thread);
         }
-        terminals.active = terminals.active.min(terminals.tabs.len() - 1);
-        self.tools.terminal_focus_wanted = true;
         cx.notify();
     }
 
-    /// The column went: every shell of the Thread ends.
-    pub(in crate::cockpit) fn end_terminals(&mut self, thread: ThreadId) {
-        self.tools.terminals.remove(&thread);
+    fn terminal_of(&self, thread: ThreadId, number: u64) -> Option<Entity<TerminalView>> {
+        let terminals = self.tools.terminals.get(&thread)?;
+        let tab = terminals.tabs.iter().find(|tab| tab.number == number)?;
+        Some(tab.view.clone())
     }
 
+    /// The shell `thread`'s Panel shows, if it shows one.
     fn active_terminal(&self, thread: ThreadId) -> Option<Entity<TerminalView>> {
-        let terminals = self.tools.terminals.get(&thread)?;
-        Some(terminals.tabs.get(terminals.active)?.view.clone())
+        match self.active_surface(thread)? {
+            SurfaceId::Terminal(number) => self.terminal_of(thread, number),
+            _ => None,
+        }
     }
 
     /// Whether the shown shell has the keyboard. The focus pump
@@ -331,124 +320,22 @@ impl CockpitView {
 
     // ------------------------------------------------------------ drawing
 
-    /// The Terminal column's body: its head, then the shown shell.
-    pub(in crate::cockpit) fn terminal_pane(&self, thread: ThreadId, cx: &mut Context<Self>) -> Div {
-        let Some(terminals) = self.tools.terminals.get(&thread) else {
-            return div().flex_1();
-        };
-        let body = terminals.tabs.get(terminals.active).map(|tab| tab.view.clone());
+    /// Shell `number`'s Surface: its row (`⋯`), then the grid.
+    pub(in crate::cockpit) fn terminal_pane(&self, thread: ThreadId, number: u64, cx: &mut Context<Self>) -> Div {
+        let body = self.terminal_of(thread, number);
+        let more = ferrite_pane::preview::head_door("terminal-more", "terminal-more".into(), icons::ELLIPSIS)
+            .tooltip(ferrite_ui::menu::tooltip("More"))
+            .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.open_context_menu(MenuTarget::TerminalMore(thread), event.position(), cx);
+            }));
         div()
             .debug_selector(|| "terminal-pane".into())
             .flex()
             .flex_col()
             .size_full()
-            .child(self.terminal_head(thread, terminals, cx))
+            .child(super::surface_bar().child(div().flex_1()).child(more))
             .child(div().flex_1().min_h_0().children(body))
-    }
-
-    fn terminal_head(&self, thread: ThreadId, terminals: &Terminals, cx: &mut Context<Self>) -> Div {
-        use theme::*;
-        let several = terminals.tabs.len() > 1;
-        let tabs = terminals.tabs.iter().enumerate().map(|(at, tab)| {
-            let active = several && at == terminals.active;
-            let id = SharedString::from(format!("terminal-tab-{at}"));
-            div()
-                .id(id.clone())
-                .debug_selector(move || id.to_string())
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap(px(SPACE_1))
-                .h(px(PANEL_TAB_H))
-                .pl(px(PANEL_TAB_PAD_X))
-                .pr(px(if several { SPACE_1 } else { PANEL_TAB_PAD_X }))
-                .rounded(px(R_CONTROL))
-                .text_size(px(FS_LABEL))
-                .text_color(rgb(if active || !several { INK_STRONG } else { INK_SUBTLE }))
-                .when(active, |tab| tab.bg(paint::FIELD))
-                .when(several, |tab| tab.cursor_pointer())
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    if let Some(terminals) = view.tools.terminals.get_mut(&thread) {
-                        terminals.active = at;
-                        view.tools.terminal_focus_wanted = true;
-                        cx.notify();
-                    }
-                }))
-                .child(if several { tab.name.clone() } else { "Terminal".into() })
-                .children(several.then(|| {
-                    let key = SharedString::from(format!("terminal-tab-close-{at}"));
-                    let selector = key.to_string();
-                    div()
-                        .id(key.clone())
-                        .debug_selector(move || selector.clone())
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(px(PANEL_TAB_H - SPACE_1))
-                        .rounded(px(R_CONTROL))
-                        .hover_control(key)
-                        .child(icons::icon(icons::CLOSE, ICON_BUTTON_GLYPH, INK_SUBTLE))
-                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.close_terminal_tab(thread, at, cx);
-                        }))
-                }))
-        });
-        let door = |key: &'static str, glyph: &'static str, tip: &'static str| {
-            ferrite_pane::preview::head_door(key, key.into(), glyph)
-                .tooltip(ferrite_ui::menu::tooltip(tip))
-        };
-        let expanded = self.panel.expanded;
-        div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(SPACE_1))
-            .h(px(WIN_CHROME_H))
-            .px(px(SIDE_CHAT_INSET))
-            .pr(px(super::super::panel::tools_inset() - PANEL_PAD_R))
-            .mt(px(self.head_drop(Column::Terminal)))
-            .child(
-                div()
-                    .debug_selector(|| "terminal-tabs".into())
-                    .flex()
-                    .flex_1()
-                    .min_w_0()
-                    .items_center()
-                    .gap(px(SPACE_0_5))
-                    .overflow_hidden()
-                    .children(tabs),
-            )
-            .child(door("terminal-new", icons::PLUS, "New terminal").on_click(cx.listener(
-                move |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.new_terminal_tab(thread, cx);
-                },
-            )))
-            .child(door("terminal-more", icons::ELLIPSIS, "More").on_click(cx.listener(
-                move |view, event: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.open_context_menu(MenuTarget::TerminalMore(thread), event.position(), cx);
-                },
-            )))
-            .child(
-                door(
-                    "terminal-expand",
-                    if expanded { icons::MINIMIZE } else { icons::MAXIMIZE },
-                    if expanded { "Collapse" } else { "Expand" },
-                )
-                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.panel.expanded = !view.panel.expanded;
-                    cx.notify();
-                })),
-            )
-            .child(door("terminal-close", icons::CLOSE, "Close").on_click(cx.listener(
-                move |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.press_tool(Tool::Terminal, cx);
-                },
-            )))
     }
 }
 
@@ -471,12 +358,12 @@ impl CockpitView {
 
 #[cfg(test)]
 impl CockpitView {
-    /// The names of the Thread's terminal tabs.
-    pub(in crate::cockpit) fn terminal_tab_names(&self, thread: ThreadId) -> Vec<String> {
+    /// The numbers of the Thread's shells.
+    pub(in crate::cockpit) fn terminal_numbers(&self, thread: ThreadId) -> Vec<u64> {
         self.tools
             .terminals
             .get(&thread)
-            .map(|terminals| terminals.tabs.iter().map(|tab| tab.name.to_string()).collect())
+            .map(|terminals| terminals.tabs.iter().map(|tab| tab.number).collect())
             .unwrap_or_default()
     }
 

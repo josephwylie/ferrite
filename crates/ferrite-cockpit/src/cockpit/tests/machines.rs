@@ -455,8 +455,8 @@ fn a_machine_without_ferrited_says_so_and_takes_no_input(cx: &mut TestAppContext
         "the board"
     );
     assert!(
-        debug_bounds(cx, "machine-lost-tree".into()).is_some(),
-        "its tree in the nav"
+        debug_bounds(cx, "machine-lost-list".into()).is_some(),
+        "its list in the nav"
     );
     cx.update(|window, cx| {
         assert!(
@@ -574,8 +574,8 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
     );
 
     let door = cx
-        .debug_bounds("nav-view-parked")
-        .expect("the Parked view's row");
+        .debug_bounds("nav-shelf-parked")
+        .expect("the Parked shelf's header");
     cx.simulate_click(door.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     let row_id: &'static str = format!("nav-thread-{}", named.get()).leak();
@@ -943,7 +943,7 @@ fn a_system_notification_outlives_a_move(cx: &mut TestAppContext) {
         assert_eq!(
             view.landing.as_ref().map(|(landing, _)| match landing {
                 Landing::Alert(Alert { away, thread, .. })
-                | Landing::Inbox(Alert { away, thread, .. }) => (away.clone(), *thread),
+=> (away.clone(), *thread),
             }),
             Some((None, here)),
             "on its Thread once it answers"
@@ -1239,12 +1239,12 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     assert_eq!(
         rows(cx),
         [
-            named("trunk", "checked out"),
-            named("feature/wt", "worktree · wt-feature"),
+            named("Current checkout", "trunk"),
+            named("Previous worktree (feature/wt)", "wt-feature"),
             named("main", "existing branch"),
             named("topic/spare", "existing branch"),
             named("New branch", "in the project checkout"),
-            named("New branch + worktree", "in an isolated checkout"),
+            named("New worktree", "in an isolated checkout"),
         ],
         "git on the machine lists the repo, its own worktrees and branches"
     );

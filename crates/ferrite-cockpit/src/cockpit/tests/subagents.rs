@@ -193,6 +193,7 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
     tick(cx);
     click_child(&view, cx, "Atlas");
     tick(cx);
+    open_live(cx);
     let viewport = view.read_with(cx, |view, cx| {
         view.panes[0]
             .transcript()
@@ -595,8 +596,7 @@ fn native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache(
     );
     tick(cx);
     click_child(&view, cx, "Atlas");
-    assert!(cx.debug_bounds("progress-caption-Working").is_some());
-    assert!(cx.debug_bounds("progress-caption-Thinking").is_none());
+    assert!(cx.debug_bounds("live-thinking").is_some());
     emit(
         &fake,
         ActivityEvent::Content {
@@ -612,7 +612,7 @@ fn native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache(
     );
     tick(cx);
     assert!(cx
-        .debug_bounds("progress-caption-Retrying · Server busy")
+        .debug_bounds("live-phase")
         .is_some());
     view.read_with(cx, |view, _| {
         let pane = &view.panes[0];
@@ -637,7 +637,7 @@ fn native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache(
     );
     tick(cx);
     assert!(cx
-        .debug_bounds("progress-caption-Retrying · Server busy")
+        .debug_bounds("live-phase")
         .is_none());
 }
 
@@ -710,6 +710,8 @@ fn escape_on_a_subagent_stops_only_that_subagent_or_goes_back(cx: &mut TestAppCo
 /// A Main `Agent` call reads as Claude's row (`Ran agent <task>`), runs
 /// with its agent — the line under the turn never names it a second time —
 /// and a press on it opens that agent in the right pane (`agent_pane`).
+/// While it runs its time counts on its own clock, not only when something
+/// else redraws the transcript.
 #[gpui::test]
 fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("subagents-row", 1);
@@ -734,6 +736,10 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("agent-running").is_some(), "its spinner");
     assert!(cx.debug_bounds("agent-row-Atlas").is_some());
+    assert!(
+        cx.debug_bounds("agent-elapsed-live").is_some(),
+        "its time counts on its own while it runs"
+    );
     view.read_with(cx, |view, _| {
         let activity = view
             .cockpit
@@ -741,16 +747,12 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
             .unwrap()
             .activity();
         let faces = crate::cockpit::transcript_glue::agent_faces(activity);
-        assert_eq!(
-            faces.get("Atlas"),
-            Some(&ferrite_pane::pane::AgentFace {
-                run: ferrite_pane::pane::AgentRun::Running,
-                summary: Some("Reading nav.rs".into()),
-            })
-        );
+        let face = faces.get("Atlas").unwrap();
+        assert_eq!(face.run, ferrite_pane::pane::AgentRun::Running);
+        assert_eq!(face.summary.as_deref(), Some("Reading nav.rs"));
     });
     assert!(
-        cx.debug_bounds("progress-call").is_none(),
+        cx.debug_bounds("live-call").is_none(),
         "one running row"
     );
     let row = cx.debug_bounds("agent-open-Atlas").expect("the row opens");
@@ -774,11 +776,56 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
         },
     );
     tick(cx);
-    let back = cx.debug_bounds("agent-drill-back").unwrap().center();
-    cx.simulate_click(back, gpui::Modifiers::none());
+    let close = cx.debug_bounds("panel-tab-Agent-close").unwrap().center();
+    cx.simulate_click(close, gpui::Modifiers::none());
     cx.run_until_parked();
     assert!(view.read_with(cx, |view, _| !view.agent_drills.is_open(thread)));
     assert!(cx.debug_bounds("agent-running").is_none(), "settled");
+    assert!(cx.debug_bounds("agent-elapsed-live").is_none(), "its time holds");
+}
+
+/// Agents started together draw T3's subagent card: shut, its trigger
+/// alone over 24px avatars; pressed, it snaps open on their rows, the
+/// working one's dot running, each row the way into its agent.
+#[gpui::test]
+fn agents_started_together_draw_one_card_that_opens_on_their_rows(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("subagents-card", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    for name in ["Atlas", "Birch", "Cedar"] {
+        agent_call(&fake, name);
+    }
+    child(&fake, "Atlas", AgentStatus::Working);
+    child(&fake, "Birch", AgentStatus::Idle);
+    child(&fake, "Cedar", AgentStatus::Idle);
+    tick(cx);
+    let trigger = cx.debug_bounds("agent-card-Atlas").expect("one card");
+    assert!(cx.debug_bounds("agent-card-title").is_some());
+    assert!(cx.debug_bounds("agent-card-status").is_some());
+    assert!(
+        cx.debug_bounds("agent-row-Atlas").is_none(),
+        "shut, the card is its trigger alone"
+    );
+    cx.simulate_click(trigger.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    let panel = cx.debug_bounds("agent-card-panel").expect("it snaps open");
+    for row in ["agent-row-Atlas", "agent-row-Birch", "agent-row-Cedar"] {
+        let bounds = cx.debug_bounds(row).unwrap_or_else(|| panic!("{row}"));
+        assert!(panel.contains(&bounds.center()), "{row} in the panel");
+    }
+    let dot = cx.debug_bounds("agent-running").expect("the working agent's dot");
+    assert_eq!(dot.size.width, px(ferrite_ui::theme::AGENT_DOT));
+    let open = cx.debug_bounds("agent-open-Birch").expect("the row opens");
+    cx.simulate_click(open.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.agent_drills.subject(thread),
+            Some(&Subject::Subagent(key("Birch")))
+        );
+    });
 }
 
 /// The keyboard reaches an agent's row: Tab lands on it, ↵ opens its
@@ -827,12 +874,11 @@ fn the_keyboard_opens_and_stops_an_agents_row(cx: &mut TestAppContext) {
     );
 }
 
-/// An agent opened from its row docks in the right pane at the token width,
-/// the thread reflowing beside it, its head `‹ <task>` with expand and
-/// close; the body holds the agent's transcript with `Model X` under its
-/// prompt; ‹ and × leave it; expand covers the content area.
+/// An agent opened from its row is an `Agent` tab of the Panel at its
+/// floor, the thread reflowing beside it; the Panel's maximize covers the
+/// content area; the tab's × closes it.
 #[gpui::test]
-fn an_opened_agent_docks_in_the_right_pane_with_its_own_head(cx: &mut TestAppContext) {
+fn an_opened_agent_is_a_panel_tab(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("subagents-drill", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -856,35 +902,29 @@ fn an_opened_agent_docks_in_the_right_pane_with_its_own_head(cx: &mut TestAppCon
         board.size.width < before && board.right() <= pane.left() + px(1.),
         "the thread reflows beside it"
     );
-    let title = cx.debug_bounds("agent-drill-title").expect("its head");
-    assert!(pane.contains(&title.center()));
-    let back = cx.debug_bounds("agent-drill-back").unwrap();
-    let expand = cx.debug_bounds("agent-drill-expand").unwrap();
-    let close = cx.debug_bounds("agent-drill-close").unwrap();
-    assert!(
-        back.left() < title.left() && back.right() <= expand.left() && expand.right() <= close.left(),
-        "‹ title, then expand, then close"
-    );
+    let tab = cx.debug_bounds("panel-tab-Agent").expect("its tab");
+    assert!(pane.contains(&tab.center()));
     assert!(
         cx.debug_bounds("panel-toggle").is_some(),
         "the rail's door stands against the pane"
     );
 
-    // Expanded, it covers the content area; the same control collapses it.
-    cx.simulate_click(expand.center(), gpui::Modifiers::none());
+    // The Panel's one maximize covers the content area, and restores.
+    let maximize = cx.debug_bounds("panel-maximize").unwrap();
+    cx.simulate_click(maximize.center(), gpui::Modifiers::none());
     tick(cx);
     let wide = cx.debug_bounds("panel").unwrap();
-    assert!(wide.size.width > pane.size.width * 2., "expanded: {wide:?}");
-    let expand = cx.debug_bounds("agent-drill-expand").unwrap();
-    cx.simulate_click(expand.center(), gpui::Modifiers::none());
+    assert!(wide.size.width > pane.size.width * 2., "maximized: {wide:?}");
+    let maximize = cx.debug_bounds("panel-maximize").unwrap();
+    cx.simulate_click(maximize.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(
         (cx.debug_bounds("panel").unwrap().size.width - pane.size.width).abs() < px(1.),
-        "collapsed"
+        "restored"
     );
 
-    // × closes the pane; ‹ would only have left the agent.
-    let close = cx.debug_bounds("agent-drill-close").unwrap();
+    // Its tab's × closes it.
+    let close = cx.debug_bounds("panel-tab-Agent-close").unwrap();
     cx.simulate_click(close.center(), gpui::Modifiers::none());
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());

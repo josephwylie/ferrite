@@ -495,6 +495,7 @@ fn small_tool_output_copies_blank_lines_and_trailing_spaces_exactly(cx: &mut Tes
         })
         .unwrap();
     tick(cx);
+    open_live(cx);
     // Open the call: its open body holds what it printed, exactly.
     view.update(cx, |view, cx| {
         view.panes[0].toggle_tool(&pane::DisclosureId::Tool("exact".into()));
@@ -506,9 +507,9 @@ fn small_tool_output_copies_blank_lines_and_trailing_spaces_exactly(cx: &mut Tes
     let copied = clipboard(cx).unwrap();
     // The shut line previews nothing; the card keeps the blank line and
     // the trailing spaces.
-    assert!(copied.contains("Ran fixture"), "the call line: {copied:?}");
+    assert!(copied.starts_with("fixture\n\n"), "the call line: {copied:?}");
     assert!(
-        !copied.contains("Ran fixture \u{b7}"),
+        !copied.contains("fixture \u{b7}"),
         "no preview: {copied:?}"
     );
     assert!(
@@ -545,8 +546,7 @@ fn received_reasoning_is_shown_once_during_live_to_settled_handoff(cx: &mut Test
         tick(cx);
         let historical = historical_count(cx, source);
         let live = usize::from(
-            cx.debug_bounds("progress-caption-Checking the supplied spacing and tool results")
-                .is_some(),
+            cx.debug_bounds("live-thought").is_some(),
         );
         assert_eq!(historical+live,1,"plain and formatted supplied summaries both require one visible presentation: {source}");
     }
@@ -557,14 +557,12 @@ fn received_reasoning_is_shown_once_during_live_to_settled_handoff(cx: &mut Test
         })
         .unwrap();
     tick(cx);
-    assert_eq!(
-        historical_count(cx, &bold),
-        1,
-        "completion retains exactly one historical summary"
+    assert!(
+        cx.debug_bounds("reasoning-summary").is_some(),
+        "completion retains the thought's row"
     );
-    assert!(cx
-        .debug_bounds("progress-caption-Checking the supplied spacing and tool results")
-        .is_none());
+    assert_eq!(historical_count(cx, &bold), 0, "shut, its body is not drawn");
+    assert!(cx.debug_bounds("live-thought").is_none());
 }
 
 #[gpui::test]

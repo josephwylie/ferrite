@@ -18,7 +18,7 @@ use gpui::{App, ClipboardItem, Context, IntoElement, SharedString, Window};
 use super::CockpitView;
 use ferrite_core::activity::{ActivityView, AgentStatus};
 use ferrite_core::transcript::BlockId;
-use ferrite_pane::pane::{AgentFace, AgentFaces, AgentRun};
+use ferrite_pane::pane::{AgentClock, AgentFace, AgentFaces, AgentRun};
 use ferrite_pane::transcript::{PromptAction, ScrollTarget, TranscriptTail};
 
 /// Whether a sent prompt's Edit, Rewind and Fork can be asked of `open`
@@ -75,7 +75,24 @@ pub(super) fn agent_faces(activity: ActivityView<'_>) -> AgentFaces {
                 (!detail.is_empty()).then(|| detail.to_owned())
             })
             .flatten();
-        faces.insert(call, AgentFace { run, summary });
+        let transcript = agent.transcript();
+        let clock = match transcript.turn_started() {
+            Some(at) if run == AgentRun::Running => Some(AgentClock::Since(at)),
+            _ => transcript.blocks().iter().rev().find_map(|block| match &block.body {
+                ferrite_core::transcript::Body::TurnEnd(end) => end
+                    .elapsed_ms
+                    .map(|ms| AgentClock::Took(std::time::Duration::from_millis(ms))),
+                _ => None,
+            }),
+        };
+        faces.insert(
+            call,
+            AgentFace {
+                run,
+                summary,
+                clock,
+            },
+        );
     }
     faces
 }
@@ -97,10 +114,12 @@ fn failure_words(message: &str) -> SharedString {
 impl CockpitView {
     /// The row after a transcript's last: the pending Decision, as its
     /// card is built for the tail (`CockpitView::decision_tail`, the
-    /// Decision card's owner).
+    /// Decision card's owner), else the failure strip, else the
+    /// background-work line.
     pub(super) fn transcript_tail(&self, index: usize, cx: &App) -> Option<TranscriptTail> {
         self.decision_tail(index, cx)
             .or_else(|| self.failure_tail(index))
+            .or_else(|| self.background_work_tail(index))
     }
 
     /// The failure strip (SPEC §5.9 item 4) under Main's transcript when the

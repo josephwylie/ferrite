@@ -63,11 +63,13 @@ fn the_arrows_lead_the_head_and_step_on_a_click(cx: &mut TestAppContext) {
         .debug_bounds("history-forward")
         .expect("the forward arrow");
     let title = cx.debug_bounds("view-title").expect("the title");
-    let bell = cx.debug_bounds("nav-activity").expect("the sidebar's bell");
+    let toggle = cx
+        .debug_bounds("nav-collapse")
+        .expect("the sidebar's toggle");
     assert_eq!(back.left(), px(ferrite_ui::theme::HISTORY_X));
     assert!(
-        forward.right() < bell.left(),
-        "in the sidebar head, before its icons"
+        forward.right() < toggle.left(),
+        "in the sidebar head, before its toggle"
     );
     assert!(back.right() < title.left(), "the arrows come first");
     assert!(back.bottom() <= px(ferrite_ui::theme::WIN_CHROME_H));
@@ -196,11 +198,10 @@ fn back_goes_from_a_subagent_to_main(cx: &mut TestAppContext) {
     assert_eq!(subject(&view, cx), Subject::Subagent(agent));
 }
 
-/// The tools stand at the row's right end against the panel's left edge,
-/// the rail's door after the split, `TITLE_TOOLS_GAP` apart; the head leaves their room.
+/// The title tools (only the Panel's door now, ADR 0039) stand at the row's
+/// right end over the panel's column; the head leaves their room.
 #[gpui::test]
 fn the_title_tools_stand_against_the_panel(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::TITLE_TOOLS_GAP;
     let (core, _fake) = cockpit("title-tools", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -212,17 +213,72 @@ fn the_title_tools_stand_against_the_panel(cx: &mut TestAppContext) {
     });
     tick(cx);
     let panel = cx.debug_bounds("panel").expect("the panel");
-    let rail = cx.debug_bounds("panel-toggle").expect("the rail's door");
-    let split = cx.debug_bounds("title-split").expect("split beside");
     let tools = cx.debug_bounds("title-tools").expect("the tools");
+    assert!(cx.debug_bounds("panel-toggle").is_some(), "the rail's door");
     assert!(tools.left() > panel.left(), "pinned at the window's edge, over the column");
-    assert_eq!(rail.left() - split.right(), px(TITLE_TOOLS_GAP), "Claude's pitch");
     hide_panel(&view, cx);
     tick(cx);
     let head = cx.debug_bounds("view-head").unwrap();
     let title = cx.debug_bounds("view-title").unwrap();
-    let split = cx.debug_bounds("title-split").expect("they stay");
     assert_eq!(cx.debug_bounds("title-tools"), Some(tools), "and do not move");
-    assert!(title.right() < split.left(), "the title runs short of them");
+    assert!(title.right() < tools.left(), "the title runs short of them");
     assert!(head.right() >= cx.debug_bounds("panel-toggle").unwrap().right());
+}
+
+/// T3's breadcrumb: the Solo head reads project / title, `/` between.
+/// The project starts a new Thread in it; the title's chevron shows only
+/// under the pointer; a right-click anywhere on the head opens the
+/// Thread's menu.
+#[gpui::test]
+fn the_solo_head_is_a_project_then_title_breadcrumb(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("head-breadcrumb", 1);
+    let thread = core.threads()[0];
+    let here = core.project_id(thread).expect("a bound Thread");
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let project = cx.debug_bounds("view-head-project").expect("the project");
+    let slash = cx.debug_bounds("view-head-separator").expect("a `/`");
+    let title = cx.debug_bounds("view-title").expect("the title");
+    assert!(
+        project.right() <= slash.left() && slash.right() <= title.left(),
+        "project / title: {project:?} {slash:?} {title:?}"
+    );
+    assert!(
+        cx.debug_bounds("project-badge").is_some_and(|badge| project.contains(&badge.center())),
+        "the project leads with its badge"
+    );
+    assert!(
+        cx.debug_bounds("view-title-chevron-shown").is_none(),
+        "no chevron at rest"
+    );
+    cx.simulate_mouse_move(title.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        cx.debug_bounds("view-title-chevron-shown").is_some(),
+        "the chevron under the pointer"
+    );
+
+    cx.simulate_mouse_down(title.center(), gpui::MouseButton::Right, gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(
+            view.context_menu
+                .as_ref()
+                .is_some_and(|menu| menu.target == MenuTarget::Thread(thread)),
+            "right-click opens the Thread's menu"
+        );
+    });
+    view.update(cx, |view, cx| {
+        view.context_menu = None;
+        cx.notify();
+    });
+    tick(cx);
+
+    cx.simulate_click(project.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        let draft = view.panes[view.focused()].draft().expect("a new Thread");
+        assert_eq!(draft.binding.project(), here, "in the head's project");
+    });
 }

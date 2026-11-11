@@ -335,16 +335,20 @@ fn the_titlebar_band_says_nothing_and_no_bar_is_left(cx: &mut TestAppContext) {
         "bottom-bar",
         "notifications-bell",
         "settings-gear",
+        "nav-activity",
     ] {
         assert!(cx.debug_bounds(gone).is_none(), "{gone} is gone");
     }
-    for door in ["nav-collapse", "nav-activity", "nav-search"] {
-        let at = cx.debug_bounds(door).unwrap_or_else(|| panic!("{door}"));
-        assert!(
-            at.bottom() <= px(ferrite_ui::theme::WIN_CHROME_H),
-            "{door} is the nav head's (§5.1.1): {at:?}"
-        );
-    }
+    let toggle = cx.debug_bounds("nav-collapse").expect("nav-collapse");
+    assert!(
+        toggle.bottom() <= px(ferrite_ui::theme::WIN_CHROME_H),
+        "the toggle is the nav head's (§5.1.1): {toggle:?}"
+    );
+    let search = cx.debug_bounds("nav-search").expect("nav-search");
+    assert!(
+        search.top() >= px(ferrite_ui::theme::WIN_CHROME_H),
+        "the search field sits in the row under the head: {search:?}"
+    );
 }
 
 /// Pressing new-thread with a draft already up re-aims that draft
@@ -424,36 +428,24 @@ fn multi_project_groups_keep_bindings_and_filter_only_navigation(cx: &mut TestAp
         assert_eq!(view.cockpit.project_id(original[0]), Some(first_project));
         assert_eq!(view.cockpit.project_id(joined), Some(second_project));
         view.enter_group(group, cx);
-        let nav = view.nav_state();
-        assert_eq!(nav.groups[0].members.len(), 3);
+        let listed = |view: &CockpitView| -> Vec<ThreadId> {
+            let mut threads: Vec<ThreadId> =
+                view.nav_state().open_rows().map(|row| row.thread).collect();
+            threads.sort();
+            threads
+        };
+        let mut members = vec![original[0], original[1], joined];
+        members.sort();
         assert_eq!(
-            nav.sections
-                .iter()
-                .map(|section| section.project)
-                .collect::<Vec<_>>(),
-            [None],
-            "a cross-Project Group belongs to none of its Projects"
+            listed(view),
+            members,
+            "a cross-Project Group's members are each one card"
         );
-        assert!(nav.sections[0].mixed, "it is the Groups section");
-        assert_eq!(nav.sections[0].label.as_ref(), "groups");
-        assert_eq!(nav.sections[0].groups, [0]);
         view.nav_filter = Some(second_project);
-        let nav = view.nav_state();
         assert_eq!(
-            nav.groups[0]
-                .members
-                .iter()
-                .map(|row| row.thread)
-                .collect::<Vec<_>>(),
-            [joined]
-        );
-        assert_eq!(
-            nav.sections
-                .iter()
-                .map(|section| section.project)
-                .collect::<Vec<_>>(),
-            [Some(second_project)],
-            "filtered, the tree is that Project's section, with every Group a member of it is in"
+            listed(view),
+            [joined],
+            "filtered, the list holds that Project's Threads alone"
         );
         assert_eq!(
             view.visible_indices().len(),
@@ -561,156 +553,44 @@ fn solo_group_draft_and_close_follow_the_persisted_view_state_machine(cx: &mut T
 }
 
 #[gpui::test]
-fn pointer_opens_a_group_and_renames_parked_thread_and_group_titles(cx: &mut TestAppContext) {
-    let (mut core, _) = cockpit("group-pointer-open-rename", 2);
+fn a_cards_title_renames_on_its_second_press_only(cx: &mut TestAppContext) {
+    let (mut core, _) = cockpit("card-pointer-rename", 2);
     let threads = core.threads();
-    let group = core
-        .apply_group(GroupChange::Create {
-            first: threads[0],
-            second: threads[1],
-        })
-        .unwrap()
-        .group
-        .unwrap();
-    assert_eq!(group.get(), 1);
-    core.rename_thread(threads[1], "Existing parked title")
-        .unwrap();
-    core.park(threads[1]).unwrap();
+    core.rename_thread(threads[1], "Existing title").unwrap();
     cx.update(|cx| cx.bind_keys([KeyBinding::new("enter", Submit, None)]));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     cx.run_until_parked();
+    let title: &'static str = format!("rename-thread-{}", threads[1].get()).leak();
 
-    let thread_title = cx
-        .debug_bounds("rename-thread-2")
-        .expect("the parked title is rendered");
-    // A single click on a title is not a rename — it is the row's own
-    // click, which focuses the Thread. Only the second press opens the
-    // editor.
-    cx.simulate_click(thread_title.center(), gpui::Modifiers::none());
+    let at = cx.debug_bounds(title).expect("the card's title is rendered");
+    cx.simulate_click(at.center(), gpui::Modifiers::none());
     view.read_with(cx, |view, _| {
         assert!(
             view.rename.is_none(),
             "one click never opens the inline editor"
         );
+        assert_eq!(view.focused_thread(), Some(threads[1]), "it opens the Thread");
     });
-    // The click showed the Group: its members are one-line rows now.
     cx.run_until_parked();
-    let thread_title = cx
-        .debug_bounds("rename-thread-2")
-        .expect("the member's title, on the shown Group");
-    press(cx, thread_title.center(), 2);
+    let at = cx.debug_bounds(title).unwrap();
+    press(cx, at.center(), 2);
     view.read_with(cx, |view, cx| {
         let editor = &view.rename.as_ref().expect("inline Thread editor").1;
-        assert_eq!(editor.read(cx).text(), "Existing parked title");
+        assert_eq!(editor.read(cx).text(), "Existing title");
     });
     view.update(cx, |view, cx| {
         let editor = view.rename.as_ref().unwrap().1.clone();
-        editor.update(cx, |line, cx| line.set("cancel me".into(), cx));
+        editor.update(cx, |line, cx| line.set("Saved title".into(), cx));
     });
-    // A press on a Pane's body, away from the editor (the board is
-    // flush now, so pick a point clear of any Composer).
-    cx.simulate_click(gpui::point(px(500.), px(150.)), gpui::Modifiers::none());
+    cx.simulate_keystrokes("enter");
     view.read_with(cx, |view, _| {
         assert!(view.rename.is_none());
         assert_eq!(
             view.cockpit.thread_title(threads[1]).unwrap().as_deref(),
-            Some("Existing parked title")
+            Some("Saved title")
         );
-    });
-
-    let thread_title = cx.debug_bounds("rename-thread-2").unwrap();
-    press(cx, thread_title.center(), 2);
-    view.update(cx, |view, cx| {
-        let editor = view.rename.as_ref().unwrap().1.clone();
-        editor.update(cx, |line, cx| line.set("Saved parked title".into(), cx));
-    });
-    cx.simulate_keystrokes("enter");
-
-    let group_title = cx.debug_bounds("rename-group-1").unwrap();
-    cx.simulate_click(group_title.center(), gpui::Modifiers::none());
-    view.read_with(cx, |view, _| {
-        assert!(
-            view.rename.is_none(),
-            "a Group title takes two clicks too — one enters the Group"
-        );
-    });
-    press(cx, group_title.center(), 2);
-    view.update(cx, |view, cx| {
-        let editor = view.rename.as_ref().unwrap().1.clone();
-        editor.update(cx, |line, cx| line.set("Saved Group title".into(), cx));
-    });
-    cx.simulate_keystrokes("enter");
-
-    let header = cx.debug_bounds("nav-group-1").unwrap();
-    cx.simulate_click(
-        gpui::point(header.right() - px(6.), header.center().y),
-        gpui::Modifiers::none(),
-    );
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.roster().view(), View::Group(group));
-        assert_eq!(view.visible_indices().len(), 2);
-        assert_eq!(
-            view.cockpit.thread_title(threads[1]).unwrap().as_deref(),
-            Some("Saved parked title")
-        );
-        assert_eq!(
-            view.cockpit.groups().get(group).unwrap().display_title(),
-            "Saved Group title"
-        );
-    });
-}
-
-#[gpui::test]
-fn pointer_drag_joins_then_reorders_to_the_after_last_target(cx: &mut TestAppContext) {
-    let (mut core, _) = cockpit("group-pointer-drag", 5);
-    let threads = core.threads();
-    let group = core
-        .apply_group(GroupChange::Create {
-            first: threads[0],
-            second: threads[1],
-        })
-        .unwrap()
-        .group
-        .unwrap();
-    let second_group = core
-        .apply_group(GroupChange::Create {
-            first: threads[3],
-            second: threads[4],
-        })
-        .unwrap()
-        .group
-        .unwrap();
-    core.rename_thread(threads[2], "Durable drag title")
-        .unwrap();
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    hide_panel(&view, cx);
-    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-    cx.run_until_parked();
-
-    drag_nav(cx, "nav-thread-3", "nav-group-1");
-    view.read_with(cx, |view, _| {
-        assert_eq!(
-            view.cockpit.groups().get(group).unwrap().members,
-            threads[..3],
-            "the real drop dispatched the join plan"
-        );
-    });
-
-    drag_nav(cx, "nav-thread-1", "member-tail-1");
-    view.read_with(cx, |view, _| {
-        assert_eq!(
-            view.cockpit.groups().get(group).unwrap().members,
-            [threads[1], threads[2], threads[0]],
-            "downward reorder lands after the last member"
-        );
-    });
-
-    drag_nav(cx, "nav-group-2", "group-gap-0");
-    view.read_with(cx, |view, _| {
-        let groups: Vec<_> = view.cockpit.groups().iter().map(|group| group.id).collect();
-        assert_eq!(groups, [second_group, group]);
     });
 }
 
@@ -745,44 +625,6 @@ fn a_long_group_remains_reachable_through_nav_scroll(cx: &mut TestAppContext) {
         after.center().y < px(320.),
         "scrolling exposes the final member: {after:?}"
     );
-}
-
-#[gpui::test]
-fn drag_from_a_pair_tracks_the_origin_and_focuses_the_survivor(cx: &mut TestAppContext) {
-    let (mut core, _) = cockpit("group-drag-origin", 3);
-    let threads = core.threads();
-    let group = core
-        .apply_group(GroupChange::Create {
-            first: threads[0],
-            second: threads[1],
-        })
-        .unwrap()
-        .group
-        .unwrap();
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, cx| {
-        view.enter_group(group, cx);
-        view.apply_drop(
-            NavDrag {
-                drag: Drag::Thread {
-                    thread: threads[0],
-                    group: Some(group),
-                },
-                origin: View::Group(group),
-            },
-            DropTarget::ThreadRow {
-                thread: threads[2],
-                group: None,
-                index: 0,
-            },
-            cx,
-        );
-    });
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.cockpit.roster().view(), View::Solo);
-        assert_eq!(view.focused_thread(), Some(threads[1]));
-        assert!(view.cockpit.groups().get(group).is_none());
-    });
 }
 
 #[gpui::test]

@@ -14,25 +14,23 @@ use crate::palette::{
 use crate::shortcuts::Shortcuts;
 
 /// What the floats hold between frames: the palette and the shortcuts sheet
-/// while they are up, and the focus the notifications list's keys ride.
+/// while they are up.
 pub(super) struct Floats {
     pub palette: Option<Entity<Palette>>,
     /// The palette is open to pick a Thread to open beside (the tab
     /// strip's split button): ⏎ on a Thread row does what ⇥ does.
     pub beside: bool,
     pub shortcuts: Option<Entity<Shortcuts>>,
-    pub notice_focus: FocusHandle,
     /// The palette or the shortcuts sheet on its way out (`sheet_floats`).
     pub exit: std::cell::RefCell<ferrite_ui::motion::Exits<gpui::AnyView>>,
 }
 
 impl Floats {
-    pub(super) fn new(cx: &mut Context<CockpitView>) -> Self {
+    pub(super) fn new() -> Self {
         Self {
             palette: None,
             beside: false,
             shortcuts: None,
-            notice_focus: cx.focus_handle(),
             exit: Default::default(),
         }
     }
@@ -119,9 +117,9 @@ fn session_row(
 
 impl CockpitView {
     /// The floats' hook on the cockpit's root: the palette's, the shortcuts
-    /// sheet's, the status line's and the notifications list's actions.
+    /// sheet's and the status line's actions.
     pub(super) fn register_palette_actions(&self, root: Div, cx: &mut Context<Self>) -> Div {
-        use crate::{notifications, palette, shortcuts, status};
+        use crate::{palette, shortcuts, status};
         root.on_action(
             cx.listener(|view, _: &palette::Toggle, window, cx| view.toggle_palette(window, cx)),
         )
@@ -162,22 +160,6 @@ impl CockpitView {
         .on_action(
             cx.listener(|view, _: &status::CycleMode, window, cx| view.cycle_mode(window, cx)),
         )
-        .on_action(
-            cx.listener(|view, _: &notifications::SelectNext, _, cx| view.step_notices(1, cx)),
-        )
-        .on_action(
-            cx.listener(|view, _: &notifications::SelectPrevious, _, cx| view.step_notices(-1, cx)),
-        )
-        .on_action(cx.listener(|view, _: &notifications::Open, window, cx| {
-            view.open_notice_at_cursor(window, cx)
-        }))
-        .on_action(
-            cx.listener(|view, _: &notifications::Dismiss, _, cx| {
-                view.dismiss_notice_at_cursor(cx)
-            }),
-        )
-        .on_action(cx.listener(|view, _: &notifications::Close, _, cx| view.close_nav_view(cx)))
-        .on_action(cx.listener(|view, _: &crate::nav::CloseView, _, cx| view.close_nav_view(cx)))
     }
 
     /// Whether a float holds the keyboard this frame (the palette's line,
@@ -244,8 +226,8 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The palette, to pick a Thread to open beside the focused Pane (the
-    /// tab strip's split-right button, `Beside::Thread`).
+    /// The palette, to pick a Thread to open beside the focused Pane (its
+    /// `Open a thread beside`, `Beside::Thread`).
     pub(super) fn open_palette_beside(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_palette(PaletteScope::All, "", window, cx);
         self.floats.beside = true;
@@ -867,28 +849,6 @@ impl CockpitView {
                 Command::FilterProject(*project),
             );
         }
-        let order = self.prefs.settings.thread_list_order;
-        add(
-            order != ThreadListOrder::Created,
-            "Sort: created".into(),
-            "",
-            None,
-            Command::SortCreated,
-        );
-        add(
-            order != ThreadListOrder::Recent,
-            "Sort: recent".into(),
-            "",
-            None,
-            Command::SortRecent,
-        );
-        add(
-            order != ThreadListOrder::Attention,
-            "Sort: attention".into(),
-            "what needs you first",
-            None,
-            Command::SortAttention,
-        );
         add(true, "New project".into(), "", None, Command::NewProject);
         for (project, title) in &projects {
             add(
@@ -919,6 +879,36 @@ impl CockpitView {
             "",
             bound_chord("cockpit::TogglePanel"),
             Command::TogglePanel,
+        );
+        // The Panel's own (ADR 0039): T3's `+` menu, close and reopen
+        // chords are Ferrite's ⌘T/⌘W/⌘⇧T, so these are the palette's.
+        add(
+            focused.is_some(),
+            "Open a surface".into(),
+            "the Panel's + menu",
+            None,
+            Command::SurfaceMenu,
+        );
+        add(
+            focused.is_some_and(|thread| self.active_surface(thread).is_some() && self.panel_open(thread)),
+            "Close surface".into(),
+            "the Panel's shown tab",
+            None,
+            Command::CloseSurface,
+        );
+        add(
+            focused.is_some(),
+            "Reopen closed surface".into(),
+            "",
+            None,
+            Command::ReopenSurface,
+        );
+        add(
+            focused.is_some() && !self.grid_board(),
+            "Open a thread beside".into(),
+            "",
+            None,
+            Command::OpenBeside,
         );
         add(
             !self.panes.is_empty(),
@@ -1149,9 +1139,6 @@ impl CockpitView {
             Command::NewThreadIn(project) => self.open_draft_in_project(project, cx),
             Command::FilterAll => self.choose_nav_filter(None, cx),
             Command::FilterProject(project) => self.choose_nav_filter(Some(project), cx),
-            Command::SortCreated => self.set_thread_order(ThreadListOrder::Created, cx),
-            Command::SortRecent => self.set_thread_order(ThreadListOrder::Recent, cx),
-            Command::SortAttention => self.set_thread_order(ThreadListOrder::Attention, cx),
             Command::NewProject => self.open_project_creator(cx),
             Command::EditProject(project) => self.open_project_editor(project, cx),
             Command::Settings => self.open_settings(&OpenSettings, window, cx),
@@ -1203,7 +1190,11 @@ impl CockpitView {
                     if let Some(index) = self.pane_for(thread) {
                         self.focus_pane(index);
                     }
-                    self.open_provider_picker(thread, cx);
+                    if command == Command::Effort {
+                        self.open_effort_picker(thread, cx);
+                    } else {
+                        self.open_provider_picker(thread, cx);
+                    }
                 }
             }
             Command::PermissionMode => {
@@ -1255,9 +1246,27 @@ impl CockpitView {
             }
             Command::ShowChanges => {
                 if let Some(thread) = thread {
-                    self.open_panel(thread, cx);
+                    match self.opener_unavailable(thread, panel::Opener::Changes) {
+                        None => self.run_opener(thread, panel::Opener::Changes, cx),
+                        Some(_) => self.open_panel(thread, cx),
+                    }
                 }
             }
+            Command::SurfaceMenu => self.open_surface_menu(cx),
+            Command::CloseSurface => {
+                if let Some((thread, id)) =
+                    thread.and_then(|thread| Some((thread, self.active_surface(thread)?)))
+                {
+                    self.close_surface(thread, &id, cx);
+                }
+            }
+            Command::ReopenSurface => {
+                if let Some(thread) = thread {
+                    self.surfaces_mut(thread).reopen_closed();
+                    cx.notify();
+                }
+            }
+            Command::OpenBeside => self.open_palette_beside(window, cx),
             Command::ShowChecks => self.open_checks(window, cx),
             Command::RefreshPr => {
                 if let Some(thread) = thread {
@@ -1361,66 +1370,6 @@ impl CockpitView {
             }
             None => self.tool_cycle_previous(&ToolCyclePrevious, window, cx),
         }
-    }
-
-    // --------------------------------------------------- the notifications
-
-    fn step_notices(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let rows = self.needs_you_rows(cx);
-        let count = rows.len();
-        if count == 0 || !self.needs_you_shown() {
-            return;
-        }
-        let next =
-            (self.needs_you.cursor_at(&rows) as isize + delta).rem_euclid(count as isize) as usize;
-        self.needs_you.select_cursor(next, &rows);
-        cx.notify();
-    }
-
-    /// ⏎ on the list opens the cursor's Thread and preserves Inbox mode.
-    fn open_notice_at_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let rows = self.needs_you_rows(cx);
-        let Some(row) = rows.get(self.needs_you.cursor_at(&rows)) else {
-            return;
-        };
-        let verb = row.open_verb();
-        self.notice_verb(verb, cx);
-        window.blur(cx);
-    }
-
-    /// Dismiss only the Notice; its open Thread remains in Inbox.
-    fn dismiss_notice_at_cursor(&mut self, cx: &mut Context<Self>) {
-        let rows = self.needs_you_rows(cx);
-        let Some(row) = rows.get(self.needs_you.cursor_at(&rows)) else {
-            return;
-        };
-        if row.away.is_some() {
-            return;
-        }
-        let verb = match &row.target {
-            crate::notifications::RowTarget::Notice(id) => Verb::Dismiss(*id),
-            crate::notifications::RowTarget::Decision(id) => Verb::DismissDecision(id.clone()),
-            crate::notifications::RowTarget::Thread(_) => return,
-        };
-        self.notice_verb(verb, cx);
-        cx.notify();
-    }
-
-    /// Existing Park (⌘W) applies to the selected Inbox Thread.
-    pub(super) fn park_inbox_cursor(&mut self, cx: &mut Context<Self>) {
-        let rows = self.needs_you_rows(cx);
-        let Some(row) = rows.get(self.needs_you.cursor_at(&rows)) else {
-            return;
-        };
-        if row.away.is_some() {
-            return;
-        }
-        let thread = row.thread;
-        self.park_listed(&[thread], cx);
-        let rows = self.needs_you_rows(cx);
-        let at = self.needs_you.cursor_at(&rows);
-        self.needs_you.select_cursor(at, &rows);
-        cx.notify();
     }
 
     // ------------------------------------------------------------ drawing

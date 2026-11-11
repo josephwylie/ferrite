@@ -23,7 +23,10 @@ gpui::actions!(browser, [Go, CancelAnnotation]);
 pub(super) struct Browsers {
     threads: BTreeMap<ThreadId, Browser>,
     events: Rc<RefCell<Vec<Event>>>,
-    reveal: std::collections::BTreeSet<ThreadId>,
+    /// Threads whose browser asked to be shown, with their Panel's
+    /// operator revision when it asked: an agent's page may reveal the
+    /// Browser tab, not take the Panel from a tab chosen since.
+    reveal: BTreeMap<ThreadId, u64>,
     control_queue: std::collections::VecDeque<ControlRequest>,
     #[cfg(feature = "cef")]
     pub(super) controller:
@@ -209,7 +212,7 @@ impl CockpitView {
         if let Some(index) = self.pane_for(thread) {
             self.panes[index].preview.show_browser();
         }
-        cx.notify();
+        self.upsert_surface(thread, super::surfaces::SurfaceId::Browser, cx);
     }
 
     pub(super) fn browser_action(
@@ -221,7 +224,8 @@ impl CockpitView {
         self.cancel_browser_capture(thread, cx);
         self.ensure_browser(thread, cx);
         if matches!(action, Action::Open { .. }) {
-            self.browsers.reveal.insert(thread);
+            let seen = self.surface_revision(thread);
+            self.browsers.reveal.entry(thread).or_insert(seen);
         }
         if self.browsers.threads[&thread].owner.is_none() {
             match self.cockpit.browser_attach(thread) {
@@ -385,7 +389,8 @@ impl CockpitView {
             };
             self.ensure_browser(thread, cx);
             if matches!(action, Some(Action::Open { .. } | Action::Select { .. })) {
-                self.browsers.reveal.insert(thread);
+                let seen = self.surface_revision(thread);
+                self.browsers.reveal.entry(thread).or_insert(seen);
             }
             let browser = self.browsers.threads.get_mut(&thread).unwrap();
             browser.state = state;
@@ -629,11 +634,16 @@ impl CockpitView {
                 }
             }
         }
-        for thread in std::mem::take(&mut self.browsers.reveal) {
-            if let Some(index) = self.pane_for(thread) {
-                self.panes[index].preview.show_browser();
-            } else {
-                self.browsers.reveal.insert(thread);
+        for (thread, seen) in std::mem::take(&mut self.browsers.reveal) {
+            match self.pane_for(thread) {
+                Some(index) => {
+                    if self.reveal_surface(thread, super::surfaces::SurfaceId::Browser, seen) {
+                        self.panes[index].preview.show_browser();
+                    }
+                }
+                None => {
+                    self.browsers.reveal.insert(thread, seen);
+                }
             }
         }
         // Only the selected live tab is realized. Restored metadata does not
