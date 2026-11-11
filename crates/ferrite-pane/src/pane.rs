@@ -2814,62 +2814,6 @@ pub fn binding_label(workspace: Option<&WorkspaceBinding>) -> SharedString {
 // for the nav's rows; the header's binding slot is the display-only branch
 // text now.
 
-// ----------------------------------------------------------- Block render
-
-/// The text left after the first `n` whitespace-separated words.
-fn skip_words(text: &str, n: usize) -> &str {
-    let mut rest = text.trim_start();
-    for _ in 0..n {
-        match rest.find(char::is_whitespace) {
-            Some(cut) => rest = rest[cut..].trim_start(),
-            None => return "",
-        }
-    }
-    rest
-}
-
-/// A preview of received text, never a second provider reasoning channel.
-/// Keep a short first line in the header; disclose only what follows it.
-/// The disclosure never repeats what the header already shows: where the
-/// first line was cut to fit, the details open on the rest of that line and
-/// run into the paragraphs under it, so expanding reads as a continuation
-/// rather than the same sentence twice.
-pub fn reasoning_text(thought: &str) -> (String, Option<String>) {
-    let thought = thought.trim();
-    let (first, rest) = thought.split_once('\n').unwrap_or((thought, ""));
-    let first = first.trim();
-    let heading = first
-        .strip_prefix("**")
-        .and_then(|text| text.strip_suffix("**"))
-        .or_else(|| {
-            let text = first.trim_start_matches('#');
-            (text.len() < first.len() && text.starts_with(' ')).then(|| text.trim())
-        })
-        .unwrap_or(first);
-    let summary = ferrite_core::progress::one_line(heading, 160);
-    let rest = rest.trim();
-    // `one_line` cuts the header at 160 characters and marks the cut with
-    // `…`. The disclosure picks the line up from the last word the header
-    // shows, so expanding continues the sentence instead of repeating it —
-    // and that one word is shared, because the cut can land mid-word and
-    // half a word is no place to resume reading. The tail runs through
-    // `one_line` too: a header and its continuation are one sentence, so
-    // they collapse whitespace the same way.
-    let tail = summary
-        .strip_suffix('…')
-        .map(|shown| skip_words(heading, shown.split_whitespace().count().saturating_sub(1)))
-        .map(|tail| ferrite_core::progress::one_line(tail, usize::MAX))
-        .unwrap_or_default();
-    let tail = tail.as_str();
-    let details = match (tail.is_empty(), rest.is_empty()) {
-        (true, true) => None,
-        (true, false) => Some(rest.to_owned()),
-        (false, true) => Some(tail.to_owned()),
-        (false, false) => Some(format!("{tail}\n\n{rest}")),
-    };
-    (summary, details)
-}
-
 // ---------------------------------------------------------- transcript rows
 
 /// The grid a transcript row is set on (the WP-A grammar in `theme.rs`):
@@ -4225,11 +4169,7 @@ pub(crate) fn render_tool(
     }
     if expanded {
         if let Some(body) = call_body(block, tool, grid, selection) {
-            card = card.child(
-                body.debug_selector(|| "tool-body".into())
-                    .mt(px(theme::WORK_ROW_PAD_Y))
-                    .pb(px(theme::SPACE_2)),
-            );
+            card = card.child(body.mt(px(theme::WORK_ROW_PAD_Y)).pb(px(theme::SPACE_2)));
         }
         for each in &tool.diffs {
             card = card.child(render_diff(Some((selection, block)), each, grid));
@@ -5656,7 +5596,7 @@ mod tests {
         let reasoning: Vec<_> = blocks
             .iter()
             .filter(|block| {
-                matches!(&block.body, Body::Thinking(text) if reasoning_text(text).1.is_some())
+                matches!(&block.body, Body::Thinking(text) if !text.trim().is_empty())
             })
             .map(|block| block.id)
             .collect();
