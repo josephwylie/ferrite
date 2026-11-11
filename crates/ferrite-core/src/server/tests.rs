@@ -23,9 +23,9 @@ mod browser_annotations;
 mod browser_providers;
 mod factory;
 mod owned;
-mod starts;
 mod park;
 mod publish;
+mod starts;
 
 pub(super) fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("fs-{}-{name}", std::process::id()));

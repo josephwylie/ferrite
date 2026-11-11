@@ -213,10 +213,12 @@ impl Server {
                 workflow: params.workflow,
                 step: params.step,
             }),
-            Method::WorkflowStart(params) => self.api_automate(crate::factory::Command::EditStart {
-                workflow: params.workflow,
-                start: params.start,
-            }),
+            Method::WorkflowStart(params) => {
+                self.api_automate(crate::factory::Command::EditStart {
+                    workflow: params.workflow,
+                    start: params.start,
+                })
+            }
             Method::WorkflowAutomation(params) => {
                 self.api_automate(crate::factory::Command::Automation {
                     workflow: params.workflow,
