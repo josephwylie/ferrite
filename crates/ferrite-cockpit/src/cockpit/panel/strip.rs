@@ -623,7 +623,7 @@ impl CockpitView {
             return;
         };
         if !self.panel_open(thread) {
-            self.surfaces_mut(thread).open = true;
+            self.surfaces_mut(thread).set_open(true);
         }
         let window = self.panel.window_w;
         let left = window - self.panel_column_w() + ferrite_ui::theme::SURFACE_HEAD_PAD_L;
@@ -668,6 +668,14 @@ impl CockpitView {
             .id("panel-empty")
             .debug_selector(|| "panel-empty".into())
             .track_focus(&self.panel_empty_focus)
+            // T3's empty panel is the Panel's focus target: a press in it
+            // takes the keyboard from the Composer, so its letters work.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _: &gpui::MouseDownEvent, window, cx| {
+                    window.focus(&view.panel_empty_focus, cx);
+                }),
+            )
             .flex()
             .flex_col()
             .items_center()

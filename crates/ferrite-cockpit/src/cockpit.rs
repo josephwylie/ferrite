@@ -401,6 +401,12 @@ pub struct CockpitView {
     /// The next frame of the list lands at once: a shelf just opened or
     /// folded.
     nav_snap: std::cell::Cell<bool>,
+    /// The window the list was last laid out in. A resize moves the
+    /// shelves anchored over the foot, and that is no change to the list:
+    /// it lands at once.
+    nav_viewport: std::cell::Cell<gpui::Size<Pixels>>,
+    /// The breadcrumb parent's room, as the last frame laid it out.
+    head_parent_room: std::rc::Rc<std::cell::Cell<view_head::ParentRoom>>,
     /// How many Parked rows the open shelf draws: ten, then 25 more per
     /// `Show 25 more`.
     nav_parked_shown: usize,
@@ -1539,6 +1545,8 @@ impl CockpitView {
             nav_drag_live: std::cell::Cell::new(false),
             nav_motion: Default::default(),
             nav_snap: std::cell::Cell::new(false),
+            nav_viewport: Default::default(),
+            head_parent_room: Default::default(),
             nav_parked_shown: ferrite_ui::theme::NAV_PARKED_PAGE_FIRST,
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             seam_drag: None,
@@ -1800,6 +1808,7 @@ impl CockpitView {
     ) {
         if self.facts.pr_answered(thread, reading) {
             self.notify_part(parts::Part::Nav, cx);
+            self.pr_reading_changed(thread, cx);
         }
     }
 
@@ -2724,11 +2733,14 @@ impl CockpitView {
                         valid.insert(pane::DisclosureId::Reasoning(block.id));
                         valid.insert(pane::DisclosureId::Live(block.id));
                     }
-                    // A turn's fold, or a steer's, by its prompt.
+                    // A turn's fold, or a steer's, by its prompt. A steer
+                    // stays inside its turn, whose card spans all of it.
                     ferrite_core::transcript::Body::Prompt(_) => {
                         valid.insert(pane::DisclosureId::Turn(block.id));
                         valid.insert(pane::DisclosureId::Prompt(block.id));
-                        turn_start = at;
+                        if !block.steer {
+                            turn_start = at;
+                        }
                     }
                     // A changed-files card's Expand all and its folders.
                     ferrite_core::transcript::Body::TurnEnd(_) => {
@@ -8597,7 +8609,12 @@ impl CockpitView {
                     .anchor(anchor)
                     .position(at)
                     .snap_to_window_with_margin(px(GRID_PAD))
-                    .child(div().w(px(width)).child(self.menu_surface(open, cx))),
+                    .child(
+                        div()
+                            .debug_selector(|| "composer-menu".into())
+                            .w(px(width))
+                            .child(self.menu_surface(open, cx)),
+                    ),
             )
             .with_priority(2)
             .into_any_element(),
@@ -8741,19 +8758,22 @@ impl CockpitView {
             .w_full()
             .child(popover)
             .children(explained.map(|detail| {
-                ferrite_ui::menu::float()
+                let card = ferrite_ui::menu::float()
                     .debug_selector(|| "composer-menu-tip".into())
-                    .absolute()
-                    .left_full()
-                    .ml(px(ferrite_ui::theme::SUBMENU_GAP))
-                    .top(px(row_top.max(0.)))
                     .w(px(ferrite_ui::theme::TOOLTIP_MAX_W))
                     .px(px(ferrite_ui::theme::TOOLTIP_PAD_X))
                     .py(px(ferrite_ui::theme::TOOLTIP_PAD_Y))
                     .text_size(px(ferrite_ui::theme::FS_META))
                     .line_height(px(ferrite_ui::theme::LH_META))
                     .text_color(rgb(ferrite_ui::theme::INK_STRONG))
-                    .child(detail)
+                    .child(detail);
+                // A drawer as wide as the box has no room on its right.
+                crate::float::beside(
+                    ferrite_ui::theme::SUBMENU_GAP,
+                    row_top.max(0.),
+                    ferrite_ui::theme::MENU_WINDOW_MARGIN,
+                    card.into_any_element(),
+                )
             }))
             .into_any_element()
     }
@@ -10184,9 +10204,16 @@ impl CockpitView {
         // The list keeps the keyboard it was handed until the operator
         // takes it elsewhere.
         let nav_list_focused = self.nav_keys_held && self.nav_focus.is_focused(window);
+        // So does "Open a surface", pressed, while it shows.
+        let panel_empty_focused = self.panel_empty_focus.is_focused(window)
+            && self
+                .panel_pane()
+                .and_then(|index| self.panes[index].thread())
+                .is_some_and(|thread| self.active_surface(thread).is_none());
         if window.has_active_dialog(cx)
             || self.floats_hold_focus()
             || nav_list_focused
+            || panel_empty_focused
             || native_text_focused
             || reader_text_focused
             || find_focused

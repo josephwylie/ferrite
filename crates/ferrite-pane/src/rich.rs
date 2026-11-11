@@ -439,9 +439,14 @@ impl gpui::RenderOnce for Markdown {
         );
         // Headings scale with the reading size the answer row set.
         let base = window.text_style().font_size.to_pixels(window.rem_size());
-        // The view runs a cell past its column for a line's trailing space
-        // (below); its blocks take that cell back.
-        let text_style = hung_style(window.rem_size(), base);
+        // A view of prose runs a cell past its column for a line's trailing
+        // space (below); its blocks take that cell back. A single line
+        // never wraps, so runs on its column.
+        let text_style = if self.single_line {
+            style_at(window.rem_size(), base)
+        } else {
+            hung_style(window.rem_size(), base)
+        };
         let text_style = if self.muted {
             // A thought stays one step down the ink ladder, headings too.
             (1..=6).fold(
@@ -587,8 +592,10 @@ impl gpui::RenderOnce for Markdown {
             // A line's trailing space hangs past its edge, as CSS lets it:
             // GPUI counts it when wrapping, so a word that ends within a
             // cell of the edge would wrap a line early. The view runs one
-            // cell past its column; its words still end inside it.
-            .mr(px(-hang))
+            // cell past its column; its words still end inside it. A single
+            // line never wraps, and its box must hold all of its words:
+            // `pane::EdgeCut` clips to it.
+            .when(!self.single_line, |view| view.mr(px(-hang)))
             .min_w_0()
             // Use natural height inside the transcript's own scroll container.
             .max_lines(if self.single_line { 1 } else { usize::MAX })

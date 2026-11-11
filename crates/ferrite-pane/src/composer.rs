@@ -1184,8 +1184,7 @@ impl TokenKind {
 /// Where tokens stand in the text, sorted, overlaps dropped. A token is
 /// whole — start-of-line or whitespace on both sides, the boundaries the
 /// wire's own `@`-token and `/`-command rules read — and is
-/// - a skill: `$name` naming any of the Session's `commands`, or `/name`
-///   naming one of its `skills`;
+/// - a skill: `$name` or `/name` naming one of the Session's `skills`;
 /// - a command: `/name` naming another of its `commands`;
 /// - a file: a staged `@path` (`chips`, picked from the `@` menu).
 ///
@@ -1198,7 +1197,7 @@ fn tokens(
 ) -> Vec<Token> {
     let named = |word: &str| -> Option<TokenKind> {
         if let Some(name) = word.strip_prefix('$') {
-            return commands.contains(name).then_some(TokenKind::Skill);
+            return skills.contains(name).then_some(TokenKind::Skill);
         }
         let name = word.strip_prefix('/')?;
         if skills.contains(name) {
@@ -2202,8 +2201,19 @@ mod tests {
     fn a_skill_goes_on_the_wire_as_slash_name() {
         let commands = set(&["tdd"]);
         let text = "costs $5, run $tdd now";
-        let found = tokens(text, &[], &commands, &none());
+        let found = tokens(text, &[], &commands, &commands);
         assert_eq!(wire_text(text, &found), "costs $5, run /tdd now");
+    }
+
+    /// `$` names skills only: a `$word` naming a plain command (fish's
+    /// `$status`) is prose, never sent as `/status`.
+    #[test]
+    fn a_dollar_word_naming_a_plain_command_is_prose() {
+        let commands = set(&["tdd", "status", "compact"]);
+        let skills = set(&["tdd"]);
+        let text = "in fish, what does $status hold?  $compact";
+        let found = tokens(text, &[], &commands, &skills);
+        assert_eq!(wire_text(text, &found), text);
     }
 
     fn shared(tokens: &[&str]) -> Vec<SharedString> {

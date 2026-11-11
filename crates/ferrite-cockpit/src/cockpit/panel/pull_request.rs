@@ -298,6 +298,9 @@ impl CockpitView {
                 Err(error) => Err(error.to_string()),
             };
             this.update(cx, |view, cx| {
+                if let Ok(pr) = &read {
+                    view.retire_other_prs(thread, pr.number);
+                }
                 view.panel.pr_reads.insert(thread, PrRead::Read(read));
                 cx.notify();
             })
@@ -309,7 +312,59 @@ impl CockpitView {
     /// A fixture world's snapshot of `thread`'s PR, as if read.
     #[cfg(any(test, feature = "visual-reference"))]
     pub(crate) fn fixture_pr_snapshot(&mut self, thread: ThreadId, pr: WirePr) {
+        self.retire_other_prs(thread, pr.number);
         self.panel.pr_reads.insert(thread, PrRead::Read(Ok(pr)));
+    }
+
+    /// The nav's reading of `thread`'s PR changed. A tab for another PR
+    /// than the branch's goes, and a snapshot the reading has overtaken (a
+    /// merge the agent ran, a new PR on the branch) is let go, to be read
+    /// again as the Surface next shows: until then the reading speaks.
+    pub(crate) fn pr_reading_changed(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let Some(reading) = self.facts.pr(thread) else {
+            return;
+        };
+        let (number, tone) = (reading.number, PrTone::of_reading(reading.state, reading.draft));
+        self.retire_other_prs(thread, number);
+        let overtaken = self
+            .pr_snapshot(thread)
+            .is_some_and(|pr| pr.number != number || PrTone::of_snapshot(pr) != tone);
+        if overtaken {
+            self.panel.pr_reads.remove(&thread);
+            cx.notify();
+        }
+    }
+
+    /// The branch's PR is `number`: a tab for another (one restored from
+    /// before the branch moved on) goes, so nothing in it acts on a PR it
+    /// does not name.
+    fn retire_other_prs(&mut self, thread: ThreadId, number: u64) {
+        let others: Vec<SurfaceId> = self.panel.surfaces.get(thread).map_or_else(Vec::new, |state| {
+            state
+                .tabs
+                .iter()
+                .filter(|id| matches!(id, SurfaceId::PullRequest(other) if *other != number))
+                .cloned()
+                .collect()
+        });
+        for id in others {
+            self.forget_surface(thread, &id);
+        }
+    }
+
+    /// Merge armed on a PR Surface no longer shown (another tab, the Panel
+    /// hidden, another Thread) is disarmed: one press, much later, must
+    /// not merge.
+    pub(super) fn disarm_unseen_merge(&mut self) {
+        let Some(armed) = self.panel.pr_armed else {
+            return;
+        };
+        let shown = self
+            .panel_pane()
+            .and_then(|index| Some((self.panes[index].thread()?, self.shown_surface(index)?)));
+        if !matches!(shown, Some((thread, SurfaceId::PullRequest(_))) if thread == armed) {
+            self.panel.pr_armed = None;
+        }
     }
 
     /// The PR's snapshot, once read.
@@ -408,7 +463,7 @@ impl CockpitView {
                 PrTab::Summary => self.pr_summary(pr),
                 PrTab::Guide => self.pr_guide(thread, pr, cx),
                 PrTab::Timeline => self.pr_timeline(pr),
-                PrTab::Code => self.changes_pane(thread, cx).into_any_element(),
+                PrTab::Code => self.changes_pane(tools::Diff::PullRequest(thread), cx).into_any_element(),
             },
             (Some(PrRead::Read(Err(note))), _) => pr_note(note.clone().into()),
             _ => pr_note("Reading\u{2026}".into()),

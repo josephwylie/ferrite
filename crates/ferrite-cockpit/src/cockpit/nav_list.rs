@@ -196,7 +196,9 @@ impl CockpitView {
         let now = cx.background_executor().now();
         let ghosts = self.nav_motion.borrow_mut().begin(Update {
             rows: faces,
-            snap: self.nav_snap.replace(false) || self.nav_drag_live.get(),
+            snap: self.nav_snap.replace(false)
+                || self.nav_drag_live.get()
+                || self.nav_viewport.replace(window.viewport_size()) != window.viewport_size(),
             now,
             reduced: ferrite_ui::motion::reduced_motion(cx),
         });

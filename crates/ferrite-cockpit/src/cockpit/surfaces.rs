@@ -134,6 +134,19 @@ impl ThreadSurfaces {
         added
     }
 
+    /// The operator shows or hides the Panel: an action, which a `reveal`
+    /// read before it may not undo.
+    pub(crate) fn set_open(&mut self, open: bool) {
+        self.revision += 1;
+        self.open = open;
+    }
+
+    /// The operator maximizes the Panel, or puts it back: an action.
+    pub(crate) fn set_maximized(&mut self, maximized: bool) {
+        self.revision += 1;
+        self.maximized = maximized;
+    }
+
     /// The revision an agent reads before it decides to `reveal`.
     pub(crate) fn revision(&self) -> u64 {
         self.revision

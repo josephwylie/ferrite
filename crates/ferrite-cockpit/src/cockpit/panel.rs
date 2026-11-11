@@ -338,7 +338,7 @@ impl CockpitView {
     /// the board's least.
     pub(super) fn toggle_panel_maximized(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         let state = self.surfaces_mut(thread);
-        state.maximized = !state.maximized;
+        state.set_maximized(!state.maximized);
         cx.notify();
     }
 
@@ -362,11 +362,12 @@ impl CockpitView {
     }
 
     /// Once per frame, before anything measures the board: tend the
-    /// previews (`tend_previews`), widen the shown Panel to its Surface's
-    /// floor, give its Surface what it needs to draw, and write the tabs
-    /// if they changed.
+    /// previews (`tend_previews`), disarm a Merge no longer in view, widen
+    /// the shown Panel to its Surface's floor, give its Surface what it
+    /// needs to draw, and write the tabs if they changed.
     pub(super) fn tend_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.tend_previews(window, cx);
+        self.disarm_unseen_merge();
         self.panel.window_w = f32::from(window.viewport_size().width);
         if let Some(thread) = self
             .panel_pane()
@@ -435,7 +436,7 @@ impl CockpitView {
         let shown = match owner.thread() {
             Some(thread) => {
                 let shown = !self.panel_open(thread);
-                self.surfaces_mut(thread).open = shown;
+                self.surfaces_mut(thread).set_open(shown);
                 if shown {
                     self.refresh_context(thread);
                 }
@@ -513,7 +514,9 @@ impl CockpitView {
         let floor = floor_w(self.active_surface(thread).as_ref(), window);
         let width = (window - f32::from(position.x)).clamp(floor, most_w(window).max(floor));
         let state = self.surfaces_mut(thread);
-        state.maximized = false;
+        if state.maximized {
+            state.set_maximized(false);
+        }
         state.width = width;
         cx.notify();
     }
@@ -679,7 +682,7 @@ impl CockpitView {
             }
             Some(SurfaceId::File(_) | SurfaceId::Browser) => padded(self.panel_preview(owner, cx)),
             Some(SurfaceId::Files) => filled(self.files_pane(thread, cx).into_any_element()),
-            Some(SurfaceId::Changes) => filled(self.changes_pane(thread, cx).into_any_element()),
+            Some(SurfaceId::Changes) => filled(self.changes_pane(tools::Diff::Changes(thread), cx).into_any_element()),
             Some(SurfaceId::Terminal(number)) => {
                 filled(self.terminal_pane(thread, number, cx).into_any_element())
             }

@@ -160,6 +160,120 @@ impl gpui::Element for Translated {
     }
 }
 
+/// `card` standing beside the box it is drawn in (a menu's side card), its
+/// head `top` under the box's: `gap` off its right edge, or off its left
+/// when the right has no room inside the window's `margin`, and not drawn
+/// when neither side has.
+pub(crate) fn beside(gap: f32, top: f32, margin: f32, card: AnyElement) -> Beside {
+    Beside {
+        gap: px(gap),
+        top: px(top),
+        margin: px(margin),
+        card,
+        shown: false,
+    }
+}
+
+/// Where a card `width` wide stands beside `anchor` in a window `room`
+/// wide (`beside`): its left edge, or `None` when no side has room.
+pub(crate) fn beside_x(
+    anchor: Bounds<Pixels>,
+    width: Pixels,
+    gap: Pixels,
+    margin: Pixels,
+    room: Pixels,
+) -> Option<Pixels> {
+    let right = anchor.right() + gap;
+    let left = anchor.left() - gap - width;
+    if right + width <= room - margin {
+        Some(right)
+    } else if left >= margin {
+        Some(left)
+    } else {
+        None
+    }
+}
+
+/// See [`beside`].
+pub(crate) struct Beside {
+    gap: Pixels,
+    top: Pixels,
+    margin: Pixels,
+    card: AnyElement,
+    shown: bool,
+}
+
+impl IntoElement for Beside {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl gpui::Element for Beside {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    /// Over the whole box it stands beside, so its bounds are the box's.
+    fn request_layout(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, ()) {
+        let mut style = gpui::Style::default();
+        style.position = gpui::Position::Absolute;
+        style.inset = gpui::Edges::all(px(0.).into());
+        (window.request_layout(style, None, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        anchor: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let size = self
+            .card
+            .layout_as_root(gpui::AvailableSpace::min_size(), window, cx);
+        let room = window.viewport_size().width;
+        let Some(x) = beside_x(anchor, size.width, self.gap, self.margin, room) else {
+            return;
+        };
+        self.shown = true;
+        self.card
+            .prepaint_at(point(x, anchor.top() + self.top), window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if self.shown {
+            self.card.paint(window, cx);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +304,15 @@ mod tests {
         let (corner, at, _) = placement(head, FloatPlace::Below { gap: 8. });
         assert_eq!(corner, Anchor::TopLeft);
         assert_eq!(at, point(px(1024.), px(46.)));
+    }
+
+    /// A side card stands right of its box, else left, else nowhere: never
+    /// past the window's margin.
+    #[test]
+    fn a_side_card_takes_the_side_with_room() {
+        let x = |anchor, room: f32| beside_x(anchor, px(200.), px(2.), px(16.), px(room));
+        assert_eq!(x(bounds(300., 0., 300., 100.), 1000.), Some(px(602.)));
+        assert_eq!(x(bounds(300., 0., 600., 100.), 1000.), Some(px(98.)));
+        assert_eq!(x(bounds(100., 0., 800., 100.), 1000.), None);
     }
 }

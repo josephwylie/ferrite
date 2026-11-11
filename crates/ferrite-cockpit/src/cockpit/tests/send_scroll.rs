@@ -275,6 +275,43 @@ fn the_turns_first_call_lets_the_prompt_go_to_the_tail(cx: &mut TestAppContext) 
     assert!(scroll.is_following_tail(), "at the tail, following");
 }
 
+/// The turn's first call landing while the send still eases up lets the
+/// prompt go as one landing after the ease does: the view ends at the
+/// tail, following.
+#[gpui::test]
+fn a_call_mid_ease_lets_the_prompt_go_to_the_tail(cx: &mut TestAppContext) {
+    let (view, fake, cx) = answered("mid-ease", true, cx);
+    let scroll = scroll(&view, cx);
+    send(cx);
+    at(16, cx);
+    at(16, cx);
+    assert!(scroll.easing(), "premise: on its way up");
+    let stream = fake.streams.borrow().len() - 1;
+    fake.streams.borrow()[stream]
+        .send(SessionEvent::ToolStarted {
+            id: "mid".into(),
+            name: "Read".into(),
+            input: serde_json::json!({"file_path": "/workspace/a.rs"}),
+        })
+        .unwrap();
+    fake.streams.borrow()[stream]
+        .send(SessionEvent::ToolCompleted {
+            id: "mid".into(),
+            output: "1 line".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        })
+        .unwrap();
+    cx.run_until_parked();
+    for _ in 0..60 {
+        at(16, cx);
+    }
+    let transcript = transcript(&view, cx);
+    let held = transcript.read_with(cx, |t, _| t.send_anchored());
+    assert!(!held, "the call lets the prompt go");
+    assert!(scroll.is_following_tail(), "at the tail, following");
+}
+
 /// Scrolled away to the top of a long transcript.
 fn scrolled_away(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     let scroll = scroll(view, cx);
