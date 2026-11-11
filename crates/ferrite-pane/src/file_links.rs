@@ -169,6 +169,15 @@ impl PathTarget {
 }
 
 type OpenReader = Rc<dyn Fn(PathBuf, Option<u32>, &mut Window, &mut App)>;
+type OpenThread = Rc<dyn Fn(ferrite_core::ThreadId, &mut Window, &mut App)>;
+
+/// What a transcript does with a press on a link in its prose: ⌘-click on a
+/// path opens the Thread's preview, a Thread link opens that Thread.
+#[derive(Clone)]
+pub(crate) struct ScopeRoute {
+    pub reader: OpenReader,
+    pub thread: OpenThread,
+}
 
 /// Where ⌘-click on a target goes, by the transcript namespace hosting it,
 /// and where each target last laid out (a scene's `preview_path` anchors on
@@ -177,23 +186,23 @@ type OpenReader = Rc<dyn Fn(PathBuf, Option<u32>, &mut Window, &mut App)>;
 /// lives as long as the transcript hosting it under that namespace.
 #[derive(Default)]
 pub(crate) struct PathScopes {
-    open: HashMap<SharedString, (gpui::EntityId, OpenReader)>,
+    open: HashMap<SharedString, (gpui::EntityId, ScopeRoute)>,
     laid_out: HashMap<SharedString, HashMap<PathBuf, Bounds<Pixels>>>,
 }
 
 impl gpui::Global for PathScopes {}
 
-/// Route ⌘-click on `scope`'s targets to `open` (the transcript `owner`'s
-/// `TranscriptEvent::OpenReader`).
+/// Route presses on `scope`'s links to `route` (the transcript `owner`'s
+/// `TranscriptEvent::OpenReader` and `OpenThread`).
 pub(crate) fn register_scope(
     scope: SharedString,
     owner: gpui::EntityId,
-    open: OpenReader,
+    route: ScopeRoute,
     cx: &mut App,
 ) {
     cx.default_global::<PathScopes>()
         .open
-        .insert(scope, (owner, open));
+        .insert(scope, (owner, route));
 }
 
 /// The transcript `owner` no longer hosts `scope`: it was released, or its
@@ -220,7 +229,7 @@ pub(crate) fn release_scope(scope: &str, owner: gpui::EntityId, cx: &mut App) ->
 pub(crate) fn open_target(target: &PathTarget, window: &mut Window, cx: &mut App) {
     let handler = target.scope.as_ref().and_then(|scope| {
         cx.try_global::<PathScopes>()
-            .and_then(|scopes| scopes.open.get(scope).map(|(_, open)| open.clone()))
+            .and_then(|scopes| scopes.open.get(scope).map(|(_, route)| route.reader.clone()))
     });
     match handler {
         Some(open) => open(target.path.clone(), target.line, window, cx),
@@ -229,6 +238,22 @@ pub(crate) fn open_target(target: &PathTarget, window: &mut Window, cx: &mut App
             location: target.line.map(|line| line.to_string()),
         }
         .open(window, cx),
+    }
+}
+
+/// Open the Thread a prose link names, through the transcript hosting
+/// `scope`.
+pub(crate) fn open_thread(
+    scope: &str,
+    thread: ferrite_core::ThreadId,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let handler = cx
+        .try_global::<PathScopes>()
+        .and_then(|scopes| scopes.open.get(scope).map(|(_, route)| route.thread.clone()));
+    if let Some(open) = handler {
+        open(thread, window, cx);
     }
 }
 
@@ -396,20 +421,15 @@ impl gpui::RenderOnce for PathText {
     }
 }
 
-/// Wire an inline file chip (`attachments::inline_file`) as a path target
-/// with its underline in the chip's own ink, `INLINE_CODE_INK`.
+/// Wire an inline file chip (`attachments::inline_file`) as a path target.
+/// The chip underlines its own name under the pointer (`link_chip`), so no
+/// fading underline is laid over it.
 pub(crate) fn wire_inline(
     element: gpui::Stateful<gpui::Div>,
     target: PathTarget,
-    size: f32,
-    line: f32,
 ) -> gpui::Stateful<gpui::Div> {
     let key = target.key("inline");
-    wire_target(
-        element.child(underline(&key, theme::INLINE_CODE_INK, size, line)),
-        target,
-        key,
-    )
+    wire_target(element, target, key)
 }
 
 // ------------------------------------------------- prose targets and refs

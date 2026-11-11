@@ -1981,38 +1981,29 @@ pub const SHADOW_PILL: u32 = 0x0000001a;
 /// **The send anchor**: a sent prompt lands this far below the
 /// transcript's top (T3's `CHAT_LIST_ANCHOR_OFFSET`).
 pub const TX_SEND_ANCHOR_OFFSET: f32 = 16.0;
-/// **Reply to a selection** (Claude's `SelectionTooltip`): a drag that
-/// selects a passage ends with a pill centred over its first line, its foot
-/// `SELECTION_REPLY_GAP` above it (under its last when there is no room
-/// above; never on the selected text): `Start a side chat` | `Reply` (`FS_UI`,
-/// body weight, `INK_STRONG`), each `SELECTION_REPLY_PAD_X` either side
-/// and `SELECTION_REPLY_PAD_Y` above and below (Claude's 12 and 6), a
-/// `FLOAT_EDGE` hairline `SELECTION_REPLY_DIVIDER_H` tall between them.
-/// The pill is a float (`paint::FLOAT` inside its `FLOAT_EDGE` ring, the
-/// float shadow), an action lit `FLOAT_HOVER` under the pointer
-/// (claude/selection-pill.png). Its radius is Claude's 8, the one pill off
-/// the three-radius family.
-pub const SELECTION_REPLY_GAP: f32 = SPACE_1_5;
-pub const SELECTION_REPLY_PAD_X: f32 = SPACE_3;
-pub const SELECTION_REPLY_PAD_Y: f32 = SPACE_1_5;
-pub const SELECTION_REPLY_DIVIDER_H: f32 = 14.0;
-pub const SELECTION_REPLY_RADIUS: f32 = 8.0;
-/// **The Reply card** (Claude's, `claude/reply-popover.png`): what `Reply`
-/// opens over the selection. A float `REPLY_CARD_W` wide, `REPLY_CARD_PAD`
-/// inside its ring: the passage in `INK_SUBTLE`, cut at
-/// `REPLY_CARD_QUOTE_LINES` lines with an ellipsis, then a one-line field
-/// (`Reply to Claude`) `REPLY_CARD_GAP` under it and the send button at its
-/// right. Sent, it becomes a tile in the Composer's tray
-/// (`claude/reply-sent-chip.png`), an image card's size, ring and `×`: the
-/// typed words behind a quote bar at its top, cut at `REPLY_TILE_LINES`, a
-/// muted `Reply` at its foot, on the file chip's `RAISED` ground.
-pub const REPLY_CARD_W: f32 = 280.0;
-pub const REPLY_CARD_PAD: f32 = SPACE_3;
-pub const REPLY_CARD_GAP: f32 = SPACE_2;
-pub const REPLY_CARD_QUOTE_LINES: usize = 2;
-/// The field wraps and grows a row at a time (the Composer's own ease) up to
-/// this many, the card growing upward from its foot; past it the field scrolls.
-pub const REPLY_CARD_FIELD_ROWS: usize = 4;
+/// **Cite a selection** (T3's `AssistantSelectionToolbar`): a drag that
+/// selects a passage ends with a glass button at the pointer, `Cite` (the
+/// Quote icon `SELECTION_CITE_ICON` then its words, 12px medium), beside
+/// `Start a side chat`. `SELECTION_CITE_H` tall, fully rounded inside a 1px
+/// `FLOAT_EDGE` ring, padded `SELECTION_CITE_PAD_X`, the float shadow, on
+/// `paint::FLOAT` (no backdrop blur in GPUI). It stands where the mouse went
+/// up, held `SELECTION_CITE_EDGE` inside the window; with the pointer more
+/// than `SELECTION_CITE_NEAR` from the selection, `SELECTION_CITE_BELOW`
+/// under its last line. A double or triple click shows it after
+/// `SELECTION_CITE_MULTI_CLICK_MS`.
+pub const SELECTION_CITE_H: f32 = 24.0;
+pub const SELECTION_CITE_PAD_X: f32 = 7.0;
+pub const SELECTION_CITE_ICON: f32 = 14.0;
+pub const SELECTION_CITE_ICON_GAP: f32 = SPACE_1_5;
+pub const SELECTION_CITE_GAP: f32 = SPACE_1_5;
+pub const SELECTION_CITE_EDGE: f32 = 8.0;
+pub const SELECTION_CITE_NEAR: f32 = 8.0;
+pub const SELECTION_CITE_BELOW: f32 = 4.0;
+pub const SELECTION_CITE_MULTI_CLICK_MS: u64 = 500;
+/// A sent Reply in the Composer's tray (`claude/reply-sent-chip.png`), an
+/// image card's size, ring and `×`: the typed words behind a quote bar at
+/// its top, cut at `REPLY_TILE_LINES`, a muted `Reply` at its foot, on the
+/// file chip's `RAISED` ground.
 pub const REPLY_TILE_LINES: usize = 3;
 /// **The side chat** (Claude's, `claude/sidechat-open.png`): the right
 /// pane's other body, `SIDE_CHAT_W` wide beside the thread, which reflows
@@ -2316,6 +2307,23 @@ pub const FAILURE_STRIP_PAD_R: f32 = SPACE_1_5;
 pub const FAILURE_STRIP_ICON: f32 = 14.0;
 pub const RETRY_H: f32 = 26.0;
 pub const RETRY_PAD_X: f32 = 10.0;
+
+/// The background-work line at the transcript's foot (T3's
+/// `ThreadNowLine`): 12px muted words, 6px between the 14px icon, the
+/// words and the actions (`BACKGROUND_LINE_ACTIONS_GAP` apart), 4px in at
+/// each side, 8px under it.
+pub const BACKGROUND_LINE_GAP: f32 = SPACE_1_5;
+pub const BACKGROUND_LINE_PAD_X: f32 = SPACE_1;
+pub const BACKGROUND_LINE_PAD_B: f32 = SPACE_2;
+pub const BACKGROUND_LINE_ICON: f32 = 14.0;
+/// The `Background work` dialog (T3's `BackgroundWorkDetails`): a sheet
+/// 512 wide, one section per task 20px apart.
+pub const BACKGROUND_DIALOG_W: f32 = 512.0;
+pub const BACKGROUND_DIALOG_MAX_H: f32 = 560.0;
+pub const BACKGROUND_DIALOG_SECTION_GAP: f32 = 20.0;
+/// What follows the title (`label: activity`) reads at 60% of the muted ink.
+pub const BACKGROUND_LINE_DETAIL_OPACITY: f32 = 0.6;
+pub const BACKGROUND_LINE_ACTIONS_GAP: f32 = 10.0;
 /// The floor a head title keeps however narrow the head (a shorter title
 /// keeps its whole text). There is no cap — a long title takes the width
 /// the head has.
@@ -2420,6 +2428,15 @@ pub const BAR_MARK: f32 = 11.0;
 pub const HERO_MARK: f32 = 48.0;
 pub const HERO_MARK_INK: u32 = TEXT_FAINT;
 pub const HERO_MARK_GAP: f32 = 28.0;
+/// Under this window height the hero's lead words give way and the project
+/// word stands alone (T3's `max-height: 28rem`).
+pub const HERO_SHORT_WINDOW: f32 = 448.0;
+/// The Project switcher's word and rule as alphas of `INK_SUBTLE` (T3's
+/// muted at 60% over a rule at 35%; 80% and 60% under the pointer).
+pub const HERO_SWITCHER_INK: u32 = 0x99;
+pub const HERO_SWITCHER_INK_HOVER: u32 = 0xcc;
+pub const HERO_SWITCHER_RULE: u32 = 0x59;
+pub const HERO_SWITCHER_RULE_HOVER: u32 = 0x99;
 /// **The env strip** over an empty Thread's or a draft's box, Codex's
 /// (codex/home.png): #282828 between the plane #181818 and the box #363636
 /// there — here the step between `CARD` and `FIELD` — `ENV_STRIP_H` tall
@@ -2524,6 +2541,9 @@ pub const COMPOSER_SELECTION: u32 = TEXT_SELECTION_WASH;
 pub const SKILL_INK: u32 = 0xb261be;
 pub const FILE_INK: u32 = 0x0090cd;
 pub const MENTION_INK: u32 = 0x0096af;
+/// A Thread linked in prose (`oklch(0.62 0.12 190)`): the same chip as a
+/// file link, a teal accent.
+pub const THREAD_INK: u32 = 0x009c96;
 pub const SKILL_ICON_STROKE: f32 = 1.85;
 pub const TOKEN_ICON: f32 = FS_COMPOSER;
 /// Between a sent token's icon and its name (T3's `gap-[0.2em]`).
@@ -3836,6 +3856,9 @@ pub const MOTION_SLIM_ACTION_MS: u64 = 150;
 /// The foot's undo notice fades in and out over 200ms on Tailwind's
 /// `ease-out` (`MOTION_EASE_OUT_TW`).
 pub const MOTION_UNDO_NOTICE_MS: u64 = 200;
+/// A line of thread state at the transcript's foot (the background-work
+/// line) fades in over 150ms on Tailwind's `ease-out`.
+pub const MOTION_LINE_IN_MS: u64 = 150;
 pub const MOTION_EASE_OUT_TW: [f32; 4] = [0.0, 0.0, 0.2, 1.0];
 /// The nav's tooltips enter over 150ms on `MOTION_EASE_STANDARD`, from
 /// `MOTION_FLOAT_FROM_SCALE`.

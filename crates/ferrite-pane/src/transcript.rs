@@ -285,8 +285,8 @@ pub enum TranscriptEvent {
         action: PromptAction,
         at: gpui::Point<gpui::Pixels>,
     },
-    /// A Reply sent from the Reply card (or an answer's Reply row, its
-    /// words empty): a Reply card in the Pane's tray (`Composer::reply`).
+    /// A selection's `Cite` (or an answer's Reply row), its words empty: a
+    /// Reply card in the Pane's tray (`Composer::reply`).
     Reply(crate::quote::Reply),
     /// An answer's Fork: a new Thread holding the conversation through
     /// the answer whose last block is `after`.
@@ -299,6 +299,9 @@ pub enum TranscriptEvent {
     /// A background call's `View live output ▸`: the Background tasks
     /// pane.
     OpenBackground,
+    /// A Thread link in prose (`[title](ferrite-thread:12)`) pressed: land
+    /// on that Thread.
+    OpenThread(ferrite_core::ThreadId),
     /// A changed-files card's `Open diff`, or a press on one of its files
     /// (as the turn named it): the Changes Surface, on that file.
     OpenChanges(Option<String>),
@@ -468,11 +471,9 @@ pub struct TranscriptView {
     texts: Vec<(usize, RunText)>,
     /// The find bar, while it is open (⌘F).
     find: Option<find::TranscriptFind>,
-    /// The Reply pill a finished selection offers (`reply`), and where
+    /// The Cite button a finished selection offers (`reply`), and where
     /// the left press that may be selecting landed.
     reply: Option<reply::SelectionReply>,
-    /// The Reply card the pill's Reply opened (`reply`).
-    reply_card: Option<reply::ReplyCard>,
     pressed_at: Option<gpui::Point<gpui::Pixels>>,
     /// A turn card's menu, while open (`outputs`).
     output_menu: Option<outputs::OutputMenu>,
@@ -603,7 +604,6 @@ impl TranscriptView {
             texts: Vec::new(),
             find: None,
             reply: None,
-            reply_card: None,
             pressed_at: None,
             output_menu: None,
             message_menu: None,
@@ -618,17 +618,27 @@ impl TranscriptView {
     }
 
     /// Route ⌘-click on this transcript's path targets to
-    /// `TranscriptEvent::OpenReader`.
+    /// `TranscriptEvent::OpenReader`, and its Thread links to `OpenThread`.
     fn register_scope(&self, cx: &mut Context<Self>) {
         let weak = cx.entity().downgrade();
         crate::file_links::register_scope(
             self.input.namespace.clone(),
             cx.entity_id(),
-            Rc::new(move |path, line, _window, cx| {
-                let _ = weak.update(cx, |_, cx| {
-                    cx.emit(TranscriptEvent::OpenReader { path, line });
-                });
-            }),
+            crate::file_links::ScopeRoute {
+                reader: Rc::new({
+                    let weak = weak.clone();
+                    move |path, line, _window, cx| {
+                        let _ = weak.update(cx, |_, cx| {
+                            cx.emit(TranscriptEvent::OpenReader { path, line });
+                        });
+                    }
+                }),
+                thread: Rc::new(move |thread, _window, cx| {
+                    let _ = weak.update(cx, |_, cx| {
+                        cx.emit(TranscriptEvent::OpenThread(thread));
+                    });
+                }),
+            },
             cx,
         );
     }
@@ -3182,7 +3192,7 @@ impl Render for TranscriptView {
             .track_focus(&self.transcript_focus)
             .capture_any_mouse_down(cx.listener(Self::pressed))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::released))
-            // A scroll fades the Reply pill out, and stops a programmatic
+            // A scroll fades the Cite button out, and stops a programmatic
             // scroll where it stands.
             .on_scroll_wheel(cx.listener(|view, _, _, cx| {
                 view.operator_scrolled();
@@ -3214,7 +3224,6 @@ impl Render for TranscriptView {
             cx.notify();
         }
         let reply = self.reply_float(window, cx);
-        let reply_card = self.reply_card_float(cx);
         let output_menu = self.output_menu_float(cx);
         let message_menu = self.message_menu_float(cx);
         let find_bar = self.find_bar();
@@ -3269,7 +3278,6 @@ impl Render for TranscriptView {
             .children(latest)
             .children(minimap)
             .children(reply)
-            .children(reply_card)
             .children(output_menu)
             .children(message_menu)
             .children(find_bar)
@@ -3278,8 +3286,6 @@ impl Render for TranscriptView {
                 cx.listener(|view, _: &crate::find::Previous, _, cx| view.find_step(false, cx)),
             )
             .on_action(cx.listener(|view, _: &crate::find::Close, _, cx| view.close_find(cx)))
-            .on_action(cx.listener(|view, _: &reply::Send, _, cx| view.send_reply(cx)))
-            .on_action(cx.listener(|view, _: &reply::Close, _, cx| view.close_reply_card(cx)))
     }
 }
 

@@ -16,6 +16,7 @@
 //! state word in colour, the last lines dim, the quick answers.
 
 mod agents;
+mod background_work;
 mod compact_composer;
 mod composer;
 mod menus;
@@ -27,6 +28,10 @@ mod work_row;
 mod wrap_up;
 pub(crate) use agents::{is_agent, render_agent, render_agent_card, AgentCardCx, AgentRowCx};
 pub use agents::{AgentClock, AgentFace, AgentFaces, AgentRun};
+pub use background_work::{
+    background_work_line, inline_button, present as present_background_work, BackgroundTask,
+    WorkKind,
+};
 #[cfg(any(test, feature = "test-support"))]
 pub use composer::model_label;
 pub use composer::{
@@ -660,9 +665,9 @@ pub struct PaneWiring {
     /// The Group head's fill button (`fill_button`), wired to fill the
     /// board with this Pane; None in Solo.
     pub fill: Option<AnyElement>,
-    /// An empty Thread's hero project word (`hero_project`): the hero
-    /// (`start_hero`) stands centred over its body until the first prompt.
-    pub start: Option<AnyElement>,
+    /// An empty Thread's hero (`Hero`): it stands centred over its body
+    /// until the first prompt.
+    pub start: Option<Hero>,
 }
 
 /// Turns the Pane head's band into its drag handle: the cockpit gives it an
@@ -1291,9 +1296,9 @@ pub struct DraftState<'a> {
     pub show_focus: bool,
     /// The Solo box's controls (`PaneWiring::toolbar`).
     pub toolbar: Option<ComposerControls>,
-    /// The hero's project word (`hero_project`), wired in the cockpit to
-    /// the Project picker. None on a board, where the cell has no room.
-    pub start: Option<AnyElement>,
+    /// The hero (`Hero`), its project word wired in the cockpit to the
+    /// Project picker. None on a board, where the cell has no room.
+    pub start: Option<Hero>,
 }
 
 /// What a draft is called until its first send names the Thread — in its
@@ -1388,53 +1393,86 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
     )
 }
 
-/// An empty Thread's or a draft's hero, Codex's home: Ferrite's mark in
-/// `HERO_MARK_INK`, then `What should we build in <project>?` at the home's
-/// display size, `project` the word the cockpit wires (`hero_project`).
-pub fn start_hero(project: AnyElement) -> Div {
-    div()
-        .debug_selector(|| "start-hero".into())
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap(px(theme::HERO_MARK_GAP))
-        .max_w_full()
-        .child(components::embossed_mark(
-            theme::HERO_MARK,
-            theme::HERO_MARK_INK,
-        ))
-        .child(
-            div()
-                .flex()
-                .flex_wrap()
-                .justify_center()
-                .items_baseline()
-                .max_w_full()
-                .font_family(theme::FONT_UI)
-                .font_weight(theme::W_BODY)
-                .text_size(px(theme::FS_HOME_TITLE))
-                .line_height(px(theme::LH_HOME_TITLE))
-                .text_color(rgb(INK_STRONG))
-                .child("What should we build in\u{a0}")
-                .child(project)
-                .child("?"),
-        )
+/// What an empty Thread's or a draft's hero asks: a Project's word
+/// (`hero_project`, wired in the cockpit), or none for a scratch Thread,
+/// which has no Project to build in.
+pub enum Hero {
+    Project(AnyElement),
+    Scratch,
 }
 
-/// The hero's project word: the Project's name, and while it can still
-/// change (a draft's) a switcher under a dashed `INK_SUBTLE` rule, Codex's.
-/// The cockpit wires its press.
+/// An empty Thread's or a draft's hero, Codex's home: Ferrite's mark in
+/// `HERO_MARK_INK`, then `What should we build in <project>?` at the home's
+/// display size (`What should we work on?` for a scratch Thread). Under
+/// `HERO_SHORT_WINDOW` of window height the lead words give way and the
+/// project word stands alone (T3's `max-height: 28rem`).
+pub fn start_hero(hero: Hero) -> StartHero {
+    StartHero { hero }
+}
+
+#[derive(IntoElement)]
+pub struct StartHero {
+    hero: Hero,
+}
+
+impl RenderOnce for StartHero {
+    fn render(self, window: &mut gpui::Window, _: &mut gpui::App) -> impl IntoElement {
+        let short = f32::from(window.viewport_size().height) < theme::HERO_SHORT_WINDOW;
+        let title = div()
+            .flex()
+            .flex_wrap()
+            .justify_center()
+            .items_baseline()
+            .max_w_full()
+            .font_family(theme::FONT_UI)
+            .font_weight(theme::W_BODY)
+            .text_size(px(theme::FS_HOME_TITLE))
+            .line_height(px(theme::LH_HOME_TITLE))
+            .text_color(rgb(INK_STRONG));
+        let title = match self.hero {
+            Hero::Project(project) => title
+                .when(!short, |title| title.child("What should we build in\u{a0}"))
+                .child(project)
+                .when(!short, |title| title.child("?")),
+            Hero::Scratch => title.child("What should we work on?"),
+        };
+        div()
+            .debug_selector(|| "start-hero".into())
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(theme::HERO_MARK_GAP))
+            .max_w_full()
+            .child(components::embossed_mark(
+                theme::HERO_MARK,
+                theme::HERO_MARK_INK,
+            ))
+            .child(title)
+    }
+}
+
+/// The hero's project word, in `W_LABEL` (T3's `font-medium`): the Project's
+/// name, and while it can still change (a draft's) a switcher: the word in
+/// muted 60% over a 1px rule at muted 35%, both lifting under the pointer
+/// (T3's dotted rule; GPUI has no dotted border, so it is solid, as the
+/// prose links' hover underline is). The cockpit wires its press.
 pub fn hero_project(label: SharedString, switcher: bool) -> Stateful<Div> {
+    let muted = |alpha: u32| gpui::rgba((INK_SUBTLE << 8) | alpha);
     div()
         .id("start-hero-project")
         .debug_selector(|| "start-hero-project".into())
         .min_w_0()
         .truncate()
+        .font_weight(theme::W_LABEL)
         .when(switcher, |word| {
             word.cursor_pointer()
                 .border_b_1()
-                .border_dashed()
-                .border_color(rgb(INK_SUBTLE))
+                .border_color(muted(theme::HERO_SWITCHER_RULE))
+                .text_color(muted(theme::HERO_SWITCHER_INK))
+                .hover(|word| {
+                    word.border_color(muted(theme::HERO_SWITCHER_RULE_HOVER))
+                        .text_color(muted(theme::HERO_SWITCHER_INK_HOVER))
+                })
         })
         .child(label)
 }

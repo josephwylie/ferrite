@@ -183,7 +183,7 @@ impl CockpitView {
             .rounded(px(R_CARD))
             .bg(paint::RAISED)
             .child(head)
-            .when(open, |card| card.child(output_block(call, !running).pl(px(SPACE_4))))
+            .when(open, |card| card.child(output_block(call, !running, true).pl(px(SPACE_4))))
     }
 
     /// The white square that stops a piece of work, where the Session can.
@@ -234,7 +234,7 @@ impl CockpitView {
 
 /// What a piece of work is called: its provider-authored title, else what
 /// the call ran.
-fn label(call: &ToolBlock) -> SharedString {
+pub(in crate::cockpit) fn label(call: &ToolBlock) -> SharedString {
     call.title.clone().unwrap_or_else(|| call.summary.clone()).into()
 }
 
@@ -261,11 +261,11 @@ fn group_label(words: String) -> Div {
 /// A command's output in mono, as Claude's pane has it: `$ command`, its
 /// last lines (`No output yet` while it has printed nothing), and once it
 /// ended, how. An agent's block is its report.
-fn output_block(call: &ToolBlock, settled: bool) -> Div {
+pub(in crate::cockpit) fn output_block(call: &ToolBlock, settled: bool, command: bool) -> Div {
     use ferrite_ui::theme::*;
     let agent = policy(&call.name).kind == ToolKind::Agent;
     let mut lines: Vec<SharedString> = Vec::new();
-    if !agent && !call.summary.is_empty() {
+    if command && !agent && !call.summary.is_empty() {
         lines.push(format!("$ {}", call.summary).into());
     }
     let text = call.output.as_ref().map(|output| output.text.as_str()).unwrap_or("");

@@ -179,6 +179,7 @@ icons![
     "corner-up-right",
     "star",
     "chevron-up",
+    "quote",
     "folder-git",
     // The Panel's Surfaces: a side chat's delete, the Changes toolbar's
     // view tools.
@@ -390,6 +391,8 @@ pub const CORNER_UP_RIGHT: &str = "icons/corner-up-right.svg";
 /// A favourite model.
 pub const STAR: &str = "icons/star.svg";
 pub const CHEVRON_UP: &str = "icons/chevron-up.svg";
+/// `Cite` on a selection.
+pub const QUOTE: &str = "icons/quote.svg";
 /// An existing worktree in the workspace menu (`FOLDER_GIT` is a new one).
 pub const FOLDER_GIT_EXISTING: &str = "icons/folder-git.svg";
 /// A side chat's delete, in its Surface's head.

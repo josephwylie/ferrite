@@ -160,7 +160,7 @@ impl CockpitView {
     /// An empty draft's hero project word (`pane::start_hero`, Codex's
     /// home): the draft's Project, a switcher that drops the Project menu
     /// under it (`band_from_hero`).
-    pub(super) fn draft_hero(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn draft_hero(&self, index: usize, cx: &mut Context<Self>) -> Option<pane::Hero> {
         let draft = self.panes[index].draft()?;
         let project = self
             .cockpit
@@ -182,17 +182,20 @@ impl CockpitView {
                 view.band_from_hero = true;
             }),
         );
-        Some(
+        Some(pane::Hero::Project(
             ferrite_ui::components::on_bounds(word, self.record_trigger(HERO_TRIGGER.into()))
                 .into_any_element(),
-        )
+        ))
     }
 
-    /// An empty Thread's hero project word: its Project, settled, so a word
-    /// and not a switcher. None while the Thread's facts are unknown.
-    pub(super) fn thread_hero(&self, thread: ThreadId) -> Option<AnyElement> {
-        let project = self.facts.get(thread)?.project_label.clone()?;
-        Some(pane::hero_project(project, false).into_any_element())
+    /// An empty Thread's hero: its Project's word, settled, so a word and
+    /// not a switcher, or the scratch wording for a Thread with no Project.
+    /// None while the Thread's facts are unknown.
+    pub(super) fn thread_hero(&self, thread: ThreadId) -> Option<pane::Hero> {
+        Some(match self.facts.get(thread)?.project_label.clone() {
+            Some(project) => pane::Hero::Project(pane::hero_project(project, false).into_any_element()),
+            None => pane::Hero::Scratch,
+        })
     }
 
     fn step_empty(&mut self, delta: isize, cx: &mut Context<Self>) {

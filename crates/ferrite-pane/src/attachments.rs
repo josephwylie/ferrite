@@ -735,14 +735,14 @@ impl RenderOnce for Attachments {
     }
 }
 
-/// A file link in prose: the path as the prose wrote it on the inline-code
-/// chip (`rich::code_chip`, as neither reference app colours a path), a
-/// `:line` suffix in `INK_SUBTLE`. It is a path target
-/// (`file_links::wire_inline`): an underline only under the pointer, ⌘-click to the Thread's preview; a plain
-/// click opens it in the Pane's preview too, at its `:line`. The native Markdown flow
-/// reserves the returned size and wraps the link atomically, so the width is
-/// measured in the face and size it is drawn in (the prose's own): the path
-/// and the location each shaped whole.
+/// A file link in prose, as T3's `MarkdownFileLink`: a chip, the file's
+/// icon and the path as the prose wrote it in medium weight and the mention
+/// accent, a `:line` suffix in `INK_SUBTLE`, underlined only under the
+/// pointer (`link_chip`). It is a path target (`file_links::wire_inline`):
+/// ⌘-click opens the Thread's preview, and a plain click opens it in the
+/// Pane's preview too, at its `:line`. The native Markdown flow reserves the
+/// returned size and wraps the link atomically, so the width is measured in
+/// the face and size it is drawn in (the prose's).
 pub fn inline_file(
     file: crate::file_links::FileLink,
     label: &str,
@@ -776,18 +776,19 @@ pub fn inline_file(
     };
     let image = crate::image_viewer::is_image(&file.path);
     let size_px = window.text_style().font_size.to_pixels(window.rem_size());
-    let link_w = inline_file_width(&name, &location, image, size_px, window);
+    let chip = crate::link_chip::Chip {
+        icon: if image {
+            ferrite_ui::icons::IMAGE
+        } else {
+            ferrite_ui::icons::FILE
+        },
+        ink: theme::MENTION_INK,
+        name: &name,
+        location: &location,
+    };
+    let link_w = chip.width(size_px, window);
     let line_h = window.line_height();
-    // The line reserves the path's exact advance, as the prototype's inline
-    // span takes it; the link's own box keeps its pixel to spare and hangs
-    // past it, so the words after it stand where the browser sets them.
-    // The chip's padding is room on the line, either side of the path.
-    let pad = px(2.0 * theme::INLINE_CODE_PAD_X);
-    let size = gpui::size(
-        inline_file_advance(&name, &location, link_w, size_px, window) + pad,
-        line_h,
-    );
-    let link_w = link_w + pad;
+    let size = gpui::size(link_w, line_h);
     let host = preview.cloned();
     let selector = format!("file-attachment-{}", file.path.display());
     let accessibility = format!("Open {name}");
@@ -818,37 +819,14 @@ pub fn inline_file(
             _ => file.open(window, cx),
         }
     };
-    let link = crate::rich::code_chip(gpui::div())
-        .id("inline-file-chip")
-        .flex()
-        .items_center()
-        .w(link_w)
-        .mt(px(theme::INLINE_CODE_INSET_Y))
-        .h(line_h - px(2.0 * theme::INLINE_CODE_INSET_Y))
-        .min_w_0()
-        .not_italic()
-        .child(
-            // The path gives way to an ellipsis; the `:line` never does.
-            gpui::div()
-                .flex()
-                .min_w_0()
-                .child(gpui::div().min_w_0().truncate().child(name))
-                .when(!location.is_empty(), |title| {
-                    title.child(
-                        gpui::div()
-                            .flex_none()
-                            .text_color(rgb(theme::INK_SUBTLE))
-                            .child(location),
-                    )
-                }),
-        );
+    let link = chip.face(size_px, link_w, line_h).id("inline-file-chip");
     // The click and keyboard target lies over the link and draws nothing but
     // the focus ring.
     let clear: gpui::Hsla = gpui::transparent_black();
     let button = ferrite_ui::components::button("inline-file-action")
         .custom(ferrite_ui::pointer::button_variant(
             clear,
-            rgb(theme::INLINE_CODE_INK).into(),
+            rgb(theme::MENTION_INK).into(),
             clear,
             cx,
         ))
@@ -872,79 +850,8 @@ pub fn inline_file(
         .child(button);
     (
         size,
-        crate::file_links::wire_inline(element, target, f32::from(size_px), f32::from(line_h))
+        crate::file_links::wire_inline(element, target)
             .into_any_element(),
     )
 }
 
-/// What an inline file link reserves on its line: the name and `:line`
-/// shaped in the code face at the prose's size, unrounded — the box's own
-/// width (`link_w`) when the clamp decided it.
-fn inline_file_advance(
-    name: &str,
-    location: &str,
-    link_w: gpui::Pixels,
-    size: gpui::Pixels,
-    window: &mut Window,
-) -> gpui::Pixels {
-    use ferrite_ui::theme;
-    let mut face = window.text_style();
-    face.font_family = theme::FONT_CODE.into();
-    face.font_weight = theme::W_BODY;
-    face.font_style = gpui::FontStyle::Normal;
-    let shaped = |text: &str| {
-        if text.is_empty() {
-            return px(0.);
-        }
-        window
-            .text_system()
-            .shape_line(
-                gpui::SharedString::from(text.to_owned()),
-                size,
-                &[face.to_run(text.len())],
-                None,
-            )
-            .width()
-    };
-    let exact = shaped(name) + shaped(location);
-    if link_w <= px(theme::INLINE_FILE_MIN_W) || link_w >= px(theme::INLINE_FILE_MAX_W) {
-        link_w
-    } else {
-        exact.min(link_w)
-    }
-}
-
-/// An inline file link's width: the name and `:line` each shaped whole in
-/// the code face at the prose's own size, rounded up to whole pixels with
-/// 1px to spare, so a name that fits is never ellipsized. Clamped to
-/// `INLINE_FILE_MIN_W`…`INLINE_FILE_MAX_W`.
-pub(crate) fn inline_file_width(
-    name: &str,
-    location: &str,
-    _image: bool,
-    size: gpui::Pixels,
-    window: &mut Window,
-) -> gpui::Pixels {
-    use ferrite_ui::theme;
-    let mut face = window.text_style();
-    face.font_family = theme::FONT_CODE.into();
-    face.font_weight = theme::W_BODY;
-    face.font_style = gpui::FontStyle::Normal;
-    let width = |text: &str| {
-        if text.is_empty() {
-            return px(0.);
-        }
-        window
-            .text_system()
-            .shape_line(
-                gpui::SharedString::from(text.to_owned()),
-                size,
-                &[face.to_run(text.len())],
-                None,
-            )
-            .width()
-            .ceil()
-    };
-    let text_w = width(name) + width(location) + px(1.);
-    text_w.clamp(px(theme::INLINE_FILE_MIN_W), px(theme::INLINE_FILE_MAX_W))
-}
