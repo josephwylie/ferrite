@@ -10,8 +10,10 @@
 //! Close all, and a File's Copy path). Dragged sideways past
 //! `SURFACE_TAB_DRAG` and let go over another tab, it moves there; a
 //! shorter move is still a click. On overflow a chevron stands at each end
-//! with more to show, scrolling by `tab_scroll_step`; the wheel's turn
-//! scrolls them sideways.
+//! with more to show, easing by `tab_scroll_step` (snapping under reduced
+//! motion); the wheel's turn scrolls them sideways. A Surface with work
+//! going on (a side chat answering, an agent working, background work)
+//! wears a pending dot at its icon's corner.
 //!
 //! The `+` menu and "Open a surface" list the same openers (`Opener`), each
 //! with its letter; one that cannot run here is dimmed and says why.
@@ -105,6 +107,7 @@ fn surface_icon(id: &SurfaceId) -> &'static str {
         SurfaceId::Terminal(_) => icons::TERMINAL,
         SurfaceId::SideChat(_) => icons::MESSAGES_SQUARE,
         SurfaceId::Agent(_) => icons::SUBAGENTS,
+        SurfaceId::PullRequest(_) => icons::GIT_PULL_REQUEST,
     }
 }
 
@@ -123,6 +126,7 @@ pub(crate) fn surface_selector(id: &SurfaceId) -> String {
         SurfaceId::Terminal(number) => format!("panel-tab-Terminal-{number}"),
         SurfaceId::SideChat(tab) => format!("panel-tab-SideChat-{tab}"),
         SurfaceId::Agent(_) => "panel-tab-Agent".into(),
+        SurfaceId::PullRequest(number) => format!("panel-tab-PullRequest-{number}"),
     }
 }
 
@@ -161,7 +165,7 @@ impl CockpitView {
             Opener::Terminal => self.new_terminal_surface(thread, cx),
             Opener::Files => self.upsert_surface(thread, SurfaceId::Files, cx),
             Opener::Changes => self.upsert_surface(thread, SurfaceId::Changes, cx),
-            Opener::PullRequest => self.open_pr(thread, cx),
+            Opener::PullRequest => self.open_pr_surface(thread, cx),
             Opener::SideChat => self.open_side_chat(thread, None, cx),
             Opener::Background => self.open_background(thread, cx),
             Opener::Overview => self.open_panel(thread, cx),
@@ -242,6 +246,21 @@ impl CockpitView {
         }
     }
 
+    /// Whether a Surface has work going on that its tab should say (T3's
+    /// pending dot): a side chat answering, an agent working, background
+    /// work running.
+    pub(crate) fn surface_pending(&self, thread: ThreadId, id: &SurfaceId) -> bool {
+        match id {
+            SurfaceId::SideChat(tab) => self.side_chat_running(thread, *tab),
+            SurfaceId::Agent(key) => self.agent_running(thread, key),
+            SurfaceId::Background => self
+                .cockpit
+                .thread(thread)
+                .is_some_and(|open| open.transcript().background_calls().any(|call| call.in_background())),
+            _ => false,
+        }
+    }
+
     /// A tab's title (T3's `surfaceTitle`): the singletons' names, a file's
     /// name (a command's own), the shell's `Terminal N`, the side chat's
     /// title, the agent's task.
@@ -256,6 +275,7 @@ impl CockpitView {
             SurfaceId::Terminal(number) => format!("Terminal {number}").into(),
             SurfaceId::SideChat(tab) => self.side_chat_title(thread, *tab),
             SurfaceId::Agent(key) => self.agent_title(thread, key),
+            SurfaceId::PullRequest(number) => format!("#{number}").into(),
         }
     }
 
@@ -301,6 +321,16 @@ impl CockpitView {
         }));
         // The chevrons show only on overflow, each at an end with more.
         let scroll = &self.panel.tabs_scroll;
+        // A chevron's ease, where this frame has it; landed, the strip is
+        // the operator's to scroll again.
+        if let Some(tween) = self.panel.tabs_tween.get() {
+            let now = cx.background_executor().now();
+            let reduced = ferrite_ui::motion::reduced_motion(cx);
+            scroll.set_offset(gpui::point(px(-tween.value(now, reduced)), scroll.offset().y));
+            if !tween.running(now, reduced) {
+                self.panel.tabs_tween.set(None);
+            }
+        }
         let scrolled = -f32::from(scroll.offset().x);
         let most = f32::from(scroll.max_offset().x);
         let chevron = |side: &'static str, glyph: &'static str, shows: bool, toward: f32| {
@@ -361,15 +391,38 @@ impl CockpitView {
             .child(maximize)
     }
 
-    /// A chevron's press: the tabs scroll `toward` (-1 left, 1 right) by
-    /// `tab_scroll_step` of what shows.
+    /// A chevron's press: the tabs ease `toward` (-1 left, 1 right) by
+    /// `tab_scroll_step` of what shows; under reduced motion they jump.
     fn scroll_surface_tabs(&mut self, toward: f32, cx: &mut Context<Self>) {
-        let visible = f32::from(self.panel.tabs_scroll.bounds().size.width);
-        self.scroll_surface_tabs_by(toward * tab_scroll_step(visible), cx);
+        let scroll = &self.panel.tabs_scroll;
+        let visible = f32::from(scroll.bounds().size.width);
+        let most = f32::from(scroll.max_offset().x).max(0.);
+        let at = -f32::from(scroll.offset().x);
+        let to = (at + toward * tab_scroll_step(visible)).clamp(0., most);
+        let now = cx.background_executor().now();
+        let reduced = ferrite_ui::motion::reduced_motion(cx);
+        self.panel.tabs_tween.set(Some(ferrite_ui::motion::Tween::retarget(
+            self.panel.tabs_tween.take(),
+            at,
+            to,
+            ferrite_ui::motion::TAB_SCROLL,
+            now,
+            reduced,
+        )));
+        cx.notify();
     }
 
-    /// The tabs scrolled `by` sideways, within their overflow.
+    /// Whether the strip is mid-ease: the frame must be drawn again.
+    pub(in crate::cockpit) fn tabs_scrolling(&self, cx: &gpui::App) -> bool {
+        let now = cx.background_executor().now();
+        let reduced = ferrite_ui::motion::reduced_motion(cx);
+        self.panel.tabs_tween.get().is_some_and(|tween| tween.running(now, reduced))
+    }
+
+    /// The tabs scrolled `by` sideways, within their overflow (the wheel's
+    /// turn, which stops a chevron's ease).
     fn scroll_surface_tabs_by(&mut self, by: f32, cx: &mut Context<Self>) {
+        self.panel.tabs_tween.set(None);
         let scroll = &self.panel.tabs_scroll;
         let most = f32::from(scroll.max_offset().x);
         let at = (-f32::from(scroll.offset().x) + by).clamp(0., most.max(0.));
@@ -403,9 +456,29 @@ impl CockpitView {
                 })
                 .child(icon(icons::CLOSE, SURFACE_TAB_ICON, INK_STRONG))
         } else {
+            // A pull request's icon says its state, in its state's ink.
+            let (glyph, ink) = match (id, self.pr_tone(thread)) {
+                (SurfaceId::PullRequest(_), Some(tone)) => (tone.glyph(), tone.ink()),
+                _ => (surface_icon(id), if active { INK_STRONG } else { INK_SUBTLE }),
+            };
+            let pending = self.surface_pending(thread, id).then(|| {
+                div()
+                    .debug_selector({
+                        let selector = selector.clone();
+                        move || format!("{selector}-pending")
+                    })
+                    .absolute()
+                    .right(px(-SURFACE_TAB_DOT_INSET))
+                    .bottom(px(-SURFACE_TAB_DOT_INSET))
+                    .size(px(SURFACE_TAB_DOT))
+                    .rounded_full()
+                    .bg(rgb(ink))
+            });
             div()
+                .relative()
                 .flex()
-                .child(icon(surface_icon(id), SURFACE_TAB_ICON, if active { INK_STRONG } else { INK_SUBTLE }))
+                .child(icon(glyph, SURFACE_TAB_ICON, ink))
+                .children(pending)
         };
         let close_key = SharedString::from(format!("panel-tab-close-{at}"));
         let close = div()

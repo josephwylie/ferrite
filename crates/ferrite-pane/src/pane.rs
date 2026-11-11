@@ -41,20 +41,20 @@ use composer::{
 pub use menus::{menu_item, menu_popover, menu_row, picker_row, picker_section, MenuRow};
 use output::{call_body, diff_rows, hunk_rows, render_diff, running_tests, DiffRow};
 pub use output::{diff_number_cells, test_elbow, DiffKind, DiffPaint, TestElbow};
-pub(crate) use text::{collect_block_text, collect_group_text, group_live, turn_stamp};
+pub(crate) use text::{collect_block_text, collect_group_text, group_live};
 pub use usage::{
     compact_count, context_meter_segments, context_segments, context_usage, ctx_meter_ink,
     plan_usage_fraction, plan_usage_popover, plan_usage_ring, usage_ink,
 };
-pub(crate) use working::running_call;
-pub use working::{background_clock, background_link, working_tail, WorkingFacts};
+pub(crate) use working::{turn_fold, FoldFace};
+pub use working::{background_clock, background_link, working_tail, WorkingFacts, WorkingTail};
 pub(crate) use wrap_up::{render_wrap_up, Face as WrapUpFace};
 #[cfg(test)]
 use {
     composer::{composer_fixed_height, composer_queue_height, queued_preview},
     output::{changed_words, result_highlights},
     usage::{category_ink, reset_label},
-    working::{starting_line, working_line_for, working_row},
+    working::starting_line,
 };
 
 use ferrite_core::activity::{AgentStatus, Subject};
@@ -150,12 +150,17 @@ struct TranscriptViewport {
 
 /// Disclosure identities preserve choices while content streams or Subjects
 /// switch: a call's details (its output fold, its diffs), a long thought,
-/// and a group of calls, named by its first call.
+/// a group of calls, named by its first call, a settled turn's fold,
+/// named by the prompt it stands under (a steer's segment by the steer's),
+/// and the running turn's thinking at its tail, with no call to name it,
+/// by its first thought (`rows::live_anchor`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DisclosureId {
     Tool(String),
     Reasoning(BlockId),
     Group(String),
+    Turn(BlockId),
+    Live(BlockId),
 }
 impl From<&str> for DisclosureId {
     fn from(call: &str) -> Self {
@@ -3884,11 +3889,10 @@ pub(crate) fn omitted_line(bytes: usize) -> Div {
 }
 
 /// How a turn ended (`text::turn_stamp`), one selectable run that copies
-/// back as it reads. A completed turn that took a while closes on `Worked
-/// for 5m 22s` in `INK_SUBTLE`, a `LINE` running on from it to the
-/// column's end; an interrupted one is a muted activity line, all
+/// back as it reads: an interrupted one is a muted activity line, all
 /// `INK_SUBTLE` (the operator did it; nothing failed); a failed one leads
-/// with `failed` in `BLOCKED`. A quick completed turn has no row at all.
+/// with `failed` in `BLOCKED`. A completed turn has no row at its end: its
+/// fold says how long it worked.
 fn turn_end(block: BlockId, end: &ferrite_core::transcript::TurnEnd, row_cx: &RowCx) -> AnyElement {
     use ferrite_core::TurnOutcome;
     let Some(text) = text::turn_stamp(end) else {
@@ -3912,16 +3916,9 @@ fn turn_end(block: BlockId, end: &ferrite_core::transcript::TurnEnd, row_cx: &Ro
             .min_w_0()
             .child(row_cx.selection.line(block, text, highlights)),
     );
-    let line = components::tabular(activity_line(row_cx.grid(), None, words))
-        .debug_selector(|| "turn-stamp".into());
-    if end.completed() {
-        return line
-            .items_center()
-            .gap(px(theme::TURN_STAMP_RULE_GAP))
-            .child(div().flex_1().h(px(1.)).bg(theme::paint::LINE))
-            .into_any_element();
-    }
-    line.into_any_element()
+    components::tabular(activity_line(row_cx.grid(), None, words))
+        .debug_selector(|| "turn-stamp".into())
+        .into_any_element()
 }
 
 /// The `·` seams in a transcript line: `INK_SUBTLE`, at body weight
@@ -4799,74 +4796,32 @@ mod tests {
     use gpui::{size, TestAppContext};
     use std::sync::Arc;
 
-    struct ShowsProgress(Transcript);
-
-    impl Render for ShowsProgress {
-        fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
-            div()
-                .w_full()
-                .child(working_row(&self.0, false, false, false, false))
-        }
-    }
-
-    /// The line says what runs: a running call's own words take the line,
-    /// on one row with its facts, over the thinking heading that came
-    /// before it, and with no key hint (the stop button says it).
-    #[gpui::test]
-    fn the_line_names_the_running_call_on_one_row(cx: &mut TestAppContext) {
-        let (lexer, _) = Lexer::new();
-        let mut transcript = Transcript::new(Arc::new(lexer));
-        transcript.apply(Input::Prompt("Build".into()));
-        transcript.apply(Input::Event(SessionEvent::ReasoningSummaryDelta {
-            text: "**Checking build progress**".into(),
-            summary_index: 0,
-        }));
-        transcript.apply(Input::Event(SessionEvent::ToolStarted {
-            id: "build".into(),
-            name: "commandExecution".into(),
-            input: serde_json::json!({"command": "cargo build --release"}),
-        }));
-        let (_, cx) = cx.add_window_view(|_, cx| {
-            gpui::component::init(cx);
-            ShowsProgress(transcript)
-        });
-        for width in [740., 260.] {
-            cx.simulate_resize(size(px(width), px(400.)));
-            cx.run_until_parked();
-            let reasoning = cx.debug_bounds("progress-reasoning").unwrap();
-            let metadata = cx.debug_bounds("progress-metadata").unwrap();
-            let line = cx.debug_bounds("progress-call").expect("the call's words");
-            assert!(cx
-                .debug_bounds("progress-caption-Checking build progress")
-                .is_none());
-            // One row, as the Claude app draws it: the step, then its facts.
-            assert_eq!(metadata.top(), reasoning.top());
-            assert!(metadata.left() >= reasoning.right());
-            assert_eq!(
-                line.size.height,
-                px(Grid::pane(Default::default(), true).line),
-                "one line, and no command detail below it"
-            );
-            assert!(metadata.right() <= px(width), "the caption truncates first");
-        }
-    }
-
     struct StartingAndWorking(Transcript);
 
     impl Render for StartingAndWorking {
         fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
-            let line = |selector: &'static str, line: Div| {
+            let line = |selector: &'static str, line: AnyElement| {
                 div().debug_selector(move || selector.into()).child(line)
             };
-            let working =
-                |solo| working_line_for(&self.0, false, solo, false, false, true, 0, None);
+            let working = |solo| {
+                working_tail(WorkingFacts {
+                    transcript: &self.0,
+                    thread: ThreadId::new(1),
+                    starting: false,
+                    solo,
+                    focused: false,
+                    reduce_motion: true,
+                })
+                .expect("a running turn")
+                .live(&[], None)
+            };
             div()
                 .w_full()
                 .flex()
                 .flex_col()
-                .child(line("solo-starting", starting_line(true, true)))
+                .child(line("solo-starting", starting_line(true, true).into_any_element()))
                 .child(line("solo-working", working(true)))
-                .child(line("group-starting", starting_line(true, false)))
+                .child(line("group-starting", starting_line(true, false).into_any_element()))
                 .child(line("group-working", working(false)))
         }
     }
@@ -4877,7 +4832,9 @@ mod tests {
     fn the_starting_line_stands_on_the_working_line_grid(cx: &mut TestAppContext) {
         let (_, cx) = cx.add_window_view(|_, cx| {
             gpui::component::init(cx);
-            StartingAndWorking(Transcript::default())
+            let mut transcript = Transcript::default();
+            transcript.apply(Input::Prompt("Build".into()));
+            StartingAndWorking(transcript)
         });
         cx.simulate_resize(size(px(640.), px(400.)));
         cx.run_until_parked();
@@ -5032,6 +4989,10 @@ mod tests {
                 .cloned()
                 .map(DisclosureId::Tool)
                 .chain(self.groups.iter().cloned().map(DisclosureId::Group))
+                // Every turn's fold open: these draw each block's own row.
+                .chain(self.blocks.iter().filter_map(|block| {
+                    matches!(block.body, Body::Prompt(_)).then_some(DisclosureId::Turn(block.id))
+                }))
                 .collect();
             if self.reasoning_expanded {
                 expanded.extend(self.blocks.iter().filter_map(|block| {
@@ -5054,7 +5015,6 @@ mod tests {
                 target: None,
                 disclosure_focus: cx.focus_handle(),
                 working: None,
-                working_reasoning: None,
                 tail: None,
                 pending_call: None,
                 workspace: None,
@@ -5066,6 +5026,7 @@ mod tests {
                 reply_to: "Claude".into(),
                 skills: Default::default(),
                 note: None,
+                queued: 0,
             };
             let selection = self.selection.clone();
             self.transcript.update(cx, |transcript, cx| {
@@ -5096,7 +5057,6 @@ mod tests {
                     target: None,
                     disclosure_focus: cx.focus_handle(),
                     working: None,
-                    working_reasoning: None,
                     tail: None,
                     pending_call: None,
                     workspace: None,
@@ -5108,6 +5068,7 @@ mod tests {
                     reply_to: "Claude".into(),
                     skills: Default::default(),
                     note: None,
+                    queued: 0,
                 },
                 crate::rich::TextCache::default(),
                 selection.clone(),
@@ -5729,8 +5690,8 @@ mod tests {
         let blocks: Vec<Block> = transcript.blocks().to_vec();
         let ids: Vec<ferrite_core::transcript::BlockId> = blocks
             .iter()
-            // A quick turn's end draws no row (`text::turn_stamp`).
-            .filter(|block| !matches!(&block.body, Body::TurnEnd(end) if turn_stamp(end).is_none()))
+            // A completed turn's end draws no row (`text::turn_stamp`).
+            .filter(|block| !matches!(&block.body, Body::TurnEnd(end) if text::turn_stamp(end).is_none()))
             .map(|block| {
                 if block.markdown.is_some() {
                     block.markdown_run.unwrap_or(block.id)
@@ -6481,8 +6442,8 @@ mod tests {
     }
 
     /// A turn's end leads with the lexicon's own lowercase words; a
-    /// finished one says how long it worked once that was a while, and
-    /// nothing when it was quick.
+    /// finished one says nothing at its end (its fold says how long it
+    /// worked, however quick).
     #[test]
     fn turn_ends_speak_the_lexicon() {
         use ferrite_core::transcript::TurnEnd;
@@ -6496,11 +6457,9 @@ mod tests {
             output_tokens: Some(3_700),
         };
         use ferrite_core::TurnOutcome::*;
+        use text::turn_stamp;
         assert_eq!(turn_stamp(&end(Completed, 100)), None);
-        assert_eq!(
-            turn_stamp(&end(Completed, 322_000)).as_deref(),
-            Some("Worked for 5m 22s")
-        );
+        assert_eq!(turn_stamp(&end(Completed, 322_000)), None);
         assert_eq!(
             turn_stamp(&end(Interrupted, 100)).as_deref(),
             Some("You stopped after 0.1s")

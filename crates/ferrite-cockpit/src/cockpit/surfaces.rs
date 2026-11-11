@@ -15,7 +15,7 @@
 //! every Surface is checked again and one that no longer resolves (its
 //! Thread gone, its file deleted, its shell or page dead) is dropped.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -41,6 +41,8 @@ pub(crate) enum SurfaceId {
     SideChat(u64),
     /// A subagent's drill-in, by its stored `AgentKey`.
     Agent(String),
+    /// The pull request of the Thread's branch, by its number.
+    PullRequest(u64),
 }
 
 impl SurfaceId {
@@ -48,6 +50,30 @@ impl SurfaceId {
     /// live page cannot.
     fn reopenable(&self) -> bool {
         !matches!(self, Self::Terminal(_) | Self::Browser)
+    }
+}
+
+/// Which of a pull request's views its Surface shows (T3's `detailTab`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PrTab {
+    #[default]
+    Summary,
+    Guide,
+    Timeline,
+    Code,
+}
+
+impl PrTab {
+    pub(crate) const ALL: [Self; 4] = [Self::Summary, Self::Guide, Self::Timeline, Self::Code];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Summary => "Summary",
+            Self::Guide => "Guide",
+            Self::Timeline => "Timeline",
+            Self::Code => "Code",
+        }
     }
 }
 
@@ -60,6 +86,9 @@ pub(crate) struct ThreadSurfaces {
     pub(crate) maximized: bool,
     /// The operator's width; the active kind's floor widens it.
     pub(crate) width: f32,
+    /// Each pull request's chosen view, by number: what its Surface
+    /// remembers (Summary when unset).
+    pub(crate) pr_tabs: BTreeMap<u64, PrTab>,
     /// Bumped by every operator action: what `reveal` checks.
     revision: u64,
     /// Closed tabs that can come back, the last closed at the end.
@@ -76,9 +105,15 @@ impl ThreadSurfaces {
             tabs: vec![SurfaceId::Overview],
             maximized: false,
             width: 0.,
+            pr_tabs: BTreeMap::new(),
             revision: 0,
             closed: Vec::new(),
         }
+    }
+
+    /// The view pull request `number`'s Surface shows.
+    pub(crate) fn pr_tab(&self, number: u64) -> PrTab {
+        self.pr_tabs.get(&number).copied().unwrap_or_default()
     }
 
     /// The one door: bring `id` forward if it has a tab, else add one at
@@ -261,6 +296,8 @@ struct PersistedThread {
     active: Option<SurfaceId>,
     maximized: bool,
     width: f32,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pr_tabs: BTreeMap<u64, PrTab>,
 }
 
 impl Surfaces {
@@ -300,6 +337,7 @@ impl Surfaces {
                 active: surfaces.active.clone(),
                 maximized: surfaces.maximized,
                 width: surfaces.width,
+                pr_tabs: surfaces.pr_tabs.clone(),
             })
             .collect();
         threads.sort_by_key(|thread| thread.thread);
@@ -335,6 +373,8 @@ fn migrate(persisted: Persisted, resolves: impl Fn(ThreadId, &SurfaceId) -> bool
             }
         }
         let active = shown_at.and_then(|at| tabs.get(at.min(tabs.len().saturating_sub(1))).cloned());
+        let mut pr_tabs = stored.pr_tabs;
+        pr_tabs.retain(|number, _| tabs.contains(&SurfaceId::PullRequest(*number)));
         threads.insert(
             thread,
             ThreadSurfaces {
@@ -343,6 +383,7 @@ fn migrate(persisted: Persisted, resolves: impl Fn(ThreadId, &SurfaceId) -> bool
                 tabs,
                 maximized: stored.maximized,
                 width: stored.width,
+                pr_tabs,
                 revision: 0,
                 closed: Vec::new(),
             },
@@ -494,6 +535,8 @@ mod tests {
         let panel = surfaces.entry(thread, true);
         panel.upsert(file("a.rs"));
         panel.upsert(SurfaceId::Changes);
+        panel.upsert(SurfaceId::PullRequest(48));
+        panel.pr_tabs.insert(48, PrTab::Timeline);
         panel.activate(&file("a.rs"));
         panel.maximized = true;
         panel.width = 512.;
@@ -501,7 +544,12 @@ mod tests {
 
         let loaded = Surfaces::load(&dir, |_, _| true).unwrap();
         let panel = loaded.get(thread).expect("the Thread's Panel");
-        assert_eq!(panel.tabs, [SurfaceId::Overview, file("a.rs"), SurfaceId::Changes]);
+        assert_eq!(
+            panel.tabs,
+            [SurfaceId::Overview, file("a.rs"), SurfaceId::Changes, SurfaceId::PullRequest(48)]
+        );
+        assert_eq!(panel.pr_tab(48), PrTab::Timeline, "a PR keeps its view");
+        assert_eq!(panel.pr_tab(7), PrTab::Summary);
         assert_eq!(panel.active, Some(file("a.rs")));
         assert!(panel.maximized && panel.open);
         assert_eq!(panel.width, 512.);

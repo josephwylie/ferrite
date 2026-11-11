@@ -321,3 +321,37 @@ fn overflowing_tabs_show_chevrons_that_scroll_the_strip(cx: &mut TestAppContext)
     assert_eq!(crate::cockpit::panel::tab_scroll_step(100.), SURFACE_TAB_SCROLL_MIN);
     assert_eq!(crate::cockpit::panel::tab_scroll_step(400.), 300.);
 }
+
+/// With motion on, a chevron eases the strip to where it sends it (T3's
+/// smooth `scrollBy`) rather than jumping.
+#[gpui::test]
+fn a_chevron_eases_the_strip(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (view, thread, cx) = solo("surfaces-overflow-ease", cx);
+    for at in 0..12 {
+        upsert(&view, thread, SurfaceId::File(format!("/tmp/easing-tab-{at}.rs").into()), cx);
+    }
+    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
+    tick(cx);
+    tick(cx);
+    let visible = view.read_with(cx, |view, _| f32::from(view.panel.tabs_scroll.bounds().size.width));
+    let step = crate::cockpit::panel::tab_scroll_step(visible);
+    let right = cx.debug_bounds("panel-tabs-right").expect("more to the right");
+    cx.simulate_click(right.center(), gpui::Modifiers::none());
+    let scrolled = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| -f32::from(view.panel.tabs_scroll.offset().x))
+    };
+    let frames = |cx: &mut gpui::VisualTestContext, ms: u64| {
+        for _ in 0..ms / 16 {
+            cx.executor().advance_clock(std::time::Duration::from_millis(16));
+            cx.run_until_parked();
+            cx.update(|window, cx| window.simulate_next_frame(cx));
+            cx.run_until_parked();
+        }
+    };
+    frames(cx, MOTION_TAB_SCROLL_MS / 3);
+    let midway = scrolled(cx);
+    assert!(midway > 0. && midway < step - 1., "on its way: {midway} of {step}");
+    frames(cx, MOTION_TAB_SCROLL_MS);
+    assert!((scrolled(cx) - step).abs() < 1., "landed");
+}

@@ -129,6 +129,7 @@ mod tests {
             markdown_run: None,
             sent_at: None,
             prompt_id: None,
+            steer: false,
         }
     }
 

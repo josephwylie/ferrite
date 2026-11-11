@@ -384,6 +384,15 @@ pub fn float_shadow() -> Vec<BoxShadow> {
     )]
 }
 
+/// The Scroll to end pill's small shadow (T3's `shadow-sm`, gpui's blur
+/// being half a CSS blur): `0 1px 3px` and `0 1px 2px -1px`, `SHADOW_PILL`.
+pub fn pill_shadow() -> Vec<BoxShadow> {
+    vec![
+        layer(theme::SHADOW_PILL, 1., 1.5, 0.),
+        layer(theme::SHADOW_PILL, 1., 1., -1.),
+    ]
+}
+
 /// The palette's dialog's shadows (SPEC §5.8): its 1px `FLOAT_EDGE`
 /// ring as a spread, then the float's shadow deepened (`SHADOW_PALETTE_*`).
 /// The dialog clips its rows to its radius, which would clip an

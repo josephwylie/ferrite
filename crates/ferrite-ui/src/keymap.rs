@@ -471,6 +471,12 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             "cockpit::ToggleTool",
             Some("ToolDisclosure"),
         ),
+        // Space too, as on any button (a turn's fold, T3's).
+        (
+            "space".into(),
+            "cockpit::ToggleTool",
+            Some("ToolDisclosure"),
+        ),
         // On an agent's row, ⌫ stops it (Claude's Delete on a row).
         (
             "backspace".into(),
@@ -1087,6 +1093,11 @@ mod tests {
             }
             assert!(table.contains(&(
                 "enter".into(),
+                "cockpit::ToggleTool",
+                Some("ToolDisclosure")
+            )));
+            assert!(table.contains(&(
+                "space".into(),
                 "cockpit::ToggleTool",
                 Some("ToolDisclosure")
             )));

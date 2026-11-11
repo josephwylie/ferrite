@@ -164,14 +164,19 @@ pub(super) fn compact_composer(
     composer_stack(attachments.filter(|_| live), false)
         // A draft's failed bootstrap says why over the box.
         .children(draft_error.map(|error| {
-            div()
-                .flex_shrink_0()
-                .min_w_0()
-                .px(px(theme::COMPACT_COMPOSER_INSET))
-                .pb(px(theme::SHELF_GAP))
-                .whitespace_normal()
-                .text_color(rgb(BLOCKED))
-                .child(error)
+            ferrite_ui::motion::fade_in(
+                SharedString::from(format!("composer-notice-{}", view.text_namespace())),
+                div()
+                    .flex_shrink_0()
+                    .min_w_0()
+                    .px(px(theme::COMPACT_COMPOSER_INSET))
+                    .pb(px(theme::SHELF_GAP))
+                    .whitespace_normal()
+                    .text_color(rgb(BLOCKED))
+                    .child(error),
+                ferrite_ui::motion::FADE_QUICK,
+                1.0,
+            )
         }))
         .pb(px(theme::COMPACT_COMPOSER_INSET))
         .children(queue.map(|queue| {

@@ -229,6 +229,7 @@ fn edits_fold_and_an_edits_diff_waits_to_be_opened(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
+    open_folds(&view, cx);
     assert!(cx.debug_bounds("transcript-banner").is_none(), "no banner");
     assert!(cx.debug_bounds("tool-group-edit-1").is_some(), "one group");
     let runs = view.read_with(cx, |view, _| view.selection.registered(thread));
@@ -379,6 +380,8 @@ fn a_long_first_line_leaves_its_fold_in_the_row(cx: &mut TestAppContext) {
             result: ferrite_core::ToolResult::Opaque,
         })
         .unwrap();
+    tick(cx);
+    open_live(cx);
     for width in [1200., 700.] {
         cx.simulate_resize(gpui::size(px(width), px(900.)));
         tick(cx);

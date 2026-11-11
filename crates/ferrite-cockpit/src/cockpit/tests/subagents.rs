@@ -193,6 +193,7 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
     tick(cx);
     click_child(&view, cx, "Atlas");
     tick(cx);
+    open_live(cx);
     let viewport = view.read_with(cx, |view, cx| {
         view.panes[0]
             .transcript()
@@ -595,8 +596,7 @@ fn native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache(
     );
     tick(cx);
     click_child(&view, cx, "Atlas");
-    assert!(cx.debug_bounds("progress-caption-Working").is_some());
-    assert!(cx.debug_bounds("progress-caption-Thinking").is_none());
+    assert!(cx.debug_bounds("live-thinking").is_some());
     emit(
         &fake,
         ActivityEvent::Content {
@@ -612,7 +612,7 @@ fn native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache(
     );
     tick(cx);
     assert!(cx
-        .debug_bounds("progress-caption-Retrying · Server busy")
+        .debug_bounds("live-phase")
         .is_some());
     view.read_with(cx, |view, _| {
         let pane = &view.panes[0];
@@ -637,7 +637,7 @@ fn native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache(
     );
     tick(cx);
     assert!(cx
-        .debug_bounds("progress-caption-Retrying · Server busy")
+        .debug_bounds("live-phase")
         .is_none());
 }
 
@@ -750,7 +750,7 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
         );
     });
     assert!(
-        cx.debug_bounds("progress-call").is_none(),
+        cx.debug_bounds("live-call").is_none(),
         "one running row"
     );
     let row = cx.debug_bounds("agent-open-Atlas").expect("the row opens");

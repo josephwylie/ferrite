@@ -40,6 +40,8 @@ pub(super) enum MenuTarget {
     /// The Changes scope dropdown, and its `⋯`.
     ChangesScope(ThreadId),
     ChangesMore(ThreadId),
+    /// The Changes toolbar's base: the branches to compare against.
+    ChangesBase(ThreadId),
     /// The terminal's right-click, and its `⋯`.
     Terminal(ThreadId),
     TerminalMore(ThreadId),
@@ -47,6 +49,8 @@ pub(super) enum MenuTarget {
     SurfaceMenu(ThreadId),
     /// A Panel tab's right-click, by its place in the strip.
     SurfaceTab { thread: ThreadId, at: usize },
+    /// The pull request Surface's `⋯`.
+    PrMore(ThreadId),
 }
 
 /// One thing a context-menu row does.
@@ -119,6 +123,8 @@ pub(super) enum MenuVerb {
     CloseAllSurfaces,
     FilterProject(Option<ProjectId>),
     OpenGroup(GroupId),
+    /// A pull request Surface's row.
+    Pr(panel::PrAction),
 }
 
 /// A parent row's submenu.
@@ -326,10 +332,14 @@ impl CockpitView {
             MenuTarget::FilesMore(thread) => rows = self.files_more_rows(thread),
             MenuTarget::ChangesScope(thread) => rows = self.changes_scope_rows(thread),
             MenuTarget::ChangesMore(thread) => rows = self.changes_more_rows(thread),
+            MenuTarget::ChangesBase(thread) => {
+                rows = self.changes_branch_rows(thread).into_iter().map(Some).collect()
+            }
             MenuTarget::Terminal(_) => rows = self.terminal_context_rows(),
             MenuTarget::TerminalMore(_) => rows = self.terminal_more_rows(),
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread),
             MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at),
+            MenuTarget::PrMore(thread) => rows = self.pr_menu_rows(thread),
             MenuTarget::Page(owner) => {
                 let address = self
                     .page_source(owner)
@@ -671,11 +681,14 @@ impl CockpitView {
             (MenuTarget::SurfaceTab { thread, at }, verb) => {
                 self.run_surface_tab_verb(thread, at, verb, cx)
             }
+            (MenuTarget::PrMore(thread), MenuVerb::Pr(action)) => self.run_pr_action(thread, action, cx),
             (MenuTarget::File(thread) | MenuTarget::FilesMore(thread), MenuVerb::Files(verb)) => {
                 self.run_files_verb(thread, verb, cx)
             }
             (
-                MenuTarget::ChangesScope(thread) | MenuTarget::ChangesMore(thread),
+                MenuTarget::ChangesScope(thread)
+                | MenuTarget::ChangesMore(thread)
+                | MenuTarget::ChangesBase(thread),
                 MenuVerb::Changes(verb),
             ) => self.run_changes_verb(thread, verb, cx),
             (
@@ -753,10 +766,12 @@ impl CockpitView {
                     | MenuTarget::FilesMore(_)
                     | MenuTarget::ChangesScope(_)
                     | MenuTarget::ChangesMore(_)
+                    | MenuTarget::ChangesBase(_)
                     | MenuTarget::Terminal(_)
                     | MenuTarget::TerminalMore(_)
                     | MenuTarget::SurfaceMenu(_)
                     | MenuTarget::SurfaceTab { .. }
+                    | MenuTarget::PrMore(_)
                     | MenuTarget::Page(_) => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);
