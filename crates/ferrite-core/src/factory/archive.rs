@@ -58,8 +58,10 @@ impl Board {
         query: &'a str,
     ) -> impl Iterator<Item = &'a Task> {
         let mut found: Vec<&Task> = self
-            .of(project)
-            .filter(|task| task.archived() && task.matches(query))
+            .archive
+            .iter()
+            .flatten()
+            .filter(|task| task.project == project && task.matches(query))
             .collect();
         found.sort_by_key(|task| std::cmp::Reverse(task.keeping.archived_ms));
         found.into_iter()
@@ -81,31 +83,39 @@ impl State {
     }
 
     /// Each Completed Task: its completion stamped, its Workers parked
-    /// once at rest, and archived 7 days on.
+    /// once at rest, and archived 7 days on. Whether any changed.
     pub(super) fn step_archive(
         &mut self,
         now_ms: i64,
         workers: &BTreeMap<ThreadId, Seen>,
         effects: &mut Vec<Effect>,
-    ) {
+    ) -> bool {
+        let mut changed = false;
         for task in &mut self.tasks {
             if task.status != Status::Completed {
                 continue;
             }
-            let completed = *task.keeping.completed_ms.get_or_insert(now_ms);
+            if task.keeping.completed_ms.is_none() {
+                task.keeping.completed_ms = Some(now_ms);
+                changed = true;
+            }
+            let completed = task.keeping.completed_ms.unwrap_or(now_ms);
             let at_rest = task
                 .worker
                 .and_then(|thread| workers.get(&thread))
                 .is_none_or(|seen| !seen.busy);
             if !task.keeping.parked && at_rest {
                 task.keeping.parked = true;
+                changed = true;
                 for thread in task.every_worker() {
                     effects.push(Effect::Park { thread });
                 }
             }
             if !task.archived() && now_ms - completed >= ARCHIVE_AFTER_MS {
                 task.keeping.archived_ms = Some(now_ms);
+                changed = true;
             }
         }
+        changed
     }
 }

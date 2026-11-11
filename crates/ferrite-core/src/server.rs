@@ -375,6 +375,8 @@ struct Server {
     factory: crate::factory::Factory,
     /// The board revision the windows were last told.
     told_factory: Option<u64>,
+    /// The Archive's revision the windows were last sent.
+    told_archive: Option<u64>,
     /// What a one-off Task's Worker runs on: the operator's defaults.
     factory_agent: crate::factory::Agent,
     /// The settings each Coordinator's Session was last tuned to (#224),
@@ -434,6 +436,7 @@ impl Server {
             forge: Default::default(),
             factory,
             told_factory: None,
+            told_archive: None,
             factory_agent: factory::default_agent(&Settings::default()),
             coordinators_tuned: Default::default(),
             github: Arc::new(github::Gh),

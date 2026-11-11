@@ -287,7 +287,13 @@ fn an_unreadable_factory_store_is_said_and_never_started_afresh() {
     assert_eq!(harness.server.join().unwrap(), 0);
     gone(&harness.address);
     gone(&harness.api);
-    let file = harness.dir.join("threads").join(crate::factory::FILE_NAME);
+    let parts = harness.dir.join("threads").join(crate::factory::DIR_NAME);
+    let file = std::fs::read_dir(&parts)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .expect("the Project's part");
     let mut torn = std::fs::read(&file).unwrap();
     torn.truncate(torn.len() / 2);
     std::fs::write(&file, &torn).unwrap();

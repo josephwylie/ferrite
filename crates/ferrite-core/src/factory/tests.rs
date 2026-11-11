@@ -484,21 +484,25 @@ fn a_change_is_written_before_its_effects() {
     let dir = std::env::temp_dir().join(format!("factory-persist-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("factory.json");
-    let mut factory = Factory::load(&path).unwrap();
+    let path = dir.clone();
+    let mut factory = Factory::open(&path);
     let task = start(&mut factory, "Fix it");
     let effects = factory.step(1, &BTreeMap::new());
     assert!(matches!(effects.as_slice(), [Effect::StartWorker { .. }]));
-    let reread = Factory::load(&path).unwrap();
+    let reread = Factory::open(&path);
     assert_eq!(status(&reread, &task), Status::Working);
-    let next = start(&mut Factory::load(&path).unwrap(), "Another");
+    let next = start(&mut Factory::open(&path), "Another");
     assert_ne!(next, task, "ids are never given twice");
 
+    // Where its part is written cannot be.
     std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(DIR_NAME), b"not a directory").unwrap();
     let refused = factory.command(Command::Stop { task: task.clone() }, 2);
     assert_eq!(refused.unwrap_err().code, RefusalCode::Failed);
     assert_eq!(status(&factory, &task), Status::Working);
     assert!(factory.step(3, &seen(true, 0)).is_empty());
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Only the Tasks that need the operator are counted for the sidebar.
@@ -560,7 +564,12 @@ fn a_task_back_to_work_waits_its_turn_under_the_limit() {
     factory.set_limit(1);
     let first = working(&mut factory);
     factory
-        .command(Command::Stop { task: first.clone() }, 4)
+        .command(
+            Command::Stop {
+                task: first.clone(),
+            },
+            4,
+        )
         .unwrap();
     factory.step(5, &both_at_rest(1));
     let second = start(&mut factory, "Another");
@@ -578,7 +587,12 @@ fn a_task_back_to_work_waits_its_turn_under_the_limit() {
     factory.step(7, &both_at_rest(1));
 
     factory
-        .command(Command::Resume { task: first.clone() }, 8)
+        .command(
+            Command::Resume {
+                task: first.clone(),
+            },
+            8,
+        )
         .unwrap();
     let effects = factory.step(9, &both_at_rest(1));
     assert_eq!(status(&factory, &first), Status::Queued, "no place yet");
@@ -610,7 +624,11 @@ fn a_task_back_to_work_waits_its_turn_under_the_limit() {
         )
         .unwrap();
     let effects = factory.step(13, &both_at_rest(1));
-    assert_eq!(status(&factory, &second), Status::Queued, "answered, it waits");
+    assert_eq!(
+        status(&factory, &second),
+        Status::Queued,
+        "answered, it waits"
+    );
     assert!(prompted(&effects, OTHER).is_empty(), "{effects:?}");
 
     factory

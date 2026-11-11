@@ -215,7 +215,7 @@ fn workflow_name(board: &Board, id: &str) -> String {
         .map_or_else(|| id.to_string(), |found| found.draft.name.clone())
 }
 
-fn unknown_proposal() -> Refusal {
+pub(super) fn unknown_proposal() -> Refusal {
     Refusal::new(RefusalCode::UnknownProposal, "no proposal has that id")
 }
 
@@ -337,15 +337,17 @@ impl State {
     }
 
     /// Tasks routed to the Coordinator since the last step: it is told.
-    pub(super) fn step_coordinators(&mut self, effects: &mut Vec<Effect>) {
+    pub(super) fn step_coordinators(&mut self, effects: &mut Vec<Effect>) -> bool {
         let told: Vec<(ProjectId, String)> = self
             .tasks
             .iter_mut()
             .filter_map(|task| Some((task.project, task.oversight.consult.take()?)))
             .collect();
+        let changed = !told.is_empty();
         for (project, text) in told {
             self.tell_coordinator(project, text, effects);
         }
+        changed
     }
 
     /// The project a Coordinator's Thread directs.

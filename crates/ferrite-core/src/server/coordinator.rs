@@ -96,9 +96,7 @@ impl Server {
     pub(super) fn tune_coordinators(&mut self) {
         let wanted: Vec<(ThreadId, Agent)> = self
             .factory
-            .board()
-            .coordinators
-            .iter()
+            .coordinators()
             .filter_map(|coordinator| Some((coordinator.thread?, coordinator.agent.clone()?)))
             .collect();
         for (thread, agent) in wanted {
@@ -159,9 +157,7 @@ impl Server {
         }
         let Some(project) = self
             .factory
-            .board()
-            .coordinators
-            .iter()
+            .coordinators()
             .find(|coordinator| coordinator.thread == Some(thread))
             .map(|coordinator| coordinator.project)
         else {

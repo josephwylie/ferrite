@@ -34,8 +34,9 @@ pub(super) fn now_ms() -> i64 {
 /// read says so on the board and in every refusal, and does nothing: it
 /// is never started afresh over the Tasks it holds, nor written (#226).
 pub(super) fn load(store_dir: &std::path::Path) -> factory::Factory {
-    let factory = factory::Factory::open(&store_dir.join(factory::FILE_NAME));
-    if let Some(trouble) = factory.board().trouble {
+    let factory = factory::Factory::open(store_dir);
+    let board = factory.changes();
+    for trouble in board.trouble.iter().chain(board.troubles.values()) {
         crate::log!("server: {trouble}");
     }
     factory
@@ -116,10 +117,7 @@ impl Server {
     fn factory_workers(&self) -> BTreeMap<ThreadId, Seen> {
         let decisions = self.engine.unanswered_decisions();
         self.factory
-            .board()
-            .tasks
-            .iter()
-            .filter_map(|task| task.worker)
+            .watched()
             .filter_map(|thread| {
                 let view = self.engine.thread(thread)?;
                 let attention = self.engine.attention(thread)?;
@@ -372,10 +370,16 @@ impl Server {
         let revision = self.factory.revision();
         (self.told_factory != Some(revision)).then(|| {
             self.told_factory = Some(revision);
-            ServerMessage::Factory {
-                revision,
-                board: self.factory.board(),
-            }
+            // The Archive goes only when it changed: a window keeps the
+            // one it has (ADR 0025).
+            let archive = self.factory.archive_revision();
+            let board = if self.told_archive == Some(archive) {
+                self.factory.changes()
+            } else {
+                self.told_archive = Some(archive);
+                self.factory.board()
+            };
+            ServerMessage::Factory { revision, board }
         })
     }
 
@@ -653,10 +657,18 @@ impl Server {
         let tasks: Vec<&factory::Task> = board
             .tasks
             .iter()
+            .chain(board.archive.iter().flatten())
             .filter(|task| project.is_none_or(|project| task.project == project))
             .collect();
         let mut answer = json!({ "tasks": tasks });
-        if let Some(trouble) = &board.trouble {
+        let trouble = match project {
+            Some(project) => board.trouble_of(project),
+            None => board
+                .trouble
+                .as_deref()
+                .or_else(|| board.troubles.values().next().map(String::as_str)),
+        };
+        if let Some(trouble) = trouble {
             answer["trouble"] = json!(trouble);
         }
         Ok(answer)

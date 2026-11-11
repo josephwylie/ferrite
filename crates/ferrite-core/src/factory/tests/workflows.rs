@@ -712,10 +712,10 @@ fn workflows_survive_a_reload() {
     let dir = std::env::temp_dir().join(format!("factory-workflows-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("factory.json");
-    let mut factory = Factory::load(&path).unwrap();
+    let path = dir.clone();
+    let mut factory = Factory::open(&path);
     let (id, _) = saved(&mut factory, &[("Build", "Build it")]);
-    let reread = Factory::load(&path).unwrap();
+    let reread = Factory::open(&path);
     assert_eq!(reread.workflow(&id), factory.workflow(&id));
     let mut reread = reread;
     assert_ne!(
@@ -726,6 +726,6 @@ fn workflows_survive_a_reload() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+mod coordinator;
 mod direction;
 mod merging;
-mod coordinator;

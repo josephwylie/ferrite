@@ -140,18 +140,20 @@ fn revival_prompt(task: &Task, cause: Cause) -> String {
 
 /// Each Task the restart caught between deciding to start its Worker and
 /// starting it stops: whether that Worker began is not known, so nothing
-/// is started again unasked. Resume starts it.
+/// is started again unasked. Resume starts it. Whether any did.
 pub(super) fn unstarted(
     state: &mut State,
     unstarted: &BTreeSet<TaskId>,
     now_ms: i64,
     effects: &mut Vec<Effect>,
-) {
+) -> bool {
+    let mut changed = false;
     for task in &mut state.tasks {
         if !unstarted.contains(&task.id) || task.status != Status::Working || task.worker.is_some()
         {
             continue;
         }
+        changed = true;
         task.note(
             now_ms,
             Actor::Ferrite,
@@ -161,4 +163,5 @@ pub(super) fn unstarted(
             Some("Ferrite restarted before this task's agent started. Resume to start it.".into());
         task.enter(Status::Stopped, effects);
     }
+    changed
 }

@@ -82,7 +82,15 @@ impl Shared {
                 self.notifications = Notifications::from_wire(notices);
             }
             ServerMessage::Factory { board, .. } => {
+                // Told only the board, the Archive is the one it has.
+                let archive = match &board.archive {
+                    Some(_) => None,
+                    None => self.factory.archive.take(),
+                };
                 self.factory = board.clone();
+                if archive.is_some() {
+                    self.factory.archive = archive;
+                }
                 self.factory_changed = true;
             }
             ServerMessage::Providers { providers, .. } => {

@@ -736,15 +736,15 @@ fn a_redirect_survives_a_reload() {
     let dir = std::env::temp_dir().join(format!("factory-redirect-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("factory.json");
-    let mut factory = Factory::load(&path).unwrap();
+    let path = dir.clone();
+    let mut factory = Factory::open(&path);
     let (id, steps) = three(&mut factory);
     let task = running(&mut factory, &id);
     redirect(&mut factory, &task, &steps[2], &[&steps[1]], ThenReturn::Me).unwrap();
     factory.step(31, &BTreeMap::new());
     started(&mut factory, &task, THIRD);
 
-    let mut reread = Factory::load(&path).unwrap();
+    let mut reread = Factory::open(&path);
     let held = the(&reread, &task).clone();
     assert_eq!(held.oversight.superseded, [FIRST]);
     assert_eq!(

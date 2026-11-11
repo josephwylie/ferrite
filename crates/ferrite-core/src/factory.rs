@@ -20,8 +20,7 @@
 //! Task's one worktree.
 
 use std::collections::BTreeMap;
-use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +34,7 @@ mod direct;
 mod pr;
 mod recovery;
 mod starts;
+mod store;
 mod workflow;
 
 pub use archive::ARCHIVE_AFTER_MS;
@@ -47,6 +47,7 @@ pub use pr::{
     Revision,
 };
 pub use recovery::Keeping;
+pub use store::{Factory, DIR_NAME};
 pub use starts::{when_label, zone_label};
 pub use starts::{
     Automation, GitHubItem, GitHubQuery, GitHubRead, GitHubSource, Missed, Overlap, Recurrence,
@@ -67,6 +68,15 @@ const SCHEMA_VERSION: u32 = 1;
 
 /// How many Tasks work at once unless Settings say otherwise.
 pub const DEFAULT_LIMIT: usize = 3;
+
+/// How many Tasks Settings may let work at once: one rule, here, for the
+/// Settings stepper and the Server alike.
+pub const LIMIT_RANGE: std::ops::RangeInclusive<usize> = 1..=12;
+
+/// `limit` as the Factory takes it: within [`LIMIT_RANGE`].
+pub fn clamp_limit(limit: usize) -> usize {
+    limit.clamp(*LIMIT_RANGE.start(), *LIMIT_RANGE.end())
+}
 
 /// How long a Worker prompted to report may stay at rest without working
 /// again before its Task needs the operator.
@@ -305,6 +315,15 @@ pub struct Board {
     /// Factory then does nothing until it can be (#226).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trouble: Option<String>,
+    /// Why one Project's part of the store could not be read or written:
+    /// that Project's Factory waits, every other one runs.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub troubles: BTreeMap<ProjectId, String>,
+    /// Every Project's archived Tasks, most recently archived last; none
+    /// when a window is told only what changed and the Archive did not
+    /// (it keeps the one it has).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive: Option<Vec<Task>>,
     /// Every Project's Coordinator that has been spoken to (#224).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub coordinators: Vec<Coordinator>,
@@ -343,8 +362,19 @@ impl Board {
             .count()
     }
 
+    /// A Task on the board or in the Archive.
     pub fn task(&self, id: &str) -> Option<&Task> {
-        self.tasks.iter().find(|task| task.id == id)
+        self.tasks
+            .iter()
+            .chain(self.archive.iter().flatten())
+            .find(|task| task.id == id)
+    }
+
+    /// Why `project`'s Factory does nothing, if it does not.
+    pub fn trouble_of(&self, project: ProjectId) -> Option<&str> {
+        self.trouble
+            .as_deref()
+            .or_else(|| self.troubles.get(&project).map(String::as_str))
     }
 
     pub fn workflows_of(&self, project: ProjectId) -> impl Iterator<Item = &Workflow> {
@@ -751,205 +781,20 @@ fn one() -> u64 {
     1
 }
 
-pub struct Factory {
-    state: State,
-    /// Where it is written; `None` keeps it in memory (tests).
-    path: Option<PathBuf>,
-    revision: u64,
-    /// Effects decided by commands, handed out by the next step.
-    pending: Vec<Effect>,
-    /// How many Tasks may be Working at once (Settings; 3 by default).
-    limit: usize,
-    /// Each GitHub start's reads, kept only while the Server runs.
-    polls: BTreeMap<WorkflowId, starts::Poll>,
-    /// The Workers that were working when it was loaded and have not been
-    /// seen since: lost, it was the restart that lost them (#226).
-    restarted: std::collections::BTreeSet<ThreadId>,
-    /// The Tasks that were working with no Worker yet when it was loaded:
-    /// the restart came between deciding to start one and starting it.
-    unstarted: std::collections::BTreeSet<TaskId>,
-    /// Why its store could not be read: it refuses every command and
-    /// steps nothing, and its file is never written.
-    trouble: Option<String>,
-}
-
-impl Factory {
-    pub fn in_memory() -> Self {
-        Self {
-            state: State {
-                version: SCHEMA_VERSION,
-                next: 1,
-                tasks: Vec::new(),
-                next_workflow: 1,
-                workflows: Vec::new(),
-                coordinators: Vec::new(),
-                proposals: Vec::new(),
-                next_proposal: 1,
-            },
-            path: None,
-            revision: 0,
-            pending: Vec::new(),
-            limit: DEFAULT_LIMIT,
-            polls: BTreeMap::new(),
-            restarted: std::collections::BTreeSet::new(),
-            unstarted: std::collections::BTreeSet::new(),
-            trouble: None,
+/// A deleted Task's Workers go with it, and only with it (#226); its
+/// worktree is removed if its checkout is clean.
+fn deleted(task: Task, effects: &mut Vec<Effect>) {
+    let mut gone = task.every_worker();
+    for thread in &task.oversight.superseded {
+        if !gone.contains(thread) {
+            gone.push(*thread);
         }
     }
-
-    /// The Factory written at `path`, or a fresh one when there is none.
-    /// One written by a newer Ferrite is refused rather than overwritten.
-    pub fn load(path: &Path) -> io::Result<Self> {
-        let mut factory = Self::in_memory();
-        match std::fs::read(path) {
-            Ok(bytes) => {
-                let state: State = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-                if state.version > SCHEMA_VERSION {
-                    return Err(io::Error::other(format!(
-                        "{} is from a newer Ferrite (version {})",
-                        path.display(),
-                        state.version
-                    )));
-                }
-                factory.restarted = state
-                    .tasks
-                    .iter()
-                    .filter(|task| matches!(task.status, Status::Working | Status::NeedsHuman))
-                    .filter_map(|task| task.worker)
-                    .collect();
-                factory.unstarted = state
-                    .tasks
-                    .iter()
-                    .filter(|task| task.status == Status::Working && task.worker.is_none())
-                    .map(|task| task.id.clone())
-                    .collect();
-                factory.state = state;
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-        factory.path = Some(path.to_path_buf());
-        Ok(factory)
+    for thread in gone {
+        effects.push(Effect::DeleteThread { thread });
     }
-
-    /// The Factory written at `path` (a fresh one when there is none), or
-    /// one that says why it could not be read and does nothing: existing
-    /// Tasks are never started afresh over, nor their file written.
-    pub fn open(path: &Path) -> Self {
-        Self::load(path).unwrap_or_else(|error| {
-            let mut factory = Self::in_memory();
-            factory.trouble = Some(format!(
-                "The Factory's store at {} could not be read, so nothing in it runs and nothing \
-                 is saved: {error}. Fix or move the file and restart Ferrite.",
-                path.display()
-            ));
-            factory
-        })
-    }
-
-    /// One change, whoever asks. Its effects come out of the next step.
-    pub fn command(&mut self, command: Command, now_ms: i64) -> Result<Answer, Refusal> {
-        if let Some(trouble) = &self.trouble {
-            return Err(Refusal::new(RefusalCode::Failed, trouble.clone()));
-        }
-        self.heard(&command);
-        self.change(|state, effects| state.command(command, now_ms, effects))
-    }
-
-    /// One pass: what to do now, given the time and what each Worker's
-    /// Thread is doing. A Worker the Server does not see (no open Thread)
-    /// is left as it is.
-    pub fn step(&mut self, now_ms: i64, workers: &BTreeMap<ThreadId, Seen>) -> Vec<Effect> {
-        if self.trouble.is_some() {
-            return Vec::new();
-        }
-        // A step that cannot be written decides nothing; the next pass
-        // tries again.
-        let limit = self.limit;
-        let restarted = std::mem::take(&mut self.restarted);
-        let unstarted = std::mem::take(&mut self.unstarted);
-        let _ = self.change(|state, effects| {
-            recovery::unstarted(state, &unstarted, now_ms, effects);
-            state.step_starts(now_ms, effects);
-            state.step(now_ms, workers, limit, &restarted, effects);
-            state.step_archive(now_ms, workers, effects);
-            state.step_coordinators(effects);
-            Ok(())
-        });
-        // Seen once, a Worker lost later was not lost to the restart.
-        self.restarted = restarted
-            .into_iter()
-            .filter(|thread| !workers.contains_key(thread))
-            .collect();
-        self.poll(now_ms);
-        std::mem::take(&mut self.pending)
-    }
-
-    /// Apply `change` to a copy, write the copy, and only then take it and
-    /// its effects: a change that cannot be written is not made.
-    fn change<T>(
-        &mut self,
-        change: impl FnOnce(&mut State, &mut Vec<Effect>) -> Result<T, Refusal>,
-    ) -> Result<T, Refusal> {
-        let mut next = self.state.clone();
-        let mut effects = Vec::new();
-        let answer = change(&mut next, &mut effects)?;
-        if next != self.state {
-            if let Some(path) = &self.path {
-                let bytes = serde_json::to_vec_pretty(&next)
-                    .map_err(|error| Refusal::new(RefusalCode::Failed, error.to_string()))?;
-                crate::store::replace_file(path, &bytes).map_err(|error| {
-                    Refusal::new(
-                        RefusalCode::Failed,
-                        format!("the Factory could not be saved: {error}"),
-                    )
-                })?;
-            }
-            self.state = next;
-            self.revision += 1;
-        }
-        self.pending.extend(effects);
-        Ok(answer)
-    }
-
-    pub fn board(&self) -> Board {
-        Board {
-            tasks: self.state.tasks.clone(),
-            workflows: self.state.workflows.clone(),
-            trouble: self.trouble.clone(),
-            coordinators: self.state.coordinators.clone(),
-            proposals: self.state.proposals.clone(),
-        }
-    }
-
-    pub fn workflow(&self, id: &str) -> Option<&Workflow> {
-        self.state
-            .workflows
-            .iter()
-            .find(|workflow| workflow.id == id)
-    }
-
-    pub fn revision(&self) -> u64 {
-        self.revision
-    }
-
-    /// How many Tasks may be Working at once.
-    pub fn limit(&self) -> usize {
-        self.limit
-    }
-
-    /// Set from Settings; at least one.
-    pub fn set_limit(&mut self, limit: usize) {
-        self.limit = limit.max(1);
-    }
-
-    pub fn task(&self, id: &str) -> Option<&Task> {
-        self.state.tasks.iter().find(|task| task.id == id)
-    }
-
-    /// The Task `thread` is (or was) a Worker of.
-    pub fn task_of(&self, thread: ThreadId) -> Option<&Task> {
-        self.state.tasks.iter().find(|task| task.had_worker(thread))
+    if let Some(path) = task.worktree {
+        effects.push(Effect::RemoveWorktree { path });
     }
 }
 
@@ -1437,20 +1282,7 @@ impl State {
                         ),
                     ));
                 }
-                let task = self.tasks.remove(at);
-                // Its Workers go with it, and only with it (#226).
-                let mut gone = task.every_worker();
-                for thread in &task.oversight.superseded {
-                    if !gone.contains(thread) {
-                        gone.push(*thread);
-                    }
-                }
-                for thread in gone {
-                    effects.push(Effect::DeleteThread { thread });
-                }
-                if let Some(path) = task.worktree {
-                    effects.push(Effect::RemoveWorktree { path });
-                }
+                deleted(self.tasks.remove(at), effects);
                 Ok(Answer::Changed(true))
             }
             Command::Ask { worker, text } => {
@@ -1485,20 +1317,51 @@ impl State {
         }
     }
 
-    /// Let Queued Tasks into Working, oldest first, while fewer than
-    /// `limit` work: a new one starts its Worker; one back to work keeps
-    /// its Worker, which is told what it was to be told.
-    fn admit(&mut self, now_ms: i64, limit: usize, effects: &mut Vec<Effect>) {
-        let mut working = self
-            .tasks
-            .iter()
-            .filter(|task| task.status == Status::Working)
-            .count();
+    /// The first half of a pass of this Project's part, in place, before
+    /// the limit is shared out: what the restart caught, and what the
+    /// schedules start. Whether it changed.
+    fn pass_starts(
+        &mut self,
+        now_ms: i64,
+        unstarted: &std::collections::BTreeSet<TaskId>,
+        effects: &mut Vec<Effect>,
+    ) -> bool {
+        let changed = recovery::unstarted(self, unstarted, now_ms, effects);
+        self.step_starts(now_ms, effects) || changed
+    }
+
+    /// The rest of the pass: the Tasks let in start, and every Worker is
+    /// looked at. Whether it changed.
+    fn pass(
+        &mut self,
+        now_ms: i64,
+        workers: &BTreeMap<ThreadId, Seen>,
+        admit: &std::collections::BTreeSet<TaskId>,
+        restarted: &std::collections::BTreeSet<ThreadId>,
+        effects: &mut Vec<Effect>,
+    ) -> bool {
+        let mut changed = self.admit(admit, now_ms, effects);
+        changed |= self.step(now_ms, workers, restarted, effects);
+        changed |= self.step_archive(now_ms, workers, effects);
+        changed |= self.step_coordinators(effects);
+        changed
+    }
+
+    /// Let the Queued Tasks the limit has room for into Working: a new one
+    /// starts its Worker; one back to work keeps its Worker, which is told
+    /// what it was to be told.
+    fn admit(
+        &mut self,
+        admit: &std::collections::BTreeSet<TaskId>,
+        now_ms: i64,
+        effects: &mut Vec<Effect>,
+    ) -> bool {
+        let mut changed = false;
         for task in &mut self.tasks {
-            if task.status != Status::Queued || working >= limit {
+            if task.status != Status::Queued || !admit.contains(&task.id) {
                 continue;
             }
-            working += 1;
+            changed = true;
             if task.worker.is_some() {
                 let prompt = task.watch.prompt.take();
                 task.enter(Status::Working, effects);
@@ -1525,48 +1388,44 @@ impl State {
             }
             task.enter(Status::Working, effects);
         }
+        changed
     }
 
+    /// Each working Worker the Server sees: lost, asking permission, or
+    /// at rest. Whether any Task changed.
     fn step(
         &mut self,
         now_ms: i64,
         workers: &BTreeMap<ThreadId, Seen>,
-        limit: usize,
         restarted: &std::collections::BTreeSet<ThreadId>,
         effects: &mut Vec<Effect>,
-    ) {
-        self.admit(now_ms, limit, effects);
+    ) -> bool {
+        let mut changed = false;
         for task in &mut self.tasks {
-            match task.status {
-                Status::Working | Status::NeedsHuman => {
-                    let Some(seen) = task.worker.and_then(|thread| workers.get(&thread)) else {
-                        continue;
-                    };
-                    let cause = match task
-                        .worker
-                        .is_some_and(|thread| restarted.contains(&thread))
-                    {
-                        true => recovery::Cause::Restart,
-                        false => recovery::Cause::Ended,
-                    };
-                    if recovery::lost(task, seen, cause, now_ms, effects) {
-                        continue;
-                    }
-                    if direct::permission(
-                        task,
-                        seen.decision.as_deref(),
-                        seen.turns,
-                        now_ms,
-                        effects,
-                    ) || task.status != Status::Working
-                    {
-                        continue;
-                    }
-                    at_rest_rule(task, seen, now_ms, effects);
-                }
-                _ => {}
+            if !matches!(task.status, Status::Working | Status::NeedsHuman) {
+                continue;
+            }
+            let Some(seen) = task.worker.and_then(|thread| workers.get(&thread)) else {
+                continue;
+            };
+            let cause = match task
+                .worker
+                .is_some_and(|thread| restarted.contains(&thread))
+            {
+                true => recovery::Cause::Restart,
+                false => recovery::Cause::Ended,
+            };
+            if recovery::lost(task, seen, cause, now_ms, effects)
+                || direct::permission(task, seen.decision.as_deref(), seen.turns, now_ms, effects)
+            {
+                changed = true;
+                continue;
+            }
+            if task.status == Status::Working {
+                changed |= at_rest_rule(task, seen, now_ms, effects);
             }
         }
+        changed
     }
 }
 
@@ -1641,27 +1500,27 @@ fn start_step(task: &mut Task, step: &Step, now_ms: i64, effects: &mut Vec<Effec
 /// still runs. At rest without a report once the turn it was prompted
 /// for has ended, it is asked once to report; at rest again after that
 /// turn (or still, after a grace), its Task needs the operator. A busy
-/// Worker is never asked.
-fn at_rest_rule(task: &mut Task, seen: &Seen, now_ms: i64, effects: &mut Vec<Effect>) {
+/// Worker is never asked. Whether the Task changed.
+fn at_rest_rule(task: &mut Task, seen: &Seen, now_ms: i64, effects: &mut Vec<Effect>) -> bool {
     let Some(thread) = task.worker else {
-        return;
+        return false;
     };
     if task.watch.at_rest && seen.busy {
-        return;
+        return false;
     }
     if let Some(text) = task.watch.prompt.take() {
         task.watch.at_rest = false;
         effects.push(Effect::Prompt { thread, text });
         task.watch.baseline = seen.turns;
         task.watch.nudged_ms = None;
-        return;
+        return true;
     }
     if std::mem::take(&mut task.watch.rebase) {
         task.watch.baseline = seen.turns;
-        return;
+        return true;
     }
     if seen.busy {
-        return;
+        return false;
     }
     let ended = seen.turns > task.watch.baseline;
     match task.watch.nudged_ms {
@@ -1677,6 +1536,7 @@ fn at_rest_rule(task: &mut Task, seen: &Seen, now_ms: i64, effects: &mut Vec<Eff
             });
             task.watch.baseline = seen.turns;
             task.watch.nudged_ms = Some(now_ms);
+            true
         }
         Some(nudged) if ended || now_ms - nudged >= NUDGE_GRACE_MS => {
             task.note(
@@ -1686,8 +1546,9 @@ fn at_rest_rule(task: &mut Task, seen: &Seen, now_ms: i64, effects: &mut Vec<Eff
             );
             task.reason = Some("The agent stopped without reporting an outcome.".into());
             task.enter(Status::NeedsHuman, effects);
+            true
         }
-        _ => {}
+        _ => false,
     }
 }
 

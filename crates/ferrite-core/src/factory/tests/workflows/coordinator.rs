@@ -650,8 +650,8 @@ fn the_coordinator_and_proposals_survive_a_reload() {
     let dir = std::env::temp_dir().join(format!("factory-coordinator-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("factory.json");
-    let mut factory = Factory::load(&path).unwrap();
+    let path = dir.clone();
+    let mut factory = Factory::open(&path);
     coordinating(&mut factory);
     let id = proposed(
         &mut factory,
@@ -660,7 +660,7 @@ fn the_coordinator_and_proposals_survive_a_reload() {
             workflow: None,
         },
     );
-    let reread = Factory::load(&path).unwrap();
+    let reread = Factory::open(&path);
     assert_eq!(reread.board().proposals, factory.board().proposals);
     assert_eq!(
         reread.board().coordinator(project()).and_then(|c| c.thread),

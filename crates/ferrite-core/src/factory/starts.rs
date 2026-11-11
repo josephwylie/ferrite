@@ -13,7 +13,9 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Datelike, Duration, NaiveTime, TimeZone, Timelike, Weekday};
 use serde::{Deserialize, Serialize};
 
-use super::{Actor, Answer, Command, Effect, Factory, Refusal, RefusalCode, State, Status};
+use super::{
+    Actor, Answer, Command, Effect, Factory, Refusal, RefusalCode, State, Status, WorkflowId,
+};
 
 /// How often an enabled GitHub start is read.
 pub const POLL_MS: i64 = 60_000;
@@ -605,21 +607,25 @@ impl Factory {
     /// once a minute, one at a time, and none while a backlog waits for
     /// the operator.
     pub(super) fn poll(&mut self, now_ms: i64) {
-        for workflow in &self.state.workflows {
-            let Some(latest) = workflow.latest() else {
-                continue;
-            };
-            let start = &latest.definition.start;
-            if workflow.automation.switch != Switch::On
-                || !start.kind.is_github()
-                || !workflow.automation.backlog.is_empty()
-            {
-                continue;
-            }
-            let poll = self.polls.entry(workflow.id.clone()).or_default();
-            if poll.version != latest.version {
+        let live: Vec<(WorkflowId, u32, Start)> = self
+            .workflows()
+            .filter(|workflow| {
+                workflow.automation.switch == Switch::On && workflow.automation.backlog.is_empty()
+            })
+            .filter_map(|workflow| {
+                let latest = workflow.latest()?;
+                let start = &latest.definition.start;
+                start
+                    .kind
+                    .is_github()
+                    .then(|| (workflow.id.clone(), latest.version, start.clone()))
+            })
+            .collect();
+        for (workflow, version, start) in live {
+            let poll = self.polls.entry(workflow.clone()).or_default();
+            if poll.version != version {
                 *poll = Poll {
-                    version: latest.version,
+                    version,
                     ..Poll::default()
                 };
             }
@@ -628,13 +634,14 @@ impl Factory {
             }
             poll.reading = true;
             poll.asked_ms = Some(now_ms);
+            let etag = poll.etag.clone();
             self.pending.push(Effect::ReadGitHub {
-                workflow: workflow.id.clone(),
-                version: latest.version,
+                workflow,
+                version,
                 query: GitHubQuery {
                     kind: start.kind,
-                    source: start.github.clone(),
-                    etag: poll.etag.clone(),
+                    source: start.github,
+                    etag,
                 },
             });
         }
@@ -944,8 +951,9 @@ impl State {
 
     /// Each live schedule: a run due now starts a Task, unless it was
     /// missed and is skipped, or the last run still goes and it is
-    /// skipped or waits.
-    pub(super) fn step_starts(&mut self, now_ms: i64, effects: &mut Vec<Effect>) {
+    /// skipped or waits. Whether any changed.
+    pub(super) fn step_starts(&mut self, now_ms: i64, effects: &mut Vec<Effect>) -> bool {
+        let mut changed = false;
         let live: Vec<(String, Schedule)> = self
             .workflows
             .iter()
@@ -968,6 +976,7 @@ impl State {
                 continue;
             };
             let automation = &mut made.automation;
+            let before = (automation.waiting, automation.due_ms);
             let mut runs = Vec::new();
             if automation.waiting && !running {
                 automation.waiting = false;
@@ -988,6 +997,7 @@ impl State {
                     }
                 }
             }
+            changed |= before != (automation.waiting, automation.due_ms) || !runs.is_empty();
             for due in runs {
                 let source = Source::Schedule {
                     workflow: workflow.clone(),
@@ -1005,6 +1015,7 @@ impl State {
                 }
             }
         }
+        changed
     }
 }
 
