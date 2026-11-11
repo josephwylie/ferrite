@@ -258,6 +258,15 @@ Rust workspace. The renderer choice and the GPUI Kit `=0.6.0` pin are in
 `docs/adr/0003-native-gpui-components.md`, the project's vocabulary is in
 `CONTEXT.md`, and the original 24-pane render spike is in `spikes/panes24/`.
 
+Each git worktree builds into its own `target/`. On macOS a new worktree
+starts with the main checkout's build (`scripts/warm-worktree.sh`), so its
+first build compiles only what its branch changes. Turn that on once per
+clone:
+
+```sh
+git config core.hooksPath scripts/git-hooks
+```
+
 Subagent architecture is in
 [ADR 0002](docs/adr/0002-subagent-activity.md). Requirements, validation, and
 review notes are on

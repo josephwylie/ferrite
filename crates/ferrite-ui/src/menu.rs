@@ -1435,7 +1435,8 @@ mod tests {
     /// default (a kit button takes `tooltip_builder(tooltip(..))`).
     #[test]
     fn no_tooltip_falls_back_to_the_kits_default() {
-        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        // Cargo runs a crate's tests in the crate's own directory.
+        let crates = std::path::PathBuf::from("..");
         let mut stale = Vec::new();
         let mut dirs = vec![crates];
         while let Some(dir) = dirs.pop() {

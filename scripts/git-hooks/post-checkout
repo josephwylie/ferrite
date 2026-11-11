@@ -1,0 +1,14 @@
+#!/bin/sh
+#
+# post-checkout <previous HEAD> <new HEAD> <branch flag>
+#
+# A new worktree's first checkout has no previous HEAD: warm its build
+# directory (scripts/warm-worktree.sh). A failure there costs a cold first
+# build, never the worktree.
+
+case "$1" in
+  *[!0]*) exit 0 ;;
+esac
+
+scripts/warm-worktree.sh ||
+  echo "warm-worktree failed; the first build here starts cold" >&2
