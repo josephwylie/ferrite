@@ -155,6 +155,15 @@ icons![
     "git-pull-request-draft",
     "folder-git-2",
     "pin-off",
+    // The Panel's Surfaces: a side chat's delete, the Changes toolbar's
+    // view tools.
+    "trash-2",
+    "rows-3",
+    "columns-2",
+    "text-wrap",
+    "pilcrow",
+    "flask-conical-off",
+    "folder-tree",
 ];
 
 pub const SIDEBAR: &str = "icons/sidebar.svg";
@@ -330,6 +339,16 @@ pub const GIT_PULL_REQUEST_DRAFT: &str = "icons/git-pull-request-draft.svg";
 pub const FOLDER_GIT: &str = "icons/folder-git-2.svg";
 /// A pinned card's pin under the pointer: the press unpins.
 pub const PIN_OFF: &str = "icons/pin-off.svg";
+/// A side chat's delete, in its Surface's head.
+pub const TRASH: &str = "icons/trash-2.svg";
+/// The Changes toolbar: Stacked and Split, Wrap, Whitespace, Hide test
+/// files, File tree.
+pub const ROWS: &str = "icons/rows-3.svg";
+pub const COLUMNS: &str = "icons/columns-2.svg";
+pub const TEXT_WRAP: &str = "icons/text-wrap.svg";
+pub const PILCROW: &str = "icons/pilcrow.svg";
+pub const FLASK_OFF: &str = "icons/flask-conical-off.svg";
+pub const FOLDER_TREE: &str = "icons/folder-tree.svg";
 
 pub struct Assets;
 

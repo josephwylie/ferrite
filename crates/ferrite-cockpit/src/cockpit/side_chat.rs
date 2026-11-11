@@ -4,6 +4,13 @@
 //! the selection's pill, or the Panel's `+` menu (Side chat, S), opens one
 //! beside the Thread, which reflows narrower; the tab's × ends it.
 //!
+//! Its head (T3's `SideChatPane`, 36 tall) holds the title, Bring back and
+//! Trash. Bring back puts the side chat's latest run into the main
+//! Thread's next message, quoted in its composer, once the main Thread is
+//! idle and the side chat holds a finished reply (each reason its
+//! tooltip); Trash ends the chat as the tab's × does, after a second press
+//! when deletes are confirmed.
+//!
 //! A tab's conversation is a fork of the Thread (`Cockpit::fork`, the
 //! whole of it): the agent's own context, none of the Thread's state. The
 //! fork is a Thread of the engine that no Pane holds — it is never in the
@@ -78,6 +85,8 @@ pub(crate) struct SideChats {
     /// The field wants the keyboard (a chat opened, a tab changed): the
     /// next frame hands it over.
     focus_wanted: bool,
+    /// The side chat whose Trash waits for its second press.
+    trash_armed: Option<u64>,
 }
 
 impl SideChats {
@@ -638,9 +647,156 @@ impl CockpitView {
             .text_size(px(FS_UI))
             .line_height(px(LH_UI))
             .text_color(rgb(INK_STRONG))
+            .child(self.side_chat_head(owner, tab, cx))
             .child(body)
             .child(self.side_chat_composer(tab, cx))
             .into_any_element()
+    }
+
+    /// T3's side chat head, under the tab strip: the title, Bring back and
+    /// Trash. The tab's × closes it, so the head has none.
+    fn side_chat_head(&self, owner: ThreadId, tab: &Tab, cx: &mut Context<Self>) -> Div {
+        use ferrite_ui::theme::*;
+        let id = tab.id;
+        let blocked = self.bring_back_blocked(owner, id);
+        let armed = self.side_chats.trash_armed == Some(id);
+        let back_key = ferrite_ui::pointer::hover_key(&gpui::ElementId::from("side-chat-bring-back"));
+        let back = div()
+            .id("side-chat-bring-back")
+            .debug_selector(|| "side-chat-bring-back".into())
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .h(px(SURFACE_TAB_H))
+            .px(px(SPACE_2))
+            .rounded(px(R_CONTROL))
+            .font_weight(W_LABEL)
+            .text_color(rgb(INK_SUBTLE))
+            .when(blocked.is_some(), |back| back.opacity(0.64))
+            .when(blocked.is_none(), |back| back.hover_control(back_key).text_color(rgb(INK_STRONG)))
+            .tooltip(ferrite_ui::menu::tooltip(
+                blocked.unwrap_or("Adds this side chat to the main thread's next message."),
+            ))
+            .child("Bring back")
+            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                view.bring_back(owner, id, window, cx);
+            }));
+        let trash = div()
+            .id("side-chat-trash")
+            .debug_selector(|| "side-chat-trash".into())
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .size(px(SURFACE_PLUS))
+            .rounded(px(R_CONTROL))
+            .hover_control("side-chat-trash")
+            .child(icon(icons::TRASH, SURFACE_PLUS_GLYPH, if armed { RED } else { INK_SUBTLE }))
+            .tooltip(ferrite_ui::menu::tooltip(if armed {
+                "Delete side chat? Press again"
+            } else {
+                "Delete side chat"
+            }))
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.trash_side_chat(owner, id, cx);
+            }));
+        tools::surface_bar()
+            .debug_selector(|| "side-chat-head".into())
+            .pl(px(SPACE_3))
+            .pr(px(SPACE_1))
+            .text_size(px(FS_BADGE))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(W_LABEL)
+                    .child(tab.title.clone()),
+            )
+            .child(back)
+            .child(trash)
+    }
+
+    /// Why Bring back cannot run for side chat `id` now (T3's reasons), or
+    /// None: the main Thread must be idle, and the side chat must hold a
+    /// finished reply.
+    pub(super) fn bring_back_blocked(&self, owner: ThreadId, id: u64) -> Option<&'static str> {
+        use ferrite_core::transcript::Status;
+        let busy = |thread: ThreadId| {
+            self.cockpit
+                .thread(thread)
+                .is_none_or(|open| matches!(open.transcript().status(), Status::Streaming | Status::Blocked))
+        };
+        if busy(owner) {
+            return Some("Available when the main thread is idle.");
+        }
+        let replied = self.side_run(owner, id).is_some_and(|run| !run.is_empty());
+        (!replied).then_some("Available after a finished reply.")
+    }
+
+    /// Side chat `id`'s latest run, its question and the reply, as plain
+    /// text: None while the fork is answering or has not answered.
+    fn side_run(&self, owner: ThreadId, id: u64) -> Option<String> {
+        use ferrite_core::transcript::{Body, Status};
+        let conversation = self
+            .side_chats
+            .chats
+            .get(&owner)?
+            .tabs
+            .iter()
+            .find(|tab| tab.id == id)?
+            .conversation
+            .as_ref()?;
+        let open = self.cockpit.thread(conversation.thread)?;
+        let transcript = open.transcript();
+        if transcript.status() != Status::Idle {
+            return None;
+        }
+        let blocks = transcript.blocks().get(conversation.inherited..)?;
+        let asked = blocks.iter().rposition(|block| matches!(block.body, Body::Prompt(_)))?;
+        let run = &blocks[asked..];
+        if run.len() < 2 {
+            return None;
+        }
+        Some(ferrite_core::transcript::plain_text(run).trim().to_string())
+    }
+
+    /// Bring back: side chat `id`'s latest run goes into the main Thread's
+    /// next message, quoted in its composer (T3's merge-back, which adds
+    /// the side chat to that message). Nothing while it cannot run.
+    fn bring_back(&mut self, owner: ThreadId, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui::component::{notification::Notification, WindowExt};
+        if self.bring_back_blocked(owner, id).is_some() {
+            return;
+        }
+        let (Some(run), Some(index)) = (self.side_run(owner, id), self.pane_for(owner)) else {
+            return;
+        };
+        let quote = ferrite_pane::quote::compose(&[Reply::new(format!("From a side chat:\n{run}"), "")], "");
+        self.panes[index]
+            .composer
+            .update(cx, |composer, cx| composer.insert(&format!("{quote}\n\n"), cx));
+        window.push_notification(
+            Notification::new()
+                .title("Brought back")
+                .message("The main thread gets this side chat with your next message there."),
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// Trash: the side chat and its fork go, after a second press when the
+    /// settings ask to confirm a delete.
+    fn trash_side_chat(&mut self, owner: ThreadId, id: u64, cx: &mut Context<Self>) {
+        if self.prefs.settings.confirm_delete && self.side_chats.trash_armed != Some(id) {
+            self.side_chats.trash_armed = Some(id);
+            cx.notify();
+            return;
+        }
+        self.side_chats.trash_armed = None;
+        self.close_surface(owner, &SurfaceId::SideChat(id), cx);
     }
 
     /// Side chat `id`'s title, for its tab.
