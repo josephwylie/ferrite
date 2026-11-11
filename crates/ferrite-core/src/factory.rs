@@ -33,11 +33,11 @@ mod direct;
 mod pr;
 mod workflow;
 
+pub use direct::{Answered, Feedback, FeedbackKind, Override, Oversight, Question, ThenReturn};
 pub use pr::{
     evidence_line, short, Delivery, Evidence, EvidenceKind, MergeOutcome, MergeRoutes, PullRequest,
     Revision,
 };
-pub use direct::{Answered, Feedback, FeedbackKind, Override, Oversight, Question, ThenReturn};
 pub use workflow::{
     Approval, ApprovalChange, Approver, Catalog, Definition, Destination, Problem, Resolved,
     RouteKind, Step, StepChange, StepId, Template, Version, Workflow, WorkflowId,
