@@ -55,6 +55,8 @@ pub(super) const STATES: &[&str] = &[
     "panel-plusmenu",
     "panel-empty",
     "panel-maximized",
+    "scroll-to-end",
+    "send-landed",
 ];
 
 pub(super) fn handles(state: &str) -> bool {
@@ -102,6 +104,8 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "panel-plusmenu" => panel("panel-plusmenu", PanelStaged::PlusMenu),
         "panel-empty" => panel("panel-empty", PanelStaged::Empty),
         "panel-maximized" => panel("panel-maximized", PanelStaged::Maximized),
+        "scroll-to-end" => scroll_to_end(),
+        "send-landed" => send_landed(),
         _ => unreachable!("`handles` lists every state"),
     }
 }
@@ -472,6 +476,46 @@ fn find() -> (Scene, Setup) {
         if let Some(transcript) = view.panes[view.focused()].transcript() {
             transcript.update(cx, |transcript, cx| transcript.type_find("nav", cx));
         }
+    });
+    (scene, setup)
+}
+
+// ------------------------------------------------------------ send scroll
+
+/// The conversation scrolled back to its top while a third prompt runs and
+/// a fourth waits: Scroll to end over the transcript's foot, `· 1 queued`
+/// (the capture's frames land its show delay).
+fn scroll_to_end() -> (Scene, Setup) {
+    let mut scene = conversation("scroll-to-end");
+    let thread = scene.core.roster().focused_thread().expect("focus");
+    scene
+        .core
+        .send(thread, "Now check the parked rows by hand.".into());
+    scene.core.pump();
+    scene.core.queue(thread, "Then push the branch.".into());
+    scene.core.pump();
+    let setup: Setup = Box::new(|view, _, cx| {
+        if let Some(transcript) = view.panes[view.focused()].transcript() {
+            transcript.update(cx, |transcript, cx| {
+                transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
+            });
+        }
+    });
+    (scene, setup)
+}
+
+/// A prompt just sent on the finished conversation: it has eased up to
+/// the top of the transcript, `TX_SEND_ANCHOR_OFFSET` under it, with the
+/// room for its answer below (the capture's frames land the ease).
+fn send_landed() -> (Scene, Setup) {
+    let scene = conversation("send-landed");
+    let setup: Setup = Box::new(|view, _, cx| {
+        let Some(thread) = view.focused_thread() else {
+            return;
+        };
+        view.cockpit
+            .send(thread, "Push the branch with the nav fix.".into());
+        view.scroll_transcript_to_new_prompt(view.focused(), cx);
     });
     (scene, setup)
 }

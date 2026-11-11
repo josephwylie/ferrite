@@ -1951,6 +1951,7 @@ impl CockpitView {
         let rewind = transcript_glue::rewind_gate(&open);
         // A subagent's tab draws no Composer to quote into.
         let quotes = self.panes[index].is_main();
+        let queued = open.queue().len();
         let key = ferrite_pane::transcript::TranscriptKey {
             namespace: namespace.clone(),
             content_revision: revision,
@@ -1969,6 +1970,7 @@ impl CockpitView {
             quotes,
             skills: open.commands().len(),
             note: None,
+            queued,
         };
         let entity = self.panes[index]
             .ensure_transcript(cx)
@@ -2023,6 +2025,7 @@ impl CockpitView {
             reply_to: open.provider().to_string().into(),
             skills: open.commands().into(),
             note: None,
+            queued,
         };
         let selection = self.selection.clone();
         entity.update(cx, |transcript, cx| transcript.sync(input, selection, cx));

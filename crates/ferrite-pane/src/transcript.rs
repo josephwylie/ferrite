@@ -28,8 +28,9 @@ use gpui::{
 
 use self::{
     rows::{carried_tool, RowId, RowKind, RowShape, TranscriptRow, TranscriptRows},
-    scroll::TranscriptScroll,
+    scroll::{EaseStep, EaseTarget},
 };
+pub use self::scroll::TranscriptScroll;
 use crate::{
     file_links::TargetContext,
     pane::{self, DisclosureId, DisclosureState, Grid},
@@ -199,6 +200,9 @@ pub struct TranscriptInput {
     /// A muted line standing under the first prompt, which no block says:
     /// `Model Haiku 5.5` in a subagent's drill-in.
     pub note: Option<SharedString>,
+    /// How many prompts wait behind the running turn: Scroll to end names
+    /// them (`Scroll to end · 2 queued`).
+    pub queued: usize,
 }
 
 /// Everything a transcript's render depends on besides its blocks and its
@@ -223,6 +227,7 @@ pub struct TranscriptKey {
     /// How many skills the prompts can name: a late catalogue redraws them.
     pub skills: usize,
     pub note: Option<SharedString>,
+    pub queued: usize,
 }
 
 impl TranscriptInput {
@@ -245,6 +250,7 @@ impl TranscriptInput {
             quotes: self.quotes,
             skills: self.skills.len(),
             note: self.note.clone(),
+            queued: self.queued,
         }
     }
 
@@ -446,6 +452,13 @@ pub struct TranscriptView {
     /// A send was made: the prompt it adds is scrolled to the top, with the
     /// room below it for the answer (`scroll_to_new_prompt`).
     jump_to_new_prompt: bool,
+    /// The prompt a send brought to the top, while the operator has not
+    /// scrolled away since: its turn's first work lets it go, to the tail
+    /// (`release_send_anchor`).
+    send_anchor: Option<RowId>,
+    /// Since when Scroll to end has been wanted, and in which namespace: it
+    /// shows `SCROLL_END_SHOW_DELAY_MS` later (`scroll_to_end_pill`).
+    scroll_end_wanted: Option<(SharedString, Instant)>,
     /// The agents' visuals in these rows: their live pages (ADR 0013).
     visuals: crate::visual::Shelf,
     /// The list's width as of the last layout (rows can't ask the list
@@ -520,6 +533,7 @@ impl TranscriptView {
                 reply_to: SharedString::default(),
                 skills: Default::default(),
                 note: None,
+                queued: 0,
             },
             rich,
             TranscriptText::default(),
@@ -581,6 +595,8 @@ impl TranscriptView {
             targets,
             runway: Rc::default(),
             jump_to_new_prompt: false,
+            send_anchor: None,
+            scroll_end_wanted: None,
             visuals,
             list_w: Rc::default(),
             texts: Vec::new(),
@@ -694,22 +710,13 @@ impl TranscriptView {
                 self.rows
                     .reconcile(&self.input.blocks, &self.input.shape(), self.grid().size);
             self.scroll.reconcile(&delta);
+            if namespace_changed {
+                self.send_anchor = None;
+            }
             if std::mem::take(&mut self.jump_to_new_prompt) {
-                let prompts = self
-                    .rows
-                    .rows()
-                    .iter()
-                    .filter(|row| row.kind() == RowKind::Prompt)
-                    .count();
-                if let Some(newest) = prompts.checked_sub(1) {
-                    self.scroll_to(
-                        ScrollTarget::TurnBand {
-                            turn: newest,
-                            offset: 0.0,
-                        },
-                        cx,
-                    );
-                }
+                self.land_new_prompt(cx);
+            } else {
+                self.release_send_anchor();
             }
             // The newest row grew in place while the turn runs: its new
             // words fade in by the run.
@@ -769,9 +776,40 @@ impl TranscriptView {
         }
     }
 
+    /// Whether a sent prompt is held at the top for its turn.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn send_anchored(&self) -> bool {
+        self.send_anchor.is_some()
+    }
+
+    /// The room under the last row a band jump left (`Runway`).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn runway_room(&self) -> f32 {
+        self.runway.get().room
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn arrivals(&self) -> usize {
         self.arrivals.len()
+    }
+
+    /// How far the sent bubbles still popping in are (`arriving`).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn bubbles_arriving(&self, cx: &App) -> Vec<f32> {
+        let now = cx.background_executor().now();
+        self.arrivals
+            .values()
+            .filter(|arrival| {
+                arrival.spec == ferrite_ui::motion::BUBBLE_IN && arrival.moving(now)
+            })
+            .map(|arrival| {
+                arrival.drawn.map_or(0., |drawn| {
+                    arrival
+                        .spec
+                        .progress_at(now.saturating_duration_since(drawn))
+                })
+            })
+            .collect()
     }
 
     /// How far along each row still on its way in is now (0 until a frame
@@ -803,7 +841,14 @@ impl TranscriptView {
             return None;
         }
         let now = cx.background_executor().now();
-        self.arrivals.get_mut(row)?.drawn(now)
+        let arrival = self.arrivals.get_mut(row)?;
+        // The sent bubble pops where it lands, not on its way up: held at
+        // its first frame, unstarted, until the send's ease is done.
+        if self.scroll.easing() && self.send_anchor.as_ref() == Some(row) {
+            *arrival = Arrival::new(arrival.spec, now);
+            return Some(0.);
+        }
+        arrival.drawn(now)
     }
 
     /// A streamed fade's linear progress, landing with the turn's end.
@@ -843,7 +888,9 @@ impl TranscriptView {
             return false;
         }
         let now = cx.background_executor().now();
-        self.streaming_fade(now) || self.arrivals.values().any(|arrival| arrival.moving(now))
+        self.scroll.easing()
+            || self.streaming_fade(now)
+            || self.arrivals.values().any(|arrival| arrival.moving(now))
     }
 
     /// The newest content row: the working row and the Decision stand
@@ -968,10 +1015,86 @@ impl TranscriptView {
     /// content change settles it: a send adds its prompt at once.
     pub fn scroll_to_new_prompt(&mut self, cx: &mut Context<Self>) {
         self.jump_to_new_prompt = true;
+        self.scroll_end_wanted = None;
         cx.notify();
     }
 
+    /// The prompt a send just added rises to the top of the view,
+    /// `TX_SEND_ANCHOR_OFFSET` below it, with the room under it for its
+    /// answer (`Runway`): eased, or at once under reduced motion.
+    fn land_new_prompt(&mut self, cx: &App) {
+        let Some((index, row)) = self
+            .rows
+            .rows()
+            .iter()
+            .enumerate()
+            .rfind(|(_, row)| row.kind() == RowKind::Prompt)
+        else {
+            return;
+        };
+        let into = (row.gap() - theme::TX_SEND_ANCHOR_OFFSET).max(0.);
+        self.send_anchor = Some(row.id().clone());
+        self.runway.set(Runway {
+            jump: Some(into),
+            index,
+            ..self.runway.get()
+        });
+        if ferrite_ui::motion::reduced_motion(cx) {
+            self.scroll.scroll_to(index, px(into));
+        } else {
+            self.scroll.ease_to(EaseTarget::Row(gpui::ListOffset {
+                item_ix: index,
+                offset_in_item: px(into),
+            }));
+        }
+    }
+
+    /// The sent prompt's turn has started work (a call, a group, its
+    /// reasoning): the prompt lets go and the transcript follows the tail,
+    /// at once, as T3's does. A prose-only answer keeps the prompt at the
+    /// top. Rows that outgrew the room let it go too, where they stand.
+    fn release_send_anchor(&mut self) {
+        let Some(anchor) = &self.send_anchor else {
+            return;
+        };
+        if !self.scroll.easing() && self.runway.get() == Runway::default() {
+            self.send_anchor = None;
+            return;
+        }
+        let rows = self.rows.rows();
+        let Some(at) = rows.iter().position(|row| row.id() == anchor) else {
+            self.send_anchor = None;
+            return;
+        };
+        let worked = rows[at + 1..].iter().any(|row| {
+            matches!(
+                row.kind(),
+                RowKind::Activity | RowKind::Group | RowKind::Reasoning
+            )
+        });
+        if worked {
+            self.send_anchor = None;
+            self.runway.set(Runway::default());
+            self.scroll.scroll_to_bottom();
+        }
+    }
+
+    /// The operator scrolled (a wheel, a page, a jump): a programmatic
+    /// scroll on its way stops where it stands, and a sent prompt is no
+    /// longer held for its turn. The room under it stays, used up as rows
+    /// arrive.
+    fn operator_scrolled(&mut self) {
+        self.scroll.cancel_ease();
+        self.send_anchor = None;
+        let runway = self.runway.get();
+        self.runway.set(Runway {
+            jump: None,
+            ..runway
+        });
+    }
+
     pub fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
+        self.send_anchor = None;
         self.scroll.scroll_to_bottom();
         cx.notify();
     }
@@ -981,6 +1104,7 @@ impl TranscriptView {
     pub fn page(&mut self, page: Page, cx: &mut Context<Self>) {
         match page {
             Page::Up | Page::Down => {
+                self.operator_scrolled();
                 self.runway.set(Runway::default());
                 self.scroll
                     .scroll_page(page == Page::Down, px(self.grid().line));
@@ -994,6 +1118,7 @@ impl TranscriptView {
     /// Scroll to `target` (a scene's Solo views): the top,
     /// the live tail, or a turn's band with its output scrolled under it.
     pub fn scroll_to(&mut self, target: ScrollTarget, cx: &mut Context<Self>) {
+        self.send_anchor = None;
         match target {
             ScrollTarget::Top => {
                 self.runway.set(Runway::default());
@@ -1955,78 +2080,121 @@ impl TranscriptView {
         ferrite_ui::motion::hover_t(&actions_key(message))
     }
 
-    /// Jump to latest: while the reader is scrolled away from the tail, a
-    /// flat round button over the transcript's foot snaps back to it, as
-    /// both reference apps' do (`JUMP_LATEST`). It fades in and out over
-    /// `motion::JUMP_FADE` (Claude's 200ms), answering no pointer while it
-    /// goes.
-    fn jump_to_latest(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        // Within a couple of lines of the end there is nothing to jump to.
-        let wanted =
-            !self.scroll.is_following_tail() && self.rows_below() >= px(2. * self.grid().line);
-        let id = gpui::ElementId::from(SharedString::from(format!(
-            "transcript-latest-{}",
-            self.input.namespace
-        )));
-        let shown = ferrite_ui::motion::settle(
-            gpui::ElementId::NamedChild(std::sync::Arc::new(id.clone()), "fade".into()),
-            wanted as u8 as f32,
-            ferrite_ui::motion::JUMP_FADE,
-            window,
-            cx,
-        );
-        if shown <= 0. {
+    /// Scroll to end (T3 Code's): while the reader is scrolled away from
+    /// the tail, a pill over the transcript's foot eases back to it. It
+    /// shows `SCROLL_END_SHOW_DELAY_MS` after it is first wanted in this
+    /// namespace (so a Subject switch never flashes it) and goes at once,
+    /// with no fade; never while the find bar is open, nor while a
+    /// programmatic scroll moves.
+    fn scroll_to_end_pill(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        // Within a couple of lines of the end there is nothing to scroll to.
+        let wanted = !self.scroll.is_following_tail()
+            && !self.scroll.easing()
+            && self.find.is_none()
+            && self.rows_below() >= px(2. * self.grid().line);
+        if !wanted {
+            self.scroll_end_wanted = None;
             return None;
         }
+        let now = cx.background_executor().now();
+        let delay = std::time::Duration::from_millis(theme::SCROLL_END_SHOW_DELAY_MS);
+        let since = match &self.scroll_end_wanted {
+            Some((namespace, since)) if *namespace == self.input.namespace => *since,
+            _ => {
+                self.scroll_end_wanted = Some((self.input.namespace.clone(), now));
+                cx.spawn(async move |view, cx| {
+                    cx.background_executor().timer(delay).await;
+                    let _ = view.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
+                now
+            }
+        };
+        if now.saturating_duration_since(since) < delay {
+            return None;
+        }
+        let id = gpui::ElementId::from(SharedString::from(format!(
+            "transcript-scroll-end-{}",
+            self.input.namespace
+        )));
         let key = ferrite_ui::pointer::hover_key(&id);
         let t = ferrite_ui::motion::hover_t(&key);
         if t > 0. && t < 1. {
             crate::file_links::mark_fading();
         }
         let weak = cx.entity().downgrade();
+        let queued = (self.input.queued > 0).then(|| {
+            div()
+                .debug_selector(|| "scroll-to-end-queued".into())
+                .text_color(gpui::rgb(theme::INK_SUBTLE))
+                .child(format!("· {} queued", self.input.queued))
+        });
         Some(
             div()
                 .absolute()
                 .left_0()
                 .right_0()
-                .bottom(px(theme::JUMP_LATEST_INSET))
+                .bottom(px(theme::SCROLL_END_INSET))
                 .flex()
                 .justify_center()
-                .opacity(shown)
                 .child(
                     div()
                         .id(id)
-                        .debug_selector(|| "jump-to-latest".into())
+                        .debug_selector(|| "scroll-to-end".into())
                         .flex()
                         .items_center()
                         .justify_center()
-                        .size(px(theme::JUMP_LATEST))
+                        .gap(px(theme::SCROLL_END_GAP))
+                        .h(px(theme::SCROLL_END_H))
+                        .px(px(theme::SCROLL_END_PAD_X))
                         .rounded_full()
-                        .bg(ferrite_ui::motion::mix(
-                            theme::paint::CARD.into(),
-                            theme::paint::SELECTION_HOVER.into(),
+                        .whitespace_nowrap()
+                        .bg(theme::paint::CARD)
+                        .border_1()
+                        .border_color(ferrite_ui::motion::mix(
+                            theme::SCROLL_END_BORDER.into(),
+                            theme::SCROLL_END_BORDER_HOVER.into(),
                             t,
                         ))
-                        .border_1()
-                        .border_color(theme::paint::LINE)
-                        .when(wanted, |button| {
-                            button
-                                .cursor_pointer()
-                                .on_hover(ferrite_ui::motion::hover_listener(key))
-                                .tooltip(ferrite_ui::menu::tooltip("Jump to latest"))
-                                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                                    cx.stop_propagation();
-                                    let _ = weak.update(cx, |view, cx| view.scroll_to_bottom(cx));
-                                })
+                        .shadow(ferrite_ui::components::pill_shadow())
+                        .font_family(theme::FONT_UI)
+                        .text_size(px(theme::FS_BADGE))
+                        .line_height(px(theme::LH_META))
+                        .font_weight(theme::W_LABEL)
+                        .text_color(gpui::rgb(theme::INK_STRONG))
+                        .cursor_pointer()
+                        .on_hover(ferrite_ui::motion::hover_listener(key))
+                        // Down, not click: the press never takes focus from
+                        // the Composer (the transcript root's own press would).
+                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                            cx.stop_propagation();
+                            let _ = weak.update(cx, |view, cx| view.scroll_to_end(cx));
                         })
                         .child(ferrite_ui::icons::icon(
-                            ferrite_ui::icons::ARROW_DOWN,
-                            theme::ICON_BUTTON_GLYPH,
-                            theme::INK_STRONG,
-                        )),
+                            ferrite_ui::icons::CHEVRON_DOWN,
+                            theme::SCROLL_END_GLYPH,
+                            theme::INK_SUBTLE,
+                        ))
+                        .child("Scroll to end")
+                        .children(queued),
                 )
                 .into_any_element(),
         )
+    }
+
+    /// Scroll to end's press: the pill goes at once, the room and the sent
+    /// prompt's hold are let go, and the transcript eases to the tail (at
+    /// once under reduced motion), following it from there.
+    fn scroll_to_end(&mut self, cx: &mut Context<Self>) {
+        self.scroll_end_wanted = None;
+        self.send_anchor = None;
+        self.runway.set(Runway::default());
+        if ferrite_ui::motion::reduced_motion(cx) {
+            self.scroll.scroll_to_bottom();
+        } else {
+            self.scroll.ease_to(EaseTarget::End);
+        }
+        cx.notify();
     }
 }
 
@@ -2379,11 +2547,11 @@ impl TranscriptView {
         self.scroll.scroll_to(index, px((at - tops[index]).max(0.)));
     }
 
-    /// Scroll to `goal` (estimated tops' space) in one frame: a jump the
-    /// operator asked for lands at once, as both reference apps' do
-    /// (motion-measured.md, "Send: what happens around it": jump-to-latest
-    /// is a snap).
+    /// Scroll to `goal` (estimated tops' space) in one frame, stopping any
+    /// programmatic scroll on its way. T3 eases its minimap's jumps; this
+    /// one snaps, as a drag along the rail lands here on every move.
     fn jump_to_goal(&mut self, goal: f32, cx: &mut Context<Self>) {
+        self.operator_scrolled();
         let (tops, total) = self.estimated_tops();
         self.jump_to(goal.clamp(0., total), &tops);
         cx.notify();
@@ -2635,6 +2803,29 @@ impl Render for TranscriptView {
         let list = div()
             .on_children_prepainted(move |_, window, cx| {
                 let anchored = scroll.did_layout();
+                // A programmatic scroll on its way moves one frame more (the
+                // render asked for the frame: `fading`); landed, the list lays
+                // out once more at its target. A scrollbar drag took it: the
+                // room stays, the prompt is no longer held.
+                let foot = px(pad_b + runway.get().room);
+                match scroll.step_ease(cx.background_executor().now(), foot) {
+                    EaseStep::Idle | EaseStep::Moving => {}
+                    EaseStep::Landed => {
+                        let weak = weak.clone();
+                        window.defer(cx, move |_, cx| {
+                            let _ = weak.update(cx, |_, cx| cx.notify());
+                        });
+                    }
+                    EaseStep::Cancelled => {
+                        let weak = weak.clone();
+                        window.defer(cx, move |_, cx| {
+                            let _ = weak.update(cx, |view, cx| {
+                                view.operator_scrolled();
+                                cx.notify();
+                            });
+                        });
+                    }
+                }
                 // A band jump's room: enough under the last row for the
                 // band to reach the top, used up as rows arrive under it.
                 {
@@ -2664,10 +2855,14 @@ impl Render for TranscriptView {
                         };
                         runway.set(now);
                         if !settled {
-                            state.scroll_to(gpui::ListOffset {
-                                item_ix: now.index,
-                                offset_in_item: px(into),
-                            });
+                            // An ease on its way owns the offset; the room
+                            // is still sized under it.
+                            if !scroll.easing() {
+                                state.scroll_to(gpui::ListOffset {
+                                    item_ix: now.index,
+                                    offset_in_item: px(into),
+                                });
+                            }
                             let weak = weak.clone();
                             window.defer(cx, move |_, cx| {
                                 let _ = weak.update(cx, |_, cx| cx.notify());
@@ -2803,8 +2998,12 @@ impl Render for TranscriptView {
             .track_focus(&self.transcript_focus)
             .capture_any_mouse_down(cx.listener(Self::pressed))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::released))
-            // A scroll fades the Reply pill out.
-            .on_scroll_wheel(cx.listener(|view, _, _, cx| view.scrolled(cx)))
+            // A scroll fades the Reply pill out, and stops a programmatic
+            // scroll where it stands.
+            .on_scroll_wheel(cx.listener(|view, _, _, cx| {
+                view.operator_scrolled();
+                view.scrolled(cx)
+            }))
             .child(list)
             .child(
                 div()
@@ -2825,7 +3024,7 @@ impl Render for TranscriptView {
         // A row runs on under the foot: it fades into the Composer, as
         // Codex's do, rather than ending on a hard cut.
         let cut_below = self.rows_below() > px(0.);
-        let latest = self.jump_to_latest(window, cx);
+        let latest = self.scroll_to_end_pill(cx);
         let minimap = self.minimap(cx);
         if crate::file_links::take_fading() {
             cx.notify();

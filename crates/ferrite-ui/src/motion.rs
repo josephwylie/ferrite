@@ -38,7 +38,8 @@
 //! | label roll | [`MORPH`] 180ms | the working line's words when they change ([`morph`]) |
 //! | count tick | [`COUNT`] 120ms quart | the working line's token count ticks to each new reading: only the cells that change cross-fade, drifting `MOTION_COUNT_DRIFT` (2pt) up, tabular so nothing shifts; a new turn's count lands; drawn by the loops overlay, so only the count redraws (`odometer::rolling_count`) |
 //! | message actions | [`ACTIONS_IN`] 120ms after 100ms / [`ACTIONS_OUT`] 60ms, ease-snap | a message's actions under the pointer ([`hover_listener_with`]) |
-//! | jump to latest | [`JUMP_FADE`] 200ms | the transcript's jump button fades in and out, answering no pointer while it goes |
+//! | send scroll | `MOTION_SCROLL_MAX_MS` 200ms at most, [`EASE_STANDARD`] | a send's prompt eases up to the top of the transcript (`TX_SEND_ANCHOR_OFFSET` below it) for Chromium's smooth-scroll length, `min(√Δpx, 12) / 60` s, re-measured each frame so rows growing under it are absorbed; any scroll by the operator stops it where it stands; the bubble's pop starts when it lands (`transcript/scroll.rs`) |
+//! | scroll to end | shows `SCROLL_END_SHOW_DELAY_MS` 150ms after it is wanted, hides at once; its click rides the send scroll's ease to the tail | the transcript's Scroll to end pill: no fade either way, its ring blending over [`HOVER_FADE`] |
 //! | usage ring | [`USAGE_ARC`] 300ms / [`USAGE_INK`] 200ms, quart | the footer's plan-usage ring moving to a new reading ([`settle`]); first paint lands |
 //! | row-in | [`ROW_IN`] 180ms, opacity only | a preview opening in the Panel, or another document replacing it, and a Panel tab's body when the operator picks the tab, from 0.3 ([`swap_in`]) |
 //! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`SCROLLBAR_FADE`] 100ms | a thumb appears on the first scroll frame, holds 1.4s, then fades, and widens 4 → 6px under the pointer (`scrollbar::step_widen`); idle, nothing is drawn |
@@ -48,6 +49,16 @@
 //! a height tween, as Claude's tool steps do: its rows are one item of a
 //! virtualized list inside a kit `Collapsible`, and an item mid-reveal
 //! would clip rows the pointer can already reach.
+//!
+//! **What stays still** (T3 Code leaves these unanimated; do not add
+//! motion to them): menus, context menus and the `/` and `@` menus
+//! (`MENU_IN` 0ms); the Composer's height after a send clears it; the
+//! scroll on a send's release to the tail, on Composer or footer growth
+//! while following, on idle tail growth, on the anchor holding its place
+//! as its own row resizes, and on restoring a thread's position; Scroll to
+//! end's show and hide; a tool group's body (only its chevron turns);
+//! streamed text's place (it fades, it never slides or scales); and the
+//! sidebar's, the Panel's and the terminal drawer's widths.
 //!
 //! **What a frame costs.** gpui asks for an animation's next frame by
 //! notifying the view drawing it, and redraws that view's ancestors with
@@ -303,8 +314,6 @@ pub const ACTIONS_OUT: MotionSpec = spec(theme::MOTION_DUR_FAST_MS, EASE_SNAP);
 pub const CHEVRON: MotionSpec = spec(theme::MOTION_CHEVRON_MS, EASE_STANDARD);
 /// A nav fold opening and shutting (`fold_body`).
 pub const FOLD: MotionSpec = spec(theme::MOTION_FOLD_MS, EASE_OUT);
-/// Jump to latest showing and going.
-pub const JUMP_FADE: MotionSpec = spec(theme::MOTION_JUMP_FADE_MS, EASE_STANDARD);
 /// The usage ring's arc and ink moving to a new reading.
 pub const USAGE_ARC: MotionSpec = spec(theme::MOTION_USAGE_ARC_MS, EASE_OUT_QUART);
 pub const USAGE_INK: MotionSpec = spec(theme::MOTION_USAGE_INK_MS, EASE_OUT_QUART);

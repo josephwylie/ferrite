@@ -862,11 +862,15 @@ fn native_progress_follows_the_tail_and_metadata_refreshes_the_wall(cx: &mut Tes
         cx.notify();
     });
     cx.run_until_parked();
+    // Scroll to end shows after its delay.
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(ferrite_ui::theme::SCROLL_END_SHOW_DELAY_MS));
+    cx.run_until_parked();
     // The working line is the transcript's last row: scrolled back, it is
     // out of view with the tail, and the way back to both is in view.
     assert!(
-        cx.debug_bounds("jump-to-latest").is_some(),
-        "scrolled away from a working tail, jump to latest is offered"
+        cx.debug_bounds("scroll-to-end").is_some(),
+        "scrolled away from a working tail, Scroll to end is offered"
     );
     // Working-phase detail appends no transcript block. Its wall caption
     // must still change, or the smallest panes freeze on the old heading.

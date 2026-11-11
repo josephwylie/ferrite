@@ -1414,7 +1414,7 @@ pub fn init_components(cx: &mut gpui::App) {
 //   carries its `Copy` under it the same way.
 // - **Reading order.** Rows read down from the top of the body, as a new
 //   conversation does; the tail is followed once they overflow, and a
-//   reader scrolled away from it gets `Jump to latest`.
+//   reader scrolled away from it gets `Scroll to end`.
 // - **The pinned prompt.** The prompt of the turn being read stays pinned at
 //   the top of the body while its output scrolls under it: its own bubble,
 //   right-aligned, clamped to `PINNED_PROMPT_LINES`, on a plane in the
@@ -1725,13 +1725,31 @@ pub const LINE_FADE: f32 = SPACE_6;
 /// `PINNED_PROMPT_PAD_Y` above and below the bubble.
 pub const PINNED_PROMPT_LINES: usize = 2;
 pub const PINNED_PROMPT_PAD_Y: f32 = SPACE_2;
-/// **Jump to latest**: while the reader is scrolled away from the tail, a
-/// `JUMP_LATEST` circle (the plane's fill in a 1px `LINE` ring, no shadow:
-/// Codex's flat button) with the down arrow floats centred
-/// `JUMP_LATEST_INSET` above the transcript's foot; a click snaps to the
-/// tail and follows it again.
-pub const JUMP_LATEST: f32 = 32.0;
-pub const JUMP_LATEST_INSET: f32 = SPACE_3;
+/// **Scroll to end** (T3 Code's `ScrollToEndButton`): while the reader is
+/// scrolled away from the tail, a pill floats centred over the transcript's
+/// foot, its own foot `SCROLL_END_INSET` above the Composer's top:
+/// `SCROLL_END_H` tall, fully rounded, `SCROLL_END_PAD_X` either side, the
+/// 14px chevron-down and `Scroll to end` (`FS_BADGE`, medium) with
+/// `· N queued` after it while prompts wait. Its ground is the plane's
+/// opaque fill (T3's glass without the blur Ferrite cannot draw), in a 1px
+/// `SCROLL_END_BORDER` ring that strengthens to `SCROLL_END_BORDER_HOVER`
+/// under the pointer, and a small shadow. It shows `SCROLL_END_SHOW_DELAY_MS`
+/// after it is first wanted and goes at once; a click eases to the tail
+/// (`MOTION_SCROLL_MAX_MS`) and follows it again.
+pub const SCROLL_END_H: f32 = 24.0;
+pub const SCROLL_END_PAD_X: f32 = 7.0;
+pub const SCROLL_END_INSET: f32 = 10.0;
+pub const SCROLL_END_GAP: f32 = SPACE_1;
+pub const SCROLL_END_GLYPH: f32 = 14.0;
+/// T3's `border-border/60` and `border-border` (dark `--border` is white 8%).
+pub const SCROLL_END_BORDER: Paint = Paint(0xffffff0c);
+pub const SCROLL_END_BORDER_HOVER: Paint = Paint(0xffffff14);
+/// T3's `shadow-sm` (`0 1px 3px` and `0 1px 2px -1px`, black 10%): the
+/// one cast besides a float's, so the pill reads over the rows it floats on.
+pub const SHADOW_PILL: u32 = 0x0000001a;
+/// **The send anchor**: a sent prompt lands this far below the
+/// transcript's top (T3's `CHAT_LIST_ANCHOR_OFFSET`).
+pub const TX_SEND_ANCHOR_OFFSET: f32 = 16.0;
 /// **Reply to a selection** (Claude's `SelectionTooltip`): a drag that
 /// selects a passage ends with a pill centred over its first line, its foot
 /// `SELECTION_REPLY_GAP` above it (under its last when there is no room
@@ -3204,9 +3222,14 @@ pub const MOTION_CHEVRON_MS: u64 = MOTION_DUR_FAST_MS;
 /// the `ease-out` keyword, height and opacity (Claude's
 /// `sidebar-group-expand`).
 pub const MOTION_FOLD_MS: u64 = 150;
-/// Jump to latest fades in and out over `MOTION_DUR_BASE_MS` on
-/// `MOTION_EASE_STANDARD`, answering no pointer while it goes.
-pub const MOTION_JUMP_FADE_MS: u64 = MOTION_DUR_BASE_MS;
+/// A programmatic transcript scroll (a send's prompt rising to the top,
+/// Scroll to end) eases on `MOTION_EASE_STANDARD` for Chromium's smooth
+/// scroll length, `min(√|Δpx|, 12) / 60` s: at most this, reached from
+/// 144px (T3's `scrollTo({behavior: "smooth"})`).
+pub const MOTION_SCROLL_MAX_MS: u64 = MOTION_DUR_BASE_MS;
+/// Scroll to end shows this long after it is first wanted, so it never
+/// flashes through a thread switch; it hides at once, with no fade.
+pub const SCROLL_END_SHOW_DELAY_MS: u64 = 150;
 /// A toast's timing: it comes in over `MOTION_DUR_BASE_MS` on the quart,
 /// sliding its own height out from under the edge it hangs on, and leaves
 /// over the same, shrinking to `MOTION_TOAST_OUT_SCALE` as it fades (the

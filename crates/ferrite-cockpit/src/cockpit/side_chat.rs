@@ -511,6 +511,7 @@ impl CockpitView {
             quotes: false,
             skills: open.commands().len(),
             note: note.clone(),
+            queued: 0,
         };
         let Some(entity) = pane.transcript() else {
             return;
@@ -549,6 +550,7 @@ impl CockpitView {
             reply_to: open.provider().to_string().into(),
             skills: open.commands().into(),
             note,
+            queued: 0,
         };
         let selection = self.selection.clone();
         entity.update(cx, |transcript, cx| transcript.sync(input, selection, cx));
