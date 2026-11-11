@@ -990,12 +990,7 @@ impl CockpitView {
                     .p(px(SPACE_4))
                     .overflow_y_scroll();
                 for (at, entry) in task.activity.iter().enumerate() {
-                    let who = match entry.by {
-                        Actor::Ferrite => "Ferrite",
-                        Actor::Agent => "Agent",
-                        Actor::Operator => "You",
-                        Actor::Tool => "Tool",
-                    };
+                    let who = entry.by.word();
                     let text = match entry.revision {
                         Some(revision) => format!("{} \u{b7} revision {revision}", entry.text),
                         None => entry.text.clone(),

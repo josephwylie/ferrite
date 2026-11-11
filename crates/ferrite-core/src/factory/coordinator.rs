@@ -565,6 +565,20 @@ impl State {
                     ProposalStatus::Pending => {}
                 }
                 self.check_act(&found.act, found.project, &catalog, now_ms)?;
+                if let Act::Redirect { task, direction } = &found.act {
+                    if let Some(task) = self.tasks.iter_mut().find(|each| each.id == *task) {
+                        let to = task
+                            .workflow
+                            .as_ref()
+                            .and_then(|run| run.definition.step(&direction.to))
+                            .map_or_else(|| direction.to.clone(), |step| step.name.clone());
+                        task.note(
+                            now_ms,
+                            Actor::Coordinator,
+                            format!("Proposed sending this task to {to}"),
+                        );
+                    }
+                }
                 let answer = self.command(
                     Self::act_command(&found.act, found.project, agent, catalog),
                     now_ms,
@@ -578,7 +592,8 @@ impl State {
                     .as_ref()
                     .and_then(|id| self.tasks.iter_mut().find(|task| task.id == *id))
                 {
-                    task.note(now_ms, Actor::Ferrite, "The Coordinator proposed it");
+                    task.note(now_ms, Actor::Coordinator, "Proposed this task");
+                    task.note(now_ms, Actor::Operator, "Accepted the Coordinator's proposal");
                 }
                 let accepted = self.proposal_mut(&proposal)?;
                 accepted.status = ProposalStatus::Accepted;

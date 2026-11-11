@@ -677,3 +677,59 @@ fn the_coordinator_and_proposals_survive_a_reload() {
     assert_ne!(second, id, "ids are never given twice");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// Story 19: the activity says what the Coordinator did. An accepted
+/// proposal's Task says the Coordinator proposed it and the operator
+/// accepted it.
+#[test]
+fn an_accepted_proposal_is_the_coordinators_in_the_activity() {
+    let mut factory = Factory::in_memory();
+    coordinating(&mut factory);
+    let (built, steps) = saved(
+        &mut factory,
+        &[("Build", "Build it"), ("Check", "Check it")],
+    );
+    let one_off = proposed(
+        &mut factory,
+        Act::Start {
+            instructions: "Fix the toolbar overflow".into(),
+            workflow: None,
+        },
+    );
+    let Ok(Answer::Task(task)) = accept(&mut factory, &one_off) else {
+        panic!("no task");
+    };
+    let by: Vec<Actor> = factory
+        .task(&task)
+        .unwrap()
+        .activity
+        .iter()
+        .map(|entry| entry.by)
+        .collect();
+    assert!(by.contains(&Actor::Coordinator), "{by:?}");
+    assert!(by.contains(&Actor::Operator), "{by:?}");
+    assert_eq!(Actor::Coordinator.word(), "Coordinator");
+
+    let running = run(&mut factory, &built, "Running");
+    factory.step(7, &BTreeMap::new());
+    started(&mut factory, &running, FIRST);
+    let send_back = proposed(
+        &mut factory,
+        Act::Redirect {
+            task: running.clone(),
+            direction: Override {
+                to: steps[1].clone(),
+                skip: Vec::new(),
+                then: ThenReturn::Routes,
+                note: String::new(),
+            },
+        },
+    );
+    accept(&mut factory, &send_back).unwrap();
+    let said = &factory.task(&running).unwrap().activity;
+    assert!(
+        said.iter()
+            .any(|entry| entry.by == Actor::Coordinator && entry.text.contains("Check")),
+        "{said:?}"
+    );
+}

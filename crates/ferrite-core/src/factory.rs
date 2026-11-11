@@ -154,6 +154,8 @@ pub enum Actor {
     Operator,
     /// A command or tool's result, as an agent reported it (#223).
     Tool,
+    /// The Project's Coordinator: what it proposed (#224).
+    Coordinator,
 }
 
 impl Actor {
@@ -163,6 +165,7 @@ impl Actor {
             Actor::Agent => "Agent",
             Actor::Operator => "You",
             Actor::Tool => "Tool",
+            Actor::Coordinator => "Coordinator",
         }
     }
 }
