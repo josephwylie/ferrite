@@ -401,6 +401,7 @@ fn samples() -> Vec<Request> {
             project: Some("3".into()),
             cwd: Some(PathBuf::from("/work/app")),
             workflow: None,
+            pr: None,
         })),
         request(Method::TaskList(TaskListParams {
             project: Some("3".into()),
@@ -450,6 +451,7 @@ fn samples() -> Vec<Request> {
                 on_finished: Some(crate::factory::Destination::Complete),
                 on_unable: Some(crate::factory::Destination::Step("s-1".into())),
                 fresh: Some(true),
+                ..Default::default()
             },
         })),
         request(Method::StepMove(StepMoveParams {
@@ -528,6 +530,7 @@ fn later_samples() -> Vec<(&'static str, Request)> {
                 project: Some("3".into()),
                 cwd: None,
                 workflow: Some("w-1".into()),
+                pr: None,
             })),
         ),
         (
@@ -979,6 +982,7 @@ fn a_report_names_the_worker_it_runs_in() {
             project: None,
             cwd: Some(PathBuf::from("/work/app")),
             workflow: None,
+            pr: None,
         }))
     );
 }

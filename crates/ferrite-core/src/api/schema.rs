@@ -444,6 +444,10 @@ pub struct TaskStartParams {
     /// else it is one-off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
+    /// Its pull request, which every Step works on:
+    /// `owner/repository#number` or its URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

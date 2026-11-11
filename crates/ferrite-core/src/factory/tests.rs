@@ -30,6 +30,7 @@ fn start(factory: &mut Factory, instructions: &str) -> TaskId {
             agent: agent(),
             request: None,
             workflow: None,
+            pr: None,
         },
         0,
     ) {
@@ -151,6 +152,7 @@ fn a_repeated_start_is_one_task() {
         agent: agent(),
         request: Some("click-1".into()),
         workflow: None,
+        pr: None,
     };
     let first = factory.command(ask(), 0).unwrap();
     let again = factory.command(ask(), 1).unwrap();
@@ -168,6 +170,7 @@ fn empty_instructions_start_nothing() {
             agent: agent(),
             request: None,
             workflow: None,
+            pr: None,
         },
         0,
     );

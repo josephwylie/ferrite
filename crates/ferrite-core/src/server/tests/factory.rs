@@ -219,6 +219,7 @@ fn a_task_is_stopped_resumed_and_deleted_leaving_dirty_work_alone() {
                     instructions: instructions.into(),
                     request: Some(format!("ask-{id}")),
                     workflow: None,
+                    pr: None,
                 },
             },
         );

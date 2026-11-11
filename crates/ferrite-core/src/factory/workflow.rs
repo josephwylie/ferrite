@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::pr::{MergeOutcome, MergeRoutes};
 use super::Agent;
 use crate::store::Provider;
 use crate::workspace::registry::ProjectId;
@@ -31,6 +32,8 @@ pub enum Destination {
     Complete,
     Human,
     Coordinator,
+    /// Stay with the Step: only "Checks pending" keeps waiting (#223).
+    Wait,
 }
 
 impl Destination {
@@ -44,6 +47,7 @@ impl Destination {
             Destination::Complete => "complete".into(),
             Destination::Human => "human".into(),
             Destination::Coordinator => "coordinator".into(),
+            Destination::Wait => "wait".into(),
         }
     }
 }
@@ -58,11 +62,12 @@ impl std::str::FromStr for Destination {
             "complete" => Destination::Complete,
             "human" => Destination::Human,
             "coordinator" => Destination::Coordinator,
+            "wait" => Destination::Wait,
             other => match other.strip_prefix("step:") {
                 Some(id) if !id.is_empty() => Destination::Step(id.to_string()),
                 _ => {
                     return Err(format!(
-                        "`{word}` is no route: next, step:<id>, approval, complete, human or coordinator"
+                        "`{word}` is no route: next, step:<id>, approval, complete, human, coordinator or wait"
                     ))
                 }
             },
@@ -101,6 +106,34 @@ pub struct Step {
     /// a returning Task continues this Step's Worker.
     #[serde(default)]
     pub fresh: bool,
+    /// Routes by merge result, replacing `on_finished` when set (#223).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_routes: Option<MergeRoutes>,
+}
+
+impl Step {
+    /// Every route it has, in the outline's order: one per merge result
+    /// (or "When finished"), then "If unable to finish".
+    pub fn routes(&self) -> Vec<(RouteKind, &Destination)> {
+        let mut routes = match &self.outcome_routes {
+            Some(by) => MergeOutcome::ALL
+                .into_iter()
+                .map(|outcome| (RouteKind::Merge(outcome), by.get(outcome)))
+                .collect(),
+            None => vec![(RouteKind::Finished, &self.on_finished)],
+        };
+        routes.push((RouteKind::Unable, &self.on_unable));
+        routes
+    }
+
+    /// The route of `kind`, if it has one.
+    pub fn route(&self, kind: RouteKind) -> Option<&Destination> {
+        match kind {
+            RouteKind::Finished => Some(&self.on_finished),
+            RouteKind::Unable => Some(&self.on_unable),
+            RouteKind::Merge(outcome) => self.outcome_routes.as_ref().map(|by| by.get(outcome)),
+        }
+    }
 }
 
 /// What a Workflow says: its name, its Steps in order, and who approves.
@@ -283,6 +316,7 @@ pub(super) fn new_step(id: StepId, name: &str, agent: Agent) -> Step {
         on_finished: Destination::Complete,
         on_unable: Destination::Human,
         fresh: false,
+        outcome_routes: None,
     }
 }
 
@@ -371,6 +405,33 @@ pub struct StepChange {
     pub on_unable: Option<Destination>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fresh: Option<bool>,
+    /// Route by merge result (one route per result) or not (#223).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_merge_result: Option<bool>,
+    /// Merge confirmed: any route, Completed included.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub on_merged: Option<Destination>,
+    /// Merge conflicts: a Step, `human` or `coordinator`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub on_conflict: Option<Destination>,
+    /// Checks pending: `wait`, a Step, `human` or `coordinator`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub on_pending: Option<Destination>,
+    /// Access denied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub on_denied: Option<Destination>,
+    /// PR changed since approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub on_head_changed: Option<Destination>,
+    /// Result unconfirmed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub on_unknown: Option<Destination>,
 }
 
 impl StepChange {
@@ -407,6 +468,44 @@ impl StepChange {
         if let Some(fresh) = self.fresh {
             step.fresh = fresh;
         }
+        match self.by_merge_result {
+            Some(true) if step.outcome_routes.is_none() => {
+                step.outcome_routes = Some(MergeRoutes::default())
+            }
+            Some(false) => step.outcome_routes = None,
+            _ => {}
+        }
+        if let Some(routes) = &mut step.outcome_routes {
+            for (outcome, to) in [
+                (MergeOutcome::Merged, self.on_merged),
+                (MergeOutcome::Conflict, self.on_conflict),
+                (MergeOutcome::Pending, self.on_pending),
+                (MergeOutcome::Denied, self.on_denied),
+                (MergeOutcome::HeadChanged, self.on_head_changed),
+                (MergeOutcome::Unknown, self.on_unknown),
+            ] {
+                if let Some(to) = to {
+                    routes.set(outcome, to);
+                }
+            }
+        }
+    }
+
+    /// The change that sets the route of `kind`.
+    pub fn route(kind: RouteKind, to: Destination) -> Self {
+        let mut change = Self::default();
+        let slot = match kind {
+            RouteKind::Finished => &mut change.on_finished,
+            RouteKind::Unable => &mut change.on_unable,
+            RouteKind::Merge(MergeOutcome::Merged) => &mut change.on_merged,
+            RouteKind::Merge(MergeOutcome::Conflict) => &mut change.on_conflict,
+            RouteKind::Merge(MergeOutcome::Pending) => &mut change.on_pending,
+            RouteKind::Merge(MergeOutcome::Denied) => &mut change.on_denied,
+            RouteKind::Merge(MergeOutcome::HeadChanged) => &mut change.on_head_changed,
+            RouteKind::Merge(MergeOutcome::Unknown) => &mut change.on_unknown,
+        };
+        *slot = Some(to);
+        change
     }
 }
 
@@ -459,6 +558,8 @@ pub struct Problem {
 pub enum RouteKind {
     Finished,
     Unable,
+    /// One merge result's route (#223).
+    Merge(MergeOutcome),
 }
 
 impl RouteKind {
@@ -466,6 +567,16 @@ impl RouteKind {
         match self {
             RouteKind::Finished => "When finished",
             RouteKind::Unable => "If unable to finish",
+            RouteKind::Merge(outcome) => outcome.label(),
+        }
+    }
+
+    /// Its selector word: `finished`, `unable`, or the merge result's.
+    pub fn word(self) -> &'static str {
+        match self {
+            RouteKind::Finished => "finished",
+            RouteKind::Unable => "unable",
+            RouteKind::Merge(outcome) => outcome.word(),
         }
     }
 }
@@ -500,6 +611,7 @@ impl Definition {
             Destination::Complete => Resolved::Complete,
             Destination::Human => Resolved::Human,
             Destination::Coordinator => Resolved::Coordinator,
+            Destination::Wait => Resolved::Wait,
         }
     }
 
@@ -525,6 +637,7 @@ impl Definition {
             Destination::Complete => "Completed".into(),
             Destination::Human => "Needs human".into(),
             Destination::Coordinator => "Coordinator".into(),
+            Destination::Wait => "Keep waiting".into(),
         }
     }
 
@@ -537,7 +650,7 @@ impl Definition {
             .filter(|step| step.id != from)
             .map(|step| Destination::Step(step.id.clone()));
         match kind {
-            RouteKind::Finished => next
+            RouteKind::Finished | RouteKind::Merge(MergeOutcome::Merged) => next
                 .chain(others)
                 .chain([
                     Destination::Approval,
@@ -549,6 +662,13 @@ impl Definition {
             RouteKind::Unable => [Destination::Human, Destination::Coordinator]
                 .into_iter()
                 .chain(others)
+                .collect(),
+            // An unsuccessful or uncertain merge never completes the Task.
+            RouteKind::Merge(outcome) => (outcome == MergeOutcome::Pending)
+                .then_some(Destination::Wait)
+                .into_iter()
+                .chain(others)
+                .chain([Destination::Human, Destination::Coordinator])
                 .collect(),
         }
     }
@@ -626,12 +746,31 @@ impl Definition {
                     }
                 }
             }
-            for (kind, route) in [
-                (RouteKind::Finished, &step.on_finished),
-                (RouteKind::Unable, &step.on_unable),
-            ] {
+            for (kind, route) in step.routes() {
                 if let Some(what) = self.broken(&step.id, route) {
                     add(Some(step), format!("{who} \u{b7} {} {what}.", kind.label()));
+                }
+                let merge = |outcome| kind == RouteKind::Merge(outcome);
+                if *route == Destination::Complete
+                    && matches!(kind, RouteKind::Merge(_))
+                    && !merge(MergeOutcome::Merged)
+                {
+                    add(
+                        Some(step),
+                        format!(
+                            "{who} \u{b7} {} cannot complete the task: only a confirmed merge can.",
+                            kind.label()
+                        ),
+                    );
+                }
+                if *route == Destination::Wait && !merge(MergeOutcome::Pending) {
+                    add(
+                        Some(step),
+                        format!(
+                            "{who} \u{b7} {} cannot keep waiting: only Checks pending waits.",
+                            kind.label()
+                        ),
+                    );
                 }
             }
         }
@@ -694,7 +833,9 @@ impl Definition {
     /// Some route leads to Ready to approve.
     pub fn reaches_approval(&self) -> bool {
         self.steps.iter().any(|step| {
-            step.on_finished == Destination::Approval || step.on_unable == Destination::Approval
+            step.routes()
+                .iter()
+                .any(|(_, route)| **route == Destination::Approval)
         })
     }
 
@@ -708,11 +849,19 @@ impl Definition {
             });
         }
         for step in &self.steps {
-            if step.on_finished == Destination::Complete {
-                paths.push(format!("{} reports finished", step.name));
-            }
-            if step.on_unable == Destination::Complete {
-                paths.push(format!("{} reports it could not finish", step.name));
+            for (kind, route) in step.routes() {
+                if *route != Destination::Complete {
+                    continue;
+                }
+                paths.push(match kind {
+                    RouteKind::Finished => format!("{} reports finished", step.name),
+                    RouteKind::Unable => format!("{} reports it could not finish", step.name),
+                    RouteKind::Merge(outcome) => format!(
+                        "{} reports {}",
+                        step.name,
+                        outcome.label().to_lowercase()
+                    ),
+                });
             }
         }
         paths
@@ -727,6 +876,8 @@ pub enum Resolved<'a> {
     Complete,
     Human,
     Coordinator,
+    /// Stay with the Step that reported.
+    Wait,
     /// Nowhere: the Step it named is gone, or none follows.
     Broken,
 }

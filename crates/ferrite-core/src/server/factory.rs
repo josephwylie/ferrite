@@ -194,6 +194,13 @@ impl Server {
                 }
             }
             Effect::RemoveWorktree { path } => return self.remove_task_worktree(&path),
+            Effect::Tidy { task, path } => {
+                let kept = self.remove_task_worktree(&path);
+                let tidied = Command::WorktreeTidied { task, kept };
+                if let Err(refusal) = self.factory.command(tidied, now_ms()) {
+                    crate::log!("server: the Factory did not take a worktree's removal: {refusal}");
+                }
+            }
             Effect::Notify {
                 task,
                 project,
@@ -344,6 +351,7 @@ impl Server {
                 instructions,
                 request,
                 workflow,
+                pr,
             } => {
                 let start = Command::Start {
                     project,
@@ -351,6 +359,7 @@ impl Server {
                     agent: self.factory_agent.clone(),
                     request,
                     workflow,
+                    pr,
                 };
                 let (answer, _) = self.factory_command(start).map_err(wire)?;
                 Ok(Some(done(answer)))
@@ -428,6 +437,7 @@ impl Server {
             agent: self.factory_agent.clone(),
             request: None,
             workflow: params.workflow,
+            pr: params.pr,
         };
         match self.factory_command(start)? {
             (Answer::Task(task), _) => Ok(json!({ "task": self.task_json(&task)? })),

@@ -30,8 +30,10 @@ use crate::workspace::registry::ProjectId;
 use crate::ThreadId;
 
 mod direct;
+mod pr;
 mod workflow;
 
+pub use pr::{short, Delivery, MergeOutcome, MergeRoutes, Evidence, EvidenceKind, PullRequest, Revision};
 pub use direct::{Answered, Feedback, FeedbackKind, Override, Oversight, Question, ThenReturn};
 pub use workflow::{
     Approval, ApprovalChange, Approver, Catalog, Definition, Destination, Problem, Resolved,
@@ -122,6 +124,8 @@ pub enum Actor {
     Ferrite,
     Agent,
     Operator,
+    /// A command or tool's result, as an agent reported it (#223).
+    Tool,
 }
 
 impl Actor {
@@ -130,6 +134,7 @@ impl Actor {
             Actor::Ferrite => "Ferrite",
             Actor::Agent => "Agent",
             Actor::Operator => "You",
+            Actor::Tool => "Tool",
         }
     }
 }
@@ -140,6 +145,9 @@ pub struct Entry {
     pub at_ms: i64,
     pub by: Actor,
     pub text: String,
+    /// The Task's PR revision when it happened (#223).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u32>,
 }
 
 /// One piece of delegated work.
@@ -188,6 +196,9 @@ pub struct Task {
     /// Questions, answers, feedback, approval and this Task's direction.
     #[serde(flatten)]
     pub oversight: Oversight,
+    /// Its pull request, evidence and worktree's fate (#223).
+    #[serde(flatten)]
+    pub delivery: Delivery,
 }
 
 /// The version of a Workflow a Task keeps.
@@ -297,6 +308,11 @@ pub enum Outcome {
     Rejected {
         reasons: String,
     },
+    /// A merge Step's result, and what showed it (#223).
+    Merge {
+        result: MergeOutcome,
+        summary: String,
+    },
 }
 
 /// Every change, whoever asks.
@@ -311,6 +327,8 @@ pub enum Command {
         agent: Agent,
         request: Option<String>,
         workflow: Option<WorkflowId>,
+        /// Its pull request: `owner/repository#number` or a URL.
+        pr: Option<String>,
     },
     /// A new Workflow from `template`, its Steps on `agent`.
     CreateWorkflow {
@@ -412,6 +430,24 @@ pub enum Command {
         workflow: WorkflowId,
         change: ApprovalChange,
     },
+    /// A Worker reports its Task's PR head (and which PR, the first
+    /// time), known by its own Thread.
+    ReportRevision {
+        worker: ThreadId,
+        head: String,
+        pr: Option<String>,
+    },
+    /// A Worker reports what a command or tool showed.
+    ReportEvidence {
+        worker: ThreadId,
+        text: String,
+    },
+    /// The Server tried to remove a merged Task's worktree: removed, or
+    /// kept and why.
+    WorktreeTidied {
+        task: TaskId,
+        kept: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -499,6 +535,13 @@ pub enum Effect {
     /// Remove a deleted Task's worktree, only if its checkout is clean;
     /// its branch stays.
     RemoveWorktree {
+        path: PathBuf,
+    },
+    /// Remove a completed Task's worktree now its PR is merged, only if
+    /// its checkout is clean (its branch stays), answered with
+    /// [`Command::WorktreeTidied`].
+    Tidy {
+        task: TaskId,
         path: PathBuf,
     },
     /// Toast, chime and system notification in the windows.
@@ -681,10 +724,12 @@ impl Task {
     }
 
     fn note(&mut self, at_ms: i64, by: Actor, text: impl Into<String>) {
+        let revision = self.revision_now();
         self.activity.push(Entry {
             at_ms,
             by,
             text: text.into(),
+            revision,
         });
     }
 
@@ -705,6 +750,7 @@ impl Task {
             status,
             title: format!("{title}: {}", self.title),
         });
+        pr::tidy(self, effects);
     }
 }
 
@@ -868,6 +914,7 @@ impl State {
                 agent,
                 request,
                 workflow,
+                pr,
             } => {
                 if let Some(task) = request.as_ref().and_then(|request| {
                     self.tasks
@@ -883,6 +930,7 @@ impl State {
                         "a Task needs instructions",
                     ));
                 };
+                let pr = pr::given(pr)?;
                 let run = match workflow {
                     None => None,
                     Some(id) => {
@@ -941,6 +989,10 @@ impl State {
                     results: Vec::new(),
                     workers: Vec::new(),
                     oversight: Oversight::default(),
+                    delivery: Delivery {
+                        pr,
+                        ..Delivery::default()
+                    },
                 };
                 let started = match &task.workflow {
                     Some(run) => format!(
@@ -948,6 +1000,10 @@ impl State {
                         run.definition.name, run.version
                     ),
                     None => "Started the task".into(),
+                };
+                let started = match &task.delivery.pr {
+                    Some(pr) => format!("{started}, on {}", pr.label()),
+                    None => started,
                 };
                 task.note(now_ms, Actor::Operator, started);
                 self.tasks.push(task);
@@ -1001,16 +1057,28 @@ impl State {
                 match outcome {
                     Outcome::Finished { summary } => {
                         task.note(now_ms, Actor::Agent, format!("Finished: {summary}"));
+                        task.evidence(
+                            EvidenceKind::Conclusion,
+                            "The agent",
+                            format!("Finished: {summary}"),
+                            now_ms,
+                        );
                         task.result = Some(summary);
                         task.reason = None;
                         task.enter(Status::Completed, effects);
                     }
                     Outcome::Unable { tried } => {
                         task.note(now_ms, Actor::Agent, format!("Unable to finish: {tried}"));
+                        task.evidence(
+                            EvidenceKind::Conclusion,
+                            "The agent",
+                            format!("Could not finish: {tried}"),
+                            now_ms,
+                        );
                         task.reason = Some(tried);
                         task.enter(Status::NeedsHuman, effects);
                     }
-                    Outcome::Approved { .. } | Outcome::Rejected { .. } => {
+                    Outcome::Approved { .. } | Outcome::Rejected { .. } | Outcome::Merge { .. } => {
                         return Err(Refusal::new(
                             RefusalCode::Invalid,
                             "this agent is not deciding an approval: report finished or unable",
@@ -1061,7 +1129,7 @@ impl State {
                 match task.worker {
                     Some(_) => {
                         task.enter(Status::Working, effects);
-                        task.watch.prompt = Some(resume_prompt());
+                        task.watch.prompt = Some(resume_prompt(task));
                     }
                     // It never had a Worker: the next step starts one.
                     None => task.enter(Status::Queued, effects),
@@ -1118,6 +1186,15 @@ impl State {
             }
             Command::Redirect { task, direction } => {
                 direct::redirect(self.task_mut(&task)?, direction, now_ms, effects)
+            }
+            Command::ReportRevision { worker, head, pr } => {
+                pr::reported_revision(self.worker_task(worker)?, worker, head, pr, now_ms)
+            }
+            Command::ReportEvidence { worker, text } => {
+                pr::reported_evidence(self.worker_task(worker)?, worker, text, now_ms)
+            }
+            Command::WorktreeTidied { task, kept } => {
+                pr::tidied(self.task_mut(&task)?, kept, now_ms)
             }
             authoring => self.author(authoring, now_ms),
         }
@@ -1357,13 +1434,17 @@ pub fn agent_label(agent: &Agent) -> String {
 
 /// How a Worker reports: the `ferrite` its Session was given.
 const REPORT: &str = "\"${FERRITE_BIN:-ferrite}\" report outcome";
+/// How a Worker reports its PR's head.
+const REVISION: &str = "\"${FERRITE_BIN:-ferrite}\" report revision";
+/// How a Worker reports what a command or tool showed.
+const EVIDENCE: &str = "\"${FERRITE_BIN:-ferrite}\" report evidence";
 /// How a Worker asks the operator.
 const QUESTION: &str = "\"${FERRITE_BIN:-ferrite}\" report question";
 
 fn first_prompt(task: &Task) -> String {
     format!(
         "You are working on Ferrite Factory task {id}, in the task's own worktree on branch \
-         `{branch}`.\n\n{instructions}\n\nWhen you are done, report the outcome with one \
+         `{branch}`.\n\n{instructions}\n{pr}\nWhen you are done, report the outcome with one \
          command:\n\n    {REPORT} finished \"<one line: what you did>\"\n\nIf you cannot \
          finish, report what you tried:\n\n    {REPORT} unable \"<what you tried and what \
          stopped you>\"\n\n{ASKING}\n\nThe outcome is read only from that command, never \
@@ -1371,6 +1452,11 @@ fn first_prompt(task: &Task) -> String {
         id = task.id,
         branch = task.branch,
         instructions = task.instructions,
+        pr = if task.delivery.pr.is_some() {
+            pr::context(task)
+        } else {
+            String::new()
+        },
     )
 }
 
@@ -1399,6 +1485,8 @@ fn reporting(task: &Task, step: &Step) -> String {
              finish, report what you tried:\n\n    {REPORT} unable \"<what you tried>\"",
             direct::decision_section(task)
         )
+    } else if step.outcome_routes.is_some() {
+        format!("{}\n{ASKING}", pr::merge_reporting(task))
     } else {
         format!("{REPORTING}\n\n{ASKING}")
     }
@@ -1410,6 +1498,14 @@ fn said(result: &StepResult) -> String {
         Outcome::Unable { tried } => format!("- {} could not finish: {tried}", result.name),
         Outcome::Approved { summary } => format!("- {} approved: {summary}", result.name),
         Outcome::Rejected { reasons } => format!("- {} did not approve: {reasons}", result.name),
+        Outcome::Merge {
+            result: merge,
+            summary,
+        } => format!(
+            "- {} reported {}: {summary}",
+            result.name,
+            merge.label().to_lowercase()
+        ),
     }
 }
 
@@ -1437,7 +1533,9 @@ fn step_prompt(task: &Task, step: &Step) -> String {
         let earlier: Vec<String> = task.results.iter().map(said).collect();
         prompt.push_str(&format!("\n## Earlier results\n\n{}\n", earlier.join("\n")));
     }
+    prompt.push_str(&pr::context(task));
     prompt.push_str(&direct::said_since(task, 0, true));
+    prompt.push_str(&pr::reconcile(task, step));
     prompt.push('\n');
     prompt.push_str(&reporting(task, step));
     prompt
@@ -1459,10 +1557,15 @@ fn return_prompt(task: &Task, step: &Step) -> String {
         news.join("\n")
     };
     format!(
-        "The task is back with you, \"{name}\". Since you last reported:\n\n{news}\n{said}\n\
+        "The task is back with you, \"{name}\". Since you last reported:\n\n{news}\n{said}{pr}\n\
          Continue with your instructions in light of that.\n\n{reporting}",
         name = step.name,
         said = direct::said_since(task, last_own, false),
+        pr = if task.delivery.pr.is_some() {
+            format!("{}{}", pr::context(task), pr::reconcile(task, step))
+        } else {
+            String::new()
+        },
         reporting = reporting(task, step),
     )
 }
@@ -1489,7 +1592,16 @@ fn nudge_prompt() -> String {
     )
 }
 
-fn resume_prompt() -> String {
+fn resume_prompt(task: &Task) -> String {
+    // A merge Step reports its result, after reconciling an unconfirmed
+    // one (#223).
+    if let Some(step) = task.current_step().filter(|step| step.outcome_routes.is_some()) {
+        return format!(
+            "The operator resumed this task. Continue where you left off.\n{}\n{}",
+            pr::reconcile(task, step),
+            reporting(task, step)
+        );
+    }
     format!(
         "The operator resumed this task. Continue where you left off, and report the \
          outcome with `{REPORT} finished …` or `{REPORT} unable …` when you are done."
