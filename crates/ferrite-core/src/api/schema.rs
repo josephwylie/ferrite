@@ -173,6 +173,14 @@ operations! {
         "Move a Step to a place in the outline (0 is first).";
     StepDelete(StepParams) => "step.delete", ["workflow", "step"],
         "Delete a Step; routes to it stay, flagged.";
+    WorkflowStart(WorkflowStartParams) => "workflow.start", ["workflow", "start"],
+        "Set how a Workflow's draft starts Tasks: manual, schedule, github_issue, github_pr or external.";
+    WorkflowAutomation(WorkflowAutomationParams) => "workflow.automation", ["workflow", "turn"],
+        "Turn a Workflow's automatic starts on, pause, resume or off. Saving never turns them on.";
+    WorkflowBacklog(WorkflowBacklogParams) => "workflow.backlog", ["workflow", "take"],
+        "Take, or pass over, what already matched when a GitHub start was turned on.";
+    TaskSubmit(TaskSubmitParams) => "task.submit", ["workflow", "identity", "instructions"],
+        "Submit a Task to a Workflow that starts from your own script; a repeated identity returns its Task.";
 }
 
 /// No parameters.
@@ -526,4 +534,36 @@ pub struct StepMoveParams {
     pub step: String,
     /// Its place in the outline, 0 first.
     pub to: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowStartParams {
+    pub workflow: String,
+    /// `{"type": "schedule", "schedule": {...}, "github": {...}}`: every
+    /// source's settings, kept while another is chosen.
+    pub start: crate::factory::Start,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowAutomationParams {
+    pub workflow: String,
+    pub turn: crate::factory::Turn,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkflowBacklogParams {
+    pub workflow: String,
+    /// Start a Task for each; else they are passed over.
+    pub take: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskSubmitParams {
+    /// A Workflow whose saved version starts from your own script.
+    pub workflow: String,
+    /// The submission's own id in your tracker: the same one again is the
+    /// same Task.
+    pub identity: String,
+    /// What the Task is to do; its first line is its title.
+    pub instructions: String,
 }

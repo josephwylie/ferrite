@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use super::Server;
 use crate::api::schema::{
     AgentPromptParams, ReportOutcomeParams, ReportedOutcome, TaskListParams, TaskParams,
-    TaskStartParams, WorkflowCreateParams,
+    TaskStartParams, TaskSubmitParams, WorkflowCreateParams,
 };
 use crate::api::{ApiError, Code};
 use crate::engine::{Launch, ProviderChoice};
@@ -516,6 +516,38 @@ impl Server {
             _ => 0,
         };
         self.api_workflow_answer(&workflow, Some(("version", json!(version))))
+    }
+
+    /// An automatic starts' command from the API, answered with the
+    /// Workflow and whether it changed.
+    pub(super) fn api_automate(&mut self, command: Command) -> Result<Value, ApiError> {
+        let workflow = match &command {
+            Command::EditStart { workflow, .. }
+            | Command::Automation { workflow, .. }
+            | Command::Backlog { workflow, .. } => workflow.clone(),
+            _ => unreachable!("only the automatic starts' commands"),
+        };
+        let (answer, _) = self.factory_command(command)?;
+        let changed = answer == Answer::Changed(true);
+        self.api_workflow_answer(&workflow, Some(("changed", json!(changed))))
+    }
+
+    /// A script's submission: its Task, new or the one its identity
+    /// already started.
+    pub(super) fn api_task_submit(&mut self, params: TaskSubmitParams) -> Result<Value, ApiError> {
+        let before = self.factory.board().tasks.len();
+        let submit = Command::Submit {
+            workflow: params.workflow,
+            identity: params.identity,
+            instructions: params.instructions,
+        };
+        match self.factory_command(submit)? {
+            (Answer::Task(task), _) => {
+                let duplicate = self.factory.board().tasks.len() == before;
+                Ok(json!({ "task": self.task_json(&task)?, "duplicate": duplicate }))
+            }
+            _ => Err(ApiError::new(Code::Failed, "no Task was made")),
+        }
     }
 
     /// The Project named, or the one holding `cwd`.

@@ -70,6 +70,30 @@ impl Server {
     }
 }
 
+/// A window's picker list, as its reply.
+pub(super) fn list(
+    github: &dyn GitHub,
+    ask: &crate::protocol::GitHubAsk,
+) -> Result<Option<crate::protocol::Done>, crate::protocol::WireError> {
+    use crate::protocol::{ErrorCode, GitHubAsk, WireError};
+    let names = match ask {
+        GitHubAsk::Repositories => github.repositories(),
+        GitHubAsk::Labels { repository } => github.labels(repository),
+        GitHubAsk::Unknown => {
+            return Err(WireError {
+                code: ErrorCode::Unsupported,
+                message: "this server does not know that GitHub list".into(),
+            })
+        }
+    };
+    names
+        .map(|names| Some(crate::protocol::Done::Names { names }))
+        .map_err(|message| WireError {
+            code: ErrorCode::Failed,
+            message,
+        })
+}
+
 /// `owner/name` safe to put in a path, or refused.
 fn repository(query: &GitHubQuery) -> Result<&str, String> {
     let repository = query

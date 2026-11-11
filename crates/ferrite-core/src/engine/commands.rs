@@ -291,6 +291,7 @@ impl Engine {
             | Op::Stop { .. }
             | Op::Task { .. }
             | Op::Workflow { .. }
+            | Op::GitHub { .. }
             | Op::Unknown => Err(unknown()),
         }
     }

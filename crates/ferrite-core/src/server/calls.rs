@@ -213,6 +213,23 @@ impl Server {
                 workflow: params.workflow,
                 step: params.step,
             }),
+            Method::WorkflowStart(params) => self.api_automate(crate::factory::Command::EditStart {
+                workflow: params.workflow,
+                start: params.start,
+            }),
+            Method::WorkflowAutomation(params) => {
+                self.api_automate(crate::factory::Command::Automation {
+                    workflow: params.workflow,
+                    turn: params.turn,
+                })
+            }
+            Method::WorkflowBacklog(params) => {
+                self.api_automate(crate::factory::Command::Backlog {
+                    workflow: params.workflow,
+                    take: params.take,
+                })
+            }
+            Method::TaskSubmit(params) => self.api_task_submit(params),
             Method::NotificationShow(params) => {
                 self.say(ServerMessage::Notification {
                     title: params.title,

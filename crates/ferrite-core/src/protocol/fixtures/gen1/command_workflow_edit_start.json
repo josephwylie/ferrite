@@ -1,0 +1,1 @@
+{"type":"command","id":23,"op":"workflow","action":{"kind":"edit_start","workflow":"w-1","start":{"type":"schedule","schedule":{"recurrence":"weekdays","time":"09:00","weekday":1,"interval_hours":4,"instructions":"Triage new issues","missed":"run_once","overlap":"queue"},"github":{"repository":"acme/app","trigger":"labelled"}}}}

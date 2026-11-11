@@ -1353,6 +1353,9 @@ pub fn workflow_command(
             workflow,
             catalog: Catalog { models, skills },
         },
+        WorkflowAction::EditStart { workflow, start } => Command::EditStart { workflow, start },
+        WorkflowAction::Automation { workflow, turn } => Command::Automation { workflow, turn },
+        WorkflowAction::Backlog { workflow, take } => Command::Backlog { workflow, take },
         WorkflowAction::Unknown => return None,
     })
 }

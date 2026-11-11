@@ -208,6 +208,10 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "step.edit",
             "step.move",
             "step.delete",
+            "workflow.start",
+            "workflow.automation",
+            "workflow.backlog",
+            "task.submit",
         ]
     );
 }
@@ -454,6 +458,32 @@ fn samples() -> Vec<Request> {
         request(Method::StepDelete(StepParams {
             workflow: "w-1".into(),
             step: "s-2".into(),
+        })),
+        request(Method::WorkflowStart(WorkflowStartParams {
+            workflow: "w-1".into(),
+            start: crate::factory::Start {
+                kind: crate::factory::StartKind::GithubIssue,
+                schedule: Default::default(),
+                github: crate::factory::GitHubSource {
+                    repository: Some("acme/app".into()),
+                    trigger: crate::factory::Trigger::Labelled,
+                    label: Some("ready-for-agent".into()),
+                    extra_instructions: "Open a PR that closes the issue".into(),
+                },
+            },
+        })),
+        request(Method::WorkflowAutomation(WorkflowAutomationParams {
+            workflow: "w-1".into(),
+            turn: crate::factory::Turn::On,
+        })),
+        request(Method::WorkflowBacklog(WorkflowBacklogParams {
+            workflow: "w-1".into(),
+            take: false,
+        })),
+        request(Method::TaskSubmit(TaskSubmitParams {
+            workflow: "w-1".into(),
+            identity: "JIRA-12".into(),
+            instructions: "Fix the CSV export".into(),
         })),
     ]
 }
@@ -947,6 +977,50 @@ fn a_report_names_the_worker_it_runs_in() {
 
 /// Every authoring act is a CLI command: a Step's routes and skills
 /// as flags, its place as a number.
+/// The automatic starts' operations as the bundled skill writes them.
+#[test]
+fn automatic_starts_parse_from_the_cli() {
+    assert_eq!(
+        parse(
+            "workflow.start",
+            &["w-1", r#"{"type":"schedule","schedule":{"time":"09:00"}}"#]
+        ),
+        Ok(Method::WorkflowStart(WorkflowStartParams {
+            workflow: "w-1".into(),
+            start: crate::factory::Start {
+                kind: crate::factory::StartKind::Schedule,
+                schedule: crate::factory::Schedule {
+                    time: Some("09:00".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        }))
+    );
+    assert_eq!(
+        parse("workflow.automation", &["w-1", "pause"]),
+        Ok(Method::WorkflowAutomation(WorkflowAutomationParams {
+            workflow: "w-1".into(),
+            turn: crate::factory::Turn::Pause,
+        }))
+    );
+    assert_eq!(
+        parse("workflow.backlog", &["w-1", "false"]),
+        Ok(Method::WorkflowBacklog(WorkflowBacklogParams {
+            workflow: "w-1".into(),
+            take: false,
+        }))
+    );
+    assert_eq!(
+        parse("task.submit", &["w-1", "JIRA-12", "Fix the CSV export"]),
+        Ok(Method::TaskSubmit(TaskSubmitParams {
+            workflow: "w-1".into(),
+            identity: "JIRA-12".into(),
+            instructions: "Fix the CSV export".into(),
+        }))
+    );
+}
+
 #[test]
 fn workflow_authoring_parses_from_the_cli() {
     assert_eq!(

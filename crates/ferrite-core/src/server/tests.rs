@@ -23,6 +23,7 @@ mod browser_annotations;
 mod browser_providers;
 mod factory;
 mod owned;
+mod starts;
 mod park;
 mod publish;
 
@@ -225,6 +226,18 @@ fn serve_in(dir: PathBuf, gate: Option<Arc<Mutex<Receiver<()>>>>) -> Harness {
 }
 
 fn serve_tuned(dir: PathBuf, gate: Option<Arc<Mutex<Receiver<()>>>>, tuning: Tuning) -> Harness {
+    serve_configured(dir, gate, tuning, Box::new(|_| {}))
+}
+
+/// What a test sets on its Server before it serves: a clock, a reader.
+type Configure = Box<dyn FnOnce(&mut Server) + Send>;
+
+fn serve_configured(
+    dir: PathBuf,
+    gate: Option<Arc<Mutex<Receiver<()>>>>,
+    tuning: Tuning,
+    configure: Configure,
+) -> Harness {
     let store = dir.join("threads");
     let address = link::address(&store);
     let listener = link::listen(&address).unwrap();
@@ -265,6 +278,7 @@ fn serve_tuned(dir: PathBuf, gate: Option<Arc<Mutex<Receiver<()>>>>, tuning: Tun
             relaunches.send(executable.to_owned()).unwrap();
             Ok(())
         });
+        configure(&mut server);
         let (heard, hear) = mpsc::channel();
         crate::api::accept_all(api_listener, heard.clone()).unwrap();
         link::accept_all(listener, heard, tuning.lag_bytes).unwrap();
