@@ -261,7 +261,10 @@ Rust workspace. The renderer choice and the GPUI Kit `=0.6.0` pin are in
 Each git worktree builds into its own `target/`. On macOS a new worktree
 starts with the main checkout's build (`scripts/warm-worktree.sh`), so its
 first build compiles only what changed since; `scripts/install-app.sh`
-brings that build up to date after each install (`scripts/warm-main.sh`).
+brings that build up to date after each install (`scripts/warm-main.sh`). What a
+worktree builds is its own and takes disk: when the disk runs low, each commit
+and checkout hands idle worktrees the main checkout's build again
+(`scripts/reclaim-worktree-builds.py`).
 Turn the worktree step on once per clone:
 
 ```sh

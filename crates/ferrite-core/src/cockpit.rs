@@ -74,6 +74,9 @@ pub struct Cockpit {
     allowance_warnings: Vec<crate::providers::limits::AllowanceWarning>,
     /// What API callers asked of the windows, oldest first.
     asked: Vec<Asked>,
+    /// The `window.*` actions this window was handed and has not done:
+    /// only a `ferrite --headless` one is (ADR 0038).
+    drives: Vec<(u64, crate::drive::Action)>,
     /// The Subject each Pane shows, where it is not Main: what this window
     /// reads when the operator looks at it.
     visible_subjects: std::collections::BTreeMap<ThreadId, Subject>,
@@ -227,6 +230,7 @@ impl Cockpit {
             browser_messages: Vec::new(),
             allowance_warnings: Vec::new(),
             asked: Vec::new(),
+            drives: Vec::new(),
             visible_subjects: std::collections::BTreeMap::new(),
             window_active: true,
             composing: std::collections::BTreeSet::new(),
@@ -834,6 +838,10 @@ impl Cockpit {
     }
 
     fn message(&mut self, message: ServerMessage, boot: Instant) {
+        if let ServerMessage::Drive { request, action } = message {
+            self.drives.push((request, action));
+            return;
+        }
         if matches!(
             message,
             ServerMessage::Browser { .. } | ServerMessage::BrowserRequest { .. }
@@ -2443,6 +2451,22 @@ impl Cockpit {
     /// What API callers asked of the windows since the last take.
     pub fn take_asked(&mut self) -> Vec<Asked> {
         std::mem::take(&mut self.asked)
+    }
+
+    /// The `window.*` actions handed to this window since the last take,
+    /// each by its request; [`Self::driven`] answers it.
+    pub fn take_drives(&mut self) -> Vec<(u64, crate::drive::Action)> {
+        std::mem::take(&mut self.drives)
+    }
+
+    pub fn driven(&mut self, request: u64, answer: Result<crate::drive::Answer, String>) {
+        if let Link::Server(server) = &mut self.link {
+            let (ok, error) = match answer {
+                Ok(answer) => (Some(answer), None),
+                Err(error) => (None, Some(error)),
+            };
+            server.say(&crate::protocol::ClientMessage::Driven { request, ok, error });
+        }
     }
 
     /// Request workspace commands without creating a Thread or Session.

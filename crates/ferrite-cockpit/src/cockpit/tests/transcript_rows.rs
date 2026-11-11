@@ -92,9 +92,9 @@ fn reasoning_discloses_body_without_repeating_its_heading(cx: &mut TestAppContex
     view.read_with(cx, |view, _| {
         let text = view.selection.registered(view.panes[0].thread().unwrap());
         assert!(
-            text.iter()
-                .any(|(block, _, _, text)| *block == id && text == body),
-            "expanded reasoning must contain the body without duplicating its heading: {text:?}"
+            text.iter().any(|(block, _, _, text)| *block == id
+                && *text == format!("**Checking files**\n\n{body}")),
+            "expanded, the row reads `Thought` and the body is the whole thought: {text:?}"
         );
     });
     for width in [1000., 740.] {
@@ -130,7 +130,7 @@ fn reasoning_discloses_body_without_repeating_its_heading(cx: &mut TestAppContex
         let text = view.selection.registered(view.panes[0].thread().unwrap());
         assert!(
             text.iter().any(|(block, _, _, text)| *block == id
-                && text == &format!("{body} More streamed detail.")),
+                && *text == format!("**Checking files**\n\n{body} More streamed detail.")),
             "streaming must preserve the open disclosure and append its body: {text:?}"
         );
     });
@@ -381,17 +381,19 @@ fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppCont
             actions.left(),
             answer.left() - px((MESSAGE_ACTION - MESSAGE_ACTION_GLYPH) / 2.)
         );
-        // One content edge: the group's summary and the answer's prose
-        // start on the content column (the prompt's bubble keeps to the
-        // right).
+        // One content edge: the group's row and the answer's prose start
+        // on the content column, the summary past the row's icon gutter
+        // (the prompt's bubble keeps to the right).
+        use ferrite_ui::theme::{WORK_GAP, WORK_GUTTER, WORK_ROW_PAD_X};
+        let label = px(WORK_ROW_PAD_X + WORK_GUTTER + WORK_GAP);
         let tools_start = caret(&view, cx, 1, 0).x;
         let answer_start = caret(&view, cx, 3, 0).x;
-        assert_eq!(answer_start, tools_start, "answer prose sits on C1");
+        assert_eq!(answer_start + label, tools_start, "answer prose sits on C1");
         // The row's box is rounded to the pixel and its text keeps its
         // fraction (the browser's model, vendor/gpui-pre "Pixel
         // snapping"): the two agree to within a pixel.
         assert!(
-            (tools_start - tools.left() - px(0.5)).abs() <= px(1.0),
+            (tools_start - label - tools.left() - px(0.5)).abs() <= px(1.0),
             "the words on the row's left edge, plus the caret helper's half-pixel inset: {tools_start:?} {tools:?}"
         );
     }
@@ -427,15 +429,17 @@ fn multiline_tool_input_is_compact_and_disclosable_while_running(cx: &mut TestAp
 
     let chevron = view.read_with(cx, |view, cx| {
         let runs = view.selection.registered(thread);
-        assert!(runs
-            .iter()
-            .any(|(_, _, _, text)| text.contains("cat <<'EOF' …")));
+        let label = "cat \\<\\<\\'EOF\\' …";
+        assert!(
+            runs.iter().any(|(_, _, _, text)| text == label),
+            "the call's label is its first line: {runs:?}"
+        );
         assert!(!runs
             .iter()
             .any(|(_, _, _, text)| text.contains("let answer")));
         let first = runs
             .iter()
-            .find(|(_, _, _, text)| text.starts_with("Running "))
+            .find(|(_, _, _, text)| text == label)
             .unwrap()
             .0;
         let height = |block| {
@@ -575,7 +579,7 @@ fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
     // it, its first line too.
     assert!(collapsed
         .iter()
-        .any(|(_, _, _, text)| text == "Ran `echo hi`"));
+        .any(|(_, _, _, text)| text == "echo hi"));
     assert!(!collapsed
         .iter()
         .any(|(_, _, _, text)| text.contains("first line")));
@@ -1276,7 +1280,7 @@ fn the_live_row_opens_the_work_it_stands_for(cx: &mut TestAppContext) {
         view.selection
             .registered(thread)
             .iter()
-            .filter(|(_, _, _, text)| text.starts_with("Running "))
+            .filter(|(_, _, _, text)| text == "sleep 15 \\&\\& echo done")
             .count()
     };
     view.read_with(cx, |view, _| {

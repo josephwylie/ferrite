@@ -304,7 +304,7 @@ impl std::ops::DerefMut for CockpitPane {
 }
 
 pub struct CockpitView {
-    cockpit: Cockpit,
+    pub(crate) cockpit: Cockpit,
     browsers: browser::Browsers,
     /// One view per Pane of the Cockpit's roster, in its order — the
     /// keyboard, the scrollback and the caches the window owns for each.

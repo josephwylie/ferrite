@@ -474,7 +474,7 @@ fn a_sweep_across_a_tool_row_copies_its_text_and_never_its_chrome(cx: &mut TestA
     cx.simulate_keystrokes("cmd-c");
     assert_eq!(
         clipboard(cx).as_deref(),
-        Some("before\n\nRan echo hi\n\nafter"),
+        Some("before\n\necho hi\n\nafter"),
         "copy the call line as it reads; omit the icon and the trail"
     );
 }
@@ -1038,8 +1038,8 @@ fn the_reply_pill_stands_clear_of_the_selection_not_at_the_pointer(cx: &mut Test
         pill
     };
 
-    // Along a line: centred over the run.
-    let (from, to) = drag(&view, cx, (0, 6), (0, 15));
+    // Along a line with room above it: centred over the run.
+    let (from, to) = drag(&view, cx, (1, 0), (1, 5));
     let pill = check(cx, "a drag along a line");
     let middle = (from.x + to.x) / 2.;
     assert!(

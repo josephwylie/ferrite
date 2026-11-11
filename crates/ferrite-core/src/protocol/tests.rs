@@ -369,6 +369,38 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
+            "hello_driven",
+            Sample::Client(ClientMessage::Hello {
+                generation: 1,
+                client: Peer {
+                    name: "ferrite".into(),
+                    version: "0.9.0".into(),
+                },
+                capabilities: vec![Capability::ParkedThreads, Capability::Driven],
+            }),
+        ),
+        (
+            "driven_shot",
+            Sample::Client(ClientMessage::Driven {
+                request: 4,
+                ok: Some(crate::drive::Answer::Shot {
+                    path: "/tmp/shot.png".into(),
+                    width: 2880,
+                    height: 1800,
+                    scale: 2.0,
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "driven_error",
+            Sample::Client(ClientMessage::Driven {
+                request: 4,
+                ok: None,
+                error: Some("nothing drawn as `settings-close`".into()),
+            }),
+        ),
+        (
             "command_open",
             command(
                 1,
@@ -1579,6 +1611,25 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 id: "toolu_09".into(),
                 title: "Chart".into(),
                 html: "<div>chart</div>".into(),
+            }),
+        ),
+        (
+            "drive_key",
+            Sample::Server(ServerMessage::Drive {
+                request: 4,
+                action: crate::drive::Action::Key(crate::drive::Keys {
+                    keys: vec!["cmd-,".into(), "escape".into()],
+                }),
+            }),
+        ),
+        (
+            "drive_click",
+            Sample::Server(ServerMessage::Drive {
+                request: 5,
+                action: crate::drive::Action::Click(crate::drive::Click {
+                    at: crate::drive::Target::Selector("settings-close".into()),
+                    press: crate::drive::Press::Double,
+                }),
             }),
         ),
         (

@@ -83,6 +83,14 @@ pub enum ClientMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// The answer to a `drive`.
+    Driven {
+        request: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ok: Option<crate::drive::Answer>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -103,6 +111,9 @@ pub enum Capability {
     /// This client lists the Server's parked Threads off its `parked`
     /// message: a window on a machine, whose logs stay there (ADR 0026).
     ParkedThreads,
+    /// This client is a `ferrite --headless` window: the API's `window.*`
+    /// actions are for it (ADR 0038).
+    Driven,
     #[serde(other)]
     Unknown,
 }
@@ -957,6 +968,13 @@ pub enum ServerMessage {
         id: String,
         title: String,
         html: String,
+    },
+    /// An API caller's `window.*` action, for the one `driven` client
+    /// chosen (ADR 0038).
+    Drive {
+        request: u64,
+        #[serde(flatten)]
+        action: crate::drive::Action,
     },
     /// An API caller asked the windows to land on this Thread
     /// (`thread.focus`, ADR 0027).
@@ -2145,6 +2163,7 @@ fn main_outgoing(input: &Input, duration: Option<Duration>) -> Outgoing {
         )
         | Input::Prompt(_)
         | Input::PromptObservation { .. }
+        | Input::ClockObservation { .. }
         | Input::Rewind { .. }
         | Input::CompletionObservation { .. } => unreachable!("the log keeps {input:?}"),
     };

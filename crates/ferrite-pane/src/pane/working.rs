@@ -102,7 +102,7 @@ struct Header {
 /// The live row's facts besides the turn's trailing work.
 #[derive(Clone, Debug, Hash, PartialEq)]
 struct Live {
-    /// The Pane holds the keyboard and motion is on: the words shimmer.
+    /// Motion is on: the words shine, in any Pane (T3's).
     shimmer: bool,
     /// Motion is on: the running glyph in the row's gutter turns.
     spinning: bool,
@@ -143,7 +143,7 @@ pub fn working_tail(facts: WorkingFacts) -> Option<WorkingTail> {
                 compacting: progress.phase == Some(Phase::Compacting),
             },
             live: Live {
-                shimmer: facts.focused && !facts.reduce_motion,
+                shimmer: !facts.reduce_motion,
                 spinning: !facts.reduce_motion,
                 phase,
                 plan: plan_of(transcript),
@@ -204,7 +204,16 @@ fn turn_header(header: &Header) -> Div {
             .items_center()
             .gap(px(theme::TURN_FOLD_ICON_GAP))
             .child(icon(icons::MINIMIZE, theme::TURN_FOLD_ICON, INK_SUBTLE))
-            .child(div().flex().child("Compacting for\u{a0}").child(clock)),
+            .child(
+                div()
+                    .flex()
+                    .child(components::shine(
+                        "Compacting for\u{a0}",
+                        INK_SUBTLE,
+                        components::Shine::Activity,
+                    ))
+                    .child(clock),
+            ),
         (true, None) => div()
             .flex()
             .items_center()
@@ -409,7 +418,12 @@ fn live_row(live: &Live, work: &[Block], disclosure: Option<LineDisclosure>) -> 
         .flatten()
         .filter(|thought| !thought.is_empty());
     let face = if live.shimmer {
-        components::shimmer(SharedString::from(words), INK_SUBTLE)
+        let shine = if selector == "live-call" {
+            components::Shine::Tool
+        } else {
+            components::Shine::Activity
+        };
+        components::shine(SharedString::from(words), INK_SUBTLE, shine)
     } else {
         div().min_w_0().truncate().child(words).into_any_element()
     };
@@ -452,7 +466,7 @@ fn live_row(live: &Live, work: &[Block], disclosure: Option<LineDisclosure>) -> 
                         .flex_shrink_0()
                         .items_center()
                         .h(px(theme::TURN_FOLD_LINE))
-                        .child(icon(icons::REASONING, theme::ICON_CHEVRON, INK_SUBTLE)),
+                        .child(icon(icons::BRAIN, theme::ICON_CHEVRON, INK_SUBTLE)),
                 )
                 .child(
                     div()

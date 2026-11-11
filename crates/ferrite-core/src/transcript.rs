@@ -40,6 +40,11 @@ pub struct Block {
     /// live and on replay alike. `None` for every other Block and for a
     /// prompt from a log written before the time was kept.
     pub sent_at: Option<String>,
+    /// When a block other than a prompt began: the stamp of the latest
+    /// `Input::ClockObservation` before it, live and on replay alike. `None`
+    /// for a block from a log written before the clock was kept, and for an
+    /// answer section.
+    pub at: Option<String>,
     /// The prompt's own id (`Input::PromptObservation`), which a rewind
     /// names it by: `None` for every other Block and for a prompt sent
     /// before Ferrite kept one, which cannot be rewound to.
@@ -857,6 +862,13 @@ pub enum Input {
         /// the prompt ids' first release on; `None` in older logs.
         prompt_id: Option<String>,
     },
+    /// The wall clock where the log stands (`clock::minute_stamp`),
+    /// observed live whenever its minute moves and recorded before the
+    /// event it heads: what the blocks after it are stamped with
+    /// (`Block::at`). Replay restores the stored value.
+    ClockObservation {
+        at: String,
+    },
     /// The conversation went back to before the prompt `prompt` names:
     /// that prompt and everything after it are gone (`truncate_from`).
     /// `dropped` counts the prompts it took, for the log's turn count.
@@ -993,6 +1005,9 @@ pub struct Transcript {
     /// How many settled calls may have moved the workspace's git or forge
     /// state behind the agent's own edits (`published`).
     published: u64,
+    /// The latest `Input::ClockObservation`'s stamp: what a new block's
+    /// `at` reads.
+    clock: Option<String>,
 }
 
 /// A test runner's progress, read off its output one complete line at a
@@ -1304,7 +1319,14 @@ impl Transcript {
             latest_reasoning_part: None,
             reasoning_parts: Default::default(),
             orphan_results: Vec::new(),
+            clock: None,
         }
+    }
+
+    /// The latest clock observation's stamp, which new blocks are stamped
+    /// with.
+    pub fn clock(&self) -> Option<&str> {
+        self.clock.as_deref()
     }
 
     /// The calls that launched background work, oldest first, while their
@@ -1853,6 +1875,10 @@ impl Transcript {
                     dirty: vec![block.id],
                     ..Update::default()
                 }
+            }
+            Input::ClockObservation { at } => {
+                self.clock = Some(at);
+                Update::default()
             }
             Input::Rewind { prompt, .. } => self.truncate_from(&prompt),
             Input::Event(SessionEvent::ReasoningSummaryPart {
@@ -3016,12 +3042,16 @@ impl Transcript {
     fn push(&mut self, body: Body) -> BlockId {
         self.thinking_open = false;
         let id = self.mint();
+        let at = (!matches!(body, Body::Prompt(_)))
+            .then(|| self.clock.clone())
+            .flatten();
         self.blocks.push(Block {
             id,
             body,
             markdown: None,
             markdown_run: None,
             sent_at: None,
+            at,
             prompt_id: None,
             steer: false,
         });
@@ -3547,6 +3577,48 @@ mod tests {
             dropped: 1,
         });
         assert!(transcript.blocks().is_empty());
+    }
+
+    /// Work is stamped with the clock the log last observed, so a replay
+    /// of the same log lines stamps it alike; work before any observation
+    /// (an older log) has no time.
+    #[test]
+    fn work_takes_its_time_from_the_clock_line_before_it() {
+        let stamp = "2026-11-10T20:01:00+00:00";
+        let inputs = vec![
+            Input::Prompt("go".into()),
+            Input::Event(SessionEvent::ToolStarted {
+                id: "early".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({"command": "ls"}),
+            }),
+            Input::ClockObservation { at: stamp.into() },
+            Input::Event(SessionEvent::ThinkingDelta {
+                text: "Weighing it".into(),
+            }),
+            Input::Event(SessionEvent::ToolStarted {
+                id: "late".into(),
+                name: "Read".into(),
+                input: serde_json::json!({"file_path": "a.rs"}),
+            }),
+        ];
+        let stamps = |transcript: &Transcript| -> Vec<Option<String>> {
+            transcript.blocks().iter().map(|block| block.at.clone()).collect()
+        };
+        let mut live = Transcript::default();
+        for input in &inputs {
+            live.apply(input.clone());
+        }
+        let at = Some(stamp.to_owned());
+        assert_eq!(stamps(&live), vec![None, None, at.clone(), at]);
+        let mut replayed = Transcript::default();
+        for input in &inputs {
+            let line = crate::store::LogRecord::of(input, None).expect("the log keeps it");
+            let line: crate::store::LogRecord =
+                serde_json::from_str(&serde_json::to_string(&line).unwrap()).unwrap();
+            replayed.apply(line.input().expect("it replays"));
+        }
+        assert_eq!(stamps(&replayed), stamps(&live));
     }
 
     /// CT-3: a prompt's send time rides the observation recorded after it;

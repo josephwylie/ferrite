@@ -2,9 +2,11 @@
 #
 # post-checkout <previous HEAD> <new HEAD> <branch flag>
 #
-# A new worktree's first checkout has no previous HEAD: warm its build
-# directory (scripts/warm-worktree.sh). A failure there costs a cold first
-# build, never the worktree.
+# Every checkout: see reclaim-builds. A new worktree's first checkout has no
+# previous HEAD: warm its build directory (scripts/warm-worktree.sh). A
+# failure there costs a cold first build, never the worktree.
+
+"$(dirname "$0")/reclaim-builds"
 
 case "$1" in
   *[!0]*) exit 0 ;;

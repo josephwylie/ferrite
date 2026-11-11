@@ -561,6 +561,12 @@ enum Record {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prompt_id: Option<String>,
     },
+    /// The wall clock, cut to its minute, before the first event of each
+    /// minute a Thread was busy: what the transcript stamps the work after
+    /// it with. Absent from older logs, whose work draws no time.
+    Clock {
+        at: String,
+    },
     /// Schema 15: the conversation went back to before the prompt whose
     /// observation carries `prompt`. Replay drops that prompt and every
     /// line after it up to here; the log itself stays append-only.
@@ -663,6 +669,7 @@ impl LogRecord {
                 prompt: prompt.clone(),
                 dropped: *dropped,
             },
+            Input::ClockObservation { at } => Record::Clock { at: at.clone() },
             Input::CompletionObservation {
                 elapsed_ms,
                 completed_at,
@@ -1532,6 +1539,7 @@ impl Record {
                 prompt: prompt.clone(),
                 dropped: *dropped,
             },
+            Record::Clock { at } => Input::ClockObservation { at: at.clone() },
             Record::ReasoningSummary {
                 text,
                 summary_index,
@@ -4456,6 +4464,12 @@ impl ThreadWriter {
         prompt_id: Option<&str>,
     ) -> io::Result<()> {
         self.lock().record_prompt_observation(sent_at, prompt_id)
+    }
+
+    /// Buffer the wall clock's minute (`Record::Clock`), ahead of the
+    /// event it heads.
+    pub fn record_clock(&mut self, at: &str) -> io::Result<()> {
+        self.lock().push(Record::Clock { at: at.into() })
     }
 
     /// Record a rewind to before the prompt `prompt` names, which took

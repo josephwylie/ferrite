@@ -128,6 +128,7 @@ mod tests {
             markdown: markdown.map(str::to_owned),
             markdown_run: None,
             sent_at: None,
+            at: None,
             prompt_id: None,
             steer: false,
         }

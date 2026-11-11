@@ -10,10 +10,15 @@ doctest = false
 
 [features]
 cef = ["ferrite-pane/cef"]
+# The Cockpit window drawn off-screen and driven by keys, clicks and shots
+# (`headless`, ADR 0038): gpui's test support carries its input and
+# capture, so release builds never have it. The app's `headless` feature
+# (`ferrite --headless`) and `visual-reference` turn this on.
+headless = ["gpui/test-support", "dep:gpui-reference-platform"]
 # Opt-in native framebuffer artifacts (`cockpit::visual_reference`);
 # excluded from normal application builds. The app's own
 # `visual-reference` feature turns this on.
-visual-reference = ["gpui/test-support", "dep:gpui-reference-platform", "ferrite-pane/visual-reference"]
+visual-reference = ["headless", "ferrite-pane/visual-reference"]
 
 browser-smoke = ["gpui/test-support", "dep:gpui-reference-platform", "ferrite-pane/browser-smoke"]
 

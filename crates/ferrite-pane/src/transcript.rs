@@ -446,6 +446,12 @@ pub struct TranscriptView {
     /// The list's width as of the last layout (rows can't ask the list
     /// while it lays them out).
     list_w: Rc<Cell<f32>>,
+    /// The list's height as of the last layout: an open group's list is
+    /// capped at half of it.
+    list_h: Rc<Cell<f32>>,
+    /// Each open group's list scroll, by its group, kept while the
+    /// transcript lives.
+    group_lists: std::cell::RefCell<HashMap<DisclosureId, Rc<pane::GroupList>>>,
     /// The texts copy and find read, in row order, each with its row.
     texts: Vec<(usize, RunText)>,
     /// The find bar, while it is open (⌘F).
@@ -580,6 +586,8 @@ impl TranscriptView {
             scroll_end_wanted: None,
             visuals,
             list_w: Rc::default(),
+            list_h: Rc::default(),
+            group_lists: Default::default(),
             texts: Vec::new(),
             find: None,
             reply: None,
@@ -1204,10 +1212,7 @@ impl TranscriptView {
             pane::collect_group_text(
                 row.blocks(),
                 self.group_expanded(row),
-                |tool| {
-                    self.tool_state(DisclosureId::Tool(tool.call.clone()))
-                        == DisclosureState::Expanded
-                },
+                |block| self.tool_state(self.member_id(block)) == DisclosureState::Expanded,
                 selection,
             );
         } else if let Some(block) = row.blocks().first() {
@@ -1594,31 +1599,39 @@ impl TranscriptView {
                 .into_any_element();
         }
         match &block.body {
-            Body::Tool(tool) => self.render_call(block.id, tool, &row_cx, view.as_ref(), false),
             Body::WrapUp(wrap) => {
                 let spent = matches!(row.kind(), RowKind::WrapUp { spent: true });
                 let face = self.wrap_up_face(wrap, spent, view.as_ref(), cx);
                 pane::render_wrap_up(block.id, wrap, &row_cx, face)
             }
-            _ => {
-                let call = match &block.body {
-                    Body::Thinking(text) if pane::reasoning_has_details(text) => {
-                        Some(DisclosureId::Reasoning(block.id))
-                    }
-                    _ => None,
-                };
-                pane::render_block(
-                    block,
-                    &row_cx,
-                    call.as_ref()
-                        .is_some_and(|call| self.tool_state(call) == DisclosureState::Expanded),
-                    call.as_ref().and_then(|call| {
-                        view.as_ref()
-                            .map(|view| self.control(call, view.clone(), cx))
-                    }),
-                )
-            }
+            _ => self.render_work(block, &row_cx, view.as_ref(), false),
         }
+    }
+
+    /// One block on its own row or in a group's list: a call
+    /// (`render_call`), or any other block, a thought opening and shutting
+    /// under the pointer and the keys.
+    fn render_work(
+        &self,
+        block: &ferrite_core::transcript::Block,
+        row_cx: &pane::RowCx,
+        view: Option<&Entity<Self>>,
+        grouped: bool,
+    ) -> AnyElement {
+        if let Body::Tool(tool) = &block.body {
+            return self.render_call(block, tool, row_cx, view, grouped);
+        }
+        let call = matches!(&block.body, Body::Thinking(text) if !text.trim().is_empty())
+            .then_some(DisclosureId::Reasoning(block.id));
+        pane::render_block(
+            block,
+            row_cx,
+            call.as_ref()
+                .is_some_and(|call| self.tool_state(call) == DisclosureState::Expanded),
+            call.as_ref().and_then(|call| {
+                view.map(|view| self.disclosure_control(call, false, view.clone()))
+            }),
+        )
     }
 
     /// A row's width (the list's, less the row insets), once laid out.
@@ -1654,12 +1667,13 @@ impl TranscriptView {
     /// in a group's card, so its open body takes no card of its own.
     fn render_call(
         &self,
-        block: BlockId,
+        stamped: &ferrite_core::transcript::Block,
         tool: &ferrite_core::transcript::ToolBlock,
         row_cx: &pane::RowCx,
         view: Option<&Entity<Self>>,
         grouped: bool,
     ) -> AnyElement {
+        let block = stamped.id;
         if pane::is_agent(tool) {
             let open = view
                 .filter(|_| self.input.agents.get(&tool.call).is_some())
@@ -1684,16 +1698,24 @@ impl TranscriptView {
                 grouped,
                 disclosure,
                 live: background_opener(tool, view),
+                at: stamped.at.clone(),
             },
         )
     }
 
-    /// The disclosure naming a group row: its first call's.
+    /// The disclosure naming a group row: its first call's (what the live
+    /// row opens, `rows::live_anchor`), or a group of thoughts alone, its
+    /// first thought's.
     fn group_id(row: &TranscriptRow) -> Option<DisclosureId> {
-        row.blocks().first().and_then(|block| match &block.body {
-            Body::Tool(tool) => Some(DisclosureId::Group(tool.call.clone())),
-            _ => None,
-        })
+        let blocks = row.blocks();
+        blocks
+            .iter()
+            .find_map(|block| match &block.body {
+                Body::Tool(tool) => Some(tool.call.clone()),
+                _ => None,
+            })
+            .or_else(|| blocks.first().map(|block| format!("thoughts-{:?}", block.id)))
+            .map(DisclosureId::Group)
     }
 
     fn group_expanded(&self, row: &TranscriptRow) -> bool {
@@ -1716,6 +1738,15 @@ impl TranscriptView {
         let disclosure = view
             .clone()
             .map(|view| self.disclosure_control(&id, true, view));
+        let opened = expanded
+            && row
+                .blocks()
+                .iter()
+                .any(|block| self.tool_state(self.member_id(block)) == DisclosureState::Expanded);
+        let list = expanded.then(|| {
+            let mut lists = self.group_lists.borrow_mut();
+            lists.entry(id.clone()).or_default().clone()
+        });
         let members = move || {
             let drawn: Vec<&ferrite_core::transcript::Block> = if expanded {
                 row.blocks().iter().collect()
@@ -1724,12 +1755,7 @@ impl TranscriptView {
             };
             drawn
                 .into_iter()
-                .filter_map(|block| match &block.body {
-                    Body::Tool(tool) => {
-                        Some(self.render_call(block.id, tool, row_cx, view.as_ref(), true))
-                    }
-                    _ => None,
-                })
+                .map(|block| self.render_work(block, row_cx, view.as_ref(), true))
                 .collect()
         };
         pane::render_tool_group(
@@ -1738,8 +1764,19 @@ impl TranscriptView {
             pane::GroupCx {
                 disclosure,
                 members: Box::new(members),
+                list: list.as_deref().map(|list| (list, opened)),
+                view_h: self.list_h.get(),
+                ground: theme::tx_ground(self.input.solo),
             },
         )
+    }
+
+    /// The disclosure a group member opens by: a call's, a thought's.
+    fn member_id(&self, block: &ferrite_core::transcript::Block) -> DisclosureId {
+        match &block.body {
+            Body::Tool(tool) => DisclosureId::Tool(tool.call.clone()),
+            _ => DisclosureId::Reasoning(block.id),
+        }
     }
 
     /// Where `call`'s disclosure control was last laid out.
@@ -1758,17 +1795,23 @@ impl TranscriptView {
     pub fn disclosures(&self) -> Vec<DisclosureId> {
         let mut stops = Vec::new();
         let call = |stops: &mut Vec<DisclosureId>, block: &ferrite_core::transcript::Block| {
-            if let Body::Tool(tool) = &block.body {
-                // An agent's row has no details: it is a stop while it
-                // opens its agent (↵), which the keyboard can stop too.
-                let stop = if pane::is_agent(tool) {
-                    self.input.agents.get(&tool.call).is_some()
-                } else {
-                    pane::tool_has_details(tool)
-                };
-                if stop {
-                    stops.push(DisclosureId::Tool(tool.call.clone()));
+            match &block.body {
+                Body::Tool(tool) => {
+                    // An agent's row has no details: it is a stop while it
+                    // opens its agent (↵), which the keyboard can stop too.
+                    let stop = if pane::is_agent(tool) {
+                        self.input.agents.get(&tool.call).is_some()
+                    } else {
+                        pane::tool_has_details(tool)
+                    };
+                    if stop {
+                        stops.push(DisclosureId::Tool(tool.call.clone()));
+                    }
                 }
+                Body::Thinking(text) if !text.trim().is_empty() => {
+                    stops.push(DisclosureId::Reasoning(block.id));
+                }
+                _ => {}
             }
         };
         for row in self.rows.rows() {
@@ -1794,34 +1837,15 @@ impl TranscriptView {
                         }
                     }
                 }
-                RowKind::Activity { .. } => {
+                RowKind::Activity | RowKind::Reasoning => {
                     if let Some(block) = row.blocks().first() {
                         call(&mut stops, block);
-                    }
-                }
-                RowKind::Reasoning => {
-                    if let Some(block) = row.blocks().first() {
-                        if matches!(&block.body, Body::Thinking(text) if pane::reasoning_has_details(text))
-                        {
-                            stops.push(DisclosureId::Reasoning(block.id));
-                        }
                     }
                 }
                 _ => {}
             }
         }
         stops
-    }
-
-    /// A reasoning row's disclosure: its header toggles under the pointer,
-    /// its chevron turning.
-    fn control(
-        &self,
-        call: &DisclosureId,
-        view: Entity<Self>,
-        _cx: &mut Context<Self>,
-    ) -> pane::Disclosure {
-        self.disclosure_control(call, false, view)
     }
 
     /// A header's disclosure: the whole header toggles under the pointer,
@@ -2041,9 +2065,9 @@ impl TranscriptView {
                         .flex()
                         .justify_center()
                         .w_full()
-                        .px(px(theme::tx_inset(self.input.solo)))
+                        .px(px(theme::tx_inset_at(self.list_w.get(), self.input.solo)))
                         .py(px(theme::PINNED_PROMPT_PAD_Y))
-                        .bg(gpui::rgb(theme::CARD))
+                        .bg(gpui::rgb(theme::tx_ground(self.input.solo)))
                         .child(
                             div()
                                 .flex()
@@ -2053,7 +2077,7 @@ impl TranscriptView {
                                 .child(bubble),
                         ),
                 )
-                .child(top_fade())
+                .child(top_fade(self.input.solo))
                 .into_any_element(),
         )
     }
@@ -2377,18 +2401,23 @@ fn date_divider(prompt: &Block) -> gpui::Div {
         .child(rule())
 }
 
-/// The top fade (`EDGE_FADE`): the card's fill fading to nothing, over
+/// The top fade (`EDGE_FADE`): the ground (T3's stops) fading to nothing, over
 /// what scrolls under the top of the transcript or its pinned prompt.
-fn top_fade() -> gpui::Div {
-    ferrite_ui::components::edge_fade(gpui::rgb(theme::CARD).into(), false)
+fn top_fade(solo: bool) -> gpui::Div {
+    ferrite_ui::components::fade(
+        gpui::rgb(theme::tx_ground(solo)).into(),
+        false,
+        theme::EDGE_FADE,
+        &theme::TX_TOP_FADE_STOPS,
+    )
 }
 
 /// The foot fade: the same fill rising from the transcript's foot while a
 /// row runs on under it (the reader scrolled away from the tail, or the
 /// tail grown past it), so a row cut there fades into the Composer rather
 /// than ending on a hard cut.
-fn bottom_fade() -> gpui::Div {
-    ferrite_ui::components::edge_fade(gpui::rgb(theme::CARD).into(), true)
+fn bottom_fade(solo: bool) -> gpui::Div {
+    ferrite_ui::components::edge_fade(gpui::rgb(theme::tx_ground(solo)).into(), true)
 }
 
 /// When each turn's answer finished, by the turn's last prose block: its
@@ -2729,6 +2758,7 @@ impl Render for TranscriptView {
         }
         let grid = self.grid();
         let solo = self.input.solo;
+        let row_inset = theme::tx_inset_at(self.list_w.get(), solo);
         let list = list(
             self.scroll.list_state().clone(),
             move |index, window, cx| {
@@ -2754,7 +2784,7 @@ impl Render for TranscriptView {
                 // row's own gap above it (the first row's is the body's top
                 // padding: the list's own top padding flickers mid-scroll).
                 let gap = row.gap();
-                let wrapper = div().w_full().pt(px(gap)).px(px(theme::tx_inset(solo)));
+                let wrapper = div().w_full().pt(px(gap)).px(px(row_inset));
                 // A row appended live comes in where it stands (its frames
                 // come from the transcript's render, `fading`): the sent
                 // bubble pops from its right edge, the rest fade.
@@ -2788,8 +2818,9 @@ impl Render for TranscriptView {
         let runway = self.runway.clone();
         let shelf = self.visuals.clone();
         let list_w = self.list_w.clone();
+        let list_h = self.list_h.clone();
         let reading = self.input.reading_size;
-        let inset = theme::tx_inset(solo);
+        let inset = row_inset;
         let pad_b = theme::body_pad_b(solo);
         let list = div()
             .on_children_prepainted(move |_, window, cx| {
@@ -2937,12 +2968,19 @@ impl Render for TranscriptView {
                         let _ = weak.update(cx, |_, cx| cx.notify());
                     });
                 }
+                list_h.set(f32::from(scroll.list_state().viewport_bounds().size.height));
                 let width = scroll.list_state().viewport_bounds().size.width;
                 if (f32::from(width) - list_w.get()).abs() >= 0.5 {
-                    // A visual row lays its page out from it: draw again.
+                    // A visual row lays its page out from it, and the rows'
+                    // inset follows it (`tx_inset_at`): draw again.
                     let had_visuals = !gaps.visual_rows().is_empty();
+                    let inset_moved =
+                        theme::tx_inset_at(f32::from(width), solo) != inset;
                     list_w.set(f32::from(width));
-                    if had_visuals {
+                    if inset_moved {
+                        scroll.remeasure_held();
+                    }
+                    if had_visuals || inset_moved {
                         let weak = weak.clone();
                         window.defer(cx, move |_, cx| {
                             let _ = weak.update(cx, |_, cx| cx.notify());
@@ -3050,7 +3088,7 @@ impl Render for TranscriptView {
                             .top_0()
                             .left_0()
                             .right_0()
-                            .child(top_fade())
+                            .child(top_fade(self.input.solo))
                     }),
             )
             .children(pinned)
@@ -3061,7 +3099,7 @@ impl Render for TranscriptView {
                     .bottom_0()
                     .left_0()
                     .right_0()
-                    .child(bottom_fade())
+                    .child(bottom_fade(self.input.solo))
             }))
             .children(latest)
             .children(minimap)

@@ -369,8 +369,8 @@ fn nothing_paints_under_a_group_head(cx: &mut TestAppContext) {
     }
 }
 
-/// The transcript column sits `tx_inset` in from the Pane's edges (Solo's
-/// 28px): the answer's row starting on its left edge, the prompt's bubble
+/// The transcript column sits `tx_inset_at` in from the Pane's edges
+/// (Solo's 48px at this width): the answer's row starting on its left edge, the prompt's bubble
 /// ending on its right.
 #[gpui::test]
 fn the_prompt_bubble_keeps_the_transcript_column(cx: &mut TestAppContext) {
@@ -387,8 +387,9 @@ fn the_prompt_bubble_keeps_the_transcript_column(cx: &mut TestAppContext) {
         .unwrap();
     tick(cx);
     let rect = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
-    let column = px(rect.x + ferrite_ui::theme::TX_INSET_SOLO);
-    let column_end = px(rect.x + rect.w - ferrite_ui::theme::TX_INSET_SOLO);
+    let inset = ferrite_ui::theme::tx_inset_at(rect.w, true);
+    let column = px(rect.x + inset);
+    let column_end = px(rect.x + rect.w - inset);
     let bubble = cx.debug_bounds("transcript-prompt").unwrap();
     assert!(
         (bubble.right() - column_end).abs() <= px(1.),

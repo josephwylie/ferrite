@@ -140,7 +140,11 @@ pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32)
     };
     let call = |kind| matches!(kind, Activity | Group | Visual | Notice);
     let work = |kind| call(kind) || matches!(kind, LiveTail | Answer { narration: true });
+    // T3's work log: its rows touch, and the run stands `WORK_LOG_PAD_B`
+    // off what follows it.
+    let log = |kind| matches!(kind, Activity | Group | Reasoning | Notice | LiveTail);
     match (previous, kind) {
+        (previous, kind) if log(previous) && log(kind) => 0.,
         (_, TurnEnd | Meta) => 0.,
         (Divider, _) => line,
         (previous, Divider) => gap_before(Some(previous), Prompt, reading),
@@ -155,6 +159,7 @@ pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32)
         (previous, Answer { .. }) if call(previous) => theme::tx_work_prose(line),
         (Answer { narration: true }, kind) if call(kind) => theme::tx_work_prose(line),
         (previous, kind) if work(previous) && work(kind) => theme::tx_half(line),
+        (previous, _) if log(previous) => theme::WORK_LOG_PAD_B,
         _ => (line * 1.5).round(),
     }
 }
@@ -490,19 +495,14 @@ fn sent_day(block: &Block) -> Option<impl PartialEq + Copy> {
 /// reading across blocks that draw nothing. Returns the members' indices
 /// and the index after the run.
 fn group_at(blocks: &[Block], start: usize, projection: &Projection) -> (Vec<usize>, usize) {
-    let run = match &blocks[start].body {
-        Body::Tool(tool) => run_of(tool),
-        _ => None,
-    };
+    let run = run_at(&blocks[start]);
     let mut members = vec![start];
     let mut end = start + 1;
     let mut index = end;
     while let Some(block) = blocks.get(index) {
-        match &block.body {
+        match run_at(block) {
             _ if projection.skips(block) => index += 1,
-            Body::Tool(tool)
-                if block.markdown.is_none() && run.is_some() && run_of(tool) == run =>
-            {
+            joins if run.is_some() && joins == run => {
                 members.push(index);
                 index += 1;
                 end = index;
@@ -511,6 +511,20 @@ fn group_at(blocks: &[Block], start: usize, projection: &Projection) -> (Vec<usi
         }
     }
     (members, end)
+}
+
+/// The run a block folds into with its neighbours (T3's work groups): a
+/// call's (`run_of`) unless it failed, since a failure stands on a row of
+/// its own; a shown thought, the routine calls'.
+fn run_at(block: &Block) -> Option<tools::Grouping> {
+    if block.markdown.is_some() {
+        return None;
+    }
+    match &block.body {
+        Body::Tool(tool) if !matches!(tool.state, ToolState::Failed(_)) => run_of(tool),
+        Body::Thinking(_) => Some(tools::Grouping::RollsUp),
+        _ => None,
+    }
 }
 
 fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<TranscriptRow>> {
@@ -649,11 +663,8 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                     rows.push(header(key));
                 }
             }
-            Body::Tool(tool) => {
-                if projection.skips(block) {
-                    continue;
-                }
-                if run_of(tool).is_some() {
+            Body::Tool(_) | Body::Thinking(_) if !projection.skips(block) => {
+                if run_at(block).is_some() {
                     let (members, end) = group_at(blocks, index - 1, projection);
                     if members.len() > 1 {
                         let run: Vec<Block> =
@@ -667,7 +678,7 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                     RowId::Block(block.id),
                     std::slice::from_ref(block),
                     None,
-                    RowKind::Activity,
+                    RowKind::of(block),
                 ));
             }
             // Hidden thinking; an answered request's record (`allowed
@@ -1036,8 +1047,7 @@ mod tests {
             [
                 Prompt,
                 TurnFold,
-                Activity,
-                Reasoning,
+                Group,
                 Answer { narration: true },
                 Activity,
                 Answer { narration: false },
@@ -1297,7 +1307,8 @@ mod tests {
         assert!(!hidden.contains(&RowKind::Reasoning), "{hidden:?}");
         assert!(!hidden.contains(&RowKind::Notice), "{hidden:?}");
         assert!(!hidden.contains(&RowKind::Meta), "{hidden:?}");
-        assert!(kinds(&shape()).contains(&RowKind::Reasoning));
+        // Shown, the thought joins the call after it in one group.
+        assert!(kinds(&shape()).contains(&RowKind::Group));
     }
 
     #[test]
@@ -1493,11 +1504,11 @@ mod tests {
         assert_eq!(rows.get(1).unwrap().blocks().len(), 3);
     }
 
-    /// Visible rows split groups: prose, a prompt, a turn's end, shown
-    /// thinking. Edits fold into the group beside them (`Edited 1 file, ran
-    /// 2 commands`); prose with more work after it in its turn narrates.
+    /// Visible rows split groups: prose, a prompt, a turn's end. A shown
+    /// thought joins the group beside it (T3's work log), as edits do;
+    /// prose with more work after it in its turn narrates.
     #[test]
-    fn prose_prompts_and_shown_thinking_split_groups() {
+    fn prose_and_prompts_split_groups_and_thoughts_join_them() {
         let mut transcript = Transcript::default();
         prompt(&mut transcript, "go");
         tool(&mut transcript, "r1");
@@ -1526,9 +1537,7 @@ mod tests {
                 RowKind::Prompt,
                 RowKind::Group,
                 narration,
-                RowKind::Activity,
-                RowKind::Reasoning,
-                RowKind::Activity,
+                RowKind::Group,
             ]
         );
         // Hidden thinking draws nothing, so the calls either side of it
@@ -1536,6 +1545,28 @@ mod tests {
         assert_eq!(
             kinds(&RowShape::default())[2..],
             [narration, RowKind::Group]
+        );
+    }
+
+    /// A failed call stands as its own row (T3's), so the routine calls
+    /// either side of it read as two runs.
+    #[test]
+    fn a_failed_call_breaks_its_group() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        for id in ["a", "b"] {
+            tool(&mut transcript, id);
+            settle(&mut transcript, id, false);
+        }
+        bash(&mut transcript, "bad");
+        settle(&mut transcript, "bad", true);
+        for id in ["c", "d"] {
+            tool(&mut transcript, id);
+            settle(&mut transcript, id, false);
+        }
+        assert_eq!(
+            kinds(&transcript, &shape()),
+            [RowKind::Prompt, RowKind::Group, RowKind::Activity, RowKind::Group]
         );
     }
 
@@ -1731,10 +1762,11 @@ mod tests {
 
     /// Claude's rhythm (at the 21 line):
     /// a prompt stands 40 over what answers it and 56 under the turn before
-    /// (its answer's actions row counted in); a turn's calls read as one
-    /// list, half a line apart, its prose 22 from them; every other block
-    /// stands a line and a half off; a row that answers the one above it
-    /// hangs flush; a leading prompt sits flush to the top.
+    /// (its answer's actions row counted in); a turn's work rows touch, as
+    /// T3's work log does, and stand `WORK_LOG_PAD_B` off what follows
+    /// them, its prose 22 from them; every other block stands a line and a
+    /// half off; a row that answers the one above it hangs flush; a leading
+    /// prompt sits flush to the top.
     #[test]
     fn the_gap_table_lists_the_work_and_spaces_the_blocks() {
         use RowKind::*;
@@ -1754,24 +1786,25 @@ mod tests {
             (Some(Prompt), TurnFold, after_prompt(READING)),
             (Some(TurnFold), answer, ferrite_ui::theme::TURN_FOLD_PAD_B),
             (Some(Working), Group, ferrite_ui::theme::TURN_FOLD_PAD_B),
-            (Some(Activity), LiveTail, half),
+            (Some(Activity), LiveTail, 0.),
             (Some(Activity), Prompt, 56.),
             (Some(answer), Prompt, after_answer(READING)),
             (Some(Prompt), narration, after_prompt(READING)),
             (Some(Prompt), Activity, after_prompt(READING)),
             (Some(Prompt), answer, after_prompt(READING)),
             (Some(Prompt), Working, after_prompt(READING)),
-            (Some(Activity), Activity, half),
-            (Some(Group), Activity, half),
+            (Some(Activity), Activity, 0.),
+            (Some(Group), Activity, 0.),
             (Some(narration), Activity, 22.),
             (Some(Activity), narration, 22.),
             (Some(narration), LiveTail, half),
             (Some(Visual), Group, half),
             (Some(Activity), answer, 22.),
-            (Some(Activity), Reasoning, block),
+            (Some(Activity), Reasoning, 0.),
             (Some(answer), hung, 0.),
             (Some(Activity), Meta, 0.),
-            (Some(Activity), Tail, block),
+            (Some(Activity), Tail, ferrite_ui::theme::WORK_LOG_PAD_B),
+            (Some(answer), Tail, block),
         ] {
             assert_eq!(
                 gap_before(previous, kind, READING),
@@ -1807,10 +1840,7 @@ mod tests {
                 after_prompt(reading),
                 "{size:?}"
             );
-            assert_eq!(
-                gap_before(Some(call), call, reading),
-                ferrite_ui::theme::tx_half(line)
-            );
+            assert_eq!(gap_before(Some(call), call, reading), 0.);
             assert_eq!(
                 line,
                 ferrite_ui::theme::answer_line_height(size),

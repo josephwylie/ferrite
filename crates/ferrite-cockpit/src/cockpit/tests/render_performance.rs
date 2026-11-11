@@ -45,8 +45,45 @@ fn reasoning_rows(fake: &Fake, from: usize, to: usize) {
                 snapshot: false,
             })
             .unwrap();
+        between(&stream[0], row);
     }
     end_turn(&stream[0]);
+}
+
+/// A failed call after thought `row`: consecutive thoughts join one group
+/// (`Thought (×N)`) and a failure stands on a row of its own, so each
+/// thought stands as its own row. Thought `row` is list item `2 * row`.
+fn between(stream: &Sender<SessionEvent>, row: usize) {
+    let id = format!("between-{row}");
+    stream
+        .send(SessionEvent::ToolStarted {
+            id: id.clone(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": between_text(row) }),
+        })
+        .unwrap();
+    stream
+        .send(SessionEvent::ToolCompleted {
+            id,
+            output: "failed".into(),
+            is_error: true,
+            result: ferrite_core::ToolResult::Opaque,
+        })
+        .unwrap();
+}
+
+fn between_text(row: usize) -> String {
+    format!("between {row:03}")
+}
+
+/// What a drag from thought `from` to thought `to` copies: those thoughts
+/// and the failed calls between them.
+fn thoughts_copied(rows: &[String], from: usize, to: usize) -> String {
+    (from..=to)
+        .flat_map(|row| [rows[row].clone(), between_text(row)])
+        .take(2 * (to - from) + 1)
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// The fixture's turn ends, so its thoughts stand as rows of their own,
@@ -73,6 +110,7 @@ fn short_reasoning_rows(fake: &Fake, from: usize, to: usize) -> Vec<String> {
                     snapshot: false,
                 })
                 .unwrap();
+            between(&stream[0], row);
             text
         })
         .collect();
@@ -95,8 +133,11 @@ fn thinking_id(
             .subject(&view.panes[0].selected)
             .unwrap()
             .transcript()
-            .blocks()[row];
-        assert!(matches!(&block.body, Body::Thinking(_)));
+            .blocks()
+            .iter()
+            .filter(|block| matches!(&block.body, Body::Thinking(_)))
+            .nth(row)
+            .expect("the fixture's thought");
         format!("thinking-{}-{:?}", view.panes[0].text_namespace(), block.id)
     })
 }
@@ -115,8 +156,8 @@ fn thinking_caret(
     })
 }
 
-/// The text a disclosed reasoning row actually mounts: the continuation of
-/// its cut first line, since the header already shows the summary.
+/// The text a disclosed thought mounts: the whole thought (its header reads
+/// `Thought`).
 fn thinking_details(
     view: &gpui::Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
@@ -124,7 +165,7 @@ fn thinking_details(
 ) -> String {
     view.read_with(cx, |view, _| {
         let thread = view.panes[0].thread().unwrap();
-        let block = &view
+        let thought = view
             .cockpit
             .thread(thread)
             .unwrap()
@@ -132,20 +173,21 @@ fn thinking_details(
             .subject(&view.panes[0].selected)
             .unwrap()
             .transcript()
-            .blocks()[row];
-        let Body::Thinking(text) = &block.body else {
-            unreachable!("fixture has one Thinking Block per virtual row")
-        };
-        ferrite_pane::pane::reasoning_text(text)
-            .1
-            .unwrap_or_else(|| text.trim().to_owned())
+            .blocks()
+            .iter()
+            .filter_map(|block| match &block.body {
+                Body::Thinking(text) => Some(text),
+                _ => None,
+            })
+            .nth(row)
+            .expect("the fixture's thought");
+        thought.trim().to_owned()
     })
 }
 
 /// Aim at a byte of a disclosed Thinking row's body through its native wrap.
-/// The offsets are into the disclosed body (`thinking_details`), so that is
-/// the text the helper shapes; shaping the whole thought would wrap a
-/// different string and aim off the row's own lines.
+/// The offsets are into the disclosed body (`thinking_details`), the text
+/// the helper shapes.
 fn wrapped_thinking_caret(
     view: &gpui::Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
@@ -522,8 +564,9 @@ fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut T
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
-    let rows = short_reasoning_rows(&fake, 0, 160);
+    let rows = short_reasoning_rows(&fake, 0, 96);
     tick(cx);
+    expand_reasoning_rows(&view, cx);
 
     // `ListState` owns the scroll. Freeze tail following before jumping into
     // retained history, or the live tail would replace our logical anchor.
@@ -539,7 +582,7 @@ fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut T
                     .scroll()
                     .list_state()
                     .scroll_to(gpui::ListOffset {
-                        item_ix: 25,
+                        item_ix: 2 * 10,
                         offset_in_item: px(0.),
                     });
             });
@@ -547,12 +590,12 @@ fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut T
     });
     cx.run_until_parked();
 
-    let row_75 = thinking_id(&view, cx, 75);
-    let from = thinking_caret(&view, cx, 25, 0);
+    let row_45 = thinking_id(&view, cx, 45);
+    let from = thinking_caret(&view, cx, 10, 0);
     cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::none());
 
     // Replacing the mounted range while the drag is held must retain a
-    // logical endpoint. Rows 26..=129 are never all native TextViews.
+    // logical endpoint. Rows 11..=79 are never all native TextViews.
     view.update(cx, |view, cx| {
         view.panes[0]
             .transcript()
@@ -563,27 +606,27 @@ fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut T
                     .scroll()
                     .list_state()
                     .scroll_to(gpui::ListOffset {
-                        item_ix: 130,
+                        item_ix: 2 * 80,
                         offset_in_item: px(0.),
                     });
             });
         cx.notify();
     });
     cx.run_until_parked();
-    let to = thinking_caret(&view, cx, 130, rows[130].len());
+    let to = thinking_caret(&view, cx, 80, rows[80].len());
     cx.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_keystrokes("cmd-c");
 
     assert_eq!(
         clipboard(cx).as_deref(),
-        Some(rows[25..=130].join("\n\n").as_str()),
+        Some(thoughts_copied(&rows, 10, 80).as_str()),
         "logical selection copies every retained row, including never-mounted intermediates"
     );
     assert_eq!(
-        native_text_renders(&row_75, cx),
+        native_text_renders(&row_45, cx),
         0,
-        "the full copy must not mount row 75 to reconstruct the range"
+        "the full copy must not mount row 45 to reconstruct the range"
     );
 
     // Both endpoints now leave the viewport, while retained membership and
@@ -608,7 +651,7 @@ fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut T
     cx.simulate_keystrokes("cmd-c");
     assert_eq!(
         clipboard(cx).as_deref(),
-        Some(rows[25..=130].join("\n\n").as_str()),
+        Some(thoughts_copied(&rows, 10, 80).as_str()),
         "viewport unmounting must not clear a retained logical selection"
     );
 }
@@ -626,7 +669,7 @@ fn partial_thinking_selection_survives_a_wrapping_resize(cx: &mut TestAppContext
     let text = format!(
         "{} {selected} {}",
         "prefix that forces wrapped native geometry ".repeat(20),
-        "suffix that keeps the same native row long ".repeat(12),
+        "suffix that keeps the same native row long ".repeat(4),
     );
     fake.streams.borrow()[0]
         .send(SessionEvent::ReasoningSummaryPart {
@@ -640,18 +683,11 @@ fn partial_thinking_selection_survives_a_wrapping_resize(cx: &mut TestAppContext
     tick(cx);
     expand_reasoning_rows(&view, cx);
 
-    // A reasoning row's disclosure opens on the continuation of its cut
-    // first line, so these offsets are into the disclosed body rather than
-    // the whole thought.
+    // The selection runs from the phrase to the body's end: a caret past
+    // the last byte clamps there, where a caret mid-paragraph would ride
+    // the shaping helper's wrap grid rather than the row's own.
     let details = thinking_details(&view, cx, 0);
-    // The disclosure opens on the continuation of the row's cut first line,
-    // so these offsets are into the disclosed body. The selection runs from
-    // the phrase to the row's end: a caret past the last byte clamps there,
-    // where a caret mid-paragraph would ride the shaping helper's wrap grid
-    // rather than the row's own.
-    let start = details
-        .find(selected)
-        .expect("the cut line's tail carries it");
+    let start = details.find(selected).expect("the body carries it");
     let end = details.len();
     let expected = details[start..].to_owned();
     let from = wrapped_thinking_caret(&view, cx, 0, start);
@@ -705,8 +741,9 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
-    let rows = short_reasoning_rows(&fake, 0, 160);
+    let rows = short_reasoning_rows(&fake, 0, 96);
     tick(cx);
+    expand_reasoning_rows(&view, cx);
 
     view.update(cx, |view, cx| {
         view.panes[0]
@@ -719,7 +756,7 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
                     .scroll()
                     .list_state()
                     .scroll_to(gpui::ListOffset {
-                        item_ix: 25,
+                        item_ix: 2 * 10,
                         offset_in_item: px(0.),
                     });
             });
@@ -727,11 +764,11 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
     });
     cx.run_until_parked();
 
-    let selected = "row 025";
-    let start = rows[25].find(selected).unwrap();
+    let selected = "row 010";
+    let start = rows[10].find(selected).unwrap();
     let end = start + selected.len();
-    let from = thinking_caret(&view, cx, 25, start);
-    let to = thinking_caret(&view, cx, 25, end);
+    let from = thinking_caret(&view, cx, 10, start);
+    let to = thinking_caret(&view, cx, 10, end);
     cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::none());
@@ -749,7 +786,7 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
                     .scroll()
                     .list_state()
                     .scroll_to(gpui::ListOffset {
-                        item_ix: 130,
+                        item_ix: 2 * 80,
                         offset_in_item: px(0.),
                     });
             });
@@ -768,7 +805,7 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
     // Replacing another retained row must not invalidate this endpoint.
     fake.streams.borrow()[0]
         .send(SessionEvent::ReasoningSummaryPart {
-            item_id: "logical-selection-row-140".into(),
+            item_id: "logical-selection-row-90".into(),
             summary_index: 0,
             text: "an unrelated snapshot replacement".into(),
             snapshot: true,
@@ -785,7 +822,7 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
     let replacement = "replacement source invalidates the old endpoint";
     fake.streams.borrow()[0]
         .send(SessionEvent::ReasoningSummaryPart {
-            item_id: "logical-selection-row-25".into(),
+            item_id: "logical-selection-row-10".into(),
             summary_index: 0,
             text: replacement.into(),
             snapshot: true,
@@ -802,7 +839,7 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
             .subject(&view.panes[0].selected)
             .unwrap()
             .transcript()
-            .blocks()[25];
+            .blocks()[2 * 10];
         assert!(matches!(&block.body, Body::Thinking(text) if text == replacement));
     });
     assert!(

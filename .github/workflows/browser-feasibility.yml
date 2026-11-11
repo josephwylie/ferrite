@@ -81,7 +81,6 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           CEF_PATH="$HOME/.local/share/cef" cargo build --profile local -p ferrite --locked --features cef
-          cargo build --profile local --locked -p herdr-projects --bin ferrite-projects
       - name: Build native controller
         # rust-cache omits nested .git metadata. Re-clone the pinned source
         # rather than letting git resolve this restored folder to Ferrite's HEAD.
