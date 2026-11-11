@@ -425,6 +425,57 @@ fn debug_bounds(
     cx.debug_bounds(Box::leak(id.into_boxed_str()))
 }
 
+/// Wheel the scrolling `area` until `target` lies inside it and the
+/// window, as the operator scrolls to what is off screen.
+fn reveal(cx: &mut gpui::VisualTestContext, area: &str, target: &str) {
+    for _ in 0..6 {
+        let size = cx.update(|window, _| window.viewport_size());
+        let space = bounds(cx, area.to_string());
+        let clamp = |at: gpui::Pixels, low: gpui::Pixels, high: gpui::Pixels| {
+            if at < low {
+                low
+            } else if at > high {
+                high
+            } else {
+                at
+            }
+        };
+        let space = gpui::Bounds::from_corners(
+            gpui::point(
+                clamp(space.left(), px(0.), size.width),
+                clamp(space.top(), px(0.), size.height),
+            ),
+            gpui::point(
+                clamp(space.right(), px(0.), size.width),
+                clamp(space.bottom(), px(0.), size.height),
+            ),
+        );
+        let at = bounds(cx, target.to_string());
+        let along =
+            |near: gpui::Pixels, far: gpui::Pixels, from: gpui::Pixels, to: gpui::Pixels| {
+                if to > far {
+                    far - to - px(8.)
+                } else if from < near {
+                    near - from + px(8.)
+                } else {
+                    px(0.)
+                }
+            };
+        let dx = along(space.left(), space.right(), at.left(), at.right());
+        let dy = along(space.top(), space.bottom(), at.top(), at.bottom());
+        if dx == px(0.) && dy == px(0.) {
+            return;
+        }
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: space.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(dx, dy)),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+    }
+    panic!("{target} never came into view in {area}");
+}
+
 fn bounds(cx: &mut gpui::VisualTestContext, id: String) -> gpui::Bounds<gpui::Pixels> {
     debug_bounds(cx, id.clone()).unwrap_or_else(|| panic!("missing {id}"))
 }

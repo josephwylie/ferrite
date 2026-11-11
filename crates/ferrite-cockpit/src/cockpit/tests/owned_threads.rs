@@ -30,7 +30,7 @@ fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) 
         .unwrap();
     core.park(coordinator).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     // The operator looks at another Thread of theirs: a request from one
     // in view rings nothing for any Thread, owned or not.
     view.update(cx, |view, cx| view.focus_thread(watched, cx));

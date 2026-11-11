@@ -9,7 +9,7 @@
 //! tab draws the Worker's ordinary Pane, which this window already holds.
 
 use super::*;
-use ferrite_core::factory::{self as core_factory, Actor, Status, Task, TaskId};
+use ferrite_core::factory::{self as core_factory, Status, Task, TaskId};
 use ferrite_core::protocol::{Done, TaskAction};
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_pane::composer::{Composer, Role};
@@ -74,7 +74,7 @@ pub(crate) struct FactoryView {
     pub(crate) project: ProjectId,
     /// The Pane focused when the board opened: focus moving to another of
     /// the operator's own leaves the board.
-    focus_at_open: Option<PaneIdentity>,
+    pub(crate) focus_at_open: Option<PaneIdentity>,
     /// The Task whose panel is open.
     pub(crate) open: Option<TaskId>,
     pub(crate) tab: TaskTab,
@@ -157,6 +157,7 @@ impl CockpitView {
         if self.factory_view.as_ref().map(|view| view.project) != Some(project) {
             self.open_factory(project, cx);
         }
+        self.read_worker(None, cx);
         if let Some(view) = self.factory_view.as_mut() {
             view.open = Some(task.to_string());
             view.tab = TaskTab::Overview;
@@ -190,7 +191,7 @@ impl CockpitView {
 
     /// The open Task's Worker's Pane in this window.
     fn open_worker_pane(&self) -> Option<usize> {
-        self.pane_for(self.open_task_now()?.worker?)
+        self.pane_for_worker(self.open_task_now()?)
     }
 
     /// The Worker drawn in the open panel's Worker tab, which streams whole.
@@ -199,10 +200,14 @@ impl CockpitView {
         if let Some(coordinator) = self.coordinator_drawn() {
             return Some(coordinator);
         }
-        (view.tab == TaskTab::Worker)
-            .then(|| self.open_task_now()?.worker)
-            .flatten()
-            .filter(|worker| self.pane_for(*worker).is_some())
+        let task = self.open_task_now()?;
+        if view.tab != TaskTab::Worker {
+            return None;
+        }
+        if let Some(reading) = self.worker_reading(task) {
+            return Some(reading);
+        }
+        task.worker.filter(|_| self.pane_for_worker(task).is_some())
     }
 
     /// Focus moved to another of the operator's own Panes (a new draft, a
@@ -215,9 +220,10 @@ impl CockpitView {
         if now == view.focus_at_open {
             return;
         }
+        // Read through the identity: an owned Thread just reopened may
+        // have no Pane in this window yet.
         let owned = now
-            .and_then(|identity| self.index_of(identity))
-            .and_then(|index| self.panes[index].thread())
+            .and_then(PaneIdentity::thread)
             .is_some_and(|thread| !self.cockpit.operators(thread));
         if owned {
             return;
@@ -533,6 +539,7 @@ impl CockpitView {
                         div()
                             .id("factory-note-dismiss")
                             .debug_selector(|| "factory-note-dismiss".into())
+                            .flex_shrink_0()
                             .cursor_pointer()
                             .child(ferrite_ui::icons::icon(
                                 ferrite_ui::icons::CLOSE,
@@ -614,7 +621,10 @@ impl CockpitView {
                 let key = status_key(status);
                 let mut column = div()
                     .id(SharedString::from(format!("factory-column-{key}")))
-                    .debug_selector(move || format!("factory-column-{key}"))
+                    .debug_selector({
+                        let key = key.clone();
+                        move || format!("factory-column-{key}")
+                    })
                     .flex()
                     .flex_col()
                     .flex_shrink_0()
@@ -1078,14 +1088,17 @@ impl CockpitView {
                     .p(px(SPACE_2))
                     .child(self.pane_slot(index, Level::Transcript, window, cx))
                     .into_any_element(),
-                None => self.worker_history(task).unwrap_or_else(|| {
-                    div()
-                        .debug_selector(|| "task-worker-none".into())
-                        .p(px(SPACE_4))
-                        .text_color(rgb(INK_SUBTLE))
-                        .child("No agent is working on this task right now.")
-                        .into_any_element()
-                }),
+                None => self
+                    .worker_read(task, cx)
+                    .or_else(|| self.worker_history(task, cx))
+                    .unwrap_or_else(|| {
+                        div()
+                            .debug_selector(|| "task-worker-none".into())
+                            .p(px(SPACE_4))
+                            .text_color(rgb(INK_SUBTLE))
+                            .child("No agent is working on this task right now.")
+                            .into_any_element()
+                    }),
             },
         };
 
@@ -1106,7 +1119,12 @@ impl CockpitView {
         )
     }
 
+    /// The Worker's live Pane, for a Task whose Workers are not parked:
+    /// a parked one's is only read (G4).
     fn pane_for_worker(&self, task: &Task) -> Option<usize> {
+        if task.archived() || task.keeping.parked {
+            return None;
+        }
         self.pane_for(task.worker?)
     }
 
@@ -1247,14 +1265,10 @@ impl CockpitView {
     }
 }
 
-/// A status's selector word.
-fn status_key(status: Status) -> &'static str {
-    match status {
-        Status::Queued => "queued",
-        Status::Working => "working",
-        Status::NeedsHuman => "needs_human",
-        Status::Approval => "approval",
-        Status::Stopped => "stopped",
-        Status::Completed => "completed",
-    }
+/// A status's selector word: its name on the wire.
+fn status_key(status: Status) -> String {
+    serde_json::to_value(status)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
 }

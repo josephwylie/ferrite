@@ -14,6 +14,9 @@ use ferrite_pane::composer::{Composer, Role};
 pub(crate) struct Archive {
     pub(crate) shown: bool,
     pub(crate) search: Option<Entity<Composer>>,
+    /// An earlier Worker of the open Task, opened to be read (G4), and
+    /// whether this window reopened it, to park it again.
+    pub(crate) reading: Option<(ThreadId, bool)>,
 }
 
 impl CockpitView {
@@ -38,11 +41,110 @@ impl CockpitView {
     }
 
     pub(crate) fn close_archive(&mut self, cx: &mut Context<Self>) {
+        self.read_worker(None, cx);
         if let Some(view) = self.factory_view.as_mut() {
             view.archive.shown = false;
             view.open = None;
         }
         cx.notify();
+    }
+
+    /// Open an earlier Worker of a Task that has none working to be read:
+    /// its Thread reopened with nothing running and drawn without a
+    /// Composer (G4). `None` goes back to the list; a Thread this window
+    /// reopened is parked again.
+    pub(crate) fn read_worker(&mut self, thread: Option<ThreadId>, cx: &mut Context<Self>) {
+        let was = self
+            .factory_view
+            .as_mut()
+            .and_then(|view| view.archive.reading.take());
+        if let Some((was, true)) = was.filter(|(was, _)| Some(*was) != thread) {
+            if let Err(error) = self.cockpit.park(was) {
+                ferrite_core::log!("factory: an earlier Worker could not be parked again: {error}");
+            }
+            let focused = self.cockpit.roster().focused();
+            if let Some(view) = self.factory_view.as_mut() {
+                view.focus_at_open = focused;
+            }
+        }
+        if let Some(thread) = thread {
+            let reopened = match was {
+                Some((same, reopened)) if same == thread => Ok(reopened),
+                _ if self.cockpit.thread(thread).is_some() => Ok(false),
+                _ => self.cockpit.revive(thread).map(|()| true),
+            };
+            // Reopening it moves the roster's focus before this window has
+            // its Pane: that is not the operator leaving the board.
+            let focused = self.cockpit.roster().focused();
+            if let Some(view) = self.factory_view.as_mut() {
+                view.focus_at_open = focused;
+                match reopened {
+                    Ok(reopened) => view.archive.reading = Some((thread, reopened)),
+                    Err(error) => {
+                        view.note = Some(SharedString::from(format!(
+                            "That agent's transcript could not be opened: {error}"
+                        )))
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// The earlier Worker being read, if it is one of `task`'s.
+    pub(super) fn worker_reading(&self, task: &Task) -> Option<ThreadId> {
+        let (thread, _) = self.factory_view.as_ref()?.archive.reading?;
+        task.every_worker().contains(&thread).then_some(thread)
+    }
+
+    /// The earlier Worker's transcript, to read: no Composer, nothing to
+    /// send.
+    pub(super) fn worker_read(&self, task: &Task, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use ferrite_ui::theme::*;
+        let thread = self.worker_reading(task)?;
+        let text = self
+            .cockpit
+            .thread(thread)
+            .map(|open| ferrite_core::transcript::plain_text(open.transcript().blocks()))
+            .unwrap_or_default();
+        let text = if text.trim().is_empty() {
+            "Nothing was said in this agent's Thread.".to_string()
+        } else {
+            text
+        };
+        Some(
+            div()
+                .debug_selector(|| "task-worker-read".into())
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .gap(px(SPACE_2))
+                .p(px(SPACE_4))
+                .child(
+                    div()
+                        .id("task-worker-read-back")
+                        .debug_selector(|| "task-worker-read-back".into())
+                        .cursor_pointer()
+                        .text_size(px(FS_META))
+                        .text_color(rgb(INK_SUBTLE))
+                        .hover(|style| style.text_color(rgb(INK_STRONG)))
+                        .child("\u{2190} Its agents")
+                        .on_click(
+                            cx.listener(|view, _: &ClickEvent, _, cx| view.read_worker(None, cx)),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("task-worker-read-text")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .whitespace_normal()
+                        .child(SharedString::from(text)),
+                )
+                .into_any_element(),
+        )
     }
 
     /// What the Archive is searched for now.
@@ -114,7 +216,8 @@ impl CockpitView {
     /// Why the Factory's store could not be read, over the board.
     pub(super) fn factory_trouble(&self) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
-        let trouble = self.cockpit.factory().trouble.clone()?;
+        let project = self.factory_view.as_ref()?.project;
+        let trouble = self.cockpit.factory().trouble_of(project)?.to_string();
         Some(
             div()
                 .debug_selector(|| "factory-trouble".into())
@@ -293,7 +396,7 @@ impl CockpitView {
 
     /// The Workers a Task had, each Step's and the last, for a Task with
     /// no Worker Pane in this window (a completed one, its Workers parked).
-    pub(super) fn worker_history(&self, task: &Task) -> Option<AnyElement> {
+    pub(super) fn worker_history(&self, task: &Task, cx: &mut Context<Self>) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
         let threads = task.every_worker();
         if threads.is_empty() {
@@ -326,7 +429,13 @@ impl CockpitView {
             let name = step_of(thread).unwrap_or_else(|| "Agent".to_string());
             list = list.child(
                 div()
+                    .id(SharedString::from(format!("task-worker-history-{at}")))
                     .debug_selector(move || format!("task-worker-history-{at}"))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(paint::RAISED))
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        view.read_worker(Some(thread), cx)
+                    }))
                     .flex()
                     .gap(px(SPACE_2))
                     .child(

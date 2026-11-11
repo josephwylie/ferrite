@@ -81,7 +81,7 @@ fn panel<'a>(
         ..Default::default()
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     view.update(cx, |view, cx| view.open_task("t-1", cx));
     tick(cx);
@@ -190,7 +190,7 @@ fn a_step_routes_by_merge_result_with_a_route_per_result(cx: &mut TestAppContext
     core.fixture_live_factory();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(1400.)));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     view.update(cx, |view, cx| {
         view.open_factory(project, cx);

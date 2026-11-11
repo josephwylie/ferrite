@@ -44,7 +44,7 @@ fn each_project_has_a_factory_entry_and_a_fresh_one_is_empty(cx: &mut TestAppCon
     let (core, fake) = cockpit("factory-entry", 1);
     let project = core.project_id(core.threads()[0]).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     let entry = format!("nav-factory-{}", project.get());
     let row = bounds(cx, entry.clone());
@@ -101,7 +101,7 @@ fn the_board_lays_cards_in_their_columns(cx: &mut TestAppContext) {
         ..Default::default()
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     let entry = format!("nav-factory-{}", project.get());
     assert!(shows(cx, &format!("{entry}-count")), "one needs you");
@@ -164,7 +164,7 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
         ..Default::default()
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     let streams = fake.streams.borrow().len();
     view.update(cx, |view, cx| view.open_task("t-1", cx));
@@ -234,7 +234,7 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
     });
     cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     let toasts = |cx: &mut gpui::VisualTestContext| {
         cx.update(|window, cx| {

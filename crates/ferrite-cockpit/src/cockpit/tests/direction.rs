@@ -75,7 +75,7 @@ fn panel<'a>(
         ..Default::default()
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     view.update(cx, |view, cx| view.open_task("t-1", cx));
     tick(cx);
@@ -318,7 +318,7 @@ fn approval_settings_choose_who_approves_and_list_what_completes(cx: &mut TestAp
     core.fixture_live_factory();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(1800.)));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     view.update(cx, |view, cx| view.open_factory(project, cx));
     tick(cx);
@@ -326,6 +326,7 @@ fn approval_settings_choose_who_approves_and_list_what_completes(cx: &mut TestAp
     click(cx, "workflow-new");
     click(cx, "context-menu-row-1");
 
+    reveal(cx, "outline", "outline-approval");
     click(cx, "outline-approval");
     assert!(shows(cx, "approval-settings"));
     assert!(shows(cx, "approval-by-0-on"), "you approve by default");

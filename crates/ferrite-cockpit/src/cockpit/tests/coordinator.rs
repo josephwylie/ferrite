@@ -39,7 +39,7 @@ fn window<'a>(
 ) -> (Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1600.), px(1000.)));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
     view.update(cx, |view, cx| view.open_factory(project, cx));
     tick(cx);
