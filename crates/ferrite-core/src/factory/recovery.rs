@@ -6,7 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{reporting, Actor, Effect, Seen, Status, Task, Watch, ASKING, REPORTING};
+use std::collections::BTreeSet;
+
+use super::{reporting, Actor, Effect, Seen, State, Status, Task, TaskId, Watch, ASKING, REPORTING};
 
 /// What a Task remembers of interruptions and time.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,4 +128,31 @@ fn revival_prompt(task: &Task, cause: Cause) -> String {
          where you left off. Before you repeat anything with an effect outside this worktree (a \
          push, a merge, a comment), check whether it already happened.{merge}\n\n{reporting}"
     )
+}
+
+/// Each Task the restart caught between deciding to start its Worker and
+/// starting it stops: whether that Worker began is not known, so nothing
+/// is started again unasked. Resume starts it.
+pub(super) fn unstarted(
+    state: &mut State,
+    unstarted: &BTreeSet<TaskId>,
+    now_ms: i64,
+    effects: &mut Vec<Effect>,
+) {
+    for task in &mut state.tasks {
+        if !unstarted.contains(&task.id)
+            || task.status != Status::Working
+            || task.worker.is_some()
+        {
+            continue;
+        }
+        task.note(
+            now_ms,
+            Actor::Ferrite,
+            "Ferrite restarted before the agent started; stopped the task",
+        );
+        task.reason =
+            Some("Ferrite restarted before this task's agent started. Resume to start it.".into());
+        task.enter(Status::Stopped, effects);
+    }
 }

@@ -803,6 +803,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         keeping: Default::default(),
                     }],
                     workflows: Vec::new(),
+                    trouble: None,
                 },
             }),
         ),
@@ -1028,6 +1029,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 revision: 4,
                 board: crate::factory::Board {
                     tasks: Vec::new(),
+                    trouble: None,
                     workflows: vec![crate::factory::Workflow {
                         id: "w-1".into(),
                         project,

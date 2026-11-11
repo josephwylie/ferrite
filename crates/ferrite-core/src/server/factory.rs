@@ -30,17 +30,15 @@ pub(super) fn now_ms() -> i64 {
     crate::clock::now().timestamp_millis()
 }
 
-/// The Factory kept in the Store's directory, or one in memory (said in
-/// the log) when the file there cannot be read: it is never overwritten.
+/// The Factory kept in the Store's directory. One whose file cannot be
+/// read says so on the board and in every refusal, and does nothing: it
+/// is never started afresh over the Tasks it holds, nor written (#226).
 pub(super) fn load(store_dir: &std::path::Path) -> factory::Factory {
-    let path = store_dir.join(factory::FILE_NAME);
-    factory::Factory::load(&path).unwrap_or_else(|error| {
-        crate::log!(
-            "server: the Factory at {} could not be read, so nothing is saved: {error}",
-            path.display()
-        );
-        factory::Factory::in_memory()
-    })
+    let factory = factory::Factory::open(&store_dir.join(factory::FILE_NAME));
+    if let Some(trouble) = factory.board().trouble {
+        crate::log!("server: {trouble}");
+    }
+    factory
 }
 
 /// A Factory answer as a window's reply.
@@ -636,7 +634,11 @@ impl Server {
             .iter()
             .filter(|task| project.is_none_or(|project| task.project == project))
             .collect();
-        Ok(json!({ "tasks": tasks }))
+        let mut answer = json!({ "tasks": tasks });
+        if let Some(trouble) = &board.trouble {
+            answer["trouble"] = json!(trouble);
+        }
+        Ok(answer)
     }
 
     pub(super) fn api_task_get(&self, params: TaskParams) -> Result<Value, ApiError> {

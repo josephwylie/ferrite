@@ -284,6 +284,10 @@ pub struct Board {
     /// Every Project's Workflows.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflows: Vec<Workflow>,
+    /// Why the Factory's store could not be read, when it could not: the
+    /// Factory then does nothing until it can be (#226).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trouble: Option<String>,
 }
 
 impl Board {
@@ -649,6 +653,12 @@ pub struct Factory {
     /// The Workers that were working when it was loaded and have not been
     /// seen since: lost, it was the restart that lost them (#226).
     restarted: std::collections::BTreeSet<ThreadId>,
+    /// The Tasks that were working with no Worker yet when it was loaded:
+    /// the restart came between deciding to start one and starting it.
+    unstarted: std::collections::BTreeSet<TaskId>,
+    /// Why its store could not be read: it refuses every command and
+    /// steps nothing, and its file is never written.
+    trouble: Option<String>,
 }
 
 impl Factory {
@@ -667,6 +677,8 @@ impl Factory {
             limit: DEFAULT_LIMIT,
             polls: BTreeMap::new(),
             restarted: std::collections::BTreeSet::new(),
+            unstarted: std::collections::BTreeSet::new(),
+            trouble: None,
         }
     }
 
@@ -690,6 +702,12 @@ impl Factory {
                     .filter(|task| matches!(task.status, Status::Working | Status::NeedsHuman))
                     .filter_map(|task| task.worker)
                     .collect();
+                factory.unstarted = state
+                    .tasks
+                    .iter()
+                    .filter(|task| task.status == Status::Working && task.worker.is_none())
+                    .map(|task| task.id.clone())
+                    .collect();
                 factory.state = state;
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -699,8 +717,26 @@ impl Factory {
         Ok(factory)
     }
 
+    /// The Factory written at `path` (a fresh one when there is none), or
+    /// one that says why it could not be read and does nothing: existing
+    /// Tasks are never started afresh over, nor their file written.
+    pub fn open(path: &Path) -> Self {
+        Self::load(path).unwrap_or_else(|error| {
+            let mut factory = Self::in_memory();
+            factory.trouble = Some(format!(
+                "The Factory's store at {} could not be read, so nothing in it runs and nothing \
+                 is saved: {error}. Fix or move the file and restart Ferrite.",
+                path.display()
+            ));
+            factory
+        })
+    }
+
     /// One change, whoever asks. Its effects come out of the next step.
     pub fn command(&mut self, command: Command, now_ms: i64) -> Result<Answer, Refusal> {
+        if let Some(trouble) = &self.trouble {
+            return Err(Refusal::new(RefusalCode::Failed, trouble.clone()));
+        }
         self.heard(&command);
         self.change(|state, effects| state.command(command, now_ms, effects))
     }
@@ -709,11 +745,16 @@ impl Factory {
     /// Thread is doing. A Worker the Server does not see (no open Thread)
     /// is left as it is.
     pub fn step(&mut self, now_ms: i64, workers: &BTreeMap<ThreadId, Seen>) -> Vec<Effect> {
+        if self.trouble.is_some() {
+            return Vec::new();
+        }
         // A step that cannot be written decides nothing; the next pass
         // tries again.
         let limit = self.limit;
         let restarted = std::mem::take(&mut self.restarted);
+        let unstarted = std::mem::take(&mut self.unstarted);
         let _ = self.change(|state, effects| {
+            recovery::unstarted(state, &unstarted, now_ms, effects);
             state.step_starts(now_ms, effects);
             state.step(now_ms, workers, limit, &restarted, effects);
             Ok(())
@@ -758,6 +799,7 @@ impl Factory {
         Board {
             tasks: self.state.tasks.clone(),
             workflows: self.state.workflows.clone(),
+            trouble: self.trouble.clone(),
         }
     }
 
