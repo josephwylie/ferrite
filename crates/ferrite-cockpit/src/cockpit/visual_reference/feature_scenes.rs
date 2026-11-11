@@ -623,8 +623,8 @@ fn panel(state: &str, staged: PanelStaged) -> (Scene, Setup) {
     (scene, setup)
 }
 
-/// The pull request Surface on Summary, the PR merged: its pill in the
-/// primary action's place.
+/// The pull request Surface on Summary, the PR open and ready to merge:
+/// every check green, Merge as the primary action.
 fn panel_pr() -> (Scene, Setup) {
     let scene = conversation("panel-pr");
     let setup: Setup = Box::new(|view, _, cx| {
@@ -634,12 +634,14 @@ fn panel_pr() -> (Scene, Setup) {
         let Ok(mut pr) = pull_request().pr else {
             return;
         };
-        pr.state = WirePrState::Merged;
+        for check in &mut pr.checks {
+            check.status = WireCheckStatus::Success;
+        }
         view.facts.pr_answered(
             thread,
             Some(PullRequest {
                 number: pr.number,
-                state: PrState::Merged,
+                state: PrState::Open,
                 draft: false,
                 url: Some(pr.url.clone()),
                 title: Some(pr.title.clone()),
