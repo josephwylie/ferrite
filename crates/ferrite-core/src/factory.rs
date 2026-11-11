@@ -1271,11 +1271,9 @@ impl State {
                 Ok(Answer::Changed(true))
             }
             Command::OperatorSaid { worker, text } => {
-                let task = self.worker_task(worker)?;
-                // Recorded, so later Steps know; nothing more. Resume and
-                // Answer are the operator's commands for the rest.
-                task.note(now_ms, Actor::Operator, text);
-                task.watch.rebase = true;
+                // Recorded, so later Steps are told; nothing more. Resume
+                // and Answer are the operator's commands for the rest.
+                direct::operator_said(self.worker_task(worker)?, worker, text, now_ms);
                 Ok(Answer::Changed(true))
             }
             Command::Stop { task } => {

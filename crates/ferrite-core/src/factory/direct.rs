@@ -32,6 +32,10 @@ pub struct Oversight {
     /// told.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub feedback: Vec<Feedback>,
+    /// What the operator said to the Task's Workers, which every later
+    /// Step is told (story 21).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub said: Vec<Said>,
     /// The operator's direction for this Task only.
     #[serde(default, rename = "override", skip_serializing_if = "Option::is_none")]
     pub direction: Option<Override>,
@@ -95,6 +99,16 @@ pub struct Feedback {
     pub text: String,
     /// How many results there were when it was given: a returning Worker
     /// is told what came after its own last one.
+    pub after: usize,
+}
+
+/// Something the operator said to one of the Task's Workers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Said {
+    /// The Step whose Worker it was said to, as the operator reads it.
+    pub to: String,
+    pub text: String,
+    /// How many results there were when it was said, as for feedback.
     pub after: usize,
 }
 
@@ -857,5 +871,45 @@ pub(super) fn said_since(task: &Task, after: usize, answers: bool) -> String {
     if !feedback.is_empty() {
         out.push_str(&format!("\n## Feedback\n\n{}\n", feedback.join("\n")));
     }
+    let said: Vec<String> = task
+        .oversight
+        .said
+        .iter()
+        .filter(|each| each.after >= after)
+        .map(|each| format!("- The operator told {}: {}", each.to, each.text))
+        .collect();
+    if !said.is_empty() {
+        out.push_str(&format!(
+            "\n## What the operator said\n\n{}\n",
+            said.join("\n")
+        ));
+    }
     out
+}
+
+/// The operator said something to `worker`, one of the Task's Workers:
+/// it is recorded, so later Steps are told it.
+pub(super) fn operator_said(task: &mut Task, worker: ThreadId, text: String, now_ms: i64) {
+    let to = if task.worker == Some(worker) {
+        task.asker()
+    } else {
+        task.workers
+            .iter()
+            .find(|each| each.thread == worker)
+            .and_then(|each| {
+                task.workflow
+                    .as_ref()?
+                    .definition
+                    .step(&each.step)
+                    .map(|step| step.name.clone())
+            })
+            .unwrap_or_else(|| "an earlier agent".into())
+    };
+    task.note(now_ms, Actor::Operator, text.clone());
+    task.oversight.said.push(Said {
+        to,
+        text,
+        after: task.results.len(),
+    });
+    task.watch.rebase = true;
 }

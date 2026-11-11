@@ -176,6 +176,61 @@ fn a_question_holds_the_task_until_answered_and_resumes_the_asker() {
     assert!(prompt.contains("Call it --fast"), "{prompt}");
 }
 
+/// Story 21: what the operator says to a Worker is recorded on its Task
+/// and every later Step is told it, naming whom it was said to; a Worker
+/// sent back is told only what was said since its own last result.
+#[test]
+fn what_the_operator_says_to_a_worker_is_told_to_later_steps() {
+    let mut factory = Factory::in_memory();
+    let (id, steps) = reviewed(&mut factory, ApprovalChange::default());
+    let task = running(&mut factory, &id);
+    let said = |factory: &mut Factory, worker, text: &str| {
+        factory.command(
+            Command::OperatorSaid {
+                worker,
+                text: text.into(),
+            },
+            12,
+        )
+    };
+    said(&mut factory, FIRST, "Keep the old flag working").unwrap();
+
+    let effects = finished(&mut factory, FIRST, "Added --fast");
+    let [(_, _, prompt)] = starts(&effects).try_into().unwrap();
+    assert!(
+        prompt.contains("The operator told Build: Keep the old flag working"),
+        "{prompt}"
+    );
+
+    started(&mut factory, &task, SECOND);
+    finished(&mut factory, SECOND, "Looks right");
+    assert_eq!(status(&factory, &task), Status::Approval);
+    said(&mut factory, FIRST, "Mind the docs too").unwrap();
+    command(
+        &mut factory,
+        Command::Rework {
+            task: task.clone(),
+            feedback: "Rename it".into(),
+            to: Some(Destination::Step(steps[0].clone())),
+        },
+    )
+    .unwrap();
+    assert_eq!(the(&factory, &task).worker, Some(FIRST));
+    let effects = factory.step(21, &at(FIRST, false, 1));
+    let told = prompts(&effects);
+    assert_eq!(told.len(), 1, "{effects:?}");
+    assert!(
+        told[0].contains("The operator told Build: Mind the docs too"),
+        "{}",
+        told[0]
+    );
+    assert!(
+        !told[0].contains("Keep the old flag working"),
+        "said before its own result: {}",
+        told[0]
+    );
+}
+
 /// A question from a Worker no longer at the Task's Step is ignored, and
 /// an answer naming an earlier question changes nothing.
 #[test]
