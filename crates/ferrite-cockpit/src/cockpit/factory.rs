@@ -748,17 +748,10 @@ impl CockpitView {
                     .gap(px(SPACE_1))
                     .text_size(px(FS_META))
                     .text_color(rgb(INK_SUBTLE))
-                    .child(ferrite_ui::icons::icon(
-                        match task.agent.provider {
-                            Provider::Claude => ferrite_ui::icons::CLAUDE,
-                            Provider::Codex => ferrite_ui::icons::CODEX,
-                        },
-                        BAR_MARK,
-                        match task.agent.provider {
-                            Provider::Claude => PROVIDER_CLAUDE,
-                            Provider::Codex => PROVIDER_CODEX,
-                        },
-                    ))
+                    .child({
+                        let (mark, ink) = ferrite_ui::provider::mark(task.agent.provider);
+                        ferrite_ui::icons::icon(mark, BAR_MARK, ink)
+                    })
                     .child(SharedString::from(match task.current_step() {
                         Some(step) => format!(
                             "{}{} \u{b7} {}",

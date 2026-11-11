@@ -1739,10 +1739,7 @@ pub fn task_command(action: crate::protocol::TaskAction) -> Option<Command> {
 
 /// `Claude · claude-opus-4`, as a card names a Worker's.
 pub fn agent_label(agent: &Agent) -> String {
-    let provider = match agent.provider {
-        Provider::Claude => "Claude",
-        Provider::Codex => "Codex",
-    };
+    let provider = agent.provider;
     match &agent.model {
         Some(model) => format!("{provider} · {model}"),
         None => provider.to_string(),

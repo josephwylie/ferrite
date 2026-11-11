@@ -104,10 +104,7 @@ pub(super) fn lost(
 
 /// "The Claude session for Builder", as the activity and a stop say it.
 fn session_name(task: &Task) -> String {
-    let provider = match task.agent.provider {
-        crate::store::Provider::Claude => "Claude",
-        crate::store::Provider::Codex => "Codex",
-    };
+    let provider = task.agent.provider;
     match task.current_step() {
         Some(step) => format!("the {provider} session for {}", step.name),
         None => format!("the agent's {provider} session"),

@@ -187,17 +187,8 @@ impl Render for StepDragPreview {
 
 fn provider_mark(provider: Provider) -> AnyElement {
     use ferrite_ui::theme::*;
-    ferrite_ui::icons::icon(
-        match provider {
-            Provider::Claude => ferrite_ui::icons::CLAUDE,
-            Provider::Codex => ferrite_ui::icons::CODEX,
-        },
-        BAR_MARK,
-        match provider {
-            Provider::Claude => PROVIDER_CLAUDE,
-            Provider::Codex => PROVIDER_CODEX,
-        },
-    )
+    let (mark, ink) = ferrite_ui::provider::mark(provider);
+    ferrite_ui::icons::icon(mark, BAR_MARK, ink)
     .into_any_element()
 }
 
