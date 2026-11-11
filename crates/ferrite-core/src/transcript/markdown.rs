@@ -419,6 +419,7 @@ fn write(
         markdown_run: Some(markdown_run),
         sent_at: None,
         prompt_id: None,
+        steer: false,
     });
     *open_id = Some(id);
     Some(id)
