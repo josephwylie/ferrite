@@ -3,6 +3,7 @@ mod boards;
 mod changes;
 mod checks;
 mod completion_checks;
+mod coordinator;
 mod composer_chips;
 mod browser_annotations;
 mod composer_controls;

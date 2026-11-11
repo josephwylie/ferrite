@@ -2584,6 +2584,43 @@ impl Cockpit {
         done
     }
 
+    /// A Coordinator command (#224), answered by the Server's Factory (or
+    /// a fixture world's own, which starts no Thread).
+    pub fn coordinator(
+        &mut self,
+        action: crate::protocol::CoordinatorAction,
+    ) -> io::Result<Option<Done>> {
+        if let Some(factory) = self.local_factory.as_mut() {
+            let agent = crate::factory::Agent {
+                provider: Provider::Claude,
+                model: None,
+                effort: None,
+            };
+            let command =
+                crate::factory::coordinator_command(action, &agent, Default::default())
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "unknown ask"))?;
+            let answer = factory
+                .command(command, 0)
+                .map_err(|refusal| io::Error::other(refusal.message))?;
+            let board = factory.board();
+            self.receive_fixture(ServerMessage::Factory { revision: 0, board });
+            return Ok(Some(match answer {
+                crate::factory::Answer::Task(task) => Done::Task { task },
+                crate::factory::Answer::Changed(changed) => Done::Changed { changed },
+                crate::factory::Answer::Workflow(workflow) => Done::Workflow { workflow },
+                crate::factory::Answer::Step(step) => Done::Step { step },
+                crate::factory::Answer::Version(version) => Done::Version { version },
+                crate::factory::Answer::Proposal(proposal) => Done::Proposal { proposal },
+            }));
+        }
+        let done = self
+            .remote()?
+            .execute(Op::Coordinator { action })
+            .map_err(io::Error::from);
+        self.settle();
+        done
+    }
+
     /// Request workspace commands without creating a Thread or Session.
     pub fn discover_commands(
         &mut self,

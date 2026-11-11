@@ -62,11 +62,19 @@ fn workflow(harness: &Harness, project: &str, steps: &[&str]) -> (String, Vec<St
         .unwrap()
         .to_string()];
     for _ in 1..steps.len() {
-        let added = ok(harness, "step.add", serde_json::json!({ "workflow": workflow }));
+        let added = ok(
+            harness,
+            "step.add",
+            serde_json::json!({ "workflow": workflow }),
+        );
         ids.push(added["step"].as_str().unwrap().to_string());
     }
     for (at, (name, id)) in steps.iter().zip(&ids).enumerate() {
-        let route = if at + 1 == steps.len() { "complete" } else { "next" };
+        let route = if at + 1 == steps.len() {
+            "complete"
+        } else {
+            "next"
+        };
         ok(
             harness,
             "step.edit",
@@ -76,7 +84,11 @@ fn workflow(harness: &Harness, project: &str, steps: &[&str]) -> (String, Vec<St
             }),
         );
     }
-    let saved = ok(harness, "workflow.save", serde_json::json!({ "workflow": workflow }));
+    let saved = ok(
+        harness,
+        "workflow.save",
+        serde_json::json!({ "workflow": workflow }),
+    );
     assert_eq!(saved["version"], 1, "{saved}");
     (workflow, ids)
 }
@@ -127,10 +139,18 @@ fn the_coordinator_starts_on_the_first_word_in_the_main_checkout_on_its_settings
         .sessions
         .recv_timeout(Duration::from_secs(5))
         .expect("the Coordinator started");
-    let listed = ok(&harness, "proposal.list", serde_json::json!({ "project": project }));
+    let listed = ok(
+        &harness,
+        "proposal.list",
+        serde_json::json!({ "project": project }),
+    );
     assert_eq!(listed["proposals"], serde_json::json!([]));
     let board = caller.answer("t", "task.list", serde_json::json!({}));
-    assert_eq!(board["result"]["tasks"], serde_json::json!([]), "talking starts nothing");
+    assert_eq!(
+        board["result"]["tasks"],
+        serde_json::json!([]),
+        "talking starts nothing"
+    );
     let threads = caller.answer("l", "thread.list", serde_json::json!({}));
     let coordinator = threads["result"]["threads"]
         .as_array()
@@ -141,9 +161,17 @@ fn the_coordinator_starts_on_the_first_word_in_the_main_checkout_on_its_settings
         .map(ThreadId::new)
         .unwrap_or_else(|| panic!("{threads}"));
 
-    let info = caller.answer("i", "thread.get", serde_json::json!({ "thread": coordinator }));
+    let info = caller.answer(
+        "i",
+        "thread.get",
+        serde_json::json!({ "thread": coordinator }),
+    );
     let info = &info["result"]["thread"];
-    assert_eq!(info["owner"], serde_json::json!({ "factory": project }), "{info}");
+    assert_eq!(
+        info["owner"],
+        serde_json::json!({ "factory": project }),
+        "{info}"
+    );
     assert!(info["worktree"].is_null(), "the main checkout: {info}");
     assert_eq!(
         harness.launches.lock().unwrap().last().cloned(),
@@ -178,14 +206,14 @@ fn the_coordinator_starts_on_the_first_word_in_the_main_checkout_on_its_settings
         serde_json::json!({ "project": project, "text": "Now?" }),
     );
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !harness
-        .launches
-        .lock()
-        .unwrap()
-        .iter()
-        .any(|launch| launch.0 == Provider::Claude && launch.1.as_deref() == Some("claude-coordinator"))
-    {
-        assert!(Instant::now() < deadline, "never tuned: {:?}", harness.launches);
+    while !harness.launches.lock().unwrap().iter().any(|launch| {
+        launch.0 == Provider::Claude && launch.1.as_deref() == Some("claude-coordinator")
+    }) {
+        assert!(
+            Instant::now() < deadline,
+            "never tuned: {:?}",
+            harness.launches
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
 
@@ -217,7 +245,11 @@ fn each_proposal_waits_for_the_operator_and_runs_once_accepted() {
         "workflow.start",
         serde_json::json!({ "workflow": scripts, "start": { "type": "external" } }),
     );
-    ok(&harness, "workflow.save", serde_json::json!({ "workflow": scripts }));
+    ok(
+        &harness,
+        "workflow.save",
+        serde_json::json!({ "workflow": scripts }),
+    );
     let running = ok(
         &harness,
         "task.start",
@@ -243,14 +275,21 @@ fn each_proposal_waits_for_the_operator_and_runs_once_accepted() {
         serde_json::json!({ "act": "start", "instructions": "x", "coordinator": worker }),
     )
     .2;
-    assert_eq!(refused[0]["error"]["code"], "not_a_coordinator", "{refused:?}");
+    assert_eq!(
+        refused[0]["error"]["code"], "not_a_coordinator",
+        "{refused:?}"
+    );
 
     let one_off = raise(
         &harness,
         coordinator,
         serde_json::json!({ "act": "start", "instructions": "Fix the toolbar overflow" }),
     );
-    let save = raise(&harness, coordinator, serde_json::json!({ "act": "save", "workflow": built }));
+    let save = raise(
+        &harness,
+        coordinator,
+        serde_json::json!({ "act": "save", "workflow": built }),
+    );
     let automation = raise(
         &harness,
         coordinator,
@@ -261,7 +300,11 @@ fn each_proposal_waits_for_the_operator_and_runs_once_accepted() {
         coordinator,
         serde_json::json!({ "act": "redirect", "task": running, "to": steps[1], "then": "me" }),
     );
-    let listed = ok(&harness, "proposal.list", serde_json::json!({ "project": project }));
+    let listed = ok(
+        &harness,
+        "proposal.list",
+        serde_json::json!({ "project": project }),
+    );
     assert_eq!(listed["proposals"].as_array().unwrap().len(), 4, "{listed}");
     let will = listed["proposals"][3]["will"].to_string();
     assert!(will.contains("Send to: Check"), "{will}");
@@ -269,18 +312,33 @@ fn each_proposal_waits_for_the_operator_and_runs_once_accepted() {
     // Nothing happened.
     let unchanged = |caller: &mut Caller| {
         let tasks = caller.answer("t", "task.list", serde_json::json!({}));
-        assert_eq!(tasks["result"]["tasks"].as_array().unwrap().len(), 1, "{tasks}");
+        assert_eq!(
+            tasks["result"]["tasks"].as_array().unwrap().len(),
+            1,
+            "{tasks}"
+        );
         assert_eq!(tasks["result"]["tasks"][0]["step"], steps[0]);
-        let made = ok(&harness, "workflow.get", serde_json::json!({ "workflow": built }));
+        let made = ok(
+            &harness,
+            "workflow.get",
+            serde_json::json!({ "workflow": built }),
+        );
         assert_eq!(made["workflow"]["versions"].as_array().unwrap().len(), 1);
-        let made = ok(&harness, "workflow.get", serde_json::json!({ "workflow": scripts }));
+        let made = ok(
+            &harness,
+            "workflow.get",
+            serde_json::json!({ "workflow": scripts }),
+        );
         assert!(made["workflow"].get("automation").is_none(), "{made}");
     };
     unchanged(&mut caller);
     assert!(harness.sessions.try_recv().is_err(), "nothing started");
 
     // Dismissed, each changes nothing.
-    for (at, proposal) in [&one_off, &save, &automation, &redirect].into_iter().enumerate() {
+    for (at, proposal) in [&one_off, &save, &automation, &redirect]
+        .into_iter()
+        .enumerate()
+    {
         let done = window_says(
             &mut window,
             10 + at as u64,
@@ -318,13 +376,28 @@ fn each_proposal_waits_for_the_operator_and_runs_once_accepted() {
         .expect("its Worker started");
     let made = task_until(&mut caller, &task, |task| task["worker"].is_u64());
     assert!(made.get("workflow").is_none(), "one-off: {made}");
-    assert_eq!(accept(&mut window, 21, &one_off), Done::Changed { changed: false });
+    assert_eq!(
+        accept(&mut window, 21, &one_off),
+        Done::Changed { changed: false }
+    );
     assert!(harness.sessions.try_recv().is_err(), "accepted once");
 
-    let save = raise(&harness, coordinator, serde_json::json!({ "act": "save", "workflow": built }));
-    let accepted = ok(&harness, "proposal.accept", serde_json::json!({ "proposal": save }));
+    let save = raise(
+        &harness,
+        coordinator,
+        serde_json::json!({ "act": "save", "workflow": built }),
+    );
+    let accepted = ok(
+        &harness,
+        "proposal.accept",
+        serde_json::json!({ "proposal": save }),
+    );
     assert_eq!(accepted["proposal"]["status"], "accepted", "{accepted}");
-    let made = ok(&harness, "workflow.get", serde_json::json!({ "workflow": built }));
+    let made = ok(
+        &harness,
+        "workflow.get",
+        serde_json::json!({ "workflow": built }),
+    );
     assert_eq!(made["workflow"]["versions"].as_array().unwrap().len(), 2);
 
     let automation = raise(
@@ -332,8 +405,16 @@ fn each_proposal_waits_for_the_operator_and_runs_once_accepted() {
         coordinator,
         serde_json::json!({ "act": "automation", "workflow": scripts }),
     );
-    ok(&harness, "proposal.accept", serde_json::json!({ "proposal": automation }));
-    let made = ok(&harness, "workflow.get", serde_json::json!({ "workflow": scripts }));
+    ok(
+        &harness,
+        "proposal.accept",
+        serde_json::json!({ "proposal": automation }),
+    );
+    let made = ok(
+        &harness,
+        "workflow.get",
+        serde_json::json!({ "workflow": scripts }),
+    );
     assert_eq!(made["workflow"]["automation"]["switch"], "on", "{made}");
 
     let redirect = raise(
@@ -358,7 +439,11 @@ fn a_task_routed_to_the_coordinator_is_told_to_it() {
         "step.edit",
         serde_json::json!({ "workflow": built, "step": steps[0], "on_finished": "coordinator", "on_unable": "complete" }),
     );
-    ok(&harness, "workflow.save", serde_json::json!({ "workflow": built }));
+    ok(
+        &harness,
+        "workflow.save",
+        serde_json::json!({ "workflow": built }),
+    );
     let task = ok(
         &harness,
         "task.start",
@@ -378,12 +463,19 @@ fn a_task_routed_to_the_coordinator_is_told_to_it() {
         serde_json::json!({ "outcome": "finished", "summary": "Built; the API is unclear", "worker": worker }),
     );
     let held = task_until(&mut caller, &task, |task| task["status"] == "needs_human");
-    assert!(held["reason"].as_str().unwrap().contains("Coordinator"), "{held}");
+    assert!(
+        held["reason"].as_str().unwrap().contains("Coordinator"),
+        "{held}"
+    );
     harness
         .sessions
         .recv_timeout(Duration::from_secs(5))
         .expect("the Coordinator started for it");
-    let listed = ok(&harness, "coordinator.say", serde_json::json!({ "project": project, "text": "Hi" }));
+    let listed = ok(
+        &harness,
+        "coordinator.say",
+        serde_json::json!({ "project": project, "text": "Hi" }),
+    );
     let coordinator = ThreadId::new(listed["coordinator"]["thread"].as_u64().unwrap());
     let read = told(&mut caller, coordinator, &task);
     assert!(read.contains("Built; the API is unclear"), "{read}");

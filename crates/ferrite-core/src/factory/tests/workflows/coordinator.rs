@@ -121,8 +121,14 @@ fn talking_starts_the_coordinator_once_with_its_briefing_and_nothing_else() {
     assert!(factory.board().coordinator(project()).is_none());
     assert!(factory.step(1, &BTreeMap::new()).is_empty());
 
-    assert_eq!(say(&mut factory, "What is left?"), Ok(Answer::Changed(true)));
-    assert_eq!(say(&mut factory, "And the docs?"), Ok(Answer::Changed(true)));
+    assert_eq!(
+        say(&mut factory, "What is left?"),
+        Ok(Answer::Changed(true))
+    );
+    assert_eq!(
+        say(&mut factory, "And the docs?"),
+        Ok(Answer::Changed(true))
+    );
     let effects = factory.step(2, &BTreeMap::new());
     let starts = coordinator_starts(&effects);
     assert_eq!(starts.len(), 1, "{effects:?}");
@@ -307,7 +313,10 @@ fn the_briefing_teaches_reading_drafting_proposing_and_never_acting_alone() {
 fn each_proposal_changes_nothing_until_accepted_and_nothing_when_dismissed() {
     let mut factory = Factory::in_memory();
     coordinating(&mut factory);
-    let (built, steps) = saved(&mut factory, &[("Build", "Build it"), ("Check", "Check it")]);
+    let (built, steps) = saved(
+        &mut factory,
+        &[("Build", "Build it"), ("Check", "Check it")],
+    );
     let scripts = scripted(&mut factory);
     let running = run(&mut factory, &built, "Running");
     factory.step(7, &BTreeMap::new());
@@ -365,13 +374,28 @@ fn each_proposal_changes_nothing_until_accepted_and_nothing_when_dismissed() {
 
     // Exactly what will happen, as the card says it.
     let lines = proposal(&raised, &ids[0]).lines(&raised);
-    assert!(lines.contains(&("Task".into(), "Fix the toolbar overflow".into())), "{lines:?}");
-    assert!(lines.contains(&("Process".into(), "One-off handoff".into())), "{lines:?}");
+    assert!(
+        lines.contains(&("Task".into(), "Fix the toolbar overflow".into())),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&("Process".into(), "One-off handoff".into())),
+        "{lines:?}"
+    );
     let lines = proposal(&raised, &ids[1]).lines(&raised);
-    assert!(lines.contains(&("Process".into(), "Ship it \u{b7} version 1".into())), "{lines:?}");
+    assert!(
+        lines.contains(&("Process".into(), "Ship it \u{b7} version 1".into())),
+        "{lines:?}"
+    );
     let lines = proposal(&raised, &ids[4]).lines(&raised);
-    assert!(lines.contains(&("Send to".into(), "Check".into())), "{lines:?}");
-    assert!(lines.contains(&("Feedback".into(), "Only the docs changed".into())), "{lines:?}");
+    assert!(
+        lines.contains(&("Send to".into(), "Check".into())),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&("Feedback".into(), "Only the docs changed".into())),
+        "{lines:?}"
+    );
 
     // Dismissed: nothing changes, and it stays dismissed.
     for id in &ids {
@@ -408,8 +432,15 @@ fn each_proposal_changes_nothing_until_accepted_and_nothing_when_dismissed() {
     assert_eq!(card.status, ProposalStatus::Accepted);
     assert_eq!(card.task.as_deref(), Some(task.as_str()));
     assert_eq!(accept(&mut factory, &one_off), Ok(Answer::Changed(false)));
-    assert_eq!(factory.board().tasks.len(), board.tasks.len(), "accepted once");
-    assert_eq!(dismiss(&mut factory, &one_off).map_err(|r| r.code), Err(RefusalCode::NotNow));
+    assert_eq!(
+        factory.board().tasks.len(),
+        board.tasks.len(),
+        "accepted once"
+    );
+    assert_eq!(
+        dismiss(&mut factory, &one_off).map_err(|r| r.code),
+        Err(RefusalCode::NotNow)
+    );
 
     let draft = workflow(&factory, &built).draft.clone();
     let save_it = proposed(
@@ -582,7 +613,10 @@ fn a_save_proposal_saves_only_the_draft_it_showed() {
 #[test]
 fn a_task_routed_to_the_coordinator_waits_and_the_coordinator_is_told() {
     let mut factory = Factory::in_memory();
-    let (id, steps) = saved(&mut factory, &[("Build", "Build it"), ("Check", "Check it")]);
+    let (id, steps) = saved(
+        &mut factory,
+        &[("Build", "Build it"), ("Check", "Check it")],
+    );
     edit(
         &mut factory,
         &id,
@@ -606,10 +640,7 @@ fn a_task_routed_to_the_coordinator_waits_and_the_coordinator_is_told() {
     assert_eq!(starts.len(), 1, "{effects:?}");
     assert!(starts[0].1.contains(&task), "{}", starts[0].1);
     assert!(starts[0].1.contains("Built, but the API is unclear"));
-    assert!(
-        factory.step(10, &BTreeMap::new()).is_empty(),
-        "told once"
-    );
+    assert!(factory.step(10, &BTreeMap::new()).is_empty(), "told once");
 }
 
 /// The Coordinator, its settings and its proposals are written with the

@@ -91,7 +91,10 @@ impl Proposal {
             Act::Start { .. } => "Hand off a task".into(),
             Act::Save {
                 workflow, version, ..
-            } => format!("Save {} as version {version}", workflow_name(board, workflow)),
+            } => format!(
+                "Save {} as version {version}",
+                workflow_name(board, workflow)
+            ),
             Act::Automation { .. } => "Turn on automatic starts".into(),
             Act::Redirect { task, .. } => format!("Direct task {task} \u{b7} this task only"),
         }
@@ -140,7 +143,11 @@ impl Proposal {
                 vec![
                     line("Agents", agents.join(" \u{2192} ")),
                     line("Starts", draft.start.kind.label().to_string()),
-                    line("Then", "New tasks use it; running tasks keep theirs. Saving starts nothing.".into()),
+                    line(
+                        "Then",
+                        "New tasks use it; running tasks keep theirs. Saving starts nothing."
+                            .into(),
+                    ),
                 ]
             }
             Act::Automation { workflow } => {
@@ -150,7 +157,10 @@ impl Proposal {
                 let mut lines = vec![line("Workflow", found.draft.name.clone())];
                 if let Some(latest) = found.latest() {
                     let start = &latest.definition.start;
-                    lines[0].1 = format!("{} \u{b7} version {}", latest.definition.name, latest.version);
+                    lines[0].1 = format!(
+                        "{} \u{b7} version {}",
+                        latest.definition.name, latest.version
+                    );
                     lines.push(line("Starts", start.kind.label().to_string()));
                     let detail = match start.kind {
                         super::StartKind::Schedule => Some(start.schedule.describe()),
@@ -261,6 +271,31 @@ pub(super) fn routed(task: &Task, from: &str, text: &str) -> String {
     )
 }
 
+/// A window's ask of a Coordinator as the command it is: an accepted
+/// one-off on `agent`, a save checked against `catalog` (whose skills are
+/// the window's). `None` for an ask this Ferrite does not know.
+pub fn coordinator_command(
+    action: crate::protocol::CoordinatorAction,
+    agent: &Agent,
+    mut catalog: Catalog,
+) -> Option<Command> {
+    use crate::protocol::CoordinatorAction;
+    Some(match action {
+        CoordinatorAction::Say { project, text } => Command::CoordinatorSay { project, text },
+        CoordinatorAction::Agent { project, agent } => Command::CoordinatorAgent { project, agent },
+        CoordinatorAction::Accept { proposal, skills } => {
+            catalog.skills = skills;
+            Command::AcceptProposal {
+                proposal,
+                agent: agent.clone(),
+                catalog,
+            }
+        }
+        CoordinatorAction::Dismiss { proposal } => Command::DismissProposal { proposal },
+        CoordinatorAction::Unknown => return None,
+    })
+}
+
 impl State {
     fn coordinator_mut(&mut self, project: ProjectId) -> &mut Coordinator {
         if let Some(at) = self.coordinators.iter().position(|c| c.project == project) {
@@ -362,7 +397,9 @@ impl State {
             self.workflows
                 .iter()
                 .find(|found| found.id == id)
-                .ok_or_else(|| Refusal::new(RefusalCode::UnknownWorkflow, "no Workflow has that id"))
+                .ok_or_else(|| {
+                    Refusal::new(RefusalCode::UnknownWorkflow, "no Workflow has that id")
+                })
                 .and_then(|found| {
                     (found.project == project)
                         .then_some(found)
@@ -484,7 +521,10 @@ impl State {
                 let project = self.coordinator_of(coordinator)?;
                 if let Act::Start { instructions, .. } = &act {
                     if instructions.trim().is_empty() {
-                        return Err(Refusal::new(RefusalCode::Invalid, "a Task needs instructions"));
+                        return Err(Refusal::new(
+                            RefusalCode::Invalid,
+                            "a Task needs instructions",
+                        ));
                     }
                 }
                 if let Some(same) = self.proposals.iter().find(|proposal| {

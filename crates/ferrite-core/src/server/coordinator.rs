@@ -140,7 +140,10 @@ impl Server {
             }
             for op in ops {
                 if let Err(error) = self.execute(op) {
-                    crate::log!("server: the Coordinator could not be tuned: {}", error.message);
+                    crate::log!(
+                        "server: the Coordinator could not be tuned: {}",
+                        error.message
+                    );
                 }
             }
             self.coordinators_tuned.insert(thread, agent);
@@ -193,23 +196,14 @@ impl Server {
             code: crate::protocol::ErrorCode::Failed,
             message: error.message,
         };
-        let command = match action.clone() {
-            CoordinatorAction::Say { project, text } => Command::CoordinatorSay { project, text },
-            CoordinatorAction::Agent { project, agent } => {
-                Command::CoordinatorAgent { project, agent }
-            }
-            CoordinatorAction::Accept { proposal, skills } => Command::AcceptProposal {
-                proposal,
-                agent: self.factory_agent.clone(),
-                catalog: self.catalog(skills),
-            },
-            CoordinatorAction::Dismiss { proposal } => Command::DismissProposal { proposal },
-            CoordinatorAction::Unknown => {
-                return Err(WireError {
-                    code: crate::protocol::ErrorCode::Unsupported,
-                    message: "this server does not know that Coordinator command".into(),
-                })
-            }
+        let catalog = self.catalog(Vec::new());
+        let Some(command) =
+            crate::factory::coordinator_command(action.clone(), &self.factory_agent, catalog)
+        else {
+            return Err(WireError {
+                code: crate::protocol::ErrorCode::Unsupported,
+                message: "this server does not know that Coordinator command".into(),
+            });
         };
         let (answer, _) = self.factory_command(command).map_err(wire)?;
         Ok(Some(done(answer)))

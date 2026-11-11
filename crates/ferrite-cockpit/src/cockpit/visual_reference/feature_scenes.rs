@@ -55,6 +55,7 @@ pub(super) const STATES: &[&str] = &[
     "factory-start-schedule",
     "factory-start-github",
     "factory-start-script",
+    "factory-coordinator",
 ];
 
 pub(super) fn handles(state: &str) -> bool {
@@ -103,6 +104,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "factory-start-schedule" => factory_start(ferrite_core::factory::StartKind::Schedule),
         "factory-start-github" => factory_start(ferrite_core::factory::StartKind::GithubIssue),
         "factory-start-script" => factory_start(ferrite_core::factory::StartKind::External),
+        "factory-coordinator" => factory_coordinator(),
         _ => unreachable!("`handles` lists every state"),
     }
 }
@@ -1019,6 +1021,127 @@ fn factory_start(kind: ferrite_core::factory::StartKind) -> (Scene, Setup) {
         view.save_workflow(cx);
         view.open_start(cx);
         view.turn_automation(ferrite_core::factory::Turn::On, cx);
+    });
+    (scene, setup)
+}
+
+/// The Coordinator surface (#224): the Coordinator's ordinary Pane beside
+/// its proposals, one of each act: a one-off handoff (accepted, with its
+/// Task), saving a version, turning automatic starts on and redirecting a
+/// Task (waiting), and a dismissed one.
+fn factory_coordinator() -> (Scene, Setup) {
+    use ferrite_core::factory::{
+        Act, Agent, Catalog, Command, Override, Start, StartKind, Template, ThenReturn,
+    };
+    let mut scene = Scene::new("factory-coordinator");
+    let ferrite = scene.project("ferrite");
+    let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
+    let project = scene.core.project_id(mine).expect("a Project");
+    let root = scene
+        .core
+        .registry()
+        .project(project)
+        .expect("its Project")
+        .root
+        .clone();
+    scene.core.focus_thread(mine);
+    scene.core.fixture_live_factory();
+    let coordinator = scene
+        .core
+        .fixture_open_owned(
+            Provider::Claude,
+            ferrite_core::workspace::WorkspaceChoice::Main { checkout: root },
+            ferrite_core::ThreadOwner::Factory(project),
+        )
+        .expect("the Coordinator");
+    let agent = Agent {
+        provider: Provider::Claude,
+        model: Some("claude-opus-4".into()),
+        effort: None,
+    };
+    let core = &mut scene.core;
+    for command in [
+        Command::CoordinatorStarted {
+            project,
+            thread: coordinator,
+        },
+        Command::CreateWorkflow {
+            project,
+            template: Template::IssueToReviewedPr,
+            agent: agent.clone(),
+        },
+        Command::SaveWorkflow {
+            workflow: "w-1".into(),
+            catalog: Catalog::default(),
+        },
+        Command::EditStart {
+            workflow: "w-1".into(),
+            start: Start {
+                kind: StartKind::External,
+                ..Start::default()
+            },
+        },
+        Command::SaveWorkflow {
+            workflow: "w-1".into(),
+            catalog: Catalog::default(),
+        },
+        Command::Start {
+            project,
+            instructions: "Reconnect drops the draft".into(),
+            agent: agent.clone(),
+            request: None,
+            workflow: Some("w-1".into()),
+        },
+        Command::RenameWorkflow {
+            workflow: "w-1".into(),
+            name: "Issue to reviewed PR, with docs".into(),
+        },
+    ] {
+        core.fixture_factory_command(command);
+    }
+    let draft = core
+        .factory()
+        .workflow("w-1")
+        .map(|workflow| workflow.draft.clone())
+        .expect("the draft");
+    for act in [
+        Act::Start {
+            instructions: "Fix the toolbar overflow on narrow windows".into(),
+            workflow: None,
+        },
+        Act::Start {
+            instructions: "Load the example".into(),
+            workflow: None,
+        },
+        Act::Save {
+            workflow: "w-1".into(),
+            version: 3,
+            draft,
+        },
+        Act::Automation {
+            workflow: "w-1".into(),
+        },
+        Act::Redirect {
+            task: "t-1".into(),
+            direction: Override {
+                to: "s-3".into(),
+                skip: vec!["s-2".into()],
+                then: ThenReturn::Me,
+                note: "Only the docs changed".into(),
+            },
+        },
+    ] {
+        core.fixture_factory_command(Command::Propose {
+            coordinator,
+            act,
+            catalog: Catalog::default(),
+        });
+    }
+    let setup: Setup = Box::new(move |view, _, cx| {
+        view.open_factory(project, cx);
+        view.factory_surface(crate::cockpit::workflows::Surface::Coordinator, cx);
+        view.accept_proposal("p-1", cx);
+        view.dismiss_proposal("p-2", cx);
     });
     (scene, setup)
 }

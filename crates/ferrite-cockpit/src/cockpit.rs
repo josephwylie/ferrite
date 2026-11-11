@@ -9,6 +9,7 @@ mod browser;
 #[cfg(feature = "browser-smoke")]
 mod browser_smoke;
 mod context_menu;
+pub(crate) mod coordinator;
 pub(crate) mod decisions;
 pub(crate) mod direction;
 mod drafts;

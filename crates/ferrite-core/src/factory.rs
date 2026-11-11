@@ -34,7 +34,7 @@ mod direct;
 mod starts;
 mod workflow;
 
-pub use coordinator::{briefing, Act, Coordinator, Proposal, ProposalId, ProposalStatus};
+pub use coordinator::{briefing, coordinator_command, Act, Coordinator, Proposal, ProposalId, ProposalStatus};
 pub use direct::{Answered, Feedback, FeedbackKind, Override, Oversight, Question, ThenReturn};
 pub use starts::{when_label, zone_label};
 pub use starts::{

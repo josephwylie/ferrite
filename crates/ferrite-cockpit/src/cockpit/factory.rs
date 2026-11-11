@@ -84,6 +84,8 @@ pub(crate) struct FactoryView {
     pub(crate) picks: Vec<(ferrite_ui::menu::Item, super::workflows::Pick)>,
     /// Answers, rework and redirects being written, and their sheets.
     pub(crate) direct: super::direction::Direct,
+    /// The Coordinator surface's field before the Coordinator runs (#224).
+    pub(crate) opening: Option<Entity<Composer>>,
 }
 
 /// A system notification's tag for a Task.
@@ -133,6 +135,7 @@ impl CockpitView {
                     workflows,
                     picks: Vec::new(),
                     direct: Default::default(),
+                    opening: None,
                 })
             }
         }
@@ -186,6 +189,9 @@ impl CockpitView {
     /// The Worker drawn in the open panel's Worker tab, which streams whole.
     pub(super) fn factory_worker_drawn(&self) -> Option<ThreadId> {
         let view = self.factory_view.as_ref()?;
+        if let Some(coordinator) = self.coordinator_drawn() {
+            return Some(coordinator);
+        }
         (view.tab == TaskTab::Worker)
             .then(|| self.open_task_now()?.worker)
             .flatten()
@@ -239,6 +245,9 @@ impl CockpitView {
             return Some(sheet.instructions.read(cx).focus_handle(cx));
         }
         if let Some(focus) = self.direct_focus(cx) {
+            return Some(focus);
+        }
+        if let Some(focus) = self.coordinator_focus(window, cx) {
             return Some(focus);
         }
         if let Some(focus) = self.workflows_focus(cx) {
@@ -516,6 +525,8 @@ impl CockpitView {
 
         let body = if view.surface == super::workflows::Surface::Workflows {
             self.workflows_surface(window, cx)
+        } else if view.surface == super::workflows::Surface::Coordinator {
+            self.coordinator_surface(window, cx)
         } else if tasks.is_empty() {
             div()
                 .debug_selector(|| "factory-empty".into())
