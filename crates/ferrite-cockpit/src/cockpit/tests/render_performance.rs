@@ -2798,11 +2798,10 @@ fn the_palette_comes_in_and_rebuilds_no_pane(cx: &mut TestAppContext) {
     assert_eq!(display_frames(cx), 0, "landed: no more frames");
 }
 
-/// A Composer's choice menu opens in its place on its first frame — no
-/// frame drawn blank while it measures itself — stands still there, and
-/// asks for nothing after.
+/// The model picker opens in its place — no frame drawn blank while it
+/// measures itself — stands still there, and asks for nothing after.
 #[gpui::test]
-fn a_choice_menu_opens_in_place_and_then_rests(cx: &mut TestAppContext) {
+fn the_model_picker_opens_in_place_and_then_rests(cx: &mut TestAppContext) {
     let (view, _fake, threads, cx) = group_board("choice-menu-entrance", &[], cx);
     view.update(cx, |view, cx| {
         view.cockpit.toggle_fullscreen();
@@ -2816,7 +2815,7 @@ fn a_choice_menu_opens_in_place_and_then_rests(cx: &mut TestAppContext) {
         cx.executor().advance_clock(Duration::from_millis(16));
         cx.run_until_parked();
         display_frames(cx);
-        stood.extend(cx.debug_bounds("choice-menu").map(|menu| menu.bottom()));
+        stood.extend(cx.debug_bounds("model-picker").map(|menu| menu.bottom()));
     }
     assert_eq!(display_frames(cx), 0, "placed: no more frames");
     assert!(!stood.is_empty(), "the premise: it was drawn");

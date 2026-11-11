@@ -14,34 +14,70 @@ pub fn model_label(model: &str) -> SharedString {
     SharedString::from(ferrite_core::providers::models::display_name(model))
 }
 
-/// The model and its effort as one footer chip (Claude's `Opus 5.5
-/// Medium`): the model in `INK_STRONG` at `W_LABEL`, a step above the
-/// body, cut first in a narrow Pane, then the effort in `INK_SUBTLE` at
-/// `W_BODY`, `FOOTER_WORD_GAP` after it and never cut. A model that takes
-/// no effort shows its name alone. While the Thread's Session starts
-/// (`loading`) the model's name shimmers, as the working line's does: it is
-/// the provider's default until the Session says which model serves
-/// (Codex's skeleton chip).
-pub fn model_effort_chip(
-    model: SharedString,
-    effort: Option<SharedString>,
-    loading: bool,
-) -> Div {
+/// The model chip's face (T3's model trigger, Claude's `Opus 5.5 Medium`):
+/// what serves the Thread and how hard it thinks.
+pub struct ModelChip {
+    /// The provider's logomark and brand ink (`provider::mark`).
+    pub mark: (&'static str, u32),
+    pub model: SharedString,
+    /// The effort in force; `None` for a model that takes none.
+    pub effort: Option<SharedString>,
+    /// The Session is starting: the name is the provider's default until it
+    /// says which model serves, and shimmers as the working line does
+    /// (Codex's skeleton chip).
+    pub loading: bool,
+    /// The picker the chip opens is open.
+    pub open: bool,
+    /// The chip button's hover group: the effort lifts while it is hovered.
+    pub group: SharedString,
+}
+
+/// The model chip's face: the provider's mark at `MODEL_PICKER_MARK`, then
+/// the model in `INK_STRONG` at `W_LABEL`, cut first in a narrow Pane, then
+/// the effort at `W_BODY`, `FOOTER_WORD_GAP` after it and never cut. The
+/// effort is `INK_SUBTLE`, lifting to `INK_STRONG` while the chip is
+/// hovered or its picker is open (T3's suffix).
+pub fn model_effort_chip(chip: ModelChip) -> Div {
+    let ModelChip {
+        mark: (path, ink),
+        model,
+        effort,
+        loading,
+        open,
+        group,
+    } = chip;
     let model = if loading {
         components::shimmer(model, INK_STRONG)
     } else {
         model.into_any_element()
     };
-    chip_face(model, INK_STRONG)
-        .font_weight(theme::W_LABEL)
-        .gap(px(theme::FOOTER_WORD_GAP))
-        .children(effort.map(|effort| {
+    let mark_selector = format!("{group}-mark");
+    let effort = effort.map(|effort| {
+        div()
+            .flex_shrink_0()
+            .font_weight(theme::W_BODY)
+            .text_color(rgb(if open { INK_STRONG } else { INK_SUBTLE }))
+            .group_hover(group.clone(), |style| style.text_color(rgb(INK_STRONG)))
+            .child(effort)
+    });
+    div()
+        .flex()
+        .flex_shrink(1.)
+        .min_w_0()
+        .items_center()
+        .gap(px(theme::SPACE_1_5))
+        .child(
             div()
+                .debug_selector(move || mark_selector.clone())
                 .flex_shrink_0()
-                .font_weight(theme::W_BODY)
-                .text_color(rgb(INK_SUBTLE))
-                .child(effort)
-        }))
+                .child(icons::icon(path, theme::MODEL_PICKER_MARK, ink)),
+        )
+        .child(
+            chip_face(model, INK_STRONG)
+                .font_weight(theme::W_LABEL)
+                .gap(px(theme::FOOTER_WORD_GAP))
+                .children(effort),
+        )
 }
 
 /// The permission mode's word under the box: `INK_SUBTLE`, or

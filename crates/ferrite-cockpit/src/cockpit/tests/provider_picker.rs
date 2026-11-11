@@ -1,6 +1,7 @@
 //! Picking a provider, a model and an effort.
 #[allow(unused_imports)]
 use super::*;
+use crate::cockpit::model_picker::Tab;
 
 #[gpui::test]
 fn draft_commands_arrive_before_first_send_and_follow_provider_changes(cx: &mut TestAppContext) {
@@ -175,7 +176,7 @@ fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut Te
         fake.spawned.borrow().is_empty(),
         "discovery creates no Session"
     );
-    view.update_in(cx, |view, window, cx| view.pick(index, window, cx));
+    view.update(cx, |view, cx| view.pick_model_row(index, cx));
     view.read_with(cx, |view, _| {
         assert_eq!(
             view.panes[0]
@@ -202,6 +203,7 @@ fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut Te
             models,
             "an empty discovery keeps the last usable menu"
         );
+        view.popover = None;
         view.settings_open = true;
         cx.notify();
     });
@@ -239,11 +241,48 @@ fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut Te
     });
 }
 
+/// The open model picker, read.
+fn picker(view: &CockpitView) -> (&Popover, &ModelPicker) {
+    let open = view.popover.as_ref().expect("the model picker is open");
+    let Kind::Provider(picker) = &open.kind else {
+        panic!("the popover is not the model picker");
+    };
+    (open, picker)
+}
+
+/// The names the picker lists now, in order.
+fn listed(view: &CockpitView) -> Vec<String> {
+    let (open, picker) = picker(view);
+    picker
+        .shown
+        .iter()
+        .map(|at| open.rows[*at].name.to_string())
+        .collect()
+}
+
+fn announce(fake: &Fake, stream: usize, models: Vec<ferrite_core::ModelInfo>) {
+    fake.streams.borrow()[stream]
+        .send(SessionEvent::Models { models })
+        .unwrap();
+}
+
+fn model(value: &str, display: &str, efforts: &[&str]) -> ferrite_core::ModelInfo {
+    ferrite_core::ModelInfo {
+        value: value.into(),
+        display: display.into(),
+        detail: String::new(),
+        resolved: None,
+        efforts: efforts.iter().map(|effort| effort.to_string()).collect(),
+        default_effort: None,
+    }
+}
+
 /// #25 AC: the keyboard-only path. `/` lists the local provider row on
-/// top; ↵ opens the picker — the two Providers with the ✓ on the
-/// current one, and no invented model rows before an announcement —
-/// and ↓↵ picks codex: Ferrite's own act, the Session replaced on the
-/// spot, nothing landing as prompt text.
+/// top; ↵ opens the picker on the Thread's Provider, the ✓ on its
+/// default, every row a model under the name people say; Codex's tab
+/// lists its catalogue and ↵ picks its first: Ferrite's own act, the
+/// Session replaced on the spot, nothing landing as prompt text, the
+/// picker kept open in its Reasoning column (T3's docked picker).
 #[gpui::test]
 fn the_slash_provider_row_opens_the_picker_and_picks_codex(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("provider-pick", 1);
@@ -256,65 +295,45 @@ fn the_slash_provider_row_opens_the_picker_and_picks_codex(cx: &mut TestAppConte
     cx.simulate_input("/");
     cx.run_until_parked();
     cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
+    tick(cx);
 
     assert_eq!(
         composer_text(&view, cx),
         "",
         "the pick never lands as slash text"
     );
-    let first_codex = view.read_with(cx, |view, _| {
-        let picker = view.popover.as_ref().expect("the provider picker is open");
-        assert!(matches!(picker.kind, Kind::Provider));
-        let names: Vec<&str> = picker
-            .rows
-            .iter()
-            .map(|pick| pick.row.name.as_ref())
-            .collect();
-        // Two sections, each headed by its Provider, each listing the
-        // catalog under the names people say — never a wire id.
-        assert_eq!(names[0], "Claude");
-        assert!(picker.rows[0].inert, "a section title is not a pick");
-        let codex = names
-            .iter()
-            .position(|name| *name == "Codex")
-            .expect("a Codex section");
-        assert!(
-            codex > 1,
-            "Claude's models sit between the titles: {names:?}"
-        );
+    view.read_with(cx, |view, _| {
+        let (open, picker) = picker(view);
+        assert_eq!(picker.tab, Tab::Provider(Provider::Claude));
+        let names = listed(view);
         assert!(
             names
                 .iter()
-                .all(|name| !name.contains("claude-") && !name.contains("gpt-5")
-                    || name.starts_with("GPT")),
-            "{names:?}"
+                .all(|name| !name.contains("claude-") && name != "Claude" && name != "Codex"),
+            "models only, never a wire id or a section title: {names:?}"
         );
-        assert!(picker.rows[1].active, "✓ on the Provider's default");
-        assert_eq!(picker.selected, 1, "the arrows start on it");
-        codex + 1
+        assert!(open.rows[open.selected].active, "the cursor starts on the ✓");
     });
-
-    view.update_in(cx, |view, window, cx| view.pick(first_codex, window, cx));
-    cx.run_until_parked();
+    view.update(cx, |view, cx| {
+        view.model_picker_tab(Tab::Provider(Provider::Codex), cx)
+    });
+    tick(cx);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
 
     view.read_with(cx, |view, _| {
-        assert!(view.popover.is_none(), "the pick closed the picker");
+        let (_, picker) = picker(view);
+        assert_eq!(picker.column, Column::Reasoning, "the keyboard moves to the column");
         assert_eq!(
             view.cockpit.thread(thread).map(|open| open.provider()),
             Some(Provider::Codex)
         );
-        // The switch was Ferrite's own act: no prompt, no running turn.
         let transcript = view.cockpit.thread(thread).unwrap().transcript();
         assert!(transcript.blocks().is_empty());
         assert!(!view.cockpit.thread(thread).is_some_and(|open| open.busy()));
     });
     let spawned = fake.spawned.borrow().last().unwrap().clone();
-    assert_eq!(
-        spawned.provider,
-        Provider::Codex,
-        "the choice drives the spawn"
-    );
+    assert_eq!(spawned.provider, Provider::Codex, "the choice drives the spawn");
     assert_eq!(
         spawned.model.as_deref(),
         Some(
@@ -326,7 +345,7 @@ fn the_slash_provider_row_opens_the_picker_and_picks_codex(cx: &mut TestAppConte
     );
 }
 
-/// #25: announced models ride the picker below the providers and a
+/// #25: announced models replace the catalogue for their Provider and a
 /// pick re-aims the model without touching the provider; the fresh
 /// Session's own announcement then lists them again with the ✓ on the
 /// standing choice.
@@ -345,28 +364,19 @@ fn announced_models_ride_the_picker_and_a_pick_reaims_the_model(cx: &mut TestApp
         .unwrap();
     tick(cx);
 
-    cx.simulate_input("/");
-    cx.run_until_parked();
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
+    view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
+    tick(cx);
     view.read_with(cx, |view, _| {
-        let picker = view.popover.as_ref().expect("open");
-        let names: Vec<&str> = picker
-            .rows
-            .iter()
-            .map(|pick| pick.row.name.as_ref())
-            .collect();
-        // The announced list replaces the catalog for its Provider;
-        // Codex, which announces none, keeps its catalog.
-        assert_eq!(&names[..4], ["Claude", "Sonnet", "Opus", "Codex"]);
+        assert_eq!(listed(view), ["Sonnet", "Opus"]);
+        let (open, picker) = picker(view);
         assert_eq!(
-            picker.selected, 1,
-            "no choice yet: the arrows start on the first model"
+            open.selected, picker.shown[0],
+            "no choice yet: the cursor starts on the first model"
         );
     });
 
     cx.simulate_keystrokes("down enter");
-    cx.run_until_parked();
+    tick(cx);
 
     assert_eq!(
         fake.spawned.borrow().last().unwrap(),
@@ -377,14 +387,9 @@ fn announced_models_ride_the_picker_and_a_pick_reaims_the_model(cx: &mut TestApp
         "the model rides the spawn; the provider stands"
     );
     view.read_with(cx, |view, _| {
-        assert_eq!(
-            view.cockpit.thread(thread).and_then(|open| open.model()),
-            Some("opus")
-        );
+        assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("opus"));
     });
 
-    // The replacement Session announces its own list — reopening the
-    // picker shows it with the ✓ on the standing choice.
     fake.streams
         .borrow()
         .last()
@@ -394,15 +399,12 @@ fn announced_models_ride_the_picker_and_a_pick_reaims_the_model(cx: &mut TestApp
         })
         .unwrap();
     tick(cx);
-    cx.simulate_input("/");
-    cx.run_until_parked();
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
     view.read_with(cx, |view, _| {
-        let picker = view.popover.as_ref().expect("reopened");
-        assert!(picker.rows[2].active, "✓ on the standing model choice");
-        assert!(!picker.rows[1].active);
-        assert_eq!(picker.selected, 2, "and the arrows start there");
+        let (open, picker) = picker(view);
+        let opus = picker.shown[1];
+        assert!(open.rows[opus].active, "✓ on the standing model choice");
+        assert!(!open.rows[picker.shown[0]].active);
+        assert_eq!(open.selected, opus, "and the cursor there");
     });
 }
 
@@ -432,27 +434,17 @@ fn a_draft_inherits_the_focused_provider_model_and_only_announced_models(cx: &mu
         view.open_band_popover(pane::BandChip::Provider, cx);
     });
 
-    view.read_with(cx, |view, _| {
+    view.update(cx, |view, cx| {
         let draft = view.panes[view.focused()].draft().unwrap();
         assert_eq!(draft.binding.provider().model.as_deref(), Some("opus"));
-        let labels: Vec<&str> = view
-            .popover
-            .as_ref()
-            .unwrap()
-            .rows
-            .iter()
-            .map(|row| row.name.as_ref())
-            .collect();
         // Announced once (deduplicated), the standing choice appended
-        // where the list did not name it, then the Codex section.
-        assert_eq!(&labels[..4], ["Claude", "Sonnet", "Opus", "Codex"]);
-        let rows = &view.popover.as_ref().unwrap().rows;
-        assert!(rows[2].active, "✓ on the inherited choice");
-        assert_eq!(view.popover.as_ref().unwrap().selected, 2);
-    });
-    view.update_in(cx, |view, window, cx| {
-        let selected = view.popover.as_ref().unwrap().selected;
-        view.pick(selected, window, cx);
+        // where the list did not name it.
+        assert_eq!(listed(view), ["Sonnet", "Opus"]);
+        let (open, picker) = picker(view);
+        let opus = picker.shown[1];
+        assert!(open.rows[opus].active, "✓ on the inherited choice");
+        assert_eq!(open.selected, opus);
+        view.pick_model_row(opus, cx);
         assert_eq!(
             view.panes[view.focused()]
                 .draft()
@@ -467,8 +459,8 @@ fn a_draft_inherits_the_focused_provider_model_and_only_announced_models(cx: &mu
 }
 
 /// The first prompt fixes the Provider, never the model: the picker
-/// still opens, the other Provider's section is drawn inert and says
-/// why, and the Composer's control stays in every Pane.
+/// still opens, the other Provider's models stay live and say a pick
+/// there is a handover, and the Composer's control stays in every Pane.
 #[gpui::test]
 fn the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("provider-lock-ui", 1);
@@ -478,10 +470,7 @@ fn the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open(cx: &mut 
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| {
-        assert!(
-            view.model_chip(0, cx).is_some(),
-            "pre-lock the Composer offers the control"
-        );
+        assert!(view.model_chip(0, cx).is_some(), "pre-lock the Composer offers the control");
     });
 
     cx.simulate_input("hello");
@@ -490,32 +479,20 @@ fn the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open(cx: &mut 
 
     view.update(cx, |view, cx| {
         view.open_provider_picker(thread, cx);
-        let picker = view
-            .popover
-            .as_ref()
-            .expect("the picker opens after the first prompt");
-        let codex = picker
-            .rows
-            .iter()
-            .position(|row| row.name.as_ref() == "Codex")
-            .unwrap();
-        // The other Provider is a handover now, not a dead door: its
-        // section says so and its rows stay live.
-        assert_eq!(picker.rows[codex].detail.as_ref(), "handover");
-        assert!(
-            picker.rows[codex + 1..].iter().all(|row| !row.inert),
-            "the other Provider's rows are live"
-        );
-        assert!(
-            picker.rows[1..codex].iter().all(|row| !row.inert),
-            "this Provider's models are live"
-        );
-        assert!(
-            view.model_chip(0, cx).is_some(),
-            "and the control itself stays — every Pane draws one"
-        );
-        view.popover = None;
+        view.model_picker_tab(Tab::Provider(Provider::Codex), cx);
     });
+    tick(cx);
+    assert!(
+        cx.debug_bounds("model-picker-row-0").is_some(),
+        "the other Provider's models are listed"
+    );
+    view.update(cx, |view, cx| {
+        let (open, _) = picker(view);
+        assert!(open.rows.iter().all(|row| !row.inert), "every model stays live");
+        assert!(view.model_chip(0, cx).is_some(), "and the control itself stays");
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
 
     // The `/model` row stays live and opens the same picker.
     cx.simulate_input("/");
@@ -524,24 +501,17 @@ fn the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open(cx: &mut 
         let row = &view.popover.as_ref().expect("open").rows[0];
         assert_eq!(row.name.as_ref(), "model");
         assert!(!row.inert);
-        assert_eq!(
-            row.detail.as_ref(),
-            "Switch model or hand over to the other provider"
-        );
+        assert_eq!(row.detail.as_ref(), "Switch model or hand over to the other provider");
     });
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     view.read_with(cx, |view, _| {
         assert!(matches!(
             view.popover.as_ref().expect("the picker opened").kind,
-            Kind::Provider
+            Kind::Provider(_)
         ));
     });
-    assert_eq!(
-        composer_text(&view, cx),
-        "",
-        "the pick never lands as slash text"
-    );
+    assert_eq!(composer_text(&view, cx), "", "the pick never lands as slash text");
 }
 
 /// Escape in an open picker closes the picker: the agent at work keeps
@@ -557,31 +527,21 @@ fn escape_in_an_open_picker_never_interrupts_the_agent(cx: &mut TestAppContext) 
     cx.simulate_input("/");
     cx.run_until_parked();
     cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert!(view.popover.is_some(), "the picker opened")
-    });
+    tick(cx);
+    view.read_with(cx, |view, _| assert!(view.popover.is_some(), "the picker opened"));
 
     cx.simulate_keystrokes("escape");
     tick(cx);
-    assert_eq!(
-        *fake.interrupts.borrow(),
-        0,
-        "Escape only closes the picker"
-    );
+    assert_eq!(*fake.interrupts.borrow(), 0, "Escape only closes the picker");
     view.read_with(cx, |view, _| assert!(view.popover.is_none()));
     cx.simulate_keystrokes("escape");
     tick(cx);
-    assert_eq!(
-        *fake.interrupts.borrow(),
-        1,
-        "the Composer's Escape stops it"
-    );
+    assert_eq!(*fake.interrupts.borrow(), 1, "the Composer's Escape stops it");
 }
 
 /// #25 regression: reopening the picker with a standing model choice
-/// and pressing bare ↵ changes nothing — the current provider's row
-/// carries the choice, so the re-pick is a true no-op: no teardown, no
+/// and pressing bare ↵ changes nothing: the current provider's row
+/// carries the choice, so the re-pick is a true no-op — no teardown, no
 /// respawn, the model kept.
 #[gpui::test]
 fn reopening_the_picker_and_pressing_enter_keeps_the_standing_choice(cx: &mut TestAppContext) {
@@ -598,43 +558,29 @@ fn reopening_the_picker_and_pressing_enter_keeps_the_standing_choice(cx: &mut Te
         .unwrap();
     tick(cx);
 
-    // Pick opus: claude · opus is now the standing choice.
-    cx.simulate_input("/");
-    cx.run_until_parked();
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
-    cx.simulate_keystrokes("down enter");
-    cx.run_until_parked();
+    view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
+    tick(cx);
+    cx.simulate_keystrokes("down enter escape");
+    tick(cx);
     view.read_with(cx, |view, _| {
-        assert_eq!(
-            view.cockpit.thread(thread).and_then(|open| open.model()),
-            Some("opus")
-        );
+        assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("opus"));
     });
     let spawns = fake.streams.borrow().len();
 
-    // Reopen; the arrows start on the standing choice — bare ↵
-    // re-picks it whole.
-    cx.simulate_input("/");
-    cx.run_until_parked();
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
+    view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
+    tick(cx);
     view.read_with(cx, |view, _| {
-        let picker = view.popover.as_ref().expect("open");
-        let standing = picker
-            .rows
-            .iter()
-            .position(|row| row.active)
-            .expect("✓ on the choice");
+        let (open, _) = picker(view);
+        let standing = open.rows.iter().position(|row| row.active).expect("✓ on the choice");
         assert_eq!(
-            picker.rows[standing].name.as_ref(),
+            open.rows[standing].name.as_ref(),
             "Opus",
             "the learned provider label survives the Session replacement"
         );
-        assert_eq!(picker.selected, standing);
+        assert_eq!(open.selected, standing);
     });
     cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
+    tick(cx);
 
     assert_eq!(
         fake.streams.borrow().len(),
@@ -647,67 +593,247 @@ fn reopening_the_picker_and_pressing_enter_keeps_the_standing_choice(cx: &mut Te
             Some("opus"),
             "the model stands"
         );
-        assert_eq!(
-            view.cockpit.thread(thread).map(|open| open.provider()),
-            Some(Provider::Claude)
-        );
     });
 }
 
-/// The effort chip opens a ladder from the provider's own announcement
-/// with the operator's default on top; a pick re-aims the Thread and
-/// the chip names the level. `/effort` opens the same picker.
+/// The Reasoning column lists the ladder the model announces, the ✓ on
+/// the level in force and `Default` on the one a Thread starts on; ↑/↓
+/// move in it, ↵ picks — the Thread re-aimed, the picker still open — and
+/// ← goes back to the list.
 #[gpui::test]
-fn the_effort_picker_lists_the_models_ladder_and_a_pick_reaims_it(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("effort-picker", 1);
+fn the_reasoning_column_takes_the_arrows_and_left_returns_to_search(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("effort-column", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    fake.streams.borrow()[0]
-        .send(SessionEvent::Models {
-            models: vec![ferrite_core::ModelInfo {
-                value: "sonnet".into(),
-                display: "Sonnet 5".into(),
-                detail: String::new(),
-                resolved: None,
-                efforts: vec!["low".into(), "high".into()],
-                default_effort: Some("high".into()),
-            }],
-        })
-        .unwrap();
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
     tick(cx);
-
-    view.update_in(cx, |view, window, cx| {
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    announce(&fake, 0, vec![model("sonnet", "Sonnet 5", &["low", "medium", "high"])]);
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.cockpit.set_model(thread, Some("sonnet".into())).unwrap();
         view.open_effort_picker(thread, cx);
-        let picker = view.popover.as_ref().expect("the effort picker opens");
-        assert!(matches!(picker.kind, Kind::Effort));
-        let names: Vec<&str> = picker.rows.iter().map(|row| row.name.as_ref()).collect();
-        assert_eq!(names, ["Default", "Low", "High"]);
-        assert!(
-            picker.rows[0].active,
-            "no choice yet: the default is in force"
-        );
-        view.pick(2, window, cx);
-        assert!(view.popover.is_none(), "a pick closes the picker");
-        assert_eq!(view.cockpit.thread(thread).unwrap().effort(), Some("high"));
     });
-
-    cx.simulate_input("/eff");
-    cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        let menu = view.popover.as_ref().expect("the / menu");
-        assert_eq!(menu.rows[0].name.as_ref(), "effort");
-    });
+    tick(cx);
+    let rungs = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            let (_, picker) = picker(view);
+            (
+                picker.column,
+                picker.effort_cursor,
+                picker
+                    .efforts
+                    .iter()
+                    .map(|rung| rung.name.to_string())
+                    .collect::<Vec<_>>(),
+            )
+        })
+    };
+    let (column, start, names) = rungs(&view, cx);
+    assert_eq!(column, Column::Reasoning);
+    assert_eq!(names, ["Low", "Medium", "High"]);
+    assert!(cx.debug_bounds("model-picker-effort-2").is_some(), "every rung is drawn");
+    cx.simulate_keystrokes("up up up");
+    tick(cx);
+    assert_eq!(rungs(&view, cx).1, 0, "↑ climbs to the top and holds");
+    cx.simulate_keystrokes("down down down");
+    tick(cx);
+    assert_eq!(rungs(&view, cx).1, 2, "↓ walks down and holds at the foot");
+    let _ = start;
     cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
+    tick(cx);
     view.read_with(cx, |view, _| {
-        let picker = view.popover.as_ref().expect("/effort opens the picker");
-        // FL-4: `/effort` opens the model picker, whose effort row is
-        // its ladder; the level in force stays High.
-        assert!(matches!(picker.kind, Kind::Provider));
         assert_eq!(view.cockpit.thread(thread).unwrap().effort(), Some("high"));
+        let (_, picker) = picker(view);
+        assert!(picker.efforts[2].active, "the ✓ follows the pick");
     });
-    assert_eq!(composer_text(&view, cx), "", "the /effort line is cleared");
+    cx.simulate_keystrokes("left");
+    tick(cx);
+    assert_eq!(rungs(&view, cx).0, Column::List, "← goes back to the list");
+}
+
+/// ⌘1…⌘N pick the Nth listed model (T3's `modelPicker.jump.N`), each row
+/// wearing its key; a search re-numbers what it lists.
+#[gpui::test]
+fn command_digits_jump_to_the_listed_models(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("picker-jumps", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    announce(
+        &fake,
+        0,
+        vec![
+            model("sonnet", "Sonnet 5", &[]),
+            model("opus", "Opus 5.5", &[]),
+            model("haiku", "Haiku 4.5", &[]),
+        ],
+    );
+    tick(cx);
+    view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
+    tick(cx);
+    assert!(cx.debug_bounds("model-picker-row-2").is_some());
+    cx.simulate_keystrokes("cmd-2");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("opus"));
+        assert!(view.popover.is_some(), "the docked picker stays open");
+    });
+    cx.simulate_input("hai");
+    tick(cx);
+    view.read_with(cx, |view, _| assert_eq!(listed(view)[0], "Haiku 4.5"));
+    cx.simulate_keystrokes("cmd-1");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("haiku"));
+    });
+}
+
+/// One popover, `MODEL_PICKER_H` tall over its footer in every state: the
+/// 44 rail, the list and the 192 Reasoning column; switching tabs or
+/// searching never resizes it. A search hides the rail and ranks every
+/// Provider's models together.
+#[gpui::test]
+fn the_model_picker_is_one_popover_of_one_height(cx: &mut TestAppContext) {
+    use ferrite_ui::theme::{MODEL_PICKER_H, MODEL_PICKER_RAIL_W, REASONING_W};
+    let (core, _fake) = cockpit("picker-height", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
+    tick(cx);
+    let body = cx.debug_bounds("model-picker-body").expect("the picker's columns");
+    let whole = cx.debug_bounds("model-picker").expect("the picker");
+    assert_eq!(body.size.height, px(MODEL_PICKER_H));
+    let rail = cx.debug_bounds("model-picker-rail").expect("the rail");
+    assert_eq!(rail.size.width, px(MODEL_PICKER_RAIL_W));
+    let column = cx.debug_bounds("model-picker-reasoning").expect("the column");
+    assert_eq!(column.size.width, px(REASONING_W));
+    let composer = cx.debug_bounds("composer-block").expect("the box");
+    assert!(whole.bottom() <= composer.top(), "over the Composer: {whole:?} / {composer:?}");
+    let footer = cx.debug_bounds("model-picker-footer").expect("the footer");
+    let permissions = cx.debug_bounds("model-picker-permissions");
+    if let Some(permissions) = permissions {
+        assert!(
+            footer.right() - permissions.right() <= px(ferrite_ui::theme::SPACE_3 + 1.),
+            "the permissions sit at the footer's far end"
+        );
+    }
+
+    let pill = cx.debug_bounds("model-picker-pill").unwrap();
+    let codex = cx.debug_bounds("model-picker-rail-codex").unwrap();
+    cx.simulate_click(codex.center(), gpui::Modifiers::none());
+    for _ in 0..20 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+    view.read_with(cx, |view, _| {
+        assert_eq!(picker(view).1.tab, Tab::Provider(Provider::Codex))
+    });
+    let slid = cx.debug_bounds("model-picker-pill").unwrap();
+    assert!(
+        (slid.center().y - codex.center().y).abs() <= px(1.),
+        "the pill slides to its button: {pill:?} → {slid:?} / {codex:?}"
+    );
+    assert_eq!(cx.debug_bounds("model-picker").unwrap(), whole, "a tab never resizes it");
+
+    cx.simulate_input("gpt");
+    tick(cx);
+    assert!(cx.debug_bounds("model-picker-rail").is_none(), "a search hides the rail");
+    assert_eq!(
+        cx.debug_bounds("model-picker").unwrap().size,
+        whole.size,
+        "nor does a search"
+    );
+    view.read_with(cx, |view, _| {
+        let names = listed(view);
+        assert!(!names.is_empty() && names.iter().all(|name| name.starts_with("GPT")), "{names:?}");
+    });
+    cx.simulate_input("zzzz");
+    tick(cx);
+    assert!(cx.debug_bounds("model-picker-row-0").is_none(), "nothing matches");
+    assert_eq!(cx.debug_bounds("model-picker").unwrap().size, whole.size);
+}
+
+/// A star puts a model in Favourites, saved at once: the next picker,
+/// in the next launch too, opens on Favourites listing it.
+#[gpui::test]
+fn favourites_persist_and_open_the_picker(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("picker-favourites", 1);
+    let thread = core.threads()[0];
+    let dir = scratch("picker-favourites-prefs");
+    std::fs::create_dir_all(&dir).unwrap();
+    let prefs = Preferences {
+        dir: dir.clone(),
+        ..Preferences::ephemeral()
+    };
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| {
+        CockpitView::new_with_settings(core, Provider::Claude, prefs, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
+    tick(cx);
+    let (starred, name) = view.read_with(cx, |view, _| {
+        let (open, picker) = picker(view);
+        assert_eq!(picker.tab, Tab::Provider(Provider::Claude), "nothing starred yet");
+        let at = picker.shown[0];
+        (at, open.rows[at].name.to_string())
+    });
+    let star = cx.debug_bounds("model-picker-star-0").expect("every row has its star");
+    cx.simulate_click(star.center(), gpui::Modifiers::none());
+    tick(cx);
+    let saved = ferrite_core::settings::Settings::load(&dir).unwrap();
+    assert_eq!(saved.favourite_models.len(), 1, "saved at once");
+    view.update(cx, |view, cx| {
+        assert!(view.popover.is_some(), "the star is not a pick");
+        view.popover = None;
+        view.open_provider_picker(thread, cx);
+        assert_eq!(picker(view).1.tab, Tab::Favourites);
+        assert_eq!(listed(view), [name.clone()]);
+        let _ = starred;
+    });
+}
+
+/// A Provider whose CLI is missing stands dimmed on the rail, its tooltip
+/// the reason, and its button does nothing.
+#[gpui::test]
+fn a_provider_that_cannot_serve_is_dimmed_on_the_rail(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("picker-unavailable", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.update(cx, |view, cx| {
+        view.cli_updates.checked(
+            Provider::Codex,
+            Ok(ferrite_core::providers::update::Status::Missing),
+            true,
+        );
+        view.open_provider_picker(thread, cx);
+    });
+    tick(cx);
+    let codex = cx.debug_bounds("model-picker-rail-codex").expect("still on the rail");
+    view.read_with(cx, |view, _| {
+        let (_, picker) = picker(view);
+        assert_eq!(
+            picker.unavailable,
+            [(Provider::Codex, SharedString::from("Codex CLI is not installed"))],
+            "its reason, its tooltip"
+        );
+    });
+    cx.simulate_click(codex.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(picker(view).1.tab, Tab::Provider(Provider::Claude), "a dead button");
+    });
 }
 
 /// Claude lists its own `effort` command; Ferrite's row of that name
@@ -782,13 +908,13 @@ fn a_draft_says_its_permission_mode(cx: &mut TestAppContext) {
     assert!(mode.left() > model.right(), "it follows the model: {mode:?} {model:?}");
 }
 
-/// A draft's model chip is the live Thread's (Claude's new-session `Opus
-/// 5.5 Medium`): one chip, the effort in force beside the model, opening
-/// the model menu with its effort a submenu there. A pick in the submenu
-/// names the chip and closes the menu, and the first send starts the
-/// Thread on that effort.
+
+/// A draft's model chip is the live Thread's: one chip, the effort in
+/// force beside the model, opening the model picker on the draft's band.
+/// A rung picked in its Reasoning column names the chip, and the first
+/// send starts the Thread on that effort.
 #[gpui::test]
-fn the_draft_model_chip_sets_its_effort_in_a_submenu(cx: &mut TestAppContext) {
+fn the_draft_model_chip_sets_its_effort_in_the_reasoning_column(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("draft-effort", 0);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -805,34 +931,29 @@ fn the_draft_model_chip_sets_its_effort_in_a_submenu(cx: &mut TestAppContext) {
         assert!(chosen.is_some(), "the chip names the level in force");
         steps
     });
-    let chip = cx
-        .debug_bounds("draft-model-picker")
-        .expect("the model chip");
+    let chip = cx.debug_bounds("draft-model-picker").expect("the model chip");
     cx.simulate_click(chip.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {
-        let band = view.popover.as_ref().expect("the model menu");
-        assert!(matches!(band.kind, Kind::Band(pane::BandChip::Provider)));
+        let (open, _) = picker(view);
+        assert!(matches!(open.pane, PaneIdentity::Draft(_)));
     });
-    let row = cx
-        .debug_bounds("choice-submenu-row-0")
-        .expect("the effort row rides the draft's model menu");
-    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
-    tick(cx);
     let high = steps
         .iter()
         .position(|step| step == "high")
         .expect("the ladder offers high");
     let pick = cx
-        .debug_bounds(Box::leak(format!("choice-sub-{high}").into_boxed_str()))
-        .expect("every level is a row");
+        .debug_bounds(Box::leak(format!("model-picker-effort-{high}").into_boxed_str()))
+        .expect("every level is a rung");
     cx.simulate_click(pick.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, _| {
-        assert!(view.popover.is_none(), "a pick closes the menu");
+        assert!(view.popover.is_some(), "the docked picker stays open");
         let draft = view.panes[view.focused()].draft().expect("still a draft");
         assert_eq!(draft.binding.effort(), Some("high"));
     });
+    cx.simulate_keystrokes("escape");
+    tick(cx);
     cx.simulate_input("go");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -873,9 +994,10 @@ fn clicking_the_footer_chip_opens_the_provider_picker(cx: &mut TestAppContext) {
         }
     }
     assert!(opened, "the sweep never found the chip");
-    // One chip carries the model and its effort.
     view.read_with(cx, |view, _| {
-        let picker = view.popover.as_ref().expect("open");
-        assert!(matches!(picker.kind, Kind::Provider));
+        assert!(matches!(
+            view.popover.as_ref().expect("open").kind,
+            Kind::Provider(_)
+        ));
     });
 }

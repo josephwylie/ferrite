@@ -15,6 +15,8 @@ pub(crate) mod empty_board;
 mod history;
 mod leaving;
 mod lightbox;
+mod mode_menu;
+mod model_picker;
 mod machines;
 mod nav_keys;
 mod nav_pick;
@@ -37,6 +39,7 @@ type FloatTriggers =
     std::rc::Rc<std::cell::RefCell<std::collections::HashMap<SharedString, gpui::Bounds<Pixels>>>>;
 
 use self::context_menu::{ContextMenu, MenuTarget, MenuVerb};
+use self::model_picker::{Column, ModelPicker};
 use ferrite_ui::components::home_relative;
 use ferrite_ui::components::Tip as _;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -519,6 +522,8 @@ pub struct CockpitView {
     session_controls: Option<(ThreadId, u64)>,
     /// The Composer's mode menu, open on one Thread's Session generation.
     mode_picker: Option<(ThreadId, u64)>,
+    /// Where the open mode menu hangs, and what it previews.
+    mode_menu: mode_menu::ModeMenu,
     /// The Composer's `+` menu, open on one Pane.
     attach_menu: Option<ferrite_core::roster::PaneIdentity>,
     /// Holds every footer's plan-usage popover open, its ring's own clicks
@@ -1165,12 +1170,11 @@ enum Kind {
         query: String,
         request_id: u64,
     },
-    /// #25: re-aim the Thread's provider / model before its first prompt.
-    Provider,
-    /// The Composer's effort picker: the reasoning ladder the Thread's
-    /// model takes, from the provider's own announcement, with the
-    /// operator's default on top. Opened by the chip or `/effort`.
-    Effort,
+    /// The model picker (`model_picker.rs`): every Provider's models and
+    /// the Reasoning column, a Thread's picks re-aiming it and a draft's
+    /// making its band choice. Opened by the model chip, `/model` and
+    /// `/effort`.
+    Provider(Box<ModelPicker>),
     /// #29: one band chip's choices on the focused draft — registry reads,
     /// never a filesystem scan — except the project chip's type-a-path row,
     /// which re-derives from the Composer line per edit.
@@ -1201,13 +1205,9 @@ struct PendingDiscovery {
 static NEXT_FILE_SEARCH: AtomicU64 = AtomicU64::new(1);
 
 impl Kind {
-    fn picker_slot(&self) -> Option<(bool, bool)> {
-        match self {
-            Kind::Provider => Some((false, false)),
-            Kind::Effort => Some((true, false)),
-            Kind::Band(pane::BandChip::Provider) => Some((false, true)),
-            _ => None,
-        }
+    /// The model picker's own line holds the keyboard while it is open.
+    fn holds_keyboard(&self) -> bool {
+        matches!(self, Kind::Provider(_))
     }
 
     /// Text-derived popovers follow the line: `sync_menu` rebuilds them on
@@ -1278,7 +1278,7 @@ impl DraftCommands {
 
 /// What picking a row does. A command or a file lands in the line; every
 /// other pick is Ferrite's own act, never a prompt.
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 enum Consequence {
     /// Replace the active `/filter` with `/name ` — sent later as plain text
     /// on Claude and translated to the typed skill item inside the Codex
@@ -1308,7 +1308,7 @@ enum Consequence {
 }
 
 /// What picking a band row does to the focused draft.
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 enum BandChoice {
     Provider(ProviderChoice),
     /// The effort chip: a rung, or None for the operator's default.
@@ -1584,6 +1584,7 @@ impl CockpitView {
             history: Default::default(),
             session_controls: None,
             mode_picker: None,
+            mode_menu: Default::default(),
             attach_menu: None,
             usage_popover_held: false,
             session_control_error: None,
@@ -2364,7 +2365,7 @@ impl CockpitView {
         }
         let models_changed = self.cockpit.take_models_changed();
         let tuning_availability_changed = self.popover.as_ref().is_some_and(|open| {
-            matches!(open.kind, Kind::Provider | Kind::Effort)
+            matches!(open.kind, Kind::Provider(_))
                 && open.pane.thread().is_some_and(|thread| {
                     self.cockpit
                         .thread(thread)
@@ -6724,7 +6725,7 @@ impl CockpitView {
                 }
             }
             Kind::Commands | Kind::Files { .. } => self.menu_muted = true,
-            Kind::Provider | Kind::Effort => {}
+            Kind::Provider(_) => {}
         }
         cx.notify();
     }
@@ -6733,23 +6734,6 @@ impl CockpitView {
     /// dispatched. The popover closes either way — a door it opens (the
     /// pickers) is a fresh popover in its place.
     fn pick(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
-        // The native menu can outlive the frame in which it opened. A turn
-        // that started meanwhile, or a change still waiting on the
-        // provider, must not turn a visible choice into a guaranteed
-        // refusal in the transcript.
-        if let Some(open) = self.popover.as_ref() {
-            if matches!(open.kind, Kind::Provider | Kind::Effort)
-                && open.pane.thread().is_some_and(|thread| {
-                    self.cockpit
-                        .thread(thread)
-                        .and_then(|thread| tuning_hold(&thread))
-                        .is_some()
-                })
-            {
-                self.refresh_model_picker(cx);
-                return;
-            }
-        }
         let Some(open) = self.popover.take() else {
             return;
         };
@@ -6832,9 +6816,9 @@ impl CockpitView {
             Consequence::OpenEffortPicker => {
                 if let Some(thread) = open.pane.thread() {
                     splice_line(cx, "");
-                    // The model picker carries the effort row (its ladder,
-                    // ←/→): `/effort` opens it, as the palette's `effort`.
-                    self.open_provider_picker(thread, cx);
+                    // The model picker's Reasoning column, as the
+                    // palette's `effort` opens it.
+                    self.open_effort_picker(thread, cx);
                 }
             }
             Consequence::Effort(effort) => {
@@ -6929,42 +6913,6 @@ impl CockpitView {
                 }
             }
         }
-    }
-
-    /// The model picker in the Composer slot: one section per Provider —
-    /// its logomark row, then its models under the names the Provider's
-    /// own menu shows — with the ✓ on what is serving. Claude's rows come
-    /// from its handshake; Codex's from the catalog. The catalog stays
-    /// inspectable during a turn, with unavailable choices and their reason.
-    fn open_provider_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let Some(open) = self.cockpit.thread(thread) else {
-            return;
-        };
-        let current = open.provider();
-        let chosen = open.model().map(str::to_string);
-        let serving = open.transcript().model().map(str::to_string);
-        let locked = open.first_prompt_sent();
-        let hold = tuning_hold(&open);
-        let (mut rows, selected) = self.provider_rows(
-            current,
-            chosen.as_deref(),
-            serving.as_deref(),
-            locked,
-            |choice| Consequence::Provision(choice),
-        );
-        Self::hold_tuning_rows(&mut rows, hold);
-        // The `/` menu the pick came through is already closed; a chip
-        // click replaces whatever the slot held outright.
-        self.popover = Some(Popover {
-            scroll: ScrollHandle::new(),
-            revealed: Default::default(),
-            hold,
-            pane: PaneIdentity::Thread(thread),
-            kind: Kind::Provider,
-            rows,
-            selected,
-        });
-        cx.notify();
     }
 
     /// Keep the current checkmark and catalog inspectable while choices
@@ -7570,6 +7518,17 @@ impl CockpitView {
             return;
         }
         let identity = pane.identity;
+        if chip == pane::BandChip::Provider {
+            if self.popover.as_ref().is_some_and(|open| {
+                open.pane == identity && matches!(open.kind, Kind::Provider(_))
+            }) {
+                self.popover = None;
+                cx.notify();
+            } else {
+                self.open_model_picker(identity, Column::List, cx);
+            }
+            return;
+        }
         let project = draft.binding.project();
         // The menu answers about the checkout as it stands now; until git
         // says, it names the last answer.
@@ -7926,31 +7885,7 @@ impl CockpitView {
     /// Discovery can finish while a picker is open. Rebuild its rows and
     /// preserve the highlighted choice by value, even if row order changes.
     fn refresh_model_picker(&mut self, cx: &mut Context<Self>) {
-        let Some(previous) = self.popover.take() else {
-            return;
-        };
-        match (&previous.kind, previous.pane) {
-            (Kind::Provider, PaneIdentity::Thread(thread)) => self.open_provider_picker(thread, cx),
-            (Kind::Effort, PaneIdentity::Thread(thread)) => self.open_effort_picker(thread, cx),
-            (Kind::Band(pane::BandChip::Provider), PaneIdentity::Draft(_)) => {
-                self.open_band_popover(pane::BandChip::Provider, cx);
-            }
-            _ => {
-                self.popover = Some(previous);
-                return;
-            }
-        }
-        if let (Some(open), Some(selected)) =
-            (&mut self.popover, previous.rows.get(previous.selected))
-        {
-            if let Some(index) = open
-                .rows
-                .iter()
-                .position(|row| row.consequence == selected.consequence)
-            {
-                open.selected = index;
-            }
-        }
+        self.rebuild_model_picker(None, cx);
     }
 
     /// Stop the submitted startup before Escape or a choice changes its draft.
@@ -8201,10 +8136,9 @@ impl CockpitView {
     }
 
     /// The focused draft's model chip (#29), where a live Thread's stands
-    /// and as it reads (Claude's new-session `Opus 5.5 Medium`): the model,
-    /// then the effort in force when the model takes one. It opens the
-    /// band's model menu, the effort its submenu there, as the Thread's
-    /// does (`choice_menu`).
+    /// and as it reads (Claude's new-session `Opus 5.5 Medium`): the
+    /// provider's mark, the model, then the effort in force when the model
+    /// takes one. It opens the model picker on the draft's band choice.
     fn draft_model_chip(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let draft = self.panes[index].draft()?;
         let provider = draft.binding.provider().provider;
@@ -8226,11 +8160,16 @@ impl CockpitView {
             )
         })
         .flatten();
-        let face = pane::model_effort_chip(
-            model_label,
-            effort.map(|effort| pane::sentence_case(&effort).into()),
-            false,
-        );
+        let identity = self.panes[index].identity;
+        let group = model_picker::chip_trigger(identity);
+        let face = pane::model_effort_chip(pane::ModelChip {
+            mark: ferrite_ui::provider::mark(provider),
+            model: model_label,
+            effort: effort.map(|effort| pane::sentence_case(&effort).into()),
+            loading: false,
+            open: self.model_picker_open(identity),
+            group: group.clone(),
+        });
         let control = pane::draft_picker(
             "draft-model-picker",
             draft.band_focus == Some(pane::BandChip::Provider),
@@ -8238,10 +8177,7 @@ impl CockpitView {
             cx,
         )
         .tip("Model and effort");
-        Some(
-            self.choice_menu(index, Kind::Band(pane::BandChip::Provider), control, cx)
-                .into_any_element(),
-        )
+        Some(self.model_chip_control(index, control, cx))
     }
 
     /// A draft's permission word, where a Thread's mode chip stands: the mode
@@ -8754,9 +8690,10 @@ impl CockpitView {
             .popover
             .as_ref()
             .filter(|open| open.pane == self.panes[index].identity)?;
-        // The pickers are `ChoiceMenu`s, and a draft's band menus hang off
-        // their chips in the bar (`band_menu_element`).
-        if open.kind.picker_slot().is_some() || matches!(open.kind, Kind::Band(_)) {
+        // The model picker hangs over the box (`model_picker_element`), and
+        // a draft's band menus off their chips in the bar
+        // (`band_menu_element`).
+        if matches!(open.kind, Kind::Provider(_) | Kind::Band(_)) {
             return None;
         }
         Some(self.menu_surface(open, cx))
@@ -8879,7 +8816,7 @@ impl CockpitView {
                 && row.detail.is_empty()
                 && row.matched.is_empty();
             let drawn = match open.kind {
-                Kind::Provider | Kind::Band(pane::BandChip::Provider)
+                Kind::Band(pane::BandChip::Provider)
                     if row.inert
                         && row.consequence_is_inert()
                         && provider_of_title(&row.name).is_some() =>
@@ -8900,7 +8837,7 @@ impl CockpitView {
                     at,
                     cx,
                 ),
-                Kind::Provider | Kind::Effort | Kind::Band(_) => wire(
+                Kind::Provider(_) | Kind::Band(_) => wire(
                     pane::picker_row(
                         ("composer-menu-row", at),
                         row.name.clone(),
@@ -10473,10 +10410,10 @@ impl CockpitView {
                     // The model picker outlives the first prompt (the
                     // model can always change); only its Thread going
                     // away closes it.
-                    Kind::Provider | Kind::Effort => open
-                        .pane
-                        .thread()
-                        .is_none_or(|thread| self.cockpit.thread(thread).is_none()),
+                    Kind::Provider(_) => match open.pane {
+                        PaneIdentity::Thread(thread) => self.cockpit.thread(thread).is_none(),
+                        PaneIdentity::Draft(_) => focused.is_some_and(|pane| pane.draft().is_none()),
+                    },
                     Kind::Band(_) => focused.is_some_and(|pane| pane.draft().is_none()),
                     Kind::Commands | Kind::Files { .. } => false,
                 }
@@ -10701,7 +10638,7 @@ impl CockpitView {
         } else if !self
             .popover
             .as_ref()
-            .is_some_and(|open| open.kind.picker_slot().is_some())
+            .is_some_and(|open| open.kind.holds_keyboard())
             && !wanted.is_focused(window)
             && (wanted == self.focus || !wanted.contains_focused(window, cx))
         {
@@ -10929,6 +10866,7 @@ impl CockpitView {
             .on_action(cx.listener(Self::menu_pick))
             .on_action(cx.listener(Self::menu_dismiss))
             .map(|root| self.register_palette_actions(root, cx))
+            .map(|root| self.register_model_picker_actions(root, cx))
             // Every press forgets the preview; one in a preview marks it
             // again as it bubbles (`panel_preview`).
             .capture_any_mouse_down(cx.listener(|view, _: &MouseDownEvent, _, _| {
@@ -11001,6 +10939,9 @@ impl CockpitView {
                         dismissed = true;
                     }
                     if view.context_menu.take().is_some() {
+                        dismissed = true;
+                    }
+                    if view.mode_picker.take().is_some() {
                         dismissed = true;
                     }
                     // A press outside the editor abandons the rename — the
@@ -11086,6 +11027,8 @@ impl CockpitView {
             .children(self.session_controls_element(window, cx))
             .children(self.context_checks_element(window, cx))
             .children(self.band_menu_element(window, cx))
+            .children(self.model_picker_element(window, cx))
+            .children(self.mode_menu_element(window, cx))
             .children(self.settings_element(window, cx))
             .children(self.project_editor_element(window, cx))
             .children(self.toast_float(window, cx))
@@ -12041,9 +11984,8 @@ impl CockpitView {
     /// label (`pane::permission_mode_label`), in `MODE_ATTENTION_INK` for
     /// `Manual` (`theme::mode_is_manual`). Always shown once the
     /// Thread has a list or a mode, so the mode can be changed, from the
-    /// cached answers when no Session runs (ADR 0032). Its menu is that
-    /// list, ✓ on the mode in force, a pick sent as the native
-    /// `SetPermissionMode` control; ⇧⇥ still cycles (`cycle_mode`). A
+    /// cached answers when no Session runs (ADR 0032). It opens the
+    /// permission menu (`mode_menu.rs`); ⇧⇥ still cycles (`cycle_mode`). A
     /// Session that cannot switch modes shows the chip without a menu.
     fn mode_chip(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes[index].thread()?;
@@ -12055,10 +11997,6 @@ impl CockpitView {
         }
         let mode = open.permission_mode().unwrap_or("default").to_string();
         let label = pane::permission_mode_label(&mode, &modes);
-        // The mode new Threads start in, from Settings: the menu's
-        // `Default` tag.
-        let settings = &self.prefs.settings;
-        let configured = settings.permission_mode_for(open.provider()).to_string();
         let key = thread.get() as usize;
         let trigger = pane::toolbar_chip(("mode-picker", key), cx)
             .debug_selector(move || format!("mode-picker-{key}"))
@@ -12075,81 +12013,19 @@ impl CockpitView {
         {
             return Some(wrap(trigger.into_any_element()));
         }
-        // Claude's mode menu: under its `Mode` heading, `Auto` first, each
-        // mode with its one line and its tag (`Recommended`, `Default`),
-        // picked by its digit, ✓ on the mode in force; every row neutral,
-        // `Manual`'s amber the footer chip's alone.
-        let mut modes = modes;
-        modes.sort_by_key(|choice| choice.value != "auto");
-        let heading = ferrite_ui::components::Choice {
-            label: "Mode".into(),
-            section: true,
-            ..Default::default()
-        };
-        let choices =
-            std::iter::once(heading)
-                .chain(modes.iter().enumerate().map(|(at, choice)| {
-                    ferrite_ui::components::Choice {
-                        label: pane::permission_mode_label(&choice.value, &modes),
-                        checked: choice.value == mode,
-                        note: ferrite_ui::theme::mode_note(&choice.value).map(SharedString::from),
-                        badge: if choice.value == configured {
-                            Some("Default".into())
-                        } else {
-                            (choice.value == "auto").then(|| "Recommended".into())
-                        },
-                        shortcut: (at < 9).then(|| SharedString::from((at + 1).to_string())),
-                        ..Default::default()
-                    }
-                }))
-                .collect();
-        // Indexed as the rows are: the heading picks nothing.
-        let values: std::rc::Rc<Vec<Option<String>>> = std::rc::Rc::new(
-            std::iter::once(None)
-                .chain(modes.into_iter().map(|choice| Some(choice.value)))
-                .collect(),
+        let trigger = trigger.on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                view.focus_pane(index);
+                view.toggle_mode_menu(thread, generation, false, cx);
+            }),
         );
-        let is_open = self.mode_picker.is_some_and(|(shown, shown_generation)| {
-            shown == thread && shown_generation == generation
-        });
-        let weak = cx.entity().downgrade();
-        let picker = weak.clone();
         Some(wrap(
-            ferrite_ui::menu::ChoiceMenu {
-                submenus: Vec::new(),
-                width: Some(ferrite_ui::theme::MODE_MENU_W),
-                hang_left: false,
-                id: format!("mode-picker-{key}").into(),
-                trigger,
-                choices,
-                open: is_open,
-                return_focus: self.panes[index].composer.focus_handle(cx),
-                on_open: std::rc::Rc::new(move |open, _, cx| {
-                    let _ = weak.update(cx, |view, cx| {
-                        if open {
-                            view.focus_pane(index);
-                            view.popover = None;
-                            view.context_menu = None;
-                            view.session_controls = None;
-                            view.mode_picker = Some((thread, generation));
-                        } else if view.mode_picker == Some((thread, generation)) {
-                            view.mode_picker = None;
-                        }
-                        cx.notify();
-                    });
-                }),
-                on_pick: std::rc::Rc::new(move |at, window, cx| {
-                    let Some(value) = values.get(at).cloned().flatten() else {
-                        return;
-                    };
-                    let _ = picker.update(cx, |view, cx| {
-                        view.request_mode(thread, generation, value, window, cx);
-                        view.mode_picker = None;
-                        cx.notify();
-                    });
-                }),
-                place: Some(self.composer_place(index)),
-            }
+            ferrite_ui::components::on_bounds(
+                div().flex().child(trigger),
+                self.record_trigger(mode_menu::chip_trigger(thread)),
+            )
             .into_any_element(),
         ))
     }
@@ -12673,365 +12549,20 @@ impl CockpitView {
         ));
         let effort = self.thread_effort(&open);
         let key = thread.get() as usize;
-        let face = pane::model_effort_chip(
-            label,
-            effort.map(|effort| pane::sentence_case(&effort).into()),
-            open.starting(),
-        );
-        Some(
-            self.choice_menu(
-                index,
-                Kind::Provider,
-                pane::toolbar_chip(("model-picker", key), cx)
-                    .debug_selector(move || format!("model-picker-{key}"))
-                    .tip(hold.unwrap_or("Model and effort"))
-                    .child(face),
-                cx,
-            )
-            .into_any_element(),
-        )
-    }
-
-    /// Where a Composer word's menu rests (SPEC §5.5): its foot over the
-    /// word's top — the footer's words stand centred in the row under the
-    /// box — and inside the box's right edge. Until the box has been laid
-    /// out once, over the bar.
-    fn composer_place(&self, index: usize) -> ferrite_ui::components::FloatPlace {
-        use ferrite_ui::theme::{COMPOSER_FOOTER_H, FOOTER_CHIP_H};
-        match self
-            .panes
-            .get(index)
-            .and_then(|pane| pane.geometry.get().composer)
-        {
-            Some(field) => ferrite_ui::components::FloatPlace {
-                floor: f32::from(field.bottom()) + (COMPOSER_FOOTER_H - FOOTER_CHIP_H) / 2.,
-                limit_right: f32::from(field.right()),
-            },
-            None => self.bar_place(),
-        }
-    }
-
-    fn choice_menu(
-        &self,
-        index: usize,
-        kind: Kind,
-        trigger: gpui::component::button::Button,
-        cx: &mut Context<Self>,
-    ) -> ferrite_ui::menu::ChoiceMenu {
-        let identity = self.panes[index].identity;
-        let slot = kind.picker_slot().expect("native choice menu");
-        let (effort, band) = slot;
-        let open = self
-            .popover
-            .as_ref()
-            .filter(|open| open.pane == identity && open.kind.picker_slot() == Some(slot));
-        // Which of the popover's rows the menu shows, in order: every one
-        // for the effort picker; the model picker's are split (`model_menu`).
-        let (mut shown, more, carry) = match open {
-            Some(open) if !effort => self.model_menu(index, open),
-            Some(open) => ((0..open.rows.len()).collect(), None, None),
-            None => (Vec::new(), None, None),
-        };
-        // Claude's model menu leads with the model in force, then the rest
-        // in the catalogue's order; an effort ladder keeps its order.
-        if let (Some(open), false) = (open, effort) {
-            if let Some(at) = shown
-                .iter()
-                .position(|row| open.rows[*row].active || carry == Some(*row))
-            {
-                let row = shown.remove(at);
-                shown.insert(0, row);
-            }
-        }
-        let choices = open
-            .map(|open| self.picker_choices(open, &shown, carry))
-            .unwrap_or_default();
-        let view = cx.entity().downgrade();
-        // The model picker — a Thread's or a draft's — opens its effort as
-        // a submenu (Claude's `Effort  Medium ›`): a pick there sets the
-        // level at once, as the effort menu's own pick does. Then the other
-        // Provider's models (`More models ›`), a handover once the Thread
-        // has begun.
-        let mut submenus = Vec::new();
-        if !effort {
-            submenus.extend(self.effort_submenu(index, cx));
-            if let (Some(open), Some(rows)) = (open, more) {
-                let choices = self.picker_choices(open, &rows, None);
-                let view = view.clone();
-                submenus.push(ferrite_ui::menu::Submenu {
-                    icon: None,
-                    // Claude's `More models ›`, no value: the submenu's
-                    // section title names the Provider and any handover.
-                    label: "More models".into(),
-                    value: SharedString::default(),
-                    choices,
-                    submenus: Vec::new(),
-                    width: ferrite_ui::theme::MODEL_PICKER_W,
-                    on_pick: std::rc::Rc::new(move |at, window, cx| {
-                        let Some(&row) = rows.get(at) else {
-                            return;
-                        };
-                        let _ = view.update(cx, |view, cx| view.pick(row, window, cx));
-                    }),
-                });
-            }
-        }
-        let weak = view;
-        let picker = weak.clone();
-        let hold = identity.thread().and_then(|thread| {
-            self.cockpit
-                .thread(thread)
-                .and_then(|thread| tuning_hold(&thread))
+        let identity = PaneIdentity::Thread(thread);
+        let face = pane::model_effort_chip(pane::ModelChip {
+            mark: ferrite_ui::provider::mark(provider),
+            model: label,
+            effort: effort.map(|effort| pane::sentence_case(&effort).into()),
+            loading: open.starting(),
+            open: self.model_picker_open(identity),
+            group: model_picker::chip_trigger(identity),
         });
-        ferrite_ui::menu::ChoiceMenu {
-            submenus,
-            hang_left: false,
-            width: Some(if effort {
-                ferrite_ui::theme::EFFORT_MENU_W
-            } else {
-                ferrite_ui::theme::MODEL_PICKER_W
-            }),
-            // Rebuild the retained menu when availability changes.
-            id: format!("choice-{identity:?}-{effort}-{}", hold.unwrap_or_default()).into(),
-            trigger,
-            choices,
-            open: open.is_some(),
-            return_focus: self.panes[index].composer.focus_handle(cx),
-            on_open: std::rc::Rc::new(move |open, _, cx| {
-                let _ = weak.update(cx, |view, cx| {
-                    if open {
-                        if let Some(index) = view.index_of(identity) {
-                            view.focus_pane(index);
-                        }
-                        if band {
-                            view.open_band_popover(pane::BandChip::Provider, cx);
-                        } else if let Some(thread) = identity.thread() {
-                            if effort {
-                                view.open_effort_picker(thread, cx);
-                            } else {
-                                view.open_provider_picker(thread, cx);
-                            }
-                        }
-                    } else if view.popover.as_ref().is_some_and(|open| {
-                        open.pane == identity && open.kind.picker_slot() == Some(slot)
-                    }) {
-                        view.popover = None;
-                        cx.notify();
-                    }
-                });
-            }),
-            on_pick: std::rc::Rc::new(move |at, window, cx| {
-                let Some(&row) = shown.get(at) else {
-                    return;
-                };
-                let _ = picker.update(cx, |view, cx| view.pick(row, window, cx));
-            }),
-            place: Some(self.composer_place(index)),
-        }
-    }
-
-    /// The model picker's shape, Claude's: the Pane's own Provider's models
-    /// as the menu's rows — no section title, and no `Default` row once
-    /// the ✓ has a model to sit on — and the other Provider's title and
-    /// models, for the `More models` submenu; and the row that carries the ✓ in the
-    /// hidden `Default` row's place. Indices into `open.rows`.
-    fn model_menu(
-        &self,
-        index: usize,
-        open: &Popover,
-    ) -> (Vec<usize>, Option<Vec<usize>>, Option<usize>) {
-        let pane = &self.panes[index];
-        let (current, serving) = match pane.thread() {
-            Some(thread) => match self.cockpit.thread(thread) {
-                Some(thread) => (
-                    Some(thread.provider()),
-                    thread.transcript().model().map(str::to_string),
-                ),
-                None => (None, None),
-            },
-            None => (
-                pane.draft().map(|draft| draft.binding.provider().provider),
-                None,
-            ),
-        };
-        // Each Provider's section: its title row, then its models.
-        let mut sections: Vec<(Option<Provider>, Option<usize>, Vec<usize>)> = Vec::new();
-        for (at, row) in open.rows.iter().enumerate() {
-            match provider_of_title(&row.name).filter(|_| row.inert && row.consequence_is_inert()) {
-                Some(provider) => sections.push((Some(provider), Some(at), Vec::new())),
-                None => match sections.last_mut() {
-                    Some((_, _, rows)) => rows.push(at),
-                    None => sections.push((None, None, vec![at])),
-                },
-            }
-        }
-        let current = current.or_else(|| sections.first().and_then(|(provider, _, _)| *provider));
-        let mut own = Vec::new();
-        let mut more = None;
-        for (provider, title, rows) in sections {
-            if provider.is_none() || provider == current {
-                own.extend(rows);
-            } else {
-                // The submenu keeps its title: the Provider, and whether a
-                // pick there hands the Thread over.
-                more = Some(title.into_iter().chain(rows).collect());
-            }
-        }
-        // The CLI's own default is only worth a row while nothing else can
-        // carry the ✓: a known serving model takes it instead.
-        let model_of = |at: usize| match &open.rows[at].consequence {
-            Consequence::Provision(choice) | Consequence::Band(BandChoice::Provider(choice)) => {
-                Some(choice.model.clone())
-            }
-            _ => None,
-        };
-        let default_row = own.iter().copied().find(|at| model_of(*at) == Some(None));
-        let serving_row = current
-            .zip(serving)
-            .and_then(|(provider, serving)| {
-                self.cockpit
-                    .model_catalog(provider)
-                    .into_iter()
-                    .find(|model| model.value != "default" && model.is(&serving))
-            })
-            .and_then(|model| {
-                own.iter()
-                    .copied()
-                    .find(|at| model_of(*at) == Some(Some(model.value.clone())))
-            });
-        let mut carry = None;
-        if let Some(default_row) = default_row {
-            let active = open.rows[default_row].active;
-            if !active || serving_row.is_some() {
-                own.retain(|at| *at != default_row);
-                carry = serving_row.filter(|_| active);
-            }
-        }
-        (own, more, carry)
-    }
-
-    /// The popover's rows at `shown`, as the choice menu draws them: a
-    /// provider's title as a section, the live rows' digits `1`…`9` by
-    /// place, none on the ✓ row (Claude's model menu), names only — a row's
-    /// description is its tooltip. `carry` wears the ✓ too (`model_menu`).
-    fn picker_choices(
-        &self,
-        open: &Popover,
-        shown: &[usize],
-        carry: Option<usize>,
-    ) -> Vec<ferrite_ui::components::Choice> {
-        let mut provider = None;
-        let mut digit = 0;
-        shown
-            .iter()
-            .map(|at| {
-                let row = &open.rows[*at];
-                let section = row.inert
-                    && row.consequence_is_inert()
-                    && provider_of_title(&row.name).is_some();
-                if section {
-                    provider = provider_of_title(&row.name);
-                }
-                // A row's digit is its place among the live rows; the ✓
-                // row needs none (Claude's `Opus 5.5 ✓`, `Fable 5.1 2`).
-                let checked = row.active || carry == Some(*at);
-                if !row.inert {
-                    digit += 1;
-                }
-                let shortcut = (!row.inert && !checked && digit <= 9)
-                    .then(|| SharedString::from(digit.to_string()));
-                let detail = (!row.detail.is_empty()).then(|| row.detail.clone());
-                ferrite_ui::components::Choice {
-                    shortcut,
-                    label: row.name.clone(),
-                    checked,
-                    disabled: row.inert,
-                    section,
-                    // Names only: a section keeps its handover note, a
-                    // row's description (`most capable…`) is its tooltip.
-                    detail: detail.clone().filter(|_| section),
-                    // Why the row is dead for now, else what it is.
-                    why: match open.hold.filter(|_| row.inert && !section) {
-                        Some(hold) => Some(SharedString::from(hold)),
-                        None => detail.filter(|_| !section),
-                    },
-                    icon: provider.map(ferrite_ui::provider::mark),
-                    ..Default::default()
-                }
-            })
-            .collect()
-    }
-
-    /// The model picker's effort submenu for Pane `index`, a Thread's or a
-    /// draft's: the model's ladder in title case, the ✓ and the row's value
-    /// on the level in force (`effort_ladder`, `draft_effort_ladder`), a
-    /// pick applied at once (`pick_effort`, or the draft's band choice), a
-    /// Thread's hold on every row. `None` for a model that takes no effort.
-    fn effort_submenu(
-        &self,
-        index: usize,
-        cx: &mut Context<Self>,
-    ) -> Option<ferrite_ui::menu::Submenu> {
-        let identity = self.panes.get(index)?.identity;
-        let (steps, chosen, hold) = match identity.thread() {
-            Some(thread) => {
-                let (steps, _, chosen) = self.effort_ladder(thread)?;
-                let hold = self
-                    .cockpit
-                    .thread(thread)
-                    .and_then(|open| tuning_hold(&open));
-                (steps, chosen, hold)
-            }
-            None => {
-                let (steps, _, chosen) = self.draft_effort_ladder(index)?;
-                (steps, chosen, None)
-            }
-        };
-        let choices = steps
-            .iter()
-            .enumerate()
-            .map(|(at, step)| ferrite_ui::components::Choice {
-                label: effort_title(step).into(),
-                checked: chosen == Some(at),
-                // Claude's menu tags its middle rung.
-                badge: (step == "medium").then(|| "Recommended".into()),
-                disabled: hold.is_some(),
-                why: hold.map(SharedString::from),
-                ..Default::default()
-            })
-            .collect();
-        let value = chosen
-            .and_then(|at| steps.get(at))
-            .map_or_else(SharedString::default, |step| effort_title(step).into());
-        let view = cx.entity().downgrade();
-        Some(ferrite_ui::menu::Submenu {
-            icon: None,
-            label: "Effort".into(),
-            value,
-            choices,
-            submenus: Vec::new(),
-            width: ferrite_ui::theme::EFFORT_MENU_W,
-            on_pick: std::rc::Rc::new(move |at, _, cx| {
-                let Some(level) = steps.get(at).cloned() else {
-                    return;
-                };
-                let _ = view.update(cx, |view, cx| match identity.thread() {
-                    Some(thread) => view.pick_effort(thread, Some(level), cx),
-                    None => view.pick_draft_effort(identity, level, cx),
-                });
-            }),
-        })
-    }
-
-    /// A draft's effort-submenu pick: the band's choice, as its model
-    /// menu's own rows are.
-    fn pick_draft_effort(&mut self, identity: PaneIdentity, level: String, cx: &mut Context<Self>) {
-        let Some(index) = self.index_of(identity) else {
-            return;
-        };
-        self.focus_pane(index);
-        let composer = self.panes[index].composer.clone();
-        self.pick_band(&BandChoice::Effort(Some(level)), &composer, cx);
+        let control = pane::toolbar_chip(("model-picker", key), cx)
+            .debug_selector(move || format!("model-picker-{key}"))
+            .tip(hold.unwrap_or("Model and effort"))
+            .child(face);
+        Some(self.model_chip_control(index, control, cx))
     }
 
     /// The model's effort ladder for `thread` (`effort_ladder_of`).
@@ -13065,67 +12596,6 @@ impl CockpitView {
             draft.binding.provider().model.as_deref(),
             &self.cockpit.announced_models(provider),
         )
-    }
-
-    /// The effort picker in the Composer slot: the operator's default for
-    /// the provider on top (what it resolves to, named), then the ladder
-    /// the Thread's model takes — from the provider's own announcement
-    /// (Claude's handshake, Codex's model/list), else the catalog. The ✓
-    /// sits on the level in force.
-    fn open_effort_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let Some(open) = self.cockpit.thread(thread) else {
-            return;
-        };
-        let provider = open.provider();
-        let hold = tuning_hold(&open);
-        let chosen = open.effort().map(str::to_string);
-        let default = self.prefs.settings.effort_for(provider).map(str::to_string);
-        let ladder =
-            ferrite_core::providers::models::efforts_for(provider, open.model(), open.models());
-        let mut rows: Vec<Row> = Vec::new();
-        rows.push(Row {
-            row: pane::MenuRow {
-                insert: SharedString::default(),
-                name: SharedString::from("Default"),
-                matched: Vec::new(),
-                detail: SharedString::from(match &default {
-                    Some(default) => format!("{} · from Settings", effort_title(default)),
-                    None => "The CLI's own choice".to_string(),
-                }),
-                prose_detail: true,
-                inert: false,
-                tag: None,
-            },
-            active: chosen.is_none(),
-            consequence: Consequence::Effort(None),
-        });
-        for effort in ladder {
-            rows.push(Row {
-                row: pane::MenuRow {
-                    insert: SharedString::default(),
-                    name: SharedString::from(effort_title(&effort)),
-                    matched: Vec::new(),
-                    detail: SharedString::from(effort_detail(&effort)),
-                    prose_detail: true,
-                    inert: false,
-                    tag: None,
-                },
-                active: chosen.as_deref() == Some(effort.as_str()),
-                consequence: Consequence::Effort(Some(effort)),
-            });
-        }
-        let selected = rows.iter().position(|row| row.active).unwrap_or(0);
-        Self::hold_tuning_rows(&mut rows, hold);
-        self.popover = Some(Popover {
-            scroll: ScrollHandle::new(),
-            revealed: Default::default(),
-            hold,
-            pane: PaneIdentity::Thread(thread),
-            kind: Kind::Effort,
-            rows,
-            selected,
-        });
-        cx.notify();
     }
 
     /// An effort-row pick: the core re-aims the Thread (eagerly before the

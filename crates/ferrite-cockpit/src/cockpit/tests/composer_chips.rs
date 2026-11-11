@@ -89,16 +89,16 @@ fn the_context_section_reads_the_window_and_the_ring_the_plan(cx: &mut TestAppCo
     );
 }
 
-/// The model picker rests above its chip in the Composer's toolbar
-/// (SPEC §5.5): its foot `MODEL_PICKER_GAP` over the chip, its right
-/// edge at the chip's (Claude's), inside the Composer, every row one menu
-/// row high.
+/// The model picker hangs over the Composer (T3's docked picker, `side=
+/// "top" align="start"`): its foot `MODEL_PICKER_GAP` over the box, its
+/// left edge at its chip's, inside the window, a model row one
+/// `MODEL_PICKER_ROW_H` high.
 #[gpui::test]
-fn the_model_picker_rests_above_the_bar_inside_the_window(cx: &mut TestAppContext) {
+fn the_model_picker_hangs_over_the_box_from_its_chip(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("model-picker-place", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(900.), px(700.)));
+    cx.simulate_resize(gpui::size(px(1600.), px(800.)));
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
     view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
@@ -107,99 +107,22 @@ fn the_model_picker_rests_above_the_bar_inside_the_window(cx: &mut TestAppContex
         cx.update(|window, _| window.refresh());
         cx.run_until_parked();
     }
-    let menu = cx.debug_bounds("choice-menu").expect("the picker is open");
+    let menu = cx.debug_bounds("model-picker").expect("the picker is open");
     let chip = debug_bounds(cx, format!("model-picker-{}", thread.get()))
         .expect("the model chip rides the toolbar");
     let composer = cx.debug_bounds("composer-block").unwrap();
     assert!(
-        (menu.bottom() - (chip.top() - px(ferrite_ui::theme::MODEL_PICKER_GAP))).abs() <= px(1.),
-        "FL-13: the picker's foot 7px over its chip: {menu:?} / {chip:?}"
+        (menu.bottom() - (composer.top() - px(ferrite_ui::theme::MODEL_PICKER_GAP))).abs()
+            <= px(1.5),
+        "its foot over the box: {menu:?} / {composer:?}"
     );
     assert!(
-        (menu.size.width - px(ferrite_ui::theme::MODEL_PICKER_W)).abs() <= px(1.),
-        "Claude's compact model menu: {menu:?}"
+        (menu.left() - chip.left()).abs() <= px(1.5),
+        "from its chip's left: {menu:?} / {chip:?}"
     );
-    assert!(menu.right() <= composer.right() + px(1.5));
-    assert!(
-        (menu.right() - chip.right()).abs() <= px(1.5),
-        "anchored on its chip, not the window's edge: {menu:?} / {chip:?}"
-    );
-    let row = cx.debug_bounds("choice-row-1").expect("a live model row");
-    // Terminal-native (WP-E): a float row is one grid row.
-    assert_eq!(row.size.height, px(ferrite_ui::theme::FLOAT_ROW_H));
-}
-
-/// Claude's model menu: the effort is a row under the models, `Effort
-/// <level> ›`, its levels in a submenu that opens beside the menu (feet
-/// level, `SUBMENU_GAP` apart) — by → from the keys or the pointer resting
-/// on the row — and a pick there sets the Thread's effort and closes both.
-#[gpui::test]
-fn the_model_picker_opens_its_effort_as_a_submenu(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{EFFORT_MENU_W, SUBMENU_GAP};
-    let (core, _fake) = cockpit("model-picker-effort", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let ladder = view.read_with(cx, |view, _| view.effort_ladder(thread));
-    let Some((steps, _, _)) = ladder else {
-        panic!("the premise: the default model takes an effort");
-    };
-    view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
-    tick(cx);
-    let menu = cx.debug_bounds("choice-menu").expect("the picker is open");
-    let row = cx
-        .debug_bounds("choice-submenu-row-0")
-        .expect("the effort row rides the model picker");
-    assert!(
-        cx.debug_bounds("choice-submenu").is_none(),
-        "shut until asked"
-    );
-    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
-    tick(cx);
-    let sub = cx
-        .debug_bounds("choice-submenu")
-        .expect("resting on the row opens the submenu");
-    assert!(
-        (sub.size.width - px(EFFORT_MENU_W)).abs() <= px(1.),
-        "{sub:?}"
-    );
-    assert!(
-        (sub.left() - menu.right() - px(SUBMENU_GAP)).abs() <= px(1.5),
-        "beside the menu: {sub:?} / {menu:?}"
-    );
-    assert!((sub.bottom() - menu.bottom()).abs() <= px(1.), "feet level");
-    let last = steps.len() - 1;
-    let pick = cx
-        .debug_bounds(Box::leak(format!("choice-sub-{last}").into_boxed_str()))
-        .expect("every level is a row");
-    cx.simulate_click(pick.center(), gpui::Modifiers::none());
-    tick(cx);
-    view.read_with(cx, |view, _| {
-        assert!(view.popover.is_none(), "a pick closes the picker");
-        assert_eq!(
-            view.cockpit.thread(thread).unwrap().effort(),
-            Some(steps[last].as_str())
-        );
-    });
-}
-
-/// Claude's effort menu tags its middle rung `Recommended`.
-#[gpui::test]
-fn the_effort_menu_tags_medium_recommended(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("effort-recommended", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    tick(cx);
-    let tags = view.update(cx, |view, cx| {
-        let menu = view.effort_submenu(0, cx).expect("the default model takes an effort");
-        menu.choices
-            .iter()
-            .map(|choice| (choice.label.to_string(), choice.badge.as_ref().map(ToString::to_string)))
-            .collect::<Vec<_>>()
-    });
-    assert!(tags.contains(&("Medium".into(), Some("Recommended".into()))), "{tags:?}");
-    assert_eq!(tags.iter().filter(|(_, badge)| badge.is_some()).count(), 1);
+    assert!(menu.right() <= px(1600.));
+    let row = cx.debug_bounds("model-picker-row-0").expect("a model row");
+    assert_eq!(row.size.height, px(ferrite_ui::theme::MODEL_PICKER_ROW_H));
 }
 
 /// A tray image that cannot be read is a red-ringed `Failed` tile; one that
@@ -280,28 +203,6 @@ fn a_draft_band_menu_hangs_off_its_chip_in_the_bar(cx: &mut TestAppContext) {
     assert!(
         rows.bottom() <= chip.top() - px(ferrite_ui::theme::FLOAT_OFFSET),
         "it rests above its chip: {rows:?} / {chip:?}"
-    );
-}
-
-/// Claude's model menu leads with the model in force, its ✓ in the check
-/// blue and no digit; the chip that opened it wears the pressed fill.
-#[gpui::test]
-fn the_model_menu_leads_with_the_model_in_force(cx: &mut TestAppContext) {
-    let (core, _fake) = cockpit("model-menu-first", 1);
-    bind_production_keys(cx);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1400.), px(800.)));
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    view.update(cx, |view, cx| view.open_provider_picker(thread, cx));
-    tick(cx);
-    let first = cx.debug_bounds("choice-row-0").expect("a first row");
-    let check = cx
-        .debug_bounds("float-check")
-        .expect("a ✓ on the model in force");
-    assert!(
-        first.contains(&check.center()),
-        "the ✓ row leads: {check:?} / {first:?}"
     );
 }
 

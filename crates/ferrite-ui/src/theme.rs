@@ -2595,15 +2595,66 @@ pub const TOKEN_PAD_X: f32 = SPACE_2;
 /// third of every row empty. A longer description cuts and keeps its
 /// tooltip.
 pub const SLASH_MENU_W: f32 = 480.0;
-/// The Composer's menus at Claude's widths: the model picker (names only,
-/// a model's description in its tooltip), its effort submenu, the
-/// permission-mode menu (a name and its one line), and the `+` menu. The
-/// submenu opens `SUBMENU_GAP` beside its menu.
-pub const MODEL_PICKER_W: f32 = 260.0;
+/// The Composer's menus at Claude's widths: an effort ladder, the
+/// permission menu (its segmented modes over the hovered mode's line), and
+/// the `+` menu. A submenu opens `SUBMENU_GAP` beside its menu.
 pub const EFFORT_MENU_W: f32 = 318.0;
 pub const MODE_MENU_W: f32 = 316.0;
 pub const ATTACH_MENU_W: f32 = 228.0;
 pub const SUBMENU_GAP: f32 = 2.0;
+/// The model picker (T3's docked `ProviderModelPicker`): one popover over
+/// the Composer with no padding of its own, its columns a provider rail
+/// (`w-11`, `p-1 gap-1`), the searchable list (rail and list together
+/// `max-w-90`) and the Reasoning column (`w-48`), then a footer. The
+/// columns stand `MODEL_PICKER_H` tall whatever they show (`h-86.5`), so a
+/// tab, a search or a model with more rungs never resizes it.
+pub const MODEL_PICKER_H: f32 = 346.0;
+pub const MODEL_PICKER_LIST_W: f32 = 360.0;
+pub const MODEL_PICKER_RAIL_W: f32 = 44.0;
+pub const MODEL_PICKER_RAIL_PAD: f32 = SPACE_1;
+/// A rail button's provider mark (`size-5` in its `size-6` box).
+pub const MODEL_PICKER_RAIL_ICON: f32 = 20.0;
+/// The rail's selected pill: `right-1 h-5 w-0.75 rounded-full`, sliding
+/// between buttons (`RAIL_SLIDE`).
+pub const MODEL_PICKER_PILL_W: f32 = 3.0;
+pub const MODEL_PICKER_PILL_H: f32 = 20.0;
+/// The search row (`px-3 pt-2.5`, a 26 input over its rule, `pb-1.5`).
+pub const MODEL_PICKER_SEARCH_H: f32 = 26.0;
+pub const MODEL_PICKER_SEARCH_ICON: f32 = 16.0;
+/// A model row (`min-h-7 rounded-sm px-2 py-1 gap-2`), a list padded 4
+/// round its rows, 2 between them.
+pub const MODEL_PICKER_ROW_H: f32 = 28.0;
+pub const MODEL_PICKER_ROW_GAP: f32 = 2.0;
+pub const MODEL_PICKER_ROW_R: f32 = 4.0;
+/// The search row's and the column head's air over them (`pt-2.5`).
+pub const MODEL_PICKER_INSET_T: f32 = 10.0;
+pub const MODEL_PICKER_MARK: f32 = 16.0;
+pub const REASONING_W: f32 = 192.0;
+/// The Reasoning column's head (`h-8.25`, a rule under it, `px-3 pt-2.5`)
+/// and its rungs (`h-8 rounded-sm px-2`).
+pub const REASONING_HEAD_H: f32 = 33.0;
+pub const REASONING_ROW_H: f32 = 32.0;
+/// The picker's grounds over `paint::FLOAT`: the rail white 3% × 30%
+/// (`bg-muted/30`), the list and the column white 3% × 40%, their edges
+/// the border at 70%, a row under the pointer foreground 9%, a rail
+/// button foreground 10%.
+pub const MODEL_PICKER_RAIL_GROUND: u32 = 0xffffff02;
+pub const MODEL_PICKER_LIST_GROUND: u32 = 0xffffff03;
+pub const MODEL_PICKER_EDGE: u32 = 0xffffff0e;
+pub const MODEL_PICKER_ROW_HOVER: u32 = 0xefefef17;
+pub const MODEL_PICKER_RAIL_HOVER: u32 = 0xefefef1a;
+/// A segmented control (T3's `FOOTER_SEGMENT` in `rounded-lg bg-input/40
+/// p-0.5`): its track white 11% × 40%, the checked segment 11% × 72%;
+/// segments 24 high.
+pub const SEGMENT_TRACK: u32 = 0xffffff0b;
+pub const SEGMENT_CHECKED: u32 = 0xffffff14;
+pub const SEGMENT_H: f32 = 24.0;
+pub const SEGMENT_TRACK_PAD: f32 = 2.0;
+pub const SEGMENT_TRACK_R: f32 = 8.0;
+/// The picker footer's permissions button (`h-7 rounded-md px-2`).
+pub const PICKER_FOOT_BUTTON_H: f32 = 28.0;
+/// A permission menu's preview of the hovered mode (`min-h-8 text-xs`).
+pub const MODE_PREVIEW_MIN_H: f32 = 32.0;
 /// A form field or a sheet's text button: one row in a cell of padding,
 /// inside a 1px edge at `R_CONTROL` (a field's the `FIELD_RING` hairline,
 /// `CONTROL_FOCUS` while it holds the caret).
