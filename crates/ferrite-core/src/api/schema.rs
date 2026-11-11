@@ -216,6 +216,34 @@ operations! {
         "Move a Project's Completed Tasks to its Archive now, off the board; they are kept whole.";
 }
 
+impl Method {
+    /// Only the operator does it: a call from a Coordinator's Thread is
+    /// refused, its act raised as a proposal instead (#224). Reads,
+    /// drafts and `proposal raise` are not.
+    pub fn operators_only(&self) -> bool {
+        matches!(
+            self,
+            Method::TaskStart(_)
+                | Method::TaskStop(_)
+                | Method::TaskResume(_)
+                | Method::TaskDelete(_)
+                | Method::TaskAnswer(_)
+                | Method::TaskApprove(_)
+                | Method::TaskRework(_)
+                | Method::TaskRedirect(_)
+                | Method::TaskClear(_)
+                | Method::TaskSubmit(_)
+                | Method::WorkflowSave(_)
+                | Method::WorkflowAutomation(_)
+                | Method::WorkflowBacklog(_)
+                | Method::ProposalAccept(_)
+                | Method::ProposalDismiss(_)
+                | Method::CoordinatorSay(_)
+                | Method::CoordinatorSet(_)
+        )
+    }
+}
+
 /// No parameters.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Empty {}

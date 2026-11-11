@@ -323,8 +323,11 @@ pub fn parse(op: &Operation, args: &[&str], context: &Context) -> Result<Request
     if let (Some(here), Some(path)) = (&context.cwd, path) {
         params.insert("path".into(), json!(here.join(path)));
     }
-    serde_json::from_value(json!({ "id": "1", "method": op.name, "params": params }))
-        .map_err(|error| error.to_string())
+    let mut request = json!({ "id": "1", "method": op.name, "params": params });
+    if let Some(thread) = context.thread.as_deref().and_then(|t| t.parse::<u64>().ok()) {
+        request["caller"] = json!(thread);
+    }
+    serde_json::from_value(request).map_err(|error| error.to_string())
 }
 
 /// How a parameter is written on the command line.

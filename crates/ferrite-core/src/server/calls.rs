@@ -35,7 +35,28 @@ impl Server {
         }
     }
 
-    fn api_request(&mut self, caller: CallerId, Request { id, method }: Request) {
+    fn api_request(
+        &mut self,
+        caller: CallerId,
+        Request {
+            id,
+            method,
+            caller: from,
+        }: Request,
+    ) {
+        // The Coordinator proposes; only the operator acts (#224).
+        if from.is_some_and(|thread| self.factory.coordinates(thread)) && method.operators_only() {
+            let refused = ApiError::new(
+                Code::ProposeInstead,
+                format!(
+                    "the Coordinator does not {}: raise it as a proposal for the user to accept, \
+                     with `\"${{FERRITE_BIN:-ferrite}}\" proposal raise`",
+                    method.name()
+                ),
+            );
+            self.api.reply(caller, id, Err(refused));
+            return;
+        }
         // What changed before the request reaches the windows and the
         // subscribers first.
         self.broadcast();

@@ -76,6 +76,10 @@ pub struct Request {
     pub id: String,
     #[serde(flatten)]
     pub method: Method,
+    /// The Thread the call runs in (`FERRITE_THREAD_ID`), when it runs in
+    /// one: a Coordinator's may only read and propose (#224).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<ThreadId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -159,6 +163,9 @@ pub enum Code {
     Failed,
     /// The CLI's own: no Server answers at the socket.
     ServerUnavailable,
+    /// A Coordinator's Thread asked for what only the operator does: it
+    /// raises a proposal instead (#224).
+    ProposeInstead,
 }
 
 impl From<crate::factory::Refusal> for ApiError {

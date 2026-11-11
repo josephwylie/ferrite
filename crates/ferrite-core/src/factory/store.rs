@@ -771,6 +771,12 @@ impl Factory {
         self.boards().flat_map(|state| &state.coordinators)
     }
 
+    /// `thread` is a Project's Coordinator.
+    pub fn coordinates(&self, thread: ThreadId) -> bool {
+        self.coordinators()
+            .any(|coordinator| coordinator.thread == Some(thread))
+    }
+
     /// The current Worker of each Task on the board: the Threads whose
     /// doing the step is told.
     pub fn watched(&self) -> impl Iterator<Item = ThreadId> + '_ {

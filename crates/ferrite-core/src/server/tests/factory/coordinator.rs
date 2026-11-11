@@ -480,3 +480,97 @@ fn a_task_routed_to_the_coordinator_is_told_to_it() {
     let read = told(&mut caller, coordinator, &task);
     assert!(read.contains("Built; the API is unclear"), "{read}");
 }
+
+/// One CLI call run from inside `thread`, as its Session's `ferrite`
+/// makes it (`FERRITE_THREAD_ID`).
+fn cli_from(
+    harness: &Harness,
+    thread: ThreadId,
+    method: &str,
+    params: serde_json::Value,
+) -> (i32, Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    let list = crate::api::Method::OPERATIONS
+        .iter()
+        .find(|op| op.name == "task.list")
+        .unwrap();
+    let context = crate::api::cli::Context {
+        thread: Some(thread.to_string()),
+        cwd: None,
+    };
+    let parsed = crate::api::cli::parse(list, &[], &context).unwrap();
+    assert_eq!(parsed.caller, Some(thread), "the CLI names where it runs");
+    let request: crate::api::Request = serde_json::from_value(serde_json::json!({
+        "id": "1", "method": method, "params": params, "caller": thread,
+    }))
+    .unwrap();
+    let ((mut out, said), (mut err, refused)) = (printed(), printed());
+    let status = crate::api::cli::call(&request, &harness.api, &mut out, &mut err);
+    drop((out, err));
+    let lines = |told: Receiver<String>| told.iter().map(|text| line(&text)).collect();
+    (status, lines(said), lines(refused))
+}
+
+/// G1, spec: the Coordinator only proposes. A call from its Thread that
+/// would act (start a Task, save a version, turn starts on, change a
+/// Task or its settings) is refused, pointing at `proposal raise`, and
+/// nothing happens; it may still read and raise, and the same act raised
+/// and accepted by the operator runs.
+#[test]
+fn the_coordinator_cannot_act_only_propose() {
+    let (harness, project, repo) = factory_project("coordinator-cannot-act");
+    let (coordinator, _agent) = coordinator(&harness, &project);
+    let (built, _) = workflow(&harness, &project, &["Build"]);
+    let acts = [
+        (
+            "task.start",
+            serde_json::json!({ "instructions": "Sneak it in", "cwd": repo }),
+        ),
+        ("workflow.save", serde_json::json!({ "workflow": built })),
+        (
+            "workflow.automation",
+            serde_json::json!({ "workflow": built, "turn": "on" }),
+        ),
+        ("task.stop", serde_json::json!({ "task": "t-1" })),
+        (
+            "coordinator.set",
+            serde_json::json!({ "project": project, "provider": "codex" }),
+        ),
+        ("proposal.accept", serde_json::json!({ "proposal": "p-1" })),
+    ];
+    for (method, params) in acts {
+        let (status, _, refused) = cli_from(&harness, coordinator, method, params);
+        assert_eq!(status, 1, "{method}");
+        assert_eq!(
+            refused[0]["error"]["code"], "propose_instead",
+            "{method}: {refused:?}"
+        );
+        let message = refused[0]["error"]["message"].as_str().unwrap();
+        assert!(message.contains("proposal raise"), "{message}");
+    }
+    assert_eq!(
+        ok(&harness, "task.list", serde_json::json!({}))["tasks"],
+        serde_json::json!([]),
+        "no Task exists"
+    );
+    let (status, _, _) = cli_from(&harness, coordinator, "task.list", serde_json::json!({}));
+    assert_eq!(status, 0, "it reads");
+
+    let proposal = raise(
+        &harness,
+        coordinator,
+        serde_json::json!({ "act": "start", "instructions": "Sneak it in" }),
+    );
+    let accepted = ok(
+        &harness,
+        "proposal.accept",
+        serde_json::json!({ "proposal": proposal }),
+    );
+    assert_eq!(accepted["proposal"]["status"], "accepted", "{accepted}");
+    assert_eq!(
+        ok(&harness, "task.list", serde_json::json!({}))["tasks"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
