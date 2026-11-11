@@ -21,7 +21,6 @@
 
 use super::*;
 use crate::nav::{NavCursor, NavItem};
-use ferrite_ui::motion;
 use gpui::{App, Bounds};
 
 impl CockpitView {
@@ -141,10 +140,10 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         if let Some(old) = self.nav_cursor.take() {
-            motion::hover_snap(old.key)(&false, window, cx);
+            crate::nav::card_hover(old.key, true)(&false, window, cx);
         }
         if let Some(next) = &next {
-            motion::hover_snap(next.key.clone())(&true, window, cx);
+            crate::nav::card_hover(next.key.clone(), true)(&true, window, cx);
             self.nav_reveal.set(true);
         }
         self.nav_cursor = next;
@@ -191,6 +190,17 @@ impl CockpitView {
                 self.leave_nav(window, cx);
             }
         }
+    }
+
+    /// F2: the cursor's card renames its Thread in place; the field takes
+    /// the keys, so the tree lets go of them.
+    fn rename_nav_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(NavItem::Thread(thread, _)) = self.nav_cursor.as_ref().map(|cursor| cursor.item)
+        else {
+            return;
+        };
+        self.leave_nav(window, cx);
+        self.start_rename(RenameTarget::Thread(thread), cx);
     }
 
     /// ← (`fold`) or →: the fold the cursor's row heads (a heading's, a
@@ -262,6 +272,9 @@ impl CockpitView {
             .on_action(
                 cx.listener(|view, _: &nav::CloseView, window, cx| view.leave_nav(window, cx)),
             )
+            .on_action(cx.listener(|view, _: &nav::Rename, window, cx| {
+                view.rename_nav_cursor(window, cx)
+            }))
     }
 
     /// Under the cursor's row once after a move: scroll the tree so the row

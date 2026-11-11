@@ -544,6 +544,9 @@ pub struct PullRequest {
     pub draft: bool,
     /// Where the PR lives on the forge; `None` when `gh` did not say.
     pub url: Option<String>,
+    /// Its title, which the nav card's PR popover reads; `None` when the
+    /// forge did not say.
+    pub title: Option<String>,
     /// The rollup of the PR's checks. `None` when the PR has no checks at
     /// all — an honest silence, not a pass.
     pub checks: Option<CheckState>,
@@ -611,6 +614,7 @@ impl PullRequest {
             },
             draft: pr.draft,
             url: (!pr.url.is_empty()).then(|| pr.url.clone()),
+            title: (!pr.title.is_empty()).then(|| pr.title.clone()),
             checks: (!runs.is_empty()).then(|| rollup_state(&runs)),
             runs,
         }
@@ -730,7 +734,7 @@ pub fn pr_view(cwd: &Path) -> Option<String> {
             "pr",
             "view",
             "--json",
-            "number,state,isDraft,url,statusCheckRollup",
+            "number,state,isDraft,url,title,statusCheckRollup",
         ],
     )
 }
@@ -772,6 +776,11 @@ pub fn parse_pr_json(body: &str) -> Option<PullRequest> {
         .get("url")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
+    let title = value
+        .get("title")
+        .and_then(serde_json::Value::as_str)
+        .filter(|title| !title.is_empty())
+        .map(str::to_string);
     let runs: Vec<Check> = value
         .get("statusCheckRollup")
         .and_then(serde_json::Value::as_array)
@@ -785,6 +794,7 @@ pub fn parse_pr_json(body: &str) -> Option<PullRequest> {
         state,
         draft,
         url,
+        title,
         checks,
         runs,
     })
@@ -1061,6 +1071,16 @@ mod tests {
         assert!(!pr.draft);
         assert_eq!(pr.url.as_deref(), Some("https://github.com/o/r/pull/47"));
         assert_eq!(pr.checks, Some(CheckState::Failing));
+        assert_eq!(pr.title, None, "gh said no title");
+    }
+
+    /// The nav card's PR popover names the PR by its title, which `gh`
+    /// is asked for.
+    #[test]
+    fn a_pr_reading_keeps_its_title() {
+        let body = r#"{"isDraft":false,"number":415,"state":"OPEN","title":"Thread cards in the nav","statusCheckRollup":[]}"#;
+        let pr = parse_pr_json(body).expect("a PR");
+        assert_eq!(pr.title.as_deref(), Some("Thread cards in the nav"));
     }
 
     /// A PR with no checks at all claims nothing — silence, never a pass.

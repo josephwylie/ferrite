@@ -18,16 +18,20 @@
 //! `cockpit.rs`, the same split `pane_cell` uses.
 //!
 //! **A list on the sidebar.** The column is `paint::SIDEBAR` (a step over
-//! the plane) from the window's top. Rows are rounded, wear
-//! `paint::SIDEBAR_HOVER` under the pointer (at once, as Claude's rows) and
-//! `paint::SIDEBAR_SELECTED` (no ring) when they stand for what the
-//! board shows: the Solo Thread's row, or the shown Group's. A Thread row
-//! is one quiet line, as Claude's list: its title, and at its right one
-//! mark when a state is worth saying (`state_mark`). Under the pointer a
-//! Thread row offers its menu at `⋯`, and a Project heading a new Thread
-//! in it (`row_action`), standing in for that mark: the hover doors Codex
-//! and Claude give their lists. Section headings are small and quiet, a
-//! caret after the label; the foot is the account row.
+//! the plane) from the window's top. Rows are rounded and snap their fills
+//! under the pointer. A Thread's row is its **card** (`card::thread_card`,
+//! T3 Code's): three lines in a fixed 78px box — the Project's badge and
+//! name with the status in words and a live clock (`Working 12m`,
+//! `Approval`, `Done`, an idle card's `3h`), the title, then the checkout
+//! (worktree, branch cut in its middle, PR chip, Provider logo). A card is
+//! bare at rest, white 8% under the pointer and 11% for the Thread the
+//! board shows; under the pointer its status gives way to `Snooze` and
+//! `Park`, and right click opens its menu. Busy cards recede (a working
+//! card at 70%, every receded title at 75% ink) so what needs the operator
+//! reads brightest. A Group row and a Project heading stay one quiet line
+//! (`SIDEBAR_SELECTED` for the shown Group), a Project heading offering a
+//! new Thread under the pointer (`row_action`). Section headings are small
+//! and quiet, a caret after the label; the foot is the account row.
 //!
 //! **One left edge** (§5.1.4, Claude's). A Project heads its rows as a
 //! quiet label with no icon, and its rows' titles start on that label, as
@@ -37,9 +41,11 @@
 //! Parked view groups its rows the same way (`ViewSection`); the Inbox and
 //! the Activity view stay flat.
 //!
-//! Colour is state (ADR 0033): the mark, a folded Project's roll-up word,
-//! the needs-you pill. One thing moves: a working
-//! Thread's spinner.
+//! Colour is state (ADR 0033): a card's status label (working blue, done
+//! green, needs-you amber or indigo, failed red, idle the secondary grey),
+//! a Group's mark, a folded Project's roll-up word. Project hues live on
+//! badges alone. A card's working ring holds still (T3's); the card's one
+//! fade is a receded working card coming up under the pointer.
 //!
 //! **Folding** (cmd-B) rides the column down to the 52px **rail** while its
 //! content fades on its own clock: one cell per open Thread in the tree's
@@ -49,7 +55,10 @@
 //! Every colour and metric is a `theme` token; this file holds no literal
 //! of its own.
 
+use std::time::{Instant, SystemTime};
+
 use ferrite_core::groups::GroupId;
+use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
 
@@ -68,6 +77,15 @@ use ferrite_ui::icons::{self, icon};
 use ferrite_ui::motion;
 use ferrite_ui::theme::*;
 
+mod card;
+pub(crate) use card::card_hover;
+#[cfg(test)]
+pub(crate) use card::status_label;
+pub use card::{
+    middle_truncate, park_button, pin_glyph, pr_chip, snooze_button, strip, strip_w, thread_card,
+    CardDoors, NavPr,
+};
+
 /// The nav's two widths — 264 open, and the 52px rail folded (cmd-B).
 /// `CockpitView::cell()` subtracts whichever is live, so the nav stays part
 /// of the semantic-zoom input rather than a special case.
@@ -82,7 +100,8 @@ gpui::actions!(
         SelectPrevious,
         Open,
         Fold,
-        Unfold
+        Unfold,
+        Rename
     ]
 );
 
@@ -112,17 +131,12 @@ impl NavCursor {
         }
     }
 
-    /// The keys mirror the rows' own (`thread_row_with_title`,
+    /// The keys mirror the rows' own (`thread_card`,
     /// `group_row_with_title`).
     pub fn thread(thread: ThreadId, group: Option<GroupId>) -> Self {
         NavCursor {
             item: NavItem::Thread(thread, group),
-            key: format!(
-                "nav-thread-{}-{}",
-                group.map_or(0, GroupId::get),
-                thread.get()
-            )
-            .into(),
+            key: card::card_key(thread, group),
         }
     }
 
@@ -334,7 +348,12 @@ impl ProjectSection {
             .branch
             .as_ref()
             .filter(|(_, default)| !default)
-            .map(|(branch, _)| short_branch(branch))
+            .map(|(branch, _)| {
+                middle_truncate(branch, |text| {
+                    text.chars().count() <= NAV_BRANCH_SEGMENT_MAX + NAV_BRANCH_TAIL
+                })
+                .into()
+            })
             .unwrap_or_else(|| self.count.to_string().into());
         (text, INK_SUBTLE)
     }
@@ -482,21 +501,67 @@ pub struct GroupBlock {
     pub selected: bool,
 }
 
-/// One Thread's row — identical whether it is a loose Thread, a Group
-/// member or a parked one; only the container differs.
+/// One Thread's row — its card (`card::thread_card`), identical whether
+/// it is a loose Thread, a Group member or a parked one; only the
+/// container differs. Every field is a cache read (`CockpitView::thread_row`).
 #[derive(Clone)]
 pub struct ThreadRow {
     pub thread: ThreadId,
     pub name: SharedString,
     /// What the Thread is doing right now.
     pub status: RowStatus,
-    /// The Project's name, from the facts cache.
+    /// The Project's name, from the facts cache: the badge's monogram and
+    /// hue read it.
     pub project: Option<SharedString>,
     /// The board shows this Thread (Solo), or it is the shown Group's
     /// focused member: the row carries the selection.
     pub selected: bool,
-    /// Its state's word (C10): what line 2 says for a state with a reason.
+    /// Its state's word (C10), which the status label says.
     pub tail: NavTail,
+    /// The branch its checkout is on.
+    pub branch: Option<SharedString>,
+    /// Where it works when that is a worktree (`~/…`).
+    pub worktree: Option<SharedString>,
+    /// The branch's pull request.
+    pub pr: Option<NavPr>,
+    /// The Provider running it (an open Thread's, live; a parked one's,
+    /// from its log).
+    pub provider: Option<Provider>,
+    /// Its last activity, which a quiet card's age reads.
+    pub activity_at: Option<SystemTime>,
+    /// When the running turn started; `None` while not working.
+    pub working_since: Option<Instant>,
+    /// Pinned (`Settings::pinned_threads`).
+    pub pinned: bool,
+    /// The titler is writing its title.
+    pub retitling: bool,
+    /// In the operator's ⌘/⇧-click selection, or swept by a Park press:
+    /// it wears `NAV_CARD_SELECTED`, and Park takes it with the rest.
+    pub picked: bool,
+}
+
+#[cfg(test)]
+impl ThreadRow {
+    /// A row with nothing known but its Thread, name and state.
+    pub fn bare(thread: ThreadId, name: impl Into<SharedString>, status: RowStatus) -> Self {
+        ThreadRow {
+            thread,
+            name: name.into(),
+            status,
+            project: None,
+            selected: false,
+            tail: NavTail::None,
+            branch: None,
+            worktree: None,
+            pr: None,
+            provider: None,
+            activity_at: None,
+            working_since: None,
+            pinned: false,
+            retitling: false,
+            picked: false,
+        }
+    }
 }
 
 /// What a set of rows rolls up to: the most urgent of them. `None` for
@@ -608,6 +673,18 @@ fn fitted(
     text: impl IntoElement,
     ground: Option<Hsla>,
 ) -> Div {
+    fitted_in(width, size, rgb(ink).into(), weight, text, ground)
+}
+
+/// `fitted` in any ink, an alpha one included (a receded card's title).
+fn fitted_in(
+    width: f32,
+    size: f32,
+    ink: Hsla,
+    weight: FontWeight,
+    text: impl IntoElement,
+    ground: Option<Hsla>,
+) -> Div {
     div()
         .relative()
         .flex()
@@ -628,7 +705,7 @@ fn fitted(
                     .text_size(px(size))
                     .font_weight(weight)
                     .line_height(px(NAV_LINE))
-                    .text_color(rgb(ink))
+                    .text_color(ink)
                     .child(text),
             ),
         )
@@ -1104,14 +1181,18 @@ pub fn heading_button(key: &'static str, glyph: &'static str) -> Stateful<Div> {
 
 /// A row's hover action (§5.1.5): a line-high icon button that stands at
 /// the right of the row while the pointer is over it, in place of what the
-/// row says there (a Thread row's `⋯`, a Project heading's new Thread). The cockpit wires its press, which must stop at
-/// the button: the row under it opens, folds or drags.
+/// row says there (a Project heading's new Thread, a snoozed card's wake).
+/// The cockpit wires its press, which must stop at the button: the row
+/// under it opens, folds or drags.
 pub fn row_action(key: impl Into<SharedString>, glyph: &'static str) -> Stateful<Div> {
     // Its glyph, not its box, meets the row's right padding, where the
     // counts and words it stands in for end.
     icon_button(key, glyph, NAV_HEADING_GLYPH, NAV_LINE, R_CONTROL)
         .mr(px(-(NAV_LINE - NAV_HEADING_GLYPH) / 2.0))
 }
+
+/// How wide a `row_action` stands, out to the row's padding.
+pub const ROW_ACTION_W: f32 = NAV_LINE - (NAV_LINE - NAV_HEADING_GLYPH) / 2.0;
 
 /// Is the row blended under the pointer, so its hover action stands?
 fn hovered(key: &SharedString) -> bool {
@@ -1219,16 +1300,6 @@ fn project_row(
 /// A hover action at the right of its line, after the title's box.
 fn at_right(action: AnyElement) -> Div {
     div().flex().flex_1().justify_end().child(action)
-}
-
-/// A branch held to `NAV_BRANCH_MAX_CH` characters, an ellipsis standing
-/// for the rest.
-fn short_branch(branch: &str) -> SharedString {
-    if branch.chars().count() <= NAV_BRANCH_MAX_CH {
-        return branch.to_string().into();
-    }
-    let kept: String = branch.chars().take(NAV_BRANCH_MAX_CH - 1).collect();
-    format!("{kept}\u{2026}").into()
 }
 
 // ------------------------------------------------------------- the tree
@@ -1463,125 +1534,18 @@ fn branch(rows: Vec<AnyElement>) -> Div {
     div().flex().flex_col().flex_shrink_0().children(rows)
 }
 
-/// The Thread row at root — see `thread_row_with_title`.
+/// The Thread card at root — see `card::thread_card`.
 #[cfg(test)]
 pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
-    thread_row_with_title(
+    thread_card(
         row,
         row.name.clone(),
-        None,
+        CardDoors::default(),
         RowPlace::ROOT,
         None,
         false,
         &Measure::Cells(7.0),
     )
-}
-
-/// A title's ink and weight (§5.1.5): primary ink (`INK_STRONG`), as
-/// the reference app's rows; 500 on the selected row and while a finish is
-/// unseen (the unread rule, said in weight now that every title is
-/// primary); a parked Thread's a step down so what is running reads first.
-fn title_face(row: &ThreadRow) -> (u32, FontWeight) {
-    if row.selected || row.status == RowStatus::Done {
-        (INK_STRONG, W_LABEL)
-    } else if row.status == RowStatus::Parked {
-        (INK_SUBTLE, W_BODY)
-    } else {
-        (INK_STRONG, W_BODY)
-    }
-}
-
-/// Hover controls and the title space they occupy.
-pub struct RowActions {
-    element: AnyElement,
-    width: f32,
-}
-
-impl RowActions {
-    pub fn single(element: AnyElement) -> Self {
-        Self {
-            element,
-            width: RIGHT_ROOM,
-        }
-    }
-
-    /// A strip of row buttons without the single button's trailing inset.
-    pub fn strip(element: AnyElement, count: usize) -> Self {
-        Self {
-            element,
-            width: count as f32 * NAV_LINE + NAV_MARK_GAP,
-        }
-    }
-}
-
-/// The one Thread row builder, with the title leaf supplied by the caller
-/// — see `group_row_with_title`. Every row is one quiet line (§5.1.5),
-/// the title and nothing else, as Claude's and Codex's lists: where a
-/// Thread works and what its PR says live in its Pane and the panel. At
-/// its right one mark says what needs saying (`state_mark`: the needs-you
-/// dot, a failure's, the working spinner); under the pointer its `action`
-/// (`row_action`, the cockpit's `⋯`) stands there instead. `group` scopes
-/// the row's blend when the Thread is listed under several Groups.
-/// `editing` is a rename in progress: the field takes the title's box.
-pub fn thread_row_with_title(
-    row: &ThreadRow,
-    title: impl IntoElement,
-    action: Option<RowActions>,
-    place: RowPlace,
-    group: Option<GroupId>,
-    editing: bool,
-    measure: &Measure,
-) -> Stateful<Div> {
-    let thread = row.thread;
-    let key = SharedString::from(format!(
-        "nav-thread-{}-{}",
-        group.map_or(0, GroupId::get),
-        thread.get()
-    ));
-    // The shown Group's row carries the selection: its focused member
-    // says so in its title's ink alone.
-    let member = matches!(place, RowPlace::Member(_));
-    let filled = row.selected && !member;
-    let (ink, weight) = match title_face(row) {
-        (ink, _) if member => (ink, W_BODY),
-        face => face,
-    };
-    let action = action.filter(|_| !editing && hovered(&key));
-    let mark = (!editing && action.is_none())
-        .then(|| state_mark(row.status))
-        .flatten();
-    let title_w = match action.as_ref() {
-        Some(action) => place.text_w() - action.width,
-        None => title_w(place, mark.is_some()),
-    };
-    let ground = (!editing)
-        .then(|| {
-            let ground = row_ground(&key, filled);
-            cut_ground(measure, &row.name, FS_NAV, weight, title_w, ground)
-        })
-        .flatten();
-    pitched(row_frame(
-        ("nav-thread", thread.get() as usize),
-        key,
-        filled,
-    ))
-    .debug_selector(move || format!("nav-thread-{}", thread.get()))
-    .flex_row()
-    .items_center()
-    .h(px(NAV_ROW_H))
-    .pl(px(place.title_x()))
-    .pr(px(NAV_ROW_PAD_X))
-    .child(
-        fitted(title_w, FS_NAV, ink, weight, title, ground)
-            .debug_selector(move || format!("nav-title-{}", thread.get())),
-    )
-    .children(mark.map(|mark| {
-        at_right(
-            mark.debug_selector(move || format!("nav-state-{}", thread.get()))
-                .into_any_element(),
-        )
-    }))
-    .children(action.map(|action| at_right(action.element)))
 }
 
 /// What a row says at its right, where its `⋯` stands under the pointer —
@@ -1617,17 +1581,12 @@ pub(crate) fn state_mark(status: RowStatus) -> Option<Div> {
     )
 }
 
-/// What a row's title gives up while its right holds a mark or its `⋯`
-/// (`row_action`): the glyph's box, out to where the button's box meets
+/// What a Group row's title gives up while its right holds a mark
+/// (`state_mark`): the glyph's box, out to where the button's box meets
 /// the row's padding, and `NAV_MARK_GAP` before it. Nothing while it holds
 /// neither: the title takes the line.
-const RIGHT_ROOM: f32 = NAV_LINE - (NAV_LINE - NAV_HEADING_GLYPH) / 2.0 + NAV_MARK_GAP;
+const RIGHT_ROOM: f32 = ROW_ACTION_W + NAV_MARK_GAP;
 
-/// How wide a Thread row's title box is at `place`, whether its right
-/// holds a mark or a `⋯`.
-pub fn title_w(place: RowPlace, marked: bool) -> f32 {
-    place.text_w() - if marked { RIGHT_ROOM } else { 0.0 }
-}
 
 /// A Notice under `Recent` in the Inbox (or a request from a
 /// machine off screen above it), two lines: its mark, its title
@@ -2185,12 +2144,10 @@ mod tests {
 
     fn selected_thread(selected: bool) -> ThreadRow {
         ThreadRow {
-            thread: ThreadId::new(8),
-            status: RowStatus::Idle,
-            name: "thread-08".into(),
             project: Some("ferrite".into()),
             selected,
             tail: NavTail::Age("2h".into()),
+            ..ThreadRow::bare(ThreadId::new(8), "thread-08", RowStatus::Idle)
         }
     }
 
@@ -2220,11 +2177,11 @@ mod tests {
         }
     }
 
-    /// The row grammar (§5.1): rounded rows, a Thread one quiet line at 30
-    /// stepping 34 with its title on its heading's label, a Group and a Project heading one
-    /// line too, a Project section 6px below the one above it.
+    /// The row grammar (§5.1): rounded rows, a Thread a card with its
+    /// content on its heading's label, a Group and a Project heading one
+    /// line, a Project section 6px below the one above it.
     #[test]
-    fn nav_rows_are_rounded_two_line_and_one_line() {
+    fn nav_rows_are_rounded_cards_and_one_line() {
         let mut row = thread_row(&thread());
         let style = row.style();
         assert_eq!(
@@ -2232,8 +2189,8 @@ mod tests {
             Some(px(R_CONTROL).into()),
             "radius 6"
         );
-        assert_eq!(style.size.height, Some(px(NAV_ROW_H).into()));
-        assert_eq!(style.margin.top, Some(px(2.0).into()), "pitch 34");
+        assert_eq!(style.size.height, Some(px(NAV_CARD_H_SHORT).into()));
+        assert_eq!(style.margin.top, Some(px(2.0).into()), "2px item padding");
         assert_eq!(style.margin.bottom, Some(px(2.0).into()));
         assert_eq!(style.padding.left, Some(px(NAV_ROW_PAD_X).into()));
         assert_eq!(style.padding.right, Some(px(NAV_ROW_PAD_X).into()));
@@ -2265,7 +2222,7 @@ mod tests {
     }
 
     /// N-5, the selection rule: one selection, on the row of what the board
-    /// shows — `SELECTED`, never a coloured outline.
+    /// shows — a fill, never a coloured outline. A card at rest is bare.
     #[test]
     fn one_selection_marks_what_the_board_shows() {
         let fill = |mut drawn: Stateful<Div>| drawn.style().background.clone();
@@ -2273,38 +2230,158 @@ mod tests {
         assert_eq!(fill(group_row(&group(true, false), 0)), selection);
         assert_eq!(fill(group_row(&group(false, false), 0)), None);
         assert_eq!(
-            fill(thread_row_with_title(
-                &thread(),
+            fill(thread_card(
+                &selected_thread(true),
                 "thread-08",
-                None,
+                CardDoors::default(),
                 RowPlace::Member(0),
                 Some(GroupId::new(1)),
                 false,
                 &Measure::Cells(7.0),
             )),
             None,
-            "an unfocused member carries no fill"
+            "a focused member says so in its title alone"
         );
-        assert_eq!(fill(thread_row(&selected_thread(true))), selection);
-        assert_eq!(fill(thread_row(&thread())), None);
+        let active = Some(gpui::Hsla::from(rgba(0xffffff1c)).into());
+        assert_eq!(fill(thread_row(&selected_thread(true))), active, "white 11%");
+        assert_eq!(fill(thread_row(&thread())), None, "no fill at rest");
+        assert_eq!(
+            (NAV_CARD_HOVER, NAV_CARD_ACTIVE),
+            (0xffffff14, 0xffffff1c),
+            "hover 8%, active 11%"
+        );
     }
 
-    /// §5.1.5: a title is `INK_STRONG`, 500 when selected,
-    /// `INK_STRONG` while its finish is unseen, `INK_SUBTLE` when parked.
+    /// Busy cards recede so what needs the operator reads brightest: a
+    /// working card's title is 400 at 75% ink, a Done, needs-you or
+    /// failed card's 500 (a failure at 95%), and the shown Thread never
+    /// recedes.
     #[test]
-    fn titles_follow_selection_unread_and_parked() {
-        assert_eq!(title_face(&thread()), (INK_STRONG, W_BODY));
-        assert_eq!(title_face(&selected_thread(true)), (INK_STRONG, W_LABEL));
-        let done = ThreadRow {
-            status: RowStatus::Done,
+    fn busy_cards_recede_and_what_needs_you_reads_brightest() {
+        let row = |status| ThreadRow { status, ..thread() };
+        let receded = (rgba(NAV_CARD_TITLE_RECEDED).into(), W_BODY);
+        for status in [
+            RowStatus::Working,
+            RowStatus::Failing,
+            RowStatus::Background,
+            RowStatus::Idle,
+            RowStatus::Parked,
+        ] {
+            assert!(row(status).receded(), "{status:?}");
+            assert_eq!(card::title_face(&row(status), 0.0), receded, "{status:?}");
+        }
+        for status in [RowStatus::Done, RowStatus::NeedsYou] {
+            assert!(!row(status).receded(), "{status:?}");
+            assert_eq!(
+                card::title_face(&row(status), 0.0),
+                (rgb(INK_STRONG).into(), W_LABEL),
+                "{status:?}"
+            );
+        }
+        assert!(!row(RowStatus::Failed).receded());
+        assert_eq!(
+            card::title_face(&row(RowStatus::Failed), 0.0),
+            (rgba(0xefefeff2).into(), W_LABEL),
+            "a failure at 95%"
+        );
+        let shown = ThreadRow {
+            status: RowStatus::Working,
+            ..selected_thread(true)
+        };
+        assert!(!shown.receded(), "the shown Thread never recedes");
+        assert_eq!(
+            card::title_face(&row(RowStatus::Working), 1.0),
+            (rgb(INK_STRONG).into(), W_BODY),
+            "under the pointer a receded title comes back to full ink"
+        );
+        assert_eq!(NAV_CARD_TITLE_RECEDED, 0xefefefbf, "75%");
+    }
+
+    /// The status slot (sidebar.md §4): a glyph, a word and a clock in
+    /// the state's ink; a quiet card its age.
+    #[test]
+    fn the_status_slot_says_the_state_in_its_ink() {
+        let now = std::time::Instant::now();
+        let wall = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        let say = |status, tail| {
+            let row = ThreadRow {
+                status,
+                tail,
+                working_since: Some(now - std::time::Duration::from_secs(12 * 60 + 3)),
+                activity_at: Some(wall - std::time::Duration::from_secs(3 * 3600)),
+                ..thread()
+            };
+            let label = card::status_label(&row, now, wall).expect("a label");
+            (label.glyph, label.ink, label.text.to_string())
+        };
+        use ferrite_ui::icons;
+        assert_eq!(
+            say(RowStatus::Working, NavTail::Working("12m03s".into())),
+            (Some(icons::CIRCLE_DASHED), NAV_WORKING_INK, "Working 12m".into())
+        );
+        assert_eq!(
+            say(RowStatus::NeedsYou, NavTail::Waiting(words::APPROVAL)),
+            (Some(icons::SHIELD_QUESTION), ATTENTION, "Approval".into())
+        );
+        assert_eq!(
+            say(RowStatus::NeedsYou, NavTail::Waiting(words::PLAN)).2,
+            "Approval",
+            "a plan reads as an approval"
+        );
+        assert_eq!(
+            say(RowStatus::NeedsYou, NavTail::Waiting(words::QUESTION)),
+            (Some(icons::MESSAGE_CIRCLE_QUESTION), NAV_INPUT_INK, "Input".into())
+        );
+        assert_eq!(
+            say(RowStatus::Failed, NavTail::Failed),
+            (Some(icons::CIRCLE_ALERT), BLOCKED, "Failed".into())
+        );
+        assert_eq!(
+            say(RowStatus::Failing, NavTail::Failing(Some(3))).2,
+            "Failing 3"
+        );
+        assert_eq!(
+            say(RowStatus::Done, NavTail::Done),
+            (Some(icons::CHECK_CIRCLE), NAV_DONE_INK, "Done".into())
+        );
+        assert_eq!(
+            say(RowStatus::Idle, NavTail::Age("3h".into())),
+            (None, INK_SECONDARY_LABEL, "3h".into())
+        );
+        assert_eq!(
+            (NAV_WORKING_INK, NAV_DONE_INK),
+            (0x51a2ff, 0x00d492),
+            "working is blue, done green"
+        );
+    }
+
+    /// A card is a fixed 78px box (8 + 20 + 4 + 20 + 2 + 16 + 8) with a
+    /// checkout line, and hugs its two lines (60) without one.
+    #[test]
+    fn a_card_is_seventy_eight_with_its_checkout_and_hugs_without() {
+        let height = |mut drawn: Stateful<Div>| drawn.style().size.height;
+        let branched = ThreadRow {
+            branch: Some("t3/improve-sidebar-architecture".into()),
             ..thread()
         };
-        assert_eq!(title_face(&done), (INK_STRONG, W_LABEL), "unread in weight");
-        let parked = ThreadRow {
-            status: RowStatus::Parked,
-            ..thread()
-        };
-        assert_eq!(title_face(&parked), (INK_SUBTLE, W_BODY));
+        assert_eq!(height(thread_row(&branched)), Some(px(78.0).into()));
+        assert_eq!(height(thread_row(&thread())), Some(px(60.0).into()));
+        assert_eq!(
+            (
+                NAV_CARD_PAD_Y,
+                NAV_CARD_LINE1_H,
+                NAV_CARD_LINE2_GAP,
+                NAV_CARD_LINE2_H,
+                NAV_CARD_LINE3_GAP,
+                NAV_CARD_LINE3_H
+            ),
+            (8.0, 20.0, 4.0, 20.0, 2.0, 16.0)
+        );
+        assert_eq!(
+            NAV_CARD_H + 2.0 * NAV_CARD_ITEM_PAD_Y + 1.0,
+            83.0,
+            "cards pitch at 83 with the list's 1px gap"
+        );
     }
 
     /// N-13: the pointer stays the arrow over every row.
@@ -2383,45 +2460,9 @@ mod tests {
         );
     }
 
-    /// Every Thread row is the one 30px line whatever arrives (§5.1.5):
-    /// a word, a mark, a member's place. The rail keeps its cell.
+    /// The rail keeps its 32px cell.
     #[test]
-    fn every_row_is_one_line_whatever_its_facts() {
-        let height = |mut drawn: Stateful<Div>| drawn.style().size.height;
-        let one = Some(px(NAV_ROW_H).into());
-        for tail in [
-            NavTail::None,
-            NavTail::Waiting(words::APPROVAL),
-            NavTail::Failing(Some(12)),
-            NavTail::Failed,
-            NavTail::Done,
-            NavTail::Working("1m04s".into()),
-        ] {
-            let row = ThreadRow {
-                tail: tail.clone(),
-                ..thread()
-            };
-            assert_eq!(height(thread_row(&row)), one, "{tail:?}");
-        }
-        for status in [
-            RowStatus::Working,
-            RowStatus::NeedsYou,
-            RowStatus::Done,
-            RowStatus::Parked,
-        ] {
-            let row = ThreadRow { status, ..thread() };
-            assert_eq!(height(thread_row(&row)), one, "{status:?}");
-        }
-        let member = thread_row_with_title(
-            &thread(),
-            "thread-08",
-            None,
-            RowPlace::Member(0),
-            None,
-            false,
-            &Measure::Cells(7.0),
-        );
-        assert_eq!(height(member), one);
+    fn the_rail_keeps_its_cell() {
         let rail = RailRow {
             key: Some(9),
             thread: ThreadId::new(9),
@@ -2434,11 +2475,11 @@ mod tests {
         );
     }
 
-    /// A row's right says one thing (§5.1.5): the needs-you dot, a
+    /// A Group row's right says one thing (§5.1.6): the needs-you dot, a
     /// failure's, the working spinner, an unseen finish's small grey dot;
     /// idle, parked and background-only rows say nothing there.
     #[test]
-    fn only_a_state_worth_saying_marks_the_right() {
+    fn only_a_state_worth_saying_marks_a_groups_right() {
         for status in [
             RowStatus::NeedsYou,
             RowStatus::Failed,
@@ -2790,13 +2831,9 @@ mod tests {
 
     /// The foot names the app and its major and minor version.
     #[test]
-    fn the_foot_shortens_the_version_and_a_branch() {
+    fn the_foot_shortens_the_version() {
         assert_eq!(short_version("0.5.0"), "0.5");
         assert_eq!(short_version("1.12.3-beta"), "1.12");
-        assert_eq!(short_branch("dev").as_ref(), "dev");
-        let long = short_branch("worktree-pay-api-migration-cleanup");
-        assert_eq!(long.chars().count(), NAV_BRANCH_MAX_CH);
-        assert!(long.ends_with('\u{2026}'));
     }
 
     /// The nav's folds open and shut over Claude's 150ms `ease-out`.
@@ -2816,9 +2853,30 @@ pub(crate) mod testing {
 
     use gpui::SharedString;
 
+    use ferrite_core::ThreadId;
+    use gpui::{FontWeight, Hsla};
+
     thread_local! {
         pub(super) static DRAWN_HOVER: RefCell<HashMap<SharedString, f32>> =
             RefCell::new(HashMap::new());
+        pub(super) static DRAWN_CARDS: RefCell<HashMap<ThreadId, DrawnCard>> =
+            RefCell::new(HashMap::new());
+    }
+
+    /// A Thread's card as last drawn: whether it receded, the opacity it
+    /// painted at, its title's ink and weight, and whether its hover strip
+    /// stood in its status slot.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub(crate) struct DrawnCard {
+        pub receded: bool,
+        pub opacity: f32,
+        pub title: (Hsla, FontWeight),
+        pub strip: bool,
+    }
+
+    /// The card for `thread` as last drawn.
+    pub(crate) fn drawn_card(thread: ThreadId) -> Option<DrawnCard> {
+        DRAWN_CARDS.with(|drawn| drawn.borrow().get(&thread).copied())
     }
 
     /// The hover the row behind `key` was last drawn at.

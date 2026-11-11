@@ -365,6 +365,18 @@ fn did_something_now(store: &std::path::Path, thread: ThreadId) {
     writeln!(log, "{record}").unwrap();
 }
 
+/// Every Thread's checkout says no branch, whatever branch this checkout
+/// (the fixtures' workspace) is on: its card hugs its two lines.
+fn without_checkouts(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+    view.update(cx, |view, cx| {
+        let threads = view.cockpit.threads();
+        view.facts
+            .set_branches(threads.into_iter().map(|thread| (thread, None)).collect());
+        view.notify_part(parts::Part::Nav, cx);
+    });
+    cx.run_until_parked();
+}
+
 fn cockpit(name: &str, panes: usize) -> (Cockpit, Fake) {
     let fake = Fake::default();
     let dir = scratch(name);
@@ -610,6 +622,7 @@ fn pr_with_checks() -> ferrite_core::workspace::PullRequest {
         state: PrState::Open,
         draft: false,
         url: Some("https://github.com/o/r/pull/48".into()),
+        title: None,
         checks: Some(CheckState::Failing),
         runs: vec![
             run(

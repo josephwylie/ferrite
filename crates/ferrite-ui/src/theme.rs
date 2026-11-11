@@ -585,6 +585,10 @@ pub mod words {
     pub const BLOCKED: &str = "blocked";
     /// Launched, not yet working.
     pub const STARTING: &str = "starting";
+    /// The nav card's words where T3's differ: a question waits on the
+    /// operator's input, and a run is setting up before its clock starts.
+    pub const INPUT: &str = "input";
+    pub const SETTING_UP: &str = "setting up";
     /// Held by the operator.
     pub const PAUSED: &str = "paused";
     /// Parked: no Session in memory, one keystroke from coming back.
@@ -3004,8 +3008,6 @@ pub const NAV_PR_MARK: f32 = 12.0;
 pub const NAV_PR_DOT: f32 = 6.0;
 /// 36px — the foot: `Ferrite 0.5` and the gear, 8px under the tree.
 pub const NAV_FOOT_PAD_T: f32 = SPACE_2;
-/// The most characters a folded Project's branch takes before it is cut.
-pub const NAV_BRANCH_MAX_CH: usize = 24;
 /// 4px — a drop target that takes no layout of its own ("insert above this
 /// Group", "append after the last member"): an absolute hit band over the
 /// edge of the row it borders.
@@ -3035,6 +3037,127 @@ const _: () = assert!(NAV_SCROLLBAR_GUTTER == 2. * NAV_SCROLLBAR_INSET + SCROLLB
 /// way.
 pub const NAV_AUTO_RAIL_BOARD_W: f32 = 560.0;
 pub const NAV_AUTO_RAIL_HYSTERESIS: f32 = 24.0;
+
+// **The Thread card** (`nav::card`, T3 Code's `SidebarThreadRow`,
+// docs/design/t3-reference/sidebar.md §3). Three lines in a fixed 78px
+// box: line 1 the Project badge, the Project's name and the status slot
+// (12px); line 2 the title (14px); line 3 the checkout — worktree,
+// branch, PR chip, Provider logo (12px). With nothing for line 3 the box
+// hugs lines 1 and 2 (60px) and the logo ends line 2. At rest a card has
+// no fill and no border: it is a fill only under the pointer (8% white),
+// for the shown Thread (11%) or selected (7%), and every fill snaps.
+//
+// **Colour is state, on line 1 alone.** Working is blue (a static dashed
+// ring, `Working 12m`), Done green (`CircleCheck`, `Done`), needs-you
+// amber (approval, plan) or indigo (a question), failed red; idle says
+// its age in the secondary label grey. Project hues live on badges only.
+// Busy cards recede so what needs the operator reads brightest: a
+// working card paints at 70% and comes up over 150ms under the pointer,
+// and every receded card's title is 400 at 75% ink.
+
+/// 78px — the card's inner box: 8 + line 1 20 + 4 + line 2 20 + 2 + line
+/// 3 16 + 8.
+pub const NAV_CARD_H: f32 = 78.0;
+/// 8px — the card's padding above line 1 and below its last line.
+pub const NAV_CARD_PAD_Y: f32 = SPACE_2;
+/// 2px — above and below each card in the list, so cards pitch at 83
+/// with the list's 1px gap.
+pub const NAV_CARD_ITEM_PAD_Y: f32 = 2.0;
+pub const NAV_CARD_LINE1_H: f32 = ROW;
+pub const NAV_CARD_LINE2_GAP: f32 = SPACE_1;
+pub const NAV_CARD_LINE2_H: f32 = ROW;
+pub const NAV_CARD_LINE3_GAP: f32 = 2.0;
+pub const NAV_CARD_LINE3_H: f32 = 16.0;
+/// The box with no checkout line: 8 + 20 + 4 + 20 + 8.
+pub const NAV_CARD_H_SHORT: f32 =
+    2.0 * NAV_CARD_PAD_Y + NAV_CARD_LINE1_H + NAV_CARD_LINE2_GAP + NAV_CARD_LINE2_H;
+const _: () = assert!(
+    NAV_CARD_H
+        == NAV_CARD_H_SHORT + NAV_CARD_LINE3_GAP + NAV_CARD_LINE3_H
+);
+/// 6px — between the items of one line.
+pub const NAV_CARD_GAP: f32 = SPACE_1_5;
+/// 12px — line 1 and line 3 (`text-xs`, 16px leading).
+pub const FS_NAV_META: f32 = 12.0;
+/// 14px — a card's title (`text-sm`, 20px leading).
+pub const FS_NAV_TITLE: f32 = 14.0;
+/// The card's fills, white over the column: under the pointer, for the
+/// Thread the board shows, and for a card in the multi-selection.
+pub const NAV_CARD_HOVER: u32 = 0xffffff14;
+pub const NAV_CARD_ACTIVE: u32 = 0xffffff1c;
+pub const NAV_CARD_SELECTED: u32 = 0xffffff12;
+/// A working card's opacity while it recedes; it comes up to 1 under the
+/// pointer over `MOTION_RECEDE_MS`.
+pub const NAV_CARD_RECEDED_OPACITY: f32 = 0.70;
+/// A receded card's title ink (`INK_STRONG` at 75%), and a failed card's
+/// once seen (95%).
+pub const NAV_CARD_TITLE_RECEDED: u32 = (INK_STRONG << 8) | 0xbf;
+pub const NAV_CARD_TITLE_SEEN_FAILED: u32 = (INK_STRONG << 8) | 0xf2;
+/// The title while the titler rewrites it.
+pub const NAV_CARD_RETITLING_OPACITY: f32 = 0.55;
+/// `#8f8f8f` — the Project's name, line 3 and the idle age (T3's
+/// `--secondary-label`): a step under `INK_SUBTLE`.
+pub const INK_SECONDARY_LABEL: u32 = 0x8f8f8f;
+/// The status slot: at least 32px wide, its icon 16px, 4px before the word.
+pub const NAV_STATUS_MIN_W: f32 = 32.0;
+pub const NAV_STATUS_ICON: f32 = 16.0;
+pub const NAV_STATUS_GAP: f32 = SPACE_1;
+/// The status inks T3 gives the card: working blue-400, done emerald-400,
+/// a question indigo-300 (approvals and failures keep `ATTENTION` and
+/// `BLOCKED`).
+pub const NAV_WORKING_INK: u32 = 0x51a2ff;
+pub const NAV_DONE_INK: u32 = 0x00d492;
+pub const NAV_INPUT_INK: u32 = 0xa3b3ff;
+/// The pin glyph on line 1, in `INK_SUBTLE` at 65%.
+pub const NAV_PIN_INK: u32 = (INK_SUBTLE << 8) | 0xa6;
+/// The hover strip's glyphs: Snooze's clock 12px, Park's check 14px, each
+/// slot padded 6px; Park's word meets the card's padding (`-4px`).
+pub const NAV_SNOOZE_GLYPH: f32 = 12.0;
+pub const NAV_PARK_GLYPH: f32 = 14.0;
+pub const NAV_STRIP_PAD_X: f32 = SPACE_1_5;
+pub const NAV_PARK_PULL: f32 = SPACE_1;
+/// 14px — line 3's glyphs (worktree, terminal) and the current Provider's
+/// logo; an earlier Provider after a Handover is 12px.
+pub const NAV_CHECKOUT_GLYPH: f32 = 14.0;
+pub const NAV_PROVIDER_LOGO: f32 = 14.0;
+pub const NAV_PROVIDER_EARLIER: f32 = 12.0;
+pub const NAV_PROVIDER_OPACITY: f32 = 0.60;
+pub const NAV_PROVIDER_EARLIER_OPACITY: f32 = 0.35;
+/// The PR chip's glyph tints (T3's): open emerald-300 at 90%, draft
+/// zinc-400 at 80%, closed red-300 at 90%, merged violet-300 at 90%.
+pub const NAV_PR_OPEN: u32 = 0x5ee9b5e6;
+pub const NAV_PR_DRAFT: u32 = 0x9f9fa9cc;
+pub const NAV_PR_CLOSED: u32 = 0xffa2a2e6;
+pub const NAV_PR_MERGED: u32 = 0xc4b4ffe6;
+/// 2px — between the PR chip's glyph and its number.
+pub const NAV_PR_GAP: f32 = 2.0;
+/// The PR popover's row: radius 4, and its ground under the pointer
+/// (T3's `--accent`).
+pub const NAV_POPOVER_ROW_R: f32 = 4.0;
+pub const NAV_POPOVER_ROW_HOVER: u32 = 0x191a1d;
+/// A branch's kept tail (`nav::middle_truncate`): the last `/` segment up
+/// to 16 characters, else the last 10 snapped to a word boundary, never
+/// under 4; no cut while the branch is within 4 of its tail.
+pub const NAV_BRANCH_SEGMENT_MAX: usize = 16;
+pub const NAV_BRANCH_TAIL: usize = 10;
+pub const NAV_BRANCH_TAIL_MIN: usize = 4;
+/// A branch is cut only when it runs this many characters past its tail.
+pub const NAV_BRANCH_MIN_CUT: usize = 4;
+
+/// The Project badge (`project_badge`): a 16px tile at radius 4, the hue
+/// at 14% under the monogram, mono 700 at 8.25px in two 6px cells.
+pub const NAV_BADGE: f32 = 16.0;
+pub const FS_PROJECT_BADGE: f32 = 8.25;
+pub const PROJECT_BADGE_GLYPH_W: f32 = 6.0;
+pub const PROJECT_BADGE_GROUND_ALPHA: u32 = 0x24;
+/// The badge's 18 hues (T3's `projectIconColors`, Tailwind v4's -400
+/// shades), in hash order: gray, red, orange, amber, yellow, lime, green,
+/// emerald, teal, cyan, sky, blue, indigo, violet, purple, fuchsia, pink,
+/// rose.
+pub const PROJECT_HUES: [u32; 18] = [
+    0x99a1af, 0xff6467, 0xff8904, 0xffb900, 0xfdc700, 0x9ae600, 0x05df72, 0x00d492, 0x00d5be,
+    0x00d3f2, 0x00bcff, 0x51a2ff, 0x7c86ff, 0xa684ff, 0xc27aff, 0xed6aff, 0xfb64b6, 0xff637e,
+];
 // (end WP-G) — append above this line only
 
 // ======================================== motion
@@ -3279,6 +3402,10 @@ pub const SHIMMER_HALF_WIDTH: f32 = 0.45;
 /// half of the period and hidden for the second (500 on, 500 off), as
 /// both reference apps blink theirs.
 pub const MOTION_CARET_BLINK_MS: u64 = 1_000;
+/// 150ms — a receded working nav card comes up to full opacity under the
+/// pointer on `MOTION_EASE_STANDARD` (T3's `transition-opacity`), the
+/// card's only fade; under reduced motion it snaps.
+pub const MOTION_RECEDE_MS: u64 = 150;
 // (end motion) — append above this line only
 
 #[cfg(test)]

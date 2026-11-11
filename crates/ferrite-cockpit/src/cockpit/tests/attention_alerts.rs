@@ -1079,13 +1079,14 @@ fn snooze_hides_a_thread_until_woken_and_new_decisions_wake_it(cx: &mut TestAppC
 }
 
 #[gpui::test]
-fn working_shelf_starts_collapsed_and_expands_to_one_line_rows(cx: &mut TestAppContext) {
+fn working_shelf_starts_collapsed_and_expands_to_cards(cx: &mut TestAppContext) {
     let (mut core, _) = cockpit("working-shelf", 1);
     let thread = core.threads()[0];
     core.send(thread, "work".into());
     bind_production_keys(cx);
-    let (_, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
+    without_checkouts(&view, cx);
     cx.simulate_keystrokes("cmd-i");
     tick(cx);
     let key: &'static str = format!("nav-thread-{}", thread.get()).leak();
@@ -1098,7 +1099,7 @@ fn working_shelf_starts_collapsed_and_expands_to_one_line_rows(cx: &mut TestAppC
     tick(cx);
     assert_eq!(
         cx.debug_bounds(key).unwrap().size.height,
-        px(ferrite_ui::theme::NAV_ROW_H)
+        px(ferrite_ui::theme::NAV_CARD_H_SHORT)
     );
     let heading = cx.debug_bounds("nav-inbox-working").unwrap();
     cx.simulate_click(heading.center(), gpui::Modifiers::none());
