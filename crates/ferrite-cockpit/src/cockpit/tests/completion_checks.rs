@@ -507,9 +507,9 @@ fn small_tool_output_copies_blank_lines_and_trailing_spaces_exactly(cx: &mut Tes
     let copied = clipboard(cx).unwrap();
     // The shut line previews nothing; the card keeps the blank line and
     // the trailing spaces.
-    assert!(copied.contains("Ran fixture"), "the call line: {copied:?}");
+    assert!(copied.starts_with("fixture\n\n"), "the call line: {copied:?}");
     assert!(
-        !copied.contains("Ran fixture \u{b7}"),
+        !copied.contains("fixture \u{b7}"),
         "no preview: {copied:?}"
     );
     assert!(
@@ -557,11 +557,11 @@ fn received_reasoning_is_shown_once_during_live_to_settled_handoff(cx: &mut Test
         })
         .unwrap();
     tick(cx);
-    assert_eq!(
-        historical_count(cx, &bold),
-        1,
-        "completion retains exactly one historical summary"
+    assert!(
+        cx.debug_bounds("reasoning-summary").is_some(),
+        "completion retains the thought's row"
     );
+    assert_eq!(historical_count(cx, &bold), 0, "shut, its body is not drawn");
     assert!(cx.debug_bounds("live-thought").is_none());
 }
 
