@@ -271,6 +271,16 @@ impl TranscriptScroll {
         adjusted
     }
 
+    /// The rows' inset moved with the width (`theme::tx_inset_at`), a frame
+    /// after the width did: measure every row again, holding the row the
+    /// resize held where it stands.
+    pub(crate) fn remeasure_held(&self) {
+        if let Some((_, index, inset)) = self.resize_anchor.get() {
+            self.resize_anchor.set(Some((px(-1.), index, inset)));
+        }
+        self.remeasure_all();
+    }
+
     /// How much of the viewport's top the pinned band covers (`band`, its
     /// foot below the viewport's top; `None` when no band is pinned). Rows
     /// pass under it into its fade (`EDGE_FADE`), so nothing is cut on a

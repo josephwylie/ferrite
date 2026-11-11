@@ -2971,10 +2971,16 @@ impl Render for TranscriptView {
                 list_h.set(f32::from(scroll.list_state().viewport_bounds().size.height));
                 let width = scroll.list_state().viewport_bounds().size.width;
                 if (f32::from(width) - list_w.get()).abs() >= 0.5 {
-                    // A visual row lays its page out from it: draw again.
+                    // A visual row lays its page out from it, and the rows'
+                    // inset follows it (`tx_inset_at`): draw again.
                     let had_visuals = !gaps.visual_rows().is_empty();
+                    let inset_moved =
+                        theme::tx_inset_at(f32::from(width), solo) != inset;
                     list_w.set(f32::from(width));
-                    if had_visuals {
+                    if inset_moved {
+                        scroll.remeasure_held();
+                    }
+                    if had_visuals || inset_moved {
                         let weak = weak.clone();
                         window.defer(cx, move |_, cx| {
                             let _ = weak.update(cx, |_, cx| cx.notify());
