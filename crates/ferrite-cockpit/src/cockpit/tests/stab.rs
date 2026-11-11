@@ -741,7 +741,7 @@ fn the_hero_drops_its_lead_words_in_a_short_window(cx: &mut TestAppContext) {
     let word = cx
         .debug_bounds("start-hero-project")
         .expect("the project word");
-    cx.simulate_resize(gpui::size(px(1200.), px(ferrite_ui::theme::HERO_SHORT_WINDOW - 48.)));
+    cx.simulate_resize(gpui::size(px(1200.), px(ferrite_ui::theme::HERO_SHORT_WINDOW - 8.)));
     tick(cx);
     let short = cx.debug_bounds("start-hero").expect("the hero stays");
     assert!(

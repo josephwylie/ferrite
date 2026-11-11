@@ -431,11 +431,11 @@ mod tests {
     #[test]
     fn it_is_held_in_the_column_and_inside_the_window() {
         let rects = [bounds(200., 100., 60., 20.)];
-        let left = place(&rects, (150., 110.));
-        assert_eq!(left.x, px(150.), "inside the column, left of the text");
+        let left = place(&rects, (195., 110.));
+        assert_eq!(left.x, px(195.), "the pointer, a little left of the text");
         let far = cite_place(
             bounds(0., 0., 1000., 700.),
-            &rects,
+            &[bounds(950., 680., 40., 15.)],
             gpui::point(px(990.), px(695.)),
             gpui::size(px(80.), px(24.)),
             gpui::size(px(1000.), px(700.)),
@@ -443,7 +443,7 @@ mod tests {
         assert_eq!((far.x, far.y), (px(912.), px(668.)));
         let corner = cite_place(
             bounds(0., 0., 1000., 700.),
-            &rects,
+            &[bounds(0., 0., 40., 15.)],
             gpui::point(px(0.), px(0.)),
             gpui::size(px(80.), px(24.)),
             gpui::size(px(1000.), px(700.)),

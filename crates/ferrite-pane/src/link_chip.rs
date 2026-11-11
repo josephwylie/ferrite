@@ -20,6 +20,7 @@ pub(crate) struct Chip<'a> {
 impl Chip<'_> {
     fn weighted(window: &Window) -> gpui::TextStyle {
         let mut face = window.text_style();
+        face.font_family = theme::FONT_UI.into();
         face.font_weight = theme::W_LABEL;
         face.font_style = gpui::FontStyle::Normal;
         face
@@ -51,6 +52,7 @@ impl Chip<'_> {
         };
         let text = shaped(self.name) + shaped(self.location) + px(1.);
         (size + Self::gap(size) + text)
+            .ceil()
             .clamp(px(theme::INLINE_FILE_MIN_W), px(theme::INLINE_FILE_MAX_W))
     }
 
@@ -64,6 +66,7 @@ impl Chip<'_> {
             .w(width)
             .h(line)
             .min_w_0()
+            .font_family(theme::FONT_UI)
             .font_weight(theme::W_LABEL)
             .text_color(rgb(self.ink))
             .whitespace_nowrap()
