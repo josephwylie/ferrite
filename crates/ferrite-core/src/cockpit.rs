@@ -74,6 +74,9 @@ pub struct Cockpit {
     allowance_warnings: Vec<crate::providers::limits::AllowanceWarning>,
     /// What API callers asked of the windows, oldest first.
     asked: Vec<Asked>,
+    /// A fixture world's own Factory, answering Workflow asks as a
+    /// Server's would (`fixture_live_factory`); a real window has none.
+    local_factory: Option<crate::factory::Factory>,
     /// The Subject each Pane shows, where it is not Main: what this window
     /// reads when the operator looks at it.
     visible_subjects: std::collections::BTreeMap<ThreadId, Subject>,
@@ -227,6 +230,7 @@ impl Cockpit {
             browser_messages: Vec::new(),
             allowance_warnings: Vec::new(),
             asked: Vec::new(),
+            local_factory: None,
             visible_subjects: std::collections::BTreeMap::new(),
             window_active: true,
             composing: std::collections::BTreeSet::new(),
@@ -2498,6 +2502,41 @@ impl Cockpit {
         done
     }
 
+    /// A Workflow authoring command (#221), answered by the Server's
+    /// Factory (or a fixture world's own).
+    pub fn workflow(
+        &mut self,
+        action: crate::protocol::WorkflowAction,
+    ) -> io::Result<Option<Done>> {
+        if let Some(factory) = self.local_factory.as_mut() {
+            let agent = crate::factory::Agent {
+                provider: Provider::Claude,
+                model: None,
+                effort: None,
+            };
+            let command = crate::factory::workflow_command(action, &agent, Vec::new())
+                .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "unknown ask"))?;
+            let answer = factory
+                .command(command, 0)
+                .map_err(|refusal| io::Error::other(refusal.message))?;
+            let board = factory.board();
+            self.receive_fixture(ServerMessage::Factory { revision: 0, board });
+            return Ok(Some(match answer {
+                crate::factory::Answer::Task(task) => Done::Task { task },
+                crate::factory::Answer::Changed(changed) => Done::Changed { changed },
+                crate::factory::Answer::Workflow(workflow) => Done::Workflow { workflow },
+                crate::factory::Answer::Step(step) => Done::Step { step },
+                crate::factory::Answer::Version(version) => Done::Version { version },
+            }));
+        }
+        let done = self
+            .remote()?
+            .execute(Op::Workflow { action })
+            .map_err(io::Error::from);
+        self.settle();
+        done
+    }
+
     /// Request workspace commands without creating a Thread or Session.
     pub fn discover_commands(
         &mut self,
@@ -2701,6 +2740,15 @@ impl Cockpit {
 
     /// A fixture world's Factory board, as a Server would say it.
     pub fn fixture_factory(&mut self, board: crate::factory::Board) {
+        self.receive_fixture(ServerMessage::Factory { revision: 0, board });
+    }
+
+    /// A fixture world with a Factory of its own that answers Workflow
+    /// asks as a Server's does, starting empty.
+    pub fn fixture_live_factory(&mut self) {
+        let factory = crate::factory::Factory::in_memory();
+        let board = factory.board();
+        self.local_factory = Some(factory);
         self.receive_fixture(ServerMessage::Factory { revision: 0, board });
     }
 

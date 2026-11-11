@@ -372,43 +372,13 @@ impl Server {
             code: crate::protocol::ErrorCode::Failed,
             message: error.message,
         };
-        let command = match action.clone() {
-            WorkflowAction::Create { project, template } => Command::CreateWorkflow {
-                project,
-                template,
-                agent: self.factory_agent.clone(),
-            },
-            WorkflowAction::Rename { workflow, name } => Command::RenameWorkflow { workflow, name },
-            WorkflowAction::AddStep { workflow, after } => Command::AddStep {
-                workflow,
-                after,
-                agent: self.factory_agent.clone(),
-            },
-            WorkflowAction::EditStep {
-                workflow,
-                step,
-                change,
-            } => Command::EditStep {
-                workflow,
-                step,
-                change,
-            },
-            WorkflowAction::MoveStep { workflow, step, to } => {
-                Command::MoveStep { workflow, step, to }
-            }
-            WorkflowAction::DeleteStep { workflow, step } => {
-                Command::DeleteStep { workflow, step }
-            }
-            WorkflowAction::Save { workflow, skills } => Command::SaveWorkflow {
-                workflow,
-                catalog: self.catalog(skills),
-            },
-            WorkflowAction::Unknown => {
-                return Err(WireError {
-                    code: crate::protocol::ErrorCode::Unsupported,
-                    message: "this server does not know that Workflow command".into(),
-                })
-            }
+        let models = self.catalog(Vec::new()).models;
+        let Some(command) = factory::workflow_command(action.clone(), &self.factory_agent, models)
+        else {
+            return Err(WireError {
+                code: crate::protocol::ErrorCode::Unsupported,
+                message: "this server does not know that Workflow command".into(),
+            });
         };
         let (answer, _) = self.factory_command(command).map_err(wire)?;
         Ok(Some(done(answer)))

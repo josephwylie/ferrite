@@ -13,6 +13,7 @@ mod decisions_parity;
 mod diagnostics;
 mod drafts;
 mod factory;
+mod workflows;
 mod files;
 mod find;
 mod floats_parity;

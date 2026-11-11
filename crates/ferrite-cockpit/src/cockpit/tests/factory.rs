@@ -70,6 +70,7 @@ fn the_board_lays_cards_in_their_columns(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("factory-columns", 1);
     let project = core.project_id(core.threads()[0]).unwrap();
     core.fixture_factory(Board {
+        workflows: Vec::new(),
         tasks: vec![
             task("t-1", project, Status::Working, None, None, None),
             task(
@@ -150,6 +151,7 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
         )
         .unwrap();
     core.fixture_factory(Board {
+        workflows: Vec::new(),
         tasks: vec![task(
             "t-1",
             project,
@@ -197,6 +199,7 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
     ] {
         view.update(cx, |view, cx| {
             view.cockpit.fixture_factory(Board {
+        workflows: Vec::new(),
                 tasks: vec![task("t-1", project, status, Some(worker), None, None)],
             });
             view.open_task("t-1", cx);
@@ -215,6 +218,7 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
     let (mut core, _fake) = cockpit("factory-alert", 2);
     let project = core.project_id(core.threads()[0]).unwrap();
     core.fixture_factory(Board {
+        workflows: Vec::new(),
         tasks: vec![task(
             "t-1",
             project,

@@ -45,6 +45,8 @@ pub(super) enum MenuTarget {
     /// The terminal's right-click, and its `⋯`.
     Terminal(ThreadId),
     TerminalMore(ThreadId),
+    /// A Factory picker (#221): its rows are the Factory view's `picks`.
+    Factory,
 }
 
 /// One thing a context-menu row does.
@@ -110,6 +112,8 @@ pub(super) enum MenuVerb {
     CopyLink,
     /// Move the Thread into this Group (Claude's `Move to section ›`).
     JoinGroup(GroupId),
+    /// The Factory picker's row at this index.
+    Factory(usize),
 }
 
 /// A parent row's submenu.
@@ -348,6 +352,14 @@ impl CockpitView {
             MenuTarget::ChangesMore(thread) => rows = self.changes_more_rows(thread),
             MenuTarget::Terminal(_) => rows = self.terminal_context_rows(),
             MenuTarget::TerminalMore(_) => rows = self.terminal_more_rows(),
+            MenuTarget::Factory => {
+                rows = self
+                    .factory_pick_rows()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, item)| Some((item, MenuVerb::Factory(index))))
+                    .collect()
+            }
             MenuTarget::Tools(_) => {
                 rows.push(Some((
                     menu::Item::new("Reveal in Finder"),
@@ -627,6 +639,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match (target, verb) {
+            (_, MenuVerb::Factory(index)) => self.pick(index, cx),
             (
                 MenuTarget::Thread(thread) | MenuTarget::Pane(thread) | MenuTarget::Snooze(thread),
                 MenuVerb::Snooze(preset),
@@ -789,6 +802,7 @@ impl CockpitView {
                     | MenuTarget::ChangesMore(_)
                     | MenuTarget::Terminal(_)
                     | MenuTarget::TerminalMore(_)
+                    | MenuTarget::Factory
                     | MenuTarget::Page(_) => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);

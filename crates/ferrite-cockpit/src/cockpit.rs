@@ -13,6 +13,7 @@ pub(crate) mod decisions;
 mod drafts;
 pub(crate) mod empty_board;
 pub(crate) mod factory;
+pub(crate) mod workflows;
 mod history;
 mod leaving;
 mod lightbox;
@@ -2342,6 +2343,7 @@ impl CockpitView {
         if self.cockpit.take_factory_changed() {
             self.factory_changed(cx);
         }
+        self.poll_factory_skills(cx);
         self.apply_thread_rules(&frame, cx);
         self.land(cx);
         self.ring_alerts(cx);
@@ -3594,6 +3596,7 @@ impl CockpitView {
             | MenuTarget::Parked
             | MenuTarget::Review { .. }
             | MenuTarget::Prompt { .. }
+            | MenuTarget::Factory
             | MenuTarget::Page(_) => None,
         }
     }

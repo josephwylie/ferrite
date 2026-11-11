@@ -1,6 +1,7 @@
 //! A Project's Factory in the window (ADR 0037, #220): its sidebar entry,
 //! its board of Tasks in the board's place, a Task's panel beside the
-//! columns, the New task sheet, and the alerts a Task raises.
+//! columns, the New task sheet, and the alerts a Task raises. Its
+//! Workflows surface is `workflows.rs` (#221).
 //!
 //! The Factory runs in the Server (`ferrite_core::factory`): the window
 //! draws the board the Server publishes and sends commands through
@@ -60,6 +61,8 @@ pub(crate) struct NewTask {
     pub(crate) instructions: Entity<Composer>,
     request: String,
     error: Option<SharedString>,
+    /// The process it runs: a Workflow's latest version, else one-off.
+    pub(crate) workflow: Option<core_factory::WorkflowId>,
 }
 
 /// What the Factory view shows.
@@ -74,6 +77,11 @@ pub(crate) struct FactoryView {
     /// What the last command said back (a refusal, a worktree kept).
     pub(crate) note: Option<SharedString>,
     pub(crate) sheet: Option<NewTask>,
+    /// The Board or the Workflows.
+    pub(crate) surface: super::workflows::Surface,
+    pub(crate) workflows: super::workflows::Workflows,
+    /// The open Factory picker's rows.
+    pub(crate) picks: Vec<(ferrite_ui::menu::Item, super::workflows::Pick)>,
 }
 
 /// A system notification's tag for a Task.
@@ -111,6 +119,7 @@ impl CockpitView {
         match self.factory_view.as_mut() {
             Some(view) if view.project == project => view.focus_at_open = focus_at_open,
             _ => {
+                let workflows = super::workflows::Workflows::new(cx);
                 self.factory_view = Some(FactoryView {
                     project,
                     focus_at_open,
@@ -118,6 +127,9 @@ impl CockpitView {
                     tab: TaskTab::Overview,
                     note: None,
                     sheet: None,
+                    surface: super::workflows::Surface::Board,
+                    workflows,
+                    picks: Vec::new(),
                 })
             }
         }
@@ -207,6 +219,7 @@ impl CockpitView {
                 view.open = None;
             }
         }
+        self.ensure_fields(cx);
         cx.notify();
     }
 
@@ -216,6 +229,9 @@ impl CockpitView {
         let view = self.factory_view.as_ref()?;
         if let Some(sheet) = &view.sheet {
             return Some(sheet.instructions.read(cx).focus_handle(cx));
+        }
+        if let Some(focus) = self.workflows_focus(cx) {
+            return Some(focus);
         }
         if view.tab == TaskTab::Worker {
             if let Some(index) = self.open_worker_pane() {
@@ -257,6 +273,7 @@ impl CockpitView {
                 REQUESTS.fetch_add(1, Ordering::Relaxed)
             ),
             error: None,
+            workflow: None,
         });
         cx.notify();
     }
@@ -286,11 +303,13 @@ impl CockpitView {
                 project,
                 instructions,
                 request: Some(sheet.request.clone()),
+                workflow: sheet.workflow.clone(),
             };
             match self.cockpit.task(action) {
                 Ok(Some(Done::Task { task })) => {
                     if let Some(view) = self.factory_view.as_mut() {
                         view.sheet = None;
+                        view.surface = super::workflows::Surface::Board;
                         view.open = Some(task);
                         view.tab = TaskTab::Overview;
                         view.note = None;
@@ -442,14 +461,33 @@ impl CockpitView {
                     .text_color(rgb(INK_SUBTLE))
                     .child(SharedString::from(count)),
             )
+            .child(self.factory_surface_tabs(cx))
             .child(div().flex_1())
             .children(view.note.clone().map(|note| {
                 div()
+                    .id("factory-note")
                     .debug_selector(|| "factory-note".into())
+                    .flex()
+                    .items_center()
+                    .gap(px(SPACE_1))
+                    .min_w_0()
                     .text_size(px(FS_META))
                     .text_color(rgb(INK_SUBTLE))
-                    .truncate()
-                    .child(note)
+                    .child(div().min_w_0().truncate().child(note))
+                    .child(
+                        div()
+                            .id("factory-note-dismiss")
+                            .debug_selector(|| "factory-note-dismiss".into())
+                            .cursor_pointer()
+                            .child(ferrite_ui::icons::icon(
+                                ferrite_ui::icons::CLOSE,
+                                ROW_ICON,
+                                INK_SUBTLE,
+                            ))
+                            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                                view.dismiss_factory_note(cx)
+                            })),
+                    )
             }))
             .child(
                 ferrite_ui::components::secondary_button(
@@ -465,7 +503,9 @@ impl CockpitView {
                 })),
             );
 
-        let body = if tasks.is_empty() {
+        let body = if view.surface == super::workflows::Surface::Workflows {
+            self.workflows_surface(window, cx)
+        } else if tasks.is_empty() {
             div()
                 .debug_selector(|| "factory-empty".into())
                 .flex_1()
@@ -953,12 +993,60 @@ impl CockpitView {
             .read(cx)
             .focus_handle(cx)
             .is_focused(window);
-        let mut body = crate::project_editor::body().child(crate::project_editor::text_field(
-            "Instructions".into(),
-            sheet.instructions.clone(),
-            focused,
-            "new-task-instructions-focused",
-        ));
+        let process = match sheet
+            .workflow
+            .as_deref()
+            .and_then(|id| self.cockpit.factory().workflow(id))
+            .and_then(|workflow| workflow.latest())
+        {
+            Some(latest) => format!(
+                "{} \u{b7} version {}",
+                latest.definition.name, latest.version
+            ),
+            None => "One-off: a single agent".into(),
+        };
+        let mut body = crate::project_editor::body()
+            .child(crate::project_editor::text_field(
+                "Instructions".into(),
+                sheet.instructions.clone(),
+                focused,
+                "new-task-instructions-focused",
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(ferrite_ui::theme::SPACE_1))
+                    .child(ferrite_ui::components::section_label("Process"))
+                    .child(
+                        div()
+                            .id("new-task-process")
+                            .debug_selector(|| "new-task-process".into())
+                            .flex()
+                            .items_center()
+                            .gap(px(ferrite_ui::theme::SPACE_1))
+                            .h(px(ferrite_ui::theme::CONTROL_H))
+                            .px(px(ferrite_ui::theme::SPACE_2))
+                            .rounded(px(ferrite_ui::theme::R_CONTROL))
+                            .border_1()
+                            .border_color(ferrite_ui::theme::paint::FIELD_RING)
+                            .cursor_pointer()
+                            .child(div().flex_1().child(SharedString::from(process)))
+                            .child(ferrite_ui::icons::icon(
+                                ferrite_ui::icons::CHEVRON_DOWN,
+                                ferrite_ui::theme::ROW_ICON,
+                                ferrite_ui::theme::INK_SUBTLE,
+                            ))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|view, event: &MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    let picks = view.process_picks();
+                                    view.open_picks(picks, event.position, cx);
+                                }),
+                            ),
+                    ),
+            );
         if let Some(error) = sheet.error.clone() {
             body = body.child(crate::project_editor::error_line(error));
         }

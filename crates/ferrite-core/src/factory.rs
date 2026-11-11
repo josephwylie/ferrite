@@ -1207,6 +1207,46 @@ fn at_rest_rule(task: &mut Task, seen: Seen, now_ms: i64, effects: &mut Vec<Effe
     }
 }
 
+/// A window's authoring ask as the command it is: new Workflows and
+/// Steps on `agent`; a save checked against `models` and the skills the
+/// window found. `None` for an ask this Ferrite does not know.
+pub fn workflow_command(
+    action: crate::protocol::WorkflowAction,
+    agent: &Agent,
+    models: Vec<(Provider, Vec<crate::ModelInfo>)>,
+) -> Option<Command> {
+    use crate::protocol::WorkflowAction;
+    Some(match action {
+        WorkflowAction::Create { project, template } => Command::CreateWorkflow {
+            project,
+            template,
+            agent: agent.clone(),
+        },
+        WorkflowAction::Rename { workflow, name } => Command::RenameWorkflow { workflow, name },
+        WorkflowAction::AddStep { workflow, after } => Command::AddStep {
+            workflow,
+            after,
+            agent: agent.clone(),
+        },
+        WorkflowAction::EditStep {
+            workflow,
+            step,
+            change,
+        } => Command::EditStep {
+            workflow,
+            step,
+            change,
+        },
+        WorkflowAction::MoveStep { workflow, step, to } => Command::MoveStep { workflow, step, to },
+        WorkflowAction::DeleteStep { workflow, step } => Command::DeleteStep { workflow, step },
+        WorkflowAction::Save { workflow, skills } => Command::SaveWorkflow {
+            workflow,
+            catalog: Catalog { models, skills },
+        },
+        WorkflowAction::Unknown => return None,
+    })
+}
+
 /// `Claude · claude-opus-4`, as a card names a Worker's.
 pub fn agent_label(agent: &Agent) -> String {
     let provider = match agent.provider {

@@ -51,6 +51,7 @@ pub(super) const STATES: &[&str] = &[
     "changes-split",
     "terminal",
     "factory",
+    "factory-workflows",
 ];
 
 pub(super) fn handles(state: &str) -> bool {
@@ -95,6 +96,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "changes-split" => tools("changes-split", &[Tool::Files, Tool::Changes], Some("crates/ferrite-ui/src/motion.rs")),
         "terminal" => tools("terminal", &[Tool::Terminal], None),
         "factory" => factory(),
+        "factory-workflows" => factory_workflows(),
         _ => unreachable!("`handles` lists every state"),
     }
 }
@@ -731,6 +733,7 @@ fn factory() -> (Scene, Setup) {
     };
     let at = |by: &str, text: &str| serde_json::json!({"at_ms": 1_700_000_000_000_i64, "by": by, "text": text});
     let board = Board {
+        workflows: Vec::new(),
         tasks: vec![
             task(
                 "t-1",
@@ -939,6 +942,27 @@ fn lightbox() -> (Scene, Setup) {
         view.panes[0]
             .preview
             .open(gallery[1].clone(), None, &gallery, window, cx);
+    });
+    (scene, setup)
+}
+
+/// A Project's Workflows (#221): the "Issue to reviewed PR" template with
+/// its Reviewer chosen in the inspector, a route to a deleted agent
+/// flagged on its row, and the draft's problems listed above.
+fn factory_workflows() -> (Scene, Setup) {
+    let mut scene = Scene::new("factory-workflows");
+    let ferrite = scene.project("ferrite");
+    let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
+    let project = scene.core.project_id(mine).expect("a Project");
+    scene.core.focus_thread(mine);
+    scene.core.fixture_live_factory();
+    let setup: Setup = Box::new(move |view, _, cx| {
+        view.open_factory(project, cx);
+        view.create_workflow(ferrite_core::factory::Template::IssueToReviewedPr, cx);
+        view.save_workflow(cx);
+        view.select_step("s-4".into(), cx);
+        view.delete_step("s-3".into(), cx);
+        view.select_step("s-4".into(), cx);
     });
     (scene, setup)
 }
