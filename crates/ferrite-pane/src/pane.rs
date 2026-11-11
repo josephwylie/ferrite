@@ -2954,6 +2954,7 @@ pub(crate) fn render_block(
     block: &Block,
     row_cx: &RowCx,
     expanded: bool,
+    live: bool,
     disclosure: Option<Disclosure>,
 ) -> AnyElement {
     let grid = row_cx.grid();
@@ -3019,17 +3020,13 @@ pub(crate) fn render_block(
         // fold learned to drop it) draws nothing — not even its margin.
         Body::Thinking(thought) if thought.trim().is_empty() => div().into_any_element(),
         // A thought (T3's): the brain, the thought flattened to one line
-        // and cut, always with its chevron. Open, the row reads `Thought`
-        // and the whole thought stands under it past the icon gutter, at
+        // and cut, always with its chevron. Open, the row reads `Thinking`
+        // while it is `live`, then `Thought` (`thought_label`), and the whole thought stands under it past the icon gutter, at
         // full ink, at most `THOUGHT_BODY_MAX_H` tall and scrolling in
         // itself.
         Body::Thinking(thought) => {
             let (overlay, _, targeted) = disclosure_parts(disclosure);
-            let label = if expanded {
-                SharedString::from("Thought")
-            } else {
-                SharedString::from(ferrite_core::progress::one_line(thought, usize::MAX))
-            };
+            let label = thought_label(thought, expanded, live);
             let header = work_row::work_row(work_row::WorkRow {
                 key: SharedString::from(format!("reasoning-row-{:?}", block.id)),
                 icon: ferrite_core::transcript::tools::ToolIcon::Brain,
@@ -4179,6 +4176,16 @@ impl gpui::Element for EdgeCut {
     }
 }
 
+/// A thought's row label: shut, the thought on one line; open, `Thinking`
+/// while it is still being thought (`live`), else `Thought` (T3's).
+fn thought_label(thought: &str, expanded: bool, live: bool) -> SharedString {
+    match (expanded, live) {
+        (false, _) => ferrite_core::progress::one_line(thought, usize::MAX).into(),
+        (true, true) => "Thinking".into(),
+        (true, false) => "Thought".into(),
+    }
+}
+
 /// A line under an activity row, in its words (a visual's caption, a
 /// decision record, why a page is missing): a step under the prose in
 /// `INK_SUBTLE`.
@@ -4891,6 +4898,15 @@ mod tests {
                     .child(edge_cut(theme::WORK_ROW_LINE, INK_SUBTLE, markdown)),
             )
         }
+    }
+
+    /// A thought's row reads its words shut; open, `Thinking` while it is
+    /// still being thought, `Thought` once it has settled.
+    #[test]
+    fn an_open_thoughts_row_reads_thinking_until_it_settles() {
+        assert_eq!(thought_label("weighing it up", false, true).as_ref(), "weighing it up");
+        assert_eq!(thought_label("weighing it up", true, true).as_ref(), "Thinking");
+        assert_eq!(thought_label("weighing it up", true, false).as_ref(), "Thought");
     }
 
     /// A label that fits draws whole: the box `edge_cut` clips to is as
