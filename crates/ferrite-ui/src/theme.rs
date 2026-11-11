@@ -2254,7 +2254,7 @@ pub const ENV_STRIP: u32 = 0x262626;
 pub const ENV_STRIP_H: f32 = 38.0;
 pub const ENV_STRIP_INSET: f32 = SPACE_3;
 pub const ENV_STRIP_PAD_X: f32 = SPACE_2;
-pub const ENV_MARK: f32 = 14.0;
+pub const ENV_MARK: f32 = 12.0;
 pub const ENV_MARK_GAP: f32 = SPACE_1_5;
 pub const ENV_CHIP_GAP: f32 = SPACE_3;
 // (end WP-C) — append above this line only
@@ -2614,6 +2614,11 @@ pub const TOKEN_PAD_X: f32 = SPACE_2;
 /// third of every row empty. A longer description cuts and keeps its
 /// tooltip.
 pub const SLASH_MENU_W: f32 = 480.0;
+/// The Workspace menu once it offers a previous worktree, kept
+/// `MENU_WINDOW_MARGIN` inside each window edge (T3's
+/// `min(21rem, 100vw - 2rem)`).
+pub const WORKSPACE_MENU_W: f32 = 336.0;
+pub const MENU_WINDOW_MARGIN: f32 = 16.0;
 /// The `/`, `@` and `$` drawer's cap (T3's `max-h-72`); its rows scroll.
 pub const SLASH_MENU_MAX_H: f32 = 288.0;
 /// The Composer's menus at Claude's widths: the model picker (names only,

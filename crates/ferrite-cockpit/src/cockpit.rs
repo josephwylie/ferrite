@@ -7916,8 +7916,8 @@ impl CockpitView {
                 let target = draft.binding.target();
                 let checked_out = self.checked_out_branch(project, cx);
                 let mut rows = vec![band_row(
+                    SharedString::from("Current checkout"),
                     checked_out.clone(),
-                    SharedString::from("checked out"),
                     *target == DraftTarget::Main,
                     BandChoice::Target(DraftTarget::Main),
                 )];
@@ -7940,14 +7940,14 @@ impl CockpitView {
                         .map(|name| name.to_string_lossy().into_owned())
                         .unwrap_or_else(|| worktree.path.display().to_string());
                     let (name, detail) = match &worktree.branch {
-                        Some(branch) => (branch.clone(), format!("worktree · {directory}")),
-                        None => (directory, "worktree · detached".to_string()),
+                        Some(branch) => (branch.clone(), directory),
+                        None => (directory, "detached".to_string()),
                     };
                     if let Some(branch) = &worktree.branch {
                         offered.push(branch);
                     }
                     rows.push(band_row(
-                        SharedString::from(name.clone()),
+                        SharedString::from(format!("Previous worktree ({name})")),
                         SharedString::from(detail),
                         matches!(
                             target,
@@ -7982,7 +7982,7 @@ impl CockpitView {
                     BandChoice::Target(DraftTarget::NewBranch),
                 ));
                 rows.push(band_row(
-                    SharedString::from("New branch + worktree"),
+                    SharedString::from("New worktree"),
                     SharedString::from("in an isolated checkout"),
                     *draft.binding.target() == DraftTarget::New,
                     BandChoice::Target(DraftTarget::New),
@@ -8237,12 +8237,20 @@ impl CockpitView {
             .project(draft.binding.project())
             .map(|project| project.title.clone())
             .unwrap_or_else(|| "Project".into());
-        let workspace_label = match draft.binding.target() {
-            DraftTarget::Main => self.checked_out_branch(draft.binding.project(), cx),
-            DraftTarget::Branch { name } => SharedString::from(name.clone()),
-            DraftTarget::NewBranch => SharedString::from("New branch"),
-            DraftTarget::Existing { branch, .. } => SharedString::from(branch.clone()),
-            DraftTarget::New => SharedString::from("New worktree"),
+        let (workspace_mark, workspace_label) = match draft.binding.target() {
+            DraftTarget::Main => {
+                // The chip no longer names the branch, but its menu's first
+                // row does: ask git now so the row opens already answered.
+                self.checked_out_branch(draft.binding.project(), cx);
+                (ferrite_ui::icons::FOLDER, SharedString::from("Current checkout"))
+            }
+            DraftTarget::Branch { name } => (ferrite_ui::icons::BRANCH, SharedString::from(name.clone())),
+            DraftTarget::NewBranch => (ferrite_ui::icons::BRANCH, SharedString::from("New branch")),
+            DraftTarget::Existing { branch, .. } => (
+                ferrite_ui::icons::FOLDER_GIT_EXISTING,
+                SharedString::from(format!("Previous worktree ({branch})")),
+            ),
+            DraftTarget::New => (ferrite_ui::icons::FOLDER_GIT, SharedString::from("New worktree")),
         };
         let chips = [
             (
@@ -8262,7 +8270,7 @@ impl CockpitView {
                 let chip_composer = composer.clone();
                 let mark = match chip {
                     pane::BandChip::Project => ferrite_ui::icons::FOLDER,
-                    _ => ferrite_ui::icons::BRANCH,
+                    _ => workspace_mark,
                 };
                 let chip_element = pane::band_chip(slot, mark, label, focused).on_mouse_down(
                     MouseButton::Left,
@@ -8858,7 +8866,9 @@ impl CockpitView {
     /// word, `FLOAT_OFFSET` under it — kept inside the window's margin. The chip has been
     /// drawn before it can be pressed, so its bounds are always recorded.
     fn band_menu_element(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        use ferrite_ui::theme::{FLOAT_OFFSET, GRID_PAD, SLASH_MENU_W};
+        use ferrite_ui::theme::{
+            FLOAT_OFFSET, GRID_PAD, MENU_WINDOW_MARGIN, SLASH_MENU_W, WORKSPACE_MENU_W,
+        };
         let open = self.popover.as_ref()?;
         let Kind::Band(chip @ (pane::BandChip::Project | pane::BandChip::Workspace)) = open.kind
         else {
@@ -8884,7 +8894,17 @@ impl CockpitView {
                 gpui::point(trigger.left(), trigger.top() - px(FLOAT_OFFSET)),
             )
         };
-        let width = SLASH_MENU_W.min(f32::from(window.viewport_size().width) - 2. * GRID_PAD);
+        // T3 widens the Workspace menu to 336 once it offers a previous
+        // worktree, whose branch rides in the row's name.
+        let previous = chip == pane::BandChip::Workspace
+            && open.rows.iter().any(|row| {
+                matches!(
+                    row.consequence,
+                    Consequence::Band(BandChoice::Target(DraftTarget::Existing { .. }))
+                )
+            });
+        let width = if previous { WORKSPACE_MENU_W } else { SLASH_MENU_W }
+            .min(f32::from(window.viewport_size().width) - 2. * MENU_WINDOW_MARGIN);
         Some(
             deferred(
                 anchored()
