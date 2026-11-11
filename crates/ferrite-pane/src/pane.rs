@@ -44,7 +44,7 @@ pub use output::{diff_number_cells, test_elbow, DiffKind, DiffPaint, TestElbow};
 pub(crate) use text::{collect_block_text, collect_group_text, group_live, turn_stamp};
 pub use usage::{
     compact_count, context_meter_segments, context_segments, context_usage, ctx_meter_ink,
-    plan_usage_fraction, plan_usage_ring, usage_ink,
+    plan_usage_fraction, plan_usage_popover, plan_usage_ring, usage_ink,
 };
 pub(crate) use working::running_call;
 pub use working::{background_clock, background_link, working_tail, WorkingFacts};

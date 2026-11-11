@@ -1973,11 +1973,11 @@ fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestApp
     assert_eq!(built, 0, "a hover in the nav rebuilt a Pane");
 }
 
-/// The Activity view costs nothing at rest: a row arrives at once, asking
-/// for no frame of its own, and a list with rows in it asks for no frame
-/// and rebuilds no nav however long it sits.
+/// The list costs nothing at rest: a row arrives at once, asking for no
+/// frame of its own, and a list with rows in it asks for no frame and
+/// rebuilds no nav however long it sits.
 #[gpui::test]
-fn the_activity_view_at_rest_asks_for_no_frames(cx: &mut TestAppContext) {
+fn the_nav_list_at_rest_asks_for_no_frames(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let _clock = hold_wall_clock();
     let (core, fake) = cockpit("activity-view-rest", 3);
@@ -2000,13 +2000,9 @@ fn the_activity_view_at_rest_asks_for_no_frames(cx: &mut TestAppContext) {
             .unwrap();
     }
     tick(cx);
-    view.update(cx, |view, cx| {
-        view.show_nav_view(nav::NavView::Inbox, None, cx)
-    });
-    tick(cx);
     let listed = view.read_with(cx, |view, _| {
-        let activity = view.inbox(&view.nav_state());
-        activity.inbox.len() + activity.working.len()
+        let state = view.nav_state();
+        state.active.len() + state.working.len()
     });
     // The untouched first Thread was opened today too.
     assert_eq!(listed, 3, "the premise: every Thread is listed");

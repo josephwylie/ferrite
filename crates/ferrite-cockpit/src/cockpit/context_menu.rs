@@ -16,11 +16,11 @@ pub(super) enum MenuTarget {
     Snooze(ThreadId),
     /// A Pane — the same Thread, but the rename opens in the head.
     Pane(ThreadId),
-    Group(GroupId),
-    /// A Project's heading in the nav.
-    Project(ProjectId),
-    /// The Parked section's header at the foot of the nav.
+    /// The Parked shelf's header at the foot of the nav.
     Parked,
+    /// The search row's Filter button: a Project to filter by, a Group to
+    /// open.
+    NavFilter,
     /// A diff line in the Review beside the Thread's Pane (ADR 0021).
     Review {
         thread: ThreadId,
@@ -77,8 +77,6 @@ pub(super) enum MenuVerb {
     Comment,
     OpenAtLine,
     LeaveGroup,
-    EnterGroup,
-    DissolveGroup,
     NewThread,
     Reveal,
     CopyPath,
@@ -119,6 +117,8 @@ pub(super) enum MenuVerb {
     CloseOtherSurfaces,
     CloseSurfacesRight,
     CloseAllSurfaces,
+    FilterProject(Option<ProjectId>),
+    OpenGroup(GroupId),
 }
 
 /// A parent row's submenu.
@@ -263,41 +263,12 @@ impl CockpitView {
                     rows.push(Some((menu::Item::new("Leave group"), MenuVerb::LeaveGroup)));
                 }
             }
-            MenuTarget::Group(group) => {
-                rows.push(Some((menu::Item::new("Rename group"), MenuVerb::Rename)));
-                if self.cockpit.roster().view() != View::Group(group) {
-                    rows.push(Some((menu::Item::new("Open group"), MenuVerb::EnterGroup)));
-                }
-                rows.push(Some((
-                    menu::Item::new("New thread in this group").shortcut("cmd-T"),
-                    MenuVerb::NewThread,
-                )));
-                rows.push(None);
-                rows.push(Some((
-                    menu::Item::new("Dissolve group").destructive(),
-                    MenuVerb::DissolveGroup,
-                )));
-            }
-            // A Project heading: a new Thread in it, and where it is on disk.
-            MenuTarget::Project(_) => {
-                rows.push(Some((
-                    menu::Item::new("New thread in this project"),
-                    MenuVerb::NewThread,
-                )));
-                rows.push(None);
-                if !self.on_machine() {
-                    rows.push(Some((
-                        menu::Item::new("Reveal in Finder"),
-                        MenuVerb::Reveal,
-                    )));
-                }
-                rows.push(Some((menu::Item::new("Copy path"), MenuVerb::CopyPath)));
-            }
-            // The Parked view's row: the view, and the one bulk act the
-            // list exists for — clearing the parked history it holds.
+            // The Parked shelf's header: the shelf, and the one bulk act it
+            // exists for — clearing the parked history it holds.
+            MenuTarget::NavFilter => rows.extend(self.filter_rows()),
             MenuTarget::Parked => {
                 rows.push(Some((
-                    menu::Item::new(if self.nav_view == nav::NavView::Parked {
+                    menu::Item::new(if self.shelf_open(nav::Shelf::Parked) {
                         "Hide parked threads"
                     } else {
                         "Show parked threads"
@@ -661,9 +632,6 @@ impl CockpitView {
             (MenuTarget::Pane(thread), MenuVerb::Rename) => {
                 self.start_rename(RenameTarget::PaneTitle(thread), cx)
             }
-            (MenuTarget::Group(group), MenuVerb::Rename) => {
-                self.start_rename(RenameTarget::Group(group), cx)
-            }
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Focus) => {
                 if self.pane_for(thread).is_some() {
                     self.focus_thread(thread, cx);
@@ -761,45 +729,24 @@ impl CockpitView {
                 }
                 self.sync_panes(cx);
             }
-            (MenuTarget::Group(group), MenuVerb::EnterGroup) => self.enter_group(group, cx),
             (MenuTarget::Parked, MenuVerb::ToggleParked) => {
-                self.toggle_nav_view(nav::NavView::Parked, None, cx);
+                let open = self.shelf_open(nav::Shelf::Parked);
+                self.set_shelf_open(nav::Shelf::Parked, !open, cx);
             }
+            (MenuTarget::NavFilter, MenuVerb::FilterProject(project)) => {
+                self.choose_nav_filter(project, cx)
+            }
+            (MenuTarget::NavFilter, MenuVerb::OpenGroup(group)) => self.enter_group(group, cx),
             (MenuTarget::Parked, MenuVerb::DeleteAllParked) => {
                 self.delete_parked_threads(cx);
-            }
-            (MenuTarget::Group(group), MenuVerb::DissolveGroup) => {
-                // Members leave one by one; the Group dissolves under two.
-                let members = self
-                    .cockpit
-                    .groups()
-                    .get(group)
-                    .map(|group| group.members.clone())
-                    .unwrap_or_default();
-                for thread in members {
-                    if self.cockpit.groups().get(group).is_none() {
-                        break;
-                    }
-                    if let Err(error) = self.cockpit.apply_group(GroupChange::Leave { thread }) {
-                        self.group_error = Some(error.to_string().into());
-                        break;
-                    }
-                }
-                self.sync_panes(cx);
             }
             (_, MenuVerb::NewThread) => {
                 let project = match target {
                     MenuTarget::Thread(thread)
                     | MenuTarget::Pane(thread)
                     | MenuTarget::Snooze(thread) => self.cockpit.project_id(thread),
-                    MenuTarget::Group(group) => self
-                        .cockpit
-                        .groups()
-                        .get(group)
-                        .and_then(|group| group.members.first().copied())
-                        .and_then(|thread| self.cockpit.project_id(thread)),
-                    MenuTarget::Project(project) => Some(project),
                     MenuTarget::Parked
+                    | MenuTarget::NavFilter
                     | MenuTarget::Review { .. }
                     | MenuTarget::Prompt { .. }
                     | MenuTarget::File(_)

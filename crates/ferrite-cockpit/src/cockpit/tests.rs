@@ -28,6 +28,7 @@ mod loops_overlay;
 mod machines;
 mod nav_list;
 mod nav_parity;
+mod nav_shelves;
 mod navigation;
 mod output_cards;
 mod panel;

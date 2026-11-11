@@ -204,7 +204,6 @@ fn prepare(
     ));
     view.cli_probing = true;
     // The nav foot's `Ferrite 0.5`.
-    view.shown_version = "0.5.0".into();
     view.facts.set_branches(
         branches
             .into_iter()

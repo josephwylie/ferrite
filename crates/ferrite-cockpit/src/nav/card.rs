@@ -35,7 +35,7 @@ use ferrite_ui::icons::{self, icon};
 use ferrite_ui::theme::*;
 use ferrite_ui::{components, motion};
 
-use super::{cut_ground, fitted_in, hovered, Measure, NavTail, RowPlace, RowStatus, ThreadRow};
+use super::{NavTooltip, cut_ground, fitted_in, hovered, Measure, NavTail, RowStatus, ThreadRow, TEXT_W};
 
 /// A Thread's pull request as its card's chip reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -327,7 +327,7 @@ fn over_column(fill: u32) -> Hsla {
 
 /// The ground under a card's text: the active fill, or the column blended
 /// toward the hover fill as far as the pointer has brought it.
-fn card_ground(key: &SharedString, active: bool, picked: bool) -> Hsla {
+pub(super) fn card_ground(key: &SharedString, active: bool, picked: bool) -> Hsla {
     if active {
         return over_column(NAV_CARD_ACTIVE);
     }
@@ -362,18 +362,10 @@ pub(crate) fn card_hover(
     }
 }
 
-/// The blend key a card's hover reads, scoped by the Group it is listed
-/// under (`NavCursor::thread` mirrors it).
-pub(crate) fn card_key(
-    thread: ThreadId,
-    group: Option<ferrite_core::groups::GroupId>,
-) -> SharedString {
-    format!(
-        "nav-thread-{}-{}",
-        group.map_or(0, ferrite_core::groups::GroupId::get),
-        thread.get()
-    )
-    .into()
+/// The blend key a Thread's row's hover reads, its card's or its slim
+/// row's (`NavCursor::thread` mirrors it).
+pub(crate) fn card_key(thread: ThreadId) -> SharedString {
+    format!("nav-thread-{}", thread.get()).into()
 }
 
 /// What the cockpit wires into a card.
@@ -392,27 +384,55 @@ pub struct CardDoors {
 }
 
 /// A Thread's card. `title` is the title's leaf (the cockpit hands in a
-/// rename target, or the live field while renaming: `editing`). `place`
-/// moves its content in under a Group; `group` scopes its blend.
+/// rename target, or the live field while renaming: `editing`).
 pub fn thread_card(
     row: &ThreadRow,
     title: impl IntoElement,
     doors: CardDoors,
-    place: RowPlace,
-    group: Option<ferrite_core::groups::GroupId>,
     editing: bool,
     measure: &Measure,
 ) -> Stateful<Div> {
+    card(row, title, doors, editing, measure, true)
+}
+
+/// A card that has left the list, as it was last drawn, for its ghost to
+/// fade (`flip::ListMotion`): no doors, no hover, and none of a live
+/// card's ids or selectors, so nothing addresses it.
+pub fn ghost_card(row: &ThreadRow, measure: &Measure) -> Stateful<Div> {
+    card(row, row.name.clone(), CardDoors::default(), false, measure, false)
+}
+
+/// `debug_selector(name-thread)` on a live card's part; nothing on a
+/// ghost's.
+fn tag<E: Styled>(element: E, live: bool, name: &'static str, thread: ThreadId) -> E
+where
+    E: gpui::InteractiveElement,
+{
+    if live {
+        element.debug_selector(move || format!("{name}-{}", thread.get()))
+    } else {
+        element
+    }
+}
+
+fn card(
+    row: &ThreadRow,
+    title: impl IntoElement,
+    doors: CardDoors,
+    editing: bool,
+    measure: &Measure,
+    live: bool,
+) -> Stateful<Div> {
     let thread = row.thread;
-    let key = card_key(thread, group);
-    // The shown Group's row carries the selection: its focused member
-    // says so in its title alone.
-    let active = row.selected && !matches!(place, RowPlace::Member(_));
-    let hover = motion::hover_t(&key);
+    let key = card_key(thread);
+    let active = row.selected;
+    let hover = if live { motion::hover_t(&key) } else { 0.0 };
     #[cfg(test)]
-    super::testing::DRAWN_HOVER.with(|drawn| drawn.borrow_mut().insert(key.clone(), hover));
+    if live {
+        super::testing::DRAWN_HOVER.with(|drawn| drawn.borrow_mut().insert(key.clone(), hover));
+    }
     let lit = !editing && (hover > 0.0 || doors.strip_held);
-    let text_w = place.text_w();
+    let text_w = TEXT_W;
     let checkout = row.has_checkout();
     let logo_w = row
         .provider
@@ -425,7 +445,7 @@ pub fn thread_card(
             cut_ground(measure, &row.name, FS_NAV_TITLE, weight, title_w, ground)
         })
         .flatten();
-    let opacity = if row.dims_whole() {
+    let opacity = if row.dims_whole() && live {
         motion::lerp(
             NAV_CARD_RECEDED_OPACITY,
             1.0,
@@ -435,17 +455,19 @@ pub fn thread_card(
         1.0
     };
     #[cfg(test)]
-    super::testing::DRAWN_CARDS.with(|drawn| {
+    if live {
+        super::testing::DRAWN_CARDS.with(|drawn| {
         drawn.borrow_mut().insert(
             thread,
             super::testing::DrawnCard {
                 receded: row.receded(),
                 opacity,
                 title: (ink, weight),
-                strip: lit && doors.strip.is_some(),
-            },
-        )
-    });
+                    strip: lit && doors.strip.is_some(),
+                },
+            )
+        });
+    }
     let rest = if row.picked {
         NAV_CARD_SELECTED
     } else {
@@ -469,11 +491,10 @@ pub fn thread_card(
             ferrite_core::clock::instant(),
             ferrite_core::clock::system_time(),
         )
-        .map(|label| status_face(thread, &label).into_any_element())
+        .map(|label| status_face(thread, &label, live).into_any_element())
         .unwrap_or_else(|| div().into_any_element()),
     };
-    let line1 = div()
-        .debug_selector(move || format!("nav-card-line1-{}", thread.get()))
+    let line1 = tag(div(), live, "nav-card-line1", thread)
         .flex()
         .items_center()
         .flex_shrink_0()
@@ -486,8 +507,7 @@ pub fn thread_card(
                 .map(|project| ferrite_ui::project_badge::project_badge(project)),
         )
         .child(
-            div()
-                .debug_selector(move || format!("nav-card-project-{}", thread.get()))
+            tag(div(), live, "nav-card-project", thread)
                 .flex_1()
                 .min_w_0()
                 .truncate()
@@ -495,14 +515,13 @@ pub fn thread_card(
                 .text_color(rgb(INK_SECONDARY_LABEL))
                 .children(row.project.clone()),
         )
-        .children(row.pinned.then(|| {
+        .children((row.pinned && live).then(|| {
             doors
                 .pin
                 .unwrap_or_else(|| pin_glyph(thread, false).into_any_element())
         }))
         .child(
-            div()
-                .debug_selector(move || format!("nav-card-status-{}", thread.get()))
+            tag(div(), live, "nav-card-status", thread)
                 .flex()
                 .flex_shrink_0()
                 .justify_end()
@@ -512,8 +531,7 @@ pub fn thread_card(
                 .child(slot),
         );
     let logo = || row.provider.map(provider_logo);
-    let line2 = div()
-        .debug_selector(move || format!("nav-card-line2-{}", thread.get()))
+    let line2 = tag(div(), live, "nav-card-line2", thread)
         .flex()
         .items_center()
         .flex_shrink_0()
@@ -521,9 +539,13 @@ pub fn thread_card(
         .h(px(NAV_CARD_LINE2_H))
         .gap(px(NAV_CARD_GAP))
         .child(
-            fitted_in(title_w, FS_NAV_TITLE, ink, weight, title, ground)
-                .debug_selector(move || format!("nav-title-{}", thread.get()))
-                .when(row.retitling, |title| {
+            tag(
+                fitted_in(title_w, FS_NAV_TITLE, ink, weight, title, ground),
+                live,
+                "nav-title",
+                thread,
+            )
+            .when(row.retitling, |title| {
                     title.opacity(NAV_CARD_RETITLING_OPACITY)
                 }),
         )
@@ -545,8 +567,7 @@ pub fn thread_card(
                 measure.ui(text, FS_NAV_META, W_BODY) <= branch_w
             })
         });
-        div()
-            .debug_selector(move || format!("nav-card-line3-{}", thread.get()))
+        tag(div(), live, "nav-card-line3", thread)
             .flex()
             .items_center()
             .flex_shrink_0()
@@ -557,6 +578,10 @@ pub fn thread_card(
             .line_height(px(NAV_CARD_LINE3_H))
             .text_color(rgb(INK_SECONDARY_LABEL))
             .children(row.worktree.clone().map(|path| {
+                let glyph = icon(icons::FOLDER_GIT, NAV_CHECKOUT_GLYPH, INK_SUBTLE);
+                if !live {
+                    return div().flex_shrink_0().child(glyph).into_any_element();
+                }
                 let tip = match &row.branch {
                     Some(branch) => format!("Worktree: {path} ({branch})"),
                     None => format!("Worktree: {path}"),
@@ -565,19 +590,19 @@ pub fn thread_card(
                     .id(("nav-card-worktree", thread.get() as usize))
                     .debug_selector(move || format!("nav-card-worktree-{}", thread.get()))
                     .flex_shrink_0()
-                    .tooltip(ferrite_ui::menu::tooltip(tip))
-                    .child(icon(icons::FOLDER_GIT, NAV_CHECKOUT_GLYPH, INK_SUBTLE))
+                    .nav_tooltip(tip)
+                    .child(glyph)
+                    .into_any_element()
             }))
             .children(branch.map(|branch| {
-                div()
-                    .debug_selector(move || format!("nav-card-branch-{}", thread.get()))
+                tag(div(), live, "nav-card-branch", thread)
                     .min_w_0()
                     .flex_shrink(1.)
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .child(branch)
             }))
-            .children(row.pr.as_ref().map(|pr| {
+            .children(row.pr.as_ref().filter(|_| live).map(|pr| {
                 doors
                     .pr
                     .unwrap_or_else(|| pr_chip(thread, pr).into_any_element())
@@ -591,9 +616,15 @@ pub fn thread_card(
                     .children(logo()),
             )
     });
-    div()
-        .id(("nav-thread", thread.get() as usize))
-        .debug_selector(move || format!("nav-thread-{}", thread.get()))
+    let frame = if live {
+        div()
+            .id(("nav-thread", thread.get() as usize))
+            .debug_selector(move || format!("nav-thread-{}", thread.get()))
+            .on_hover(card_hover(key, row.dims_whole()))
+    } else {
+        div().id(("nav-ghost", thread.get() as usize))
+    };
+    frame
         .relative()
         .flex()
         .flex_col()
@@ -606,15 +637,13 @@ pub fn thread_card(
         }))
         .pt(px(NAV_CARD_PAD_Y))
         .pb(px(NAV_CARD_PAD_Y))
-        .pl(px(place.title_x()))
-        .pr(px(NAV_ROW_PAD_X))
+        .px(px(NAV_ROW_PAD_X))
         .rounded(px(R_CONTROL))
         .overflow_hidden()
         .whitespace_nowrap()
         .line_height(px(NAV_CARD_LINE1_H))
         .when_some(fill, |card, fill: Hsla| card.bg(fill))
         .when(opacity < 1.0, |card| card.opacity(opacity))
-        .on_hover(card_hover(key, row.dims_whole()))
         .child(line1)
         .child(line2)
         .children(line3)
@@ -622,9 +651,8 @@ pub fn thread_card(
 
 /// The status slot's label: its glyph, then its words in tabular
 /// figures, in the state's ink.
-fn status_face(thread: ThreadId, label: &StatusLabel) -> Div {
-    div()
-        .debug_selector(move || format!("nav-state-{}", thread.get()))
+fn status_face(thread: ThreadId, label: &StatusLabel, live: bool) -> Div {
+    tag(div(), live, "nav-state", thread)
         .flex()
         .items_center()
         .gap(px(NAV_STATUS_GAP))
@@ -708,7 +736,7 @@ pub fn snooze_button(thread: ThreadId) -> Stateful<Div> {
         INK_SUBTLE
     };
     strip_button(key, format!("nav-card-snooze-{}", thread.get()))
-        .tooltip(ferrite_ui::menu::tooltip("Snooze thread"))
+        .nav_tooltip("Snooze thread")
         .child(icon(icons::CLOCK, NAV_SNOOZE_GLYPH, ink))
 }
 
@@ -724,7 +752,7 @@ pub fn park_button(thread: ThreadId) -> Stateful<Div> {
     strip_button(key, format!("nav-card-park-{}", thread.get()))
         .gap(px(SPACE_1))
         .mr(px(-NAV_PARK_PULL))
-        .tooltip(ferrite_ui::menu::tooltip("Park thread"))
+        .nav_tooltip("Park thread")
         .child(icon(icons::CHECK, NAV_PARK_GLYPH, ink))
         .child("Park")
 }

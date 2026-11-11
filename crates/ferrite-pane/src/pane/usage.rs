@@ -54,6 +54,43 @@ pub fn plan_usage_ring(
     Some(if held { popover.open(true) } else { popover })
 }
 
+/// A plan-usage card opened from `trigger` (the nav foot's Usage button):
+/// the ring's popover, rising from the trigger's top-left corner.
+pub fn plan_usage_popover(
+    id: impl Into<gpui::ElementId>,
+    trigger: impl IntoElement,
+    limits: RateLimits,
+) -> impl IntoElement {
+    let now = ferrite_core::clock::system_time();
+    gpui::component::popover::Popover::new(id)
+        .appearance(false)
+        .anchor(gpui::Anchor::BottomLeft)
+        .bottom(px(theme::USAGE_POP_OFFSET))
+        .trigger(PlainTrigger(trigger.into_any_element()))
+        .content(move |_, _, _| plan_usage_card(limits, None, now))
+}
+
+/// A popover's trigger drawn as it is, never in the kit's selected face.
+struct PlainTrigger(gpui::AnyElement);
+
+impl gpui::component::Selectable for PlainTrigger {
+    fn selected(self, _: bool) -> Self {
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        false
+    }
+}
+
+impl IntoElement for PlainTrigger {
+    type Element = gpui::AnyElement;
+
+    fn into_element(self) -> Self::Element {
+        self.0
+    }
+}
+
 /// The ring's reading: the fullest window reported, or None.
 pub fn plan_usage_fraction(limits: RateLimits) -> Option<f32> {
     plan_windows(limits)
