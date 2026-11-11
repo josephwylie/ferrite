@@ -287,6 +287,7 @@ pub fn launch() {
                                 version: env!("CARGO_PKG_VERSION").into(),
                             },
                             renderer: Some(renderer),
+                            driven: false,
                             defaults: defaults.clone(),
                             bridge: ferrite_core::machine::Bridge::ssh,
                         },

@@ -140,6 +140,9 @@ pub enum Code {
     Timeout,
     /// The Thread closed (parked or deleted) while the wait ran.
     ThreadClosed,
+    /// No `ferrite --headless` window is attached to take a `window.*`
+    /// action.
+    NoHeadlessWindow,
     AlreadyAnswered,
     InvalidAnswer,
     Failed,
