@@ -29,11 +29,13 @@ use crate::store::Provider;
 use crate::workspace::registry::ProjectId;
 use crate::ThreadId;
 
+mod direct;
 mod workflow;
 
+pub use direct::{Answered, Feedback, FeedbackKind, Override, Oversight, Question, ThenReturn};
 pub use workflow::{
-    Catalog, Definition, Destination, Problem, Resolved, RouteKind, Step, StepChange, StepId,
-    Template, Version, Workflow, WorkflowId,
+    Approval, ApprovalChange, Approver, Catalog, Definition, Destination, Problem, Resolved,
+    RouteKind, Step, StepChange, StepId, Template, Version, Workflow, WorkflowId,
 };
 
 /// A Task's id: `t-<n>`, never given twice by one Server. A Worker's
@@ -183,6 +185,9 @@ pub struct Task {
     /// Each visited Step's Worker, which a return to it continues.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workers: Vec<StepWorker>,
+    /// Questions, answers, feedback, approval and this Task's direction.
+    #[serde(flatten)]
+    pub oversight: Oversight,
 }
 
 /// The version of a Workflow a Task keeps.
@@ -280,6 +285,10 @@ impl Board {
 pub enum Outcome {
     Finished { summary: String },
     Unable { tried: String },
+    /// The deciding agent approves.
+    Approved { summary: String },
+    /// The deciding agent does not, and why.
+    Rejected { reasons: String },
 }
 
 /// Every change, whoever asks.
@@ -363,6 +372,38 @@ pub enum Command {
     Delete {
         task: TaskId,
     },
+    /// A Worker asks the operator, known by its own Thread.
+    Ask {
+        worker: ThreadId,
+        text: String,
+    },
+    /// The operator answers the question waiting (that one, when
+    /// `question` names it).
+    AnswerQuestion {
+        task: TaskId,
+        text: String,
+        question: Option<u64>,
+    },
+    /// The operator approves what is Ready to approve.
+    Approve {
+        task: TaskId,
+    },
+    /// Rework with `feedback`, to `to` (the Workflow's recipient when
+    /// none).
+    Rework {
+        task: TaskId,
+        feedback: String,
+        to: Option<Destination>,
+    },
+    /// One Task's direction; the saved Workflow is unchanged.
+    Redirect {
+        task: TaskId,
+        direction: Override,
+    },
+    EditApproval {
+        workflow: WorkflowId,
+        change: ApprovalChange,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -412,7 +453,7 @@ impl std::fmt::Display for Refusal {
 }
 
 /// What the Server tells the step of one Worker's Thread.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Seen {
     /// Not at rest: Main, a Subagent or a background task working, a
     /// prompt held for its starting Session, or a Decision waiting.
@@ -420,6 +461,8 @@ pub struct Seen {
     /// A count that grows each time one of its turns ends (its
     /// `completion_seq`; 0 before its first).
     pub turns: u64,
+    /// A Provider Decision waiting in its Session, as it reads.
+    pub decision: Option<String>,
 }
 
 /// What the Server carries out, in order.
@@ -616,7 +659,9 @@ fn not_a_worker() -> Refusal {
 impl Task {
     /// `thread` is one of its Workers, current or not.
     pub fn had_worker(&self, thread: ThreadId) -> bool {
-        self.worker == Some(thread) || self.workers.iter().any(|each| each.thread == thread)
+        self.worker == Some(thread)
+            || self.workers.iter().any(|each| each.thread == thread)
+            || self.oversight.superseded.contains(&thread)
     }
 
     /// The Step it is at, in the version it keeps.
@@ -700,6 +745,7 @@ impl State {
                     draft: Definition {
                         name: String::new(),
                         steps: Vec::new(),
+                        approval: Approval::default(),
                     },
                     versions: Vec::new(),
                     next_step: 1,
@@ -766,6 +812,12 @@ impl State {
                     .ok_or_else(unknown_step)?;
                 steps.remove(at);
                 Ok(Answer::Changed(true))
+            }
+            Command::EditApproval { workflow, change } => {
+                let approval = &mut self.workflow_mut(&workflow)?.draft.approval;
+                let before = approval.clone();
+                change.apply(approval);
+                Ok(Answer::Changed(*approval != before))
             }
             Command::SaveWorkflow { workflow, catalog } => {
                 let made = self.workflow_mut(&workflow)?;
@@ -880,6 +932,7 @@ impl State {
                     workflow: run,
                     results: Vec::new(),
                     workers: Vec::new(),
+                    oversight: Oversight::default(),
                 };
                 let started = match &task.workflow {
                     Some(run) => format!(
@@ -929,13 +982,14 @@ impl State {
                 let task = self.worker_task(worker)?;
                 // A Worker no longer at its Task's Step (one Step runs at
                 // a time) reports into the past.
-                if task.status != Status::Working || task.worker != Some(worker) {
+                if !task.running() || task.worker != Some(worker) {
                     return Ok(Answer::Changed(false));
                 }
                 if task.workflow.is_some() {
-                    route(task, outcome, now_ms, effects);
+                    direct::reported(task, outcome, now_ms, effects)?;
                     return Ok(Answer::Changed(true));
                 }
+                task.oversight.permission = None;
                 match outcome {
                     Outcome::Finished { summary } => {
                         task.note(now_ms, Actor::Agent, format!("Finished: {summary}"));
@@ -948,13 +1002,23 @@ impl State {
                         task.reason = Some(tried);
                         task.enter(Status::NeedsHuman, effects);
                     }
+                    Outcome::Approved { .. } | Outcome::Rejected { .. } => {
+                        return Err(Refusal::new(
+                            RefusalCode::Invalid,
+                            "this agent is not deciding an approval: report finished or unable",
+                        ))
+                    }
                 }
                 Ok(Answer::Changed(true))
             }
             Command::OperatorSaid { worker, text } => {
                 let task = self.worker_task(worker)?;
                 task.note(now_ms, Actor::Operator, text);
-                if matches!(task.status, Status::NeedsHuman | Status::Stopped) {
+                // Said in the Worker, it is the answer to its question.
+                task.oversight.question = None;
+                if matches!(task.status, Status::NeedsHuman | Status::Stopped)
+                    && task.oversight.permission.is_none()
+                {
                     task.reason = None;
                     task.enter(Status::Working, effects);
                 }
@@ -971,6 +1035,8 @@ impl State {
                 }
                 task.note(now_ms, Actor::Operator, "Stopped the task");
                 task.reason = Some("Stopped by you".into());
+                task.oversight.question = None;
+                task.oversight.permission = None;
                 if let Some(thread) = task.worker {
                     effects.push(Effect::Interrupt { thread });
                 }
@@ -1027,6 +1093,24 @@ impl State {
                 }
                 Ok(Answer::Changed(true))
             }
+            Command::Ask { worker, text } => {
+                let task = self.worker_task(worker)?;
+                direct::ask(task, worker, text, now_ms, effects)
+            }
+            Command::AnswerQuestion {
+                task,
+                text,
+                question,
+            } => direct::answer(self.task_mut(&task)?, text, question, now_ms, effects),
+            Command::Approve { task } => {
+                direct::approve_command(self.task_mut(&task)?, now_ms, effects)
+            }
+            Command::Rework { task, feedback, to } => {
+                direct::rework(self.task_mut(&task)?, feedback, to, now_ms, effects)
+            }
+            Command::Redirect { task, direction } => {
+                direct::redirect(self.task_mut(&task)?, direction, now_ms, effects)
+            }
             authoring => self.author(authoring, now_ms),
         }
     }
@@ -1055,11 +1139,21 @@ impl State {
                     }
                     task.enter(Status::Working, effects);
                 }
-                Status::Working => {
+                Status::Working | Status::NeedsHuman => {
                     let Some(seen) = task.worker.and_then(|thread| workers.get(&thread)) else {
                         continue;
                     };
-                    at_rest_rule(task, *seen, now_ms, effects);
+                    if direct::permission(
+                        task,
+                        seen.decision.as_deref(),
+                        seen.turns,
+                        now_ms,
+                        effects,
+                    ) || task.status != Status::Working
+                    {
+                        continue;
+                    }
+                    at_rest_rule(task, seen, now_ms, effects);
                 }
                 _ => {}
             }
@@ -1067,87 +1161,42 @@ impl State {
     }
 }
 
-/// A Workflow Task's Worker reported: record it and follow the Step's
-/// route. Moving on between Steps is silent; an end is told.
-fn route(task: &mut Task, outcome: Outcome, now_ms: i64, effects: &mut Vec<Effect>) {
-    let Some(step) = task.current_step().cloned() else {
-        return;
-    };
-    let (said, route, text) = match &outcome {
-        Outcome::Finished { summary } => ("finished", &step.on_finished, summary.clone()),
-        Outcome::Unable { tried } => ("could not finish", &step.on_unable, tried.clone()),
-    };
-    task.note(
-        now_ms,
-        Actor::Agent,
-        format!("{} {said}: {text}", step.name),
-    );
-    task.results.push(StepResult {
-        step: step.id.clone(),
-        name: step.name.clone(),
-        outcome: outcome.clone(),
-    });
-    let definition = task
-        .workflow
-        .as_ref()
-        .map(|run| run.definition.clone())
-        .unwrap_or_else(|| Definition {
-            name: String::new(),
-            steps: Vec::new(),
-        });
-    match definition.resolve(&step.id, route) {
-        Resolved::Step(next) => {
-            let next = next.clone();
-            task.step = Some(next.id.clone());
-            task.agent = next.agent.clone();
-            task.reason = None;
-            task.watch = Watch::default();
-            let earlier = task
-                .workers
-                .iter()
-                .find(|each| each.step == next.id)
-                .map(|each| each.thread);
-            match earlier {
-                Some(thread) if !next.fresh => {
-                    task.note(
-                        now_ms,
-                        Actor::Ferrite,
-                        format!("Back to {}: its agent continues", next.name),
-                    );
-                    task.worker = Some(thread);
-                    task.watch.prompt = Some(return_prompt(task, &next));
-                }
-                Some(old) => {
-                    effects.push(Effect::Park { thread: old });
-                    task.workers.retain(|each| each.step != next.id);
-                    start_step(task, &next, now_ms, effects);
-                }
-                None => start_step(task, &next, now_ms, effects),
-            }
+/// Move the Task to `step` and run it: its earlier Worker continues
+/// (unless the Step starts fresh every time), else a new one starts.
+/// `deciding`, the run decides an approval.
+fn enter_step(
+    task: &mut Task,
+    step: &Step,
+    deciding: bool,
+    now_ms: i64,
+    effects: &mut Vec<Effect>,
+) {
+    task.step = Some(step.id.clone());
+    task.agent = step.agent.clone();
+    task.reason = None;
+    task.oversight.deciding = deciding;
+    task.enter(Status::Working, effects);
+    let earlier = task
+        .workers
+        .iter()
+        .find(|each| each.step == step.id)
+        .map(|each| each.thread);
+    match earlier {
+        Some(thread) if !step.fresh => {
+            task.note(
+                now_ms,
+                Actor::Ferrite,
+                format!("Back to {}: its agent continues", step.name),
+            );
+            task.worker = Some(thread);
+            task.watch.prompt = Some(return_prompt(task, step));
         }
-        Resolved::Complete => {
-            task.result = Some(text);
-            task.reason = None;
-            task.enter(Status::Completed, effects);
+        Some(old) => {
+            effects.push(Effect::Park { thread: old });
+            task.workers.retain(|each| each.step != step.id);
+            start_step(task, step, now_ms, effects);
         }
-        Resolved::Human => {
-            task.reason = Some(text);
-            task.enter(Status::NeedsHuman, effects);
-        }
-        Resolved::Coordinator => {
-            task.reason = Some(format!(
-                "{} {said} and routes to the Coordinator, which this Ferrite does not run                  yet: {text}",
-                step.name
-            ));
-            task.enter(Status::NeedsHuman, effects);
-        }
-        Resolved::Broken => {
-            task.reason = Some(format!(
-                "{}'s route leads to an agent that is not in this version: {text}",
-                step.name
-            ));
-            task.enter(Status::NeedsHuman, effects);
-        }
+        None => start_step(task, step, now_ms, effects),
     }
 }
 
@@ -1174,7 +1223,7 @@ fn start_step(task: &mut Task, step: &Step, now_ms: i64, effects: &mut Vec<Effec
 /// for has ended, it is asked once to report; at rest again after that
 /// turn (or still, after a grace), its Task needs the operator. A busy
 /// Worker is never asked.
-fn at_rest_rule(task: &mut Task, seen: Seen, now_ms: i64, effects: &mut Vec<Effect>) {
+fn at_rest_rule(task: &mut Task, seen: &Seen, now_ms: i64, effects: &mut Vec<Effect>) {
     let Some(thread) = task.worker else {
         return;
     };
@@ -1273,6 +1322,8 @@ pub fn agent_label(agent: &Agent) -> String {
 
 /// How a Worker reports: the `ferrite` its Session was given.
 const REPORT: &str = "\"${FERRITE_BIN:-ferrite}\" report outcome";
+/// How a Worker asks the operator.
+const QUESTION: &str = "\"${FERRITE_BIN:-ferrite}\" report question";
 
 fn first_prompt(task: &Task) -> String {
     format!(
@@ -1280,8 +1331,8 @@ fn first_prompt(task: &Task) -> String {
          `{branch}`.\n\n{instructions}\n\nWhen you are done, report the outcome with one \
          command:\n\n    {REPORT} finished \"<one line: what you did>\"\n\nIf you cannot \
          finish, report what you tried:\n\n    {REPORT} unable \"<what you tried and what \
-         stopped you>\"\n\nThe outcome is read only from that command, never from your \
-         messages.",
+         stopped you>\"\n\n{ASKING}\n\nThe outcome is read only from that command, never \
+         from your messages.",
         id = task.id,
         branch = task.branch,
         instructions = task.instructions,
@@ -1294,15 +1345,42 @@ const REPORTING: &str = "When you are done, report the outcome with one command:
      unable \"<what you tried and what stopped you>\"\n\nThe outcome is read only from that \
      command, never from your messages.";
 
+const ASKING: &str = "If you need the operator to decide something before you can go on, ask \
+     them and end your turn; the task waits for their answer:\n\n    \
+     \"${FERRITE_BIN:-ferrite}\" report question \"<your question>\"";
+
+/// How the current run is to report: its outcome, or (deciding an
+/// approval) its decision.
+fn reporting(task: &Task, step: &Step) -> String {
+    if task.oversight.deciding {
+        format!(
+            "{}\nIf you cannot decide, report what stopped you and the operator decides:\n\n    \
+             {REPORT} unable \"<what stopped you>\"",
+            direct::decision_section(task)
+        )
+    } else if task.decides_in_own_run(step) {
+        format!(
+            "When your work is done, you also decide its approval.\n\n{}\nIf you cannot \
+             finish, report what you tried:\n\n    {REPORT} unable \"<what you tried>\"",
+            direct::decision_section(task)
+        )
+    } else {
+        format!("{REPORTING}\n\n{ASKING}")
+    }
+}
+
 fn said(result: &StepResult) -> String {
     match &result.outcome {
         Outcome::Finished { summary } => format!("- {} finished: {summary}", result.name),
         Outcome::Unable { tried } => format!("- {} could not finish: {tried}", result.name),
+        Outcome::Approved { summary } => format!("- {} approved: {summary}", result.name),
+        Outcome::Rejected { reasons } => format!("- {} did not approve: {reasons}", result.name),
     }
 }
 
 /// A Step's Worker's first prompt: who it is, its instructions and
-/// skills, the Task's request and what the Steps before it reported.
+/// skills, the Task's request, what the Steps before it reported, the
+/// operator's answers and feedback, and how to report.
 fn step_prompt(task: &Task, step: &Step) -> String {
     let mut prompt = format!(
         "You are the \"{name}\" agent on Ferrite Factory task {id}, working in the task's own \
@@ -1324,13 +1402,15 @@ fn step_prompt(task: &Task, step: &Step) -> String {
         let earlier: Vec<String> = task.results.iter().map(said).collect();
         prompt.push_str(&format!("\n## Earlier results\n\n{}\n", earlier.join("\n")));
     }
+    prompt.push_str(&direct::said_since(task, 0, true));
     prompt.push('\n');
-    prompt.push_str(REPORTING);
+    prompt.push_str(&reporting(task, step));
     prompt
 }
 
 /// What a continued Worker is told when the Task returns to its Step:
-/// what the other Steps reported since it last did.
+/// what the other Steps reported and the feedback given since it last
+/// reported.
 fn return_prompt(task: &Task, step: &Step) -> String {
     let last_own = task
         .results
@@ -1338,11 +1418,32 @@ fn return_prompt(task: &Task, step: &Step) -> String {
         .rposition(|result| result.step == step.id)
         .map_or(0, |at| at + 1);
     let news: Vec<String> = task.results[last_own..].iter().map(said).collect();
+    let news = if news.is_empty() {
+        "- Nothing new was reported.".to_string()
+    } else {
+        news.join("\n")
+    };
     format!(
-        "The task is back with you, \"{name}\". Since you last reported:\n\n{news}\n\n\
-         Continue with your instructions in light of that.\n\n{REPORTING}",
+        "The task is back with you, \"{name}\". Since you last reported:\n\n{news}\n{said}\n\
+         Continue with your instructions in light of that.\n\n{reporting}",
         name = step.name,
-        news = news.join("\n"),
+        said = direct::said_since(task, last_own, false),
+        reporting = reporting(task, step),
+    )
+}
+
+/// What the asker is told once the operator answers.
+fn answer_prompt(task: &Task, question: &str, answer: &str) -> String {
+    let reporting = match task.current_step() {
+        Some(step) => reporting(task, step),
+        None => format!(
+            "When you are done, report the outcome with `{REPORT} finished \"<what you did>\"`, \
+             or `{REPORT} unable \"<what you tried>\"`."
+        ),
+    };
+    format!(
+        "The operator answered your question.\n\nYou asked: {question}\n\nTheir answer: \
+         {answer}\n\nContinue with your instructions in light of that.\n\n{reporting}"
     )
 }
 

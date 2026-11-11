@@ -53,6 +53,17 @@ fn done(answer: Answer) -> Done {
     }
 }
 
+/// A Provider Decision as a Task says it: the Provider's own summary,
+/// else the tool it gates.
+fn decision_line(decision: &crate::protocol::WireDecision) -> String {
+    let said = decision.description.trim();
+    if said.is_empty() {
+        decision.tool_name.clone()
+    } else {
+        said.to_string()
+    }
+}
+
 /// A one-off Task's Worker: the operator's default Provider, its model
 /// and Effort.
 pub(super) fn default_agent(settings: &Settings) -> Agent {
@@ -92,6 +103,7 @@ impl Server {
 
     /// What each open Worker's Thread is doing.
     fn factory_workers(&self) -> BTreeMap<ThreadId, Seen> {
+        let decisions = self.engine.unanswered_decisions();
         self.factory
             .board()
             .tasks
@@ -104,7 +116,20 @@ impl Server {
                     || self.engine.holds_prompt(thread)
                     || view.starting();
                 let turns = self.engine.completion_seq(thread).unwrap_or(0);
-                Some((thread, Seen { busy, turns }))
+                // A Provider Decision in its Session is the Task's to
+                // answer (#222), never the Inbox's.
+                let decision = decisions
+                    .iter()
+                    .find(|pending| pending.thread == thread)
+                    .map(|pending| decision_line(&pending.decision));
+                Some((
+                    thread,
+                    Seen {
+                        busy,
+                        turns,
+                        decision,
+                    },
+                ))
             })
             .collect()
     }

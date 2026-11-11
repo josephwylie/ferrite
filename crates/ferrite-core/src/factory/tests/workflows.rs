@@ -374,7 +374,7 @@ fn a_draft_with_problems_lists_them_all_and_cannot_be_saved_or_run() {
             "Name this agent.",
             "An unnamed agent has no instructions.",
             "An unnamed agent: claude-model is not available from Claude. Choose a model.",
-            "No route ends in Completed. Route an outcome to Completed.",
+            "No route ends in Completed. Route an outcome to Completed, or set After approval to mark the task complete.",
         ]
     );
     // Flagged, never replaced.
@@ -596,6 +596,7 @@ fn a_returning_task_continues_or_starts_fresh() {
             Seen {
                 busy: false,
                 turns: 1,
+                decision: None,
             },
         )]),
     );
@@ -714,3 +715,5 @@ fn workflows_survive_a_reload() {
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+mod direction;
