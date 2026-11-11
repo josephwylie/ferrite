@@ -815,13 +815,14 @@ fn is_code(style: &HighlightStyle) -> bool {
 /// `code_pad` element either side of each code run in it. The wrapper
 /// measures in the prose face alone, so each code word goes in as an
 /// element of its width in the code face, and each code space as a prose
-/// space plus the difference.
+/// space plus the difference. A code word wider than the line stays text,
+/// so the wrapper can still break inside it.
 fn text_wrap_fragments<'a>(
     text: &'a str,
     highlights: &[(Range<usize>, HighlightStyle)],
     range: Range<usize>,
     code_pad: Pixels,
-    code_width: &mut impl FnMut(&str, &HighlightStyle) -> Pixels,
+    code_width: &mut impl FnMut(&str, &HighlightStyle) -> Option<Pixels>,
     space_width: Pixels,
 ) -> Vec<WrapLineFragment<'a>> {
     let mut fragments = Vec::new();
@@ -844,11 +845,15 @@ fn text_wrap_fragments<'a>(
         for piece in text[start..end].split_inclusive(' ') {
             let word = piece.trim_end_matches(' ');
             if !word.is_empty() {
-                fragments.push(WrapLineFragment::element(code_width(word, style), word.len()));
+                fragments.push(match code_width(word, style) {
+                    Some(width) => WrapLineFragment::element(width, word.len()),
+                    None => WrapLineFragment::text(word),
+                });
             }
             for _ in word.len()..piece.len() {
                 fragments.push(WrapLineFragment::text(" "));
-                fragments.push(WrapLineFragment::element(code_width(" ", style) - space_width, 0));
+                let width = code_width(" ", style).unwrap_or(space_width);
+                fragments.push(WrapLineFragment::element(width - space_width, 0));
             }
         }
         if code_pad > Pixels::ZERO && code.end <= range.end {
@@ -908,7 +913,7 @@ fn line_ranges(
         if let Some(family) = code_font {
             run.font.family = family.clone();
         }
-        shaped_width(text, run)
+        Some(shaped_width(text, run)).filter(|width| *width <= wrap_width)
     };
     let mut ranges = Vec::new();
 
