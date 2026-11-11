@@ -25,11 +25,6 @@ use crate::workspace::registry::ProjectId;
 use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
 use crate::{Attention, ThreadId, ThreadOwner};
 
-/// Wall-clock milliseconds, as the Factory's activity is stamped.
-pub(super) fn now_ms() -> i64 {
-    crate::clock::now().timestamp_millis()
-}
-
 /// The Factory kept in the Store's directory. One whose file cannot be
 /// read says so on the board and in every refusal, and does nothing: it
 /// is never started afresh over the Tasks it holds, nor written (#226).
@@ -81,8 +76,8 @@ pub(super) fn default_agent(settings: &Settings) -> Agent {
 }
 
 impl Server {
-    /// The Factory's time now.
-    fn now_ms(&self) -> i64 {
+    /// The Factory's time now: its one clock, which tests script.
+    pub(super) fn now_ms(&self) -> i64 {
         (self.clock)()
     }
 
@@ -229,7 +224,7 @@ impl Server {
             Effect::Tidy { task, path } => {
                 let kept = self.remove_task_worktree(&path);
                 let tidied = Command::WorktreeTidied { task, kept };
-                if let Err(refusal) = self.factory.command(tidied, now_ms()) {
+                if let Err(refusal) = self.factory.command(tidied, self.now_ms()) {
                     crate::log!("server: the Factory did not take a worktree's removal: {refusal}");
                 }
             }

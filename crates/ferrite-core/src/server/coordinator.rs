@@ -34,7 +34,7 @@ impl Server {
             Ok(thread) => Command::CoordinatorStarted { project, thread },
             Err(why) => Command::CoordinatorFailed { project, why },
         };
-        if let Err(refusal) = self.factory.command(command, (self.clock)()) {
+        if let Err(refusal) = self.factory.command(command, self.now_ms()) {
             crate::log!("server: the Factory did not take a Coordinator's start: {refusal}");
         }
     }
@@ -166,7 +166,7 @@ impl Server {
         if self.execute(Op::Revive { thread }).is_ok() && self.engine.thread(thread).is_some() {
             return true;
         }
-        let now = (self.clock)();
+        let now = self.now_ms();
         let gone = Command::CoordinatorFailed {
             project,
             why: "its Thread is gone".into(),

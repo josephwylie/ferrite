@@ -441,7 +441,7 @@ impl Server {
             coordinators_tuned: Default::default(),
             github: Arc::new(github::Gh),
             github_reads: Vec::new(),
-            clock: Arc::new(factory::now_ms),
+            clock: Arc::new(|| crate::clock::now().timestamp_millis()),
         }
     }
 
