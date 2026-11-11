@@ -330,6 +330,9 @@ pub const USAGE_ARC: MotionSpec = spec(theme::MOTION_USAGE_ARC_MS, EASE_OUT_QUAR
 pub const USAGE_INK: MotionSpec = spec(theme::MOTION_USAGE_INK_MS, EASE_OUT_QUART);
 /// A switch's knob.
 pub const SWITCH: MotionSpec = spec(theme::MOTION_SWITCH_MS, EASE_OVERSHOOT);
+/// The model picker rail's pill sliding between providers (T3's
+/// `transition-[top] duration-200 ease-out`).
+pub const RAIL_SLIDE: MotionSpec = spec(theme::MOTION_DUR_BASE_MS, EASE_OUT);
 /// A scrollbar thumb fading out and widening.
 pub const SCROLLBAR_FADE: MotionSpec = spec(theme::MOTION_SCROLLBAR_FADE_MS, EASE_STANDARD);
 /// A board slot sliding in beside its owner, and out again a little
@@ -1927,10 +1930,20 @@ fn press_key(key: &str) -> SharedString {
 /// so the press lands where it rests. Its frames ride the hover blends'
 /// (the view that painted the hover draws them). Reduced motion: no squish.
 pub fn pressable<E: InteractiveElement + Styled>(element: E, key: SharedString) -> E {
+    pressable_lifting(element, key, 1.0)
+}
+
+/// [`pressable`] that also grows to `lift` with `key`'s hover blend.
+pub fn pressable_lifting<E: InteractiveElement + Styled>(
+    element: E,
+    key: SharedString,
+    lift: f32,
+) -> E {
     let pressed = hover_t(&press_key(&key));
+    let hovered = if lift == 1.0 { 0.0 } else { hover_t(&key) };
     let mut element = scaled(
         element,
-        lerp(1.0, theme::MOTION_PRESS_SCALE, pressed),
+        lerp(1.0, lift, hovered) * lerp(1.0, theme::MOTION_PRESS_SCALE, pressed),
         FROM_CENTRE,
     );
     let (down, up, away) = (key.clone(), key.clone(), key);
