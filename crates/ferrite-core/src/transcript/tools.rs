@@ -377,21 +377,17 @@ mod findings_tests {
 
     #[test]
     fn findings_read_from_a_real_report_findings_input() {
-        let line = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/claude-report-findings-2.1.318.jsonl"
-        ))
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-        .find_map(|frame| {
-            frame["message"]["content"]
-                .as_array()?
-                .iter()
-                .find(|block| block["name"] == "ReportFindings")
-                .map(|block| block["input"].clone())
-        })
-        .expect("the capture holds a ReportFindings call");
+        let line = include_str!("../../tests/fixtures/claude-report-findings-2.1.318.jsonl")
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .find_map(|frame| {
+                frame["message"]["content"]
+                    .as_array()?
+                    .iter()
+                    .find(|block| block["name"] == "ReportFindings")
+                    .map(|block| block["input"].clone())
+            })
+            .expect("the capture holds a ReportFindings call");
         let found = findings_of(&line);
         assert_eq!(found.len(), 2);
         assert_eq!((found[0].file.as_str(), found[0].line), ("bad.rs", Some(2)));
