@@ -164,6 +164,17 @@ impl CockpitView {
     }
 
     /// The agent's task, for its tab: its description, else its name.
+    /// Whether agent `key` is working.
+    pub(super) fn agent_running(&self, owner: ThreadId, key: &str) -> bool {
+        let subject = Subject::Subagent(ferrite_core::activity::AgentKey::from_stored(key.to_owned()));
+        self.cockpit.thread(owner).is_some_and(|open| {
+            open.activity()
+                .children()
+                .into_iter()
+                .any(|agent| agent.subject() == subject && agent.status() == ferrite_core::activity::AgentStatus::Working)
+        })
+    }
+
     pub(super) fn agent_title(&self, owner: ThreadId, key: &str) -> SharedString {
         let subject = Subject::Subagent(ferrite_core::activity::AgentKey::from_stored(key.to_owned()));
         self.cockpit

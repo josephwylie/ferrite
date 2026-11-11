@@ -306,6 +306,7 @@ pub const CHEVRON: MotionSpec = spec(theme::MOTION_CHEVRON_MS, EASE_STANDARD);
 pub const RECEDE: MotionSpec = spec(theme::MOTION_RECEDE_MS, EASE_STANDARD);
 /// A nav fold opening and shutting (`fold_body`).
 pub const FOLD: MotionSpec = spec(theme::MOTION_FOLD_MS, EASE_OUT);
+pub const TAB_SCROLL: MotionSpec = spec(theme::MOTION_TAB_SCROLL_MS, EASE_STANDARD);
 /// Jump to latest showing and going.
 pub const JUMP_FADE: MotionSpec = spec(theme::MOTION_JUMP_FADE_MS, EASE_STANDARD);
 /// The usage ring's arc and ink moving to a new reading.

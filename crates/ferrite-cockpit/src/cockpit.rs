@@ -10219,7 +10219,7 @@ impl Render for CockpitView {
         // loops). Each reads what this frame drew, never the clock again: a
         // slide that ended between the draw and here still asks for the one
         // frame that lands it at rest.
-        let sliding = self.reader_slides.moving();
+        let sliding = self.reader_slides.moving() || self.tabs_scrolling(cx);
         let fading = ferrite_ui::motion::hover_fades_active();
         if fading || sliding {
             // A blend is drawn again by the view that paints it alone: a

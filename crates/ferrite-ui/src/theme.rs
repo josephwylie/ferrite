@@ -1011,6 +1011,10 @@ pub const SURFACE_TAB_GAP: f32 = SPACE_0_5;
 pub const SURFACE_TAB_CLOSE: f32 = 16.0;
 pub const SURFACE_TAB_CLOSE_R: f32 = 4.0;
 pub const SURFACE_TAB_ICON: f32 = 12.0;
+/// A tab's pending dot (T3's `size-1.5 -right-0.5 -bottom-0.5`): 6 round,
+/// in the icon's ink at its bottom right, 2 out.
+pub const SURFACE_TAB_DOT: f32 = 6.0;
+pub const SURFACE_TAB_DOT_INSET: f32 = 2.0;
 /// How far a held tab moves sideways before it drags (T3's dnd-kit
 /// distance): a shorter move is a click.
 pub const SURFACE_TAB_DRAG: f32 = 6.0;
@@ -3341,6 +3345,9 @@ pub const MOTION_CHEVRON_MS: u64 = MOTION_DUR_FAST_MS;
 /// the `ease-out` keyword, height and opacity (Claude's
 /// `sidebar-group-expand`).
 pub const MOTION_FOLD_MS: u64 = 150;
+/// The Panel's tab strip easing to where a chevron sent it (T3's smooth
+/// `scrollBy`).
+pub const MOTION_TAB_SCROLL_MS: u64 = 200;
 /// Jump to latest fades in and out over `MOTION_DUR_BASE_MS` on
 /// `MOTION_EASE_STANDARD`, answering no pointer while it goes.
 pub const MOTION_JUMP_FADE_MS: u64 = MOTION_DUR_BASE_MS;

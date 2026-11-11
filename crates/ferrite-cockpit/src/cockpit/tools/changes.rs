@@ -551,7 +551,7 @@ impl CockpitView {
         use theme::*;
         let all_folded = matches!(&changes.load, Load::Read(files)
             if !files.is_empty() && files.iter().all(|file| changes.folded.contains(&file.path)));
-        let mut tool = |key: &'static str, glyph: &'static str, tip: &'static str, on: bool, verb: Verb| {
+        let tool = |key: &'static str, glyph: &'static str, tip: &'static str, on: bool, verb: Verb| {
             div()
                 .id(key)
                 .debug_selector(move || key.into())

@@ -262,11 +262,14 @@ fn the_side_chat_head_brings_back_and_trashes(cx: &mut TestAppContext) {
     tick(cx);
     let blocked = view.read_with(cx, |view, _| view.bring_back_blocked(owner, id));
     assert_eq!(blocked, Some("Available after a finished reply."), "still answering");
+    let dot = format!("panel-tab-SideChat-{id}-pending");
+    assert!(debug_bounds(cx, dot.clone()).is_some(), "its tab's pending dot");
     send(SessionEvent::TurnEnded {
         outcome: ferrite_core::TurnOutcome::Completed,
         cost_usd: None,
     });
     tick(cx);
+    assert!(debug_bounds(cx, dot).is_none(), "answered: no dot");
     assert_eq!(view.read_with(cx, |view, _| view.bring_back_blocked(owner, id)), None);
     let back = cx.debug_bounds("side-chat-bring-back").unwrap();
     cx.simulate_click(back.center(), gpui::Modifiers::none());

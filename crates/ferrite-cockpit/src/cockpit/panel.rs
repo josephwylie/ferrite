@@ -55,8 +55,10 @@ pub(crate) struct Panel {
     /// Each Thread's sections' scroll, so a Thread's Overview comes back
     /// where it was left.
     scrolls: std::collections::HashMap<ThreadId, ScrollHandle>,
-    /// The head row's tabs' own horizontal scroll.
+    /// The head row's tabs' own horizontal scroll, and its ease to where a
+    /// chevron sent it, until the frame that lands it lets it go.
     pub(crate) tabs_scroll: ScrollHandle,
+    tabs_tween: std::cell::Cell<Option<ferrite_ui::motion::Tween>>,
     /// The Changes section's unfolded files and their hunks.
     hunks: hunks::Hunks,
     /// The window's width as of the last frame, what the floors and the
@@ -95,6 +97,7 @@ impl Panel {
             dirty: false,
             scrolls: Default::default(),
             tabs_scroll: ScrollHandle::new(),
+            tabs_tween: Default::default(),
             hunks: Default::default(),
             window_w: 0.,
             tended: false,

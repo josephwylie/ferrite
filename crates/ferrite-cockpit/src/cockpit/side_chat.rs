@@ -799,6 +799,17 @@ impl CockpitView {
         self.close_surface(owner, &SurfaceId::SideChat(id), cx);
     }
 
+    /// Whether side chat `id`'s fork is answering.
+    pub(super) fn side_chat_running(&self, owner: ThreadId, id: u64) -> bool {
+        self.side_chats
+            .chats
+            .get(&owner)
+            .and_then(|chat| chat.tabs.iter().find(|tab| tab.id == id))
+            .and_then(|tab| tab.conversation.as_ref())
+            .and_then(|conversation| self.cockpit.thread(conversation.thread))
+            .is_some_and(|open| open.transcript().status() == ferrite_core::transcript::Status::Streaming)
+    }
+
     /// Side chat `id`'s title, for its tab.
     pub(super) fn side_chat_title(&self, owner: ThreadId, id: u64) -> SharedString {
         self.side_chats
