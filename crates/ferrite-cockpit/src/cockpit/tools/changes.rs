@@ -62,6 +62,30 @@ impl Scope {
     }
 }
 
+/// One of a Thread's diffs, each with its own scope, folds and filter: the
+/// Changes Surface's, in the scope the operator picks, and a pull request's
+/// Code view, always the branch's whole diff.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Diff {
+    Changes(ThreadId),
+    PullRequest(ThreadId),
+}
+
+impl Diff {
+    pub(crate) fn thread(self) -> ThreadId {
+        match self {
+            Diff::Changes(thread) | Diff::PullRequest(thread) => thread,
+        }
+    }
+
+    fn scope(self) -> Scope {
+        match self {
+            Diff::Changes(_) => Scope::Uncommitted,
+            Diff::PullRequest(_) => Scope::All,
+        }
+    }
+}
+
 /// What a Changes menu row does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Verb {
@@ -119,9 +143,9 @@ pub(crate) struct Changes {
 }
 
 impl Changes {
-    pub(super) fn new(filter: Entity<Composer>) -> Self {
+    pub(super) fn new(scope: Scope, filter: Entity<Composer>) -> Self {
         Self {
-            scope: Scope::Uncommitted,
+            scope,
             load: Load::Reading,
             reviewed: HashSet::new(),
             folded: HashSet::new(),
@@ -178,13 +202,24 @@ pub(crate) fn without_whitespace(hunks: Vec<Vec<Line>>) -> Vec<Vec<Line>> {
 }
 
 impl CockpitView {
-    fn changes_of(&mut self, thread: ThreadId) -> Option<&mut Changes> {
-        self.tools.changes.get_mut(&thread)
+    fn changes_of(&mut self, diff: Diff) -> Option<&mut Changes> {
+        self.tools.changes.get_mut(&diff)
     }
 
-    /// The Changes state for `thread`, read for the first time it is made.
+    /// The Changes Surface's diff of `thread`, read the first time it is
+    /// made.
     pub(in crate::cockpit) fn ensure_changes(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if !self.tools.changes.contains_key(&thread) {
+        self.ensure_diff(Diff::Changes(thread), cx);
+    }
+
+    /// The branch's whole diff of `thread`: what a pull request's Code view
+    /// shows, whatever the Changes Surface was left on.
+    pub(in crate::cockpit) fn ensure_branch_changes(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        self.ensure_diff(Diff::PullRequest(thread), cx);
+    }
+
+    fn ensure_diff(&mut self, diff: Diff, cx: &mut Context<Self>) {
+        if !self.tools.changes.contains_key(&diff) {
             let filter = cx.new(|cx| {
                 let mut field = Composer::new(cx);
                 field.set_role(Role::Field(None), cx);
@@ -192,17 +227,8 @@ impl CockpitView {
             });
             cx.subscribe(&filter, |_, _, _: &ferrite_pane::composer::Edited, cx| cx.notify())
                 .detach();
-            self.tools.changes.insert(thread, Changes::new(filter));
-            self.refresh_changes(thread, cx);
-        }
-    }
-
-    /// The Changes state for `thread`, made on the branch's whole diff if
-    /// it is new: what a pull request's Code view shows.
-    pub(in crate::cockpit) fn ensure_branch_changes(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if !self.tools.changes.contains_key(&thread) {
-            self.ensure_changes(thread, cx);
-            self.run_changes_verb(thread, Verb::All, cx);
+            self.tools.changes.insert(diff, Changes::new(diff.scope(), filter));
+            self.refresh_changes(diff, cx);
         }
     }
 
@@ -210,7 +236,7 @@ impl CockpitView {
     /// (relative to the checkout).
     pub(in crate::cockpit) fn changes_list(&self, thread: ThreadId, path: &str) -> bool {
         matches!(
-            self.tools.changes.get(&thread).map(|changes| &changes.load),
+            self.tools.changes.get(&Diff::Changes(thread)).map(|changes| &changes.load),
             Some(Load::Read(files)) if files.iter().any(|file| file.path == path)
         )
     }
@@ -219,7 +245,7 @@ impl CockpitView {
     /// its diff unfolded and in view.
     pub(in crate::cockpit) fn show_changes_of(&mut self, thread: ThreadId, path: &str, cx: &mut Context<Self>) {
         self.upsert_surface(thread, SurfaceId::Changes, cx);
-        let Some(changes) = self.changes_of(thread) else {
+        let Some(changes) = self.changes_of(Diff::Changes(thread)) else {
             return;
         };
         changes.folded.remove(path);
@@ -233,8 +259,8 @@ impl CockpitView {
 
     /// A file's stage button: its change goes into git's index, or comes
     /// out of it, and the list is read again.
-    fn stage_file(&mut self, thread: ThreadId, path: String, stage: bool, cx: &mut Context<Self>) {
-        let Some(root) = self.thread_path(thread) else {
+    fn stage_file(&mut self, diff: Diff, path: String, stage: bool, cx: &mut Context<Self>) {
+        let Some(root) = self.thread_path(diff.thread()) else {
             return;
         };
         cx.spawn(async move |view, cx| {
@@ -250,17 +276,17 @@ impl CockpitView {
                     let _ = git.arg(path).output();
                 })
                 .await;
-            view.update(cx, |view, cx| view.refresh_changes(thread, cx)).ok();
+            view.update(cx, |view, cx| view.refresh_changes(diff, cx)).ok();
         })
         .detach();
     }
 
     /// Read the diff again, for the current scope.
-    fn refresh_changes(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let Some(root) = self.thread_path(thread) else {
+    fn refresh_changes(&mut self, diff: Diff, cx: &mut Context<Self>) {
+        let Some(root) = self.thread_path(diff.thread()) else {
             return;
         };
-        let Some(changes) = self.changes_of(thread) else {
+        let Some(changes) = self.changes_of(diff) else {
             return;
         };
         changes.generation += 1;
@@ -293,7 +319,7 @@ impl CockpitView {
                 })
                 .await;
             view.update(cx, |view, cx| {
-                if let Some(changes) = view.changes_of(thread).filter(|c| c.generation == generation) {
+                if let Some(changes) = view.changes_of(diff).filter(|c| c.generation == generation) {
                     changes.load = match files {
                         Ok(files) => Load::Read(files),
                         Err(why) => Load::Failed(why.into()),
@@ -309,11 +335,11 @@ impl CockpitView {
 
     pub(in crate::cockpit) fn run_changes_verb(
         &mut self,
-        thread: ThreadId,
+        diff: Diff,
         verb: Verb,
         cx: &mut Context<Self>,
     ) {
-        let Some(changes) = self.changes_of(thread) else {
+        let Some(changes) = self.changes_of(diff) else {
             return;
         };
         match verb {
@@ -327,7 +353,7 @@ impl CockpitView {
                     },
                     _ => unreachable!(),
                 };
-                self.refresh_changes(thread, cx);
+                self.refresh_changes(diff, cx);
                 return;
             }
             Verb::CollapseAll => {
@@ -340,15 +366,15 @@ impl CockpitView {
             Verb::ToggleWhitespace => changes.hide_whitespace = !changes.hide_whitespace,
             Verb::ToggleTests => changes.hide_tests = !changes.hide_tests,
             Verb::Refresh => {
-                self.refresh_changes(thread, cx);
+                self.refresh_changes(diff, cx);
                 return;
             }
         }
         cx.notify();
     }
 
-    fn toggle_fold(&mut self, thread: ThreadId, path: &str, cx: &mut Context<Self>) {
-        if let Some(changes) = self.changes_of(thread) {
+    fn toggle_fold(&mut self, diff: Diff, path: &str, cx: &mut Context<Self>) {
+        if let Some(changes) = self.changes_of(diff) {
             if !changes.folded.remove(path) {
                 changes.folded.insert(path.to_string());
             }
@@ -356,8 +382,8 @@ impl CockpitView {
         }
     }
 
-    fn toggle_reviewed(&mut self, thread: ThreadId, path: &str, cx: &mut Context<Self>) {
-        if let Some(changes) = self.changes_of(thread) {
+    fn toggle_reviewed(&mut self, diff: Diff, path: &str, cx: &mut Context<Self>) {
+        if let Some(changes) = self.changes_of(diff) {
             if changes.reviewed.remove(path) {
                 changes.folded.remove(path);
             } else {
@@ -369,8 +395,8 @@ impl CockpitView {
     }
 
     /// The rows of the scope dropdown.
-    pub(in crate::cockpit) fn changes_scope_rows(&self, thread: ThreadId) -> Vec<Option<(menu::Item, MenuVerb)>> {
-        let Some(changes) = self.tools.changes.get(&thread) else {
+    pub(in crate::cockpit) fn changes_scope_rows(&self, diff: Diff) -> Vec<Option<(menu::Item, MenuVerb)>> {
+        let Some(changes) = self.tools.changes.get(&diff) else {
             return Vec::new();
         };
         let row = |label: &'static str, scope: Scope, verb: Verb| {
@@ -389,8 +415,8 @@ impl CockpitView {
     }
 
     /// `Compare against ›`: the branches, the standing one ticked.
-    pub(in crate::cockpit) fn changes_branch_rows(&self, thread: ThreadId) -> Vec<(menu::Item, MenuVerb)> {
-        let Some(changes) = self.tools.changes.get(&thread) else {
+    pub(in crate::cockpit) fn changes_branch_rows(&self, diff: Diff) -> Vec<(menu::Item, MenuVerb)> {
+        let Some(changes) = self.tools.changes.get(&diff) else {
             return Vec::new();
         };
         changes
@@ -406,8 +432,8 @@ impl CockpitView {
     }
 
     /// The Changes `⋯` menu's rows.
-    pub(in crate::cockpit) fn changes_more_rows(&self, thread: ThreadId) -> Vec<Option<(menu::Item, MenuVerb)>> {
-        let Some(changes) = self.tools.changes.get(&thread) else {
+    pub(in crate::cockpit) fn changes_more_rows(&self, diff: Diff) -> Vec<Option<(menu::Item, MenuVerb)>> {
+        let Some(changes) = self.tools.changes.get(&diff) else {
             return Vec::new();
         };
         let row = |label: &'static str, checked: bool, verb: Verb| {
@@ -429,15 +455,15 @@ impl CockpitView {
 
     // ------------------------------------------------------------ drawing
 
-    pub(in crate::cockpit) fn changes_pane(&self, thread: ThreadId, cx: &mut Context<Self>) -> Div {
-        let Some(changes) = self.tools.changes.get(&thread) else {
+    pub(in crate::cockpit) fn changes_pane(&self, diff: Diff, cx: &mut Context<Self>) -> Div {
+        let Some(changes) = self.tools.changes.get(&diff) else {
             return div().flex_1();
         };
         let body = match &changes.load {
             Load::Reading => self.changes_note("Reading changes\u{2026}").into_any_element(),
             Load::Failed(why) => self.changes_note(why.clone()).into_any_element(),
             Load::Read(files) if files.is_empty() => {
-                self.changes_empty(thread, &changes.scope, cx).into_any_element()
+                self.changes_empty(diff, &changes.scope, cx).into_any_element()
             }
             Load::Read(files) => {
                 let wanted = changes.filter.read(cx).text().trim().to_lowercase();
@@ -459,7 +485,7 @@ impl CockpitView {
                         .min_h_0()
                         .overflow_y_scroll()
                         .track_scroll(&changes.scroll)
-                        .children(listed.into_iter().map(|(at, file)| self.changes_file(thread, changes, at, file, cx)))
+                        .children(listed.into_iter().map(|(at, file)| self.changes_file(diff, changes, at, file, cx)))
                         .into_any_element()
                 };
                 let empty = wanted.is_empty();
@@ -510,13 +536,13 @@ impl CockpitView {
             .flex_col()
             .flex_1()
             .min_h_0()
-            .child(self.changes_head(thread, changes, cx))
+            .child(self.changes_head(diff, changes, cx))
             .child(body)
     }
 
     /// Nothing changed in the scope: its note, and for the uncommitted scope
     /// a link to the whole branch's diff.
-    fn changes_empty(&self, thread: ThreadId, scope: &Scope, cx: &mut Context<Self>) -> Div {
+    fn changes_empty(&self, diff: Diff, scope: &Scope, cx: &mut Context<Self>) -> Div {
         let note = self.changes_note("No changes");
         if *scope != Scope::Uncommitted {
             return note;
@@ -529,7 +555,7 @@ impl CockpitView {
                 .text_color(rgb(theme::LINK_INK))
                 .child("View branch diff")
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    view.run_changes_verb(thread, Verb::All, cx)
+                    view.run_changes_verb(diff, Verb::All, cx)
                 })),
         )
     }
@@ -547,7 +573,7 @@ impl CockpitView {
 
     /// T3's diff toolbar: the scope and what it compares at the left, the
     /// view's tools at the right.
-    fn changes_head(&self, thread: ThreadId, changes: &Changes, cx: &mut Context<Self>) -> Div {
+    fn changes_head(&self, diff: Diff, changes: &Changes, cx: &mut Context<Self>) -> Div {
         use theme::*;
         let all_folded = matches!(&changes.load, Load::Read(files)
             if !files.is_empty() && files.iter().all(|file| changes.folded.contains(&file.path)));
@@ -568,7 +594,7 @@ impl CockpitView {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
-                    view.run_changes_verb(thread, verb, cx);
+                    view.run_changes_verb(diff, verb, cx);
                 }))
         };
         let (fold_tip, fold_verb) = if all_folded {
@@ -602,7 +628,7 @@ impl CockpitView {
             Scope::Uncommitted => None,
             Scope::All => Some(
                 self.facts
-                    .get(thread)
+                    .get(diff.thread())
                     .and_then(|facts| facts.default_branch.clone())
                     .map_or_else(|| "the base".to_string(), |base| base.to_string()),
             ),
@@ -610,7 +636,7 @@ impl CockpitView {
         };
         let comparing = base.map(|base| {
             let head = self
-                .thread_branch(thread)
+                .thread_branch(diff.thread())
                 .map_or_else(|| "HEAD".to_string(), |head| head.to_string());
             div()
                 .debug_selector(|| "changes-comparing".into())
@@ -638,7 +664,7 @@ impl CockpitView {
                         .child(icons::icon(icons::CHEVRON_DOWN, ICON_CHEVRON, INK_SUBTLE))
                         .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
                             cx.stop_propagation();
-                            view.open_context_menu(MenuTarget::ChangesBase(thread), event.position(), cx);
+                            view.open_context_menu(MenuTarget::ChangesBase(diff), event.position(), cx);
                         })),
                 )
         });
@@ -658,7 +684,9 @@ impl CockpitView {
                     .min_w_0()
                     .items_center()
                     .gap(px(SPACE_2))
-                    .child(
+                    // A pull request's Code view is the branch's diff: no
+                    // scope to pick, nothing else to compare against.
+                    .when(matches!(diff, Diff::Changes(_)), |left| left.child(
                         div()
                             .id("changes-scope")
                             .debug_selector(|| "changes-scope".into())
@@ -678,10 +706,10 @@ impl CockpitView {
                             .child(icons::icon(icons::CHEVRON_DOWN, SURFACE_PLUS_GLYPH, INK_SUBTLE))
                             .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
-                                view.open_context_menu(MenuTarget::ChangesScope(thread), event.position(), cx);
+                                view.open_context_menu(MenuTarget::ChangesScope(diff), event.position(), cx);
                             })),
                     )
-                    .children(comparing),
+                    .children(comparing)),
             )
             .child(
                 tools.child(
@@ -689,7 +717,7 @@ impl CockpitView {
                         .tooltip(ferrite_ui::menu::tooltip("More"))
                         .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
                             cx.stop_propagation();
-                            view.open_context_menu(MenuTarget::ChangesMore(thread), event.position(), cx);
+                            view.open_context_menu(MenuTarget::ChangesMore(diff), event.position(), cx);
                         })),
                 ),
             )
@@ -697,7 +725,7 @@ impl CockpitView {
 
     fn changes_file(
         &self,
-        thread: ThreadId,
+        diff: Diff,
         changes: &Changes,
         at: usize,
         file: &File,
@@ -752,7 +780,7 @@ impl CockpitView {
             .cursor_pointer()
             .text_size(px(FS_LABEL))
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                view.toggle_fold(thread, &fold_path, cx)
+                view.toggle_fold(diff, &fold_path, cx)
             }))
             .child(ferrite_ui::components::chevron_at(
                 if folded { 0. } else { 1. },
@@ -784,7 +812,7 @@ impl CockpitView {
                 )
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
-                    view.stage_file(thread, stage_path.clone(), !staged, cx);
+                    view.stage_file(diff, stage_path.clone(), !staged, cx);
                 })),
             )
             .child(
@@ -796,15 +824,15 @@ impl CockpitView {
                 )
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
-                    view.toggle_reviewed(thread, &review_path, cx);
+                    view.toggle_reviewed(diff, &review_path, cx);
                 })),
             )
             .child(
                 door(format!("changes-open-{at}"), icons::EXTERNAL, "Open file", INK_SUBTLE).on_click(
                     cx.listener(move |view, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
-                        if let Some(root) = view.thread_path(thread) {
-                            view.open_in_files(thread, root.join(&open_path), None, false, cx);
+                        if let Some(root) = view.thread_path(diff.thread()) {
+                            view.open_in_files(diff.thread(), root.join(&open_path), None, false, cx);
                         }
                     }),
                 ),
@@ -823,19 +851,19 @@ impl CockpitView {
 #[cfg(test)]
 impl CockpitView {
     /// How many files the last read found, once it has landed.
-    pub(in crate::cockpit) fn changes_read(&self, thread: ThreadId) -> Option<usize> {
-        match &self.tools.changes.get(&thread)?.load {
+    pub(in crate::cockpit) fn changes_read(&self, diff: Diff) -> Option<usize> {
+        match &self.tools.changes.get(&diff)?.load {
             Load::Read(files) => Some(files.len()),
             _ => None,
         }
     }
 
-    pub(in crate::cockpit) fn changes_filter(&self, thread: ThreadId) -> Option<Entity<Composer>> {
-        Some(self.tools.changes.get(&thread)?.filter.clone())
+    pub(in crate::cockpit) fn changes_filter(&self, diff: Diff) -> Option<Entity<Composer>> {
+        Some(self.tools.changes.get(&diff)?.filter.clone())
     }
 
-    pub(in crate::cockpit) fn changes_scope_label(&self, thread: ThreadId) -> Option<String> {
-        Some(self.tools.changes.get(&thread)?.scope.label())
+    pub(in crate::cockpit) fn changes_scope_label(&self, diff: Diff) -> Option<String> {
+        Some(self.tools.changes.get(&diff)?.scope.label())
     }
 }
 

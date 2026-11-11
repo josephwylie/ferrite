@@ -472,3 +472,35 @@ fn a_slim_row_fades_its_age_into_revive(cx: &mut TestAppContext) {
         "Revive in the age's place"
     );
 }
+
+/// A window resize is not a change to the list: a shelf's rows stay under
+/// their header, which is anchored over the foot, rather than travel.
+#[gpui::test]
+fn a_resize_does_not_send_shelf_rows_travelling(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (mut core, _fake) = cockpit("nav-resize", 4);
+    let threads = sorted_threads(&core);
+    core.park(threads[0]).unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(600.)));
+    tick(cx);
+    view.update(cx, |view, cx| view.set_shelf_open(nav::Shelf::Parked, true, cx));
+    tick(cx);
+    leap(cx, Duration::from_millis(400));
+    let key = super::super::nav_list::NavKey::Slim(threads[0]);
+    let travel = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            let now = cx.background_executor().now();
+            view.nav_motion.borrow().offset(key, now)
+        })
+    };
+    assert_eq!(travel(&view, cx), None, "at rest");
+
+    cx.simulate_resize(gpui::size(px(1000.), px(900.)));
+    tick(cx);
+    assert_eq!(travel(&view, cx), None, "the row lands with its header");
+    let header = cx.debug_bounds("nav-shelf-parked").unwrap();
+    let row = cx.debug_bounds(card(threads[0])).unwrap();
+    assert!(row.top() >= header.bottom(), "under its header: {row:?} {header:?}");
+}

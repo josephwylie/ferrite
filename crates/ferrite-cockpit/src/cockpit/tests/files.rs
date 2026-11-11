@@ -4,7 +4,7 @@ use super::*;
 use crate::cockpit::context_menu::Submenu;
 use crate::cockpit::panel::Opener;
 use crate::cockpit::surfaces::SurfaceId;
-use crate::cockpit::tools::{FilesSub, FilesVerb};
+use crate::cockpit::tools::{Diff, FilesSub, FilesVerb};
 
 fn files_window<'a>(
     name: &str,
@@ -201,7 +201,7 @@ fn a_changed_files_tab_offers_show_changes(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.run_opener(thread, Opener::Changes, cx));
     for _ in 0..400 {
         tick(cx);
-        if view.read_with(cx, |view, _| view.changes_read(thread).is_some()) {
+        if view.read_with(cx, |view, _| view.changes_read(Diff::Changes(thread)).is_some()) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));

@@ -355,3 +355,55 @@ fn a_chevron_eases_the_strip(cx: &mut TestAppContext) {
     frames(cx, MOTION_TAB_SCROLL_MS);
     assert!((scrolled(cx) - step).abs() < 1., "landed");
 }
+
+/// #236: "Open a surface" is the Panel's focus target: a press in it takes
+/// the keyboard from the Composer, and a bare letter fires its row.
+#[gpui::test]
+fn the_empty_panels_letters_work_from_the_keyboard(cx: &mut TestAppContext) {
+    let (view, thread, cx) = solo("empty-keys", cx);
+    view.update(cx, |view, cx| view.close_surface(thread, &SurfaceId::Overview, cx));
+    tick(cx);
+    let head = cx.debug_bounds("panel-empty-head").expect("Open a surface");
+    cx.simulate_click(head.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_keystrokes("d");
+    tick(cx);
+    let typed = view.read_with(cx, |view, cx| view.panes[0].composer.read(cx).text().to_string());
+    assert_eq!(typed, "", "the Composer did not take the letter");
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Changes), "d opens Changes");
+}
+
+/// The `+` menu's bare letter picks its row from the keyboard.
+#[gpui::test]
+fn the_plus_menus_letter_picks_its_row(cx: &mut TestAppContext) {
+    let (view, thread, cx) = solo("plus-keys", cx);
+    view.update(cx, |view, cx| view.open_surface_menu(cx));
+    tick(cx);
+    cx.simulate_keystrokes("d");
+    tick(cx);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Changes), "d opens Changes");
+}
+
+/// ADR 0039: an agent's reveal is refused once the operator has acted in
+/// the Panel since the revision it read. Hiding the Panel and maximizing
+/// it are acting.
+#[gpui::test]
+fn an_agents_reveal_does_not_undo_a_hide_or_a_maximize(cx: &mut TestAppContext) {
+    let (view, thread, cx) = solo("reveal-hidden", cx);
+    upsert(&view, thread, SurfaceId::Overview, cx);
+    let seen = view.read_with(cx, |view, _| view.surface_revision(thread));
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    tick(cx);
+    assert!(cx.debug_bounds("panel").is_none(), "the operator hid the Panel");
+    let revealed = view.update(cx, |view, _| view.reveal_surface(thread, SurfaceId::Browser, seen));
+    tick(cx);
+    assert!(!revealed, "the reveal is refused");
+    assert!(cx.debug_bounds("panel").is_none(), "the Panel stays hidden");
+
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    tick(cx);
+    let seen = view.read_with(cx, |view, _| view.surface_revision(thread));
+    view.update(cx, |view, cx| view.toggle_panel_maximized(thread, cx));
+    let revealed = view.update(cx, |view, _| view.reveal_surface(thread, SurfaceId::Browser, seen));
+    assert!(!revealed, "a maximize is acting too");
+}

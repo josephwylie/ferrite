@@ -947,15 +947,16 @@ pub const VIEW_HEAD_GAP: f32 = 10.0;
 /// Solo's breadcrumb (T3's `ChatHeader`): items `HEAD_CRUMB_GAP` apart,
 /// `/` between them. The Project's badge `HEAD_BADGE` (T3's
 /// `size-3.5`), `HEAD_BADGE_GAP` before its name, which stops at
-/// `HEAD_PROJECT_MAX_W` (`max-w-40`); a parent Thread gives way down to
-/// `HEAD_PARENT_MIN_W`, its ellipsis; the title keeps
+/// `HEAD_PROJECT_MAX_W` (`max-w-40`); a parent Thread collapses to `...`
+/// while the row overflows, and comes back once the row has its whole
+/// title and `HEAD_PARENT_ROOM_SLACK` to spare; the title keeps
 /// `VIEW_TITLE_MIN_W`, its chevron (`HEAD_CHEVRON`) `HEAD_CHEVRON_GAP`
 /// after it. A machine's badge sits on `HEAD_ENV_GROUND` (`BLUE` at 12%).
 pub const HEAD_CRUMB_GAP: f32 = 12.0;
 pub const HEAD_BADGE: f32 = 14.0;
 pub const HEAD_BADGE_GAP: f32 = 6.0;
 pub const HEAD_PROJECT_MAX_W: f32 = 160.0;
-pub const HEAD_PARENT_MIN_W: f32 = 16.0;
+pub const HEAD_PARENT_ROOM_SLACK: f32 = 8.0;
 pub const VIEW_TITLE_MIN_W: f32 = 40.0;
 pub const HEAD_CHEVRON: f32 = 14.0;
 pub const HEAD_CHEVRON_GAP: f32 = 4.0;
