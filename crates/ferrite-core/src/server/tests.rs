@@ -21,6 +21,7 @@ use crate::{Decision, DecisionAnswer, SessionEvent};
 mod browser_annotations;
 #[cfg(unix)]
 mod browser_providers;
+mod drive;
 mod park;
 mod publish;
 
@@ -1246,6 +1247,7 @@ fn cockpit(harness: &Harness) -> crate::cockpit::Cockpit {
         },
         renderer: None,
         browser: false,
+        driven: false,
         discovery: Box::new(NoDiscovery),
     })
     .unwrap()
@@ -2619,6 +2621,7 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
         client: peer(),
         renderer: None,
         browser: false,
+        driven: false,
         discovery: Box::new(NoDiscovery),
     })
     .unwrap();

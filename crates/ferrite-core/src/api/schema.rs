@@ -16,6 +16,8 @@
 //!   not up within its time; the refusal names the Thread, which stays.
 //! - `agent_prompt_stalled`, `timeout`: a wait gave up; nothing was undone.
 //! - `thread_closed`: the Thread closed while a wait ran.
+//! - `no_headless_window`: a `window.*` action, and no `ferrite
+//!   --headless` window is attached to take it.
 //! - `worktree_not_found`: no linked worktree is at that path.
 //! - `dirty_worktree_requires_force`: the worktree holds changes; nothing
 //!   was removed (there is no force).
@@ -34,6 +36,7 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::drive;
 use crate::protocol::{WireAnswer, WireSound};
 use crate::store::Provider;
 use crate::{Attention, ThreadId};
@@ -135,6 +138,16 @@ operations! {
         "Land every Ferrite window on a Project's first open Thread.";
     ThreadRevive(ThreadReviveParams) => "thread.revive", ["thread"],
         "Start a parked Thread's agent again in place, keeping its id.";
+    WindowKey(drive::Keys) => "window.key", ["keys"],
+        "Press keys in the headless window (`ferrite --headless`), in order.";
+    WindowType(drive::Text) => "window.type", ["text"],
+        "Type text into whatever holds the headless window's keyboard.";
+    WindowClick(drive::Click) => "window.click", [],
+        "Click in the headless window: an element by its debug selector, or a point.";
+    WindowFind(drive::Find) => "window.find", ["selector"],
+        "Where the headless window last drew an element, by its debug selector.";
+    WindowShot(drive::Shot) => "window.shot", ["path"],
+        "Save the headless window's frame as a PNG at a path.";
 }
 
 /// No parameters.
