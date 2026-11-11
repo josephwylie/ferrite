@@ -2754,6 +2754,7 @@ impl CockpitView {
                                 );
                             }
                         }
+                        turn_start = at + 1;
                     }
                     _ => {}
                 }
