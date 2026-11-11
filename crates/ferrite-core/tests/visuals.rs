@@ -38,7 +38,8 @@ fn dir() -> PathBuf {
 }
 
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{name}"))
+    // Cargo runs a crate's tests in the crate's own directory.
+    std::path::absolute(format!("tests/fixtures/{name}")).unwrap()
 }
 
 /// Immutable executables avoid Linux's ETXTBSY race when another test forks

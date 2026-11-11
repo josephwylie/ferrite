@@ -365,9 +365,15 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     );
     // The preview closes from the keyboard (escape, or cmd-w in it; F-14).
     view.update(cx, |view, cx| view.close_preview(0, cx));
-    // The file opened the Files column, which stays beside the Pane until it
+    // The file opened the Files tab, which stays beside the Pane until it
     // is put away: the measure below is of the Pane with the window to itself.
-    view.update(cx, |view, cx| view.press_tool(crate::cockpit::tools::Tool::Files, cx));
+    view.update(cx, |view, cx| {
+        let thread = view.panes[0].thread().unwrap();
+        view.close_surface(thread, &crate::cockpit::surfaces::SurfaceId::Files, cx);
+        if view.panel_open(thread) {
+            view.toggle_panel_now(cx);
+        }
+    });
     tick(cx);
 
     let id = view.read_with(cx, |view, _| {
@@ -1605,10 +1611,11 @@ fn the_panel_goes_at_once_when_focus_moves_to_a_draft(cx: &mut TestAppContext) {
 }
 
 /// A preview opening in a shown Panel snaps it to its wide width, its card
-/// laid out at that width against the board's edge, and closing snaps it
-/// back to the sections at the Panel's own width.
+/// laid out at that width against the board's edge, and closing its tab
+/// shows the sections at once, the width kept (narrowing is the
+/// operator's).
 #[gpui::test]
-fn a_preview_snaps_the_panel_wide_and_back(cx: &mut TestAppContext) {
+fn a_preview_snaps_the_panel_wide(cx: &mut TestAppContext) {
     use ferrite_ui::theme::{PANEL_PAD_L, PANEL_PAD_R, PANEL_W};
     ferrite_ui::motion::testing::drive();
     let (view, cx) = panel_window("motion-panel-preview", cx);
@@ -1636,22 +1643,22 @@ fn a_preview_snaps_the_panel_wide_and_back(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| view.close_preview(0, cx));
     cx.run_until_parked();
-    assert_eq!(panel_width(cx), Some(PANEL_W), "back to its own width");
+    assert_eq!(panel_width(cx), Some(wide), "the width kept");
     assert!(
         cx.debug_bounds("panel-sections").is_some(),
         "the sections, at once"
     );
     assert!(
-        cx.debug_bounds("panel-tab-Preview").is_none(),
+        cx.debug_bounds("panel-tab-File-notes.md").is_none(),
         "its tab is gone"
     );
 }
 
-/// A preview opened while the Panel is hidden shows it, at its wide width
-/// at once, and closing it hides the Panel again, the preview let go, while
-/// the setting never changes.
+/// A preview opened while the Panel is hidden opens the Thread's Panel, at
+/// its wide width at once, while the setting never changes; closing it
+/// lets the preview go and leaves the Panel on its Overview.
 #[gpui::test]
-fn a_preview_shows_a_hidden_panel_and_hides_it_again(cx: &mut TestAppContext) {
+fn a_preview_opens_a_hidden_panel(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (view, cx) = panel_window("motion-panel-preview-hidden", cx);
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
@@ -1676,7 +1683,7 @@ fn a_preview_shows_a_hidden_panel_and_hides_it_again(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| view.close_preview(0, cx));
     cx.run_until_parked();
-    assert_eq!(panel_width(cx), None, "hidden again");
+    assert!(cx.debug_bounds("panel-sections").is_some(), "on its Overview");
     assert!(
         view.read_with(cx, |view, _| !view.panes[0].preview.is_open()),
         "and the preview closed"

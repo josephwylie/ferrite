@@ -5,9 +5,9 @@
 //! - **The rail's section**, after Changes: each piece of work still
 //!   running, its title, its clock from the launch and a stop square where
 //!   the Session can stop it, then `N finished`. A row opens the pane.
-//! - **The pane** (`bg-pane-running.png`, `bg-card-*.png`): the column's
-//!   other body (as the side chat is), its head `Background tasks` with
-//!   close. `Running N`, a card per piece of work: its `▾`, title, clock and
+//! - **The Surface** (`bg-pane-running.png`, `bg-card-*.png`): a tab of the
+//!   Thread's Panel (ADR 0039), `Background`, its tab's × closing it.
+//!   `Running N`, a card per piece of work: its `▾`, title, clock and
 //!   stop, open on its output in mono (`$ command`, the lines so far, or
 //!   `No output yet`); then `Finished N`, a card each, closed, with how
 //!   long it took, opening on its output and `[exited with code 0]`.
@@ -16,7 +16,7 @@
 //! own row (`pane::background_link`, `View live output ▸`).
 
 use super::*;
-use crate::cockpit::view_head::Column;
+use crate::cockpit::surfaces::SurfaceId;
 use ferrite_core::transcript::{ToolBlock, ToolState};
 use ferrite_core::transcript::tools::{policy, ToolKind};
 
@@ -76,54 +76,16 @@ impl CockpitView {
         Some(section)
     }
 
-    /// The pane is open for `thread`.
-    pub(super) fn background_shown(&self, thread: Option<ThreadId>) -> bool {
-        thread.is_some() && self.panel.background == thread
-    }
-
-    /// Open the Background tasks pane over `thread`'s column.
+    /// Open `thread`'s Background Surface.
     pub(crate) fn open_background(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        self.panel.background = Some(thread);
-        cx.notify();
+        self.upsert_surface(thread, SurfaceId::Background, cx);
     }
 
-    /// The pane's body: its head, then Running and Finished.
+    /// The Background Surface's body: Running and Finished.
     pub(super) fn background_pane(&self, thread: ThreadId, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
-        let head = div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(SPACE_1))
-            .h(px(WIN_CHROME_H))
-            .pr(px(tools_inset() - PANEL_PAD_R))
-            .mt(px(self.head_drop(Column::Rail)))
-            .child(
-                div()
-                    .debug_selector(|| "background-pane-head".into())
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(rgb(INK_SUBTLE))
-                    .child("Background tasks"),
-            )
-            .child(
-                crate::nav::icon_button(
-                    "background-pane-close",
-                    icons::CLOSE,
-                    NAV_TOGGLE_GLYPH,
-                    ICON_BUTTON,
-                    R_CONTROL,
-                )
-                .tooltip(ferrite_ui::menu::tooltip("Close"))
-                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.panel.background = None;
-                    cx.notify();
-                })),
-            );
         let Some(open) = self.cockpit.thread(thread) else {
-            return div().child(head);
+            return div();
         };
         let timings = open.activity().main().timings();
         let calls: Vec<&ToolBlock> = open.transcript().background_calls().collect();
@@ -164,7 +126,7 @@ impl CockpitView {
                 body = body.child(self.card(id, call, false, tail, cx));
             }
         }
-        div().flex().flex_col().child(head).child(body)
+        body
     }
 
     /// One piece of work's card: its disclosure, title and `tail` (clock and

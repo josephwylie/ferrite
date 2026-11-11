@@ -83,9 +83,8 @@ fn native_todo_receipt_replaces_the_previous_todo_plan() {
 
 /// A captured fixture's frames (`tests/fixtures`), one JSON value a line.
 fn fixture(name: &str) -> Vec<serde_json::Value> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name);
+    // Cargo runs a crate's tests in the crate's own directory.
+    let path = std::path::Path::new("tests/fixtures").join(name);
     std::fs::read_to_string(path)
         .unwrap()
         .lines()

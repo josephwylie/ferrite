@@ -1,74 +1,62 @@
 //! The subagent drill-in (Claude's, `claude/subagent-drillin.png`): a press
-//! on a `Ran agent` row opens that agent in the right pane, over whatever
-//! the pane held (the sections, a preview, a side chat), which the head's
-//! `‹` goes back to. Its head reads `‹ <the agent's task>` with expand and
-//! close at the right; the body is the agent's own transcript — its prompt
-//! as a bubble, `Model Haiku 5.5` under it, its tool summary, its answer —
-//! drawn by the same compact transcript the side chat's tabs use
-//! (`sync_compact_transcript`). Open, back, expand and close are one frame.
+//! on a `Ran agent` row opens that agent as a Surface of the Thread's Panel
+//! (ADR 0039), its tab named by the agent's task; the body is the agent's
+//! own transcript — its prompt as a bubble, `Model Haiku 5.5` under it, its
+//! tool summary, its answer — drawn by the same compact transcript the side
+//! chat uses (`sync_compact_transcript`). The tab's × closes it.
 //!
 //! The Pane keeps showing Main: this is not `select_subject`, which is how
 //! a Pane takes a subagent's transcript for itself (a notice's jump, the
 //! history arrows).
 
-use crate::cockpit::view_head::Column;
 use std::collections::HashMap;
 
+use super::surfaces::SurfaceId;
 use super::*;
 
 use ferrite_core::activity::Subject;
-use ferrite_pane::preview::head_door;
-use ferrite_ui::icons::{self, icon};
 
-/// One agent held open in a Thread's right pane.
+/// One agent held open in a Thread's Panel.
 struct Drill {
     subject: Subject,
     /// What the pane draws it with: the Pane's pieces (its transcript, its
     /// tool disclosures), never in the grid.
     pane: PaneView,
-    expanded: bool,
 }
 
-/// Every Thread's open drill-in.
+/// Every Thread's open agents, by the Thread and the agent's stored key
+/// (`SurfaceId::Agent`'s).
 #[derive(Default)]
 pub(crate) struct AgentDrills {
-    drills: HashMap<ThreadId, Drill>,
+    drills: HashMap<(ThreadId, String), Drill>,
 }
 
 impl AgentDrills {
+    #[cfg(test)]
     pub(crate) fn is_open(&self, owner: ThreadId) -> bool {
-        self.drills.contains_key(&owner)
+        self.drills.keys().any(|(thread, _)| *thread == owner)
     }
 
-    fn is_expanded(&self, owner: ThreadId) -> bool {
-        self.drills.get(&owner).is_some_and(|drill| drill.expanded)
-    }
-
-    /// The agent `owner`'s pane holds, what the tests read.
+    /// An agent `owner`'s Panel holds, what the tests read.
     #[cfg(test)]
     pub(crate) fn subject(&self, owner: ThreadId) -> Option<&Subject> {
-        self.drills.get(&owner).map(|drill| &drill.subject)
+        self.drills
+            .iter()
+            .find(|((thread, _), _)| *thread == owner)
+            .map(|(_, drill)| &drill.subject)
+    }
+}
+
+/// The key an agent's Surface is known by; Main has none (it is the
+/// Pane's own).
+fn agent_key(subject: &Subject) -> Option<String> {
+    match subject {
+        Subject::Main => None,
+        Subject::Subagent(key) => Some(key.as_str().to_owned()),
     }
 }
 
 impl CockpitView {
-    /// Whether Pane `index`'s Thread has an agent open in the right pane.
-    pub(super) fn agent_drill_shown(&self, index: usize) -> bool {
-        self.panes
-            .get(index)
-            .and_then(|pane| pane.thread())
-            .is_some_and(|thread| self.agent_drills.is_open(thread))
-    }
-
-    /// Whether the docked pane covers the content area, the Thread's head
-    /// and tools under it.
-    pub(super) fn docked_pane_covers(&self) -> bool {
-        self.side_chat_covers()
-            || self.focused_thread().is_some_and(|owner| {
-                self.agent_drills.is_open(owner) && self.agent_drills.is_expanded(owner)
-            })
-    }
-
     /// The agent's Subject, from the call that started it.
     pub(super) fn agent_of_call(&self, thread: ThreadId, call: &str) -> Option<Subject> {
         self.cockpit.thread(thread)?.activity().invocations().find_map(
@@ -77,7 +65,7 @@ impl CockpitView {
     }
 
     /// A press on an agent call's row in Pane `index`: that agent opens in
-    /// the right pane.
+    /// the Panel.
     pub(super) fn open_agent_from(&mut self, index: usize, call: String, cx: &mut Context<Self>) {
         let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
             return;
@@ -87,8 +75,8 @@ impl CockpitView {
         }
     }
 
-    /// Open `subject` (an agent of `thread`) in the right pane, the panel
-    /// shown if it was hidden.
+    /// Open `subject` (an agent of `thread`) as a Surface of its Panel: one
+    /// tab per agent, brought forward if it is open already.
     pub(super) fn open_agent_drill(
         &mut self,
         thread: ThreadId,
@@ -106,40 +94,30 @@ impl CockpitView {
         else {
             return;
         };
-        let mut pane = PaneView::new(thread, cx);
-        pane.select_subject(subject.clone(), generation, cx);
-        if let Some(entity) = pane.transcript() {
-            cx.subscribe(&entity, Self::agent_transcript_event).detach();
+        let Some(key) = agent_key(&subject) else {
+            return;
+        };
+        if !self.agent_drills.drills.contains_key(&(thread, key.clone())) {
+            let mut pane = PaneView::new(thread, cx);
+            pane.select_subject(subject.clone(), generation, cx);
+            if let Some(entity) = pane.transcript() {
+                cx.subscribe(&entity, Self::agent_transcript_event).detach();
+            }
+            self.agent_drills
+                .drills
+                .insert((thread, key.clone()), Drill { subject, pane });
         }
-        let expanded = self
+        self.upsert_surface(thread, SurfaceId::Agent(key), cx);
+    }
+
+    /// Its tab closed: the agent goes from the Panel.
+    pub(super) fn close_agent_drill(&mut self, thread: ThreadId, key: &str, cx: &mut Context<Self>) {
+        if self
             .agent_drills
             .drills
-            .get(&thread)
-            .is_some_and(|drill| drill.expanded);
-        self.agent_drills.drills.insert(
-            thread,
-            Drill {
-                subject,
-                pane,
-                expanded,
-            },
-        );
-        if !self.prefs.settings.panel_shown {
-            self.change_settings(|settings| settings.panel_shown = true, cx);
-        }
-        cx.notify();
-    }
-
-    /// `‹`: the agent goes, and the pane shows what it held before.
-    pub(super) fn close_agent_drill(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if self.agent_drills.drills.remove(&thread).is_some() {
-            cx.notify();
-        }
-    }
-
-    fn toggle_agent_expanded(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if let Some(drill) = self.agent_drills.drills.get_mut(&thread) {
-            drill.expanded = !drill.expanded;
+            .remove(&(thread, key.to_owned()))
+            .is_some()
+        {
             cx.notify();
         }
     }
@@ -175,48 +153,45 @@ impl CockpitView {
 
     /// Every frame: keep each open agent's transcript told what it holds.
     pub(super) fn tend_agent_drills(&mut self, cx: &mut Context<Self>) {
-        let threads: Vec<ThreadId> = self.agent_drills.drills.keys().copied().collect();
-        for thread in threads {
-            let Some(drill) = self.agent_drills.drills.get(&thread) else {
+        let keys: Vec<(ThreadId, String)> = self.agent_drills.drills.keys().cloned().collect();
+        for key in keys {
+            let Some(drill) = self.agent_drills.drills.get(&key) else {
                 continue;
             };
-            let note = self.agent_model_note(thread, &drill.subject);
-            self.sync_compact_transcript(thread, &drill.subject, &drill.pane, 0, note, cx);
+            let note = self.agent_model_note(key.0, &drill.subject);
+            self.sync_compact_transcript(key.0, &drill.subject, &drill.pane, 0, note, cx);
         }
+    }
+
+    /// The agent's task, for its tab: its description, else its name.
+    pub(super) fn agent_title(&self, owner: ThreadId, key: &str) -> SharedString {
+        let subject = Subject::Subagent(ferrite_core::activity::AgentKey::from_stored(key.to_owned()));
+        self.cockpit
+            .thread(owner)
+            .and_then(|open| {
+                let activity = open.activity();
+                let agent = activity
+                    .children()
+                    .into_iter()
+                    .find(|agent| agent.subject() == subject)?;
+                let info = agent.info();
+                Some(
+                    info.description
+                        .clone()
+                        .filter(|task| !task.trim().is_empty())
+                        .unwrap_or_else(|| subagents::agent_name(info)),
+                )
+            })
+            .unwrap_or_else(|| "Subagent".into())
+            .into()
     }
 
     // ------------------------------------------------------------ drawing
 
-    /// The panel's column while it holds `owner`'s agent: laid as the side
-    /// chat's is, `SIDE_CHAT_W` wide or, expanded, across the whole content
-    /// area over the Thread.
-    pub(super) fn agent_drill_column(
-        &self,
-        owner: ThreadId,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let width = if self.agent_drills.is_expanded(owner) {
-            f32::from(window.viewport_size().width) - self.board_left()
-        } else {
-            self.panel_column_w()
-        };
-        div()
-            .debug_selector(|| "panel".into())
-            .absolute()
-            .top_0()
-            .right_0()
-            .bottom(px(ferrite_ui::theme::HAIRLINE_W))
-            .w(px(width))
-            .overflow_hidden()
-            .bg(ferrite_ui::theme::paint::PANEL)
-            .child(self.agent_drill_body(owner, cx))
-            .into_any_element()
-    }
-
-    fn agent_drill_body(&self, owner: ThreadId, cx: &mut Context<Self>) -> AnyElement {
+    /// Agent `key`'s Surface: its transcript.
+    pub(super) fn agent_drill_body(&self, owner: ThreadId, key: &str) -> AnyElement {
         use ferrite_ui::theme::*;
-        let Some(drill) = self.agent_drills.drills.get(&owner) else {
+        let Some(drill) = self.agent_drills.drills.get(&(owner, key.to_owned())) else {
             return div().into_any_element();
         };
         div()
@@ -228,7 +203,6 @@ impl CockpitView {
             .text_size(px(FS_UI))
             .line_height(px(LH_UI))
             .text_color(rgb(INK_STRONG))
-            .child(self.agent_drill_head(owner, drill, cx))
             .child(
                 div()
                     .relative()
@@ -237,102 +211,5 @@ impl CockpitView {
                     .children(drill.pane.transcript()),
             )
             .into_any_element()
-    }
-
-    /// The head: `‹` and the agent's task, which go back together, and at
-    /// the right expand and close.
-    fn agent_drill_head(&self, owner: ThreadId, drill: &Drill, cx: &mut Context<Self>) -> Div {
-        use ferrite_ui::theme::*;
-        let title = self
-            .cockpit
-            .thread(owner)
-            .and_then(|open| {
-                let activity = open.activity();
-                let agent = activity
-                    .children()
-                    .into_iter()
-                    .find(|agent| agent.subject() == drill.subject)?;
-                let info = agent.info();
-                Some(
-                    info.description
-                        .clone()
-                        .filter(|task| !task.trim().is_empty())
-                        .unwrap_or_else(|| subagents::agent_name(info)),
-                )
-            })
-            .unwrap_or_else(|| "Subagent".into());
-        let back = div()
-            .id("agent-drill-back")
-            .debug_selector(|| "agent-drill-back".into())
-            .flex()
-            .flex_1()
-            .min_w_0()
-            .items_center()
-            .gap(px(SPACE_1))
-            .h(px(ICON_BUTTON))
-            .pr(px(SPACE_2))
-            .rounded(px(R_CONTROL))
-            .cursor_pointer()
-            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .justify_center()
-                    .size(px(ICON_BUTTON))
-                    .child(icon(icons::BACK, ICON_BUTTON_GLYPH, INK_SUBTLE)),
-            )
-            .child(
-                div()
-                    .debug_selector(|| "agent-drill-title".into())
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(FS_LABEL))
-                    .child(SharedString::from(title)),
-            )
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.close_agent_drill(owner, cx);
-            }));
-        let expand = head_door(
-            "agent-drill-expand",
-            "agent-drill-expand".into(),
-            if drill.expanded {
-                icons::MINIMIZE
-            } else {
-                icons::MAXIMIZE
-            },
-        )
-        .tooltip(ferrite_ui::menu::tooltip(if drill.expanded {
-            "Collapse"
-        } else {
-            "Expand"
-        }))
-        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-            cx.stop_propagation();
-            view.toggle_agent_expanded(owner, cx);
-        }));
-        let close = head_door("agent-drill-close", "agent-drill-close".into(), icons::CLOSE)
-            .tooltip(ferrite_ui::menu::tooltip("Close"))
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.close_agent_drill(owner, cx);
-                view.close_side_chat(owner, cx);
-                if view.prefs.settings.panel_shown {
-                    view.toggle_panel_now(cx);
-                }
-            }));
-        div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(SPACE_1))
-            .h(px(WIN_CHROME_H))
-            .px(px(SIDE_CHAT_INSET))
-            .mt(px(self.head_drop(Column::Rail)))
-            .child(back)
-            .child(expand)
-            .child(close)
     }
 }

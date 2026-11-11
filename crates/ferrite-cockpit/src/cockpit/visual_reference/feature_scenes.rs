@@ -21,7 +21,8 @@ use ferrite_reviewr::search::{CodeHit, FileHit, SearchResults};
 use gpui::{AppContext, Focusable};
 
 use super::{conversation, Scene, Setup};
-use crate::cockpit::tools::Tool;
+use crate::cockpit::panel::Opener;
+use crate::cockpit::surfaces::{SurfaceId, ThreadSurfaces};
 use crate::review::ReviewView;
 
 /// Every state this module draws, at the app size.
@@ -50,6 +51,10 @@ pub(super) const STATES: &[&str] = &[
     "files-empty",
     "changes-split",
     "terminal",
+    "panel-tabs",
+    "panel-plusmenu",
+    "panel-empty",
+    "panel-maximized",
 ];
 
 pub(super) fn handles(state: &str) -> bool {
@@ -89,10 +94,14 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         }
         "page-pane" => page_pane(),
         "lightbox" => lightbox(),
-        "files-code" => tools("files-code", &[Tool::Files], Some("crates/ferrite-ui/src/motion.rs")),
-        "files-empty" => tools("files-empty", &[Tool::Files], None),
-        "changes-split" => tools("changes-split", &[Tool::Files, Tool::Changes], Some("crates/ferrite-ui/src/motion.rs")),
-        "terminal" => tools("terminal", &[Tool::Terminal], None),
+        "files-code" => tools("files-code", &[Opener::Files], Some("crates/ferrite-ui/src/motion.rs")),
+        "files-empty" => tools("files-empty", &[Opener::Files], None),
+        "changes-split" => tools("changes-split", &[Opener::Files, Opener::Changes], Some("crates/ferrite-ui/src/motion.rs")),
+        "terminal" => tools("terminal", &[Opener::Terminal], None),
+        "panel-tabs" => panel("panel-tabs", PanelStaged::Tabs),
+        "panel-plusmenu" => panel("panel-plusmenu", PanelStaged::PlusMenu),
+        "panel-empty" => panel("panel-empty", PanelStaged::Empty),
+        "panel-maximized" => panel("panel-maximized", PanelStaged::Maximized),
         _ => unreachable!("`handles` lists every state"),
     }
 }
@@ -509,28 +518,60 @@ fn reply_card() -> (Scene, Setup) {
 
 // ------------------------------------------------------------- title tools
 
-/// The conversation with the dock's `tools` open on its Thread (the
+/// The conversation with the Panel's `tools` open on its Thread (the
 /// checkout is this repository), `file` opened in Files
 /// (`claude/parity/files-code.png`, `files-empty.png`, `changes-split.png`,
 /// `terminal-command.png`). A terminal runs the command Claude's capture ran.
-fn tools(state: &str, tools: &'static [Tool], file: Option<&'static str>) -> (Scene, Setup) {
+fn tools(state: &str, tools: &'static [Opener], file: Option<&'static str>) -> (Scene, Setup) {
     let scene = conversation(state);
     let setup: Setup = Box::new(move |view, _, cx| {
         let Some(thread) = view.focused_thread() else {
             return;
         };
-        // Claude's captures hold the dock alone, the rail put away.
-        if !tools.contains(&Tool::Terminal) {
-            view.toggle_panel_now(cx);
-        }
         for tool in tools {
-            view.press_tool(*tool, cx);
+            view.run_opener(thread, *tool, cx);
         }
         if let (Some(file), Ok(root)) = (file, std::env::current_dir()) {
             view.open_in_files(thread, root.join(file), None, true, cx);
         }
-        if tools.contains(&Tool::Terminal) {
+        if tools.contains(&Opener::Terminal) {
             view.fixture_terminal_command(thread, b"echo hello; ls | head -5\r", cx);
+        }
+    });
+    (scene, setup)
+}
+
+// --------------------------------------------------------------------- panel
+
+/// How a `panel-*` scene leaves the Panel.
+#[derive(Clone, Copy)]
+enum PanelStaged {
+    /// Four tabs, Changes shown.
+    Tabs,
+    /// The `+` menu up, Pull request dimmed (no PR on the branch).
+    PlusMenu,
+    /// Every tab closed: "Open a surface".
+    Empty,
+    /// Changes shown, maximized.
+    Maximized,
+}
+
+/// The conversation with its Panel's tabs staged (ADR 0039).
+fn panel(state: &str, staged: PanelStaged) -> (Scene, Setup) {
+    let scene = conversation(state);
+    let setup: Setup = Box::new(move |view, _, cx| {
+        let Some(thread) = view.focused_thread() else {
+            return;
+        };
+        for opener in [Opener::Changes, Opener::Files, Opener::Terminal] {
+            view.run_opener(thread, opener, cx);
+        }
+        view.upsert_surface(thread, SurfaceId::Changes, cx);
+        match staged {
+            PanelStaged::Tabs => {}
+            PanelStaged::PlusMenu => view.open_surface_menu(cx),
+            PanelStaged::Empty => view.close_surfaces(thread, ThreadSurfaces::close_all, cx),
+            PanelStaged::Maximized => view.toggle_panel_maximized(thread, cx),
         }
     });
     (scene, setup)

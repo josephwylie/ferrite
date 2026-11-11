@@ -1,11 +1,13 @@
 //! Files (Claude's explorer, `files-empty.png`, `files-code.png`,
-//! `files-more-menu.png`): the dock's two-column pane — the open files'
-//! editor at the left, the checkout's tree at the right.
+//! `files-more-menu.png`): the Panel's Files Surface (ADR 0039), two
+//! columns — the open files' editor at the left, the checkout's tree at the
+//! right.
 //!
-//! - **Head:** the editor's tab strip (a preview tab, one a press opened
-//!   and the next press replaces, reads in italic; typing or a second
-//!   press keeps it), then `Go to file` (⌘P, the tree's filter), `Collapse
-//!   all folders`, `Hide file tree` (⇧⌘Y), `⋯`, expand and close.
+//! - **Its row** (under the Panel's head): the editor's own file tabs (a
+//!   preview tab, one a press opened and the next press replaces, reads in
+//!   italic; typing or a second press keeps it), then `Go to file` (⌘P,
+//!   the tree's filter), `Collapse all folders`, `Hide file tree` (⇧⌘Y)
+//!   and `⋯`.
 //! - **Tree** (`tree`): a filter field, folders that open on a press, git's
 //!   colour on each name; a right-click offers `Attach as context`, `Copy ›`
 //!   and `Show in Finder`.
@@ -29,7 +31,7 @@ use ferrite_ui::theme::{self};
 use super::editor::{self, Editor};
 use super::tree::{FileTree, Row, Status};
 use super::*;
-use crate::cockpit::view_head::Column;
+use crate::cockpit::surfaces::SurfaceId;
 use crate::cockpit::context_menu::Submenu;
 
 /// The filter field's key context: ⏎ opens the first match.
@@ -241,11 +243,7 @@ impl CockpitView {
 
     /// Show the Files pane for `thread` (the Files door, opened).
     fn show_files(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if !self.tools.dock(thread).files {
-            let dock = self.tools.docks.entry(thread).or_default();
-            dock.files = true;
-            self.give_column_to_tools(thread, cx);
-        }
+        self.upsert_surface(thread, SurfaceId::Files, cx);
     }
 
     fn select_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
@@ -486,7 +484,7 @@ impl CockpitView {
                 .h(px(PANEL_TAB_H))
                 .pl(px(PANEL_TAB_PAD_X))
                 .pr(px(SPACE_1))
-                .max_w(px(PANEL_PREVIEW_TAB_MAX_W))
+                .max_w(px(SURFACE_TAB_MAX_W))
                 .rounded(px(R_CONTROL))
                 .text_size(px(FS_LABEL))
                 .text_color(rgb(if active { INK_STRONG } else { INK_SUBTLE }))
@@ -530,16 +528,7 @@ impl CockpitView {
                 None => door.tooltip(ferrite_ui::menu::tooltip(tip)),
             }
         };
-        let expanded = self.panel.expanded;
-        div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(SPACE_1))
-            .h(px(WIN_CHROME_H))
-            .px(px(SIDE_CHAT_INSET))
-            .pr(px(super::super::panel::tools_inset() - PANEL_PAD_R))
-            .mt(px(self.head_drop(Column::Files)))
+        super::surface_bar()
             .child(
                 div()
                     .debug_selector(|| "files-tabs".into())
@@ -579,27 +568,6 @@ impl CockpitView {
                     move |view, event: &ClickEvent, _, cx| {
                         cx.stop_propagation();
                         view.open_context_menu(MenuTarget::FilesMore(thread), event.position(), cx);
-                    },
-                )),
-            )
-            .child(
-                door(
-                    "files-expand",
-                    if expanded { icons::MINIMIZE } else { icons::MAXIMIZE },
-                    if expanded { "Collapse" } else { "Expand" },
-                    None,
-                )
-                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.panel.expanded = !view.panel.expanded;
-                    cx.notify();
-                })),
-            )
-            .child(
-                door("files-close", icons::CLOSE, "Close", None).on_click(cx.listener(
-                    move |view, _: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.press_tool(Tool::Files, cx);
                     },
                 )),
             )

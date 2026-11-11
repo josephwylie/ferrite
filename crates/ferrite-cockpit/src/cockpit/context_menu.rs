@@ -33,8 +33,6 @@ pub(super) enum MenuTarget {
     },
     /// The page a Pane's preview shows: its title's menu.
     Page(PaneIdentity),
-    /// The title bar's `⋯`: the Thread's checkout, in Finder or as a path.
-    Tools(ThreadId),
     /// A Files tree row (the path is the Files state's `pressed`).
     File(ThreadId),
     /// The Files pane's `⋯`.
@@ -45,6 +43,10 @@ pub(super) enum MenuTarget {
     /// The terminal's right-click, and its `⋯`.
     Terminal(ThreadId),
     TerminalMore(ThreadId),
+    /// The Panel head's `+`: every Surface the Thread's Panel can open.
+    SurfaceMenu(ThreadId),
+    /// A Panel tab's right-click, by its place in the strip.
+    SurfaceTab { thread: ThreadId, at: usize },
 }
 
 /// One thing a context-menu row does.
@@ -110,6 +112,13 @@ pub(super) enum MenuVerb {
     CopyLink,
     /// Move the Thread into this Group (Claude's `Move to section ›`).
     JoinGroup(GroupId),
+    /// A `+` menu row: its Surface opens in the Panel.
+    OpenSurface(panel::Opener),
+    /// A Panel tab's closes.
+    CloseSurface,
+    CloseOtherSurfaces,
+    CloseSurfacesRight,
+    CloseAllSurfaces,
 }
 
 /// A parent row's submenu.
@@ -348,13 +357,8 @@ impl CockpitView {
             MenuTarget::ChangesMore(thread) => rows = self.changes_more_rows(thread),
             MenuTarget::Terminal(_) => rows = self.terminal_context_rows(),
             MenuTarget::TerminalMore(_) => rows = self.terminal_more_rows(),
-            MenuTarget::Tools(_) => {
-                rows.push(Some((
-                    menu::Item::new("Reveal in Finder"),
-                    MenuVerb::Reveal,
-                )));
-                rows.push(Some((menu::Item::new("Copy path"), MenuVerb::CopyPath)));
-            }
+            MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread),
+            MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at),
             MenuTarget::Page(owner) => {
                 let address = self
                     .page_source(owner)
@@ -683,6 +687,12 @@ impl CockpitView {
                 }
             }
             (MenuTarget::Page(owner), verb) => self.run_page_verb(owner, verb, cx),
+            (MenuTarget::SurfaceMenu(thread), MenuVerb::OpenSurface(opener)) => {
+                self.run_opener(thread, opener, cx)
+            }
+            (MenuTarget::SurfaceTab { thread, at }, verb) => {
+                self.run_surface_tab_verb(thread, at, verb, cx)
+            }
             (MenuTarget::File(thread) | MenuTarget::FilesMore(thread), MenuVerb::Files(verb)) => {
                 self.run_files_verb(thread, verb, cx)
             }
@@ -782,13 +792,14 @@ impl CockpitView {
                     MenuTarget::Parked
                     | MenuTarget::Review { .. }
                     | MenuTarget::Prompt { .. }
-                    | MenuTarget::Tools(_)
                     | MenuTarget::File(_)
                     | MenuTarget::FilesMore(_)
                     | MenuTarget::ChangesScope(_)
                     | MenuTarget::ChangesMore(_)
                     | MenuTarget::Terminal(_)
                     | MenuTarget::TerminalMore(_)
+                    | MenuTarget::SurfaceMenu(_)
+                    | MenuTarget::SurfaceTab { .. }
                     | MenuTarget::Page(_) => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);

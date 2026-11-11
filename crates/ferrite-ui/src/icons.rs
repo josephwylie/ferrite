@@ -145,6 +145,8 @@ icons![
     "pin",
     "clock",
     // (end UI refresh)
+    // A side chat's Surface tab (Lucide's messages-square, T3's).
+    "messages-square",
 ];
 
 pub const SIDEBAR: &str = "icons/sidebar.svg";
@@ -307,6 +309,8 @@ pub const CODE: &str = "icons/code.svg";
 pub const PIN: &str = "icons/pin.svg";
 pub const CLOCK: &str = "icons/clock.svg";
 // (end UI refresh)
+/// A side chat: its Surface tab and the + menu's row.
+pub const MESSAGES_SQUARE: &str = "icons/messages-square.svg";
 
 pub struct Assets;
 

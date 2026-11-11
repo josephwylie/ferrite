@@ -1,7 +1,7 @@
-//! The Terminal column (`cockpit/tools/terminal.rs`): a shell per tab in the
-//! Thread's folder, its head, its menus, and `Attach as context`.
+//! The Terminal Surface (`cockpit/tools/terminal.rs`): a shell per Panel
+//! tab in the Thread's folder, its menus, and `Attach as context`.
 use super::*;
-use crate::cockpit::tools::Tool;
+use crate::cockpit::surfaces::SurfaceId;
 
 fn window<'a>(
     name: &str,
@@ -18,12 +18,13 @@ fn window<'a>(
 }
 
 fn opened(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
-    view.update(cx, |view, cx| view.press_tool(Tool::Terminal, cx));
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.update(cx, |view, cx| view.new_terminal_surface(thread, cx));
     tick(cx);
 }
 
-fn tabs(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> Vec<String> {
-    view.read_with(cx, |view, _| view.terminal_tab_names(thread))
+fn numbers(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> Vec<u64> {
+    view.read_with(cx, |view, _| view.terminal_numbers(thread))
 }
 
 /// Run `command` in the shown shell and wait for `needle` to be on screen.
@@ -33,38 +34,39 @@ fn run(view: &Entity<CockpitView>, thread: ThreadId, command: &'static [u8], cx:
 }
 
 #[gpui::test]
-fn the_door_opens_a_shell_in_its_own_column_and_closing_ends_it(cx: &mut TestAppContext) {
+fn the_door_opens_a_shell_in_a_panel_tab_and_closing_it_ends_it(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-door", cx);
     opened(&view, cx);
-    assert!(cx.debug_bounds("dock-terminal").is_some());
+    assert!(cx.debug_bounds("terminal-pane").is_some());
     assert!(cx.debug_bounds("terminal").is_some(), "the grid");
-    assert_eq!(tabs(&view, thread, cx), ["Terminal 1"]);
-    assert!(view.read_with(cx, |view, _| view.tool_pressed(Tool::Terminal)));
-    let close = cx.debug_bounds("terminal-close").unwrap();
-    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    assert!(cx.debug_bounds("panel-tab-Terminal-1").is_some(), "its tab");
+    assert_eq!(numbers(&view, thread, cx), [1]);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)));
+    view.update(cx, |view, cx| view.close_surface(thread, &SurfaceId::Terminal(1), cx));
     tick(cx);
-    assert!(cx.debug_bounds("dock-terminal").is_none());
-    assert!(tabs(&view, thread, cx).is_empty(), "its shell ended with it");
+    assert!(cx.debug_bounds("terminal-pane").is_none());
+    assert!(numbers(&view, thread, cx).is_empty(), "its shell ended with it");
 }
 
+/// Each new terminal is its own tab and shell; ⌘J shows the last one, not
+/// another.
 #[gpui::test]
-fn a_plus_makes_a_second_tab_and_an_x_ends_that_shell(cx: &mut TestAppContext) {
+fn a_second_terminal_is_a_second_tab_and_cmd_j_shows_the_last(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-tabs", cx);
     opened(&view, cx);
-    assert!(cx.debug_bounds("terminal-tab-close-0").is_none(), "one tab has no x");
-    let plus = cx.debug_bounds("terminal-new").unwrap();
-    cx.simulate_click(plus.center(), gpui::Modifiers::none());
+    opened(&view, cx);
+    assert_eq!(numbers(&view, thread, cx), [1, 2]);
+    assert!(cx.debug_bounds("panel-tab-Terminal-2").is_some());
+    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
     tick(cx);
-    assert_eq!(tabs(&view, thread, cx), ["Terminal 1", "Terminal 2"]);
-    let x = cx.debug_bounds("terminal-tab-close-1").expect("each tab has an x");
-    cx.simulate_click(x.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("cmd-j");
     tick(cx);
-    assert_eq!(tabs(&view, thread, cx), ["Terminal 1"]);
-    assert!(cx.debug_bounds("terminal-tab-close-0").is_none(), "bare again");
-    // The last tab's x is the column's close.
-    view.update(cx, |view, cx| view.close_terminal_tab(thread, 0, cx));
+    assert_eq!(numbers(&view, thread, cx), [1, 2], "no third shell");
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(2)));
+    view.update(cx, |view, cx| view.close_surface(thread, &SurfaceId::Terminal(2), cx));
     tick(cx);
-    assert!(cx.debug_bounds("dock-terminal").is_none());
+    assert_eq!(numbers(&view, thread, cx), [1]);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)), "its neighbour");
 }
 
 #[gpui::test]

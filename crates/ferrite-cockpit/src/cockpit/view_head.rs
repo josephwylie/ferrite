@@ -14,12 +14,12 @@
 //! so while the panel is hidden the branch follows the ▾ in the quiet ink
 //! (`head_branch`). A Group names itself — its title, `<project> · N
 //! threads`, and `New thread`. There is no layout switch and no PR button.
-//! The title-bar tools (`title_tools_element`, `tools`) stand at the row's
-//! right end, against the right column's left edge (or the window's), so
-//! they ride with the column as Claude's do: Open a thread beside, then
-//! Claude's five — the session rail, Terminal, Changes, Files and `⋯`
-//! (the checkout in Finder, its path). The head leaves them their room.
-//! Claude's browser has nothing behind it here, so it is not drawn.
+//! The title bar keeps one tool (ADR 0039, `title_tools_element`): the
+//! Panel's toggle, at the row's right end at the window's edge, where it
+//! stays whatever the Panel holds. Everything else the old tools opened is
+//! a Surface of the Panel, opened from its `+` menu or its chord; a Thread
+//! beside is the palette's (`open_palette_beside`). The head leaves the
+//! toggle its room.
 //!
 //! The head is an overlay laid after the titlebar's drag strip
 //! (the frame's titlebar), over the frame the board column already paints
@@ -28,7 +28,6 @@
 //! the strip beneath and drags the window (on Windows, the controls take
 //! their region out of the strip's `Drag` hit test the same way).
 
-use super::tools::Tool;
 use super::*;
 use ferrite_ui::{components, icons, theme};
 
@@ -85,33 +84,13 @@ impl CockpitView {
         super::panel::tools_inset()
     }
 
-    /// How far a column's head row stands below the window's top. The title
-    /// tools stand over the window's right edge whatever column is there, so
-    /// the head row of the rightmost column (`Column`) stands under them,
-    /// not beside them where they would crowd its tabs and doors.
-    pub(super) fn head_drop(&self, column: Column) -> f32 {
-        let tools = self.title_tools().len();
-        let shown = tools > 0 && self.panel_candidate().is_some() && !self.docked_pane_covers();
-        let rightmost = match column {
-            Column::Terminal => true,
-            Column::Files => !self.tool_pressed(Tool::Terminal),
-            Column::Rail => !self.dock_shown(self.focused_thread()),
-        };
-        if rightmost && shown {
-            theme::WIN_CHROME_H
-        } else {
-            0.
-        }
-    }
-
     /// The head's padding at its end, which keeps its content clear of
     /// the tools (`right` is where the head ends).
     fn view_head_pad_r(&self, right: f32) -> f32 {
-        let tools = self.title_tools().len();
-        if tools == 0 {
+        if !self.panel_toggle_shown() {
             return theme::VIEW_HEAD_PAD_X;
         }
-        (self.title_tools_right() + tools_width(tools) + theme::VIEW_HEAD_PAD_X - right)
+        (self.title_tools_right() + theme::ICON_BUTTON + theme::VIEW_HEAD_PAD_X - right)
             .max(theme::VIEW_HEAD_PAD_X)
     }
 
@@ -176,26 +155,33 @@ impl CockpitView {
             .into_any_element()
     }
 
-    /// The tools the focused Thread has something behind, left to right.
-    /// A draft and the empty board have none.
-    fn title_tools(&self) -> Vec<TitleTool> {
-        if self.empty_board_shown() {
-            return Vec::new();
-        }
-        let Some(thread) = self.focused_thread() else {
-            return Vec::new();
-        };
-        let checkout = self.thread_path(thread).is_some();
-        title_tools(checkout, self.on_machine(), self.grid_board())
+    /// Whether the title bar shows the Panel's toggle: for a Thread, not a
+    /// draft or the empty board.
+    fn panel_toggle_shown(&self) -> bool {
+        !self.empty_board_shown() && self.focused_thread().is_some()
     }
 
-    /// The title-bar tools, laid by the frame at the row's right end
-    /// at the window's edge (`title_tools_right`).
+    /// The title bar's one tool (ADR 0039), laid by the frame at the row's
+    /// right end at the window's edge (`title_tools_right`): the Panel's
+    /// toggle (T3's "Toggle right panel"), pressed while the Panel shows.
     pub(super) fn title_tools_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let tools = self.title_tools();
-        if tools.is_empty() || self.panel_candidate().is_none() || self.docked_pane_covers() {
+        if !self.panel_toggle_shown() {
             return None;
         }
+        let door = crate::nav::icon_button(
+            "panel-toggle",
+            icons::PANEL_RIGHT,
+            theme::NAV_TOGGLE_GLYPH,
+            theme::ICON_BUTTON,
+            theme::R_CONTROL,
+        )
+        .occlude()
+        .when(self.panel_pane().is_some(), |door| door.bg(theme::paint::SELECTED))
+        .tooltip(ferrite_ui::menu::action_tooltip("Toggle panel", "cockpit::TogglePanel"))
+        .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+            cx.stop_propagation();
+            view.toggle_panel_now(cx);
+        }));
         Some(
             div()
                 .debug_selector(|| "title-tools".into())
@@ -205,78 +191,9 @@ impl CockpitView {
                 .h(px(theme::WIN_CHROME_H))
                 .flex()
                 .items_center()
-                .gap(px(theme::TITLE_TOOLS_GAP))
-                .children(tools.into_iter().map(|tool| self.title_tool(tool, cx)))
+                .child(door)
                 .into_any_element(),
         )
-    }
-
-    fn title_tool(&self, tool: TitleTool, cx: &mut Context<Self>) -> AnyElement {
-        let (key, glyph, tip, chord) = match tool {
-            TitleTool::Split => ("title-split", icons::SPLIT_RIGHT, "Open a thread beside", None),
-            TitleTool::Tool(Tool::Rail) => (
-                "panel-toggle",
-                icons::PANEL_RIGHT,
-                "Show session rail",
-                Some("cockpit::TogglePanel"),
-            ),
-            TitleTool::Tool(Tool::Terminal) => (
-                "title-terminal",
-                icons::TERMINAL,
-                "Terminal",
-                Some("cockpit::ToggleTerminal"),
-            ),
-            TitleTool::Tool(Tool::Changes) => (
-                "title-changes",
-                icons::DIFF,
-                "Changes",
-                Some("cockpit::ToggleChanges"),
-            ),
-            TitleTool::Tool(Tool::Files) => (
-                "title-files",
-                icons::FOLDER,
-                "Files",
-                Some("cockpit::ToggleFiles"),
-            ),
-            TitleTool::Browser => ("open-browser", icons::GLOBE, "Open browser", None),
-            TitleTool::More => ("title-more", icons::ELLIPSIS, "More", None),
-        };
-        let pressed = matches!(tool, TitleTool::Tool(tool) if self.tool_pressed(tool));
-        let door = crate::nav::icon_button(
-            key,
-            glyph,
-            theme::NAV_TOGGLE_GLYPH,
-            theme::ICON_BUTTON,
-            theme::R_CONTROL,
-        )
-        .occlude()
-        .when(pressed, |door| door.bg(theme::paint::SELECTED));
-        let door = match chord {
-            Some(action) => door.tooltip(ferrite_ui::menu::action_tooltip(tip, action)),
-            None => door.tooltip(ferrite_ui::menu::tooltip(tip)),
-        };
-        door.on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            match tool {
-                TitleTool::Tool(tool) => view.press_tool(tool, cx),
-                TitleTool::Split => view.open_palette_beside(window, cx),
-                TitleTool::Browser => {
-                    if let Some(thread) = view.focused_thread() {
-                        view.open_browser(thread, cx);
-                    }
-                }
-                TitleTool::More => {
-                    if let Some(thread) = view.focused_thread() {
-                        view.open_context_menu(
-                            MenuTarget::Tools(thread),
-                            event.position(),
-                            cx,
-                        );
-                    }
-                }
-            }
-        }))
-        .into_any_element()
     }
 
     /// Solo: the focused Thread's title and its ▾, as Claude's, then the
@@ -405,58 +322,6 @@ impl CockpitView {
     }
 }
 
-/// A title-bar tool (Claude's, where Ferrite has the surface).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TitleTool {
-    /// A Thread beside this one (the old tab strip's split-right button).
-    Split,
-    /// One of Claude's: the rail, Terminal, Changes or Files.
-    Tool(Tool),
-    /// The Thread's Conversation browser.
-    Browser,
-    /// Claude's `⋯`: the checkout in Finder, its path.
-    More,
-}
-
-/// Which tools show: the rail and the browser for any Thread; Terminal,
-/// Changes, Files and `⋯` need a checkout on this computer (a machine's is
-/// not on this disk); a board of Panes already has them side by side, so
-/// it offers no split.
-fn title_tools(checkout: bool, on_machine: bool, grid_board: bool) -> Vec<TitleTool> {
-    let mut tools = Vec::new();
-    if !grid_board {
-        tools.push(TitleTool::Split);
-    }
-    tools.push(TitleTool::Tool(Tool::Rail));
-    let local = checkout && !on_machine;
-    if local {
-        tools.extend([
-            TitleTool::Tool(Tool::Terminal),
-            TitleTool::Tool(Tool::Changes),
-            TitleTool::Tool(Tool::Files),
-        ]);
-    }
-    tools.push(TitleTool::Browser);
-    if local {
-        tools.push(TitleTool::More);
-    }
-    tools
-}
-
-/// A column of the right side, in the order they stand: the rail, then the
-/// dock's Files or Changes, then its terminal at the window's edge.
-#[derive(Clone, Copy)]
-pub(super) enum Column {
-    Rail,
-    Files,
-    Terminal,
-}
-
-/// `count` tools' doors, `TITLE_TOOLS_GAP` apart.
-fn tools_width(count: usize) -> f32 {
-    count as f32 * theme::ICON_BUTTON + count.saturating_sub(1) as f32 * theme::TITLE_TOOLS_GAP
-}
-
 /// One history arrow: the sidebar toggle's door while there is somewhere
 /// to go, else its glyph in `HISTORY_ARROW_DISABLED_INK` with no hover.
 /// The tooltip shows either way, so the chord is learnt at the ends too.
@@ -536,35 +401,3 @@ fn control(button: impl IntoElement) -> AnyElement {
         .into_any_element()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{title_tools, TitleTool};
-    use crate::cockpit::tools::Tool as T;
-
-    /// Each tool shows only with something behind it.
-    #[test]
-    fn a_title_tool_shows_only_with_its_surface() {
-        use TitleTool::{Browser, Split, More, Tool};
-        let all = [
-            Split,
-            Tool(T::Rail),
-            Tool(T::Terminal),
-            Tool(T::Changes),
-            Tool(T::Files),
-            Browser,
-            More,
-        ];
-        assert_eq!(title_tools(true, false, false), all);
-        assert_eq!(
-            title_tools(true, true, false),
-            [Split, Tool(T::Rail), Browser],
-            "a machine's checkout is not on this disk"
-        );
-        assert_eq!(title_tools(false, false, false), [Split, Tool(T::Rail), Browser]);
-        assert_eq!(
-            title_tools(true, false, true),
-            all[1..],
-            "a board already has Panes side by side"
-        );
-    }
-}
