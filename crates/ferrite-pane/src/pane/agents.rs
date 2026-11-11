@@ -46,6 +46,18 @@ impl AgentClock {
         }
     }
 
+    /// How the clock reads: while it runs, counting on its own (the pulse
+    /// clock wakes it each second, `working::counting_clock`), not only
+    /// when something else redraws the transcript.
+    fn face(self) -> AnyElement {
+        match self {
+            Self::Since(at) => {
+                super::working::counting_clock(at, "agent-elapsed-live", agent_elapsed)
+            }
+            Self::Took(took) => SharedString::from(agent_elapsed(took)).into_any_element(),
+        }
+    }
+
     /// The longest of `clocks`: a card's, its agents' together.
     pub(crate) fn longest(clocks: impl Iterator<Item = Self>) -> Option<Self> {
         clocks.max_by_key(|clock| clock.elapsed())
@@ -157,7 +169,7 @@ pub(crate) fn render_agent(
             .flex_shrink_0()
             .text_size(px(theme::FS_BADGE))
             .text_color(rgb(INK_SUBTLE))
-            .child(SharedString::from(agent_elapsed(clock.elapsed())))
+            .child(clock.face())
     });
     let opens = open.is_some();
     let row_selector = format!("agent-row-{}", tool.call);
@@ -331,7 +343,7 @@ pub(crate) fn render_agent_card(
                 .flex_shrink_0()
                 .text_size(px(theme::FS_BADGE))
                 .text_color(rgb(INK_SUBTLE))
-                .child(SharedString::from(agent_elapsed(clock.elapsed())))
+                .child(clock.face())
         }))
         .child(
             icons::icon(
