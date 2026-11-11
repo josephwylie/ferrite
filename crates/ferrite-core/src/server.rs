@@ -31,6 +31,7 @@ pub mod agent;
 mod bridge;
 mod browser;
 mod calls;
+mod coordinator;
 mod factory;
 pub mod github;
 mod render;
@@ -954,6 +955,7 @@ impl Server {
             }
             Op::Task { action } => self.task_command(action),
             Op::Workflow { action } => self.workflow_command(action),
+            Op::Coordinator { action } => self.coordinator_command(action),
             Op::GitHub { ask } => {
                 let github = Arc::clone(&self.github);
                 let ask = ask.clone();

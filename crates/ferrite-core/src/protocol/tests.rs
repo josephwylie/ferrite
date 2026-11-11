@@ -799,6 +799,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         source: None,
                     }],
                     workflows: Vec::new(),
+                    ..Default::default()
                 },
             }),
         ),
@@ -1049,6 +1050,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         next_step: 2,
                         automation: Default::default(),
                     }],
+                    ..Default::default()
                 },
             }),
         ),

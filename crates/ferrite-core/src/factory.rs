@@ -29,10 +29,12 @@ use crate::store::Provider;
 use crate::workspace::registry::ProjectId;
 use crate::ThreadId;
 
+mod coordinator;
 mod direct;
 mod starts;
 mod workflow;
 
+pub use coordinator::{briefing, Act, Coordinator, Proposal, ProposalId, ProposalStatus};
 pub use direct::{Answered, Feedback, FeedbackKind, Override, Oversight, Question, ThenReturn};
 pub use starts::{when_label, zone_label};
 pub use starts::{
@@ -260,9 +262,31 @@ pub struct Board {
     /// Every Project's Workflows.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflows: Vec<Workflow>,
+    /// Every Project's Coordinator that has been spoken to (#224).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub coordinators: Vec<Coordinator>,
+    /// Every Coordinator's proposals, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proposals: Vec<Proposal>,
 }
 
 impl Board {
+    pub fn coordinator(&self, project: ProjectId) -> Option<&Coordinator> {
+        self.coordinators
+            .iter()
+            .find(|coordinator| coordinator.project == project)
+    }
+
+    pub fn proposal(&self, id: &str) -> Option<&Proposal> {
+        self.proposals.iter().find(|proposal| proposal.id == id)
+    }
+
+    pub fn proposals_of(&self, project: ProjectId) -> impl Iterator<Item = &Proposal> {
+        self.proposals
+            .iter()
+            .filter(move |proposal| proposal.project == project)
+    }
+
     pub fn of(&self, project: ProjectId) -> impl Iterator<Item = &Task> {
         self.tasks
             .iter()
@@ -453,6 +477,45 @@ pub enum Command {
         identity: String,
         instructions: String,
     },
+    /// The operator speaks to `project`'s Coordinator: it starts, with
+    /// its briefing, if it has not (#224).
+    CoordinatorSay {
+        project: ProjectId,
+        text: String,
+    },
+    /// The Server started the Coordinator a [`Effect::StartCoordinator`]
+    /// asked for.
+    CoordinatorStarted {
+        project: ProjectId,
+        thread: ThreadId,
+    },
+    /// It could not.
+    CoordinatorFailed {
+        project: ProjectId,
+        why: String,
+    },
+    /// The Coordinator's Provider, model and effort, from its next turn.
+    CoordinatorAgent {
+        project: ProjectId,
+        agent: Agent,
+    },
+    /// A Coordinator, known by its own Thread, proposes `act`; the save's
+    /// check is against `catalog`.
+    Propose {
+        coordinator: ThreadId,
+        act: Act,
+        catalog: Catalog,
+    },
+    /// The operator accepts a proposal: its act runs as theirs (a Task on
+    /// `agent` when one-off).
+    AcceptProposal {
+        proposal: ProposalId,
+        agent: Agent,
+        catalog: Catalog,
+    },
+    DismissProposal {
+        proposal: ProposalId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -464,6 +527,8 @@ pub enum Answer {
     Version(u32),
     /// Whether the command changed anything: a repeat does not.
     Changed(bool),
+    /// The proposal raised, or the same one already waiting.
+    Proposal(ProposalId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -478,6 +543,9 @@ pub enum RefusalCode {
     Invalid,
     /// The change could not be written; nothing changed.
     Failed,
+    UnknownProposal,
+    /// The Thread is no Project's Coordinator.
+    NotACoordinator,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -556,6 +624,19 @@ pub enum Effect {
         version: u32,
         query: GitHubQuery,
     },
+    /// Start `project`'s Coordinator, owned by its Factory, in its main
+    /// checkout, on `agent` (the operator's default when none), and send
+    /// it `prompt`; answered with [`Command::CoordinatorStarted`].
+    StartCoordinator {
+        project: ProjectId,
+        agent: Option<Agent>,
+        prompt: String,
+    },
+    /// Set an open Thread's Provider, model and effort for its next turn.
+    Tune {
+        thread: ThreadId,
+        agent: Agent,
+    },
 }
 
 /// What is written.
@@ -570,6 +651,13 @@ struct State {
     next_workflow: u64,
     #[serde(default)]
     workflows: Vec<Workflow>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    coordinators: Vec<Coordinator>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    proposals: Vec<Proposal>,
+    /// The next proposal's number.
+    #[serde(default = "one")]
+    next_proposal: u64,
 }
 
 fn one() -> u64 {
@@ -598,6 +686,9 @@ impl Factory {
                 tasks: Vec::new(),
                 next_workflow: 1,
                 workflows: Vec::new(),
+                coordinators: Vec::new(),
+                proposals: Vec::new(),
+                next_proposal: 1,
             },
             path: None,
             revision: 0,
@@ -646,6 +737,7 @@ impl Factory {
         let _ = self.change(|state, effects| {
             state.step_starts(now_ms, effects);
             state.step(now_ms, workers, limit, effects);
+            state.step_coordinators(effects);
             Ok(())
         });
         self.poll(now_ms);
@@ -683,6 +775,8 @@ impl Factory {
         Board {
             tasks: self.state.tasks.clone(),
             workflows: self.state.workflows.clone(),
+            coordinators: self.state.coordinators.clone(),
+            proposals: self.state.proposals.clone(),
         }
     }
 
@@ -1152,6 +1246,13 @@ impl State {
             | Command::Backlog { .. }
             | Command::GitHubRead { .. }
             | Command::Submit { .. } => self.automate(command, now_ms, effects),
+            Command::CoordinatorSay { .. }
+            | Command::CoordinatorStarted { .. }
+            | Command::CoordinatorFailed { .. }
+            | Command::CoordinatorAgent { .. }
+            | Command::Propose { .. }
+            | Command::AcceptProposal { .. }
+            | Command::DismissProposal { .. } => self.coordinate(command, now_ms, effects),
             Command::Delete { task } => {
                 let at = self
                     .tasks

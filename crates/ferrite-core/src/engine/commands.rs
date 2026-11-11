@@ -292,6 +292,7 @@ impl Engine {
             | Op::Task { .. }
             | Op::Workflow { .. }
             | Op::GitHub { .. }
+            | Op::Coordinator { .. }
             | Op::Unknown => Err(unknown()),
         }
     }

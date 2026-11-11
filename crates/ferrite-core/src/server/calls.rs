@@ -259,6 +259,12 @@ impl Server {
                 })
             }
             Method::TaskSubmit(params) => self.api_task_submit(params),
+            Method::ProposalRaise(params) => self.api_proposal_raise(params),
+            Method::ProposalList(params) => self.api_proposal_list(params),
+            Method::ProposalAccept(params) => self.api_proposal_answer(params.proposal, true),
+            Method::ProposalDismiss(params) => self.api_proposal_answer(params.proposal, false),
+            Method::CoordinatorSay(params) => self.api_coordinator_say(params),
+            Method::CoordinatorSet(params) => self.api_coordinator_set(params),
             Method::NotificationShow(params) => {
                 self.say(ServerMessage::Notification {
                     title: params.title,

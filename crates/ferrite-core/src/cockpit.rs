@@ -2573,6 +2573,7 @@ impl Cockpit {
                 crate::factory::Answer::Workflow(workflow) => Done::Workflow { workflow },
                 crate::factory::Answer::Step(step) => Done::Step { step },
                 crate::factory::Answer::Version(version) => Done::Version { version },
+                crate::factory::Answer::Proposal(proposal) => Done::Proposal { proposal },
             }));
         }
         let done = self

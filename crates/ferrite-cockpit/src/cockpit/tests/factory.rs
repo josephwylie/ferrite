@@ -98,6 +98,7 @@ fn the_board_lays_cards_in_their_columns(cx: &mut TestAppContext) {
                 Some("Stopped by you"),
             ),
         ],
+        ..Default::default()
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
@@ -160,6 +161,7 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
             None,
             None,
         )],
+        ..Default::default()
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
@@ -201,6 +203,7 @@ fn a_tasks_panel_shows_its_worker_and_offers_delete_only_at_rest(cx: &mut TestAp
             view.cockpit.fixture_factory(Board {
                 workflows: Vec::new(),
                 tasks: vec![task("t-1", project, status, Some(worker), None, None)],
+                ..Default::default()
             });
             view.open_task("t-1", cx);
         });
@@ -227,6 +230,7 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
             None,
             Some("No access"),
         )],
+        ..Default::default()
     });
     cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));

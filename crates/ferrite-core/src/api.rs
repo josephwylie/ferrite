@@ -152,6 +152,10 @@ pub enum Code {
     NotAWorker,
     /// The Task's state does not allow it.
     NotNow,
+    /// No proposal has that id (#224).
+    UnknownProposal,
+    /// A proposal from a Thread that is no Project's Coordinator.
+    NotACoordinator,
     Failed,
     /// The CLI's own: no Server answers at the socket.
     ServerUnavailable,
@@ -166,6 +170,8 @@ impl From<crate::factory::Refusal> for ApiError {
             RefusalCode::UnknownStep => Code::UnknownStep,
             RefusalCode::NotAWorker => Code::NotAWorker,
             RefusalCode::NotNow => Code::NotNow,
+            RefusalCode::UnknownProposal => Code::UnknownProposal,
+            RefusalCode::NotACoordinator => Code::NotACoordinator,
             RefusalCode::Invalid => Code::InvalidRequest,
             RefusalCode::Failed => Code::Failed,
         };

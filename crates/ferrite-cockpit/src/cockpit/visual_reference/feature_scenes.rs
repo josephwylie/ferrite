@@ -797,6 +797,7 @@ fn factory() -> (Scene, Setup) {
                 )]),
             ),
         ],
+        ..Default::default()
     };
     scene.core.fixture_factory(board);
     let setup: Setup = Box::new(move |view, _, cx| {
