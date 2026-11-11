@@ -334,6 +334,77 @@ fn a_task_is_stopped_resumed_and_deleted_leaving_dirty_work_alone() {
     );
 }
 
+/// G7: a save is checked against the skills the Server finds installed
+/// in the Workflow's Project, the same from the CLI and from a window,
+/// whatever the window believes is installed.
+#[test]
+fn a_save_is_checked_against_the_servers_skills_from_the_cli_and_a_window() {
+    let (harness, project, _repo) = factory_project("factory-skills");
+    *harness.installed.lock().unwrap() = Some(vec!["tdd".into()]);
+    let mut window = attach(&harness.address);
+    let (status, said, refused) = cli(
+        &harness.api,
+        "workflow.create",
+        serde_json::json!({ "project": project, "name": "Skilled" }),
+    );
+    assert_eq!((status, refused.len()), (0, 0), "{refused:?}");
+    let workflow = said[0]["result"]["workflow"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let step = said[0]["result"]["workflow"]["draft"]["steps"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let edit = |skills: serde_json::Value| {
+        let (status, said, refused) = cli(
+            &harness.api,
+            "step.edit",
+            serde_json::json!({
+                "workflow": workflow, "step": step, "instructions": "Do it", "skills": skills,
+            }),
+        );
+        assert_eq!((status, refused.len()), (0, 0), "{refused:?}");
+        said[0]["result"]["problems"].to_string()
+    };
+    let missing = "the skill changelog is not installed for";
+    let problems = edit(serde_json::json!(["changelog"]));
+    assert!(problems.contains(missing), "{problems}");
+
+    let (_, _, refused) = cli(
+        &harness.api,
+        "workflow.save",
+        serde_json::json!({ "workflow": workflow }),
+    );
+    let from_cli = refused[0]["error"]["message"].to_string();
+    assert!(from_cli.contains(missing), "{refused:?}");
+    let believed = vec![(crate::store::Provider::Claude, vec!["changelog".into()])];
+    let from_window = match window.command(
+        1,
+        Op::Workflow {
+            action: protocol::WorkflowAction::Save {
+                workflow: workflow.clone(),
+                skills: believed,
+            },
+        },
+    ) {
+        ServerMessage::Reply {
+            error: Some(error), ..
+        } => error.message,
+        reply => panic!("{reply:?}"),
+    };
+    assert!(from_window.contains(missing), "{from_window}");
+
+    edit(serde_json::json!(["tdd"]));
+    let (status, said, refused) = cli(
+        &harness.api,
+        "workflow.save",
+        serde_json::json!({ "workflow": workflow }),
+    );
+    assert_eq!((status, refused.len()), (0, 0), "{refused:?}");
+    assert_eq!(said[0]["result"]["version"], 1, "{said:?}");
+}
+
 /// AC (#221): a Workflow authored wholly from the CLI, with custom Step
 /// names, is saved as version 1 and that starts nothing; a Task on it
 /// runs its Steps one at a time, each Worker on its own Step's Provider,
@@ -476,7 +547,7 @@ fn a_workflow_task_runs_each_step_with_its_own_agent_and_context() {
     assert!(harness.sessions.try_recv().is_err(), "nothing more started");
 }
 
+mod coordinator;
 mod direction;
 mod merging;
 mod recovery;
-mod coordinator;

@@ -217,7 +217,7 @@ impl Server {
                     name: params.name,
                 },
             ),
-            Method::WorkflowSave(params) => self.api_workflow_save(params.workflow, Vec::new()),
+            Method::WorkflowSave(params) => self.api_workflow_save(params.workflow),
             Method::StepAdd(params) => self.api_author(
                 params.workflow.clone(),
                 crate::factory::Command::AddStep {

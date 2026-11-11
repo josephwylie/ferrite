@@ -164,8 +164,8 @@ impl Server {
         &mut self,
         action: &CoordinatorAction,
     ) -> Result<Option<Done>, WireError> {
-        let catalog = self.catalog(Vec::new());
-        let Some(command) =
+        let catalog = crate::factory::Catalog::default();
+        let Some(mut command) =
             crate::factory::coordinator_command(action.clone(), &self.factory_agent, catalog)
         else {
             return Err(WireError {
@@ -173,6 +173,14 @@ impl Server {
                 message: "this server does not know that Coordinator command".into(),
             });
         };
+        if let Command::AcceptProposal {
+            proposal, catalog, ..
+        } = &mut command
+        {
+            let workflow = self.saved_by(proposal);
+            let from_window = std::mem::take(&mut catalog.skills);
+            *catalog = self.catalog(workflow.as_deref(), from_window);
+        }
         let (answer, _) = self
             .factory_command(command)
             .map_err(super::factory::wire_error)?;
@@ -237,10 +245,14 @@ impl Server {
                 },
             },
         };
+        let saves = match &act {
+            Act::Save { workflow, .. } => Some(workflow.clone()),
+            _ => None,
+        };
         let propose = Command::Propose {
             coordinator: params.coordinator,
             act,
-            catalog: self.catalog(Vec::new()),
+            catalog: self.catalog(saves.as_deref(), Vec::new()),
         };
         match self.factory_command(propose)? {
             (Answer::Proposal(proposal), _) => Ok(json!({
@@ -267,6 +279,14 @@ impl Server {
         Ok(json!({ "proposals": proposals }))
     }
 
+    /// The Workflow `proposal` would save, if it is a save.
+    fn saved_by(&self, proposal: &str) -> Option<String> {
+        match &self.factory.proposal(proposal)?.act {
+            Act::Save { workflow, .. } => Some(workflow.clone()),
+            _ => None,
+        }
+    }
+
     /// Accept (its act runs as the operator's) or dismiss a proposal.
     pub(super) fn api_proposal_answer(
         &mut self,
@@ -274,10 +294,11 @@ impl Server {
         accept: bool,
     ) -> Result<Value, ApiError> {
         let command = if accept {
+            let workflow = self.saved_by(&proposal);
             Command::AcceptProposal {
                 proposal: proposal.clone(),
                 agent: self.factory_agent.clone(),
-                catalog: self.catalog(Vec::new()),
+                catalog: self.catalog(workflow.as_deref(), Vec::new()),
             }
         } else {
             Command::DismissProposal {

@@ -37,6 +37,9 @@ pub(super) fn scratch(name: &str) -> PathBuf {
 type Answers = Arc<Mutex<Vec<(String, DecisionAnswer)>>>;
 /// The client ids of the prompts handed to the providers' queues.
 type Queued = Arc<Mutex<Vec<String>>>;
+/// The skills every Provider lists as installed, once a test says;
+/// `None`, the Server cannot list them.
+type Installed = Arc<Mutex<Option<Vec<String>>>>;
 
 struct Scripted {
     events: Receiver<SessionEvent>,
@@ -128,6 +131,7 @@ struct Spawn {
     gate: Option<Arc<Mutex<Receiver<()>>>>,
     can_queue: CanQueue,
     controls: Controls,
+    installed: Installed,
 }
 
 impl Spawn {
@@ -171,6 +175,22 @@ impl Spawner for Spawn {
             Ok(Box::new(session) as Box<dyn crate::providers::Session + Send>)
         })
     }
+    fn discover_commands(
+        &mut self,
+        _provider: crate::store::Provider,
+        _cwd: &Path,
+    ) -> Option<crate::providers::commands::Discovery> {
+        let installed = self.installed.lock().unwrap().clone()?;
+        let (tx, rx) = mpsc::channel();
+        let skills = installed.into_iter().map(|name| crate::SessionCommand {
+            name,
+            description: String::new(),
+            path: None,
+            source: Some(crate::CommandSource::Skill),
+        });
+        tx.send(Ok(skills.collect())).unwrap();
+        Some(rx)
+    }
 }
 
 struct Harness {
@@ -187,6 +207,7 @@ struct Harness {
     queued: Queued,
     browser: crate::browser::Client,
     browser_disk: browser::DiskControl,
+    installed: Installed,
 }
 
 fn start(name: &str) -> Harness {
@@ -247,7 +268,9 @@ fn serve_configured(
     let answers = Answers::default();
     let queued = Queued::default();
     let launches = Launches::default();
+    let installed = Installed::default();
     let spawn = Spawn {
+        installed: installed.clone(),
         sessions,
         launches: launches.clone(),
         answers: answers.clone(),
@@ -296,6 +319,7 @@ fn serve_configured(
         queued,
         browser,
         browser_disk: disk.recv_timeout(Duration::from_secs(5)).unwrap(),
+        installed,
     }
 }
 
@@ -1550,6 +1574,7 @@ pub(super) fn spawn() -> (Box<dyn Spawner>, Receiver<Sender<SessionEvent>>) {
         gate: None,
         can_queue: None,
         controls: Controls::default(),
+        installed: Installed::default(),
     };
     (Box::new(spawner), providers)
 }
@@ -2114,6 +2139,7 @@ fn spawn_gated() -> (Box<dyn Spawner>, Receiver<Sender<SessionEvent>>, Sender<()
         gate: Some(Arc::new(Mutex::new(opens))),
         can_queue: None,
         controls: Controls::default(),
+        installed: Installed::default(),
     };
     (Box::new(spawner), providers, gate)
 }
@@ -2269,6 +2295,7 @@ fn asking_a_thread_without_its_agent_starts_it_and_asks_it() {
         gate: Some(Arc::new(Mutex::new(opens))),
         can_queue: None,
         controls: controls.clone(),
+        installed: Installed::default(),
     };
     let (mut engine, thread) =
         restored_after("restored-ask", Box::new(spawner), |engine, thread, _| {
@@ -2325,6 +2352,7 @@ fn prompts_queued_while_the_agent_starts_wait_for_it() {
             gate: Some(Arc::new(Mutex::new(opens))),
             can_queue: None,
             controls: Controls::default(),
+            installed: Installed::default(),
         }),
     );
     engine.send(thread, "first".into());
@@ -2363,6 +2391,7 @@ fn prompts_wait_for_a_provider_that_cannot_queue_yet() {
             gate: Some(Arc::new(Mutex::new(opens))),
             can_queue: Some(can_queue.clone()),
             controls: Controls::default(),
+            installed: Installed::default(),
         }),
     );
     engine.send(thread, "first".into());

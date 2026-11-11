@@ -765,6 +765,12 @@ impl Factory {
             .find(|workflow| workflow.id == id)
     }
 
+    pub fn proposal(&self, id: &str) -> Option<&super::Proposal> {
+        self.boards()
+            .flat_map(|state| &state.proposals)
+            .find(|proposal| proposal.id == id)
+    }
+
     pub(super) fn workflows(&self) -> impl Iterator<Item = &Workflow> {
         self.boards().flat_map(|state| &state.workflows)
     }

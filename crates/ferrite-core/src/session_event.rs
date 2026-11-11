@@ -431,6 +431,17 @@ pub struct SessionCommand {
     pub source: Option<CommandSource>,
 }
 
+impl SessionCommand {
+    /// A skill a Workflow Step can name: one the operator, the project or
+    /// a plugin installed, or a Codex SKILL.md.
+    pub fn is_skill(&self) -> bool {
+        matches!(
+            self.source,
+            Some(CommandSource::Skill) | Some(CommandSource::Plugin { .. })
+        ) || self.path.is_some()
+    }
+}
+
 /// Where a `/` command comes from.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]

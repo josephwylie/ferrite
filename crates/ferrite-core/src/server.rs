@@ -389,6 +389,9 @@ struct Server {
     github_reads: Vec<github::Reading>,
     /// Task PR head reads still out (#223).
     head_reads: Vec<github::HeadReading>,
+    /// Each Project root's skills per Provider, as the Server last listed
+    /// them and when (`None`: it could not), for a Workflow's check (G7).
+    skills_seen: Vec<factory::SkillsSeen>,
     /// The Factory's wall clock, in milliseconds: a test passes its own.
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
@@ -444,6 +447,7 @@ impl Server {
             github: Arc::new(github::Gh),
             github_reads: Vec::new(),
             head_reads: Vec::new(),
+            skills_seen: Vec::new(),
             clock: Arc::new(|| crate::clock::now().timestamp_millis()),
         }
     }

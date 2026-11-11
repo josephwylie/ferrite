@@ -25,6 +25,22 @@ use crate::workspace::registry::ProjectId;
 use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
 use crate::{Attention, ThreadId, ThreadOwner};
 
+/// How long a check waits on the Server's own listing of a Project's
+/// skills (G7).
+const SKILLS_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long a Project's listing of skills is reused before it is asked
+/// again.
+const SKILLS_KEPT_MS: i64 = 60_000;
+
+/// One Project root's skills for one Provider, as the Server last listed
+/// them and when (`None`: it could not).
+pub(super) struct SkillsSeen {
+    root: std::path::PathBuf,
+    provider: crate::store::Provider,
+    at_ms: i64,
+    listed: Option<Vec<String>>,
+}
+
 /// The Factory kept in the Store's directory. One whose file cannot be
 /// read says so on the board and in every refusal, and does nothing: it
 /// is never started afresh over the Tasks it holds, nor written (#226).
@@ -453,19 +469,102 @@ impl Server {
         Ok(Some(done(answer)))
     }
 
-    /// What is known installed, for a save's check: each Provider's
-    /// models as its agents announced them, and the skills a window found.
+    /// What is known installed, for a check of `workflow`: each
+    /// Provider's models as its agents announced them, and the skills
+    /// this Server finds installed in the Workflow's Project for each
+    /// Provider its Steps use (G7), so a save is checked the same from
+    /// the CLI and a window. A window's list stands in only for a
+    /// Provider the Server cannot list.
     pub(super) fn catalog(
-        &self,
-        skills: Vec<(crate::store::Provider, Vec<String>)>,
+        &mut self,
+        workflow: Option<&str>,
+        from_window: Vec<(crate::store::Provider, Vec<String>)>,
     ) -> factory::Catalog {
+        let mut skills = self.installed_skills(workflow);
+        for (provider, listed) in from_window {
+            if !skills.iter().any(|(each, _)| *each == provider) {
+                skills.push((provider, listed));
+            }
+        }
         factory::Catalog {
-            models: crate::store::Provider::ALL
-                .into_iter()
-                .map(|provider| (provider, self.engine.announced_models(provider)))
-                .collect(),
+            models: self.models(),
             skills,
         }
+    }
+
+    fn models(&self) -> Vec<(crate::store::Provider, Vec<crate::ModelInfo>)> {
+        crate::store::Provider::ALL
+            .into_iter()
+            .map(|provider| (provider, self.engine.announced_models(provider)))
+            .collect()
+    }
+
+    /// The skills each Provider `workflow`'s Steps use lists in its
+    /// Project, as the Server's own discovery finds them: a listing is
+    /// reused for [`SKILLS_KEPT_MS`], and one that does not answer within
+    /// [`SKILLS_WAIT`] leaves that Provider unchecked.
+    fn installed_skills(
+        &mut self,
+        workflow: Option<&str>,
+    ) -> Vec<(crate::store::Provider, Vec<String>)> {
+        let Some(found) = workflow.and_then(|workflow| self.factory.workflow(workflow)) else {
+            return Vec::new();
+        };
+        let Some(root) = self
+            .engine
+            .registry()
+            .project(found.project)
+            .map(|project| project.root.clone())
+        else {
+            return Vec::new();
+        };
+        let providers: Vec<_> = found
+            .draft
+            .steps
+            .iter()
+            .map(|step| step.agent.provider)
+            .collect();
+        let now = self.now_ms();
+        let mut installed = Vec::new();
+        for provider in providers {
+            if installed.iter().any(|(each, _)| *each == provider) {
+                continue;
+            }
+            let seen = self
+                .skills_seen
+                .iter()
+                .find(|seen| seen.root == root && seen.provider == provider);
+            let listed = match seen {
+                Some(seen) if now - seen.at_ms < SKILLS_KEPT_MS => seen.listed.clone(),
+                _ => {
+                    let listed = self
+                        .engine
+                        .discover_commands(provider, &root)
+                        .and_then(|pending| pending.recv_timeout(SKILLS_WAIT).ok())
+                        .and_then(Result::ok)
+                        .map(|commands| {
+                            commands
+                                .into_iter()
+                                .filter(crate::SessionCommand::is_skill)
+                                .map(|command| command.name)
+                                .collect::<Vec<_>>()
+                        });
+                    self.skills_seen
+                        .retain(|seen| seen.root != root || seen.provider != provider);
+                    self.skills_seen.push(SkillsSeen {
+                        root: root.clone(),
+                        provider,
+                        at_ms: now,
+                        listed: listed.clone(),
+                    });
+                    listed
+                }
+            };
+            if let Some(listed) = listed {
+                installed.push((provider, listed));
+            }
+        }
+        installed
     }
 
     /// A window's Workflow authoring command.
@@ -473,14 +572,19 @@ impl Server {
         &mut self,
         action: &WorkflowAction,
     ) -> Result<Option<Done>, WireError> {
-        let models = self.catalog(Vec::new()).models;
-        let Some(command) = factory::workflow_command(action.clone(), &self.factory_agent, models)
+        let models = self.models();
+        let Some(mut command) =
+            factory::workflow_command(action.clone(), &self.factory_agent, models)
         else {
             return Err(WireError {
                 code: crate::protocol::ErrorCode::Unsupported,
                 message: "this server does not know that Workflow command".into(),
             });
         };
+        if let Command::SaveWorkflow { workflow, catalog } = &mut command {
+            let from_window = std::mem::take(&mut catalog.skills);
+            *catalog = self.catalog(Some(&workflow.clone()), from_window);
+        }
         let (answer, _) = self.factory_command(command).map_err(wire_error)?;
         Ok(Some(done(answer)))
     }
@@ -550,15 +654,16 @@ impl Server {
     /// A Workflow and its draft's problems, as far as the Server knows
     /// what is installed; `extra` joins the answer.
     pub(super) fn api_workflow_answer(
-        &self,
+        &mut self,
         workflow: &str,
         extra: Option<(&str, Value)>,
     ) -> Result<Value, ApiError> {
+        let catalog = self.catalog(Some(workflow), Vec::new());
         let found = self
             .factory
             .workflow(workflow)
             .ok_or_else(|| ApiError::new(Code::UnknownWorkflow, "no Workflow has that id"))?;
-        let problems = found.draft.problems(&self.catalog(Vec::new()));
+        let problems = found.draft.problems(&catalog);
         let mut answer = json!({ "workflow": found, "problems": problems });
         if let Some((key, value)) = extra {
             answer[key] = value;
@@ -581,14 +686,10 @@ impl Server {
         self.api_workflow_answer(&workflow, extra)
     }
 
-    pub(super) fn api_workflow_save(
-        &mut self,
-        workflow: String,
-        skills: Vec<(crate::store::Provider, Vec<String>)>,
-    ) -> Result<Value, ApiError> {
+    pub(super) fn api_workflow_save(&mut self, workflow: String) -> Result<Value, ApiError> {
         let save = Command::SaveWorkflow {
             workflow: workflow.clone(),
-            catalog: self.catalog(skills),
+            catalog: self.catalog(Some(&workflow), Vec::new()),
         };
         let (answer, _) = self.factory_command(save)?;
         let version = match answer {
