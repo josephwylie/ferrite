@@ -460,3 +460,116 @@ fn the_settings_limit_queues_the_excess_and_releases_it() {
     let released = world.tasks_until(|tasks| tasks[1]["status"] == "working");
     assert_eq!(released[0]["status"], "stopped");
 }
+
+impl World {
+    /// Stop the Server; while it is down, move the clock to `at_ms` and
+    /// script GitHub's next answers with `will`; then serve its Store
+    /// again on the same clock and GitHub: a restart.
+    fn restart(self, at_ms: i64, will: Vec<Result<GitHubRead, String>>) -> World {
+        let mut control = attach(&self.harness.address);
+        drop(control.command(226, Op::Stop { when: When::Now }));
+        let World {
+            harness,
+            project,
+            repo,
+            clock,
+            github,
+        } = self;
+        assert_eq!(harness.server.join().unwrap(), 0);
+        gone(&harness.address);
+        gone(&harness.api);
+        clock.store(at_ms, Ordering::SeqCst);
+        for answer in will {
+            github.will(answer);
+        }
+        let (time, reader) = (Arc::clone(&clock), Arc::clone(&github));
+        let harness = serve_configured(
+            harness.dir.clone(),
+            None,
+            Tuning::default(),
+            Box::new(move |server: &mut Server| {
+                server.clock = Arc::new(move || time.load(Ordering::SeqCst));
+                server.github = reader;
+            }),
+        );
+        World {
+            harness,
+            project,
+            repo,
+            clock,
+            github,
+        }
+    }
+}
+
+/// AC: a schedule's run that fell due while the Server was down, and a
+/// GitHub match that arrived then, each start one Task after the restart,
+/// once; what was seen before it is not started again; the switches and
+/// the schedule's state are intact.
+#[cfg(unix)]
+#[test]
+fn starts_that_arrived_during_a_restart_are_handled_once() {
+    let world = world("starts-restart");
+    let schedule = world.saved(serde_json::json!({
+        "type": "schedule",
+        "schedule": {
+            "recurrence": "interval", "interval_hours": 1,
+            "instructions": "Triage new issues since the last run",
+        },
+    }));
+    let github = world.saved(serde_json::json!({
+        "type": "github_issue",
+        "github": { "repository": "acme/app", "trigger": "labelled", "label": "ready-for-agent" },
+    }));
+    world.ok(
+        "workflow.automation",
+        serde_json::json!({ "workflow": schedule, "turn": "on" }),
+    );
+    world.github.will(matching(vec![issue(3, "Old crash")]));
+    world.ok(
+        "workflow.automation",
+        serde_json::json!({ "workflow": github, "turn": "on" }),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while world.automation(&github)["backlog"].is_null() {
+        assert!(Instant::now() < deadline, "no backlog");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    world.ok(
+        "workflow.backlog",
+        serde_json::json!({ "workflow": github, "take": false }),
+    );
+
+    // Down across the schedule's run; a new issue is labelled meanwhile.
+    let world = world.restart(
+        midnight() + HOUR + 30_000,
+        vec![matching(vec![issue(3, "Old crash"), issue(7, "Login fails")])],
+    );
+    assert_eq!(world.automation(&schedule)["switch"], "on");
+    assert_eq!(world.automation(&github)["switch"], "on");
+    let tasks = world.tasks_until(|tasks| tasks.len() == 2);
+    let mut titles: Vec<String> = tasks
+        .iter()
+        .map(|task| task["title"].as_str().unwrap().to_string())
+        .collect();
+    titles.sort();
+    assert_eq!(
+        titles,
+        vec!["Login fails", "Triage new issues since the last run"]
+    );
+    world.settle();
+    assert_eq!(world.tasks().len(), 2, "once");
+
+    // And once more across a second restart: nothing is started again.
+    let world = world.restart(
+        midnight() + HOUR + 60_000,
+        vec![matching(vec![issue(3, "Old crash"), issue(7, "Login fails")])],
+    );
+    world.settle();
+    assert_eq!(world.tasks().len(), 2, "nothing again");
+    assert_eq!(
+        world.automation(&schedule)["due_ms"],
+        midnight() + 2 * HOUR,
+        "the schedule's next run is kept"
+    );
+}
