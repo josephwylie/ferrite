@@ -54,7 +54,7 @@ pub(crate) struct Panel {
     /// where it was left.
     scrolls: std::collections::HashMap<ThreadId, ScrollHandle>,
     /// The head row's tabs' own horizontal scroll.
-    tabs_scroll: ScrollHandle,
+    pub(crate) tabs_scroll: ScrollHandle,
     /// The Changes section's unfolded files and their hunks.
     hunks: hunks::Hunks,
     /// The window's width as of the last frame, what the floors and the

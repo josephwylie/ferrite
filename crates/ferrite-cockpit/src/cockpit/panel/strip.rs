@@ -276,6 +276,9 @@ impl CockpitView {
             .flex()
             .items_center()
             .gap(px(SURFACE_HEAD_GAP))
+            // T3's `w-max min-w-full`: as wide as its tabs, so they
+            // overflow the scroll rather than squeeze.
+            .flex_shrink_0()
             .min_w_full()
             .children(tabs.iter().enumerate().map(|(at, id)| {
                 self.surface_tab(thread, at, id, active.as_ref() == Some(id), cx)
@@ -340,6 +343,7 @@ impl CockpitView {
             .child(
                 div()
                     .id("panel-tab-scroll")
+                    .flex()
                     .flex_1()
                     .min_w_0()
                     .overflow_x_scroll()
