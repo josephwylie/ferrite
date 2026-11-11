@@ -463,6 +463,7 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("left".into(), "nav::Fold", Some("NavTree")),
         ("right".into(), "nav::Unfold", Some("NavTree")),
         ("escape".into(), "nav::CloseView", Some("NavTree")),
+        ("f2".into(), "nav::Rename", Some("NavTree")),
         ("up".into(), "shortcuts::ScrollUp", Some("Shortcuts")),
         ("down".into(), "shortcuts::ScrollDown", Some("Shortcuts")),
         ("escape".into(), "shortcuts::Dismiss", Some("Shortcuts")),
