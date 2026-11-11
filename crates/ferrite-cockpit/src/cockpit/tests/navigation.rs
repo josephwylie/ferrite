@@ -63,11 +63,13 @@ fn the_arrows_lead_the_head_and_step_on_a_click(cx: &mut TestAppContext) {
         .debug_bounds("history-forward")
         .expect("the forward arrow");
     let title = cx.debug_bounds("view-title").expect("the title");
-    let bell = cx.debug_bounds("nav-activity").expect("the sidebar's bell");
+    let toggle = cx
+        .debug_bounds("nav-collapse")
+        .expect("the sidebar's toggle");
     assert_eq!(back.left(), px(ferrite_ui::theme::HISTORY_X));
     assert!(
-        forward.right() < bell.left(),
-        "in the sidebar head, before its icons"
+        forward.right() < toggle.left(),
+        "in the sidebar head, before its toggle"
     );
     assert!(back.right() < title.left(), "the arrows come first");
     assert!(back.bottom() <= px(ferrite_ui::theme::WIN_CHROME_H));

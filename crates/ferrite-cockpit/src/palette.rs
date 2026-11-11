@@ -154,9 +154,6 @@ pub(crate) enum Command {
     NewThreadIn(ProjectId),
     FilterAll,
     FilterProject(ProjectId),
-    SortCreated,
-    SortRecent,
-    SortAttention,
     NewProject,
     EditProject(ProjectId),
     Settings,
@@ -1172,6 +1169,6 @@ mod tests {
             Some(ferrite_ui::icons::BRANCH)
         );
         assert_eq!(Command::OpenGroup.icon(), Some(ferrite_ui::icons::BOARD));
-        assert_eq!(Command::SortCreated.icon(), None);
+        assert_eq!(Command::FilterAll.icon(), None);
     }
 }

@@ -55,19 +55,13 @@ pub struct Settings {
     /// flip it. Default: false, as Claude opens with the transcript alone;
     /// a saved choice is kept.
     pub panel_shown: bool,
-    /// The Threads the nav's `Pinned` section holds, in the order they
+    /// The Threads pinned to the top of the nav's list, in the order they
     /// were pinned (the row menu's `Pin`). An id whose Thread is gone is
     /// passed over. Default: none.
     pub pinned_threads: Vec<crate::ThreadId>,
-    /// What the bell's `⋯` menu shows (`Show`). Default: the Priority
-    /// section, not the Pinned one.
-    pub activity_shows: ActivityShows,
-    /// The Projects whose nav section is folded to its heading (its `▾`).
-    /// Default: none.
-    pub folded_projects: Vec<crate::workspace::registry::ProjectId>,
-    /// How the navigation orders the rows inside each Project: creation
-    /// order, or most recently used first. Changed from the ⌘K palette.
-    pub thread_list_order: ThreadListOrder,
+    /// The nav's shelves the operator opened (ADR 0040). Default: none, as
+    /// every shelf starts folded.
+    pub open_shelves: Vec<NavShelf>,
     /// Whether deleting a Thread asks first. Default: true.
     pub confirm_delete: bool,
     /// Whether an untitled Thread is named from its first prompt.
@@ -230,42 +224,13 @@ impl Default for ReadingSize {
     }
 }
 
-/// How the navigation orders the rows inside each Project section. The
-/// sections themselves are always the Projects in creation order.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// A shelf at the foot of the nav's list (ADR 0040), in drawing order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum ThreadListOrder {
-    /// Creation order: a row never moves because its Thread worked. The
-    /// two retired readings (one activity stream, Project sections) load
-    /// as this, the order that replaced them.
-    #[default]
-    #[serde(alias = "recent", alias = "by-project")]
-    Created,
-    /// Most recently used first (the palette's `sort: recent`).
-    #[serde(rename = "last-used")]
-    Recent,
-    /// What needs the operator first — blocked, done, working, idle — and
-    /// creation order within each (the palette's `sort: attention`).
-    Attention,
-}
-
-/// The sections of the bell (Activity view) its `⋯` menu shows: the
-/// `Priority` section, and a `Pinned` one. Ferrite has no scheduled
-/// tasks, so no `Scheduled`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ActivityShows {
-    pub priority: bool,
-    pub pinned: bool,
-}
-
-impl Default for ActivityShows {
-    fn default() -> Self {
-        Self {
-            priority: true,
-            pinned: false,
-        }
-    }
+pub enum NavShelf {
+    Working,
+    Snoozed,
+    Parked,
 }
 
 impl Default for Settings {
@@ -282,9 +247,7 @@ impl Default for Settings {
             nav_collapsed: false,
             panel_shown: false,
             pinned_threads: Vec::new(),
-            activity_shows: ActivityShows::default(),
-            folded_projects: Vec::new(),
-            thread_list_order: ThreadListOrder::Created,
+            open_shelves: Vec::new(),
             confirm_delete: true,
             auto_title: true,
             placeholder_suggestions: true,
@@ -514,12 +477,7 @@ mod tests {
             nav_collapsed: true,
             panel_shown: true,
             pinned_threads: vec![crate::ThreadId::new(7)],
-            activity_shows: ActivityShows {
-                priority: false,
-                pinned: true,
-            },
-            folded_projects: vec![serde_json::from_str("3").unwrap()],
-            thread_list_order: ThreadListOrder::Recent,
+            open_shelves: vec![NavShelf::Working, NavShelf::Parked],
             confirm_delete: false,
             auto_title: false,
             placeholder_suggestions: false,
@@ -591,28 +549,18 @@ mod tests {
         assert!(!Settings::load(&dir).unwrap().panel_shown);
     }
 
-    /// The retired orders (one activity stream, Project sections) load as
-    /// creation order, which replaced both; `sort: recent` and `sort:
-    /// attention` round-trip.
+    /// A file from before the one list (its Project folds, its sort and
+    /// the bell's sections) still loads, with every shelf folded.
     #[test]
-    fn retired_thread_orders_load_as_creation_order() {
-        for (stored, order) in [
-            ("\"recent\"", ThreadListOrder::Created),
-            ("\"by-project\"", ThreadListOrder::Created),
-            ("\"created\"", ThreadListOrder::Created),
-            ("\"last-used\"", ThreadListOrder::Recent),
-            ("\"attention\"", ThreadListOrder::Attention),
-        ] {
-            assert_eq!(
-                serde_json::from_str::<ThreadListOrder>(stored).unwrap(),
-                order,
-                "{stored}"
-            );
-        }
-        assert_eq!(
-            serde_json::to_string(&ThreadListOrder::Recent).unwrap(),
-            "\"last-used\""
-        );
+    fn a_tree_era_file_loads_with_its_shelves_folded() {
+        let dir = scratch("tree-era");
+        fs::write(
+            dir.join(Settings::FILE),
+            r#"{"folded_projects": [3], "thread_list_order": "attention",
+                "activity_shows": {"priority": false, "pinned": true}}"#,
+        )
+        .unwrap();
+        assert_eq!(Settings::load(&dir).unwrap(), Settings::default());
     }
 
     #[test]
@@ -641,7 +589,7 @@ mod tests {
         assert_eq!(settings.codex_sandbox, None);
         assert!(!settings.nav_collapsed);
         assert!(!settings.panel_shown, "the panel starts closed");
-        assert_eq!(settings.thread_list_order, ThreadListOrder::Created);
+        assert!(settings.open_shelves.is_empty(), "every shelf starts folded");
         assert!(settings.confirm_delete);
         assert!(settings.auto_title);
         assert!(settings.placeholder_suggestions);

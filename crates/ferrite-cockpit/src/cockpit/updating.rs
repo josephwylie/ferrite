@@ -108,7 +108,7 @@ impl CockpitView {
     /// Settings' update button: check, restart when idle, or — once
     /// already waiting — restart now, asking first as ⌘Q does. A release
     /// handed over gets its installer opened again.
-    fn press_ferrite_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn press_ferrite_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.ferrite_update.state() {
             State::Unchecked | State::UpToDate | State::Failed { .. } => {
                 self.check_for_ferrite_update(cx)

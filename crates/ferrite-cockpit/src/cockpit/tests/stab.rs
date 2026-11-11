@@ -375,9 +375,9 @@ fn the_watchdog_sweeps_on_the_executor_clock(cx: &mut TestAppContext) {
 }
 
 /// The bottom-left toast card is gone (C8): with the nav open, finishes off
-/// the board toast nothing — the tree and the Inbox say it — so the Parked
-/// view's row never moves and there is no `+N` bubble. The Inbox still
-/// lists them.
+/// the board toast nothing — the list says it — so the Parked shelf's
+/// header never moves and there is no `+N` bubble. The Inbox still lists
+/// them.
 #[gpui::test]
 fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("toast-parked", 5);
@@ -392,8 +392,8 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     let resting = cx
-        .debug_bounds("nav-view-parked")
-        .expect("the Parked view's row");
+        .debug_bounds("nav-shelf-parked")
+        .expect("the Parked shelf's header");
 
     for stream in &fake.streams.borrow()[1..4] {
         stream
@@ -417,7 +417,7 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
         assert_eq!(
             window.notifications(cx).len(),
             0,
-            "the nav is open: the tree and the Inbox say it, nothing toasts"
+            "the nav is open: the list says it, nothing toasts"
         );
     });
     assert_eq!(
@@ -431,7 +431,7 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
     }
     assert!(cx.debug_bounds("toast-more").is_none(), "no `+N` bubble");
     assert_eq!(
-        cx.debug_bounds("nav-view-parked"),
+        cx.debug_bounds("nav-shelf-parked"),
         Some(resting),
         "the row never moves"
     );
@@ -1424,6 +1424,7 @@ fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
     let dir = scratch("no-server");
     let core = Cockpit::attach(ferrite_core::cockpit::Attach {
             browser: false,
+            driven: false,
         store: dir.clone(),
         server: ferrite_core::cockpit::Endpoint::Local {
             executable: dir.join("no-such-ferrite"),
@@ -1461,6 +1462,7 @@ fn the_restart_button_answers_its_press(cx: &mut TestAppContext) {
     let dir = scratch("restart-press");
     let core = Cockpit::attach(ferrite_core::cockpit::Attach {
             browser: false,
+            driven: false,
         store: dir.clone(),
         server: ferrite_core::cockpit::Endpoint::Local {
             executable: dir.join("no-such-ferrite"),

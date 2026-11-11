@@ -24,11 +24,11 @@ impl CockpitView {
         until: Option<std::time::SystemTime>,
         cx: &mut Context<Self>,
     ) {
-        self.group_error = self
-            .cockpit
-            .snooze_thread(thread, until)
-            .err()
-            .map(|error| error.to_string().into());
+        let snoozed = self.cockpit.snooze_thread(thread, until);
+        if snoozed.is_ok() && until.is_some() {
+            self.offer_undo(super::nav_chrome::UndoAct::Snoozed(thread), cx);
+        }
+        self.group_error = snoozed.err().map(|error| error.to_string().into());
         cx.notify();
     }
 
@@ -38,7 +38,6 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.show_nav_view(nav::NavView::Inbox, None, cx);
         let line = cx.new(ferrite_pane::composer::Composer::new);
         line.update(cx, |line, cx| {
             line.set_role(ferrite_pane::composer::Role::Field(None), cx);

@@ -28,6 +28,7 @@ mod loops_overlay;
 mod machines;
 mod nav_list;
 mod nav_parity;
+mod nav_shelves;
 mod navigation;
 mod output_cards;
 mod panel;
@@ -920,26 +921,4 @@ fn composer_text(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestCont
     view.read_with(cx, |view, cx| {
         view.panes[0].composer.read(cx).text().to_string()
     })
-}
-
-fn drag_nav(cx: &mut gpui::VisualTestContext, source: &'static str, target: &'static str) {
-    let source = cx.debug_bounds(source).unwrap();
-    let target = cx.debug_bounds(target).unwrap();
-    let source = gpui::point(source.right() - px(5.), source.center().y);
-    cx.simulate_mouse_down(source, gpui::MouseButton::Left, gpui::Modifiers::none());
-    cx.simulate_mouse_move(
-        gpui::point(source.x - px(30.), source.y),
-        gpui::MouseButton::Left,
-        gpui::Modifiers::none(),
-    );
-    cx.simulate_mouse_move(
-        target.center(),
-        gpui::MouseButton::Left,
-        gpui::Modifiers::none(),
-    );
-    cx.simulate_mouse_up(
-        target.center(),
-        gpui::MouseButton::Left,
-        gpui::Modifiers::none(),
-    );
 }

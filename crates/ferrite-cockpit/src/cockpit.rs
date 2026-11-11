@@ -18,7 +18,9 @@ mod lightbox;
 mod mode_menu;
 mod model_picker;
 mod machines;
+mod nav_chrome;
 mod nav_keys;
+mod nav_list;
 mod nav_pick;
 mod palette;
 pub(crate) mod panel;
@@ -53,45 +55,11 @@ use ferrite_core::cockpit::{CloseError, Cockpit, HistoryDirection, ProviderChoic
 use ferrite_core::docview::{Cell, Level};
 use ferrite_core::draft::DraftTarget;
 use ferrite_core::followup;
-use ferrite_core::groups::{Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
+use ferrite_core::groups::{Drag, DropTarget, GroupChange, GroupId};
 use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
-use ferrite_core::settings::ThreadListOrder;
 use ferrite_core::sound::Sound;
 use ferrite_pane::page::PageSource;
-
-/// The loose rows the nav last drew, in order, and under `sort: attention`
-/// the state each row was ranked by (C8, "never re-sort under the
-/// pointer"): while the pointer is inside the column or a drag is live,
-/// the tree keeps this order, and Groups and sections keep the ranks they
-/// were sorted by. It re-ranks on pointer-leave, a focus change, or a
-/// Thread arriving or leaving — any of which changes `focused` or the row
-/// set, so the snapshot no longer applies. Creation order never moves a
-/// row, so it has nothing to hold.
-struct NavSnapshot {
-    rows: Vec<ThreadId>,
-    focused: Option<ThreadId>,
-    ranks: std::collections::HashMap<ThreadId, Attention>,
-}
-
-/// Reorder `rows` by where they sat in `snapshot`, when the snapshot holds
-/// exactly the same Threads; `false` (and `rows` untouched) otherwise.
-fn hold_order(rows: &mut [nav::ThreadRow], snapshot: &[ThreadId]) -> bool {
-    if rows.len() != snapshot.len() {
-        return false;
-    }
-    let position = |row: &nav::ThreadRow| snapshot.iter().position(|held| *held == row.thread);
-    if rows.iter().any(|row| position(row).is_none()) {
-        return false;
-    }
-    rows.sort_by_key(position);
-    true
-}
-
-/// A fold the nav's triangles hold (N-4): a Project section shut to its
-/// heading, a Group shut to its row, the Parked section shut to its header.
-/// In memory only; a re-render or a view switch keeps it.
-pub(crate) use crate::nav::NavFold;
 
 /// The action ⌘`ordinal` is bound to: the shown board's `ordinal`th Pane in
 /// head order (R5, `CockpitView::board_order`; Solo's ⌘1 is the Solo Pane).
@@ -336,7 +304,7 @@ impl std::ops::DerefMut for CockpitPane {
 }
 
 pub struct CockpitView {
-    cockpit: Cockpit,
+    pub(crate) cockpit: Cockpit,
     browsers: browser::Browsers,
     /// One view per Pane of the Cockpit's roster, in its order — the
     /// keyboard, the scrollback and the caches the window owns for each.
@@ -422,22 +390,19 @@ pub struct CockpitView {
     /// Measuring what the board would be beside the full column
     /// (`update_auto_rail`): `nav_width` answers the full width meanwhile.
     nav_measure_full: std::cell::Cell<bool>,
-    /// The pointer is inside the nav column: its order holds still.
+    /// The pointer is inside the nav column: its scrollbar shows.
     nav_hovered: bool,
-    /// A drag is live this frame: the nav's order holds still.
+    /// A drag is live this frame: the nav's rows stand still.
     nav_drag_live: std::cell::Cell<bool>,
-    /// The order the nav last drew, held while the pointer is inside.
-    nav_snapshot: std::cell::RefCell<Option<NavSnapshot>>,
-    /// What the nav's folds hold shut (N-4) besides the Projects (saved
-    /// with the settings): the Pinned and Groups sections and Groups. In
-    /// memory only.
-    nav_folds: std::collections::HashSet<NavFold>,
-    /// The folds opening or shutting now (`motion::FOLD`, Claude's 150ms
-    /// `ease-out`), dropped once they come to rest.
-    nav_fold_moves: std::collections::HashMap<NavFold, ferrite_ui::motion::Reveal>,
-    /// The sections whose `Show more` was pressed (`None` is Recents): all
-    /// their loose rows drawn. In memory only.
-    nav_more: std::collections::HashSet<Option<ProjectId>>,
+    /// The nav list's motion (`nav::flip`): where each row was laid last
+    /// frame, and the ghosts of rows that left.
+    nav_motion: nav_list::NavMotion,
+    /// The next frame of the list lands at once: a shelf just opened or
+    /// folded.
+    nav_snap: std::cell::Cell<bool>,
+    /// How many Parked rows the open shelf draws: ten, then 25 more per
+    /// `Show 25 more`.
+    nav_parked_shown: usize,
     /// What the nav and the Pane head say about a Thread beyond an O(1)
     /// read — checkout, Project, a parked row's provider, the L3 card —
     /// refreshed by moment, never per frame.
@@ -450,24 +415,31 @@ pub struct CockpitView {
     /// The nav tree's scroll, shared with the hand-drawn scrollbar beside
     /// it — gpui 0.2.2 paints none of its own.
     nav_scroll: ScrollHandle,
-    /// What the nav shows under its views (§5.1.2): the tree, or a view's
-    /// list in its place. The tree on every launch.
-    pub(crate) nav_view: nav::NavView,
-    /// The keyboard of the tree (⌘⇧E, `nav_keys`) or of a view's list
-    /// other than the Inbox (whose keys are the Inbox's,
-    /// `Floats::notice_focus`): Esc returns to the tree, or from the tree
-    /// to the board.
-    nav_view_focus: FocusHandle,
-    /// Where the tree's keyboard stands (`nav_keys`), while it has one.
+    /// The list's keyboard (⌘I, ⌘⇧E, `nav_keys`): Esc gives it back to
+    /// the board.
+    nav_focus: FocusHandle,
+    /// Where the list's keyboard stands (`nav_keys`), while it has one.
     nav_cursor: Option<nav::NavCursor>,
-    /// ⌘⇧E handed the tree the keys, and it has not let go: only then
-    /// does render's focus rule leave them on the tree.
+    /// ⌘I or ⌘⇧E handed the list the keys, and it has not let go: only
+    /// then does render's focus rule leave them on the list.
     nav_keys_held: bool,
-    /// Clears the cursor when the tree lets go of the keys (`focus_nav`).
+    /// Clears the cursor when the list lets go of the keys (`focus_nav`).
     nav_blur: Option<gpui::Subscription>,
     /// Set by a cursor move until its row has scrolled into view
     /// (`cursor_reveal`).
     nav_reveal: std::rc::Rc<std::cell::Cell<bool>>,
+    /// Where the cursor's row was last drawn: ⇧F10 opens its menu there.
+    nav_cursor_bounds: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
+    /// The Thread whose card last scrolled into view for being shown
+    /// (`shown_reveal`): a focus change scrolls the new one's.
+    nav_shown: std::rc::Rc<std::cell::Cell<Option<ThreadId>>>,
+    /// The nav's search field (`nav_chrome`), and the result its ↑/↓ stand
+    /// on.
+    nav_search: Entity<ferrite_pane::composer::Composer>,
+    nav_search_cursor: usize,
+    /// The foot's undo notice: what the last Park or Snooze did, until it
+    /// fades (`nav_chrome::NavUndo`).
+    nav_undo: Option<nav_chrome::NavUndo>,
     /// The rail's own scroll (cmd-B folded).
     nav_rail_scroll: ScrollHandle,
     /// The window's activation, followed into the Cockpit
@@ -507,8 +479,6 @@ pub struct CockpitView {
     /// to be the row you are looking at.
     rename: Option<(RenameTarget, Entity<ferrite_pane::composer::Composer>)>,
     snooze_editor: Option<snooze::Editor>,
-    inbox_working_expanded: bool,
-    inbox_snoozed_expanded: bool,
     /// The right-click menu, if one is up: what it is about, where it was
     /// summoned, and which destructive row is armed for its second press.
     context_menu: Option<ContextMenu>,
@@ -621,9 +591,7 @@ pub struct CockpitView {
     /// The version the empty board's banner names: this build's
     /// (`CARGO_PKG_VERSION`). The parity capture names the release the
     /// prototype's world runs (`0.5.0`).
-    pub(crate) shown_version: SharedString,
     /// Who the foot names: the login at the machine (`$USER`).
-    pub(crate) shown_user: SharedString,
     /// Where each provider CLI stands against its newest release.
     cli_updates: crate::cli_updates::CliUpdates,
     /// Where Ferrite's own update stands (ADR 0023).
@@ -709,7 +677,6 @@ pub struct GoToMachine {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Landing {
     Alert(crate::notifications::Alert),
-    Inbox(crate::notifications::Alert),
 }
 
 impl EventEmitter<GoToMachine> for CockpitView {}
@@ -722,11 +689,10 @@ enum CardFrom {
     Head(PaneIdentity),
 }
 
-/// What an inline rename is aimed at. Both are titles the operator owns:
-/// a Group's, and a Thread's own display name.
+/// What an inline rename is aimed at: a Thread's own display name, at
+/// one of the sites that edit it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RenameTarget {
-    Group(GroupId),
     /// A Thread, renamed from its nav row.
     Thread(ThreadId),
     /// A Thread, renamed from its Pane head — the same title, a different
@@ -1060,12 +1026,11 @@ fn rename_field(editor: Entity<ferrite_pane::composer::Composer>) -> Div {
         .child(hint)
 }
 
-/// What rides the pointer while a nav row is dragged: that row itself, as
-/// the tree drew it — a Thread's row, or the Group's header.
+/// What rides the pointer while a nav card is dragged: that card itself,
+/// as the list drew it.
 #[derive(Clone)]
 enum NavChip {
     Thread(nav::ThreadRow),
-    Group(nav::GroupBlock),
 }
 
 impl NavChip {
@@ -1075,16 +1040,6 @@ impl NavChip {
                 row,
                 row.name.clone(),
                 nav::CardDoors::default(),
-                nav::RowPlace::ROOT,
-                None,
-                false,
-                measure,
-            ),
-            NavChip::Group(group) => nav::group_row_with_title(
-                group,
-                group.title.clone(),
-                nav::group_fold(group),
-                0,
                 false,
                 measure,
             ),
@@ -1092,39 +1047,10 @@ impl NavChip {
     }
 }
 
-struct NavDragPreview(NavChip);
-
-/// A nav drag, plus the View it started from. The row's own mouse-down
-/// fires before the drag does — clicking a Group row enters it — so by the
-/// time the drop lands, `self.view` is wherever the *press* took the
-/// operator, not where they picked the row up. The drop's meaning belongs
-/// to the origin: dragging the second member out of a pair you are looking
-/// at is a different act from dragging it out of a Group you are not.
+/// A nav card's drag onto the board.
 #[derive(Clone, Copy)]
 struct NavDrag {
     drag: Drag,
-    origin: View,
-}
-
-impl Render for NavDragPreview {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.0.element(&nav::Measure::Text(cx))
-    }
-}
-
-/// What a row says while a drag hovers it: the wash of the answer core
-/// already knows — `DROP_WASH`, `INK_STRONG` as a ground, where the drop would
-/// land, or `BLOCKED_WASH` where core refuses it. The wash alone speaks: a
-/// ring would need an edge the rows do not have, and adding one mid-drag
-/// would move the row.
-fn drop_feedback<E: gpui::InteractiveElement>(element: E, groups: Groups, target: DropTarget) -> E {
-    element.drag_over::<NavDrag>(move |style, drag, _, _| {
-        if matches!(groups.preview_drop(drag.drag, target), Plan::Refused(_)) {
-            style.bg(rgba(ferrite_ui::theme::BLOCKED_WASH))
-        } else {
-            style.bg(rgba(ferrite_ui::theme::DROP_WASH))
-        }
-    })
 }
 
 /// The one popover the Composer's slot can hold — the `/` or `@` menu
@@ -1552,12 +1478,13 @@ impl CockpitView {
             agent_drills: Default::default(),
             native_copy: None,
             nav_filter: None,
-            nav_folds: std::collections::HashSet::new(),
-            nav_fold_moves: std::collections::HashMap::new(),
-            nav_more: std::collections::HashSet::new(),
             nav_scroll: ScrollHandle::new(),
-            nav_view: nav::NavView::Tree,
-            nav_view_focus: cx.focus_handle(),
+            nav_focus: cx.focus_handle(),
+            nav_cursor_bounds: Default::default(),
+            nav_shown: Default::default(),
+            nav_search: nav_chrome::search_line(cx),
+            nav_search_cursor: 0,
+            nav_undo: None,
             nav_cursor: None,
             nav_keys_held: false,
             nav_blur: None,
@@ -1579,8 +1506,6 @@ impl CockpitView {
             asking_repo: None,
             rename: None,
             snooze_editor: None,
-            inbox_working_expanded: false,
-            inbox_snoozed_expanded: false,
             context_menu: None,
             panel: panel::Panel::load(&prefs.dir),
             panel_empty_focus: cx.focus_handle(),
@@ -1605,7 +1530,9 @@ impl CockpitView {
             nav_measure_full: std::cell::Cell::new(false),
             nav_hovered: false,
             nav_drag_live: std::cell::Cell::new(false),
-            nav_snapshot: std::cell::RefCell::new(None),
+            nav_motion: Default::default(),
+            nav_snap: std::cell::Cell::new(false),
+            nav_parked_shown: ferrite_ui::theme::NAV_PARKED_PAGE_FIRST,
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             seam_drag: None,
             board: std::cell::Cell::new(layout::Rect::default()),
@@ -1630,8 +1557,6 @@ impl CockpitView {
             maximized: false,
             cli_versions: None,
             cli_probing: false,
-            shown_version: env!("CARGO_PKG_VERSION").into(),
-            shown_user: std::env::var("USER").unwrap_or_default().into(),
             cli_updates: Default::default(),
             ferrite_update: Default::default(),
             server_bands: Default::default(),
@@ -1648,7 +1573,7 @@ impl CockpitView {
             published: std::collections::HashMap::new(),
             #[cfg(test)]
             pr_asked: Vec::new(),
-            floats: palette::Floats::new(cx),
+            floats: palette::Floats::new(),
             transcript_entities: Default::default(),
             decisions: decisions::DecisionState::new(cx.weak_entity()),
             nav_measure_rest: std::cell::Cell::new(false),
@@ -1702,9 +1627,6 @@ impl CockpitView {
 
     /// Open `open` once the Cockpit is attached, if it is by `until`.
     pub fn with_landing(mut self, open: Option<Landing>, until: std::time::Instant) -> Self {
-        if matches!(&open, Some(Landing::Inbox(_))) {
-            self.nav_view = nav::NavView::Inbox;
-        }
         self.landing = open.map(|open| (open, until));
         self
     }
@@ -3447,11 +3369,6 @@ impl CockpitView {
     /// press is dropped rather than opening an editor over nothing.
     fn start_rename(&mut self, target: RenameTarget, cx: &mut Context<Self>) {
         let title = match target {
-            RenameTarget::Group(group) => self
-                .cockpit
-                .groups()
-                .get(group)
-                .map(|group| group.display_title()),
             // A Thread with no stored title shows its generated one, so
             // that is what the editor opens on: the operator edits the name
             // they can see.
@@ -3488,72 +3405,21 @@ impl CockpitView {
             cx.notify();
             return;
         }
-        let result = match target {
-            RenameTarget::Group(group) => self
-                .cockpit
-                .apply_group(GroupChange::Rename { group, title })
-                .map(|_| ())
-                .map_err(|error| error.to_string()),
-            RenameTarget::Thread(thread)
-            | RenameTarget::PaneTitle(thread)
-            | RenameTarget::ViewTitle(thread) => self
-                .cockpit
-                .rename_thread(thread, &title)
-                .map_err(|error| error.to_string()),
-        };
-        if let Err(error) = result {
-            self.group_error = Some(error.into());
-        } else {
-            if let RenameTarget::Thread(thread)
-            | RenameTarget::PaneTitle(thread)
-            | RenameTarget::ViewTitle(thread) = target
-            {
+        let (RenameTarget::Thread(thread)
+        | RenameTarget::PaneTitle(thread)
+        | RenameTarget::ViewTitle(thread)) = target;
+        match self.cockpit.rename_thread(thread, &title) {
+            Err(error) => self.group_error = Some(error.to_string().into()),
+            Ok(_) => {
                 self.facts.renamed(&self.cockpit, thread);
                 self.refresh_names();
+                self.group_error = None;
             }
-            self.group_error = None;
         }
         cx.notify();
     }
 
-    /// A Group's title cell: the live editor while this Group is the one
-    /// being renamed, otherwise the title with a press that opens it. That
-    /// press stops there — the row underneath would otherwise enter the
-    /// Group on the way to renaming it.
-    fn editable_group_title(
-        &self,
-        group: GroupId,
-        title: SharedString,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        if let Some((RenameTarget::Group(editing), editor)) = &self.rename {
-            if *editing == group {
-                return rename_field(editor.clone())
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
-                    )
-                    .into_any_element();
-            }
-        }
-        nav::rename_target_group(group, title)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                    // A single click belongs to the row under the title —
-                    // it enters the Group. Only the second click renames,
-                    // and only then is the press worth swallowing.
-                    if event.click_count < 2 {
-                        return;
-                    }
-                    cx.stop_propagation();
-                    view.start_rename(RenameTarget::Group(group), cx);
-                }),
-            )
-            .into_any_element()
-    }
-
-    /// The Threads the Parked section lists and counts: every parked
+    /// The Threads the Parked shelf lists and counts: every parked
     /// Thread the Project filter admits — a parked Group member too (the
     /// prototype's `parked 3` holds Release notes, an Everything member),
     /// and a parked tile on the wall is still a parked Thread.
@@ -3582,23 +3448,6 @@ impl CockpitView {
             .collect()
     }
 
-    /// The Threads some Group claims as home (`Groups::home`), as the nav
-    /// sees it: an open Thread that is only ever a Group's guest is still a
-    /// loose row under its Project (R1). A member whose leave waits on a
-    /// pending draft has already left.
-    fn homed_threads(&self) -> std::collections::HashSet<ThreadId> {
-        self.cockpit
-            .groups()
-            .iter()
-            .flat_map(|group| {
-                let pending_leave = self.cockpit.roster().pending_leave(group.id);
-                group.members.iter().copied().filter(move |thread| {
-                    Some(*thread) != pending_leave && group.is_home_of(*thread)
-                })
-            })
-            .collect()
-    }
-
     /// Whether any Thread, open or parked, records this Project.
     fn project_in_use(&self, project: ProjectId) -> bool {
         self.cockpit
@@ -3614,11 +3463,6 @@ impl CockpitView {
             MenuTarget::Thread(thread)
             | MenuTarget::Pane(thread)
             | MenuTarget::Snooze(thread) => self.thread_path(thread),
-            MenuTarget::Project(project) => self
-                .cockpit
-                .registry()
-                .project(project)
-                .map(|project| project.root.clone()),
             MenuTarget::File(thread) => self.files_pressed(thread),
             MenuTarget::FilesMore(_)
             | MenuTarget::ChangesScope(_)
@@ -3629,8 +3473,8 @@ impl CockpitView {
             | MenuTarget::SurfaceMenu(_)
             | MenuTarget::SurfaceTab { .. }
             | MenuTarget::PrMore(_) => None,
-            MenuTarget::Group(_)
-            | MenuTarget::Parked
+            MenuTarget::Parked
+            | MenuTarget::NavFilter
             | MenuTarget::Review { .. }
             | MenuTarget::Prompt { .. }
             | MenuTarget::Page(_) => None,
@@ -7348,108 +7192,6 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// How the nav orders the rows inside each Project (N-3): creation
-    /// order, or `sort: recent` (last used first) — the ⌘K palette's sort
-    /// command. Saved with the settings.
-    pub(crate) fn set_thread_order(&mut self, order: ThreadListOrder, cx: &mut Context<Self>) {
-        if self.prefs.settings.thread_list_order == order {
-            return;
-        }
-        // A fresh order is drawn at once, never held from the old one.
-        self.nav_snapshot.borrow_mut().take();
-        self.change_settings(|settings| settings.thread_list_order = order, cx);
-    }
-
-    /// Fold or unfold what one of the nav's folds holds (N-4) — a Project
-    /// section, the Pinned or Groups section, a Group. Its rows slide open
-    /// or shut over `motion::FOLD` (`nav_fold_body`). A Project's fold is
-    /// saved with the settings; the others are held in memory: the fold
-    /// survives re-renders and view switches, and opening a folded Group
-    /// leaves it folded.
-    pub(crate) fn set_nav_fold(&mut self, fold: NavFold, folded: bool, cx: &mut Context<Self>) {
-        if self.nav_folded(fold) == folded {
-            return;
-        }
-        let now = cx.background_executor().now();
-        let reduced = ferrite_ui::motion::reduced_motion(cx);
-        let spec = ferrite_ui::motion::FOLD;
-        self.nav_fold_moves
-            .retain(|_, fold| fold.running(now, reduced));
-        if !reduced {
-            self.nav_fold_moves
-                .entry(fold)
-                .or_insert_with(|| match folded {
-                    true => ferrite_ui::motion::Reveal::open(spec, spec, now),
-                    false => ferrite_ui::motion::Reveal::closed(spec, spec, now),
-                })
-                .set(!folded, now, reduced);
-        }
-        match fold {
-            NavFold::Project(project) => self.change_settings(
-                |settings| {
-                    settings.folded_projects.retain(|shut| *shut != project);
-                    if folded {
-                        settings.folded_projects.push(project);
-                    }
-                },
-                cx,
-            ),
-            _ if folded => {
-                self.nav_folds.insert(fold);
-            }
-            _ => {
-                self.nav_folds.remove(&fold);
-            }
-        }
-        cx.notify();
-    }
-
-    /// How far open `fold` is while it opens or shuts; `None` at rest.
-    fn nav_fold_shown(&self, fold: NavFold, cx: &gpui::App) -> Option<f32> {
-        let now = cx.background_executor().now();
-        let reduced = ferrite_ui::motion::reduced_motion(cx);
-        self.nav_fold_moves
-            .get(&fold)
-            .filter(|move_| move_.running(now, reduced))
-            .map(|move_| move_.value(now, reduced))
-    }
-
-    /// Whether any of the nav's folds is moving: the nav asks for frames.
-    fn nav_folds_moving(&self, cx: &gpui::App) -> bool {
-        let now = cx.background_executor().now();
-        let reduced = ferrite_ui::motion::reduced_motion(cx);
-        self.nav_fold_moves
-            .values()
-            .any(|move_| move_.running(now, reduced))
-    }
-
-    /// Whether `fold`'s rows are drawn: open, or still shutting.
-    fn nav_fold_drawn(&self, fold: NavFold, folded: bool, cx: &gpui::App) -> bool {
-        !folded || self.nav_fold_shown(fold, cx).is_some()
-    }
-
-    /// `body`, the rows `fold` holds, clipped to how far open it is while
-    /// it moves (`motion::fold_body`); itself at rest.
-    fn nav_fold_body(&self, fold: NavFold, body: impl IntoElement, cx: &gpui::App) -> AnyElement {
-        match self.nav_fold_shown(fold, cx) {
-            Some(shown) => ferrite_ui::motion::fold_body(
-                SharedString::from(format!("nav-fold-{fold:?}")),
-                shown,
-                body,
-            )
-            .into_any_element(),
-            None => body.into_any_element(),
-        }
-    }
-
-    /// Whether one of the nav's folds is shut (`set_nav_fold`).
-    pub(crate) fn nav_folded(&self, fold: NavFold) -> bool {
-        match fold {
-            NavFold::Project(project) => self.prefs.settings.folded_projects.contains(&project),
-            _ => self.nav_folds.contains(&fold),
-        }
-    }
-
     /// Pin or unpin a Thread (the row menu's `Pin` / `Unpin`): a pinned
     /// Thread is listed under `Pinned`, newest pin last. Saved with the
     /// settings.
@@ -7466,61 +7208,12 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Show the parked Threads (N-18): the nav unfolds if it is folded away
-    /// and shows the Parked view — the ⌘K palette's "show parked" command.
+    /// Show the parked Threads (N-18): the nav unfolds if it is folded
+    /// away, the Parked shelf opens, and the list takes the keys on its
+    /// header — the ⌘K palette's "show parked" command.
     pub(crate) fn show_parked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.show_nav_view(nav::NavView::Parked, Some(window), cx);
-    }
-
-    /// Show `view` in the tree's place (§5.1.2): the nav unfolds if it is
-    /// folded away, the list starts at its top, and its keys take the
-    /// keyboard when there is a window to hand it to — the Inbox
-    /// the Inbox's (`notice_focus`, the cursor on its first row), any other
-    /// list Esc's way back to the tree. The tree hands the keyboard back.
-    pub(crate) fn show_nav_view(
-        &mut self,
-        view: nav::NavView,
-        window: Option<&mut Window>,
-        cx: &mut Context<Self>,
-    ) {
-        if view != nav::NavView::Tree && self.nav_railed() {
-            self.toggle_nav_now(cx);
-        }
-        if self.nav_view != view {
-            self.nav_scroll.set_offset(gpui::point(px(0.), px(0.)));
-        }
-        if view != nav::NavView::Inbox {
-            self.snooze_editor = None;
-        }
-        self.nav_view = view;
-        if view == nav::NavView::Inbox {
-            self.needs_you.reset_cursor();
-        }
-        if let Some(window) = window {
-            match view {
-                nav::NavView::Tree => {}
-                nav::NavView::Inbox => window.focus(&self.floats.notice_focus, cx),
-                _ => window.focus(&self.nav_view_focus, cx),
-            }
-        }
-        cx.notify();
-    }
-
-    /// A view row's press, or the act behind it: `view`, or the tree when
-    /// it is already shown (§5.1.2: a click on the active view returns to
-    /// the tree).
-    pub(crate) fn toggle_nav_view(
-        &mut self,
-        view: nav::NavView,
-        window: Option<&mut Window>,
-        cx: &mut Context<Self>,
-    ) {
-        let next = if self.nav_view == view {
-            nav::NavView::Tree
-        } else {
-            view
-        };
-        self.show_nav_view(next, window, cx);
+        self.set_shelf_open(nav::Shelf::Parked, true, cx);
+        self.focus_nav_on(Some(nav::NavCursor::shelf(nav::Shelf::Parked)), window, cx);
     }
 
     /// A new Thread in a named Project — the ⌘K palette's "new thread in
@@ -9048,384 +8741,81 @@ impl CockpitView {
             .into_any_element()
     }
 
-    /// The nav's per-frame state, from caches and O(1) reads only. Nothing
-    /// here touches the store, and nothing here is a Pane decision: the
-    /// Project filter narrows this list and nothing else.
+    /// The nav's per-frame state (ADR 0040), from caches and O(1) reads
+    /// only; the Project filter narrows it and nothing else. Every open
+    /// Thread the filter admits is in one section, by priority: snoozed,
+    /// pinned, working, else active. Pinned keeps pin order; Active puts
+    /// pending Decisions first, then the needs-you queue's order (oldest
+    /// request first); Working the newest send first; Snoozed the soonest
+    /// to wake first; Parked the park order. Drafts are not rows (#29).
     ///
-    /// The tree (N-2) is one section per Project, in creation order: its
-    /// loose rows — open Threads no Group claims as home — then its Groups,
-    /// each under the Project of its first member; then `Other`, for
-    /// Threads whose Project cannot be read. A Project with nothing to show
-    /// draws no heading, and a Thread a second Group includes is listed
-    /// under that Group too (R1). Rows keep creation order (N-3) — a Thread
-    /// starting or finishing work never moves — unless `sort: recent` asks
-    /// for last use within each Project, or `sort: attention` ranks by
-    /// state: the loose rows, each Group's members, the Groups in a section
-    /// and the sections themselves, each by its roll-up, creation order
-    /// among equals. Filtered to a Project, the tree is that Project's
-    /// section, holding every Group with a member there.
-    ///
-    /// The one selection (N-5) is the row of what the board shows: the
-    /// Group being viewed (its view or its wall), or the Solo Thread. The
-    /// empty board shows neither, so no row is selected.
+    /// The one selection is the shown Thread: Solo's, or the shown Group's
+    /// focused member. The empty board shows none.
     fn nav_state(&self) -> nav::NavState {
         let roster = self.cockpit.roster();
-        let board_empty = self.empty_board_shown();
-        let view = roster.view();
-        let solo = match view {
-            _ if board_empty => None,
-            View::Solo => roster.focused_thread(),
-            View::Group(_) => None,
-        };
-        let project_of = |thread: ThreadId| self.facts.get(thread).and_then(|facts| facts.project);
+        let shown = (!self.empty_board_shown())
+            .then(|| roster.focused_thread())
+            .flatten();
         let row = |thread: ThreadId| nav::ThreadRow {
-            selected: solo == Some(thread),
+            selected: shown == Some(thread),
             ..self.thread_row(thread)
         };
-        // The loose rows: open Threads with no home Group, in creation
-        // order. Drafts are not rows (#29) — the grid is where a draft
-        // lives — and a parked loose Thread waits in the Parked section.
-        let homed = self.homed_threads();
         let mut threads: Vec<ThreadId> = self
             .panes
             .iter()
             .filter_map(|pane| pane.thread())
-            .filter(|thread| !homed.contains(thread) && self.admitted(*thread))
+            .chain(
+                self.cockpit
+                    .groups()
+                    .iter()
+                    .flat_map(|group| group.members.iter().copied()),
+            )
+            .filter(|thread| self.cockpit.thread(*thread).is_some() && self.admitted(*thread))
             .collect();
         threads.sort();
         threads.dedup();
-        let mut loose: Vec<nav::ThreadRow> = threads.into_iter().map(row).collect();
-        // A pinned loose Thread is listed under `Pinned`, in pin order, and
-        // nowhere else.
         let pins = &self.prefs.settings.pinned_threads;
-        let pinned: Vec<nav::ThreadRow> = pins
-            .iter()
-            .filter_map(|pin| loose.iter().find(|row| row.thread == *pin).cloned())
-            .collect();
-        loose.retain(|row| !pins.contains(&row.thread));
-        // Stable: Threads used at the same moment, or in the same state,
-        // keep creation order.
-        let order = self.prefs.settings.thread_list_order;
-        match order {
-            ThreadListOrder::Created => {}
-            ThreadListOrder::Recent => {
-                loose.sort_by_key(|row| std::cmp::Reverse(self.last_used(row.thread)))
-            }
-            ThreadListOrder::Attention => {
-                loose.sort_by_key(|row| std::cmp::Reverse(row.status.attention()))
-            }
-        }
-        // Never re-sort under the pointer (C8): while the pointer is inside
-        // the column or a drag is live, the rows keep the order they were
-        // last drawn in, and the ranks they were sorted by, as long as the
-        // same Threads are there and focus has not moved. Anything else
-        // re-ranks, and is remembered at the end.
-        let focused = roster.focused_thread();
-        let frozen = self.nav_hovered || self.nav_drag_live.get();
-        let held_ranks = match self.nav_snapshot.borrow().as_ref() {
-            Some(held) if frozen && held.focused == focused => {
-                hold_order(&mut loose, &held.rows).then(|| held.ranks.clone())
-            }
-            _ => None,
-        };
-        let held = held_ranks.is_some();
-        let ranks = held_ranks.unwrap_or_default();
-        // A row's rank under `sort: attention`, most urgent least: the held
-        // one while the tree holds still.
-        let rank = |row: &nav::ThreadRow| {
-            std::cmp::Reverse(
-                ranks
-                    .get(&row.thread)
-                    .copied()
-                    .unwrap_or_else(|| row.status.attention()),
-            )
-        };
-        let attention = order == ThreadListOrder::Attention;
-
-        // The Groups, in the durable order (creation order unless the
-        // operator moved one), each under the one Project its members share
-        // — or, when they span Projects, in the Groups section, belonging
-        // to none of them. Filtered, a Group sits under the filter's Project
-        // when any member is there, drawing only those members. A member
-        // whose leave is parked on a pending draft has already left, as in
-        // `visible_indices`.
-        let mut placed: Vec<(Option<Option<ProjectId>>, nav::GroupBlock)> = self
-            .cockpit
-            .groups()
-            .iter()
-            .filter_map(|group| {
-                let leaving = roster.pending_leave(group.id);
-                let members: Vec<ThreadId> = group
-                    .members
-                    .iter()
-                    .copied()
-                    .filter(|thread| Some(*thread) != leaving)
-                    .collect();
-                let mut shown: Vec<nav::ThreadRow> = members
-                    .iter()
-                    .copied()
-                    .filter(|thread| self.admitted(*thread))
-                    .map(row)
-                    .collect();
-                if shown.is_empty() {
-                    return None;
-                }
-                if attention {
-                    shown.sort_by_key(rank);
-                }
-                // `None` is the Groups section; `Some(project)` a Project's.
-                let project = match self.nav_filter {
-                    Some(filter) => Some(Some(filter)),
-                    None => {
-                        let mut projects: Vec<ProjectId> = members
-                            .iter()
-                            .filter_map(|thread| project_of(*thread))
-                            .collect();
-                        projects.sort();
-                        projects.dedup();
-                        match projects.as_slice() {
-                            [] => Some(None),
-                            [only] => Some(Some(*only)),
-                            _ => None,
-                        }
-                    }
-                };
-                Some((
-                    project,
-                    nav::GroupBlock {
-                        id: group.id,
-                        title: group.display_title().into(),
-                        members: shown,
-                        folded: self.nav_folds.contains(&NavFold::Group(group.id)),
-                        selected: !board_empty && view == View::Group(group.id),
-                    },
-                ))
-            })
-            .collect();
-        if attention {
-            placed.sort_by_cached_key(|(_, block)| block.members.iter().map(rank).min());
-        }
-
-        // The sections: every Project something is drawn under, in creation
-        // order (ids are handed out in registration order), `Other` last.
-        // The Groups section, when any Group spans Projects, comes first.
-        let mut keys: Vec<Option<ProjectId>> = loose
-            .iter()
-            .map(|row| project_of(row.thread))
-            .chain(placed.iter().filter_map(|(project, _)| *project))
-            .collect();
-        keys.sort_by_key(|key| (key.is_none(), *key));
-        keys.dedup();
-        let mut solos: Vec<nav::ThreadRow> = Vec::new();
-        let mut groups: Vec<nav::GroupBlock> = Vec::new();
-        let mut sections: Vec<nav::ProjectSection> = Vec::new();
-        let mixed: Vec<usize> = placed
-            .iter()
-            .filter(|(project, _)| project.is_none())
-            .map(|(_, block)| {
-                groups.push(block.clone());
-                groups.len() - 1
-            })
-            .collect();
-        if !mixed.is_empty() {
-            let rows: Vec<&nav::ThreadRow> = mixed
-                .iter()
-                .flat_map(|index| groups[*index].members.iter())
-                .collect();
-            sections.push(nav::ProjectSection {
-                project: None,
-                mixed: true,
-                label: SharedString::from("groups"),
-                branch: None,
-                folded: self.nav_folds.contains(&NavFold::Groups),
-                roll_up: nav::RollUp::of(rows.iter().copied()),
-                count: rows.len(),
-                solos: Vec::new(),
-                drawn: Vec::new(),
-                more: None,
-                groups: mixed,
-            });
-        }
-        for key in keys {
-            let mut section_solos = Vec::new();
-            let mut section_loose: Vec<&nav::ThreadRow> = loose
-                .iter()
-                .filter(|row| project_of(row.thread) == key)
-                .collect();
-            // Recents (no Project) lists newest first, whatever the order.
-            if key.is_none() {
-                section_loose.sort_by_key(|row| std::cmp::Reverse(self.last_used(row.thread)));
-            }
-            for row in section_loose {
-                section_solos.push(solos.len());
-                solos.push(row.clone());
-            }
-            // Past `SHOWN_ROWS` the rest wait under `Show more`, but the
-            // selected row is always drawn.
-            let long = section_solos.len() > nav::SHOWN_ROWS;
-            let open = self.nav_more.contains(&key);
-            let drawn: Vec<usize> = section_solos
-                .iter()
-                .enumerate()
-                .filter(|(at, index)| {
-                    !long || open || *at < nav::SHOWN_ROWS || solos[**index].selected
-                })
-                .map(|(_, index)| *index)
-                .collect();
-            let more = long.then_some(if open {
-                nav::ShowMore::Less
-            } else {
-                nav::ShowMore::More
-            });
-            let mut section_groups = Vec::new();
-            for (_, block) in placed.iter().filter(|(project, _)| *project == Some(key)) {
-                section_groups.push(groups.len());
-                groups.push(block.clone());
-            }
-            // A section's own Threads, not a Group's guest from another
-            // Project: they say its branch and the Space it stands for.
-            let own: Vec<ThreadId> = section_solos
-                .iter()
-                .map(|index| solos[*index].thread)
-                .chain(
-                    section_groups
-                        .iter()
-                        .flat_map(|index| groups[*index].members.iter().map(|row| row.thread)),
-                )
-                .filter(|thread| project_of(*thread) == key)
-                .collect();
-            // A heading names its rows' shared checkout; `Other` names no
-            // Project, so no checkout either.
-            let branch = key.and_then(|_| self.section_branch(&own));
-            let rows: Vec<&nav::ThreadRow> = section_solos
-                .iter()
-                .map(|index| &solos[*index])
-                .chain(
-                    section_groups
-                        .iter()
-                        .flat_map(|index| groups[*index].members.iter()),
-                )
-                .collect();
-            let label = self.section_label(key, rows.iter().copied());
-            let roll_up = nav::RollUp::of(rows.iter().copied());
-            let count = rows.len();
-            sections.push(nav::ProjectSection {
-                project: key,
-                mixed: false,
-                label,
-                branch,
-                roll_up,
-                count,
-                folded: key.is_some_and(|project| self.nav_folded(NavFold::Project(project))),
-                solos: section_solos,
-                drawn,
-                more,
-                groups: section_groups,
-            });
-        }
-
-        if attention {
-            sections.sort_by_cached_key(|section| {
-                section
-                    .solos
-                    .iter()
-                    .map(|index| &solos[*index])
-                    .chain(
-                        section
-                            .groups
-                            .iter()
-                            .flat_map(|index| groups[*index].members.iter()),
-                    )
-                    .map(rank)
-                    .min()
-            });
-        }
-        if !held {
-            let ranks = if attention {
-                solos
-                    .iter()
-                    .chain(groups.iter().flat_map(|group| group.members.iter()))
-                    .map(|row| (row.thread, row.status.attention()))
-                    .collect()
-            } else {
-                Default::default()
-            };
-            *self.nav_snapshot.borrow_mut() = Some(NavSnapshot {
-                rows: loose.iter().map(|row| row.thread).collect(),
-                focused,
-                ranks,
-            });
-        }
-
-        let parked = self.parked_threads().into_iter().map(row).collect();
-
-        nav::NavState {
-            pinned,
-            pinned_folded: self.nav_folded(NavFold::Pinned),
-            sections,
-            groups,
-            solos,
-            parked,
-        }
-    }
-
-    /// Inbox membership follows open Thread lifecycle, independently of Notices.
-    /// Blockers precede work; every other open Thread awaits the operator.
-    pub(crate) fn inbox(&self, state: &nav::NavState) -> nav::Inbox {
-        let mut rows: Vec<_> = state
-            .pinned
-            .iter()
-            .chain(&state.solos)
-            .chain(state.groups.iter().flat_map(|group| &group.members))
-            .collect();
-        rows.sort_by_key(|row| row.thread);
-        rows.dedup_by_key(|row| row.thread);
-        let queue = self.cockpit.needs_you();
-        let mut inbox = Vec::new();
-        let mut working = Vec::new();
+        let mut state = nav::NavState::default();
+        let mut pinned = Vec::new();
         let mut snoozed = Vec::new();
-        for row in rows {
-            let entry = row.clone();
-            let open = self.cockpit.thread(row.thread);
-            if open.and_then(|open| open.snooze()).is_some() {
-                snoozed.push(entry);
-                continue;
-            }
-            if open.is_some_and(|open| open.pending_decisions().is_empty())
-                && open.is_some_and(|open| {
-                    open.needs_queue() || open.background_work() || !open.queue().is_empty()
-                })
-            {
-                working.push(entry);
-            } else {
-                inbox.push(entry);
+        for thread in threads {
+            let open = self.cockpit.thread(thread);
+            let snooze = open.and_then(|open| open.snooze()).map(|snooze| snooze.until);
+            let working = open.is_some_and(|open| {
+                open.pending_decisions().is_empty()
+                    && (open.needs_queue() || open.background_work() || !open.queue().is_empty())
+            });
+            match (snooze, pins.iter().position(|pin| *pin == thread)) {
+                (Some(until), _) => snoozed.push((until, row(thread))),
+                (None, Some(at)) => pinned.push((at, row(thread))),
+                (None, None) if working => state.working.push(row(thread)),
+                (None, None) => state.active.push(row(thread)),
             }
         }
-        inbox.sort_by_key(|entry| {
+        pinned.sort_by_key(|(at, _)| *at);
+        state.pinned = pinned.into_iter().map(|(_, row)| row).collect();
+        snoozed.sort_by_key(|(until, _)| *until);
+        state.snoozed = snoozed.into_iter().map(|(_, row)| row).collect();
+        let queue = self.cockpit.needs_you();
+        state.active.sort_by_key(|row| {
             (
-                if self
-                    .cockpit
-                    .thread(entry.thread)
-                    .is_some_and(|open| !open.pending_decisions().is_empty())
-                {
-                    0
-                } else {
-                    1
-                },
+                self.cockpit
+                    .thread(row.thread)
+                    .is_none_or(|open| open.pending_decisions().is_empty()),
                 queue
                     .iter()
-                    .position(|id| *id == entry.thread)
+                    .position(|id| *id == row.thread)
                     .unwrap_or(usize::MAX),
             )
         });
-        nav::Inbox {
-            inbox,
-            working,
-            snoozed,
-        }
+        state
+            .working
+            .sort_by_key(|row| std::cmp::Reverse(row.working_since));
+        state.parked = self.parked_threads().into_iter().map(row).collect();
+        state
     }
 
-    /// Does the Project filter admit this Thread? `All projects` admits
+    /// Does the Project filter admit this Thread?    /// Does the Project filter admit this Thread? `All projects` admits
     /// everything; a chosen Project admits only Threads whose cached
     /// ProjectId is it — so a Thread whose Project is unknown appears under
     /// `All projects` alone, rather than being quietly filed under someone
@@ -9529,34 +8919,6 @@ impl CockpitView {
             .or_else(|| facts.branch.clone())
     }
 
-    /// What a Project heading says of its rows' checkouts (§5.1.4): the
-    /// branch every one of them is on and whether that is the Project's
-    /// default. Cache reads only; the checkouts that say no branch (a parked row may not)
-    /// say nothing either way.
-    fn section_branch(&self, rows: &[ThreadId]) -> Option<(SharedString, bool)> {
-        let read: Vec<SharedString> = rows
-            .iter()
-            .filter_map(|thread| self.facts.get(*thread))
-            .filter_map(Self::checkout_branch)
-            .collect();
-        let first = read.first().cloned()?;
-        if !read.iter().all(|branch| *branch == first) {
-            return None;
-        }
-        let default = rows
-            .iter()
-            .find_map(|thread| {
-                self.facts
-                    .get(*thread)
-                    .and_then(|facts| facts.default_branch.clone())
-            })
-            .map_or_else(
-                || matches!(first.as_ref(), "main" | "master"),
-                |default| default == first,
-            );
-        Some((first, default))
-    }
-
     /// Land on a Thread from the nav's other doors — an Activity or rail
     /// row: the Group on screen when it holds the Thread, else its
     /// home Group's view, else its Pane if open, else revived — exactly as
@@ -9634,21 +8996,6 @@ impl CockpitView {
                 self.group_error = Some(error.to_string().into());
             }
         }
-        cx.notify();
-    }
-
-    /// A nav drop: the core plans and applies it in the View the drag
-    /// started from; a refusal lands in the nav's banner.
-    fn apply_drop(&mut self, drag: NavDrag, target: DropTarget, cx: &mut Context<Self>) {
-        self.nav_dragging = None;
-        match self.cockpit.drop(drag.drag, drag.origin, target) {
-            Ok(()) => self.group_error = None,
-            Err(error) => {
-                ferrite_core::log!("group change refused: {error}");
-                self.group_error = Some(error.to_string().into());
-            }
-        }
-        self.sync_panes(cx);
         cx.notify();
     }
 
@@ -9741,8 +9088,8 @@ impl CockpitView {
     /// Close the focused Pane — cmd-w. The core decides what that means
     /// (park, leave, defer onto a draft, discard); the mirror follows.
     fn close_thread(&mut self, _: &CloseThread, window: &mut Window, cx: &mut Context<Self>) {
-        if self.needs_you_shown() && self.floats.notice_focus.is_focused(window) {
-            self.park_inbox_cursor(cx);
+        if self.nav_keys_held && self.nav_focus.is_focused(window) {
+            self.park_nav_cursor(cx);
             return;
         }
         // ⌘W over the lightbox closes it; in the focused Pane's preview or
@@ -10701,6 +10048,11 @@ impl CockpitView {
                     .as_ref()
                     .map(|editor| editor.line.focus_handle(cx))
             })
+            // The nav's search field keeps the keys it was handed.
+            .or_else(|| {
+                self.search_focused(window, cx)
+                    .then(|| self.nav_search.focus_handle(cx))
+            })
             // An open Decision note (⇥) holds the keyboard until it closes.
             .or_else(|| self.decision_note_focus(cx))
             // The lightbox, over everything, keeps the keyboard its image
@@ -10812,13 +10164,9 @@ impl CockpitView {
                     view.find_holds_focus(window, cx) || view.reply_card_holds_focus(window, cx)
                 })
         });
-        // A nav view's list keeps the keyboard it was handed until the
-        // operator takes it elsewhere: the view stays shown either way.
-        let nav_list_focused = match self.nav_view {
-            nav::NavView::Inbox => self.floats.notice_focus.is_focused(window),
-            nav::NavView::Tree => self.nav_keys_held && self.nav_view_focus.is_focused(window),
-            nav::NavView::Parked => self.nav_view_focus.is_focused(window),
-        };
+        // The list keeps the keyboard it was handed until the operator
+        // takes it elsewhere.
+        let nav_list_focused = self.nav_keys_held && self.nav_focus.is_focused(window);
         if window.has_active_dialog(cx)
             || self.floats_hold_focus()
             || nav_list_focused
@@ -12813,45 +12161,24 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// cmd-i: the Inbox, shown or back to the tree
-    /// (§5.1.2, FL-16). Showing it closes the floats over it, puts its
-    /// cursor on the first row and hands it the keyboard (its keys ride
-    /// the `Notifications` context).
+    /// ⌘I (and the Bar's needs-you count): the list takes the keys on its
+    /// first card (ADR 0040); again, they go back to the board.
     fn toggle_notifications(
         &mut self,
         _: &ToggleNotifications,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.nav_view != nav::NavView::Inbox {
-            self.popover = None;
-            self.context_menu = None;
-            self.floats.palette = None;
-            self.floats.shortcuts = None;
+        if self.nav_keys_held && self.nav_focus.is_focused(window) {
+            self.leave_nav(window, cx);
+            return;
         }
-        self.toggle_nav_view(nav::NavView::Inbox, Some(window), cx);
-    }
-
-    /// Whether the Inbox is shown.
-    pub(crate) fn needs_you_shown(&self) -> bool {
-        self.nav_view == nav::NavView::Inbox
-    }
-
-    /// Back to the tree from a view (Esc, or opening what a row stands
-    /// for), the keyboard to the board.
-    pub(super) fn close_nav_view(&mut self, cx: &mut Context<Self>) {
-        self.snooze_editor = None;
-        if self.nav_view != nav::NavView::Tree {
-            self.nav_view = nav::NavView::Tree;
-            cx.notify();
-        }
-    }
-
-    /// Opening work leaves Inbox visible; other temporary lists return to the tree.
-    fn finish_notice_navigation(&mut self, cx: &mut Context<Self>) {
-        if !self.needs_you_shown() {
-            self.close_nav_view(cx);
-        }
+        self.popover = None;
+        self.context_menu = None;
+        self.floats.palette = None;
+        self.floats.shortcuts = None;
+        let first = self.nav_items(cx).into_iter().next();
+        self.focus_nav_on(first, window, cx);
     }
 
     /// Every click or key on the Inbox's surfaces — a toast's `⏎ open`, a
@@ -12879,7 +12206,7 @@ impl CockpitView {
                 if self.cockpit.open_notice(id).is_some() {
                     self.sync_panes(cx);
                 }
-                self.finish_notice_navigation(cx);
+                self.snooze_editor = None;
             }
             Verb::Dismiss(id) => {
                 self.cockpit.dismiss_notice(id);
@@ -12914,7 +12241,7 @@ impl CockpitView {
                     self.land_on_thread(id.thread, cx);
                     self.select_subject_from_notice(id.thread, subject, cx);
                 }
-                self.finish_notice_navigation(cx);
+                self.snooze_editor = None;
             }
             Verb::DismissDecision(id) => {
                 self.cockpit.dismiss_decision_notice(&id);
@@ -12929,7 +12256,7 @@ impl CockpitView {
             }
             Verb::Answer(..) => {}
             Verb::GoTo(alert) => {
-                self.finish_notice_navigation(cx);
+                self.snooze_editor = None;
                 self.go_to_alert(alert, cx);
             }
         }
@@ -13278,15 +12605,18 @@ impl CockpitView {
 
     /// One row per open Thread awaiting handling, independent of Notices.
     /// Requests precede other rows, retaining each machine's attention order.
+    #[cfg(test)]
     pub(super) fn needs_you_rows(&self, cx: &gpui::App) -> Vec<NoticeRow> {
-        self.inbox_rows(&self.inbox(&self.nav_state()), cx)
+        self.inbox_rows(&self.nav_state(), cx)
     }
 
-    fn inbox_rows(&self, activity: &nav::Inbox, cx: &gpui::App) -> Vec<NoticeRow> {
+    /// The Active section as the Inbox's rows: each local Thread's, then a
+    /// connected machine's requests and finishes, requests first.
+    pub(super) fn inbox_rows(&self, state: &nav::NavState, cx: &gpui::App) -> Vec<NoticeRow> {
         let now = ferrite_core::clock::system_time();
         let notifications = self.cockpit.notifications();
-        let mut rows: Vec<_> = activity
-            .inbox
+        let mut rows: Vec<_> = state
+            .active
             .iter()
             .map(|entry| {
                 let thread = entry.thread;
@@ -13318,74 +12648,6 @@ impl CockpitView {
         let mut seen = std::collections::BTreeSet::new();
         rows.retain(|row| seen.insert((row.away.clone(), row.thread)));
         rows
-    }
-
-    /// The nav's content at its own width (`nav::content`, §5.1): the head
-    /// in the head row, the views, the tree — or the shown view's list in
-    /// its place — with its scrollbar, and the foot: the view switcher, the
-    /// account row and free disk once it runs low.
-    fn nav_content(&self, state: &nav::NavState, window: &Window, cx: &mut Context<Self>) -> Div {
-        #[cfg(test)]
-        drawn::built_nav();
-        self.nav_drawn.borrow_mut().clear();
-        // A fold mid-move: the nav (its part alone) draws again next frame.
-        if self.nav_folds_moving(cx) {
-            ferrite_ui::motion::request_frame(window);
-        }
-        let list = match self.nav_view {
-            nav::NavView::Tree => self.nav_tree(state, cx),
-            nav::NavView::Inbox => self.needs_you_list(state, window, cx),
-            nav::NavView::Parked => self.parked_list(state, cx),
-        };
-        let list = self.sweep_release(list, cx);
-        let gear = nav::gear_button().on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-            cx.stop_propagation();
-            view.toggle_settings(cx);
-        }));
-        nav::content()
-            .child(nav::head(
-                crate::frame().head_drag(!self.overlay_open(), self.maximized),
-                self.activity_bell(state, cx),
-                nav::search_button().on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|_, _: &MouseDownEvent, window, cx| {
-                        cx.stop_propagation();
-                        window.dispatch_action(Box::new(crate::palette::Toggle), cx);
-                    }),
-                ),
-                self.nav_toggle(false, cx),
-            ))
-            .child(self.nav_views(state, cx))
-            .child(
-                div()
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .child(list)
-                    .children(nav::edge_fades(&self.nav_scroll))
-                    .child(nav::scrollbar(&self.nav_scroll, self.nav_hovered)),
-            )
-            .child(nav::foot(
-                &self.shown_user,
-                &self.shown_version,
-                self.free_disk.and_then(ferrite_ui::frame::free_disk_words),
-                gear,
-            ))
-    }
-
-    /// The Activity view's door in the nav's head: the bell, which shows
-    /// the view or the tree again from it, wearing a dot while a Thread
-    /// needs the operator or a finish is unseen.
-    fn activity_bell(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Stateful<Div> {
-        nav::activity_button(self.nav_view == nav::NavView::Inbox, state.alert()).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|view, _: &MouseDownEvent, window, cx| {
-                cx.stop_propagation();
-                view.toggle_nav_view(nav::NavView::Inbox, Some(window), cx);
-            }),
-        )
     }
 
     /// What a Thread's card wires (`nav::CardDoors`): its hover strip —
@@ -13475,12 +12737,18 @@ impl CockpitView {
         }
     }
 
-    /// Park each of `threads` (reversible: the Parked view holds them).
+    /// Park each of `threads` (reversible: the Parked shelf holds them,
+    /// and ⌘Z takes it back while the foot's notice stands).
     fn park_listed(&mut self, threads: &[ThreadId], cx: &mut Context<Self>) {
-        for thread in threads {
-            let _ = self.cockpit.park_thread(*thread);
-        }
+        let parked: Vec<ThreadId> = threads
+            .iter()
+            .copied()
+            .filter(|thread| self.cockpit.park_thread(*thread).is_ok())
+            .collect();
         self.sync_panes(cx);
+        if !parked.is_empty() {
+            self.offer_undo(nav_chrome::UndoAct::Parked(parked), cx);
+        }
         cx.notify();
     }
 
@@ -13495,429 +12763,6 @@ impl CockpitView {
         )
     }
 
-    /// The views (§5.1.2): `New thread`, its chord read from the keymap,
-    /// and `Parked` (its count) — search and the Activity bell are the
-    /// head's. A press shows the view in the tree's place, or the tree
-    /// again from the active one.
-    fn nav_views(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Div {
-        use ferrite_ui::icons;
-        use nav::{NavView, Trailing};
-        let shown = self.nav_view;
-        let mut rows: Vec<AnyElement> = Vec::new();
-        let key = "nav-view-new";
-        rows.push(
-            nav::view_row(
-                key,
-                nav::view_icon(icons::PLUS),
-                "New thread",
-                ferrite_ui::components::bound_chord("cockpit::NewThread")
-                    .map_or(Trailing::None, Trailing::Chord),
-                false,
-            )
-            .on_click(cx.listener(|_, _: &ClickEvent, window, cx| {
-                window.dispatch_action(Box::new(NewThread), cx);
-            }))
-            .into_any_element(),
-        );
-        let key = "nav-view-parked";
-        let active = shown == NavView::Parked;
-        rows.push(
-            nav::view_row(
-                key,
-                nav::view_icon(icons::ARCHIVE),
-                "Parked",
-                Trailing::Count(state.parked.len()),
-                active,
-            )
-            .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
-                view.toggle_nav_view(NavView::Parked, Some(window), cx);
-            }))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|view, event: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.open_context_menu(MenuTarget::Parked, event.position, cx);
-                }),
-            )
-            .into_any_element(),
-        );
-        nav::views(rows)
-    }
-
-    /// The Inbox's list in the tree's place (§5.1.2), scrolling as
-    /// the tree does and holding its own keys (`needs_you_rows`, its cursor
-    /// `needs_you.cursor` while it has the keyboard): the blocked Threads
-    /// oldest-first, then idle open Threads, with Working below. A row's
-    /// press opens its Thread or its Decision's owning Subject.
-    fn needs_you_list(
-        &self,
-        state: &nav::NavState,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let tree = nav::nav_tree(&self.nav_scroll);
-        let activity = self.inbox(state);
-        let rows = self.inbox_rows(&activity, cx);
-        let cursor = self
-            .floats
-            .notice_focus
-            .is_focused(window)
-            .then(|| self.needs_you.cursor_at(&rows));
-        let mut list = nav::view_list("nav-view-needs-you-list");
-        list = list
-            .child(self.inbox_heading(rows.len(), cx))
-            .children(self.snooze_field())
-            .children(
-                self.group_error
-                    .as_ref()
-                    .map(|error| nav::notice(error.clone())),
-            );
-        if rows.is_empty() {
-            list = list.child(nav::note("nav-needs-you-empty", "Nothing needs you"));
-        }
-        for (index, row) in rows.iter().enumerate() {
-            let local_request = row.away.is_none();
-            let verb = row.open_verb();
-            let picks = row.thread;
-            let open = cx.listener(move |view, event: &ClickEvent, window, cx| {
-                cx.stop_propagation();
-                if local_request && view.pick_card(picks, event.modifiers(), cx) {
-                    return;
-                }
-                view.snooze_editor = None;
-                view.notice_verb(verb.clone(), cx);
-                window.blur(cx);
-            });
-            let selected = cursor.map_or(
-                row.away.is_none() && self.focused_thread() == Some(row.thread),
-                |at| at == index,
-            );
-            let element = if local_request {
-                let thread = nav::ThreadRow {
-                    selected,
-                    ..self.thread_row(row.thread)
-                };
-                let editing = self.renaming_thread(row.thread);
-                let drawn = nav::thread_card(
-                    &thread,
-                    self.editable_thread_title(row.thread, thread.name.clone(), cx),
-                    self.card_doors(row.thread, cx),
-                    nav::RowPlace::ROOT,
-                    None,
-                    editing,
-                    &nav::Measure::Text(cx),
-                );
-                div()
-                    .id(("notice-row", index))
-                    .debug_selector(move || format!("notice-row-{index}"))
-                    .flex_shrink_0()
-                    .child(self.pickable_card(drawn, row.thread, cx))
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener({
-                            let thread = row.thread;
-                            move |view, event: &MouseDownEvent, _, cx| {
-                                cx.stop_propagation();
-                                view.pick_for_menu(thread, cx);
-                                view.open_context_menu(
-                                    MenuTarget::Thread(thread),
-                                    event.position,
-                                    cx,
-                                );
-                            }
-                        }),
-                    )
-                    .on_click(open)
-                    .into_any_element()
-            } else {
-                nav::notice_row(index, row, selected, &nav::Measure::Text(cx))
-                    .on_click(open)
-                    .into_any_element()
-            };
-            list = list.child(element);
-        }
-        if !activity.working.is_empty() {
-            list = list.child(
-                nav::fold_heading(
-                    "nav-inbox-working",
-                    format!("Working · {}", activity.working.len()),
-                    !self.inbox_working_expanded,
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.inbox_working_expanded ^= true;
-                        cx.notify();
-                    }),
-                ),
-            );
-            for entry in activity
-                .working
-                .iter()
-                .filter(|_| self.inbox_working_expanded)
-            {
-                let thread = entry.thread;
-                list = list.child(
-                    self.pickable_card(nav::thread_card(
-                        entry,
-                        self.editable_thread_title(thread, entry.name.clone(), cx),
-                        self.card_doors(thread, cx),
-                        nav::RowPlace::ROOT,
-                        None,
-                        self.renaming_thread(thread),
-                        &nav::Measure::Text(cx),
-                    ), thread, cx)
-                    .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
-                        if view.pick_card(thread, event.modifiers(), cx) {
-                            return;
-                        }
-                        view.snooze_editor = None;
-                        view.land_on_thread(thread, cx);
-                        window.blur(cx);
-                    }))
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.pick_for_menu(thread, cx);
-                            view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
-                        }),
-                    ),
-                );
-            }
-        }
-        if !activity.snoozed.is_empty() {
-            list = list.child(
-                nav::fold_heading(
-                    "nav-inbox-snoozed",
-                    format!("Snoozed · {}", activity.snoozed.len()),
-                    !self.inbox_snoozed_expanded,
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.inbox_snoozed_expanded ^= true;
-                        cx.notify();
-                    }),
-                ),
-            );
-            for entry in activity
-                .snoozed
-                .iter()
-                .filter(|_| self.inbox_snoozed_expanded)
-            {
-                let thread = entry.thread;
-                let wake = nav::row_action(
-                    format!("wake-thread-{}", thread.get()),
-                    ferrite_ui::icons::CLOSE,
-                )
-                .tooltip(ferrite_ui::menu::tooltip("Wake thread"))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.snooze_thread(thread, None, cx);
-                    }),
-                )
-                .into_any_element();
-                let doors = nav::CardDoors {
-                    strip: Some(nav::strip(vec![wake], nav::ROW_ACTION_W)),
-                    ..self.card_doors(thread, cx)
-                };
-                list = list.child(
-                    self.pickable_card(nav::thread_card(
-                        entry,
-                        self.editable_thread_title(thread, entry.name.clone(), cx),
-                        doors,
-                        nav::RowPlace::ROOT,
-                        None,
-                        self.renaming_thread(thread),
-                        &nav::Measure::Text(cx),
-                    ), thread, cx)
-                    .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
-                        if view.pick_card(thread, event.modifiers(), cx) {
-                            return;
-                        }
-                        view.snooze_editor = None;
-                        view.land_on_thread(thread, cx);
-                        window.blur(cx);
-                    }))
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.pick_for_menu(thread, cx);
-                            view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
-                        }),
-                    ),
-                );
-            }
-        }
-        tree.track_focus(&self.floats.notice_focus)
-            // The custom field inherits Submit/Escape from the cockpit;
-            // list navigation must not capture its Enter.
-            .when(self.snooze_editor.is_none(), |tree| {
-                tree.key_context("Notifications")
-            })
-            .child(list)
-    }
-
-    /// The Parked view's list in the tree's place (§5.1.2), its Threads
-    /// grouped as the tree groups them, Esc's way back to the tree.
-    fn parked_list(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Stateful<Div> {
-        let mut list = nav::view_list("nav-view-parked-list");
-        if state.parked.is_empty() {
-            list = list.child(nav::note("nav-parked-empty", "Nothing parked"));
-        }
-        let sections = self.view_tree(state.parked.clone());
-        list = list.children(self.view_sections(&sections, cx, |view, row, place, cx| {
-            view.thread_element(row, None, place, cx)
-        }));
-        let list = if self.machine_lost() {
-            machines::held(list, "machine-lost-parked")
-        } else {
-            list
-        };
-        nav::nav_tree(&self.nav_scroll)
-            .track_focus(&self.nav_view_focus)
-            .key_context("NavView")
-            .child(list)
-    }
-
-    /// A view's rows grouped as the tree groups them (`nav::ViewSection`):
-    /// under their Project, then under their home Group within it. A
-    /// Group's fold is the tree's own.
-    fn view_tree(&self, rows: Vec<nav::ThreadRow>) -> Vec<nav::ViewSection> {
-        let groups = self.cockpit.groups();
-        nav::ViewSection::tree(
-            rows,
-            |row| nav::ViewPlace {
-                project: self.facts.get(row.thread).and_then(|facts| facts.project),
-                group: groups.home(row.thread).and_then(|group| {
-                    Some(nav::HomeGroup {
-                        order: groups.iter().position(|other| other.id == group.id)?,
-                        id: group.id,
-                        title: group.display_title().into(),
-                        folded: self.nav_folds.contains(&NavFold::Group(group.id)),
-                    })
-                }),
-            },
-            |project, rows| self.section_label(project, rows.iter().copied()),
-        )
-    }
-
-    /// What heads a Project section, in the tree or a view's list: the
-    /// Project's title, else a row's
-    /// cached Project name, lowercased. `other` names no Project.
-    fn section_label<'a>(
-        &self,
-        key: Option<ProjectId>,
-        mut rows: impl Iterator<Item = &'a nav::ThreadRow>,
-    ) -> SharedString {
-        let Some(project) = key else {
-            return SharedString::from("other");
-        };
-        self.cockpit
-            .registry()
-            .project(project)
-            .map(|project| SharedString::from(project.title.to_lowercase()))
-            .or_else(|| {
-                rows.find_map(|row| row.project.as_deref().map(str::to_lowercase))
-                    .map(SharedString::from)
-            })
-            .unwrap_or_else(|| SharedString::from("other"))
-    }
-
-    /// A view's sections drawn as the tree draws its own: each a plain
-    /// Project heading over its rows, on its label, each Group's row (a
-    /// press opens it, its chevron folds it as the tree's does) over its
-    /// members, one level in. `thread` draws a row at its place and wires
-    /// its press, which differs by view.
-    fn view_sections(
-        &self,
-        sections: &[nav::ViewSection],
-        cx: &mut Context<Self>,
-        thread: impl Fn(&Self, &nav::ThreadRow, nav::RowPlace, &mut Context<Self>) -> AnyElement,
-    ) -> Vec<AnyElement> {
-        sections
-            .iter()
-            .enumerate()
-            .map(|(index, section)| {
-                let mut rows: Vec<AnyElement> = section
-                    .solos
-                    .iter()
-                    .map(|row| thread(self, row, nav::RowPlace::Row(0), cx))
-                    .collect();
-                for group in &section.groups {
-                    let id = group.id;
-                    let head = nav::group_row_with_title(
-                        group,
-                        group.title.clone(),
-                        self.group_fold(group, cx),
-                        0,
-                        false,
-                        &nav::Measure::Text(cx),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                            view.enter_group(id, cx)
-                        }),
-                    );
-                    let mut block = nav::group_block(id).child(head);
-                    if !group.folded {
-                        let members = group
-                            .members
-                            .iter()
-                            .map(|row| thread(self, row, nav::RowPlace::Row(1), cx))
-                            .collect();
-                        block = block.child(nav::members(members));
-                    }
-                    rows.push(block.into_any_element());
-                }
-                nav::section(index == 0)
-                    .child(nav::view_project(
-                        index,
-                        section.label.clone(),
-                        &nav::Measure::Text(cx),
-                    ))
-                    .child(nav::project_rows(rows))
-                    .into_any_element()
-            })
-            .collect()
-    }
-
-    /// Inbox counts Threads; Mark all read acknowledges Notices only.
-    fn inbox_heading(&self, count: usize, cx: &mut Context<Self>) -> Div {
-        // A text control in the heading's ink, the `+`'s height and its
-        // ground under the pointer and pressed, so it reads as one.
-        nav::heading("nav-recent", format!("Inbox · {count}")).child(
-            div()
-                .id("notifications-mark-read")
-                .debug_selector(|| "notifications-mark-read".into())
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .h(px(ferrite_ui::theme::NAV_HEADING_BUTTON))
-                .px(px(ferrite_ui::theme::SPACE_1))
-                .rounded(px(ferrite_ui::theme::R_CONTROL))
-                .hover_row("notifications-mark-read")
-                .press_row()
-                .font_weight(ferrite_ui::theme::W_BODY)
-                .child("Mark all read")
-                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.notice_verb(Verb::MarkAllRead, cx);
-                })),
-        )
-    }
-
-    /// The nav column (§5.1): the head, the views, the tree and the foot
-    /// on the frame, from the window's top. cmd-B folds it to the rail at
-    /// once (Claude's sidebar snaps). The rail and the uncached rows share
-    /// one `nav_state` a frame.
     fn nav(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let collapsed = self.nav_railed();
         let width = if collapsed {
@@ -13937,12 +12782,10 @@ impl CockpitView {
         frame.child(shell).into_any_element()
     }
 
-    /// The rail (cmd-B folded): every open Thread in the tree's order —
-    /// pinned rows, then each section's loose rows and Group members, folds
-    /// and `Show more` ignored, each Thread once —
-    /// with its mark, and the digit of the ⌘1–9 that focuses it where one
-    /// does (the board's head order, R5). A press lands on the Thread as
-    /// its tree row's does.
+    /// The rail (cmd-B folded): every open Thread in the list's order,
+    /// shelves folded or not, with its mark, and the digit of the ⌘1–9 that
+    /// focuses it where one does (the board's head order, R5). A press
+    /// lands on the Thread as its card's does.
     fn nav_rail(
         &self,
         state: &nav::NavState,
@@ -13955,34 +12798,18 @@ impl CockpitView {
             .take(9)
             .map(|index| self.panes[index].thread())
             .collect();
-        let focused = self.cockpit.roster().focused_thread();
-        let mut rows: Vec<nav::RailRow> = Vec::new();
-        let mut listed = std::collections::HashSet::new();
-        let pinned = state.pinned.iter().map(|row| (row, false));
-        let tree = state.sections.iter().flat_map(|section| {
-            let solos = section
-                .solos
-                .iter()
-                .map(|index| (&state.solos[*index], false));
-            let members = section.groups.iter().flat_map(|index| {
-                let group = &state.groups[*index];
-                group.members.iter().map(|row| (row, group.selected))
-            });
-            solos.chain(members)
-        });
-        for (row, group_shown) in pinned.chain(tree) {
-            if listed.insert(row.thread) {
-                rows.push(nav::RailRow {
-                    key: keyed
-                        .iter()
-                        .position(|shown| *shown == Some(row.thread))
-                        .map(|at| at + 1),
-                    thread: row.thread,
-                    status: row.status,
-                    selected: row.selected || (group_shown && focused == Some(row.thread)),
-                });
-            }
-        }
+        let rows: Vec<nav::RailRow> = state
+            .open_rows()
+            .map(|row| nav::RailRow {
+                key: keyed
+                    .iter()
+                    .position(|shown| *shown == Some(row.thread))
+                    .map(|at| at + 1),
+                thread: row.thread,
+                status: row.status,
+                selected: row.selected,
+            })
+            .collect();
         let mut rail = nav::rail(&self.nav_rail_scroll, self.nav_toggle(true, cx));
         for row in &rows {
             let thread = row.thread;
@@ -13992,530 +12819,8 @@ impl CockpitView {
         }
         rail
     }
-
-    /// The scrolling tree: one section per Project (`nav_state`), each its heading, its
-    /// loose rows — a `LooseZone`, a place to drop a row to get it out of
-    /// its Group — and its Groups, then the ground, which is a `LooseZone`
-    /// too.
-    fn nav_tree(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Stateful<Div> {
-        // Every drag started from this frame started from this View.
-        let origin = self.cockpit.roster().view();
-        let mut tree = self.nav_keys(nav::nav_tree(&self.nav_scroll), cx);
-        if let Some(error) = &self.group_error {
-            tree = tree.child(nav::notice(error.clone()));
-        }
-        // With machines (ADR 0026): the one the window is on heads its own
-        // tree, which folds under it, and is held while its Server is away;
-        // the others follow the tree.
-        let machines = self.machine_rows(cx);
-        let on = machines
-            .as_ref()
-            .and_then(|rows| rows.iter().find(|row| row.selected));
-        if let Some(on) = on {
-            tree = tree.child(self.machine_heading(on, cx));
-        }
-        let folded = on.is_some_and(|on| on.folded);
-        let mut own: Vec<AnyElement> = Vec::new();
-        let mut zones = 0usize;
-        // `Pinned` (Claude's) heads the tree while it holds a row.
-        if !state.pinned.is_empty() && !folded {
-            own.push(self.pinned_section(state, cx));
-        }
-        // `Projects` heads the Project sections, under the Groups section
-        // (Groups spanning Projects) where there is one.
-        let projects_at = state
-            .sections
-            .iter()
-            .position(|section| !section.mixed)
-            .unwrap_or(state.sections.len());
-        let mut first = own.is_empty();
-        for (index, section) in state.sections.iter().enumerate().filter(|_| !folded) {
-            if index == projects_at {
-                // Clear of `Pinned` when it stands right above.
-                let under_pinned = index == 0 && !own.is_empty();
-                own.push(
-                    nav::section(!under_pinned)
-                        .child(self.projects_heading(cx))
-                        .into_any_element(),
-                );
-                first = true;
-            }
-            // Recents follows the Projects under its own heading, as
-            // Codex's list ends.
-            let recents = section.recents();
-            let mut block = nav::section(first && !recents);
-            block = if recents {
-                block.child(nav::heading("nav-recents-heading", "Recents"))
-            } else {
-                block.child(self.project_heading(index, section, cx))
-            };
-            first = false;
-            let fold = match section.project {
-                _ if section.mixed => Some(NavFold::Groups),
-                project => project.map(NavFold::Project),
-            };
-            if fold.map_or(!section.folded, |fold| {
-                self.nav_fold_drawn(fold, section.folded, cx)
-            }) {
-                // Every section's rows start on its heading's label.
-                let mut rows: Vec<AnyElement> = Vec::new();
-                if !section.drawn.is_empty() {
-                    let mut solos: Vec<AnyElement> = section
-                        .drawn
-                        .iter()
-                        .map(|row| {
-                            self.thread_element(&state.solos[*row], None, nav::RowPlace::ROOT, cx)
-                        })
-                        .collect();
-                    if let Some(more) = section.more {
-                        let key = section.project;
-                        solos.push(
-                            nav::show_more(index, more, nav::RowPlace::ROOT)
-                                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                                    if !view.nav_more.remove(&key) {
-                                        view.nav_more.insert(key);
-                                    }
-                                    cx.notify();
-                                }))
-                                .into_any_element(),
-                        );
-                    }
-                    rows.push(self.loose_run(zones, solos, cx));
-                    zones += 1;
-                }
-                for group in &section.groups {
-                    rows.push(self.group_element(&state.groups[*group], origin, cx));
-                }
-                let rows = if section.mixed || recents {
-                    div().flex().flex_col().flex_shrink_0().children(rows)
-                } else {
-                    nav::project_rows(rows)
-                };
-                block = match fold {
-                    Some(fold) => block.child(self.nav_fold_body(fold, rows, cx)),
-                    None => block.child(rows),
-                };
-            }
-            own.push(block.into_any_element());
-        }
-        if projects_at == state.sections.len() && !folded {
-            own.push(self.projects_heading(cx).into_any_element());
-        }
-        // An empty tree says so at its top, before the ground. It names the
-        // Project the filter chose.
-        if state.sections.is_empty() && state.pinned.is_empty() && !folded {
-            let filtered = self
-                .nav_filter
-                .and_then(|project| self.cockpit.registry().project(project))
-                .map(|project| project.title.clone());
-            own.push(
-                nav::empty_filter(
-                    filtered.as_deref(),
-                    (!state.parked.is_empty()).then(|| {
-                        nav::parked_link()
-                            .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
-                                view.show_nav_view(nav::NavView::Parked, Some(window), cx);
-                            }))
-                            .into_any_element()
-                    }),
-                )
-                .into_any_element(),
-            );
-        }
-        tree = if self.machine_lost() {
-            tree.child(machines::held(
-                div().flex().flex_col().flex_shrink_0().children(own),
-                "machine-lost-tree",
-            ))
-        } else {
-            tree.children(own)
-        };
-        if let Some(rows) = &machines {
-            tree = tree.children(self.machines_off_screen(rows, cx));
-        }
-        // The ground under the last row is a drop target too — with every
-        // Thread in a Group it is the only place left to drop one to get it
-        // out — and it takes the tree's slack, so that ground is never dead.
-        tree.child(
-            drop_feedback(
-                nav::loose_ground(zones),
-                self.cockpit.groups().clone(),
-                DropTarget::LooseZone,
-            )
-            .on_drop(cx.listener(|view, drag: &NavDrag, _, cx| {
-                view.apply_drop(*drag, DropTarget::LooseZone, cx)
-            })),
-        )
-    }
-
-    /// The `Pinned` section (Claude's): its heading, whose press folds it,
-    /// over the pinned rows, flat on the title column as Claude lists them.
-    fn pinned_section(&self, state: &nav::NavState, cx: &mut Context<Self>) -> AnyElement {
-        let folded = state.pinned_folded;
-        let heading = div()
-            .id("nav-pinned-section")
-            .child(
-                nav::fold_heading("nav-pinned-heading", "Pinned", folded)
-                    .children(self.cursor_reveal(nav::NavItem::Heading(NavFold::Pinned))),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    view.set_nav_fold(NavFold::Pinned, !folded, cx);
-                }),
-            );
-        let rows = self.nav_fold_drawn(NavFold::Pinned, folded, cx).then(|| {
-            let rows = state
-                .pinned
-                .iter()
-                .map(|row| self.thread_element(row, None, nav::RowPlace::ROOT, cx));
-            let rows = div().flex().flex_col().flex_shrink_0().children(rows);
-            self.nav_fold_body(NavFold::Pinned, rows, cx)
-        });
-        nav::section(true)
-            .child(heading)
-            .children(rows)
-            .into_any_element()
-    }
-
-    /// The `Projects` heading (§5.1.3), its `+` a new Project, under the
-    /// pointer only.
-    fn projects_heading(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        nav::heading_with_action("nav-projects-heading", "Projects", || {
-            nav::heading_button("nav-new-project", ferrite_ui::icons::PLUS)
-                .tooltip(ferrite_ui::menu::tooltip("New project"))
-                .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.open_project_creator(cx);
-                }))
-                .into_any_element()
-        })
-    }
-
-    /// A Project heading (N-12): a plain row whose press folds or unfolds
-    /// the section (N-4), whose right press opens its menu (a new Thread,
-    /// its place on disk), and whose hover
-    /// action starts a Thread in it. `Other` names no Project and does none
-    /// of these.
-    /// The Groups section's is the `Groups` heading, its press the fold.
-    fn project_heading(
-        &self,
-        index: usize,
-        section: &nav::ProjectSection,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        if section.mixed {
-            let folded = section.folded;
-            return div()
-                .id(("nav-project-section", index))
-                .child(
-                    nav::fold_heading("nav-groups-heading", "Groups", folded)
-                        .children(self.cursor_reveal(nav::NavItem::Heading(NavFold::Groups))),
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                        view.set_nav_fold(NavFold::Groups, !folded, cx);
-                    }),
-                )
-                .into_any_element();
-        }
-        // A Project's heading starts a Thread in it from under the pointer,
-        // as its menu's first row does.
-        let action = section.project.filter(|_| !section.mixed).map(|project| {
-            nav::row_action(format!("nav-project-new-{index}"), ferrite_ui::icons::PLUS)
-                .tooltip(ferrite_ui::menu::tooltip("New thread in this project"))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-                    cx.stop_propagation();
-                    view.run_menu_verb(
-                        MenuTarget::Project(project),
-                        MenuVerb::NewThread,
-                        window,
-                        cx,
-                    );
-                    cx.notify();
-                }))
-                .into_any_element()
-        });
-        let heading = nav::project_section(index, section, action, &nav::Measure::Text(cx))
-            .children(section.project.and_then(|project| {
-                self.cursor_reveal(nav::NavItem::Heading(NavFold::Project(project)))
-            }));
-        let fold = match section.project {
-            _ if section.mixed => NavFold::Groups,
-            Some(project) => NavFold::Project(project),
-            None => return heading.into_any_element(),
-        };
-        let folded = section.folded;
-        heading
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    view.set_nav_fold(fold, !folded, cx);
-                }),
-            )
-            .when_some(
-                section.project.filter(|_| !section.mixed),
-                |heading, project| {
-                    heading.on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.open_context_menu(
-                                MenuTarget::Project(project),
-                                event.position,
-                                cx,
-                            );
-                        }),
-                    )
-                },
-            )
-            .into_any_element()
-    }
-
-    /// One section's run of loose rows, which is also a `LooseZone`.
-    fn loose_run(&self, zone: usize, rows: Vec<AnyElement>, cx: &mut Context<Self>) -> AnyElement {
-        drop_feedback(
-            nav::solos(zone, rows),
-            self.cockpit.groups().clone(),
-            DropTarget::LooseZone,
-        )
-        .on_drop(cx.listener(|view, drag: &NavDrag, _, cx| {
-            view.apply_drop(*drag, DropTarget::LooseZone, cx)
-        }))
-        .into_any_element()
-    }
-
-    /// One Group block: the header — the drag handle, the rename target and
-    /// the way in, its triangle the fold (N-4) — then, unfolded, the member
-    /// rows; and over the header's top edge the "insert before this Group"
-    /// drop band, laid last so it is the topmost target there. Its row
-    /// starts on its heading's label, its members one level in.
-    fn group_element(
-        &self,
-        group: &nav::GroupBlock,
-        origin: View,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let id = group.id;
-        let Some(full_index) = self
-            .cockpit
-            .groups()
-            .iter()
-            .position(|group| group.id == id)
-        else {
-            return div().into_any_element();
-        };
-        let gap = DropTarget::GroupGap(full_index);
-        let folded = group.folded;
-        let fold = self.group_fold(group, cx);
-        let title = self.editable_group_title(id, group.title.clone(), cx);
-        let editing =
-            matches!(&self.rename, Some((RenameTarget::Group(editing), _)) if *editing == id);
-        let head =
-            nav::group_row_with_title(group, title, fold, 0, editing, &nav::Measure::Text(cx))
-                .children(self.cursor_reveal(nav::NavItem::Group(id)));
-        let chip = NavChip::Group(group.clone());
-        let lifted = self.nav_dragging == Some(Drag::Group(id));
-        let mut block = nav::group_block(id)
-            .when(lifted, |block| {
-                block.opacity(ferrite_ui::theme::DRAG_SOURCE_OPACITY)
-            })
-            .child(
-                drop_feedback(
-                    head,
-                    self.cockpit.groups().clone(),
-                    DropTarget::GroupHeader(id),
-                )
-                .on_drag(
-                    NavDrag {
-                        drag: Drag::Group(id),
-                        origin,
-                    },
-                    move |_, _, _, cx| {
-                        let chip = chip.clone();
-                        cx.new(|_| NavDragPreview(chip))
-                    },
-                )
-                .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
-                    view.apply_drop(*drag, DropTarget::GroupHeader(id), cx)
-                }))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, _: &MouseDownEvent, _, cx| view.enter_group(id, cx)),
-                )
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.open_context_menu(MenuTarget::Group(id), event.position, cx);
-                    }),
-                ),
-            );
-        if self.nav_fold_drawn(NavFold::Group(id), folded, cx) && !group.members.is_empty() {
-            // The shown Group's members are one-line rows, the focused
-            // Pane's title strong (§5.1.6); any other Group's are two-line
-            // rows, nested under it.
-            let focused = self.cockpit.roster().focused_thread();
-            let rows = group
-                .members
-                .iter()
-                .map(|row| {
-                    if group.selected {
-                        let member = nav::ThreadRow {
-                            selected: focused == Some(row.thread),
-                            ..row.clone()
-                        };
-                        let place = nav::RowPlace::Member(0);
-                        self.thread_element(&member, Some(id), place, cx)
-                    } else {
-                        self.thread_element(row, Some(id), nav::RowPlace::Row(1), cx)
-                    }
-                })
-                .collect();
-            let mut members = nav::members(rows);
-            // Appending to the Group means dropping past its last row —
-            // an index one beyond the end, aimed at the last member.
-            if let Some(last) = group.members.last().map(|row| row.thread) {
-                let tail = DropTarget::ThreadRow {
-                    thread: last,
-                    group: Some(id),
-                    index: self
-                        .cockpit
-                        .groups()
-                        .get(id)
-                        .map_or(0, |group| group.members.len()),
-                };
-                members = members.child(
-                    drop_feedback(nav::member_tail(id), self.cockpit.groups().clone(), tail)
-                        .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
-                            view.apply_drop(*drag, tail, cx)
-                        })),
-                );
-            }
-            block = block.child(self.nav_fold_body(NavFold::Group(id), members, cx));
-        }
-        block
-            .child(
-                drop_feedback(
-                    nav::group_gap(full_index),
-                    self.cockpit.groups().clone(),
-                    gap,
-                )
-                .on_drop(
-                    cx.listener(move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, gap, cx)),
-                ),
-            )
-            .into_any_element()
-    }
-
-    /// A Group row's chevron, wired: the triangle folds and stops there, so
-    /// the rest of the row opens the Group, and opening a folded Group
-    /// leaves it folded. The tree and the views share the fold.
-    fn group_fold(&self, group: &nav::GroupBlock, cx: &mut Context<Self>) -> Stateful<Div> {
-        let (id, folded) = (group.id, group.folded);
-        nav::group_fold(group).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                view.set_nav_fold(NavFold::Group(id), !folded, cx);
-            }),
-        )
-    }
-
-    /// One Thread row, with the whole drag/drop and click wiring a row has
-    /// had since #21. A press on a member row opens its Group (`group`, the
-    /// Group it is drawn under) on that Thread; a loose row whose Pane is
-    /// open focuses it; a parked one revives.
-    fn thread_element(
-        &self,
-        row: &nav::ThreadRow,
-        group: Option<GroupId>,
-        place: nav::RowPlace,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let thread = row.thread;
-        // A Project filter hides rows, not members. Drop positions always
-        // address the durable order, including the hidden members.
-        let index = group
-            .and_then(|id| self.cockpit.groups().get(id))
-            .and_then(|group| group.members.iter().position(|member| *member == thread))
-            .unwrap_or(0);
-        let origin = self.cockpit.roster().view();
-        let target = DropTarget::ThreadRow {
-            thread,
-            group,
-            index,
-        };
-        let title = self.editable_thread_title(thread, row.name.clone(), cx);
-        let editing = self.renaming_thread(thread);
-        let item = nav::NavItem::Thread(thread, group);
-        let head = nav::thread_card(
-            row,
-            title,
-            self.card_doors(thread, cx),
-            place,
-            group,
-            editing,
-            &nav::Measure::Text(cx),
-        )
-        .children(self.cursor_reveal(item));
-        let head = self.pickable_card(head, thread, cx);
-        let face = self.thread_ghost(thread);
-        let nav_edge = self.nav_width();
-        let chip = NavChip::Thread(row.clone());
-        let lifted = matches!(
-            self.nav_dragging,
-            Some(Drag::Thread { thread: dragged, .. }) if dragged == thread
-        );
-        drop_feedback(head, self.cockpit.groups().clone(), target)
-            // The row being dragged stays in the tree, dimmed, while its
-            // copy rides the pointer.
-            .when(lifted, |row| {
-                row.opacity(ferrite_ui::theme::DRAG_SOURCE_OPACITY)
-            })
-            .on_drag(
-                NavDrag {
-                    drag: Drag::Thread { thread, group },
-                    origin,
-                },
-                move |_, grab, _, cx| {
-                    let face = face.clone();
-                    let chip = chip.clone();
-                    cx.new(|_| PaneGhost {
-                        face,
-                        grab,
-                        row_left_of: Some((nav_edge, chip)),
-                    })
-                },
-            )
-            .on_drop(
-                cx.listener(move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, target, cx)),
-            )
-            // A click, not a press: pressing a row to drag it onto the
-            // board must leave the board showing, not switch to the row's
-            // own view before the drag begins.
-            .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
-                if view.pick_card(thread, event.modifiers(), cx) {
-                    return;
-                }
-                view.open_nav_row(thread, group, cx);
-            }))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.pick_for_menu(thread, cx);
-                    view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
-                }),
-            )
-            .into_any_element()
-    }
 }
 
-/// A typed path with `~` spelled out — the type-a-path row accepts what an
-/// operator would type at a shell.
 /// A slot's leaf in a board's tree. A Thread's Pane is its own id; drafts
 /// and reader slots are no Threads and never persist, so stand-in ids
 /// nothing real reaches name them: a draft counts down from the top, and a

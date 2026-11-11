@@ -224,6 +224,29 @@ prompt was taken, rather than when the turn ends:
 `"$F" notification show "Ready" --sound done` rings a chime with the
 toast (`--important` keeps it up).
 
+## Drive a headless window
+
+To check a change to Ferrite's own UI, run a `ferrite --headless` built
+with `--features headless` on a throwaway Store (`FERRITE_STORE`): it is
+the real window, attached to that Store's server and drawn off-screen, so
+it never covers or interrupts the user's. The `window` commands drive it:
+
+```bash
+"$F" window key cmd-,
+"$F" window type "hello"
+"$F" window find settings-close
+"$F" window click --selector settings-close
+"$F" window shot /tmp/settings.png
+```
+
+`window key` presses each keystroke in order (`unhandled` lists those
+nothing took). `window click` takes an element's debug selector (its
+`window find` bounds are where it was last drawn) or `--x` and `--y` in
+the window's 1440x900 logical pixels, with `--double` or `--right`.
+`window shot` writes a PNG (2880x1800) the window drew; look at it.
+With no headless window attached the server refuses with
+`no_headless_window`.
+
 ## Another machine
 
 Only when the user asks for work on one of their saved machines (Ferrite's

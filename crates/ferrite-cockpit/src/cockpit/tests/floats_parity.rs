@@ -507,12 +507,12 @@ fn shift_tab_cycles_the_permission_mode(cx: &mut TestAppContext) {
         }));
 }
 
-/// FL-16 / FL-17: the Inbox is the nav's (§5.1.2),
-/// its first row selected; ↑↓ wrap, ⌫ dismisses the cursor's row, esc closes without
-/// interrupting, `mark all read` reads everything and removes nothing; the
-/// unread count is the waiting requests only.
+/// FL-16 / FL-17, ADR 0040: the Inbox is the nav's list, requests
+/// first; ⌘I hands it the keys on its first card, ↑↓ walk it and stop at
+/// its ends, Esc gives the keys back without interrupting; the unread
+/// count is the waiting requests only.
 #[gpui::test]
-fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext) {
+fn cmd_i_walks_the_list_requests_first(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("needs-you-list", 6);
     let threads = core.threads();
     for thread in &threads[3..6] {
@@ -558,12 +558,10 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
     cx.simulate_keystrokes("cmd-i");
     tick(cx);
     let column = cx.debug_bounds("nav-column").unwrap();
-    let list = cx
-        .debug_bounds("nav-view-needs-you-list")
-        .expect("the Inbox is up");
+    let list = cx.debug_bounds("nav-list").expect("the list is up");
     assert!(
         column.contains(&list.origin),
-        "in the nav, in the tree's place: {list:?} / {column:?}"
+        "in the nav: {list:?} / {column:?}"
     );
     let rows = view.read_with(cx, |view, cx| view.needs_you_rows(cx));
     assert_eq!(rows.len(), 6, "idle open Thread is also in Inbox");
@@ -572,49 +570,25 @@ fn the_notifications_list_walks_dismisses_and_marks_read(cx: &mut TestAppContext
         rows[0].detail.text(),
         "Bash wants to run gh issue close 212"
     );
-    assert_eq!(view.read_with(cx, |view, _| view.needs_you.cursor), 0);
+    let cursor = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.nav_cursor.as_ref().map(|cursor| cursor.item))
+    };
+    assert_eq!(cursor(cx), Some(nav::NavItem::Thread(rows[0].thread)));
     cx.simulate_keystrokes("up");
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, _| view.needs_you.cursor),
-        5,
-        "↑ wraps"
+        cursor(cx),
+        Some(nav::NavItem::Thread(rows[0].thread)),
+        "↑ stops at the top"
     );
     cx.simulate_keystrokes("down");
     tick(cx);
-    assert_eq!(
-        view.read_with(cx, |view, _| view.needs_you.cursor),
-        0,
-        "↓ wraps"
-    );
-    cx.simulate_keystrokes("backspace");
-    tick(cx);
-    assert_eq!(
-        view.read_with(cx, |view, cx| view.needs_you_rows(cx).len()),
-        6,
-        "⌫ dismisses the Notice, retaining its Thread"
-    );
+    assert_eq!(cursor(cx), Some(nav::NavItem::Thread(rows[1].thread)));
     cx.simulate_keystrokes("escape");
     tick(cx);
-    assert!(!view.read_with(cx, |view, _| view.needs_you_shown()));
+    assert!(!view.read_with(cx, |view, _| view.nav_keys_held));
+    assert_eq!(cursor(cx), None);
     assert_eq!(*fake.interrupts.borrow(), 0);
-    cx.simulate_keystrokes("cmd-i");
-    tick(cx);
-    let mark = cx
-        .debug_bounds("notifications-mark-read")
-        .expect("`mark all read` always shows");
-    cx.simulate_click(mark.center(), gpui::Modifiers::none());
-    tick(cx);
-    view.read_with(cx, |view, cx| {
-        let notifications = view.cockpit.notifications();
-        assert_eq!(notifications.unread(), 0);
-        assert_eq!(notifications.unread_requests(), 0);
-        assert_eq!(view.needs_you_rows(cx).len(), 6, "reading removes nothing");
-    });
-    assert!(
-        cx.debug_bounds("notifications-badge").is_none(),
-        "the badge clears"
-    );
 }
 
 /// FL-18: a request's toast answers with its buttons — `1 allow`, `3

@@ -703,14 +703,6 @@ impl Element for CodeLine {
 
 #[cfg(test)]
 impl Editor {
-    pub(crate) fn text(&self) -> &str {
-        self.text.text()
-    }
-
-    pub(crate) fn caret(&self) -> usize {
-        self.text.cursor()
-    }
-
     /// What typing `text` at the caret does.
     pub(crate) fn type_text(&mut self, text: &str, cx: &mut Context<Self>) {
         self.edit(cx, |line| line.replace(None, text));
