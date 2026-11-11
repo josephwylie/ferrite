@@ -19,6 +19,7 @@ use ferrite_core::factory::{
 };
 use ferrite_core::protocol::{Done, WorkflowAction};
 use ferrite_pane::composer::{Composer, Edited, Role};
+use gpui::component::Disableable as _;
 
 /// The outline's width beside the inspector.
 const OUTLINE_W: f32 = 440.;
@@ -464,7 +465,7 @@ impl CockpitView {
     }
 
     /// The text a field holds now.
-    pub(crate) fn field_text(&self, field: &Field, cx: &App) -> Option<String> {
+    pub(crate) fn field_text(&self, field: &Field, cx: &gpui::App) -> Option<String> {
         self.factory_view
             .as_ref()?
             .workflows
@@ -475,7 +476,7 @@ impl CockpitView {
 
     /// What holds the keyboard on the Workflows surface: the field
     /// chosen, else the outline.
-    pub(super) fn workflows_focus(&self, cx: &App) -> Option<FocusHandle> {
+    pub(super) fn workflows_focus(&self, cx: &gpui::App) -> Option<FocusHandle> {
         let view = self.factory_view.as_ref()?;
         if view.surface != Surface::Workflows {
             return None;
@@ -702,7 +703,7 @@ impl CockpitView {
     }
 
     /// A picker row pressed.
-    pub(crate) fn pick(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub(crate) fn factory_pick(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(pick) = self
             .factory_view
             .as_ref()

@@ -20,18 +20,25 @@ fn click(cx: &mut gpui::VisualTestContext, selector: &str) {
 
 /// A window on a fixture world whose Factory answers, open on the
 /// Project's Workflows.
-fn workflows_window(
-    cx: &mut TestAppContext,
+fn workflows_window<'a>(
+    cx: &'a mut TestAppContext,
     name: &str,
     fake_setup: impl FnOnce(&Fake),
 ) -> (
     Entity<CockpitView>,
-    &mut gpui::VisualTestContext,
+    &'a mut gpui::VisualTestContext,
     Fake,
     ProjectId,
 ) {
-    let (mut core, fake) = cockpit(name, 1);
+    // Set up before the Cockpit is made: its Engine asks for models then.
+    let fake = Fake::default();
     fake_setup(&fake);
+    let dir = scratch(name);
+    let mut core = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
+    let thread = core
+        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .unwrap();
+    did_something_now(&dir, thread);
     let project = core.project_id(core.threads()[0]).unwrap();
     core.fixture_live_factory();
     bind_production_keys(cx);
@@ -410,7 +417,8 @@ fn typed_text_survives_what_happens_around_it(cx: &mut TestAppContext) {
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: inspector.center(),
         delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-400.))),
-        ..Default::default()
+        modifiers: gpui::Modifiers::none(),
+        touch_phase: gpui::TouchPhase::default(),
     });
     tick(cx);
     holds(&view, cx, "scrolled");

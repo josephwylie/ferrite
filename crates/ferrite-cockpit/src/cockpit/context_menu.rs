@@ -639,7 +639,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match (target, verb) {
-            (_, MenuVerb::Factory(index)) => self.pick(index, cx),
+            (_, MenuVerb::Factory(index)) => self.factory_pick(index, cx),
             (
                 MenuTarget::Thread(thread) | MenuTarget::Pane(thread) | MenuTarget::Snooze(thread),
                 MenuVerb::Snooze(preset),
