@@ -63,6 +63,24 @@ struct Ids {
     proposal: u64,
 }
 
+impl Ids {
+    /// What a Project's State gives next, before it makes anything.
+    fn lend(self, state: &mut State) {
+        state.next = self.task;
+        state.next_workflow = self.workflow;
+        state.next_proposal = self.proposal;
+    }
+
+    /// What follows once `state` has made what it made.
+    fn of(state: &State) -> Self {
+        Self {
+            task: state.next,
+            workflow: state.next_workflow,
+            proposal: state.next_proposal,
+        }
+    }
+}
+
 /// Where a command's subject is.
 enum Found {
     Board(ProjectId),
@@ -515,9 +533,7 @@ impl Factory {
         if let Some(trouble) = &part.unreadable {
             return Err(failed(trouble.clone()));
         }
-        part.state.next = ids.task;
-        part.state.next_workflow = ids.workflow;
-        part.state.next_proposal = ids.proposal;
+        ids.lend(&mut part.state);
         let mut next = part.state.clone();
         let mut effects = Vec::new();
         let answer = next.command(command, now_ms, &mut effects)?;
@@ -546,11 +562,7 @@ impl Factory {
             self.pending.append(&mut part.held);
             self.revision += 1;
         }
-        self.ids = Ids {
-            task: part.state.next,
-            workflow: part.state.next_workflow,
-            proposal: part.state.next_proposal,
-        };
+        self.ids = Ids::of(&part.state);
         self.pending.extend(effects);
         Ok(answer)
     }
@@ -609,13 +621,19 @@ impl Factory {
         }
         let mut changed = BTreeSet::new();
         for (project, part) in &mut self.parts {
-            if part.unreadable.is_none()
-                && part
-                    .state
-                    .pass_starts(now_ms, &self.unstarted, &mut part.held)
+            if part.unreadable.is_some() {
+                continue;
+            }
+            // A schedule's or GitHub's Task takes the next id across
+            // every Project, as a command's does.
+            self.ids.lend(&mut part.state);
+            if part
+                .state
+                .pass_starts(now_ms, &self.unstarted, &mut part.held)
             {
                 changed.insert(*project);
             }
+            self.ids = Ids::of(&part.state);
         }
         let admit = self.admissions();
         let none = BTreeSet::new();

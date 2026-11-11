@@ -442,6 +442,72 @@ fn a_script_submission_starts_one_task_per_identity() {
     assert_eq!(world.tasks().len(), 1);
 }
 
+/// AC (case 10): a run missed while nothing ran is skipped, or run once,
+/// as the schedule says; a run due while its last Task still works is
+/// skipped, or waits and starts once that Task is done, as it says.
+#[test]
+fn a_schedules_missed_and_overlap_choices_are_honoured() {
+    let world = world("starts-missed-overlap");
+    let schedule = |missed: &str, overlap: &str| {
+        serde_json::json!({
+            "type": "schedule",
+            "schedule": {
+                "recurrence": "interval", "interval_hours": 1,
+                "instructions": format!("{missed} {overlap}"),
+                "missed": missed, "overlap": overlap,
+            },
+        })
+    };
+    let skips = world.saved(schedule("skip", "skip"));
+    let catches_up = world.saved(schedule("run_once", "queue"));
+    world.at(midnight() + HOUR);
+    for workflow in [&skips, &catches_up] {
+        world.ok(
+            "workflow.automation",
+            serde_json::json!({ "workflow": workflow, "turn": "on" }),
+        );
+    }
+    let runs = |tasks: &[serde_json::Value], workflow: &str| {
+        tasks
+            .iter()
+            .filter(|task| task["source"]["workflow"] == workflow)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    // Two o'clock's run, half an hour late: missed.
+    world.at(midnight() + 2 * HOUR + 30 * 60_000);
+    let tasks = world.tasks_until(|tasks| runs(tasks, &catches_up).len() == 1);
+    world.settle();
+    let tasks_now = world.tasks();
+    assert!(runs(&tasks_now, &skips).is_empty(), "{tasks:?}");
+    assert_eq!(runs(&tasks_now, &catches_up).len(), 1, "{tasks_now:?}");
+
+    // Three o'clock's, on time: the one that skipped runs; the other's
+    // last Task still works, so this run waits.
+    world.at(midnight() + 3 * HOUR);
+    world.tasks_until(|tasks| runs(tasks, &skips).len() == 1);
+    world.settle();
+    assert_eq!(runs(&world.tasks(), &catches_up).len(), 1);
+    assert_eq!(world.automation(&catches_up)["waiting"], true);
+
+    // Four o'clock's, while both still work: skipped, or still the one
+    // waiting run.
+    world.at(midnight() + 4 * HOUR);
+    world.settle();
+    let tasks_now = world.tasks();
+    assert_eq!(runs(&tasks_now, &skips).len(), 1, "{tasks_now:?}");
+    assert_eq!(runs(&tasks_now, &catches_up).len(), 1, "{tasks_now:?}");
+
+    // Its last Task done, the waiting run starts, once.
+    let last = runs(&tasks_now, &catches_up)[0]["id"].clone();
+    world.ok("task.stop", serde_json::json!({ "task": last }));
+    world.tasks_until(|tasks| runs(tasks, &catches_up).len() == 2);
+    world.settle();
+    assert_eq!(runs(&world.tasks(), &catches_up).len(), 2);
+    assert_eq!(runs(&world.tasks(), &skips).len(), 1);
+}
+
 /// AC: Settings bound how many Tasks work at once; the excess waits in
 /// Queued and is released as a Task leaves Working.
 #[test]

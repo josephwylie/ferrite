@@ -197,6 +197,75 @@ fn a_worker_that_never_reports_is_prompted_once_then_needs_the_operator() {
     assert!(window.needs_you().is_empty(), "nothing in the Inbox");
 }
 
+/// AC (case 13): a Worker whose turn ended while a background task or a
+/// Subagent still runs is not prompted to report; once both settle it is,
+/// once.
+#[test]
+fn a_worker_with_background_work_or_a_subagent_running_is_not_prompted() {
+    use crate::activity::{ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject};
+    use crate::progress::{ProgressEvent, TaskStatus};
+    let (harness, project, repo) = factory_project("factory-busy");
+    let mut caller = call(&harness);
+    let task = caller.answer(
+        "1",
+        "task.start",
+        serde_json::json!({ "instructions": "Run the build", "project": project, "cwd": repo }),
+    )["result"]["task"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let agent = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    let worker = worker_of(&mut caller, &task);
+    let background = |status| SessionEvent::Progress {
+        event: ProgressEvent::Background {
+            id: "shell".into(),
+            label: "cargo build".into(),
+            status,
+            detail: String::new(),
+        },
+    };
+    let child = AgentKey::new(crate::store::Provider::Claude, "claude-1", "child");
+    let mut info = AgentInfo::new(child.clone());
+    info.parent = Some(Subject::Main);
+    let subagent = |state| {
+        SessionEvent::Activity(ActivityEvent::Status {
+            key: child.clone(),
+            state,
+        })
+    };
+    agent.send(background(TaskStatus::Working)).unwrap();
+    agent
+        .send(SessionEvent::Activity(ActivityEvent::Discovered(info)))
+        .unwrap();
+    agent.send(subagent(AgentStatus::Working)).unwrap();
+    turn_ends(&agent);
+    let held = |caller: &mut Caller, why: &str| {
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!read(caller, worker).contains("without reporting"), "{why}");
+        assert_eq!(task_until(caller, &task, |_| true)["status"], "working");
+    };
+    held(&mut caller, "prompted while both run");
+
+    agent.send(background(TaskStatus::Completed)).unwrap();
+    held(&mut caller, "prompted while the Subagent runs");
+
+    agent.send(subagent(AgentStatus::Idle)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !read(&mut caller, worker).contains("without reporting") {
+        assert!(Instant::now() < deadline, "never asked to report");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        read(&mut caller, worker)
+            .matches("without reporting")
+            .count(),
+        1
+    );
+}
+
 /// AC: Stop interrupts the Worker and stops the Task; Resume prompts it
 /// on; what the operator says to the Worker from a window is recorded on
 /// the Task; Delete is refused while it works, and removes its worktree

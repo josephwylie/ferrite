@@ -295,6 +295,33 @@ mod factory {
         );
     }
 
+    /// A run's Task takes the next id, as an operator's does: the two
+    /// never share one.
+    #[test]
+    fn a_scheduled_task_and_a_later_one_never_share_an_id() {
+        let mut factory = Factory::in_memory();
+        let workflow = saved(&mut factory, hourly());
+        turn(&mut factory, &workflow, Turn::On, t0() + 10);
+        step(&mut factory, t0() + HOUR);
+        let Ok(Answer::Task(later)) = factory.command(
+            Command::Start {
+                project: project(),
+                instructions: "Fix the toolbar".into(),
+                agent: agent(),
+                request: None,
+                workflow: None,
+                pr: None,
+            },
+            t0() + HOUR + 5,
+        ) else {
+            panic!("no Task");
+        };
+        let ids: Vec<String> = tasks(&factory).into_iter().map(|task| task.id).collect();
+        assert_eq!(ids.len(), 2, "{ids:?}");
+        assert_ne!(ids[0], ids[1], "{ids:?}");
+        assert!(ids.contains(&later));
+    }
+
     #[test]
     fn turning_on_needs_a_saved_automatic_start() {
         let mut factory = Factory::in_memory();

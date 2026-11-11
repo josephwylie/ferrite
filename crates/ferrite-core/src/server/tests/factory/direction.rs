@@ -186,6 +186,74 @@ fn a_question_waits_across_a_restart_and_the_answer_resumes_the_asker() {
     assert_eq!(approved["task"]["status"], "completed", "{approved}");
 }
 
+/// AC (case 15): the windows are alerted when a Task needs the operator,
+/// is ready to approve, stops or completes, and never as it moves from
+/// one Step to the next.
+#[test]
+fn the_windows_are_alerted_on_the_four_task_events_and_not_between_steps() {
+    use crate::factory::Status;
+    let (harness, project, repo) = factory_project("factory-alerts");
+    let mut window = cockpit(&harness);
+    let (workflow, _) = workflow(
+        &harness,
+        &project,
+        &[("Builder", "Build it"), ("Reviewer", "Review it")],
+    );
+    let mut caller = call(&harness);
+    let shipped = run(&harness, &repo, &workflow, "Add a --fast flag");
+    let builder = worker_of(&mut caller, &shipped);
+    report(&harness, builder, "finished", "Built");
+    let reviewer = next_worker(&mut caller, &shipped, builder);
+    report(&harness, reviewer, "finished", "Reviewed");
+    task_until(&mut caller, &shipped, |task| task["status"] == "approval");
+    ok(
+        &harness,
+        "task.approve",
+        serde_json::json!({ "task": shipped }),
+    );
+
+    let asked = ok(
+        &harness,
+        "task.start",
+        serde_json::json!({ "instructions": "Tidy the README", "cwd": repo }),
+    )["task"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let worker = worker_of(&mut caller, &asked);
+    ok(
+        &harness,
+        "report.question",
+        serde_json::json!({ "text": "Which README?", "worker": worker }),
+    );
+    task_until(&mut caller, &asked, |task| task["status"] == "needs_human");
+    ok(&harness, "task.stop", serde_json::json!({ "task": asked }));
+
+    let status = |window: &crate::cockpit::Cockpit, task: &str| {
+        window.factory().task(task).map(|task| task.status)
+    };
+    pump_until(&mut window, |window| {
+        status(window, &shipped) == Some(Status::Completed)
+            && status(window, &asked) == Some(Status::Stopped)
+    });
+    let alerts = window.take_asked();
+    let of = |task: &str| -> Vec<Status> {
+        alerts
+            .iter()
+            .filter_map(|alert| match alert {
+                crate::cockpit::Asked::TaskAlert {
+                    task: alerted,
+                    status,
+                    ..
+                } if alerted == task => Some(*status),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(of(&shipped), [Status::Approval, Status::Completed]);
+    assert_eq!(of(&asked), [Status::NeedsHuman, Status::Stopped]);
+}
+
 /// AC (cases 8, 3): agent approval without a deciding Step or
 /// instructions is refused; with them, the deciding Step is told the
 /// instructions in its run and decides in it; its rejection carries its
