@@ -10,22 +10,44 @@ pub(super) const NO_RESULT: &str = "no result";
 /// What a call the operator stopped says (a denial, or the turn's stop).
 pub(super) const STOPPED: &str = "stopped";
 
-/// How a turn's end reads in the transcript, if it says anything: a
-/// completed turn `Worked for 5m 22s` once it took `TURN_STAMP_MIN_MS` (a
-/// quicker one, or one whose time was never observed, says nothing); an
-/// interrupted or failed one always, as core words it (`failed · 0.1s ·
-/// <message>`).
+/// How a turn's end reads in the transcript, if it says anything: an
+/// interrupted or failed one, as core words it (`failed · 0.1s ·
+/// <message>`). A completed turn says nothing at its end: its fold, at its
+/// top, says how long it worked (`transcript::turns`).
 pub(crate) fn turn_stamp(end: &ferrite_core::transcript::TurnEnd) -> Option<String> {
-    if !end.completed() {
-        return Some(end.text());
+    (!end.completed()).then(|| end.text())
+}
+
+/// What a running turn's live row says of its newest call (T3's
+/// `liveWorkEntryLabel`): a command by its program alone, as its state
+/// reads (`Running sed`, `Ran sed`, `Failed sed`, `Stopped sed`); any other
+/// call as the working words name it (`Reading main.rs`).
+pub(crate) fn live_words(tool: &ToolBlock) -> String {
+    if Work::of(tool).kind != ToolKind::Command {
+        return working_words(tool);
     }
-    let elapsed = end
-        .elapsed_ms
-        .filter(|ms| *ms >= theme::TURN_STAMP_MIN_MS)?;
-    Some(format!(
-        "Worked for {}",
-        ferrite_core::progress::settled_duration_label(std::time::Duration::from_millis(elapsed))
-    ))
+    let verb = match tool.state {
+        ToolState::Running => "Running",
+        ToolState::Ok | ToolState::Unavailable => "Ran",
+        ToolState::Failed(_) => "Failed",
+        ToolState::Stopped => "Stopped",
+    };
+    match program_name(without_cd(&tool.argument())) {
+        Some(program) => format!("{verb} {program}"),
+        None => verb.to_owned(),
+    }
+}
+
+/// A command line's program (T3's `commandProgramName`): its first word
+/// past any `NAME=value` settings, a path's last part (`/usr/bin/sed` →
+/// `sed`).
+fn program_name(command: &str) -> Option<&str> {
+    let word = command
+        .split_whitespace()
+        .find(|word| !(word.contains('=') && !word.starts_with('=')))?;
+    let word = word.trim_matches(|c| matches!(c, '"' | '\'' | '('));
+    let program = word.rsplit('/').next().unwrap_or(word);
+    (!program.is_empty()).then_some(program)
 }
 
 /// What kind of work a call did, for its call line's verb and its group's
@@ -869,6 +891,46 @@ mod tests {
             is_error,
             result: ferrite_core::ToolResult::Opaque,
         }));
+    }
+
+    /// The live row names a command by its program alone, in its state's
+    /// verb, whatever the model wrote beside it.
+    #[test]
+    fn the_live_row_names_a_command_by_its_program() {
+        let mut transcript = Transcript::default();
+        let command = |transcript: &mut Transcript, id: &str, command: &str| {
+            transcript.apply(Input::Event(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: "Bash".into(),
+                input: serde_json::json!({ "command": command, "description": "Edit the file" }),
+            }));
+        };
+        command(&mut transcript, "a", "cd crates/x && sed -i '' 's/a/b/' lib.rs");
+        command(&mut transcript, "b", "RUST_LOG=debug /usr/bin/cargo test");
+        let words = |transcript: &Transcript| -> Vec<String> {
+            transcript
+                .blocks()
+                .iter()
+                .filter_map(|block| match &block.body {
+                    Body::Tool(tool) => Some(live_words(tool)),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(words(&transcript), ["Running sed", "Running cargo"]);
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "a".into(),
+            output: String::new(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        }));
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "b".into(),
+            output: "boom".into(),
+            is_error: true,
+            result: ferrite_core::ToolResult::Opaque,
+        }));
+        assert_eq!(words(&transcript), ["Ran sed", "Failed cargo"]);
     }
 
     /// A call row reads in the UI face: only its literal argument is a

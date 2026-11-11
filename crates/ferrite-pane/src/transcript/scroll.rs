@@ -1,9 +1,10 @@
 //! The transcript's small scroll facade over GPUI's lazy variable-height list.
 
-use gpui::{px, FollowMode, ListAlignment, ListState, Pixels};
+use ferrite_ui::motion::{MotionSpec, Tween, EASE_STANDARD};
+use gpui::{px, FollowMode, ListAlignment, ListOffset, ListState, Pixels};
 #[cfg(any(test, feature = "test-support"))]
 use gpui::{Bounds, Point};
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, rc::Rc, time::Instant};
 
 use super::rows::RowDelta;
 
@@ -19,6 +20,54 @@ pub struct TranscriptScroll {
     // How much of the viewport's top the pinned band covers, sampled after
     // layout (find reveals below it).
     top_mask: Rc<Cell<Pixels>>,
+    // A programmatic scroll easing to its target (`ease_to`).
+    ease: Rc<Cell<Option<ScrollEase>>>,
+}
+
+/// Where a programmatic scroll eases to: a row's offset (a send's prompt),
+/// or the tail (Scroll to end).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum EaseTarget {
+    Row(ListOffset),
+    End,
+}
+
+/// A programmatic scroll on its way: a tween on the distance still to go,
+/// re-measured every frame, so rows growing under it are absorbed (T3's
+/// settle loop). Its tween starts on the first frame that can measure the
+/// target.
+#[derive(Clone, Copy, Debug)]
+struct ScrollEase {
+    target: EaseTarget,
+    tween: Option<Tween>,
+}
+
+/// What a frame did with the ease (`TranscriptScroll::step_ease`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EaseStep {
+    /// No ease is running.
+    Idle,
+    /// It moved and wants the next frame.
+    Moving,
+    /// It reached its target: the offset is exact from here.
+    Landed,
+    /// The operator took the scroll (a scrollbar drag): it stopped where it
+    /// stands.
+    Cancelled,
+}
+
+/// A programmatic scroll's motion for a move of `distance` px: Chromium's
+/// smooth scroll, `min(√|Δ|, 12) / 60` s (at most `MOTION_SCROLL_MAX_MS`,
+/// reached from 144px), on `EASE_STANDARD` (T3's smooth `scrollTo`).
+pub(crate) fn scroll_spec(distance: f32) -> MotionSpec {
+    let distance = distance.abs();
+    let ms = if distance < 0.5 {
+        0
+    } else {
+        ((distance.sqrt().min(12.) / 60. * 1000.).round() as u64)
+            .min(ferrite_ui::theme::MOTION_SCROLL_MAX_MS)
+    };
+    MotionSpec::new(ms, EASE_STANDARD)
 }
 
 impl TranscriptScroll {
@@ -33,6 +82,7 @@ impl TranscriptScroll {
             list,
             resize_anchor: Default::default(),
             top_mask: Rc::new(Cell::new(px(0.))),
+            ease: Default::default(),
         }
     }
 
@@ -59,6 +109,7 @@ impl TranscriptScroll {
 
     /// Resume native tail following and reveal the newest row.
     pub(crate) fn scroll_to_bottom(&self) {
+        self.ease.set(None);
         self.list.set_follow_mode(FollowMode::Tail);
         self.list.scroll_to_end();
     }
@@ -67,7 +118,8 @@ impl TranscriptScroll {
     /// minimap jump): tail following pauses until the reader returns to the
     /// end.
     pub(crate) fn scroll_to(&self, item_ix: usize, offset: Pixels) {
-        self.list.scroll_to(gpui::ListOffset {
+        self.ease.set(None);
+        self.list.scroll_to(ListOffset {
             item_ix,
             offset_in_item: offset,
         });
@@ -76,8 +128,98 @@ impl TranscriptScroll {
     /// Scroll a page up or down (`by` a viewport less the line kept in
     /// view of the page before): reaching the end resumes following it.
     pub(crate) fn scroll_page(&self, down: bool, keep: Pixels) {
+        self.ease.set(None);
         let page = (self.list.viewport_bounds().size.height - keep).max(keep);
         self.list.scroll_by(if down { page } else { -page });
+    }
+
+    /// Ease to `target` over the frames to come (`step_ease` moves it),
+    /// replacing any ease on its way. Tail following pauses meanwhile: the
+    /// ease, not the list, moves the offset, and landing on the end resumes
+    /// it.
+    pub(crate) fn ease_to(&self, target: EaseTarget) {
+        self.list.pause_following_tail();
+        self.ease.set(Some(ScrollEase {
+            target,
+            tween: None,
+        }));
+    }
+
+    /// Whether an ease is on its way.
+    pub fn easing(&self) -> bool {
+        self.ease.get().is_some()
+    }
+
+    /// Stop an ease where it stands (the operator scrolled): whether one
+    /// was running.
+    pub(crate) fn cancel_ease(&self) -> bool {
+        self.ease.take().is_some()
+    }
+
+    /// One frame of the ease, after a layout: re-measure what is left to
+    /// go, and scroll so that what is left is the tween's value now. `foot`
+    /// is the list's padding past its last row (the end lies under it). A
+    /// target the list has not measured is snapped to.
+    pub(crate) fn step_ease(&self, now: Instant, foot: Pixels) -> EaseStep {
+        let Some(mut ease) = self.ease.get() else {
+            return EaseStep::Idle;
+        };
+        if self.list.is_scrollbar_dragging() {
+            self.ease.set(None);
+            return EaseStep::Cancelled;
+        }
+        let viewport = self.list.viewport_bounds();
+        let left = match ease.target {
+            EaseTarget::Row(offset) => {
+                // The end can reach the offset before the room under it is
+                // laid out: the list would follow it, and the ease moves it.
+                self.list.pause_following_tail();
+                self.list
+                    .bounds_for_item(offset.item_ix)
+                    .map(|bounds| bounds.top() + offset.offset_in_item - viewport.top())
+            }
+            EaseTarget::End if self.list.is_following_tail() => Some(px(0.)),
+            EaseTarget::End => Some(
+                self.list.max_offset_for_scrollbar().y
+                    + self.list.scroll_px_offset_for_scrollbar().y
+                    + foot,
+            ),
+        };
+        let Some(mut left) = left else {
+            self.land(ease.target);
+            return EaseStep::Landed;
+        };
+        let tween = match ease.tween {
+            Some(tween) => tween,
+            None => {
+                // A far end: the rows between are not measured, so come
+                // within a viewport of it before easing the rest.
+                let reach = viewport.size.height.max(px(1.));
+                if left.abs() > reach {
+                    let jump = left - reach * left.signum();
+                    self.list.scroll_by(jump);
+                    left -= jump;
+                }
+                let tween = Tween::new(f32::from(left), 0., scroll_spec(f32::from(left)), now);
+                ease.tween = Some(tween);
+                tween
+            }
+        };
+        if !tween.running(now, false) {
+            self.land(ease.target);
+            return EaseStep::Landed;
+        }
+        self.list.scroll_by(left - px(tween.value(now, false)));
+        self.ease.set(Some(ease));
+        EaseStep::Moving
+    }
+
+    /// The ease is done: its target exactly, and at the end following it.
+    fn land(&self, target: EaseTarget) {
+        match target {
+            EaseTarget::Row(offset) => self.scroll_to(offset.item_ix, offset.offset_in_item),
+            EaseTarget::End => self.scroll_to_bottom(),
+        }
     }
 
     pub fn is_following_tail(&self) -> bool {
@@ -174,5 +316,20 @@ impl TranscriptScroll {
         // Nothing else moves: a row's gap is part of the row (see
         // `rows::gap_before`), so a neighbour's arrival or eviction reaches
         // the list as that row's own change in `remeasure`.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_programmatic_scroll_takes_chromiums_smooth_scroll_length() {
+        assert_eq!(scroll_spec(0.).duration_ms, 0);
+        assert_eq!(scroll_spec(36.).duration_ms, 100);
+        assert_eq!(scroll_spec(-36.).duration_ms, 100);
+        assert_eq!(scroll_spec(144.).duration_ms, 200);
+        assert_eq!(scroll_spec(2000.).duration_ms, 200);
+        assert_eq!(scroll_spec(144.).curve, ferrite_ui::motion::EASE_STANDARD);
     }
 }

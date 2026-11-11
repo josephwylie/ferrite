@@ -496,8 +496,6 @@ impl CockpitView {
             solo: false,
             focused: true,
             reduce_motion: cx.reduce_motion(),
-            reasoning_visible: false,
-            effort: self.thread_effort(&open),
         });
         let workspace =
             ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
@@ -520,6 +518,7 @@ impl CockpitView {
             quotes: false,
             skills: open.commands().len(),
             note: note.clone(),
+            queued: 0,
         };
         let Some(entity) = pane.transcript() else {
             return;
@@ -545,7 +544,6 @@ impl CockpitView {
             expanded: disclosure.0,
             target: disclosure.1,
             disclosure_focus: disclosure.2,
-            working_reasoning: None,
             working,
             tail: None,
             pending_call: None,
@@ -558,6 +556,7 @@ impl CockpitView {
             reply_to: open.provider().to_string().into(),
             skills: open.commands().into(),
             note,
+            queued: 0,
         };
         let selection = self.selection.clone();
         entity.update(cx, |transcript, cx| transcript.sync(input, selection, cx));

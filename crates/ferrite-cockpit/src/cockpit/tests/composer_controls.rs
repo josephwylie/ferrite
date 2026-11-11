@@ -520,14 +520,14 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
             "the eight-line draft stays inside its cell: {editor:?} / {cell:?}"
         );
         if width == 900. {
-            // The working line is the transcript's last row now.
+            // The live row is the transcript's last row now.
             let progress = cx.debug_bounds("transcript-progress").unwrap();
             assert!(
                 progress.bottom() <= editor.top(),
                 "the complete live status stays above the box: {progress:?} / {editor:?}"
             );
-            // One transcript line: the working line sits on the prose grid.
-            assert!(progress.size.height <= px(ferrite_ui::theme::LH_PROSE));
+            // One row: the live row stands on the fold's row height.
+            assert!(progress.size.height <= px(ferrite_ui::theme::TURN_FOLD_ROW_H));
         }
     }
     view.update(cx, |view, cx| {

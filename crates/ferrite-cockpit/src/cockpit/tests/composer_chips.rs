@@ -402,16 +402,24 @@ fn the_plus_menu_reaches_the_connectors(cx: &mut TestAppContext) {
         .contains(&ferrite_core::SessionControl::LoginMcp {
             server: "search".into()
         }));
-    view.update(cx, |view, cx| {
-        view.change_settings(|settings| settings.panel_shown = false, cx)
-    });
+    // The Thread's Panel shut, as the operator shuts it (ADR 0039: the
+    // Panel opens and shuts per Thread).
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    tick(cx);
+    assert!(cx.debug_bounds("panel").is_none(), "the premise: the panel is shut");
     open(&view, cx);
     let manage = cx.debug_bounds("choice-sub-1").expect("Manage connectors");
     cx.simulate_click(manage.center(), gpui::Modifiers::none());
     tick(cx);
+    assert!(cx.debug_bounds("panel").is_some(), "the panel shows");
     view.read_with(cx, |view, _| {
         assert!(view.attach_menu.is_none(), "a pick closes the menu");
-        assert!(view.prefs.settings.panel_shown, "the panel shows");
+        let thread = view.panes[0].thread().expect("a Thread");
+        assert_eq!(
+            view.active_surface(thread),
+            Some(crate::cockpit::surfaces::SurfaceId::Overview),
+            "on its Overview, where the connectors are"
+        );
     });
 }
 
@@ -734,4 +742,33 @@ fn a_skill_in_a_sent_bubble_is_blue_with_its_description_on_hover(cx: &mut TestA
             && description.size.height > px(ferrite_ui::theme::LH_META),
         "wrapped at its width: {name:?} {description:?}"
     );
+}
+
+/// A file added to the draft grows into the tray (`CHIP_IN`); the files
+/// a draft is put back with stand where they are.
+#[gpui::test]
+fn an_added_attachment_grows_in_and_a_restored_one_stands(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("tray-chip-in", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let added = std::path::PathBuf::from("/tmp/notes.md");
+    let composer = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    composer.update(cx, |composer, cx| {
+        composer.add_files(std::slice::from_ref(&added), cx)
+    });
+    let growing = |cx: &mut gpui::VisualTestContext| {
+        composer.read_with(cx, |composer, cx| composer.files_growing(cx))
+    };
+    assert!(growing(cx).contains(&added), "it grows in");
+    let text = composer.read_with(cx, |composer, _| composer.editable());
+    composer.update(cx, |composer, cx| composer.take(cx));
+    composer.update(cx, |composer, cx| composer.set(text, cx));
+    assert!(growing(cx).is_empty(), "a draft put back stands");
+    composer.update(cx, |composer, cx| composer.take(cx));
+    composer.update(cx, |composer, cx| {
+        composer.add_files(std::slice::from_ref(&added), cx)
+    });
+    cx.executor().advance_clock(Duration::from_millis(
+        ferrite_ui::theme::MOTION_CHIP_IN_MS,
+    ));
+    assert!(growing(cx).is_empty(), "and stands once it has grown");
 }

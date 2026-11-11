@@ -56,6 +56,7 @@ mod thread_groups;
 mod terminal;
 mod tools;
 mod transcript_pointer;
+mod send_scroll;
 mod transcript_rows;
 mod ui_a;
 mod ui_b;
@@ -468,6 +469,45 @@ fn spoken(fake: &Fake, stream: usize) {
             cost_usd: None,
         })
         .unwrap();
+}
+
+/// Open every settled turn's fold on Pane 0 (`DisclosureId::Turn`), for a
+/// test whose subject is the work rows the fold hides.
+fn open_folds(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+    view.update(cx, |view, cx| {
+        let Some(thread) = view.panes[0].thread() else {
+            return;
+        };
+        let prompts: Vec<_> = view
+            .cockpit
+            .thread(thread)
+            .unwrap()
+            .transcript()
+            .blocks()
+            .iter()
+            .filter(|block| matches!(block.body, Body::Prompt(_)))
+            .map(|block| pane::DisclosureId::Turn(block.id))
+            .collect();
+        for fold in prompts {
+            if !view.panes[0].tool_expanded(fold.clone()) {
+                view.panes[0].toggle_tool(&fold);
+            }
+        }
+        cx.notify();
+    });
+    tick(cx);
+}
+
+/// Press the running turn's live row, opening the trailing work it stands
+/// for, for a test whose subject is those rows.
+fn open_live(cx: &mut gpui::VisualTestContext) {
+    let live = cx
+        .debug_bounds("live-call")
+        .or_else(|| cx.debug_bounds("live-thinking"))
+        .expect("the live row")
+        .center();
+    cx.simulate_click(live, gpui::Modifiers::none());
+    tick(cx);
 }
 
 fn tick(cx: &mut gpui::VisualTestContext) {

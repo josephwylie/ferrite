@@ -408,6 +408,8 @@ pub mod paint {
     pub const CARD_RING: Paint = Paint::solid(super::CARD_RING);
     pub const FIELD_RING: Paint = Paint::solid(super::FIELD_RING);
     pub const BLOCK_RING: Paint = Paint::solid(super::BLOCK_RING);
+    /// The rule under a turn's header and fold.
+    pub const TURN_FOLD_RULE: Paint = Paint(super::TURN_FOLD_RULE);
 
     /// The prompt band: a field that occludes what scrolls under it.
     pub const PROMPT_BAND: Paint = FIELD;
@@ -1436,7 +1438,7 @@ pub fn init_components(cx: &mut gpui::App) {
 //   carries its `Copy` under it the same way.
 // - **Reading order.** Rows read down from the top of the body, as a new
 //   conversation does; the tail is followed once they overflow, and a
-//   reader scrolled away from it gets `Jump to latest`.
+//   reader scrolled away from it gets `Scroll to end`.
 // - **The pinned prompt.** The prompt of the turn being read stays pinned at
 //   the top of the body while its output scrolls under it: its own bubble,
 //   right-aligned, clamped to `PINNED_PROMPT_LINES`, on a plane in the
@@ -1454,10 +1456,13 @@ pub fn init_components(cx: &mut gpui::App) {
 //   a line and a half off; a row that answers the one above it sits flush.
 //   The space above a row is chosen at reconcile from the row before it
 //   (`rows::gap_before`) and is part of the row's identity.
-// - **The turn's end.** A turn that took `TURN_STAMP_MIN_MS` or more closes
-//   on `Worked for 5m 22s`, `INK_SUBTLE`, a `LINE` running on to the
-//   column's end; a quicker one says nothing. A failed or interrupted turn
-//   says `failed · 0.1s · <message>`, the lead word in its state ink.
+// - **The turn's header and fold** (ADR 0038). A running turn opens under
+//   its prompt with `Working for 11m 24s` over a faint rule (`TURN_FOLD_*`),
+//   its live step at its tail (`Running sed`, `Thinking`). Once it settles
+//   that row is the fold, `Worked for 24m 55s ›`, shut: the turn's work
+//   folds away under it, leaving the answer and what must stay in view
+//   (`transcript::turns`). A failed turn keeps every step and says `failed ·
+//   0.1s · <message>`, the lead word in its state ink.
 // - **Failure** is a word: a failed call's line stays in the work's ink and
 //   its verdict (`· failed`) follows the cut, `failed` in `BLOCKED`; what
 //   it printed reads as output does.
@@ -1680,13 +1685,34 @@ pub const TEST_BAR_EASE_MS: u64 = 300;
 pub const PATH_UNDERLINE_W: f32 = 1.0;
 pub const PATH_UNDERLINE_OFFSET: f32 = 3.0;
 // ---- transcript app pass (owner: transcript.rs and its rows)
-/// A completed turn closes with `Worked for 5m 22s` only when it took at
-/// least this long: a quick answer needs no receipt. An interrupted or
-/// failed turn always says so.
-pub const TURN_STAMP_MIN_MS: u64 = 30_000;
-/// The turn stamp's rule runs from its words to the column's end, this far
-/// after them.
-pub const TURN_STAMP_RULE_GAP: f32 = SPACE_3;
+/// **A turn's header and fold** (T3's `WorkingTimelineRow` and turn fold,
+/// MessagesTimeline.tsx:1621-1652; ADR 0038): `Working for 11m 24s` under
+/// the running turn's prompt, the same row `Worked for 24m 55s ›` once it
+/// settles, at any duration. `TURN_FOLD_PAD_T` above the words,
+/// `TURN_FOLD_TEXT_B` under them to a 1px rule of `TURN_FOLD_RULE` (T3's
+/// `--border` at 60%, white 4.8%) the column's width, then the row's own
+/// `TURN_FOLD_PAD_B` (`rows::gap_before`). The words are `TURN_FOLD_TEXT` on
+/// `TURN_FOLD_LINE` in `INK_SUBTLE`, tabular, on a `TURN_FOLD_ROW_H` row
+/// inset `TURN_FOLD_INSET`; the fold's chevron (`TURN_FOLD_CHEVRON`) stands
+/// `TURN_FOLD_GAP` after them, and the row keeps `TURN_FOLD_END` at its
+/// end. Under the pointer the words and chevron go to `INK_STRONG` over
+/// `MOTION_FOLD_HOVER_MS`, and the turn's start time snaps in at the end.
+pub const TURN_FOLD_PAD_T: f32 = SPACE_1;
+pub const TURN_FOLD_TEXT_B: f32 = SPACE_2;
+pub const TURN_FOLD_PAD_B: f32 = 6.0;
+pub const TURN_FOLD_RULE: u32 = 0xffffff0c;
+pub const TURN_FOLD_TEXT: f32 = 14.0;
+pub const TURN_FOLD_LINE: f32 = 22.75;
+pub const TURN_FOLD_ROW_H: f32 = 24.0;
+pub const TURN_FOLD_INSET: f32 = SPACE_1;
+pub const TURN_FOLD_END: f32 = 2.0;
+pub const TURN_FOLD_CHEVRON: f32 = 14.0;
+pub const TURN_FOLD_GAP: f32 = SPACE_1;
+/// The fold's hover time: 12px, `SPACE_1` off the row's end.
+pub const TURN_FOLD_TIME: f32 = 12.0;
+/// The compacting header's icon, `TURN_FOLD_ICON_GAP` before its words.
+pub const TURN_FOLD_ICON: f32 = 12.0;
+pub const TURN_FOLD_ICON_GAP: f32 = SPACE_2;
 /// **Message actions**: a prompt's (its send time and `Copy`, under its
 /// bubble's right edge) and a turn's answer's (`Copy` and the time it
 /// finished, under its left edge), `MESSAGE_ACTIONS_GAP` under the message,
@@ -1747,13 +1773,31 @@ pub const LINE_FADE: f32 = SPACE_6;
 /// `PINNED_PROMPT_PAD_Y` above and below the bubble.
 pub const PINNED_PROMPT_LINES: usize = 2;
 pub const PINNED_PROMPT_PAD_Y: f32 = SPACE_2;
-/// **Jump to latest**: while the reader is scrolled away from the tail, a
-/// `JUMP_LATEST` circle (the plane's fill in a 1px `LINE` ring, no shadow:
-/// Codex's flat button) with the down arrow floats centred
-/// `JUMP_LATEST_INSET` above the transcript's foot; a click snaps to the
-/// tail and follows it again.
-pub const JUMP_LATEST: f32 = 32.0;
-pub const JUMP_LATEST_INSET: f32 = SPACE_3;
+/// **Scroll to end** (T3 Code's `ScrollToEndButton`): while the reader is
+/// scrolled away from the tail, a pill floats centred over the transcript's
+/// foot, its own foot `SCROLL_END_INSET` above the Composer's top:
+/// `SCROLL_END_H` tall, fully rounded, `SCROLL_END_PAD_X` either side, the
+/// 14px chevron-down and `Scroll to end` (`FS_BADGE`, medium) with
+/// `· N queued` after it while prompts wait. Its ground is the plane's
+/// opaque fill (T3's glass without the blur Ferrite cannot draw), in a 1px
+/// `SCROLL_END_BORDER` ring that strengthens to `SCROLL_END_BORDER_HOVER`
+/// under the pointer, and a small shadow. It shows `SCROLL_END_SHOW_DELAY_MS`
+/// after it is first wanted and goes at once; a click eases to the tail
+/// (`MOTION_SCROLL_MAX_MS`) and follows it again.
+pub const SCROLL_END_H: f32 = 24.0;
+pub const SCROLL_END_PAD_X: f32 = 7.0;
+pub const SCROLL_END_INSET: f32 = 10.0;
+pub const SCROLL_END_GAP: f32 = SPACE_1;
+pub const SCROLL_END_GLYPH: f32 = 14.0;
+/// T3's `border-border/60` and `border-border` (dark `--border` is white 8%).
+pub const SCROLL_END_BORDER: Paint = Paint(0xffffff0c);
+pub const SCROLL_END_BORDER_HOVER: Paint = Paint(0xffffff14);
+/// T3's `shadow-sm` (`0 1px 3px` and `0 1px 2px -1px`, black 10%): the
+/// one cast besides a float's, so the pill reads over the rows it floats on.
+pub const SHADOW_PILL: u32 = 0x0000001a;
+/// **The send anchor**: a sent prompt lands this far below the
+/// transcript's top (T3's `CHAT_LIST_ANCHOR_OFFSET`).
+pub const TX_SEND_ANCHOR_OFFSET: f32 = 16.0;
 /// **Reply to a selection** (Claude's `SelectionTooltip`): a drag that
 /// selects a passage ends with a pill centred over its first line, its foot
 /// `SELECTION_REPLY_GAP` above it (under its last when there is no room
@@ -3341,6 +3385,9 @@ pub const MOTION_PRESS_SCALE: f32 = 0.975;
 /// A disclosure chevron turns its quarter over `MOTION_DUR_FAST_MS` on
 /// `MOTION_EASE_STANDARD` (Claude's `TurnStatus` caret).
 pub const MOTION_CHEVRON_MS: u64 = MOTION_DUR_FAST_MS;
+/// A turn fold's words and chevron brighten under the pointer over 150ms
+/// on `MOTION_EASE_STANDARD` (T3's default `transition-colors`).
+pub const MOTION_FOLD_HOVER_MS: u64 = 150;
 /// A nav fold (a Project, a Group, Pinned) opens and shuts over 150ms on
 /// the `ease-out` keyword, height and opacity (Claude's
 /// `sidebar-group-expand`).
@@ -3348,9 +3395,19 @@ pub const MOTION_FOLD_MS: u64 = 150;
 /// The Panel's tab strip easing to where a chevron sent it (T3's smooth
 /// `scrollBy`).
 pub const MOTION_TAB_SCROLL_MS: u64 = 200;
-/// Jump to latest fades in and out over `MOTION_DUR_BASE_MS` on
-/// `MOTION_EASE_STANDARD`, answering no pointer while it goes.
-pub const MOTION_JUMP_FADE_MS: u64 = MOTION_DUR_BASE_MS;
+/// A programmatic transcript scroll (a send's prompt rising to the top,
+/// Scroll to end) eases on `MOTION_EASE_STANDARD` for Chromium's smooth
+/// scroll length, `min(√|Δpx|, 12) / 60` s: at most this, reached from
+/// 144px (T3's `scrollTo({behavior: "smooth"})`).
+pub const MOTION_SCROLL_MAX_MS: u64 = MOTION_DUR_BASE_MS;
+/// Scroll to end shows this long after it is first wanted, so it never
+/// flashes through a thread switch; it hides at once, with no fade.
+pub const SCROLL_END_SHOW_DELAY_MS: u64 = 150;
+/// An attachment added to a draft grows in from `MOTION_CHIP_FROM_SCALE`
+/// about its centre as it fades in, over `MOTION_CHIP_IN_MS` on
+/// `MOTION_EASE_SNAP` (T3's `--ease-drawer`).
+pub const MOTION_CHIP_IN_MS: u64 = 300;
+pub const MOTION_CHIP_FROM_SCALE: f32 = 0.95;
 /// A toast's timing: it comes in over `MOTION_DUR_BASE_MS` on the quart,
 /// sliding its own height out from under the edge it hangs on, and leaves
 /// over the same, shrinking to `MOTION_TOAST_OUT_SCALE` as it fades (the

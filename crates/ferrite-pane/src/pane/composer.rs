@@ -452,7 +452,8 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         field = field.child(ring(theme::DROP_EDGE));
     }
     if let Some(error) = draft_error {
-        field = field.child(
+        field = field.child(ferrite_ui::motion::fade_in(
+            SharedString::from(format!("composer-notice-{namespace}")),
             div()
                 .flex_shrink_0()
                 .min_w_0()
@@ -461,7 +462,9 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
                 .whitespace_normal()
                 .text_color(rgb(BLOCKED))
                 .child(error),
-        );
+            ferrite_ui::motion::FADE_QUICK,
+            1.0,
+        ));
     }
     // The pending files ride inside the box, over the text they go with
     // (as Claude's and Codex's do), the text `ATTACH_ROW_GAP` under them.
