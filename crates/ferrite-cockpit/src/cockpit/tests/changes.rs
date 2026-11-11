@@ -103,6 +103,7 @@ fn the_menus_hold_what_the_spec_names_and_a_scope_rereads(cx: &mut TestAppContex
             ("Expand all files".into(), false),
             ("Word wrap".into(), true),
             ("Hide whitespace changes".into(), false),
+            ("Hide test files".into(), false),
             ("Refresh".into(), false),
         ]
     );
@@ -131,6 +132,49 @@ fn the_menus_hold_what_the_spec_names_and_a_scope_rereads(cx: &mut TestAppContex
         view.read_with(cx, |view, _| view.changes_scope_label(thread)).as_deref(),
         Some("All changes")
     );
+}
+
+/// The toolbar (T3's diff toolbar): 28 tall, the scope at the left and,
+/// against a branch, what it compares; 14px tools at the right, each
+/// doing its verb: Hide test files leaves the tests out of the list.
+#[gpui::test]
+fn the_toolbar_holds_the_scope_and_the_view_tools(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("changes-toolbar", cx);
+    let repo = std::env::temp_dir()
+        .join(format!("ferrite-view-{}-changes-toolbar", std::process::id()))
+        .join("repo");
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(repo.join("tests/c.rs"), "test\n").unwrap();
+    opened(&view, thread, cx);
+    assert_eq!(view.read_with(cx, |view, _| view.changes_read(thread)), Some(3));
+    let bar = cx.debug_bounds("changes-toolbar").expect("its toolbar");
+    assert_eq!(bar.size.height, px(ferrite_ui::theme::SURFACE_TOOLBAR_H));
+    let scope = cx.debug_bounds("changes-scope").unwrap();
+    assert!(scope.left() - bar.left() < px(12.), "the scope at the left");
+    assert!(cx.debug_bounds("changes-comparing").is_none(), "uncommitted compares nothing");
+    for tool in ["changes-refresh", "changes-fold-all", "changes-wrap", "changes-whitespace", "changes-hide-tests"] {
+        let at = cx.debug_bounds(tool).unwrap_or_else(|| panic!("{tool}"));
+        assert!(at.left() > scope.right(), "{tool} at the right");
+        assert_eq!(at.size.height, px(ferrite_ui::theme::SURFACE_PLUS));
+    }
+    let shown = |cx: &mut gpui::VisualTestContext| {
+        (0..3)
+            .filter(|at| cx.debug_bounds(Box::leak(format!("changes-file-{at}").into_boxed_str())).is_some())
+            .count()
+    };
+    assert_eq!(shown(cx), 3);
+    let hide = cx.debug_bounds("changes-hide-tests").unwrap();
+    cx.simulate_click(hide.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(shown(cx), 2, "tests/c.rs is left out");
+    let fold = cx.debug_bounds("changes-fold-all").unwrap();
+    cx.simulate_click(fold.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("panel-hunks-0").is_none(), "collapsed");
+    view.update(cx, |view, cx| view.run_changes_verb(thread, ChangesVerb::All, cx));
+    tick(cx);
+    assert!(cx.debug_bounds("changes-comparing").is_some(), "against the base, it says so");
+    assert!(cx.debug_bounds("changes-base").is_some(), "the base is a dropdown");
 }
 
 #[gpui::test]

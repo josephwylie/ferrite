@@ -55,6 +55,7 @@ pub(super) const STATES: &[&str] = &[
     "panel-plusmenu",
     "panel-empty",
     "panel-maximized",
+    "panel-pr",
     "scroll-to-end",
     "send-landed",
 ];
@@ -104,6 +105,7 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "panel-plusmenu" => panel("panel-plusmenu", PanelStaged::PlusMenu),
         "panel-empty" => panel("panel-empty", PanelStaged::Empty),
         "panel-maximized" => panel("panel-maximized", PanelStaged::Maximized),
+        "panel-pr" => panel_pr(),
         "scroll-to-end" => scroll_to_end(),
         "send-landed" => send_landed(),
         _ => unreachable!("`handles` lists every state"),
@@ -617,6 +619,38 @@ fn panel(state: &str, staged: PanelStaged) -> (Scene, Setup) {
             PanelStaged::Empty => view.close_surfaces(thread, ThreadSurfaces::close_all, cx),
             PanelStaged::Maximized => view.toggle_panel_maximized(thread, cx),
         }
+    });
+    (scene, setup)
+}
+
+/// The pull request Surface on Summary, the PR open and ready to merge:
+/// every check green, Merge as the primary action.
+fn panel_pr() -> (Scene, Setup) {
+    let scene = conversation("panel-pr");
+    let setup: Setup = Box::new(|view, _, cx| {
+        let Some(thread) = view.focused_thread() else {
+            return;
+        };
+        let Ok(mut pr) = pull_request().pr else {
+            return;
+        };
+        for check in &mut pr.checks {
+            check.status = WireCheckStatus::Success;
+        }
+        view.facts.pr_answered(
+            thread,
+            Some(PullRequest {
+                number: pr.number,
+                state: PrState::Open,
+                draft: false,
+                url: Some(pr.url.clone()),
+                title: Some(pr.title.clone()),
+                checks: Some(CheckState::Passing),
+                runs: Vec::new(),
+            }),
+        );
+        view.fixture_pr_snapshot(thread, pr);
+        view.open_pr_surface(thread, cx);
     });
     (scene, setup)
 }

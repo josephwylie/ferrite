@@ -1012,6 +1012,10 @@ pub const SURFACE_TAB_GAP: f32 = SPACE_0_5;
 pub const SURFACE_TAB_CLOSE: f32 = 16.0;
 pub const SURFACE_TAB_CLOSE_R: f32 = 4.0;
 pub const SURFACE_TAB_ICON: f32 = 12.0;
+/// A tab's pending dot (T3's `size-1.5 -right-0.5 -bottom-0.5`): 6 round,
+/// in the icon's ink at its bottom right, 2 out.
+pub const SURFACE_TAB_DOT: f32 = 6.0;
+pub const SURFACE_TAB_DOT_INSET: f32 = 2.0;
 /// How far a held tab moves sideways before it drags (T3's dnd-kit
 /// distance): a shorter move is a click.
 pub const SURFACE_TAB_DRAG: f32 = 6.0;
@@ -1028,6 +1032,20 @@ pub const SURFACE_PLUS_GLYPH: f32 = 14.0;
 pub const SURFACE_BAR_H: f32 = 36.0;
 /// The Changes Surface's toolbar (T3's diff toolbar, `h-7 px-2 gap-2`).
 pub const SURFACE_TOOLBAR_H: f32 = 28.0;
+/// **The pull request Surface** (T3's `PullRequestDetailPanel`): its
+/// header's rows 28 tall (`h-7`), the `#N`'s link glyph 10; the views'
+/// segmented group at radius 8 on white 4.4% (`bg-input/40 p-0.5
+/// gap-0.5`), each segment 10 in (`px-2.5`), pressed on white 7.9%
+/// (`bg-input/72`); the merged or closed pill 7 in on white 3.5%
+/// (`bg-input/32`).
+pub const PR_ROW_H: f32 = 28.0;
+pub const PR_LINK_GLYPH: f32 = 10.0;
+pub const PR_GROUP_R: f32 = 8.0;
+pub const PR_GROUP_GROUND: u32 = 0xffffff0b;
+pub const PR_SEGMENT_PAD_X: f32 = 10.0;
+pub const PR_SEGMENT_PRESSED: u32 = 0xffffff14;
+pub const PR_PILL_PAD_X: f32 = 7.0;
+pub const PR_PILL_GROUND: u32 = 0xffffff09;
 /// **"Open a surface"** (T3's empty panel, `max-w-xs py-6`): its rows 32
 /// tall at radius 8, 10 in, 10 between icon and label, 2 apart;
 /// each ends in a soft key cap (`KEY_CAP_SOFT`, 20 square, white 7%).
@@ -3454,6 +3472,9 @@ pub const MOTION_FOLD_HOVER_MS: u64 = 150;
 /// the `ease-out` keyword, height and opacity (Claude's
 /// `sidebar-group-expand`).
 pub const MOTION_FOLD_MS: u64 = 150;
+/// The Panel's tab strip easing to where a chevron sent it (T3's smooth
+/// `scrollBy`).
+pub const MOTION_TAB_SCROLL_MS: u64 = 200;
 /// A programmatic transcript scroll (a send's prompt rising to the top,
 /// Scroll to end) eases on `MOTION_EASE_STANDARD` for Chromium's smooth
 /// scroll length, `min(√|Δpx|, 12) / 60` s: at most this, reached from
