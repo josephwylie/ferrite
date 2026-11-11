@@ -176,43 +176,58 @@ impl Server {
             Method::TaskStart(params) => self.api_task_start(params),
             Method::TaskList(params) => self.api_task_list(params),
             Method::TaskGet(params) => self.api_task_get(params),
-            Method::TaskStop(params) => {
-                self.api_task_change(crate::factory::Command::Stop { task: params.task })
-            }
-            Method::TaskResume(params) => {
-                self.api_task_change(crate::factory::Command::Resume { task: params.task })
-            }
+            Method::TaskStop(params) => self.api_task_command(
+                &params.task.clone(),
+                crate::factory::Command::Stop { task: params.task },
+            ),
+            Method::TaskResume(params) => self.api_task_command(
+                &params.task.clone(),
+                crate::factory::Command::Resume { task: params.task },
+            ),
             Method::TaskDelete(params) => self.api_task_delete(params),
             Method::ReportOutcome(params) => self.api_report(params),
             Method::WorkflowCreate(params) => self.api_workflow_create(params),
             Method::WorkflowList(params) => self.api_workflow_list(params),
             Method::WorkflowGet(params) => self.api_workflow_answer(&params.workflow, None),
-            Method::WorkflowRename(params) => {
-                self.api_author(crate::factory::Command::RenameWorkflow {
+            Method::WorkflowRename(params) => self.api_author(
+                params.workflow.clone(),
+                crate::factory::Command::RenameWorkflow {
                     workflow: params.workflow,
                     name: params.name,
-                })
-            }
+                },
+            ),
             Method::WorkflowSave(params) => self.api_workflow_save(params.workflow, Vec::new()),
-            Method::StepAdd(params) => self.api_author(crate::factory::Command::AddStep {
-                workflow: params.workflow,
-                after: params.after,
-                agent: self.factory_agent.clone(),
-            }),
-            Method::StepEdit(params) => self.api_author(crate::factory::Command::EditStep {
-                workflow: params.workflow,
-                step: params.step,
-                change: params.change,
-            }),
-            Method::StepMove(params) => self.api_author(crate::factory::Command::MoveStep {
-                workflow: params.workflow,
-                step: params.step,
-                to: params.to,
-            }),
-            Method::StepDelete(params) => self.api_author(crate::factory::Command::DeleteStep {
-                workflow: params.workflow,
-                step: params.step,
-            }),
+            Method::StepAdd(params) => self.api_author(
+                params.workflow.clone(),
+                crate::factory::Command::AddStep {
+                    workflow: params.workflow,
+                    after: params.after,
+                    agent: self.factory_agent.clone(),
+                },
+            ),
+            Method::StepEdit(params) => self.api_author(
+                params.workflow.clone(),
+                crate::factory::Command::EditStep {
+                    workflow: params.workflow,
+                    step: params.step,
+                    change: params.change,
+                },
+            ),
+            Method::StepMove(params) => self.api_author(
+                params.workflow.clone(),
+                crate::factory::Command::MoveStep {
+                    workflow: params.workflow,
+                    step: params.step,
+                    to: params.to,
+                },
+            ),
+            Method::StepDelete(params) => self.api_author(
+                params.workflow.clone(),
+                crate::factory::Command::DeleteStep {
+                    workflow: params.workflow,
+                    step: params.step,
+                },
+            ),
             Method::ReportQuestion(params) => self.api_ask(params),
             Method::ReportRevision(params) => self.api_worker_said(
                 params.worker,
@@ -250,30 +265,34 @@ impl Server {
             }
             Method::TaskRework(params) => self.api_task_rework(params),
             Method::TaskRedirect(params) => self.api_task_redirect(params),
-            Method::WorkflowApproval(params) => {
-                self.api_author(crate::factory::Command::EditApproval {
+            Method::WorkflowApproval(params) => self.api_author(
+                params.workflow.clone(),
+                crate::factory::Command::EditApproval {
                     workflow: params.workflow,
                     change: params.change,
-                })
-            }
-            Method::WorkflowStart(params) => {
-                self.api_automate(crate::factory::Command::EditStart {
+                },
+            ),
+            Method::WorkflowStart(params) => self.api_automate(
+                params.workflow.clone(),
+                crate::factory::Command::EditStart {
                     workflow: params.workflow,
                     start: params.start,
-                })
-            }
-            Method::WorkflowAutomation(params) => {
-                self.api_automate(crate::factory::Command::Automation {
+                },
+            ),
+            Method::WorkflowAutomation(params) => self.api_automate(
+                params.workflow.clone(),
+                crate::factory::Command::Automation {
                     workflow: params.workflow,
                     turn: params.turn,
-                })
-            }
-            Method::WorkflowBacklog(params) => {
-                self.api_automate(crate::factory::Command::Backlog {
+                },
+            ),
+            Method::WorkflowBacklog(params) => self.api_automate(
+                params.workflow.clone(),
+                crate::factory::Command::Backlog {
                     workflow: params.workflow,
                     take: params.take,
-                })
-            }
+                },
+            ),
             Method::TaskSubmit(params) => self.api_task_submit(params),
             Method::ProposalRaise(params) => self.api_proposal_raise(params),
             Method::ProposalList(params) => self.api_proposal_list(params),

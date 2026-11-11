@@ -468,155 +468,178 @@ impl State {
             .ok_or_else(unknown_proposal)
     }
 
-    /// A Coordinator command.
-    pub(super) fn coordinate(
+    pub(super) fn coordinator_say(
         &mut self,
-        command: Command,
+        project: ProjectId,
+        text: String,
+        effects: &mut Vec<Effect>,
+    ) -> Result<Answer, Refusal> {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return Err(Refusal::new(RefusalCode::Invalid, "say something"));
+        }
+        self.tell_coordinator(project, text, effects);
+        Ok(Answer::Changed(true))
+    }
+
+    pub(super) fn coordinator_started(
+        &mut self,
+        project: ProjectId,
+        thread: ThreadId,
+        effects: &mut Vec<Effect>,
+    ) -> Result<Answer, Refusal> {
+        let coordinator = self.coordinator_mut(project);
+        if coordinator.thread == Some(thread) {
+            return Ok(Answer::Changed(false));
+        }
+        coordinator.thread = Some(thread);
+        coordinator.starting = false;
+        coordinator.error = None;
+        for text in std::mem::take(&mut coordinator.waiting) {
+            effects.push(Effect::Prompt { thread, text });
+        }
+        Ok(Answer::Changed(true))
+    }
+
+    pub(super) fn coordinator_failed(
+        &mut self,
+        project: ProjectId,
+        why: String,
+    ) -> Result<Answer, Refusal> {
+        let coordinator = self.coordinator_mut(project);
+        coordinator.thread = None;
+        coordinator.starting = false;
+        coordinator.waiting.clear();
+        coordinator.error = Some(why);
+        Ok(Answer::Changed(true))
+    }
+
+    pub(super) fn coordinator_agent(
+        &mut self,
+        project: ProjectId,
+        agent: Agent,
+        effects: &mut Vec<Effect>,
+    ) -> Result<Answer, Refusal> {
+        let coordinator = self.coordinator_mut(project);
+        if coordinator.agent.as_ref() == Some(&agent) {
+            return Ok(Answer::Changed(false));
+        }
+        coordinator.agent = Some(agent.clone());
+        if let Some(thread) = coordinator.thread {
+            effects.push(Effect::Tune { thread, agent });
+        }
+        Ok(Answer::Changed(true))
+    }
+
+    pub(super) fn propose(
+        &mut self,
+        coordinator: ThreadId,
+        act: Act,
+        catalog: Catalog,
+        now_ms: i64,
+    ) -> Result<Answer, Refusal> {
+        let project = self.coordinator_of(coordinator)?;
+        if let Act::Start { instructions, .. } = &act {
+            if instructions.trim().is_empty() {
+                return Err(Refusal::new(
+                    RefusalCode::Invalid,
+                    "a Task needs instructions",
+                ));
+            }
+        }
+        if let Some(same) = self.proposals.iter().find(|proposal| {
+            proposal.status == ProposalStatus::Pending
+                && proposal.project == project
+                && proposal.act == act
+        }) {
+            return Ok(Answer::Proposal(same.id.clone()));
+        }
+        self.check_act(&act, project, &catalog, now_ms)?;
+        let id = format!("p-{}", self.next_proposal);
+        self.next_proposal += 1;
+        self.proposals.push(Proposal {
+            id: id.clone(),
+            project,
+            act,
+            status: ProposalStatus::Pending,
+            raised_ms: now_ms,
+            task: None,
+        });
+        Ok(Answer::Proposal(id))
+    }
+
+    pub(super) fn accept_proposal(
+        &mut self,
+        proposal: ProposalId,
+        agent: Agent,
+        catalog: Catalog,
         now_ms: i64,
         effects: &mut Vec<Effect>,
     ) -> Result<Answer, Refusal> {
-        match command {
-            Command::CoordinatorSay { project, text } => {
-                let text = text.trim().to_string();
-                if text.is_empty() {
-                    return Err(Refusal::new(RefusalCode::Invalid, "say something"));
-                }
-                self.tell_coordinator(project, text, effects);
-                Ok(Answer::Changed(true))
+        let found = self.proposal_mut(&proposal)?.clone();
+        match found.status {
+            ProposalStatus::Accepted => return Ok(Answer::Changed(false)),
+            ProposalStatus::Dismissed => {
+                return Err(Refusal::new(
+                    RefusalCode::NotNow,
+                    "the proposal was dismissed",
+                ))
             }
-            Command::CoordinatorStarted { project, thread } => {
-                let coordinator = self.coordinator_mut(project);
-                if coordinator.thread == Some(thread) {
-                    return Ok(Answer::Changed(false));
-                }
-                coordinator.thread = Some(thread);
-                coordinator.starting = false;
-                coordinator.error = None;
-                for text in std::mem::take(&mut coordinator.waiting) {
-                    effects.push(Effect::Prompt { thread, text });
-                }
-                Ok(Answer::Changed(true))
-            }
-            Command::CoordinatorFailed { project, why } => {
-                let coordinator = self.coordinator_mut(project);
-                coordinator.thread = None;
-                coordinator.starting = false;
-                coordinator.waiting.clear();
-                coordinator.error = Some(why);
-                Ok(Answer::Changed(true))
-            }
-            Command::CoordinatorAgent { project, agent } => {
-                let coordinator = self.coordinator_mut(project);
-                if coordinator.agent.as_ref() == Some(&agent) {
-                    return Ok(Answer::Changed(false));
-                }
-                coordinator.agent = Some(agent.clone());
-                if let Some(thread) = coordinator.thread {
-                    effects.push(Effect::Tune { thread, agent });
-                }
-                Ok(Answer::Changed(true))
-            }
-            Command::Propose {
-                coordinator,
-                act,
-                catalog,
-            } => {
-                let project = self.coordinator_of(coordinator)?;
-                if let Act::Start { instructions, .. } = &act {
-                    if instructions.trim().is_empty() {
-                        return Err(Refusal::new(
-                            RefusalCode::Invalid,
-                            "a Task needs instructions",
-                        ));
-                    }
-                }
-                if let Some(same) = self.proposals.iter().find(|proposal| {
-                    proposal.status == ProposalStatus::Pending
-                        && proposal.project == project
-                        && proposal.act == act
-                }) {
-                    return Ok(Answer::Proposal(same.id.clone()));
-                }
-                self.check_act(&act, project, &catalog, now_ms)?;
-                let id = format!("p-{}", self.next_proposal);
-                self.next_proposal += 1;
-                self.proposals.push(Proposal {
-                    id: id.clone(),
-                    project,
-                    act,
-                    status: ProposalStatus::Pending,
-                    raised_ms: now_ms,
-                    task: None,
-                });
-                Ok(Answer::Proposal(id))
-            }
-            Command::AcceptProposal {
-                proposal,
-                agent,
-                catalog,
-            } => {
-                let found = self.proposal_mut(&proposal)?.clone();
-                match found.status {
-                    ProposalStatus::Accepted => return Ok(Answer::Changed(false)),
-                    ProposalStatus::Dismissed => {
-                        return Err(Refusal::new(
-                            RefusalCode::NotNow,
-                            "the proposal was dismissed",
-                        ))
-                    }
-                    ProposalStatus::Pending => {}
-                }
-                self.check_act(&found.act, found.project, &catalog, now_ms)?;
-                if let Act::Redirect { task, direction } = &found.act {
-                    if let Some(task) = self.tasks.iter_mut().find(|each| each.id == *task) {
-                        let to = task
-                            .workflow
-                            .as_ref()
-                            .and_then(|run| run.definition.step(&direction.to))
-                            .map_or_else(|| direction.to.clone(), |step| step.name.clone());
-                        task.note(
-                            now_ms,
-                            Actor::Coordinator,
-                            format!("Proposed sending this task to {to}"),
-                        );
-                    }
-                }
-                let answer = self.command(
-                    Self::act_command(&found.act, found.project, agent, catalog),
-                    now_ms,
-                    effects,
-                )?;
-                let made = match &answer {
-                    Answer::Task(task) => Some(task.clone()),
-                    _ => None,
-                };
-                if let Some(task) = made
+            ProposalStatus::Pending => {}
+        }
+        self.check_act(&found.act, found.project, &catalog, now_ms)?;
+        if let Act::Redirect { task, direction } = &found.act {
+            if let Some(task) = self.tasks.iter_mut().find(|each| each.id == *task) {
+                let to = task
+                    .workflow
                     .as_ref()
-                    .and_then(|id| self.tasks.iter_mut().find(|task| task.id == *id))
-                {
-                    task.note(now_ms, Actor::Coordinator, "Proposed this task");
-                    task.note(now_ms, Actor::Operator, "Accepted the Coordinator's proposal");
-                }
-                let accepted = self.proposal_mut(&proposal)?;
-                accepted.status = ProposalStatus::Accepted;
-                accepted.task = made;
-                Ok(answer)
+                    .and_then(|run| run.definition.step(&direction.to))
+                    .map_or_else(|| direction.to.clone(), |step| step.name.clone());
+                task.note(
+                    now_ms,
+                    Actor::Coordinator,
+                    format!("Proposed sending this task to {to}"),
+                );
             }
-            Command::DismissProposal { proposal } => {
-                let found = self.proposal_mut(&proposal)?;
-                match found.status {
-                    ProposalStatus::Pending => {
-                        found.status = ProposalStatus::Dismissed;
-                        Ok(Answer::Changed(true))
-                    }
-                    ProposalStatus::Dismissed => Ok(Answer::Changed(false)),
-                    ProposalStatus::Accepted => Err(Refusal::new(
-                        RefusalCode::NotNow,
-                        "the proposal was already accepted",
-                    )),
-                }
+        }
+        let answer = self.command(
+            Self::act_command(&found.act, found.project, agent, catalog),
+            now_ms,
+            effects,
+        )?;
+        let made = match &answer {
+            Answer::Task(task) => Some(task.clone()),
+            _ => None,
+        };
+        if let Some(task) = made
+            .as_ref()
+            .and_then(|id| self.tasks.iter_mut().find(|task| task.id == *id))
+        {
+            task.note(now_ms, Actor::Coordinator, "Proposed this task");
+            task.note(
+                now_ms,
+                Actor::Operator,
+                "Accepted the Coordinator's proposal",
+            );
+        }
+        let accepted = self.proposal_mut(&proposal)?;
+        accepted.status = ProposalStatus::Accepted;
+        accepted.task = made;
+        Ok(answer)
+    }
+
+    pub(super) fn dismiss_proposal(&mut self, proposal: ProposalId) -> Result<Answer, Refusal> {
+        let found = self.proposal_mut(&proposal)?;
+        match found.status {
+            ProposalStatus::Pending => {
+                found.status = ProposalStatus::Dismissed;
+                Ok(Answer::Changed(true))
             }
-            _ => unreachable!("only the Coordinator's commands"),
+            ProposalStatus::Dismissed => Ok(Answer::Changed(false)),
+            ProposalStatus::Accepted => Err(Refusal::new(
+                RefusalCode::NotNow,
+                "the proposal was already accepted",
+            )),
         }
     }
 }

@@ -8,9 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::BTreeSet;
 
-use super::{
-    Actor, Effect, Seen, State, Status, Task, TaskId, Watch,
-};
+use super::{Actor, Effect, Seen, State, Status, Task, TaskId, Watch};
 
 /// What a Task remembers of interruptions and time.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

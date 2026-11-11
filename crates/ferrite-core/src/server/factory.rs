@@ -144,7 +144,10 @@ impl Server {
     }
 
     /// One command, and at once what it set off.
-    pub(super) fn factory_command(&mut self, command: Command) -> Result<(Answer, Vec<String>), ApiError> {
+    pub(super) fn factory_command(
+        &mut self,
+        command: Command,
+    ) -> Result<(Answer, Vec<String>), ApiError> {
         let answer = self.factory.command(command, self.now_ms())?;
         let kept = self.step_factory();
         Ok((answer, kept))
@@ -428,7 +431,10 @@ impl Server {
 
     /// What is known installed, for a save's check: each Provider's
     /// models as its agents announced them, and the skills a window found.
-    pub(super) fn catalog(&self, skills: Vec<(crate::store::Provider, Vec<String>)>) -> factory::Catalog {
+    pub(super) fn catalog(
+        &self,
+        skills: Vec<(crate::store::Provider, Vec<String>)>,
+    ) -> factory::Catalog {
         factory::Catalog {
             models: crate::store::Provider::ALL
                 .into_iter()
@@ -541,16 +547,11 @@ impl Server {
     }
 
     /// An authoring command from the API, answered with the Workflow.
-    pub(super) fn api_author(&mut self, command: Command) -> Result<Value, ApiError> {
-        let workflow = match &command {
-            Command::RenameWorkflow { workflow, .. }
-            | Command::AddStep { workflow, .. }
-            | Command::EditStep { workflow, .. }
-            | Command::MoveStep { workflow, .. }
-            | Command::DeleteStep { workflow, .. }
-            | Command::EditApproval { workflow, .. } => workflow.clone(),
-            _ => unreachable!("only authoring commands"),
-        };
+    pub(super) fn api_author(
+        &mut self,
+        workflow: String,
+        command: Command,
+    ) -> Result<Value, ApiError> {
         let (answer, _) = self.factory_command(command)?;
         let extra = match answer {
             Answer::Step(step) => Some(("step", json!(step))),
@@ -579,13 +580,11 @@ impl Server {
 
     /// An automatic starts' command from the API, answered with the
     /// Workflow and whether it changed.
-    pub(super) fn api_automate(&mut self, command: Command) -> Result<Value, ApiError> {
-        let workflow = match &command {
-            Command::EditStart { workflow, .. }
-            | Command::Automation { workflow, .. }
-            | Command::Backlog { workflow, .. } => workflow.clone(),
-            _ => unreachable!("only the automatic starts' commands"),
-        };
+    pub(super) fn api_automate(
+        &mut self,
+        workflow: String,
+        command: Command,
+    ) -> Result<Value, ApiError> {
         let (answer, _) = self.factory_command(command)?;
         let changed = answer == Answer::Changed(true);
         self.api_workflow_answer(&workflow, Some(("changed", json!(changed))))
@@ -600,7 +599,9 @@ impl Server {
             instructions: params.instructions,
         };
         match self.factory_command(submit)? {
-            (Answer::Task(task), _) => Ok(json!({ "task": self.task_json(&task)?, "duplicate": false })),
+            (Answer::Task(task), _) => {
+                Ok(json!({ "task": self.task_json(&task)?, "duplicate": false }))
+            }
             (Answer::Duplicate(task), _) => {
                 Ok(json!({ "task": self.task_json(&task)?, "duplicate": true }))
             }
@@ -677,16 +678,6 @@ impl Server {
 
     pub(super) fn api_task_get(&self, params: TaskParams) -> Result<Value, ApiError> {
         Ok(json!({ "task": self.task_json(&params.task)? }))
-    }
-
-    pub(super) fn api_task_change(&mut self, command: Command) -> Result<Value, ApiError> {
-        let task = match &command {
-            Command::Stop { task } | Command::Resume { task } => task.clone(),
-            _ => unreachable!("only stop and resume change a Task in place"),
-        };
-        let (answer, _) = self.factory_command(command)?;
-        let changed = answer == Answer::Changed(true);
-        Ok(json!({ "task": self.task_json(&task)?, "changed": changed }))
     }
 
     pub(super) fn api_task_delete(&mut self, params: TaskParams) -> Result<Value, ApiError> {

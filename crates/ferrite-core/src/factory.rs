@@ -47,12 +47,12 @@ pub use pr::{
     Revision,
 };
 pub use recovery::Keeping;
-pub use store::{Factory, DIR_NAME};
 pub use starts::{when_label, zone_label};
 pub use starts::{
     Automation, GitHubItem, GitHubQuery, GitHubRead, GitHubSource, Missed, Overlap, Recurrence,
     Schedule, Source, Start, StartKind, Switch, Trigger, Turn, INTERVAL_HOURS, POLL_MS, WEEKDAYS,
 };
+pub use store::{Factory, DIR_NAME};
 pub use workflow::{
     Approval, ApprovalChange, Approver, Catalog, Definition, Destination, Problem, Resolved,
     RouteKind, Step, StepChange, StepId, Template, Version, Workflow, WorkflowId,
@@ -902,132 +902,264 @@ impl State {
             .ok_or_else(unknown_step)
     }
 
-    /// A Workflow authoring command.
-    fn author(&mut self, command: Command, now_ms: i64) -> Result<Answer, Refusal> {
-        match command {
-            Command::CreateWorkflow {
-                project,
-                template,
-                agent,
-            } => {
-                let id = format!("w-{}", self.next_workflow);
-                self.next_workflow += 1;
-                let mut made = Workflow {
-                    id: id.clone(),
-                    project,
-                    draft: Definition {
-                        name: String::new(),
-                        steps: Vec::new(),
-                        approval: Approval::default(),
-                        start: Start::default(),
-                    },
-                    versions: Vec::new(),
-                    next_step: 1,
-                    automation: Automation::default(),
-                };
-                workflow::from_template(template, &mut made, &agent);
-                self.workflows.push(made);
-                Ok(Answer::Workflow(id))
-            }
-            Command::RenameWorkflow { workflow, name } => {
-                let draft = &mut self.workflow_mut(&workflow)?.draft;
-                let changed = draft.name != name;
-                draft.name = name;
-                Ok(Answer::Changed(changed))
-            }
-            Command::AddStep {
-                workflow,
-                after,
-                agent,
-            } => {
-                let made = self.workflow_mut(&workflow)?;
-                let at = match &after {
-                    Some(after) => {
-                        made.draft
-                            .steps
-                            .iter()
-                            .position(|step| step.id == *after)
-                            .ok_or_else(unknown_step)?
-                            + 1
-                    }
-                    None => made.draft.steps.len(),
-                };
-                let id = made.new_step_id();
+    pub(super) fn create_workflow(
+        &mut self,
+        project: ProjectId,
+        template: Template,
+        agent: Agent,
+    ) -> Result<Answer, Refusal> {
+        let id = format!("w-{}", self.next_workflow);
+        self.next_workflow += 1;
+        let mut made = Workflow {
+            id: id.clone(),
+            project,
+            draft: Definition {
+                name: String::new(),
+                steps: Vec::new(),
+                approval: Approval::default(),
+                start: Start::default(),
+            },
+            versions: Vec::new(),
+            next_step: 1,
+            automation: Automation::default(),
+        };
+        workflow::from_template(template, &mut made, &agent);
+        self.workflows.push(made);
+        Ok(Answer::Workflow(id))
+    }
+
+    pub(super) fn rename_workflow(
+        &mut self,
+        workflow: WorkflowId,
+        name: String,
+    ) -> Result<Answer, Refusal> {
+        let draft = &mut self.workflow_mut(&workflow)?.draft;
+        let changed = draft.name != name;
+        draft.name = name;
+        Ok(Answer::Changed(changed))
+    }
+
+    pub(super) fn add_step(
+        &mut self,
+        workflow: WorkflowId,
+        after: Option<StepId>,
+        agent: Agent,
+    ) -> Result<Answer, Refusal> {
+        let made = self.workflow_mut(&workflow)?;
+        let at = match &after {
+            Some(after) => {
                 made.draft
                     .steps
-                    .insert(at, workflow::new_step(id.clone(), "New agent", agent));
-                Ok(Answer::Step(id))
-            }
-            Command::EditStep {
-                workflow,
-                step,
-                change,
-            } => {
-                let step = self.draft_step(&workflow, &step)?;
-                let before = step.clone();
-                change.apply(step);
-                Ok(Answer::Changed(*step != before))
-            }
-            Command::MoveStep { workflow, step, to } => {
-                let steps = &mut self.workflow_mut(&workflow)?.draft.steps;
-                let from = steps
                     .iter()
-                    .position(|each| each.id == step)
-                    .ok_or_else(unknown_step)?;
-                let to = to.min(steps.len() - 1);
-                let moved = steps.remove(from);
-                steps.insert(to, moved);
-                Ok(Answer::Changed(from != to))
+                    .position(|step| step.id == *after)
+                    .ok_or_else(unknown_step)?
+                    + 1
             }
-            Command::DeleteStep { workflow, step } => {
-                let steps = &mut self.workflow_mut(&workflow)?.draft.steps;
-                let at = steps
+            None => made.draft.steps.len(),
+        };
+        let id = made.new_step_id();
+        made.draft
+            .steps
+            .insert(at, workflow::new_step(id.clone(), "New agent", agent));
+        Ok(Answer::Step(id))
+    }
+
+    pub(super) fn edit_step(
+        &mut self,
+        workflow: WorkflowId,
+        step: StepId,
+        change: StepChange,
+    ) -> Result<Answer, Refusal> {
+        let step = self.draft_step(&workflow, &step)?;
+        let before = step.clone();
+        change.apply(step);
+        Ok(Answer::Changed(*step != before))
+    }
+
+    pub(super) fn move_step(
+        &mut self,
+        workflow: WorkflowId,
+        step: StepId,
+        to: usize,
+    ) -> Result<Answer, Refusal> {
+        let steps = &mut self.workflow_mut(&workflow)?.draft.steps;
+        let from = steps
+            .iter()
+            .position(|each| each.id == step)
+            .ok_or_else(unknown_step)?;
+        let to = to.min(steps.len() - 1);
+        let moved = steps.remove(from);
+        steps.insert(to, moved);
+        Ok(Answer::Changed(from != to))
+    }
+
+    pub(super) fn delete_step(
+        &mut self,
+        workflow: WorkflowId,
+        step: StepId,
+    ) -> Result<Answer, Refusal> {
+        let steps = &mut self.workflow_mut(&workflow)?.draft.steps;
+        let at = steps
+            .iter()
+            .position(|each| each.id == step)
+            .ok_or_else(unknown_step)?;
+        steps.remove(at);
+        Ok(Answer::Changed(true))
+    }
+
+    pub(super) fn edit_approval(
+        &mut self,
+        workflow: WorkflowId,
+        change: ApprovalChange,
+    ) -> Result<Answer, Refusal> {
+        let approval = &mut self.workflow_mut(&workflow)?.draft.approval;
+        let before = approval.clone();
+        change.apply(approval);
+        Ok(Answer::Changed(*approval != before))
+    }
+
+    pub(super) fn save_workflow(
+        &mut self,
+        workflow: WorkflowId,
+        catalog: Catalog,
+        now_ms: i64,
+    ) -> Result<Answer, Refusal> {
+        let made = self.workflow_mut(&workflow)?;
+        let problems = made.draft.problems(&catalog);
+        if !problems.is_empty() {
+            let listed: Vec<String> = problems
+                .into_iter()
+                .map(|problem| problem.message)
+                .collect();
+            return Err(Refusal::new(
+                RefusalCode::Invalid,
+                format!("the workflow cannot be saved: {}", listed.join(" ")),
+            ));
+        }
+        if !made.unsaved() {
+            return Ok(Answer::Version(made.latest().map_or(0, |v| v.version)));
+        }
+        // A new start is a new setup: it is never live until the
+        // operator turns it on.
+        if made
+            .latest()
+            .is_some_and(|latest| latest.definition.start != made.draft.start)
+        {
+            made.automation.turn_off();
+        }
+        let version = made.latest().map_or(1, |latest| latest.version + 1);
+        made.versions.push(Version {
+            version,
+            saved_ms: now_ms,
+            definition: made.draft.clone(),
+        });
+        Ok(Answer::Version(version))
+    }
+
+    /// A Task with `instructions`, Queued, or the one `request` already
+    /// started.
+    #[allow(clippy::too_many_arguments)]
+    fn start(
+        &mut self,
+        project: ProjectId,
+        instructions: String,
+        agent: Agent,
+        request: Option<String>,
+        workflow: Option<WorkflowId>,
+        pr: Option<String>,
+        now_ms: i64,
+    ) -> Result<TaskId, Refusal> {
+        if let Some(task) = request.as_ref().and_then(|request| {
+            self.tasks
+                .iter()
+                .find(|task| task.request.as_ref() == Some(request))
+        }) {
+            return Ok(task.id.clone());
+        }
+        let instructions = instructions.trim().to_string();
+        let Some(title) = instructions.lines().next().map(str::trim) else {
+            return Err(Refusal::new(
+                RefusalCode::Invalid,
+                "a Task needs instructions",
+            ));
+        };
+        let pr = pr::given(pr)?;
+        let run = match workflow {
+            None => None,
+            Some(id) => {
+                let made = self
+                    .workflows
                     .iter()
-                    .position(|each| each.id == step)
-                    .ok_or_else(unknown_step)?;
-                steps.remove(at);
-                Ok(Answer::Changed(true))
-            }
-            Command::EditApproval { workflow, change } => {
-                let approval = &mut self.workflow_mut(&workflow)?.draft.approval;
-                let before = approval.clone();
-                change.apply(approval);
-                Ok(Answer::Changed(*approval != before))
-            }
-            Command::SaveWorkflow { workflow, catalog } => {
-                let made = self.workflow_mut(&workflow)?;
-                let problems = made.draft.problems(&catalog);
-                if !problems.is_empty() {
-                    let listed: Vec<String> = problems
-                        .into_iter()
-                        .map(|problem| problem.message)
-                        .collect();
+                    .find(|made| made.id == id)
+                    .ok_or_else(|| {
+                        Refusal::new(RefusalCode::UnknownWorkflow, "no Workflow has that id")
+                    })?;
+                if made.project != project {
                     return Err(Refusal::new(
                         RefusalCode::Invalid,
-                        format!("the workflow cannot be saved: {}", listed.join(" ")),
+                        "that Workflow is another Project's",
                     ));
                 }
-                if !made.unsaved() {
-                    return Ok(Answer::Version(made.latest().map_or(0, |v| v.version)));
-                }
-                // A new start is a new setup: it is never live until the
-                // operator turns it on.
-                if made
-                    .latest()
-                    .is_some_and(|latest| latest.definition.start != made.draft.start)
-                {
-                    made.automation.turn_off();
-                }
-                let version = made.latest().map_or(1, |latest| latest.version + 1);
-                made.versions.push(Version {
-                    version,
-                    saved_ms: now_ms,
-                    definition: made.draft.clone(),
-                });
-                Ok(Answer::Version(version))
+                let version = made.latest().ok_or_else(|| {
+                    Refusal::new(
+                        RefusalCode::Invalid,
+                        "the workflow has no saved version: save it first",
+                    )
+                })?;
+                Some(Run {
+                    id: made.id.clone(),
+                    version: version.version,
+                    definition: version.definition.clone(),
+                })
             }
-            _ => unreachable!("only authoring commands"),
-        }
+        };
+        let first = run
+            .as_ref()
+            .and_then(|run| run.definition.steps.first().cloned());
+        let id = format!("t-{}", self.next);
+        self.next += 1;
+        let mut task = Task {
+            title: title.to_string(),
+            branch: format!("factory/{id}"),
+            id: id.clone(),
+            project,
+            instructions,
+            status: Status::Queued,
+            agent: first.as_ref().map_or(agent, |step| step.agent.clone()),
+            worker: None,
+            worktree: None,
+            result: None,
+            reason: None,
+            activity: Vec::new(),
+            created_ms: now_ms,
+            request,
+            watch: Watch::default(),
+            step: first.map(|step| step.id),
+            workflow: run,
+            results: Vec::new(),
+            workers: Vec::new(),
+            oversight: Oversight::default(),
+            source: None,
+            delivery: Delivery {
+                pr,
+                ..Delivery::default()
+            },
+            keeping: Keeping::default(),
+        };
+        let started = match &task.workflow {
+            Some(run) => format!(
+                "Started the task on {} (version {})",
+                run.definition.name, run.version
+            ),
+            None => "Started the task".into(),
+        };
+        let started = match &task.delivery.pr {
+            Some(pr) => format!("{started}, on {}", pr.label()),
+            None => started,
+        };
+        task.note(now_ms, Actor::Operator, started);
+        self.tasks.push(task);
+        Ok(id)
     }
 
     fn command(
@@ -1044,102 +1176,9 @@ impl State {
                 request,
                 workflow,
                 pr,
-            } => {
-                if let Some(task) = request.as_ref().and_then(|request| {
-                    self.tasks
-                        .iter()
-                        .find(|task| task.request.as_ref() == Some(request))
-                }) {
-                    return Ok(Answer::Task(task.id.clone()));
-                }
-                let instructions = instructions.trim().to_string();
-                let Some(title) = instructions.lines().next().map(str::trim) else {
-                    return Err(Refusal::new(
-                        RefusalCode::Invalid,
-                        "a Task needs instructions",
-                    ));
-                };
-                let pr = pr::given(pr)?;
-                let run = match workflow {
-                    None => None,
-                    Some(id) => {
-                        let made = self
-                            .workflows
-                            .iter()
-                            .find(|made| made.id == id)
-                            .ok_or_else(|| {
-                                Refusal::new(
-                                    RefusalCode::UnknownWorkflow,
-                                    "no Workflow has that id",
-                                )
-                            })?;
-                        if made.project != project {
-                            return Err(Refusal::new(
-                                RefusalCode::Invalid,
-                                "that Workflow is another Project's",
-                            ));
-                        }
-                        let version = made.latest().ok_or_else(|| {
-                            Refusal::new(
-                                RefusalCode::Invalid,
-                                "the workflow has no saved version: save it first",
-                            )
-                        })?;
-                        Some(Run {
-                            id: made.id.clone(),
-                            version: version.version,
-                            definition: version.definition.clone(),
-                        })
-                    }
-                };
-                let first = run
-                    .as_ref()
-                    .and_then(|run| run.definition.steps.first().cloned());
-                let id = format!("t-{}", self.next);
-                self.next += 1;
-                let mut task = Task {
-                    title: title.to_string(),
-                    branch: format!("factory/{id}"),
-                    id: id.clone(),
-                    project,
-                    instructions,
-                    status: Status::Queued,
-                    agent: first.as_ref().map_or(agent, |step| step.agent.clone()),
-                    worker: None,
-                    worktree: None,
-                    result: None,
-                    reason: None,
-                    activity: Vec::new(),
-                    created_ms: now_ms,
-                    request,
-                    watch: Watch::default(),
-                    step: first.map(|step| step.id),
-                    workflow: run,
-                    results: Vec::new(),
-                    workers: Vec::new(),
-                    oversight: Oversight::default(),
-                    source: None,
-                    delivery: Delivery {
-                        pr,
-                        ..Delivery::default()
-                    },
-                    keeping: Keeping::default(),
-                };
-                let started = match &task.workflow {
-                    Some(run) => format!(
-                        "Started the task on {} (version {})",
-                        run.definition.name, run.version
-                    ),
-                    None => "Started the task".into(),
-                };
-                let started = match &task.delivery.pr {
-                    Some(pr) => format!("{started}, on {}", pr.label()),
-                    None => started,
-                };
-                task.note(now_ms, Actor::Operator, started);
-                self.tasks.push(task);
-                Ok(Answer::Task(id))
-            }
+            } => self
+                .start(project, instructions, agent, request, workflow, pr, now_ms)
+                .map(Answer::Task),
             Command::WorkerStarted {
                 task,
                 thread,
@@ -1256,18 +1295,6 @@ impl State {
                 }
                 Ok(Answer::Changed(true))
             }
-            Command::EditStart { .. }
-            | Command::Automation { .. }
-            | Command::Backlog { .. }
-            | Command::GitHubRead { .. }
-            | Command::Submit { .. } => self.automate(command, now_ms, effects),
-            Command::CoordinatorSay { .. }
-            | Command::CoordinatorStarted { .. }
-            | Command::CoordinatorFailed { .. }
-            | Command::CoordinatorAgent { .. }
-            | Command::Propose { .. }
-            | Command::AcceptProposal { .. }
-            | Command::DismissProposal { .. } => self.coordinate(command, now_ms, effects),
             Command::Delete { task } => {
                 let at = self
                     .tasks
@@ -1315,7 +1342,62 @@ impl State {
                 pr::tidied(self.task_mut(&task)?, kept, now_ms)
             }
             Command::Clear { project } => Ok(self.clear(project, now_ms)),
-            authoring => self.author(authoring, now_ms),
+            Command::CreateWorkflow {
+                project,
+                template,
+                agent,
+            } => self.create_workflow(project, template, agent),
+            Command::RenameWorkflow { workflow, name } => self.rename_workflow(workflow, name),
+            Command::AddStep {
+                workflow,
+                after,
+                agent,
+            } => self.add_step(workflow, after, agent),
+            Command::EditStep {
+                workflow,
+                step,
+                change,
+            } => self.edit_step(workflow, step, change),
+            Command::MoveStep { workflow, step, to } => self.move_step(workflow, step, to),
+            Command::DeleteStep { workflow, step } => self.delete_step(workflow, step),
+            Command::EditApproval { workflow, change } => self.edit_approval(workflow, change),
+            Command::SaveWorkflow { workflow, catalog } => {
+                self.save_workflow(workflow, catalog, now_ms)
+            }
+            Command::EditStart { workflow, start } => self.edit_start(workflow, start),
+            Command::Automation { workflow, turn } => self.automation(workflow, turn, now_ms),
+            Command::Backlog { workflow, take } => self.backlog(workflow, take, now_ms),
+            Command::GitHubRead {
+                workflow,
+                version,
+                result,
+            } => self.github_read(workflow, version, result, now_ms),
+            Command::Submit {
+                workflow,
+                identity,
+                instructions,
+            } => self.submit(workflow, identity, instructions, now_ms),
+            Command::CoordinatorSay { project, text } => {
+                self.coordinator_say(project, text, effects)
+            }
+            Command::CoordinatorStarted { project, thread } => {
+                self.coordinator_started(project, thread, effects)
+            }
+            Command::CoordinatorFailed { project, why } => self.coordinator_failed(project, why),
+            Command::CoordinatorAgent { project, agent } => {
+                self.coordinator_agent(project, agent, effects)
+            }
+            Command::Propose {
+                coordinator,
+                act,
+                catalog,
+            } => self.propose(coordinator, act, catalog, now_ms),
+            Command::AcceptProposal {
+                proposal,
+                agent,
+                catalog,
+            } => self.accept_proposal(proposal, agent, catalog, now_ms, effects),
+            Command::DismissProposal { proposal } => self.dismiss_proposal(proposal),
         }
     }
 
@@ -1329,7 +1411,7 @@ impl State {
         effects: &mut Vec<Effect>,
     ) -> bool {
         let changed = recovery::unstarted(self, unstarted, now_ms, effects);
-        self.step_starts(now_ms, effects) || changed
+        self.step_starts(now_ms) || changed
     }
 
     /// The rest of the pass: the Tasks let in start, and every Worker is

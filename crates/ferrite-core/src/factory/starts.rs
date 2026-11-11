@@ -688,7 +688,6 @@ impl State {
         request: String,
         source: Source,
         now_ms: i64,
-        effects: &mut Vec<Effect>,
     ) -> Result<String, Refusal> {
         let made = self
             .workflows
@@ -700,21 +699,21 @@ impl State {
             .and_then(|latest| latest.definition.steps.first())
             .map(|step| step.agent.clone())
             .ok_or_else(|| Refusal::new(RefusalCode::Invalid, "the workflow has no agent"))?;
-        let start = Command::Start {
-            project: made.project,
+        // A pull request that starts a Task is its PR (#223).
+        let pr = match &source {
+            Source::PullRequest { url, .. } => Some(url.clone()),
+            _ => None,
+        };
+        let project = made.project;
+        let id = self.start(
+            project,
             instructions,
             agent,
-            request: Some(request),
-            workflow: Some(workflow.to_string()),
-            // A pull request that starts a Task is its PR (#223).
-            pr: match &source {
-                Source::PullRequest { url, .. } => Some(url.clone()),
-                _ => None,
-            },
-        };
-        let Answer::Task(id) = self.command(start, now_ms, effects)? else {
-            unreachable!("a start answers with its Task");
-        };
+            Some(request),
+            Some(workflow.to_string()),
+            pr,
+            now_ms,
+        )?;
         let task = self.task_mut(&id)?;
         if task.source.is_none() {
             let said = match &source {
@@ -740,7 +739,6 @@ impl State {
         github: &GitHubSource,
         item: &GitHubItem,
         now_ms: i64,
-        effects: &mut Vec<Effect>,
     ) {
         let repository = github.repository.clone().unwrap_or_default();
         let source = if kind == StartKind::GithubPr {
@@ -757,14 +755,9 @@ impl State {
             }
         };
         let instructions = github_instructions(kind, github, item);
-        if let Err(refusal) = self.start_from(
-            workflow,
-            instructions,
-            item.url.clone(),
-            source,
-            now_ms,
-            effects,
-        ) {
+        if let Err(refusal) =
+            self.start_from(workflow, instructions, item.url.clone(), source, now_ms)
+        {
             crate::log!("factory: {} did not start a Task: {refusal}", item.url);
         }
         if let Ok(made) = self.workflow_mut(workflow) {
@@ -772,187 +765,196 @@ impl State {
         }
     }
 
-    /// The automatic starts' commands.
-    pub(super) fn automate(
+    pub(super) fn edit_start(
         &mut self,
-        command: Command,
-        now_ms: i64,
-        effects: &mut Vec<Effect>,
+        workflow: WorkflowId,
+        start: Start,
     ) -> Result<Answer, Refusal> {
-        match command {
-            Command::EditStart { workflow, start } => {
-                let draft = &mut self.workflow_mut(&workflow)?.draft;
-                let changed = draft.start != start;
-                draft.start = start;
-                Ok(Answer::Changed(changed))
+        let draft = &mut self.workflow_mut(&workflow)?.draft;
+        let changed = draft.start != start;
+        draft.start = start;
+        Ok(Answer::Changed(changed))
+    }
+
+    pub(super) fn automation(
+        &mut self,
+        workflow: WorkflowId,
+        turn: Turn,
+        now_ms: i64,
+    ) -> Result<Answer, Refusal> {
+        let made = self.workflow_mut(&workflow)?;
+        let start = made.latest().map(|latest| latest.definition.start.clone());
+        let automation = &mut made.automation;
+        let before = automation.clone();
+        let due = |start: &Option<Start>| {
+            start
+                .as_ref()
+                .filter(|start| start.kind == StartKind::Schedule)
+                .and_then(|start| start.schedule.next_after_ms(now_ms))
+        };
+        match turn {
+            Turn::On | Turn::Resume if automation.switch == Switch::Paused => {
+                automation.switch = Switch::On;
+                automation.due_ms = due(&start);
             }
-            Command::Automation { workflow, turn } => {
-                let made = self.workflow_mut(&workflow)?;
-                let start = made.latest().map(|latest| latest.definition.start.clone());
-                let automation = &mut made.automation;
-                let before = automation.clone();
-                let due = |start: &Option<Start>| {
-                    start
-                        .as_ref()
-                        .filter(|start| start.kind == StartKind::Schedule)
-                        .and_then(|start| start.schedule.next_after_ms(now_ms))
-                };
-                match turn {
-                    Turn::On | Turn::Resume if automation.switch == Switch::Paused => {
-                        automation.switch = Switch::On;
-                        automation.due_ms = due(&start);
-                    }
-                    Turn::On if automation.switch == Switch::Off => {
-                        if !start.as_ref().is_some_and(|start| start.kind.automatic()) {
-                            return Err(Refusal::new(
-                                RefusalCode::Invalid,
-                                "save a version with an automatic start before turning \
-                                 automatic starts on",
-                            ));
-                        }
-                        automation.turn_off();
-                        automation.switch = Switch::On;
-                        automation.due_ms = due(&start);
-                    }
-                    Turn::Pause if automation.switch == Switch::On => {
-                        automation.switch = Switch::Paused;
-                        automation.waiting = false;
-                    }
-                    Turn::Off => automation.turn_off(),
-                    _ => {}
-                }
-                Ok(Answer::Changed(*automation != before))
-            }
-            Command::Backlog { workflow, take } => {
-                let made = self.workflow_mut(&workflow)?;
-                let backlog = std::mem::take(&mut made.automation.backlog);
-                if backlog.is_empty() {
-                    return Ok(Answer::Changed(false));
-                }
-                let Some(start) = made.latest().map(|latest| latest.definition.start.clone())
-                else {
-                    return Ok(Answer::Changed(true));
-                };
-                for item in &backlog {
-                    if take {
-                        self.take_item(&workflow, start.kind, &start.github, item, now_ms, effects);
-                    } else {
-                        self.workflow_mut(&workflow)?
-                            .automation
-                            .seen
-                            .insert(item.url.clone());
-                    }
-                }
-                Ok(Answer::Changed(true))
-            }
-            Command::GitHubRead {
-                workflow,
-                version,
-                result,
-            } => {
-                let made = self.workflow_mut(&workflow)?;
-                let Some(latest) = made.latest().filter(|latest| latest.version == version) else {
-                    return Ok(Answer::Changed(false));
-                };
-                let start = latest.definition.start.clone();
-                let automation = &mut made.automation;
-                if automation.switch != Switch::On || !start.kind.is_github() {
-                    return Ok(Answer::Changed(false));
-                }
-                let items = match result {
-                    Err(why) => {
-                        let changed = automation.error.as_ref() != Some(&why);
-                        automation.error = Some(why);
-                        return Ok(Answer::Changed(changed));
-                    }
-                    Ok(GitHubRead::Unchanged) => Vec::new(),
-                    Ok(GitHubRead::Matches { items, .. }) => items,
-                };
-                let mut changed = automation.error.take().is_some();
-                let new: Vec<GitHubItem> = items
-                    .into_iter()
-                    .filter(|item| !automation.seen.contains(&item.url))
-                    .collect();
-                if !automation.primed {
-                    automation.primed = true;
-                    automation.backlog = new;
-                    return Ok(Answer::Changed(true));
-                }
-                for item in &new {
-                    self.take_item(&workflow, start.kind, &start.github, item, now_ms, effects);
-                    changed = true;
-                }
-                Ok(Answer::Changed(changed))
-            }
-            Command::Submit {
-                workflow,
-                identity,
-                instructions,
-            } => {
-                let identity = identity.trim().to_string();
-                if identity.is_empty() {
+            Turn::On if automation.switch == Switch::Off => {
+                if !start.as_ref().is_some_and(|start| start.kind.automatic()) {
                     return Err(Refusal::new(
                         RefusalCode::Invalid,
-                        "a submission needs an identity, so a repeat is the same Task",
+                        "save a version with an automatic start before turning \
+                             automatic starts on",
                     ));
                 }
-                if instructions.trim().is_empty() {
-                    return Err(Refusal::new(
-                        RefusalCode::Invalid,
-                        "a submission needs instructions",
-                    ));
-                }
-                let made = self
-                    .workflows
-                    .iter()
-                    .find(|made| made.id == workflow)
-                    .ok_or_else(unknown_workflow)?;
-                let request = format!("script:{workflow}:{identity}");
-                if let Some(task) = self
-                    .tasks
-                    .iter()
-                    .find(|task| task.request.as_deref() == Some(request.as_str()))
-                {
-                    return Ok(Answer::Duplicate(task.id.clone()));
-                }
-                let kind = made.latest().map(|latest| latest.definition.start.kind);
-                if kind != Some(StartKind::External) {
-                    return Err(Refusal::new(
-                        RefusalCode::Invalid,
-                        format!(
-                            "{} does not start from your own script: save a version that does",
-                            made.draft.name
-                        ),
-                    ));
-                }
-                if made.automation.switch != Switch::On {
-                    return Err(Refusal::new(
-                        RefusalCode::NotNow,
-                        format!(
-                            "automatic starts for {} are {}",
-                            made.draft.name,
-                            made.automation.switch.word().to_lowercase()
-                        ),
-                    ));
-                }
-                let id = self.start_from(
-                    &workflow,
-                    instructions,
-                    request,
-                    Source::Script { identity },
-                    now_ms,
-                    effects,
-                )?;
-                Ok(Answer::Task(id))
+                automation.turn_off();
+                automation.switch = Switch::On;
+                automation.due_ms = due(&start);
             }
-            _ => unreachable!("only the automatic starts' commands"),
+            Turn::Pause if automation.switch == Switch::On => {
+                automation.switch = Switch::Paused;
+                automation.waiting = false;
+            }
+            Turn::Off => automation.turn_off(),
+            _ => {}
         }
+        Ok(Answer::Changed(*automation != before))
+    }
+
+    pub(super) fn backlog(
+        &mut self,
+        workflow: WorkflowId,
+        take: bool,
+        now_ms: i64,
+    ) -> Result<Answer, Refusal> {
+        let made = self.workflow_mut(&workflow)?;
+        let backlog = std::mem::take(&mut made.automation.backlog);
+        if backlog.is_empty() {
+            return Ok(Answer::Changed(false));
+        }
+        let Some(start) = made.latest().map(|latest| latest.definition.start.clone()) else {
+            return Ok(Answer::Changed(true));
+        };
+        for item in &backlog {
+            if take {
+                self.take_item(&workflow, start.kind, &start.github, item, now_ms);
+            } else {
+                self.workflow_mut(&workflow)?
+                    .automation
+                    .seen
+                    .insert(item.url.clone());
+            }
+        }
+        Ok(Answer::Changed(true))
+    }
+
+    pub(super) fn github_read(
+        &mut self,
+        workflow: WorkflowId,
+        version: u32,
+        result: Result<GitHubRead, String>,
+        now_ms: i64,
+    ) -> Result<Answer, Refusal> {
+        let made = self.workflow_mut(&workflow)?;
+        let Some(latest) = made.latest().filter(|latest| latest.version == version) else {
+            return Ok(Answer::Changed(false));
+        };
+        let start = latest.definition.start.clone();
+        let automation = &mut made.automation;
+        if automation.switch != Switch::On || !start.kind.is_github() {
+            return Ok(Answer::Changed(false));
+        }
+        let items = match result {
+            Err(why) => {
+                let changed = automation.error.as_ref() != Some(&why);
+                automation.error = Some(why);
+                return Ok(Answer::Changed(changed));
+            }
+            Ok(GitHubRead::Unchanged) => Vec::new(),
+            Ok(GitHubRead::Matches { items, .. }) => items,
+        };
+        let mut changed = automation.error.take().is_some();
+        let new: Vec<GitHubItem> = items
+            .into_iter()
+            .filter(|item| !automation.seen.contains(&item.url))
+            .collect();
+        if !automation.primed {
+            automation.primed = true;
+            automation.backlog = new;
+            return Ok(Answer::Changed(true));
+        }
+        for item in &new {
+            self.take_item(&workflow, start.kind, &start.github, item, now_ms);
+            changed = true;
+        }
+        Ok(Answer::Changed(changed))
+    }
+
+    pub(super) fn submit(
+        &mut self,
+        workflow: WorkflowId,
+        identity: String,
+        instructions: String,
+        now_ms: i64,
+    ) -> Result<Answer, Refusal> {
+        let identity = identity.trim().to_string();
+        if identity.is_empty() {
+            return Err(Refusal::new(
+                RefusalCode::Invalid,
+                "a submission needs an identity, so a repeat is the same Task",
+            ));
+        }
+        if instructions.trim().is_empty() {
+            return Err(Refusal::new(
+                RefusalCode::Invalid,
+                "a submission needs instructions",
+            ));
+        }
+        let made = self
+            .workflows
+            .iter()
+            .find(|made| made.id == workflow)
+            .ok_or_else(unknown_workflow)?;
+        let request = format!("script:{workflow}:{identity}");
+        if let Some(task) = self
+            .tasks
+            .iter()
+            .find(|task| task.request.as_deref() == Some(request.as_str()))
+        {
+            return Ok(Answer::Duplicate(task.id.clone()));
+        }
+        let kind = made.latest().map(|latest| latest.definition.start.kind);
+        if kind != Some(StartKind::External) {
+            return Err(Refusal::new(
+                RefusalCode::Invalid,
+                format!(
+                    "{} does not start from your own script: save a version that does",
+                    made.draft.name
+                ),
+            ));
+        }
+        if made.automation.switch != Switch::On {
+            return Err(Refusal::new(
+                RefusalCode::NotNow,
+                format!(
+                    "automatic starts for {} are {}",
+                    made.draft.name,
+                    made.automation.switch.word().to_lowercase()
+                ),
+            ));
+        }
+        let id = self.start_from(
+            &workflow,
+            instructions,
+            request,
+            Source::Script { identity },
+            now_ms,
+        )?;
+        Ok(Answer::Task(id))
     }
 
     /// Each live schedule: a run due now starts a Task, unless it was
     /// missed and is skipped, or the last run still goes and it is
     /// skipped or waits. Whether any changed.
-    pub(super) fn step_starts(&mut self, now_ms: i64, effects: &mut Vec<Effect>) -> bool {
+    pub(super) fn step_starts(&mut self, now_ms: i64) -> bool {
         let mut changed = false;
         let live: Vec<(String, Schedule)> = self
             .workflows
@@ -1009,7 +1011,6 @@ impl State {
                     request,
                     source,
                     now_ms,
-                    effects,
                 ) {
                     crate::log!("factory: {workflow}'s schedule did not start a Task: {refusal}");
                 }
