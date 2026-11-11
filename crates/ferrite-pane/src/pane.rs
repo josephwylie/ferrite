@@ -4855,6 +4855,71 @@ mod tests {
         }
     }
 
+    /// A work row's label as `render_tool` cuts it: an activity run in
+    /// `edge_cut`, its words' shaped width beside it.
+    struct CutLabel {
+        rich: crate::rich::TextCache,
+        words: &'static str,
+        shaped: std::rc::Rc<std::cell::Cell<gpui::Pixels>>,
+    }
+
+    impl Render for CutLabel {
+        fn render(&mut self, window: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+            let size = px(theme::FS_UI);
+            let style = gpui::TextStyle {
+                font_family: theme::FONT_UI.into(),
+                font_size: size.into(),
+                ..window.text_style()
+            };
+            let run = style.to_run(self.words.len());
+            let shaped = window
+                .text_system()
+                .shape_line(self.words.into(), size, &[run], None)
+                .width;
+            self.shaped.set(shaped);
+            let markdown = crate::rich::Markdown::new(
+                "cut-label",
+                text::escape_words(self.words),
+                self.rich.clone(),
+            )
+            .activity();
+            div().w_full().flex().text_size(size).child(
+                div()
+                    .debug_selector(|| "cut-label".into())
+                    .flex_shrink(1.)
+                    .min_w_0()
+                    .child(edge_cut(theme::WORK_ROW_LINE, INK_SUBTLE, markdown)),
+            )
+        }
+    }
+
+    /// A label that fits draws whole: the box `edge_cut` clips to is as
+    /// wide as the words the run paints, so `ls -la` never draws `ls -l`.
+    #[gpui::test]
+    fn a_work_rows_label_that_fits_keeps_its_last_glyph(cx: &mut TestAppContext) {
+        let shaped = std::rc::Rc::new(std::cell::Cell::new(px(0.)));
+        let (_, cx) = cx.add_window_view({
+            let shaped = shaped.clone();
+            move |_, cx| {
+                gpui::component::init(cx);
+                CutLabel {
+                    rich: crate::rich::TextCache::default(),
+                    words: "ls -la",
+                    shaped,
+                }
+            }
+        });
+        cx.simulate_resize(size(px(640.), px(400.)));
+        cx.run_until_parked();
+        let label = cx.debug_bounds("cut-label").expect("the label");
+        assert!(
+            label.size.width + px(1.) >= shaped.get(),
+            "the box ({:?}) holds the words ({:?})",
+            label.size.width,
+            shaped.get()
+        );
+    }
+
     /// `Starting` holds the working line's own row, Solo's and a Group
     /// Pane's, so the line never moves when the turn's words replace it.
     #[gpui::test]
