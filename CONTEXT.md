@@ -189,6 +189,15 @@ A ` ```mermaid ` fence in an answer or the reader, drawn as the picture it
 describes once it is on screen; until then, or when it can't be drawn, it
 reads as code. Not a Visual: nobody asked for it, and it is not live.
 
+**Conversation browser**
+The browser tabs that belong to one Thread, shared by the operator and that
+Thread's agent.
+_Avoid_: agent-private browser.
+
+**Browser annotation**
+Feedback attached to a selected page element or a marked region of a page,
+using comments, drawings, or both.
+
 **Review**
 A diff of a Thread's changes beside its Pane — uncommitted, the branch
 against its base, the last turn, or one of the branch's commits — whose
