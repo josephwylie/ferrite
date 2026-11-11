@@ -499,7 +499,8 @@ impl CockpitView {
             .into_any_element()
     }
 
-    /// A picker's button: what it holds, opening its rows.
+    /// A picker's button: what it holds, opening its rows; disabled, it
+    /// opens nothing.
     fn start_chooser(
         selector: &'static str,
         text: String,
@@ -508,18 +509,16 @@ impl CockpitView {
         picks: Vec<(ferrite_ui::menu::Item, Pick)>,
         cx: &mut Context<Self>,
     ) -> Div {
-        use ferrite_ui::theme::*;
+        use gpui::component::Disableable;
         let picks = std::rc::Rc::new(picks);
-        let ink = if flagged {
-            BLOCKED
-        } else if disabled {
-            INK_SUBTLE
-        } else {
-            INK_STRONG
+        let look = ferrite_ui::controls::Look {
+            flagged,
+            full_width: true,
+            disabled,
         };
         div().flex_1().min_w_0().child(
-            div()
-                .id(selector)
+            ferrite_ui::controls::chooser(selector, "", text.into(), look, cx)
+                .disabled(disabled)
                 .debug_selector(move || {
                     if flagged {
                         format!("{selector}-flagged")
@@ -527,78 +526,28 @@ impl CockpitView {
                         selector.to_string()
                     }
                 })
-                .flex()
-                .items_center()
-                .gap(px(SPACE_1))
-                .h(px(CONTROL_H))
-                .px(px(SPACE_2))
-                .rounded(px(R_CONTROL))
-                .border_1()
-                .border_color(if flagged {
-                    gpui::Hsla::from(rgb(BLOCKED))
-                } else {
-                    paint::FIELD_RING.into()
-                })
-                .when(!disabled, |chooser| chooser.cursor_pointer())
-                .text_color(rgb(ink))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .child(SharedString::from(text)),
-                )
-                .child(ferrite_ui::icons::icon(
-                    ferrite_ui::icons::CHEVRON_DOWN,
-                    ROW_ICON,
-                    INK_SUBTLE,
-                ))
                 .when(!disabled, |chooser| {
-                    chooser.on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            view.open_picks((*picks).clone(), event.position, cx);
-                        }),
-                    )
+                    chooser.on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.open_picks((*picks).clone(), event.position(), cx);
+                    }))
                 }),
         )
     }
 
-    /// A segmented choice: one of a few, the chosen one filled.
+    /// A segmented choice: one of a few, full width, the chosen one
+    /// selected as `{selector}-{at}-on`.
     fn start_segments(
         selector: &'static str,
         options: Vec<(&'static str, bool, StartPick)>,
         cx: &mut Context<Self>,
     ) -> Div {
-        use ferrite_ui::theme::*;
-        let mut row = div()
-            .debug_selector(move || selector.into())
-            .flex()
-            .gap(px(SPACE_0_5))
-            .p(px(SPACE_0_5))
-            .rounded(px(R_CONTROL))
-            .border_1()
-            .border_color(paint::LINE);
+        let mut row = ferrite_ui::controls::segments(true).debug_selector(move || selector.into());
         for (at, (label, chosen, pick)) in options.into_iter().enumerate() {
             let key = format!("{selector}-{at}{}", if chosen { "-on" } else { "" });
             row = row.child(
-                div()
-                    .id(SharedString::from(key.clone()))
+                ferrite_ui::controls::segment((selector, at), label, chosen, true, cx)
                     .debug_selector(move || key.clone())
-                    .flex_1()
-                    .flex()
-                    .justify_center()
-                    .px(px(SPACE_2))
-                    .h(px(CONTROL_H - 2. * SPACE_0_5))
-                    .items_center()
-                    .rounded(px(R_CONTROL))
-                    .cursor_pointer()
-                    .text_size(px(FS_LABEL))
-                    .text_color(rgb(if chosen { INK_STRONG } else { INK_SUBTLE }))
-                    .when(chosen, |segment| segment.bg(paint::RAISED))
-                    .when(!chosen, |segment| segment.hover(|s| s.bg(paint::HOVER)))
-                    .child(label)
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                         view.apply_start_pick(pick.clone(), cx)
                     })),

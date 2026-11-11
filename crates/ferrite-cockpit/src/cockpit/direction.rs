@@ -78,18 +78,23 @@ pub(crate) enum TaskPick {
     RedirectTo(StepId),
 }
 
-/// A labelled chooser that opens `picks` under the pointer.
+/// A Factory picker's button: the shared chooser face, full width, its
+/// rows opened in the window's picker at the press (anchored to it from
+/// the keyboard). Flagged, it is selected as `{selector}-flagged`.
 pub(crate) fn chooser(
     selector: &'static str,
     text: String,
     flagged: bool,
     picks: Vec<(ferrite_ui::menu::Item, super::workflows::Pick)>,
     cx: &mut Context<CockpitView>,
-) -> gpui::Stateful<Div> {
-    use ferrite_ui::theme::*;
+) -> gpui::component::button::Button {
     let picks = std::rc::Rc::new(picks);
-    div()
-        .id(selector)
+    let look = ferrite_ui::controls::Look {
+        flagged,
+        full_width: true,
+        disabled: false,
+    };
+    ferrite_ui::controls::chooser(selector, "", text.into(), look, cx)
         .debug_selector(move || {
             if flagged {
                 format!("{selector}-flagged")
@@ -97,42 +102,14 @@ pub(crate) fn chooser(
                 selector.to_string()
             }
         })
-        .flex()
-        .items_center()
-        .gap(px(SPACE_1))
-        .h(px(CONTROL_H))
-        .px(px(SPACE_2))
-        .rounded(px(R_CONTROL))
-        .border_1()
-        .border_color(if flagged {
-            gpui::Hsla::from(rgb(BLOCKED))
-        } else {
-            paint::FIELD_RING.into()
-        })
-        .cursor_pointer()
-        .text_color(rgb(if flagged { BLOCKED } else { INK_STRONG }))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .child(SharedString::from(text)),
-        )
-        .child(ferrite_ui::icons::icon(
-            ferrite_ui::icons::CHEVRON_DOWN,
-            ROW_ICON,
-            INK_SUBTLE,
-        ))
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                view.open_picks((*picks).clone(), event.position, cx);
-            }),
-        )
+        .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
+            cx.stop_propagation();
+            view.open_picks((*picks).clone(), event.position(), cx);
+        }))
 }
 
-/// Two or more choices side by side, the chosen one filled.
+/// Two or more choices side by side, full width: the shared segments, the
+/// chosen one selected as `{selector}-{at}-on`.
 pub(crate) fn segmented<T: Copy + PartialEq + 'static>(
     selector: &'static str,
     chosen: T,
@@ -140,38 +117,16 @@ pub(crate) fn segmented<T: Copy + PartialEq + 'static>(
     pick: impl Fn(&mut CockpitView, T, &mut Context<CockpitView>) + Clone + 'static,
     cx: &mut Context<CockpitView>,
 ) -> Div {
-    use ferrite_ui::theme::*;
-    let mut track = div()
-        .debug_selector(move || selector.to_string())
-        .flex()
-        .items_center()
-        .gap(px(SPACE_0_5))
-        .p(px(SPACE_0_5))
-        .rounded(px(R_CONTROL))
-        .bg(paint::RAISED);
+    let mut track =
+        ferrite_ui::controls::segments(true).debug_selector(move || selector.to_string());
     for (at, (value, word)) in options.iter().enumerate() {
         let value = *value;
         let on = value == chosen;
         let key = format!("{selector}-{at}{}", if on { "-on" } else { "" });
         let pick = pick.clone();
         track = track.child(
-            div()
-                .id(SharedString::from(key.clone()))
+            ferrite_ui::controls::segment((selector, at), *word, on, true, cx)
                 .debug_selector(move || key.clone())
-                .flex_1()
-                .flex()
-                .justify_center()
-                .px(px(SPACE_2))
-                .h(px(CONTROL_H - SPACE_1))
-                .items_center()
-                .rounded(px(R_CONTROL))
-                .cursor_pointer()
-                .text_size(px(FS_LABEL))
-                .font_weight(if on { W_LABEL } else { W_BODY })
-                .text_color(rgb(if on { INK_STRONG } else { INK_SUBTLE }))
-                .when(on, |chip| chip.bg(paint::SELECTED))
-                .when(!on, |chip| chip.hover(|chip| chip.bg(paint::HOVER)))
-                .child(*word)
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| pick(view, value, cx))),
         );
     }
