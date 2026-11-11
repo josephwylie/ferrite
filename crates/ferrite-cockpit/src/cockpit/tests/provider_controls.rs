@@ -441,7 +441,7 @@ fn background_work_lives_in_its_row_the_rail_and_the_pane(cx: &mut TestAppContex
         cx.debug_bounds("tool-background-live").is_none(),
         "handed back, the row settles to plain text"
     );
-    let close = cx.debug_bounds("background-pane-close").unwrap();
+    let close = cx.debug_bounds("panel-tab-Background-close").expect("its tab's ×");
     cx.simulate_click(close.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds("background-pane").is_none());

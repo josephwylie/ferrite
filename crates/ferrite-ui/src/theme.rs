@@ -1010,6 +1010,11 @@ pub const SURFACE_TAB_ICON: f32 = 12.0;
 /// How far a held tab moves sideways before it drags (T3's dnd-kit
 /// distance): a shorter move is a click.
 pub const SURFACE_TAB_DRAG: f32 = 6.0;
+/// The tab strip's overflow chevrons (T3's `RightPanelTabs`): each scrolls
+/// by `SURFACE_TAB_SCROLL_SHARE` of the visible width, never under
+/// `SURFACE_TAB_SCROLL_MIN`.
+pub const SURFACE_TAB_SCROLL_MIN: f32 = 120.0;
+pub const SURFACE_TAB_SCROLL_SHARE: f32 = 0.75;
 /// The head's `+` (T3's `icon-xs` ghost, `Plus size-3.5`).
 pub const SURFACE_PLUS: f32 = 24.0;
 pub const SURFACE_PLUS_GLYPH: f32 = 14.0;

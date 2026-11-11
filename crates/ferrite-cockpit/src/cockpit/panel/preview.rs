@@ -202,7 +202,6 @@ impl CockpitView {
     /// list; the preview follows the File tab the Panel shows. A find bar
     /// closes with its document, and a Markdown reveal that is due settles.
     pub(in crate::cockpit) fn tend_previews(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.sync_previews(window, cx);
         for pane in &mut self.panes {
             for annotation in pane.preview.take_annotation_requests() {
                 let image = pane
@@ -269,6 +268,14 @@ impl CockpitView {
                 _ => {}
             }
             tab.seen = opened.map(|(open, _)| open);
+            // A draft's preview, kept through its first send: the new
+            // Thread takes it as its File tab.
+            if let (Some(thread), Some(document)) = (thread, &document) {
+                if !tab.documents.contains_key(&document.path) {
+                    tab.documents.insert(document.path.clone(), document.clone());
+                    opened_surfaces.push((thread, document_surface(document)));
+                }
+            }
             let Some(find) = &mut tab.find else {
                 continue;
             };
@@ -283,6 +290,9 @@ impl CockpitView {
                 self.surfaces_mut(thread).upsert(id);
             }
         }
+        // After the opened ones take their tabs, or the tab shown before
+        // would read its own document back over the one just opened.
+        self.sync_previews(window, cx);
     }
 
     /// Keep each Thread's preview showing the document its Panel shows: a

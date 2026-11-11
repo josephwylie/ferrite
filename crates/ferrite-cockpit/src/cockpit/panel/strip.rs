@@ -9,7 +9,9 @@
 //! right click opens its menu (Close, Close others, Close to the right,
 //! Close all, and a File's Copy path). Dragged sideways past
 //! `SURFACE_TAB_DRAG` and let go over another tab, it moves there; a
-//! shorter move is still a click.
+//! shorter move is still a click. On overflow a chevron stands at each end
+//! with more to show, scrolling by `tab_scroll_step`; the wheel's turn
+//! scrolls them sideways.
 //!
 //! The `+` menu and "Open a surface" list the same openers (`Opener`), each
 //! with its letter; one that cannot run here is dimmed and says why.
@@ -81,6 +83,12 @@ impl Opener {
             Self::Overview => icons::PANEL_RIGHT,
         }
     }
+}
+
+/// How far a chevron scrolls a strip showing `visible` of its tabs.
+pub(crate) fn tab_scroll_step(visible: f32) -> f32 {
+    use ferrite_ui::theme::{SURFACE_TAB_SCROLL_MIN, SURFACE_TAB_SCROLL_SHARE};
+    (visible * SURFACE_TAB_SCROLL_SHARE).max(SURFACE_TAB_SCROLL_MIN)
 }
 
 /// A Surface's icon in its tab. Overview and Background have no T3
@@ -288,6 +296,35 @@ impl CockpitView {
             cx.stop_propagation();
             view.toggle_panel_maximized(thread, cx);
         }));
+        // The chevrons show only on overflow, each at an end with more.
+        let scroll = &self.panel.tabs_scroll;
+        let scrolled = -f32::from(scroll.offset().x);
+        let most = f32::from(scroll.max_offset().x);
+        let chevron = |side: &'static str, glyph: &'static str, shows: bool, toward: f32| {
+            shows.then(|| {
+                let key = SharedString::from(format!("panel-tabs-{side}"));
+                div()
+                    .id(key.clone())
+                    .debug_selector({
+                        let key = key.clone();
+                        move || key.to_string()
+                    })
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_center()
+                    .size(px(SURFACE_PLUS))
+                    .rounded(px(R_CONTROL))
+                    .occlude()
+                    .hover_raised(key)
+                    .child(icon(glyph, ICON_CHEVRON, INK_SUBTLE))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.scroll_surface_tabs(toward, cx);
+                    }))
+            })
+        };
         // The title bar's Panel toggle keeps the row's right end.
         let toggle = ICON_BUTTON + TITLE_TOOLS_GAP;
         div()
@@ -299,6 +336,7 @@ impl CockpitView {
             .h(px(WIN_CHROME_H))
             .pl(px(SURFACE_HEAD_PAD_L))
             .pr(px(super::tools_inset() + toggle))
+            .children(chevron("left", icons::BACK, scrolled > 0.5, -1.))
             .child(
                 div()
                     .id("panel-tab-scroll")
@@ -306,9 +344,33 @@ impl CockpitView {
                     .min_w_0()
                     .overflow_x_scroll()
                     .track_scroll(&self.panel.tabs_scroll)
+                    // The wheel's vertical turn scrolls the tabs sideways.
+                    .on_scroll_wheel(cx.listener(|view, event: &gpui::ScrollWheelEvent, window, cx| {
+                        let delta = event.delta.pixel_delta(window.line_height());
+                        if delta.y.abs() > delta.x.abs() {
+                            view.scroll_surface_tabs_by(-f32::from(delta.y), cx);
+                        }
+                    }))
                     .child(strip),
             )
+            .children(chevron("right", icons::CHEVRON_RIGHT, scrolled < most - 0.5, 1.))
             .child(maximize)
+    }
+
+    /// A chevron's press: the tabs scroll `toward` (-1 left, 1 right) by
+    /// `tab_scroll_step` of what shows.
+    fn scroll_surface_tabs(&mut self, toward: f32, cx: &mut Context<Self>) {
+        let visible = f32::from(self.panel.tabs_scroll.bounds().size.width);
+        self.scroll_surface_tabs_by(toward * tab_scroll_step(visible), cx);
+    }
+
+    /// The tabs scrolled `by` sideways, within their overflow.
+    fn scroll_surface_tabs_by(&mut self, by: f32, cx: &mut Context<Self>) {
+        let scroll = &self.panel.tabs_scroll;
+        let most = f32::from(scroll.max_offset().x);
+        let at = (-f32::from(scroll.offset().x) + by).clamp(0., most.max(0.));
+        scroll.set_offset(gpui::point(px(-at), scroll.offset().y));
+        cx.notify();
     }
 
     /// One tab (T3's `group/tab`, see the module doc).
@@ -323,39 +385,39 @@ impl CockpitView {
         use ferrite_ui::theme::*;
         let element = gpui::ElementId::from(SharedString::from(format!("panel-tab-{at}")));
         let key = ferrite_ui::pointer::hover_key(&element);
-        let group = SharedString::from(format!("panel-tab-group-{at}"));
         let selector = surface_selector(id);
         let close_id = id.clone();
+        // Read from the tab's own hover, not a group hover: a display that
+        // changes between prepaint and paint panics gpui.
+        let hovered = ferrite_ui::motion::hover_t(&key) > 0.;
+        let glyph = if hovered {
+            div()
+                .flex()
+                .debug_selector({
+                    let selector = selector.clone();
+                    move || format!("{selector}-x")
+                })
+                .child(icon(icons::CLOSE, SURFACE_TAB_ICON, INK_STRONG))
+        } else {
+            div()
+                .flex()
+                .child(icon(surface_icon(id), SURFACE_TAB_ICON, if active { INK_STRONG } else { INK_SUBTLE }))
+        };
+        let close_key = SharedString::from(format!("panel-tab-close-{at}"));
         let close = div()
-            .id(SharedString::from(format!("panel-tab-close-{at}")))
+            .id(close_key.clone())
             .debug_selector({
                 let selector = selector.clone();
                 move || format!("{selector}-close")
             })
-            .relative()
             .flex()
             .flex_shrink_0()
             .items_center()
             .justify_center()
             .size(px(SURFACE_TAB_CLOSE))
             .rounded(px(SURFACE_TAB_CLOSE_R))
-            .hover(|close| close.bg(paint::HOVER))
-            .child(
-                div()
-                    .flex()
-                    .group_hover(group.clone(), |icon| icon.hidden())
-                    .child(icon(surface_icon(id), SURFACE_TAB_ICON, if active { INK_STRONG } else { INK_SUBTLE })),
-            )
-            .child(
-                div()
-                    .debug_selector({
-                        let selector = selector.clone();
-                        move || format!("{selector}-x")
-                    })
-                    .hidden()
-                    .group_hover(group.clone(), |x| x.flex())
-                    .child(icon(icons::CLOSE, SURFACE_TAB_ICON, INK_STRONG)),
-            )
+            .hover_control(close_key)
+            .child(glyph)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
@@ -366,7 +428,6 @@ impl CockpitView {
         let held = id.clone();
         div()
             .id(element)
-            .group(group)
             .debug_selector(move || selector.clone())
             .flex()
             .flex_shrink_0()
@@ -386,8 +447,8 @@ impl CockpitView {
                 if active {
                     face.hover_carried(key).text_color(rgb(INK_STRONG))
                 } else {
-                    face.text_color(rgb(INK_SUBTLE))
-                        .hover(|face| face.bg(paint::HOVER).text_color(rgb(INK_STRONG)))
+                    face.hover_row(key)
+                        .text_color(rgb(if hovered { INK_STRONG } else { INK_SUBTLE }))
                 }
             })
             .child(close)
@@ -406,6 +467,11 @@ impl CockpitView {
                     view.press_surface_tab(thread, held.clone(), f32::from(event.position.x));
                 }),
             )
+            // A tab occludes the root, whose move would otherwise track
+            // the drag.
+            .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
+                view.panel_pointer_moved(event.position, event.dragging(), cx);
+            }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseUpEvent, _, cx| {

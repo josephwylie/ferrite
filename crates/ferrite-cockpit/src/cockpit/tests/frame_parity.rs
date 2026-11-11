@@ -375,7 +375,7 @@ fn the_foot_says_free_disk_only_when_it_runs_low(cx: &mut TestAppContext) {
 /// the board giving up the width — and closing it gives the Pane its board
 /// back.
 #[gpui::test]
-fn a_file_opens_in_the_panel_and_closes_back(cx: &mut TestAppContext) {
+fn a_file_opens_in_the_panel_and_closes(cx: &mut TestAppContext) {
     let dir = scratch("frame-reader");
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("nav.rs");
@@ -419,10 +419,13 @@ fn a_file_opens_in_the_panel_and_closes_back(cx: &mut TestAppContext) {
     tick(cx);
     cx.executor().advance_clock(Duration::from_millis(250));
     tick(cx);
+    // Closed, the Panel keeps the width it was widened to: narrowing back
+    // is the operator's (ADR 0039), so the board stays as it was given.
     let back = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1.w);
+    assert!(cx.debug_bounds("panel-preview").is_none());
     assert!(
-        (back - whole).abs() <= 0.5,
-        "the board as it was: {back} / {whole}"
+        (back - narrowed).abs() <= 0.5,
+        "the board as the file left it: {back} / {narrowed}"
     );
 }
 

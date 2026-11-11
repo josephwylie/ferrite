@@ -157,14 +157,14 @@ fn the_plus_menu_lists_every_surface_with_its_letter(cx: &mut TestAppContext) {
             .collect::<Vec<_>>()
     });
     let s = |text: &str| text.to_string();
-    // This Thread has no checkout: Terminal, Files and Changes say why.
+    // No PR on its branch and an agent that cannot fork: those two say why.
     assert_eq!(
         rows,
         [
             (s("Browser"), Some(s("B")), false, false),
-            (s("Terminal"), Some(s("T")), true, true),
-            (s("Files"), Some(s("F")), true, true),
-            (s("Changes"), Some(s("D")), true, true),
+            (s("Terminal"), Some(s("T")), false, false),
+            (s("Files"), Some(s("F")), false, false),
+            (s("Changes"), Some(s("D")), false, false),
             (s("Pull request"), Some(s("P")), true, true),
             (s("Side chat"), Some(s("S")), true, true),
             (s("Background"), Some(s("G")), false, false),
@@ -172,9 +172,12 @@ fn the_plus_menu_lists_every_surface_with_its_letter(cx: &mut TestAppContext) {
         ]
     );
     // An unavailable row's letter does nothing; an available one opens.
-    cx.simulate_keystrokes("d");
+    cx.simulate_keystrokes("s");
     tick(cx);
-    assert!(!panel_tabs(&view, thread, cx).0.contains(&SurfaceId::Changes));
+    assert!(!panel_tabs(&view, thread, cx)
+        .0
+        .iter()
+        .any(|tab| matches!(tab, SurfaceId::SideChat(_))));
     if view.read_with(cx, |view, _| view.context_menu.is_none()) {
         cx.simulate_click(plus.center(), gpui::Modifiers::none());
         tick(cx);
@@ -292,4 +295,29 @@ fn the_tabs_survive_a_restart(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("changes").is_some(), "its body, read again");
     let width = cx.debug_bounds("panel").unwrap().size.width;
     assert_eq!(width, px(1900. - NAV_WIDTH - DOCK_THREAD_MIN_W), "maximized");
+}
+
+/// On overflow a chevron stands at the end with more to show, and scrolls
+/// by three quarters of the strip, at least 120.
+#[gpui::test]
+fn overflowing_tabs_show_chevrons_that_scroll_the_strip(cx: &mut TestAppContext) {
+    let (view, thread, cx) = solo("surfaces-overflow", cx);
+    assert!(cx.debug_bounds("panel-tabs-right").is_none(), "no overflow, no chevron");
+    for at in 0..12 {
+        upsert(&view, thread, SurfaceId::File(format!("/tmp/overflowing-tab-{at}.rs").into()), cx);
+    }
+    view.update(cx, |view, cx| view.activate_surface(thread, &SurfaceId::Overview, cx));
+    tick(cx);
+    tick(cx);
+    assert!(cx.debug_bounds("panel-tabs-left").is_none(), "nothing left of the first");
+    let right = cx.debug_bounds("panel-tabs-right").expect("more to the right");
+    let visible = view.read_with(cx, |view, _| f32::from(view.panel.tabs_scroll.bounds().size.width));
+    cx.simulate_click(right.center(), gpui::Modifiers::none());
+    tick(cx);
+    let scrolled = view.read_with(cx, |view, _| -f32::from(view.panel.tabs_scroll.offset().x));
+    let step = crate::cockpit::panel::tab_scroll_step(visible);
+    assert!((scrolled - step).abs() < 1., "{scrolled} by {step}");
+    assert!(cx.debug_bounds("panel-tabs-left").is_some(), "now more to the left");
+    assert_eq!(crate::cockpit::panel::tab_scroll_step(100.), SURFACE_TAB_SCROLL_MIN);
+    assert_eq!(crate::cockpit::panel::tab_scroll_step(400.), 300.);
 }

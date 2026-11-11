@@ -774,8 +774,8 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
         },
     );
     tick(cx);
-    let back = cx.debug_bounds("agent-drill-back").unwrap().center();
-    cx.simulate_click(back, gpui::Modifiers::none());
+    let close = cx.debug_bounds("panel-tab-Agent-close").unwrap().center();
+    cx.simulate_click(close, gpui::Modifiers::none());
     cx.run_until_parked();
     assert!(view.read_with(cx, |view, _| !view.agent_drills.is_open(thread)));
     assert!(cx.debug_bounds("agent-running").is_none(), "settled");
@@ -827,12 +827,11 @@ fn the_keyboard_opens_and_stops_an_agents_row(cx: &mut TestAppContext) {
     );
 }
 
-/// An agent opened from its row docks in the right pane at the token width,
-/// the thread reflowing beside it, its head `‹ <task>` with expand and
-/// close; the body holds the agent's transcript with `Model X` under its
-/// prompt; ‹ and × leave it; expand covers the content area.
+/// An agent opened from its row is an `Agent` tab of the Panel at its
+/// floor, the thread reflowing beside it; the Panel's maximize covers the
+/// content area; the tab's × closes it.
 #[gpui::test]
-fn an_opened_agent_docks_in_the_right_pane_with_its_own_head(cx: &mut TestAppContext) {
+fn an_opened_agent_is_a_panel_tab(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("subagents-drill", 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -856,35 +855,29 @@ fn an_opened_agent_docks_in_the_right_pane_with_its_own_head(cx: &mut TestAppCon
         board.size.width < before && board.right() <= pane.left() + px(1.),
         "the thread reflows beside it"
     );
-    let title = cx.debug_bounds("agent-drill-title").expect("its head");
-    assert!(pane.contains(&title.center()));
-    let back = cx.debug_bounds("agent-drill-back").unwrap();
-    let expand = cx.debug_bounds("agent-drill-expand").unwrap();
-    let close = cx.debug_bounds("agent-drill-close").unwrap();
-    assert!(
-        back.left() < title.left() && back.right() <= expand.left() && expand.right() <= close.left(),
-        "‹ title, then expand, then close"
-    );
+    let tab = cx.debug_bounds("panel-tab-Agent").expect("its tab");
+    assert!(pane.contains(&tab.center()));
     assert!(
         cx.debug_bounds("panel-toggle").is_some(),
         "the rail's door stands against the pane"
     );
 
-    // Expanded, it covers the content area; the same control collapses it.
-    cx.simulate_click(expand.center(), gpui::Modifiers::none());
+    // The Panel's one maximize covers the content area, and restores.
+    let maximize = cx.debug_bounds("panel-maximize").unwrap();
+    cx.simulate_click(maximize.center(), gpui::Modifiers::none());
     tick(cx);
     let wide = cx.debug_bounds("panel").unwrap();
-    assert!(wide.size.width > pane.size.width * 2., "expanded: {wide:?}");
-    let expand = cx.debug_bounds("agent-drill-expand").unwrap();
-    cx.simulate_click(expand.center(), gpui::Modifiers::none());
+    assert!(wide.size.width > pane.size.width * 2., "maximized: {wide:?}");
+    let maximize = cx.debug_bounds("panel-maximize").unwrap();
+    cx.simulate_click(maximize.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(
         (cx.debug_bounds("panel").unwrap().size.width - pane.size.width).abs() < px(1.),
-        "collapsed"
+        "restored"
     );
 
-    // × closes the pane; ‹ would only have left the agent.
-    let close = cx.debug_bounds("agent-drill-close").unwrap();
+    // Its tab's × closes it.
+    let close = cx.debug_bounds("panel-tab-Agent-close").unwrap();
     cx.simulate_click(close.center(), gpui::Modifiers::none());
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());

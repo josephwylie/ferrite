@@ -41,6 +41,8 @@ use ferrite_ui::icons::{self, icon};
 use super::*;
 
 pub(crate) use strip::Opener;
+#[cfg(test)]
+pub(crate) use strip::tab_scroll_step;
 
 /// The panel's own state on the cockpit.
 pub(crate) struct Panel {
@@ -585,8 +587,6 @@ impl CockpitView {
                 .w(px(self.panel_column_w()))
                 .overflow_hidden()
                 .bg(paint::PANEL)
-                .border_l(px(HAIRLINE_W))
-                .border_color(paint::LINE)
                 .child(column)
                 .children(edge)
                 .into_any_element(),

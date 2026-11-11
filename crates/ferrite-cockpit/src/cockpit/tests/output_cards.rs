@@ -233,7 +233,7 @@ fn a_local_server_uses_the_thread_browser_preview(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("browser-preview").is_some(), "local addresses use the browser controls");
     assert!(cx.debug_bounds("preview-page").is_none(), "the sealed HTML host is reserved for files");
-    assert!(cx.debug_bounds("preview-expand").is_some());
+    assert!(cx.debug_bounds("panel-maximize").is_some(), "the Panel's one maximize");
 }
 
 /// A settled `ReportFindings` call, opened, draws its findings grouped by
