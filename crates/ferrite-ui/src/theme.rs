@@ -3263,6 +3263,9 @@ pub const NAV_HOVER_CARD_PAD_Y: f32 = SPACE_1;
 pub const NAV_HOVER_CARD_LINE_GAP: f32 = SPACE_1_5;
 pub const NAV_HOVER_CARD_ICON: f32 = 12.0;
 pub const NAV_HOVER_CARD_INK: u32 = (INK_STRONG << 8) | 0xbf;
+/// The rule over the hover card's pull request (T3's `border-border/60`:
+/// the white 8% border at 60%).
+pub const NAV_HOVER_CARD_RULE: u32 = 0xffffff0f;
 /// The glass face (T3's `dropdown-glass`): the float's ground at 80%, a
 /// border of white 10%. gpui draws no backdrop blur.
 pub const NAV_GLASS: u32 = (FLOAT << 8) | 0xcc;

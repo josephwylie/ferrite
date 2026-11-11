@@ -374,12 +374,9 @@ impl CockpitView {
             lines.push((ferrite_ui::icons::FOLDER, worktree.clone()));
         }
         if let Some(provider) = row.provider {
-            lines.push((ferrite_ui::icons::LAPTOP, SharedString::from(ferrite_ui::provider::title(provider))));
-        }
-        if let Some(pr) = &row.pr {
             lines.push((
-                ferrite_ui::icons::GIT_PULL_REQUEST,
-                SharedString::from(format!("#{}", pr.number)),
+                ferrite_ui::icons::LAPTOP,
+                SharedString::from(ferrite_ui::provider::title(provider)),
             ));
         }
         Some(crate::nav::chrome::hover_card(

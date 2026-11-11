@@ -836,7 +836,7 @@ impl gpui::Render for PrPopover {
             rgb(NAV_POPOVER_ROW_HOVER).into(),
             motion::hover_t(&key),
         );
-        ferrite_ui::menu::float()
+        ferrite_ui::menu::glass()
             .debug_selector(|| "nav-pr-popover".into())
             .w(px(TOOLTIP_MAX_W))
             .p(px(SPACE_1))
@@ -855,23 +855,35 @@ impl gpui::Render for PrPopover {
                     .when_some(url, |row, url| {
                         row.on_click(move |_, _, cx| cx.open_url(&url))
                     })
-                    .child(pr_glyph(pr.state))
-                    .child(components::tabular(
-                        div()
-                            .flex_shrink_0()
-                            .font_family(FONT_CODE)
-                            .text_color(rgb(INK_STRONG))
-                            .child(format!("#{}", pr.number)),
-                    ))
-                    .children(pr.title.clone().map(|title| {
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(rgba(NAV_CARD_TITLE_RECEDED))
-                            .child(title)
-                    })),
+                    .child(pr_line(pr)),
             )
     }
+}
+
+/// A pull request's line in the PR popover and the hover card's foot: its
+/// glyph, its number and its title.
+pub(crate) fn pr_line(pr: &NavPr) -> Div {
+    div()
+        .flex()
+        .flex_1()
+        .min_w_0()
+        .items_center()
+        .gap(px(SPACE_2))
+        .child(pr_glyph(pr.state))
+        .child(components::tabular(
+            div()
+                .flex_shrink_0()
+                .font_family(FONT_CODE)
+                .text_color(rgb(INK_STRONG))
+                .child(format!("#{}", pr.number)),
+        ))
+        .children(pr.title.clone().map(|title| {
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(rgba(NAV_CARD_TITLE_RECEDED))
+                .child(title)
+        }))
 }
 
 #[cfg(test)]

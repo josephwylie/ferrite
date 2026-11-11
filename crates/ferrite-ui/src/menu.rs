@@ -22,7 +22,9 @@
 use std::rc::Rc;
 
 use gpui::prelude::*;
-use gpui::{div, px, rgb, AnyElement, Div, ElementId, HighlightStyle, SharedString, Stateful};
+use gpui::{
+    div, px, rgb, rgba, AnyElement, Div, ElementId, HighlightStyle, SharedString, Stateful,
+};
 
 use crate::components::{self, MenuItem};
 use crate::icons;
@@ -41,6 +43,18 @@ pub type Item = MenuItem;
 /// to a line's text). The caller states its width and position.
 pub fn float() -> Div {
     components::floating_surface().p(px(0.))
+}
+
+/// The nav's glass face (T3's `dropdown-glass`), for its hover card and PR
+/// popover: the float ground at 80% (gpui draws no backdrop blur), a white
+/// 10% edge and the float's shadow.
+pub fn glass() -> Div {
+    div()
+        .rounded(px(R_CONTROL))
+        .bg(rgba(NAV_GLASS))
+        .border_1()
+        .border_color(rgba(NAV_GLASS_BORDER))
+        .shadow(components::float_shadow())
 }
 
 /// A float's head row: its title in `INK_STRONG` at `W_LABEL`, and at the

@@ -255,10 +255,10 @@ pub struct HoverLines {
 
 /// A card's hover detail (T3's row tooltip): placed to the right of the
 /// card, aligned to its top, 4px away, at most 320px wide, in the glass
-/// face — the float ground at 80% (GPUI draws no backdrop blur), a white
-/// 10% edge and the float shadow. The Title, then a line per fact.
+/// face (`menu::glass`). The Title, a line per fact, then the pull
+/// request under a rule.
 pub fn hover_card(row: &ThreadRow, lines: HoverLines) -> AnyElement {
-    let body = div()
+    let body = ferrite_ui::menu::glass()
         .debug_selector(|| "nav-hover-card".into())
         .flex()
         .flex_col()
@@ -266,11 +266,6 @@ pub fn hover_card(row: &ThreadRow, lines: HoverLines) -> AnyElement {
         .max_w(px(NAV_HOVER_CARD_MAX_W))
         .px(px(NAV_HOVER_CARD_PAD_X))
         .py(px(NAV_HOVER_CARD_PAD_Y))
-        .rounded(px(R_CONTROL))
-        .bg(rgba(NAV_GLASS))
-        .border_1()
-        .border_color(rgba(NAV_GLASS_BORDER))
-        .shadow(components::float_shadow())
         .font_family(FONT_UI)
         .text_size(px(FS_NAV_TOOLTIP))
         .child(
@@ -303,13 +298,29 @@ pub fn hover_card(row: &ThreadRow, lines: HoverLines) -> AnyElement {
                         .child(icon(glyph, NAV_HOVER_CARD_ICON, INK_SUBTLE))
                         .child(div().truncate().child(words))
                 })),
-        );
-    deferred(
-        anchored()
-            .position_mode(gpui::AnchoredPositionMode::Local)
-            .position(point(px(INNER_W + NAV_HOVER_CARD_GAP), px(0.)))
-            .child(body),
-    )
-    .with_priority(1)
-    .into_any_element()
+        )
+        .children(row.pr.as_ref().map(|pr| {
+            div()
+                .debug_selector(|| "nav-hover-card-prs".into())
+                .flex()
+                .pt(px(NAV_HOVER_CARD_LINE_GAP))
+                .border_t_1()
+                .border_color(rgba(NAV_HOVER_CARD_RULE))
+                .child(super::card::pr_line(pr))
+        }));
+    // Absolute, so its origin is the card's corner and not inside its pad.
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .child(
+            deferred(
+                anchored()
+                    .position_mode(gpui::AnchoredPositionMode::Local)
+                    .position(point(px(INNER_W + NAV_HOVER_CARD_GAP), px(0.)))
+                    .child(body),
+            )
+            .with_priority(1),
+        )
+        .into_any_element()
 }

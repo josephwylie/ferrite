@@ -93,7 +93,9 @@ fn the_parked_shelf_shows_ten_then_twenty_five_more(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(2400.)));
-    view.update(cx, |view, cx| view.set_shelf_open(nav::Shelf::Parked, true, cx));
+    view.update(cx, |view, cx| {
+        view.set_shelf_open(nav::Shelf::Parked, true, cx)
+    });
     tick(cx);
     let drawn = |cx: &mut gpui::VisualTestContext| {
         threads[1..]
@@ -270,7 +272,9 @@ fn the_keyboard_walks_the_list_and_follows_a_parked_thread(cx: &mut TestAppConte
     hide_panel(&view, cx);
     tick(cx);
     let cursor = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
-        view.read_with(cx, |view, _| view.nav_cursor.clone().map(|cursor| cursor.item))
+        view.read_with(cx, |view, _| {
+            view.nav_cursor.clone().map(|cursor| cursor.item)
+        })
     };
     cx.simulate_keystrokes("cmd-shift-e end");
     tick(cx);
@@ -359,5 +363,101 @@ fn the_shown_threads_card_scrolls_into_view(cx: &mut TestAppContext) {
     assert!(
         after.top() >= list.top() && after.bottom() <= list.bottom() + px(1.0),
         "scrolled into view: {after:?} in {list:?}"
+    );
+}
+
+/// A card under the pointer shows its detail to its right, top-aligned
+/// 4px away and at most 320px wide, its pull request under a rule; with
+/// its Snooze menu open it shows none.
+#[gpui::test]
+fn a_hovered_card_shows_its_detail_card(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("nav-hover-card", 2);
+    let threads = sorted_threads(&core);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    view.update(cx, |view, cx| {
+        let pr = ferrite_core::workspace::PullRequest {
+            number: 415,
+            state: ferrite_core::workspace::PrState::Open,
+            draft: false,
+            url: None,
+            title: Some("Thread cards in the nav".into()),
+            checks: None,
+            runs: Vec::new(),
+        };
+        view.facts.pr_answered(threads[0], Some(pr));
+        cx.notify();
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("nav-hover-card").is_none(), "none at rest");
+
+    let row = cx.debug_bounds(card(threads[0])).expect("its card");
+    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
+    tick(cx);
+    let detail = cx.debug_bounds("nav-hover-card").expect("its detail");
+    assert!(
+        (detail.left() - row.right() - px(4.)).abs() <= px(0.5),
+        "{detail:?} right of {row:?}"
+    );
+    assert!((detail.top() - row.top()).abs() <= px(0.5), "top-aligned");
+    assert!(detail.size.width <= px(ferrite_ui::theme::NAV_HOVER_CARD_MAX_W));
+    let prs = cx
+        .debug_bounds("nav-hover-card-prs")
+        .expect("its pull request");
+    assert!(
+        prs.bottom() <= detail.bottom(),
+        "inside the card, at its foot"
+    );
+
+    view.update(cx, |view, cx| {
+        view.open_context_menu(MenuTarget::Snooze(threads[0]), row.center(), cx)
+    });
+    tick(cx);
+    assert!(
+        cx.debug_bounds("nav-hover-card").is_none(),
+        "not with its Snooze menu open"
+    );
+}
+
+/// A parked slim row is 36px; under the pointer its age fades out and
+/// Revive fades in over 150ms, not at once.
+#[gpui::test]
+fn a_slim_row_fades_its_age_into_revive(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (mut core, _fake) = cockpit("nav-slim-hover", 2);
+    let threads = sorted_threads(&core);
+    core.park(threads[0]).unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    view.update(cx, |view, cx| {
+        view.set_shelf_open(nav::Shelf::Parked, true, cx)
+    });
+    tick(cx);
+    let row = cx.debug_bounds(card(threads[0])).expect("its slim row");
+    assert_eq!(row.size.height, px(ferrite_ui::theme::NAV_SLIM_H));
+    assert_eq!(
+        nav::testing::drawn_slim(threads[0]),
+        Some(0.0),
+        "its age at rest"
+    );
+    let revive: &'static str = format!("nav-revive-{}", threads[0].get()).leak();
+    assert!(cx.debug_bounds(revive).is_none(), "no Revive at rest");
+
+    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
+    cx.run_until_parked();
+    let rising = nav::testing::drawn_slim(threads[0]).unwrap();
+    assert!(rising < 1.0, "it fades, not snaps: {rising}");
+    cx.executor().advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(
+        nav::testing::drawn_slim(threads[0]),
+        Some(1.0),
+        "Revive after 150ms"
+    );
+    assert!(
+        cx.debug_bounds(revive).is_some(),
+        "Revive in the age's place"
     );
 }
