@@ -9,11 +9,10 @@ use serde_json::{json, Value};
 use super::factory::done;
 use super::Server;
 use crate::api::schema::{
-    AgentPromptParams, CoordinatorSayParams, CoordinatorSetParams, ProposalRaiseParams,
-    ProposedAct, TaskListParams,
+    CoordinatorSayParams, CoordinatorSetParams, ProposalRaiseParams, ProposedAct, TaskListParams,
 };
 use crate::api::{ApiError, Code};
-use crate::engine::{Launch, ProviderChoice};
+use crate::engine::Launch;
 use crate::factory::{Act, Agent, Answer, Command, Override};
 use crate::protocol::{CoordinatorAction, Done, Op, WireError};
 use crate::workspace::registry::ProjectId;
@@ -56,36 +55,18 @@ impl Server {
             owner: Some(ThreadOwner::Factory(project)),
             ..Default::default()
         };
-        let thread = self
-            .engine
-            .open_tuned(
-                ProviderChoice {
-                    provider: agent.provider,
-                    model: agent.model,
-                },
-                agent.effort,
-                WorkspaceChoice::Main { checkout },
-                launch,
-            )
-            .map_err(|error| error.to_string())?;
-        let _ = self.execute(Op::Rename {
-            thread,
-            title: "Coordinator".into(),
-        });
-        self.prompt(&AgentPromptParams {
-            thread,
-            text: prompt,
-            wait: false,
-            timeout_ms: None,
-            until: Vec::new(),
-        })
-        .map_err(|error| error.message)?;
-        Ok(thread)
+        self.open_owned(
+            agent,
+            WorkspaceChoice::Main { checkout },
+            launch,
+            Some("Coordinator".into()),
+            prompt,
+        )
     }
 
     /// A Coordinator's settings changed: its Session is tuned to them at
     /// its next rest.
-    pub(super) fn retune(&mut self, thread: ThreadId, _agent: Agent) {
+    pub(super) fn retune(&mut self, thread: ThreadId) {
         self.coordinators_tuned.remove(&thread);
     }
 
@@ -103,17 +84,12 @@ impl Server {
             if self.coordinators_tuned.get(&thread) == Some(&agent) {
                 continue;
             }
+            if !self.at_rest(thread) {
+                continue;
+            }
             let Some(view) = self.engine.thread(thread) else {
                 continue;
             };
-            let at_rest = matches!(
-                self.engine.attention(thread),
-                Some(crate::Attention::Idle | crate::Attention::Done)
-            ) && !view.starting()
-                && !self.engine.holds_prompt(thread);
-            if !at_rest {
-                continue;
-            }
             let provider = view.provider() != agent.provider;
             let model = agent.model.is_some() && view.model() != agent.model.as_deref();
             let effort = agent.effort.is_some() && view.effort() != agent.effort.as_deref();
@@ -188,10 +164,6 @@ impl Server {
         &mut self,
         action: &CoordinatorAction,
     ) -> Result<Option<Done>, WireError> {
-        let wire = |error: ApiError| WireError {
-            code: crate::protocol::ErrorCode::Failed,
-            message: error.message,
-        };
         let catalog = self.catalog(Vec::new());
         let Some(command) =
             crate::factory::coordinator_command(action.clone(), &self.factory_agent, catalog)
@@ -201,7 +173,9 @@ impl Server {
                 message: "this server does not know that Coordinator command".into(),
             });
         };
-        let (answer, _) = self.factory_command(command).map_err(wire)?;
+        let (answer, _) = self
+            .factory_command(command)
+            .map_err(super::factory::wire_error)?;
         Ok(Some(done(answer)))
     }
 

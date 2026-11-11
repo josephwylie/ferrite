@@ -526,7 +526,7 @@ impl State {
         }
         coordinator.agent = Some(agent.clone());
         if let Some(thread) = coordinator.thread {
-            effects.push(Effect::Tune { thread, agent });
+            effects.push(Effect::Tune { thread });
         }
         Ok(Answer::Changed(true))
     }

@@ -37,6 +37,14 @@ pub(super) fn load(store_dir: &std::path::Path) -> factory::Factory {
     factory
 }
 
+/// A Factory refusal as a window's error.
+pub(super) fn wire_error(error: ApiError) -> WireError {
+    WireError {
+        code: crate::protocol::ErrorCode::Failed,
+        message: error.message,
+    }
+}
+
 /// A Factory answer as a window's reply.
 pub(super) fn done(answer: Answer) -> Done {
     match answer {
@@ -115,10 +123,8 @@ impl Server {
             .watched()
             .filter_map(|thread| {
                 let view = self.engine.thread(thread)?;
-                let attention = self.engine.attention(thread)?;
-                let busy = !matches!(attention, Attention::Idle | Attention::Done)
-                    || self.engine.holds_prompt(thread)
-                    || view.starting();
+                self.engine.attention(thread)?;
+                let busy = !self.at_rest(thread);
                 let turns = self.engine.completion_seq(thread).unwrap_or(0);
                 // A Provider Decision in its Session is the Task's to
                 // answer (#222), never the Inbox's.
@@ -236,7 +242,7 @@ impl Server {
                 agent,
                 prompt,
             } => self.start_coordinator(project, agent, prompt),
-            Effect::Tune { thread, agent } => self.retune(thread, agent),
+            Effect::Tune { thread } => self.retune(thread),
             Effect::Notify {
                 task,
                 project,
@@ -290,25 +296,40 @@ impl Server {
             owner: Some(ThreadOwner::Task(task.to_string())),
             ..Default::default()
         };
+        let thread = self.open_owned(agent, workspace, launch, title, prompt)?;
+        let worktree = match self.engine.thread(thread).and_then(|view| view.workspace()) {
+            Some(WorkspaceBinding::Worktree { path, .. }) => Some(path.clone()),
+            _ => None,
+        };
+        Ok((thread, worktree))
+    }
+
+    /// Open a Thread the Factory owns on `agent`'s Provider, model and
+    /// Effort, title it, and give it its first prompt: a Worker or a
+    /// Coordinator.
+    pub(super) fn open_owned(
+        &mut self,
+        agent: Agent,
+        workspace: WorkspaceChoice,
+        launch: Launch,
+        title: Option<String>,
+        prompt: String,
+    ) -> Result<ThreadId, String> {
         let thread = self
             .engine
-            .open_tuned(
+            .open_choice(
                 ProviderChoice {
                     provider: agent.provider,
                     model: agent.model,
                 },
-                agent.effort,
                 workspace,
+                agent.effort,
                 launch,
             )
             .map_err(|error| error.to_string())?;
         if let Some(title) = title {
             let _ = self.execute(crate::protocol::Op::Rename { thread, title });
         }
-        let worktree = match self.engine.thread(thread).and_then(|view| view.workspace()) {
-            Some(WorkspaceBinding::Worktree { path, .. }) => Some(path.clone()),
-            _ => None,
-        };
         self.prompt(&AgentPromptParams {
             thread,
             text: prompt,
@@ -317,7 +338,19 @@ impl Server {
             until: Vec::new(),
         })
         .map_err(|error| error.message)?;
-        Ok((thread, worktree))
+        Ok(thread)
+    }
+
+    /// At rest: its turn over, nothing of its Session running or held.
+    pub(super) fn at_rest(&self, thread: ThreadId) -> bool {
+        matches!(
+            self.engine.attention(thread),
+            Some(Attention::Idle | Attention::Done)
+        ) && !self.engine.holds_prompt(thread)
+            && self
+                .engine
+                .thread(thread)
+                .is_some_and(|view| !view.starting())
     }
 
     /// A deleted Task's worktree goes only when its checkout is clean;
@@ -383,10 +416,6 @@ impl Server {
 
     /// A window's Factory command.
     pub(super) fn task_command(&mut self, action: &TaskAction) -> Result<Option<Done>, WireError> {
-        let wire = |error: ApiError| WireError {
-            code: crate::protocol::ErrorCode::Failed,
-            message: error.message,
-        };
         match action.clone() {
             TaskAction::Start {
                 project,
@@ -403,19 +432,19 @@ impl Server {
                     workflow,
                     pr,
                 };
-                let (answer, _) = self.factory_command(start).map_err(wire)?;
+                let (answer, _) = self.factory_command(start).map_err(wire_error)?;
                 Ok(Some(done(answer)))
             }
             TaskAction::Delete { task } => {
                 let (_, kept) = self
                     .factory_command(Command::Delete { task })
-                    .map_err(wire)?;
+                    .map_err(wire_error)?;
                 Ok(Some(Done::Deleted {
                     kept: (!kept.is_empty()).then(|| kept.join(" ")),
                 }))
             }
             other => match factory::task_command(other) {
-                Some(command) => self.task_changed(command).map_err(wire),
+                Some(command) => self.task_changed(command).map_err(wire_error),
                 None => Err(WireError {
                     code: crate::protocol::ErrorCode::Unsupported,
                     message: "this server does not know that Factory command".into(),
@@ -449,10 +478,6 @@ impl Server {
         &mut self,
         action: &WorkflowAction,
     ) -> Result<Option<Done>, WireError> {
-        let wire = |error: ApiError| WireError {
-            code: crate::protocol::ErrorCode::Failed,
-            message: error.message,
-        };
         let models = self.catalog(Vec::new()).models;
         let Some(command) = factory::workflow_command(action.clone(), &self.factory_agent, models)
         else {
@@ -461,7 +486,7 @@ impl Server {
                 message: "this server does not know that Workflow command".into(),
             });
         };
-        let (answer, _) = self.factory_command(command).map_err(wire)?;
+        let (answer, _) = self.factory_command(command).map_err(wire_error)?;
         Ok(Some(done(answer)))
     }
 

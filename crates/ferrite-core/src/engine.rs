@@ -1544,18 +1544,6 @@ impl Engine {
         )
     }
 
-    /// `open_with`, on a chosen model and Effort from the start: a Factory
-    /// Step's Worker (ADR 0037).
-    pub fn open_tuned(
-        &mut self,
-        choice: ProviderChoice,
-        effort: Option<String>,
-        workspace: WorkspaceChoice,
-        launch: Launch,
-    ) -> io::Result<ThreadId> {
-        self.open_choice(choice, workspace, effort, launch)
-    }
-
     /// Make a worktree of `repo` on the new `branch`, from `base` (the
     /// repo's HEAD when none), placed and registered as the registry's own
     /// are; its Project and path. Git refuses a branch that already
@@ -1575,7 +1563,8 @@ impl Engine {
 
     /// `effort` is the Thread's own reasoning level from its first breath
     /// (a draft's chip); None is the operator's default for the provider.
-    fn open_choice(
+    /// A Factory Step's Worker and a Coordinator open this way (ADR 0037).
+    pub(crate) fn open_choice(
         &mut self,
         choice: ProviderChoice,
         workspace: WorkspaceChoice,

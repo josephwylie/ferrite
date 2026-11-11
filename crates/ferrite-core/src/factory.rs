@@ -751,11 +751,9 @@ pub enum Effect {
         agent: Option<Agent>,
         prompt: String,
     },
-    /// Set an open Thread's Provider, model and effort for its next turn.
-    Tune {
-        thread: ThreadId,
-        agent: Agent,
-    },
+    /// Bring an open Coordinator's Provider, model and effort to its
+    /// settings, from its next turn.
+    Tune { thread: ThreadId },
 }
 
 /// What is written.

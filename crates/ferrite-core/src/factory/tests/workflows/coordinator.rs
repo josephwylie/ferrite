@@ -264,8 +264,7 @@ fn the_coordinators_settings_reach_its_start_and_then_its_session() {
     assert_eq!(
         factory.step(6, &BTreeMap::new()),
         [Effect::Tune {
-            thread: COORDINATOR,
-            agent: changed.clone()
+            thread: COORDINATOR
         }]
     );
     assert_eq!(
