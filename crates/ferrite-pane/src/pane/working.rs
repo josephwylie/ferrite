@@ -351,8 +351,11 @@ pub(crate) fn turn_fold(
                 .text_color(rgb(INK_SUBTLE));
             match ferrite_core::clock::parse_local(stamp) {
                 Some(at) => time
-                    .child(SharedString::from(ferrite_core::clock::label(at)))
-                    .tooltip(ferrite_ui::menu::tooltip(ferrite_core::clock::exact_label(at))),
+                    .child(SharedString::from(ferrite_core::clock::day_aware_label(
+                        at,
+                        ferrite_core::clock::now(),
+                    )))
+                    .tooltip(ferrite_ui::menu::tooltip(ferrite_core::clock::day_aware_tooltip(at))),
                 // A log from before stamps were kept: the time it printed.
                 None => time.child(SharedString::from(stamp.to_owned())),
             }

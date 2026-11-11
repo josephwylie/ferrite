@@ -1404,6 +1404,9 @@ impl TranscriptView {
         if row.kind() == RowKind::Divider {
             return date_divider(&blocks[0]).into_any_element();
         }
+        if let Some(Body::Compaction(compaction)) = blocks.first().map(|block| &block.body) {
+            return compaction_divider(compaction).into_any_element();
+        }
         if row.kind() == RowKind::Note {
             return note_line(row.source().unwrap_or_default()).into_any_element();
         }
@@ -1568,6 +1571,19 @@ impl TranscriptView {
             let words = ferrite_core::prompt_files::split(line.clone()).0;
             let prompt_block = block.id;
             let cuts = cuts.map(|((_, allowed), _)| allowed.clone());
+            let joins = row.joins();
+            let face = pane::PromptFace {
+                above: joins.above,
+                below: joins.below,
+                clamp: pane::prompt_clamps(line).then(|| {
+                    let clamp = DisclosureId::Prompt(block.id);
+                    let open = self.tool_state(&clamp) == DisclosureState::Expanded;
+                    pane::PromptClamp {
+                        open,
+                        toggle: self.clamp_toggle(clamp, open, view.clone()),
+                    }
+                }),
+            };
             return div()
                 .id(id.clone())
                 .group(MESSAGE_GROUP)
@@ -1594,6 +1610,7 @@ impl TranscriptView {
                     block,
                     line,
                     &row_cx,
+                    face,
                     Some(actions.into_any_element()),
                 ))
                 .into_any_element();
@@ -1920,6 +1937,36 @@ impl TranscriptView {
             .debug_selector(|| "message-copy".into())
             .flex_shrink_0()
             .child(ferrite_ui::components::copy_button(id, text))
+            .into_any_element()
+    }
+
+    /// A long prompt's `Show full message` / `Show less` (T3's ghost-muted
+    /// xs button): `INK_SUBTLE` meta type, `INK_STRONG` on the raised hover
+    /// ground, toggling its clamp (`DisclosureId::Prompt`).
+    fn clamp_toggle(&self, clamp: DisclosureId, open: bool, view: Option<Entity<Self>>) -> AnyElement {
+        div()
+            .id(SharedString::from(format!(
+                "prompt-clamp-{}-{clamp:?}",
+                self.input.namespace
+            )))
+            .debug_selector(|| "prompt-clamp-toggle".into())
+            .flex()
+            .items_center()
+            .h(px(theme::MESSAGE_ACTION))
+            .px(px(theme::MESSAGE_ACTION_PAD_X))
+            .rounded(px(theme::R_CONTROL))
+            .text_size(px(theme::FS_BADGE))
+            .text_color(gpui::rgb(theme::INK_SUBTLE))
+            .cursor_pointer()
+            .hover(|style| style.bg(theme::paint::HOVER).text_color(gpui::rgb(theme::INK_STRONG)))
+            .child(if open { "Show less" } else { "Show full message" })
+            .when_some(view, |button, view| {
+                button.on_click(move |_, _, cx| {
+                    view.update(cx, |_, cx| {
+                        cx.emit(TranscriptEvent::ToggleDisclosure(clamp.clone()))
+                    })
+                })
+            })
             .into_any_element()
     }
 
@@ -2309,9 +2356,8 @@ fn actions_key(message: &SharedString) -> SharedString {
     format!("actions:{message}").into()
 }
 
-/// The pointer on a message: its actions come in after
-/// `motion::ACTIONS_IN`'s 100ms wait, over 120ms, and go over 60ms
-/// (Claude's message actions).
+/// The pointer on a message: its actions fade in and out over 200ms with
+/// no wait (`motion::ACTIONS_IN`, T3's).
 fn actions_listener(message: &SharedString) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
     ferrite_ui::motion::hover_listener_with(
         actions_key(message),
@@ -2320,12 +2366,13 @@ fn actions_listener(message: &SharedString) -> impl Fn(&bool, &mut Window, &mut 
     )
 }
 
-/// A message's time among its actions, as Claude's reads (`52 minutes ago`,
-/// `yesterday`: `clock::relative_label`), its exact time in a tooltip;
-/// meta type in `INK_SUBTLE`. Read as the row draws; the transcript is
-/// drawn again as each minute turns, on the pulse clock's one timer, so it
-/// never goes stale and costs nothing in between. A log from before
-/// stamps were kept shows the time it printed (`7:31 pm`).
+/// A message's time among its actions, as T3's reads (`8:26 pm`,
+/// `yesterday at 8:26 pm`, `11/9 8:26 pm`: `clock::day_aware_label`), its
+/// day in a tooltip (`8:26 pm, 9th November 2026`); meta type in
+/// `INK_SUBTLE`. Read as the row draws; the transcript is drawn again as
+/// each minute turns, on the pulse clock's one timer, so it never goes
+/// stale past midnight. A log from before stamps were kept shows the time
+/// it printed (`7:31 pm`).
 fn message_time(
     id: SharedString,
     selector: &'static str,
@@ -2335,7 +2382,7 @@ fn message_time(
         .id(id)
         .debug_selector(move || selector.into())
         .px(px(theme::SPACE_1))
-        .text_size(px(theme::FS_META))
+        .text_size(px(theme::FS_BADGE))
         .line_height(px(theme::LH_META))
         .text_color(gpui::rgb(theme::INK_SUBTLE));
     let Some(at) = ferrite_core::clock::parse_local(stamp) else {
@@ -2345,12 +2392,12 @@ fn message_time(
     // The Cockpit's sweep redraws the transcript as the minute turns over
     // (`CockpitView::message_minute`), the only time the label can change.
     let now = ferrite_core::clock::now();
-    time.child(SharedString::from(ferrite_core::clock::relative_label(
+    time.child(SharedString::from(ferrite_core::clock::day_aware_label(
         at, now,
     )))
-    .tooltip(ferrite_ui::menu::tooltip(ferrite_core::clock::exact_label(
-        at,
-    )))
+    .tooltip(ferrite_ui::menu::tooltip(
+        ferrite_core::clock::day_aware_tooltip(at),
+    ))
 }
 
 /// A long thread's date divider (`RowKind::Divider`) over the first prompt
@@ -2378,27 +2425,84 @@ fn date_divider(prompt: &Block) -> gpui::Div {
         .and_then(ferrite_core::clock::parse_local)
         .map(|at| ferrite_core::clock::day_heading(at, ferrite_core::clock::now()))
         .unwrap_or_default();
-    let rule = || {
-        div()
-            .flex_1()
-            .h(px(theme::HAIRLINE_W))
-            .bg(gpui::rgb(theme::LINE))
-    };
-    div()
+    divider(divider_line())
         .debug_selector(|| "date-divider".into())
+        .text_color(gpui::rgb(theme::INK_SUBTLE))
+        .child(div().flex_shrink_0().child(SharedString::from(day)))
+        .child(divider_rule(divider_line()))
+}
+
+/// T3's line / label / line separator: 12px text `DIVIDER_GAP` from a
+/// hairline either side in `rule`, `DIVIDER_PAD_Y` above and below. The
+/// caller adds the label and the second rule.
+fn divider(rule: gpui::Hsla) -> gpui::Div {
+    div()
         .flex()
         .items_center()
-        .gap(px(theme::DATE_DIVIDER_GAP))
+        .gap(px(theme::DIVIDER_GAP))
         .w_full()
         .min_w_0()
-        .h(px(theme::LH_META))
+        .py(px(theme::DIVIDER_PAD_Y))
         .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_META))
+        .text_size(px(theme::FS_BADGE))
         .line_height(px(theme::LH_META))
-        .text_color(gpui::rgb(theme::INK_SUBTLE))
-        .child(rule())
-        .child(div().flex_shrink_0().child(SharedString::from(day)))
-        .child(rule())
+        .child(divider_rule(rule))
+}
+
+/// A divider's hairline ink: `LINE` at 70% (T3's `bg-border/70`).
+fn divider_line() -> gpui::Hsla {
+    gpui::Hsla::from(theme::paint::LINE).opacity(0.7)
+}
+
+fn divider_rule(ink: gpui::Hsla) -> gpui::Div {
+    div().flex_1().h(px(theme::HAIRLINE_W)).bg(ink)
+}
+
+/// A context compaction (`RowKind::Compaction`, T3's
+/// `ContextCompactionTimelineRow`): `Minimize2 · Context compacted 367K →
+/// 27.7K tokens` centred between hairlines, the arrow a 12px icon, in
+/// `INK_SUBTLE`; shining (`Shine::Activity`) while it runs. A failure reads
+/// in `BLOCKED` with `CircleAlert`, its reason after a `·` at 80%, and its
+/// rules in `BLOCKED` at 30%.
+pub(crate) fn compaction_divider(compaction: &ferrite_core::transcript::Compaction) -> gpui::Div {
+    use ferrite_ui::{components, icons};
+    let failed = compaction.report.failure.is_some();
+    let ink = if failed { theme::BLOCKED } else { theme::INK_SUBTLE };
+    let rule: gpui::Hsla = if failed {
+        gpui::Hsla::from(gpui::rgb(theme::BLOCKED)).opacity(0.3)
+    } else {
+        divider_line()
+    };
+    let glyph = |path| icons::icon(path, theme::DIVIDER_ICON, ink).flex_shrink_0();
+    let mut label = div()
+        .flex()
+        .min_w_0()
+        .items_center()
+        .gap(px(theme::DIVIDER_LABEL_GAP))
+        .child(glyph(if failed { icons::CIRCLE_ALERT } else { icons::MINIMIZE }));
+    let title = compaction.title();
+    label = match compaction.counts() {
+        Some((before, after)) => label
+            .child(SharedString::from(format!("{title} {before}")))
+            .child(glyph(icons::ARROW_RIGHT))
+            .child(SharedString::from(format!("{after} tokens"))),
+        None if compaction.running => label.child(components::shine(title, ink, components::Shine::Activity)),
+        None => label.child(title),
+    };
+    if let Some(reason) = compaction.report.failure.as_deref().filter(|r| !r.is_empty()) {
+        label = label.child(
+            div()
+                .min_w_0()
+                .truncate()
+                .opacity(0.8)
+                .child(SharedString::from(format!("\u{b7} {reason}"))),
+        );
+    }
+    divider(rule)
+        .debug_selector(|| "compaction-divider".into())
+        .text_color(gpui::rgb(ink))
+        .child(label)
+        .child(divider_rule(rule))
 }
 
 /// The top fade (`EDGE_FADE`): the ground (T3's stops) fading to nothing, over

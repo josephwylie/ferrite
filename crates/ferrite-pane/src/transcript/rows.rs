@@ -88,6 +88,9 @@ pub(crate) enum RowKind {
     /// A date divider between turns on different days: a turn's gap above
     /// it, a line between it and its day's first prompt.
     Divider,
+    /// A context compaction's divider (T3's): never folded, and it breaks
+    /// a run of work.
+    Compaction,
     /// A turn's wrap-up box. `spent`: a later prompt (or wrap-up) follows
     /// it, so its steps are no longer offered.
     WrapUp {
@@ -108,6 +111,7 @@ impl RowKind {
             Body::Notice(_) => Self::Notice,
             Body::Meta(_) => Self::Meta,
             Body::TurnEnd(_) => Self::TurnEnd,
+            Body::Compaction(_) => Self::Compaction,
             // Fallback prose (no Markdown source) is agent prose too.
             Body::Paragraph { .. } | Body::Heading { .. } | Body::Bullet { .. } => {
                 Self::Answer { narration: false }
@@ -119,27 +123,26 @@ impl RowKind {
 
 /// The space above a row, from the row before it (`None`: the first row),
 /// its own kind and the answer size `reading`: the transcript's one table
-/// of vertical rhythm (the turn rhythm in `theme.rs`, Claude's measured
-/// spacing). A prompt's bubble stands `tx_after_prompt` above whatever
-/// answers it and `tx_turn_gap` under the turn before it, each counting the
-/// message's actions row laid out at rest between them (the prompt's under
-/// its bubble, an answer's under its prose). A turn's calls and
-/// groups read as one list, half a line apart; its prose stands
-/// `tx_work_prose` from the calls on either side. Every other block (the
-/// stamp, a thought, the Decision) stands a line and a half off. A row
-/// that answers the one above it (a decision record, an interrupted or
-/// failed turn's end) sits flush under it. A first row is flush to the top
-/// when it is a prompt and a line down otherwise (both under the body's own
-/// top padding, `RowShape::top_pad`).
+/// of vertical rhythm. A message's own padding comes first, as T3's
+/// `TimelineRowContent` gives it (`TX_ROW_PAD`): 16 under a prompt (its
+/// actions row counted in) and under a turn's answer (its meta counted in),
+/// 4 between two prompts in a row, 8 under narration. A turn's work rows
+/// touch, as T3's work log does, and the run stands `WORK_LOG_PAD_B` off
+/// what follows it. A turn's fold and header carry their own padding. A
+/// prompt after the work stands a turn's gap (`tx_turn_gap`) under it.
+/// Every other block (the stamp, the Decision) stands a line and a half
+/// off. A row that answers the one above it (a decision record, an
+/// interrupted or failed turn's end) sits flush under it. A first row is
+/// flush to the top when it is a prompt and a line down otherwise (both
+/// under the body's own top padding, `RowShape::top_pad`).
 pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32) -> f32 {
     use ferrite_ui::theme;
     use RowKind::*;
     let line = theme::prose_line_height(reading);
+    let pad = |step| theme::tx_scaled(step, reading);
     let Some(previous) = previous else {
         return if kind == Prompt { 0. } else { line };
     };
-    let call = |kind| matches!(kind, Activity | Group | Visual | Notice);
-    let work = |kind| call(kind) || matches!(kind, LiveTail | Answer { narration: true });
     // T3's work log: its rows touch, and the run stands `WORK_LOG_PAD_B`
     // off what follows it.
     let log = |kind| matches!(kind, Activity | Group | Reasoning | Notice | LiveTail);
@@ -149,16 +152,15 @@ pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32)
         (Divider, _) => line,
         (previous, Divider) => gap_before(Some(previous), Prompt, reading),
         (_, Outputs) => theme::tx_half(line),
-        (Prompt, _) => (theme::tx_after_prompt(line) - theme::MESSAGE_ACTION).max(0.),
-        (Answer { narration: false }, Prompt) => {
-            theme::tx_turn_gap(line) - theme::MESSAGE_ACTIONS_GAP - theme::MESSAGE_ACTION
-        }
+        (Prompt, Prompt) => pad(theme::TX_ROW_PAD_JOINED),
+        (Prompt, _) | (Answer { narration: false }, _) => pad(theme::TX_ROW_PAD),
+        (Answer { narration: true }, _) => pad(theme::TX_ROW_PAD_BARE),
+        (Compaction, _) => pad(theme::TX_ROW_PAD),
         (_, Prompt) => theme::tx_turn_gap(line),
         // A turn's header and its fold carry their own bottom padding.
         (Working | TurnFold, _) => theme::TURN_FOLD_PAD_B,
-        (previous, Answer { .. }) if call(previous) => theme::tx_work_prose(line),
-        (Answer { narration: true }, kind) if call(kind) => theme::tx_work_prose(line),
-        (previous, kind) if work(previous) && work(kind) => theme::tx_half(line),
+        // A visual stands half a line off the rows around it.
+        (Visual, _) | (_, Visual) => theme::tx_half(line),
         (previous, _) if log(previous) => theme::WORK_LOG_PAD_B,
         _ => (line * 1.5).round(),
     }
@@ -209,6 +211,17 @@ pub(crate) struct TranscriptRow {
     outputs: Rc<[Output]>,
     /// A fold row's label and hover time.
     fold: Option<Rc<Fold>>,
+    /// A prompt's joins to the prompts right above and below it.
+    joins: Joins,
+}
+
+/// Whether a prompt stands right under another (`above`) and right over
+/// another (`below`): T3 joins two of the operator's messages in a row on
+/// tighter corners.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Joins {
+    pub above: bool,
+    pub below: bool,
 }
 
 impl TranscriptRow {
@@ -245,6 +258,11 @@ impl TranscriptRow {
     /// What a fold row says; `None` for any other row.
     pub(crate) fn fold(&self) -> Option<&Fold> {
         self.fold.as_deref()
+    }
+
+    /// A prompt row's joins to its neighbours (`Joins`).
+    pub(crate) fn joins(&self) -> Joins {
+        self.joins
     }
 
     #[cfg(test)]
@@ -559,6 +577,7 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
         tail_key: None,
         outputs: Rc::from([]),
         fold: None,
+        joins: Joins::default(),
     };
     let header = |key| {
         let mut working = row(RowId::Working, &[], None, RowKind::Working);
@@ -727,6 +746,12 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
                 }
             }
             _ => {}
+        }
+    }
+    for at in 1..rows.len() {
+        if rows[at - 1].kind == RowKind::Prompt && rows[at].kind == RowKind::Prompt {
+            rows[at - 1].joins.below = true;
+            rows[at].joins.above = true;
         }
     }
     let mut previous = None;
@@ -1056,6 +1081,40 @@ mod tests {
         // The answer stands the fold's own padding under it.
         let gaps: Vec<_> = rows.rows().iter().map(|row| row.gap()).collect();
         assert_eq!(gaps[2], ferrite_ui::theme::TURN_FOLD_PAD_B);
+    }
+
+    /// A compaction breaks the run of work it falls in and stands in view
+    /// under its turn's shut fold.
+    #[test]
+    fn a_compaction_breaks_the_work_and_stays_out_of_the_fold() {
+        use RowKind::*;
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        bash(&mut transcript, "a");
+        settle(&mut transcript, "a", false);
+        transcript.apply(Input::Event(SessionEvent::Progress {
+            event: ferrite_core::progress::ProgressEvent::Phase {
+                phase: ferrite_core::progress::Phase::Compacting,
+                detail: String::new(),
+            },
+        }));
+        bash(&mut transcript, "b");
+        settle(&mut transcript, "b", false);
+        text(&mut transcript, "Done.");
+        complete(&mut transcript, 2_000);
+        assert_eq!(
+            kinds(&transcript, &shape()),
+            [Prompt, TurnFold, Compaction, Answer { narration: false }]
+        );
+        let prompt = transcript.blocks()[0].id;
+        let open = RowShape {
+            open_folds: [prompt].into(),
+            ..shape()
+        };
+        assert_eq!(
+            kinds(&transcript, &open),
+            [Prompt, TurnFold, Activity, Compaction, Activity, Answer { narration: false }]
+        );
     }
 
     /// Any turn folds, however quick (no floor), timed as T3 prints it.
@@ -1744,74 +1803,91 @@ mod tests {
         );
     }
 
-    /// The gap between a prompt's row and what answers it: the prompt step
-    /// less the actions row under its bubble.
+    /// T3's padding under a prompt and under a turn's answer.
     fn after_prompt(reading: f32) -> f32 {
-        use ferrite_ui::theme;
-        theme::tx_after_prompt(theme::prose_line_height(reading)) - theme::MESSAGE_ACTION
+        ferrite_ui::theme::tx_scaled(16., reading)
     }
 
-    /// The gap between a finished answer and the next prompt: the turn's
-    /// gap less the answer's actions row, which stands under it at rest.
     fn after_answer(reading: f32) -> f32 {
-        use ferrite_ui::theme;
-        theme::tx_turn_gap(theme::prose_line_height(reading))
-            - theme::MESSAGE_ACTIONS_GAP
-            - theme::MESSAGE_ACTION
+        ferrite_ui::theme::tx_scaled(16., reading)
     }
 
-    /// Claude's rhythm (at the 21 line):
-    /// a prompt stands 40 over what answers it and 56 under the turn before
-    /// (its answer's actions row counted in); a turn's work rows touch, as
-    /// T3's work log does, and stand `WORK_LOG_PAD_B` off what follows
-    /// them, its prose 22 from them; every other block stands a line and a
-    /// half off; a row that answers the one above it hangs flush; a leading
-    /// prompt sits flush to the top.
+    /// T3's rhythm (at the Standard 23 line): 16 under a prompt and under
+    /// a turn's answer, 4 between two prompts, 8 under narration; a turn's
+    /// work rows touch and stand `WORK_LOG_PAD_B` off what follows them;
+    /// a prompt after the work stands 56 under it; every other block
+    /// stands a line and a half off; a row that answers the one above it
+    /// hangs flush; a leading prompt sits flush to the top.
     #[test]
     fn the_gap_table_lists_the_work_and_spaces_the_blocks() {
         use RowKind::*;
         let line = ferrite_ui::theme::prose_line_height(READING);
-        assert_eq!(line, 21.);
+        assert_eq!(line, 23.);
         let half = ferrite_ui::theme::tx_half(line);
         let block = (line * 1.5).round();
         let answer = Answer { narration: false };
         let narration = Answer { narration: true };
         let hung = TurnEnd;
-        assert_eq!(after_answer(READING) + 32., 56.);
-        assert_eq!(after_prompt(READING) + 24., 40.);
+        let pad_b = ferrite_ui::theme::WORK_LOG_PAD_B;
         for (previous, kind, gap) in [
             (None, Prompt, 0.),
             (None, Activity, line),
             (Some(TurnFold), Prompt, 56.),
-            (Some(Prompt), TurnFold, after_prompt(READING)),
+            (Some(Prompt), TurnFold, 16.),
+            (Some(Prompt), Prompt, 4.),
             (Some(TurnFold), answer, ferrite_ui::theme::TURN_FOLD_PAD_B),
             (Some(Working), Group, ferrite_ui::theme::TURN_FOLD_PAD_B),
             (Some(Activity), LiveTail, 0.),
             (Some(Activity), Prompt, 56.),
-            (Some(answer), Prompt, after_answer(READING)),
-            (Some(Prompt), narration, after_prompt(READING)),
-            (Some(Prompt), Activity, after_prompt(READING)),
-            (Some(Prompt), answer, after_prompt(READING)),
-            (Some(Prompt), Working, after_prompt(READING)),
+            (Some(answer), Prompt, 16.),
+            (Some(Prompt), narration, 16.),
+            (Some(Prompt), Activity, 16.),
+            (Some(Prompt), answer, 16.),
+            (Some(Prompt), Working, 16.),
             (Some(Activity), Activity, 0.),
             (Some(Group), Activity, 0.),
-            (Some(narration), Activity, 22.),
-            (Some(Activity), narration, 22.),
-            (Some(narration), LiveTail, half),
+            (Some(narration), Activity, 8.),
+            (Some(Activity), narration, pad_b),
+            (Some(narration), LiveTail, 8.),
             (Some(Visual), Group, half),
-            (Some(Activity), answer, 22.),
+            (Some(Activity), answer, pad_b),
             (Some(Activity), Reasoning, 0.),
             (Some(answer), hung, 0.),
             (Some(Activity), Meta, 0.),
-            (Some(Activity), Tail, ferrite_ui::theme::WORK_LOG_PAD_B),
-            (Some(answer), Tail, block),
+            (Some(Activity), Tail, pad_b),
+            (Some(answer), Tail, 16.),
+            (Some(Meta), Tail, block),
         ] {
             assert_eq!(
                 gap_before(previous, kind, READING),
                 gap,
-                "{previous:?} → {kind:?}"
+                "{previous:?} -> {kind:?}"
             );
         }
+    }
+
+    /// T3 joins two of the operator's prompts in a row: 4 apart, the
+    /// upper's foot and the lower's head on tighter corners.
+    #[test]
+    fn two_prompts_in_a_row_join_four_apart() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "one");
+        prompt(&mut transcript, "two");
+        text(&mut transcript, "done");
+        let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        let prompts: Vec<_> = rows
+            .rows()
+            .iter()
+            .filter(|row| row.kind() == RowKind::Prompt)
+            .map(|row| (row.joins(), row.gap()))
+            .collect();
+        assert_eq!(
+            prompts,
+            vec![
+                (Joins { above: false, below: true }, 0.),
+                (Joins { above: true, below: false }, 4.),
+            ]
+        );
     }
 
     #[test]
@@ -1889,27 +1965,22 @@ mod tests {
             ]
         );
         let gaps: Vec<_> = rows.rows().iter().map(|row| row.gap()).collect();
-        let line = ferrite_ui::theme::prose_line_height(READING);
         assert_eq!(
             gaps,
-            vec![
-                0.,
-                after_prompt(READING),
-                ferrite_ui::theme::tx_work_prose(line)
-            ],
+            vec![0., after_prompt(READING), 8.],
             "the narration stands off the prompt, and the work off the narration"
         );
     }
 
     /// CT-34/41: the first row stands on the body's top padding, the
-    /// Decision closes the rows a line down, and a changed tail key is a
-    /// changed row.
+    /// Decision closes the rows under the answer's padding, and a changed
+    /// tail key is a changed row.
     #[test]
     fn the_top_padding_heads_the_rows_and_the_tail_closes_them() {
         let mut transcript = Transcript::default();
         prompt(&mut transcript, "go");
         text(&mut transcript, "answer");
-        let line = (ferrite_ui::theme::prose_line_height(READING) * 1.5).round();
+        let line = after_answer(READING);
         let solo = RowShape {
             top_pad: ferrite_ui::theme::TX_PAD_T,
             tail: Some(7),

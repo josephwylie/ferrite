@@ -2771,6 +2771,7 @@ impl CockpitView {
                     // A turn's fold, or a steer's, by its prompt.
                     ferrite_core::transcript::Body::Prompt(_) => {
                         valid.insert(pane::DisclosureId::Turn(block.id));
+                        valid.insert(pane::DisclosureId::Prompt(block.id));
                     }
                     _ => {}
                 }

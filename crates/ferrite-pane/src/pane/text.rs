@@ -647,6 +647,8 @@ pub(crate) fn collect_block_text(
                 let _ = selection.line(block.id, stamp, Vec::new());
             }
         }
+        // A divider, not the conversation: a sweep reads across it.
+        Body::Compaction(_) => {}
         Body::Code { source, .. } => {
             let _ = selection.line(block.id, source.clone(), Vec::new());
         }

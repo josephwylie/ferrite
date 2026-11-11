@@ -163,6 +163,8 @@ pub enum DisclosureId {
     Group(String),
     Turn(BlockId),
     Live(BlockId),
+    /// A long prompt's clamp, opened (`pane::prompt_clamps`).
+    Prompt(BlockId),
 }
 impl From<&str> for DisclosureId {
     fn from(call: &str) -> Self {
@@ -2961,7 +2963,7 @@ pub(crate) fn render_block(
         Body::WrapUp(wrap) => {
             wrap_up::render_wrap_up(block.id, wrap, row_cx, WrapUpFace::Steps(Vec::new()))
         }
-        Body::Prompt(line) => prompt_row(block, line, row_cx, None),
+        Body::Prompt(line) => prompt_row(block, line, row_cx, PromptFace::default(), None),
         // Fallback prose (a block with no Markdown source) reads as the
         // answer does, on the content column.
         Body::Paragraph { spans } => row
@@ -3104,6 +3106,8 @@ pub(crate) fn render_block(
             .into_any_element(),
         Body::TurnEnd(end) => row
             .child(turn_end(block.id, end, row_cx))
+            .into_any_element(),
+        Body::Compaction(compaction) => crate::transcript::compaction_divider(compaction)
             .into_any_element(),
         // Code keeps literal indentation and highlighting on a 1px rule,
         // with no ground.
@@ -3456,10 +3460,39 @@ fn prompt_gallery(files: &[std::path::PathBuf]) -> std::sync::Arc<[std::path::Pa
 /// `actions` (the transcript's: its send time, `Copy`) stand under it all,
 /// on its right edge, as Claude's and Codex's do. The passages it quoted
 /// stand over the bubble as their Quote rows.
+/// How a prompt's bubble sits: its joins to the prompts right above and
+/// below it (`rows::Joins`, those corners tightening to
+/// `PROMPT_BUBBLE_JOIN_RADIUS`), and a long prompt's clamp (`prompt_clamps`)
+/// with the toggle under it that opens and shuts it.
+#[derive(Default)]
+pub(crate) struct PromptFace {
+    pub above: bool,
+    pub below: bool,
+    pub clamp: Option<PromptClamp>,
+}
+
+/// A long prompt's clamp: whether it is open, and its toggle.
+pub(crate) struct PromptClamp {
+    pub open: bool,
+    pub toggle: AnyElement,
+}
+
+/// Whether a prompt's words clamp (T3's `shouldCollapseUserMessage`):
+/// over `PROMPT_CLAMP_CHARS` characters or `PROMPT_CLAMP_LINES` lines of
+/// what its bubble shows.
+pub(crate) fn prompt_clamps(line: &str) -> bool {
+    let words = ferrite_core::prompt_files::split(line.to_owned()).0;
+    let words = crate::quote::split(&words).1;
+    !words.trim().is_empty()
+        && (words.chars().count() > theme::PROMPT_CLAMP_CHARS
+            || words.split('\n').count() > theme::PROMPT_CLAMP_LINES)
+}
+
 pub(crate) fn prompt_row(
     block: &Block,
     line: &str,
     row_cx: &RowCx,
+    face: PromptFace,
     actions: Option<AnyElement>,
 ) -> AnyElement {
     let (words, other_files, annotations) =
@@ -3479,10 +3512,45 @@ pub(crate) fn prompt_row(
                 .child(crate::attachments::quote_row(index, reply))
         })
         .collect();
+    let clamped = face.clamp.as_ref().is_some_and(|clamp| !clamp.open);
     let bubble = prompt_words(block, text, &gallery, row_cx, None).map(|words| {
+        let join = px(theme::PROMPT_BUBBLE_JOIN_RADIUS);
         prompt_bubble()
             .debug_selector(|| "transcript-prompt".into())
-            .child(words)
+            .when(face.above, |bubble| bubble.rounded_tr(join))
+            .when(face.below, |bubble| bubble.rounded_br(join))
+            .when(clamped, |bubble| bubble.relative())
+            .child(
+                div()
+                    .min_w_0()
+                    .when(clamped, |words| {
+                        words
+                            .debug_selector(|| "transcript-prompt-clamped".into())
+                            .max_h(px(theme::PROMPT_CLAMP_H))
+                            .overflow_hidden()
+                    })
+                    .child(words),
+            )
+            .when(clamped, |bubble| {
+                bubble.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom(px(theme::PROMPT_BUBBLE_PAD_Y))
+                        .child(ferrite_ui::components::fade(
+                            theme::paint::PROMPT_BUBBLE.into(),
+                            true,
+                            theme::PROMPT_CLAMP_FADE,
+                            &[(0., 0.), (1., 1.)],
+                        )),
+                )
+            })
+    });
+    let toggle = face.clamp.map(|clamp| {
+        div()
+            .mt(px(theme::PROMPT_CLAMP_TOGGLE_GAP))
+            .child(clamp.toggle)
     });
     let images: Vec<_> = gallery
         .iter()
@@ -3519,13 +3587,15 @@ pub(crate) fn prompt_row(
             )
         })
         .children(quotes)
-        .children(bubble);
+        .children(bubble)
+        .children(toggle);
     div()
         .id(SharedString::from(format!("prompt-{:?}", block.id)))
         .relative()
         .flex()
         .flex_col()
         .items_end()
+        .gap(px(theme::PROMPT_ACTIONS_GAP))
         .w_full()
         .min_w_0()
         .child(message)
@@ -3574,8 +3644,8 @@ pub(crate) fn pinned_prompt(block: &Block, line: &str, row_cx: &RowCx, lines: us
         )
 }
 
-/// The prompt's bubble (the prototype's `.me`): `paint::PROMPT_BUBBLE` at
-/// `R_CARD`, shrinking to its words in Geist `INK_STRONG` at body
+/// The prompt's bubble (T3's): `paint::PROMPT_BUBBLE` at
+/// `PROMPT_BUBBLE_RADIUS`, shrinking to its words in Geist `INK_STRONG` at body
 /// weight, never wider than `PROMPT_BUBBLE_MAX_W` of the column. One face
 /// for the echo in its row and its pinned copy.
 fn prompt_bubble() -> Div {
@@ -3585,7 +3655,7 @@ fn prompt_bubble() -> Div {
         .py(px(theme::PROMPT_BUBBLE_PAD_Y))
         .px(px(theme::PROMPT_BUBBLE_PAD_X))
         .bg(theme::paint::PROMPT_BUBBLE)
-        .rounded(px(theme::R_CARD))
+        .rounded(px(theme::PROMPT_BUBBLE_RADIUS))
         .font_family(theme::FONT_UI)
         .font_weight(theme::W_BODY)
         .text_color(rgb(INK_STRONG))
@@ -5208,6 +5278,7 @@ mod tests {
                 Body::TurnEnd(_) => "turn-end",
                 Body::Visual(_) => "visual",
                 Body::WrapUp(_) => "wrap-up",
+                Body::Compaction(_) => "compaction",
             })
             .collect();
         for wanted in [

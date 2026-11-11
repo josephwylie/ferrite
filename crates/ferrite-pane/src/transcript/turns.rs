@@ -29,12 +29,16 @@ pub(crate) struct Fold {
 
 /// A block that hides under its turn's fold, if it were inside one: work,
 /// thoughts, interim prose and notes. The operator's own blocks (prompts),
-/// notices, the turn's resource cards (a visual, a wrap-up, review
+/// notices, a context compaction, the turn's resource cards (a visual, a wrap-up, review
 /// findings), questions put to the operator, and anything still running (a
 /// live subagent, background work) stay in view.
 fn foldable(block: &Block) -> bool {
     match &block.body {
-        Body::Prompt(_) | Body::Notice(_) | Body::Visual(_) | Body::WrapUp(_) => false,
+        Body::Prompt(_)
+        | Body::Notice(_)
+        | Body::Visual(_)
+        | Body::WrapUp(_)
+        | Body::Compaction(_) => false,
         Body::Tool(tool) => {
             let kind = tools::policy(&tool.name).kind;
             tool.state != ToolState::Running

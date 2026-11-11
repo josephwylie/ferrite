@@ -894,13 +894,13 @@ fn style_hanging(rem_size: gpui::Pixels, base: gpui::Pixels, hang: f32) -> TextV
     let code_cell = theme::tx_cell(code_size);
     let mut style = TextViewStyle::default()
         .with_dark(true)
-        .with_foreground(rgb(theme::INK_STRONG).into())
+        .with_foreground(theme::prose_ink())
         .with_muted_foreground(rgb(theme::INK_SUBTLE).into())
-        // Links and paths read `LINK_INK`, underlined at rest, as the
-        // Claude app's are.
+        // Links and paths read `LINK_INK`, underlined only under the
+        // pointer, as T3's are.
         .with_link(rgb(theme::LINK_INK).into())
         .with_link_underline(Some(rgb(theme::LINK_INK).into()))
-        .with_link_underline_on_hover(false)
+        .with_link_underline_on_hover(true)
         // An image in an answer sits in the prompt image's frame:
         // `IMAGE_CELLS` wide at the prose's size, a 1px `LINE` edge.
         .with_image(
@@ -2818,19 +2818,20 @@ mod style_tests {
         rgb(value).into()
     }
 
-    /// SPEC §5.4: prose `INK_STRONG`, strong `W_STRONG` `INK_STRONG`,
-    /// links and paths `LINK_INK` underlined at rest, inline code
+    /// Prose `INK_STRONG` at 90% (T3's `text-foreground/90`), strong
+    /// `W_STRONG` `INK_STRONG`, links and paths `LINK_INK` underlined under
+    /// the pointer, inline code
     /// a `RAISED` chip, a fence in the block box.
     #[test]
     fn prose_is_prose_ink_with_semibold_strong_and_link_blue_links() {
         let style = style(px(theme::FS_UI));
-        assert_eq!(style.foreground(), solid(theme::INK_STRONG));
+        assert_eq!(style.foreground(), solid(theme::INK_STRONG).opacity(0.9));
         assert_eq!(style.strong().font_weight, Some(theme::W_STRONG));
         assert_eq!(style.strong().color, Some(solid(theme::INK_STRONG)));
         assert_eq!(style.link(), solid(theme::LINK_INK));
-        // The underline is the link's own ink, painted at rest.
+        // The underline is the link's own ink, painted under the pointer.
         assert_eq!(style.link_underline(), Some(solid(theme::LINK_INK)));
-        assert!(!style.link_underline_on_hover());
+        assert!(style.link_underline_on_hover());
         assert_eq!(style.inline_code_font().as_deref(), Some(theme::FONT_CODE));
         assert_eq!(style.inline_code_wash(), Some(inline_code_wash()));
         assert_eq!(

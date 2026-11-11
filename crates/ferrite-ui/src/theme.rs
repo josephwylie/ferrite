@@ -270,8 +270,9 @@ pub const RAISED: u32 = 0x242424;
 /// hover a step up.
 pub const SECONDARY: u32 = 0x3b3b3b;
 pub const SECONDARY_HOVER: u32 = 0x454545;
-/// `#262626` — the prompt's bubble, matching Claude (typecolour.md).
-pub const PROMPT_BUBBLE: u32 = 0x262626;
+/// `#1e1e1e` — the prompt's bubble, T3's `--message-surface` (neutral-950
+/// at 92% over white).
+pub const PROMPT_BUBBLE: u32 = 0x1e1e1e;
 /// `#2a2a2a` — the inline-code chip, matching Claude (typecolour.md).
 pub const INLINE_CODE_CHIP: u32 = 0x2a2a2a;
 /// `#303030` — inline code's chip in a sent prompt, a step over its
@@ -678,10 +679,15 @@ pub const SYN_PUNCT: u32 = SYN_PLAIN;
 /// Claude's and Codex's plain code.
 pub const SYN_PLAIN: u32 = INK_STRONG;
 /// A link or a path in prose, a file chip's name: the Claude app's link
-/// blue, a link in prose underlined at rest (the owner's spec, superseding
-/// ADR 0033's white links; a link is the one ink here that is not state).
+/// blue, a link in prose underlined under the pointer (T3's; a link is
+/// the one ink here that is not state).
 /// A path in a tool call's arguments is `INK_SUBTLE` with the rest of them.
 pub const LINK_INK: u32 = 0x7aa8ee;
+
+/// Answer prose's ink: `INK_STRONG` at 90%, T3's `text-foreground/90`.
+pub fn prose_ink() -> gpui::Hsla {
+    gpui::Hsla::from(gpui::rgb(INK_STRONG)).opacity(0.9)
+}
 /// The wash over the slot a dragged Pane would take: white at 6%.
 pub const DROP_WASH: u32 = 0xffffff0f;
 /// That slot's edge: the focus ring's white at 22%.
@@ -754,9 +760,9 @@ pub const FS_NAV: f32 = 13.0;
 /// 14px — the Standard reading size (`ReadingSize::STANDARD`): agent prose
 /// and every Solo transcript row at the default zoom, on `LH_PROSE`.
 pub const FS_PROSE: f32 = 14.0;
-/// 21px — the Standard reading size's line: 1.5×, whole
-/// (`prose_line_height`).
-pub const LH_PROSE: f32 = 21.0;
+/// 23px — the Standard reading size's line: 1.625× (T3's
+/// `leading-relaxed`), whole (`prose_line_height`).
+pub const LH_PROSE: f32 = 23.0;
 /// 14 on 20 — a view title (the Solo and Group heads), at `W_LABEL`.
 pub const FS_TITLE: f32 = 14.0;
 /// 13 — tabs, buttons, Pane titles, panel tabs, at `W_LABEL` on `LH_UI`.
@@ -796,9 +802,9 @@ pub fn answer_text_size(size: ferrite_core::settings::ReadingSize) -> f32 {
     f32::from(size.px())
 }
 
-/// The pixel line height paired with each reading size: 1.5× and whole
-/// (`prose_line_height`): 12/18 · 13/20 · 14/21 · 15/23 · 16/24 · 18/27 ·
-/// 20/30 · 22/33 · 24/36.
+/// The pixel line height paired with each reading size: 1.625× and whole
+/// (`prose_line_height`): 12/20 · 13/21 · 14/23 · 15/24 · 16/26 · 18/29 ·
+/// 20/33 · 22/36 · 24/39.
 pub fn answer_line_height(size: ferrite_core::settings::ReadingSize) -> f32 {
     prose_line_height(answer_text_size(size))
 }
@@ -827,11 +833,11 @@ pub fn heading_scale(_level: u8) -> f32 {
     1.
 }
 
-/// The transcript's line over its size: 1.5 (14/21), Claude's measured
-/// pitch over SF 14; Codex's 14/22 is a hair looser.
-pub const TX_LINE_RATIO: f32 = 1.5;
+/// The transcript's line over its size: 1.625 (14/23), T3's
+/// `leading-relaxed` (22.75 at 14) on a whole pixel.
+pub const TX_LINE_RATIO: f32 = 1.625;
 
-/// A transcript size's pixel line height: `round(size × 1.5)`.
+/// A transcript size's pixel line height: `round(size × 1.625)`.
 pub fn prose_line_height(size: f32) -> f32 {
     (size * TX_LINE_RATIO).round()
 }
@@ -1167,9 +1173,6 @@ pub const BODY_PAD_B_GROUP: f32 = 14.0;
 /// The working line's down arrow before its token count: Lucide's
 /// `arrow-down` in the line's ink, a step under its text (`pane::working`).
 pub const WORKING_ARROW: f32 = 12.0;
-/// A long thread's date divider: the date's hairlines stand this far from
-/// its words (`transcript::date_divider`).
-pub const DATE_DIVIDER_GAP: f32 = SPACE_3;
 
 /// The Pane body's bottom padding: Solo's `BODY_PAD_B`, a Group Pane's
 /// `BODY_PAD_B_GROUP`.
@@ -1558,25 +1561,46 @@ pub fn tx_half(line: f32) -> f32 {
     (line / 2.0).floor()
 }
 
-/// **The transcript's turn rhythm** at a line of `line` (21 at Standard),
-/// as Claude spaces it, scaling with the
-/// reading size: 40 from a prompt's bubble to whatever answers it, 22
-/// between a turn's prose and its calls (either way), 56 from a turn's last
-/// block to the next prompt.
+/// **The transcript's turn rhythm** at a line of `line` (`LH_PROSE` at
+/// Standard), scaling with the reading size: 40 from a prompt's bubble to
+/// whatever answers it, 22 between a turn's prose and its calls (either
+/// way), 56 from a turn's last block to the next prompt.
 pub fn tx_after_prompt(line: f32) -> f32 {
-    (line * 40. / 21.).round()
+    (line * 40. / LH_PROSE).round()
 }
 pub fn tx_work_prose(line: f32) -> f32 {
-    (line * 22. / 21.).round()
+    (line * 22. / LH_PROSE).round()
 }
 pub fn tx_turn_gap(line: f32) -> f32 {
-    (line * 56. / 21.).round()
+    (line * 56. / LH_PROSE).round()
 }
-/// The space between an answer's paragraphs (and its other blocks): 12 on
-/// the 21 line, Claude's 11 rounded to the grid, so an answer reads as one
+/// The space between an answer's paragraphs (and its other blocks): T3's
+/// 0.65rem (10.4) on the Standard line, whole, so an answer reads as one
 /// piece rather than as terminal output with a blank line between blocks.
 pub fn tx_paragraph_gap(line: f32) -> f32 {
-    (line * 12. / 21.).round()
+    (line * 10. / LH_PROSE).round()
+}
+
+/// **T3's row padding** (`TimelineRowContent`), the space under a message
+/// at the Standard size, scaling with the reading size `reading`: 16 under
+/// a prompt and under an answer with its meta (`pb-4`), 8 under an answer
+/// without (`pb-2`), 4 between two of the operator's prompts (`pb-1`).
+pub const TX_ROW_PAD: f32 = SPACE_4;
+pub const TX_ROW_PAD_BARE: f32 = SPACE_2;
+pub const TX_ROW_PAD_JOINED: f32 = SPACE_1;
+
+/// **A transcript divider** (T3's line / label / line, the date's and a
+/// context compaction's): `FS_BADGE` text `DIVIDER_GAP` from a hairline in
+/// `LINE` either side, `DIVIDER_PAD_Y` above and below; a compaction's
+/// label holds `DIVIDER_ICON` icons `DIVIDER_LABEL_GAP` from its words.
+pub const DIVIDER_GAP: f32 = SPACE_3;
+pub const DIVIDER_PAD_Y: f32 = SPACE_1;
+pub const DIVIDER_ICON: f32 = 12.0;
+pub const DIVIDER_LABEL_GAP: f32 = SPACE_1_5;
+
+/// A Standard-size step at reading size `reading`, whole pixels.
+pub fn tx_scaled(step: f32, reading: f32) -> f32 {
+    (step * reading / FS_PROSE).round()
 }
 /// A tight list's items stand this much further apart than their lines
 /// (Claude's 24 pitch on a 21 line).
@@ -1650,15 +1674,30 @@ pub fn tx_inset(solo: bool) -> f32 {
     }
 }
 
-/// **The prompt bubble** (the prototype's `.bubble`): right-aligned,
+/// **The prompt bubble** (T3's `UserMessageRow`): right-aligned,
 /// shrinking to its words, never wider than `PROMPT_BUBBLE_MAX_W` of the
-/// column; `paint::PROMPT_BUBBLE` at `R_CARD`, `PROMPT_BUBBLE_PAD_X` either side
-/// and `PROMPT_BUBBLE_PAD_Y` above and below; `PROMPT_BUBBLE_GAP` between
-/// it, its thumbnails and its send time.
-pub const PROMPT_BUBBLE_MAX_W: f32 = 0.84;
-pub const PROMPT_BUBBLE_PAD_X: f32 = SPACE_4;
-pub const PROMPT_BUBBLE_PAD_Y: f32 = 10.0;
+/// column; `paint::PROMPT_BUBBLE` at `PROMPT_BUBBLE_RADIUS`,
+/// `PROMPT_BUBBLE_PAD_X` either side and `PROMPT_BUBBLE_PAD_Y` above and
+/// below; `PROMPT_BUBBLE_GAP` between it and its thumbnails, and
+/// `PROMPT_ACTIONS_GAP` over its actions. Two prompts in a row join on
+/// `PROMPT_BUBBLE_JOIN_RADIUS` corners (the upper's bottom right, the
+/// lower's top right).
+pub const PROMPT_BUBBLE_MAX_W: f32 = 0.80;
+pub const PROMPT_BUBBLE_PAD_X: f32 = SPACE_3;
+pub const PROMPT_BUBBLE_PAD_Y: f32 = SPACE_3;
 pub const PROMPT_BUBBLE_GAP: f32 = SPACE_1_5;
+pub const PROMPT_BUBBLE_RADIUS: f32 = SPACE_4;
+pub const PROMPT_BUBBLE_JOIN_RADIUS: f32 = SPACE_1_5;
+pub const PROMPT_ACTIONS_GAP: f32 = SPACE_1;
+/// **A long prompt** (over `PROMPT_CLAMP_CHARS` visible characters or
+/// `PROMPT_CLAMP_LINES` lines) clamps to `PROMPT_CLAMP_H` under a
+/// `PROMPT_CLAMP_FADE` fade at its foot, with `Show full message` /
+/// `Show less` `PROMPT_CLAMP_TOGGLE_GAP` under it (T3's `max-h-44`).
+pub const PROMPT_CLAMP_CHARS: usize = 600;
+pub const PROMPT_CLAMP_LINES: usize = 8;
+pub const PROMPT_CLAMP_H: f32 = 176.0;
+pub const PROMPT_CLAMP_FADE: f32 = 28.0;
+pub const PROMPT_CLAMP_TOGGLE_GAP: f32 = SPACE_1_5;
 
 /// **A sent image's thumbnail** (Claude's, over its bubble): the picture
 /// at its own proportions, no larger than `THUMB_MAX_W` × `THUMB_MAX_H`
@@ -1818,18 +1857,22 @@ pub const WORK_DETAIL_CODE: f32 = 11.0;
 pub const WORK_LIST_MAX_H: f32 = 288.0;
 pub const WORK_LIST_FADE: f32 = SPACE_6;
 pub const WORK_LIST_PAD_B: f32 = SPACE_1;
-/// **Message actions**: a prompt's (its send time and `Copy`, under its
-/// bubble's right edge) and a turn's answer's (`Copy` and the time it
-/// finished, under its left edge), `MESSAGE_ACTIONS_GAP` under the message,
-/// laid out at rest so the pointer never moves the transcript. They show
+/// **Message actions**: a prompt's (its send time, `Edit from here` and
+/// `Copy`, `PROMPT_ACTIONS_GAP` under its bubble's right edge) and a turn's
+/// answer's meta (`Copy`, `Fork` and the time it finished,
+/// `MESSAGE_ACTIONS_GAP` under its left edge), laid out at rest so the
+/// pointer never moves the transcript. Times read T3's way (`8:26 pm`,
+/// `yesterday at 8:26 pm`: `clock::day_aware_label`). They show
 /// under the pointer anywhere on the message, and always under the
 /// thread's latest answer (Codex: the last answer is where you act). Each is
 /// a `MESSAGE_ACTION` square at `R_CONTROL`, its `MESSAGE_ACTION_GLYPH` icon
 /// in `INK_SUBTLE`, the raised hover blend; a copy turns to a check for
 /// `COPIED_HOLD_MS`. The time is meta type in `INK_SUBTLE`.
 pub const MESSAGE_ACTION: f32 = SPACE_6;
-pub const MESSAGE_ACTION_GLYPH: f32 = 14.0;
-pub const MESSAGE_ACTIONS_GAP: f32 = SPACE_2;
+/// A worded message action's side padding (T3's xs button, `px-[7px]`).
+pub const MESSAGE_ACTION_PAD_X: f32 = 7.0;
+pub const MESSAGE_ACTION_GLYPH: f32 = 12.0;
+pub const MESSAGE_ACTIONS_GAP: f32 = SPACE_1_5;
 pub const COPIED_HOLD_MS: u64 = 1_500;
 /// **The edge fades**: what scrolls under the top of the transcript (or
 /// under its pinned prompt) fades out over this height into the card, so no
@@ -3550,10 +3593,6 @@ pub const MOTION_LIGHTBOX_FROM_SCALE: f32 = 0.3;
 /// `MOTION_DUR_SNAP_MS` on `MOTION_EASE_SNAP`, after gpui's 300ms delay
 /// (Claude's grouped tooltips; the next one within 200ms shows at once).
 pub const MOTION_TOOLTIP_IN_MS: u64 = MOTION_DUR_SNAP_MS;
-/// A message's actions show under the pointer over `MOTION_DUR_SNAP_MS`
-/// after `MOTION_ACTIONS_DELAY_MS`, and go over `MOTION_DUR_FAST_MS` at
-/// once, both on `MOTION_EASE_SNAP` (Claude's `--cds-message-actions-opacity`).
-pub const MOTION_ACTIONS_DELAY_MS: u64 = 100;
 /// A board slot opening beside its owner (the Review beside its Pane)
 /// slides in over 240ms on `MOTION_EASE_SNAP`, the owner narrowing with
 /// it, and slides out over a shorter 200ms before it is removed.
@@ -3925,7 +3964,7 @@ mod tests {
         assert_eq!(hsla, paint::RAISED.hsla());
     }
 
-    /// Rule 1: every type role on a whole-pixel line, a 1.5× reading line
+    /// Rule 1: every type role on a whole-pixel line, a 1.625× reading line
     /// at every reading size, headings at the body size, a code cell of
     /// 0.6em, and every chrome size on the type scale.
     #[test]
@@ -3938,15 +3977,15 @@ mod tests {
         for reading in ReadingSize::STEPS.map(ReadingSize::nearest) {
             let (size, line) = (answer_text_size(reading), answer_line_height(reading));
             assert_eq!(line, line.round());
-            assert!(line >= size * 1.45, "{reading:?}: {size}/{line}");
-            assert!(line <= size * 1.55, "{reading:?}: {size}/{line}");
+            assert!(line >= size * 1.58, "{reading:?}: {size}/{line}");
+            assert!(line <= size * 1.67, "{reading:?}: {size}/{line}");
         }
-        // At Standard: Solo and a Group Pane 14/21, on the scale.
-        assert_eq!(answer_line_height(ReadingSize::nearest(14)), 21.0);
+        // At Standard: Solo and a Group Pane 14/23, on the scale.
+        assert_eq!(answer_line_height(ReadingSize::nearest(14)), 23.0);
         let group = tx_size(ReadingSize::STANDARD, false);
-        assert_eq!((group, prose_line_height(group)), (14.0, 21.0));
+        assert_eq!((group, prose_line_height(group)), (14.0, 23.0));
         let solo = tx_size(ReadingSize::STANDARD, true);
-        assert_eq!((solo, prose_line_height(solo)), (14.0, 21.0));
+        assert_eq!((solo, prose_line_height(solo)), (14.0, 23.0));
         for size in [group, solo, group - TX_BLOCK_STEP, solo - TX_BLOCK_STEP] {
             assert!(TYPE_SCALE.contains(&size), "{size} is off the scale");
         }
