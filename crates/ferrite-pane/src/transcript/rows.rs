@@ -2041,4 +2041,51 @@ mod tests {
         }));
         assert!(TranscriptRows::new(transcript.blocks(), &shape(), READING).is_empty());
     }
+
+    /// A failed call before the answer stays in view under the shut fold
+    /// (ADR 0007: failures are never hidden); the clean work around it folds.
+    #[test]
+    fn a_failed_call_before_the_answer_stays_in_view() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        bash(&mut transcript, "bad");
+        settle(&mut transcript, "bad", true);
+        bash(&mut transcript, "ok");
+        settle(&mut transcript, "ok", false);
+        text(&mut transcript, "Done.");
+        complete(&mut transcript, 2_000);
+        let rows = TranscriptRows::new(transcript.blocks(), &shape(), READING);
+        let shown: Vec<String> = calls(&rows).into_iter().flat_map(|(_, calls)| calls).collect();
+        assert_eq!(shown, ["bad"], "the failure stays, the clean call folds");
+    }
+
+    /// A steer into a turn that had drawn nothing yet (its thought hidden):
+    /// the turn's first segment hides nothing that draws, so it has no
+    /// fold; the steer's segment keeps its own.
+    #[test]
+    fn a_fold_that_hides_nothing_is_no_fold() {
+        let mut transcript = Transcript::default();
+        let sent = |transcript: &mut Transcript, text: &str, stamp: &str| {
+            prompt(transcript, text);
+            transcript.apply(Input::PromptObservation {
+                sent_at: stamp.into(),
+                prompt_id: None,
+            });
+        };
+        sent(&mut transcript, "go", "2026-11-09T20:00:00+00:00");
+        transcript.apply(Input::Event(SessionEvent::ThinkingDelta { text: "hm".into() }));
+        sent(&mut transcript, "and the docs", "2026-11-09T20:01:00+00:00");
+        bash(&mut transcript, "b");
+        settle(&mut transcript, "b", false);
+        text(&mut transcript, "Done.");
+        complete(&mut transcript, 90_000);
+        let hidden_thinking = RowShape { thinking: false, ..shape() };
+        let rows = TranscriptRows::new(transcript.blocks(), &hidden_thinking, READING);
+        let folds: Vec<_> = rows
+            .rows()
+            .iter()
+            .filter_map(|row| row.fold().map(|fold| fold.label.clone()))
+            .collect();
+        assert_eq!(folds, ["Continued for 30s"]);
+    }
 }

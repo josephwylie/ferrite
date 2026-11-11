@@ -315,3 +315,63 @@ fn a_running_command_opens_onto_its_output_so_far(cx: &mut TestAppContext) {
     let after = cx.debug_bounds("tool-output").expect("still shown").size.height;
     assert!(after > before, "it fills as output arrives: {before:?} -> {after:?}");
 }
+
+/// A steered turn's changed-files card spans the whole turn, so a folder
+/// the operator opened on it stays open as the transcript moves on, even
+/// when its file was written before the steer.
+#[gpui::test]
+fn a_steered_turns_opened_folder_stays_open(cx: &mut TestAppContext) {
+    let (mut core, fake, workspace) = bound_cockpit("steered-folder", Provider::Claude);
+    let first = core.threads()[0];
+    core.send(first, "write the site".into());
+    std::fs::create_dir_all(workspace.join("site")).unwrap();
+    std::fs::create_dir_all(workspace.join("docs")).unwrap();
+    std::fs::write(workspace.join("site/index.html"), "<p>x</p>").unwrap();
+    std::fs::write(workspace.join("docs/b.md"), "b").unwrap();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    let stream = fake.streams.borrow()[0].clone();
+    wrote(&stream, "w1", "site/index.html", "<p>x</p>");
+    stream
+        .send(SessionEvent::Queue(ferrite_core::QueueEvent::Started {
+            historical: false,
+            client_id: "steer-1".into(),
+            text: Some("and the docs".into()),
+        }))
+        .unwrap();
+    wrote(&stream, "w2", "docs/b.md", "b");
+    stream.send(SessionEvent::TextDelta { text: "Done.".into() }).unwrap();
+    stream
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    hide_panel(&view, cx);
+    let steered = view.read_with(cx, |view, _| {
+        let thread = view.cockpit.threads()[0];
+        view.cockpit
+            .thread(thread)
+            .unwrap()
+            .transcript()
+            .blocks()
+            .iter()
+            .any(|block| block.steer)
+    });
+    assert!(steered, "premise: the turn holds a steer");
+    let folder = cx.debug_bounds("changes-folder-site").expect("the site folder");
+    cx.simulate_click(folder.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(
+        cx.debug_bounds("changes-file-site/index.html").is_some(),
+        "premise: the press opened it"
+    );
+    stream.send(SessionEvent::TextDelta { text: "More.".into() }).unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("changes-file-site/index.html").is_some(),
+        "the folder the operator opened stays open"
+    );
+}

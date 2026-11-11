@@ -323,7 +323,8 @@ impl Line {
         self.reversed = false;
     }
 
-    /// Select the word under `offset` — a double-click.
+    /// Select the word under `offset` — a double-click; on a token, the
+    /// token whole.
     pub fn select_word_at(&mut self, offset: usize) {
         let offset = offset.min(self.content.len());
         let at = self.char_boundary_at_or_before(offset);
@@ -334,6 +335,11 @@ impl Line {
             self.reversed = false;
             return;
         };
+        if let Some(atom) = self.atoms.iter().find(|atom| atom.contains(&at)) {
+            self.selection = atom.clone();
+            self.reversed = false;
+            return;
+        }
         let here = kind(c);
         let start = self.run_start(at, here);
         let end = self.run_end(at, here);
@@ -349,20 +355,25 @@ impl Line {
 
     /// A click: the caret lands at `offset`, snapped onto a character.
     pub fn place_caret(&mut self, offset: usize) {
-        let at = self.char_boundary_at_or_before(offset);
-        let at = match self.atom_around(at) {
-            Some(atom) if at - atom.start <= atom.end - at => atom.start,
-            Some(atom) => atom.end,
-            None => at,
-        };
+        let at = self.snapped(offset);
         self.place(at);
     }
 
     /// A shift-click or a drag: the selection grows from its anchor to
-    /// `offset`, snapped onto a character.
+    /// `offset`, snapped onto a character, never inside a token.
     pub fn select_to(&mut self, offset: usize) {
-        let at = self.char_boundary_at_or_before(offset);
+        let at = self.snapped(offset);
         self.extend(at);
+    }
+
+    /// `offset` on a character, and off a token onto its nearer edge.
+    fn snapped(&self, offset: usize) -> usize {
+        let at = self.char_boundary_at_or_before(offset);
+        match self.atom_around(at) {
+            Some(atom) if at - atom.start <= atom.end - at => atom.start,
+            Some(atom) => atom.end,
+            None => at,
+        }
     }
 
     /// Collapse the selection to a caret at `at`.
@@ -444,7 +455,7 @@ impl Line {
     }
 
     /// The start of the word before `offset`: back over whitespace, then
-    /// back over one run of the kind found there.
+    /// back over one run of the kind found there, or over a token whole.
     fn word_start(&self, offset: usize) -> usize {
         let mut at = offset;
         while let Some(c) = self.content[..at].chars().next_back() {
@@ -453,6 +464,9 @@ impl Line {
             }
             at -= c.len_utf8();
         }
+        if let Some(atom) = self.atoms.iter().find(|atom| atom.start < at && at <= atom.end) {
+            return atom.start;
+        }
         let Some(c) = self.content[..at].chars().next_back() else {
             return at;
         };
@@ -460,7 +474,7 @@ impl Line {
     }
 
     /// The end of the word after `offset`: over whitespace, then over one
-    /// run of the kind found there.
+    /// run of the kind found there, or over a token whole.
     fn word_end(&self, offset: usize) -> usize {
         let mut at = offset;
         while let Some(c) = self.content[at..].chars().next() {
@@ -468,6 +482,9 @@ impl Line {
                 break;
             }
             at += c.len_utf8();
+        }
+        if let Some(atom) = self.atoms.iter().find(|atom| atom.start <= at && at < atom.end) {
+            return atom.end;
         }
         let Some(c) = self.content[at..].chars().next() else {
             return at;
@@ -565,6 +582,43 @@ mod tests {
         let mut line = of("fix $tdd now");
         line.set_atoms(vec![4..8]);
         line
+    }
+
+    /// ⌥←, ⌥⌫, a drag and a double-click take a token whole: none lands
+    /// inside one.
+    #[test]
+    fn word_left_never_lands_inside_a_token() {
+        let mut line = of("fix /to-spec now");
+        line.set_atoms(vec![4..12]);
+        line.place_caret(12);
+        line.move_word_left();
+        assert_eq!(line.cursor(), 4, "alt-left from a token's end lands inside it");
+    }
+
+    #[test]
+    fn word_delete_takes_a_token_whole() {
+        let mut line = of("fix /to-spec now");
+        line.set_atoms(vec![4..12]);
+        line.place_caret(12);
+        line.delete_word_left();
+        assert_eq!(line.text(), "fix  now", "alt-backspace leaves half a token");
+    }
+
+    #[test]
+    fn a_drag_never_ends_inside_a_token() {
+        let mut line = with_token();
+        line.place_caret(0);
+        line.select_to(6);
+        let end = line.selection().end;
+        assert!(end == 4 || end == 8, "the selection ends inside the token at {end}");
+    }
+
+    #[test]
+    fn a_double_click_selects_a_token_whole() {
+        let mut line = of("fix /to-spec now");
+        line.set_atoms(vec![4..12]);
+        line.select_word_at(9);
+        assert_eq!(line.selection(), 4..12, "a double-click selects part of the token");
     }
 
     #[test]

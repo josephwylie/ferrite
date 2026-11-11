@@ -710,6 +710,8 @@ fn escape_on_a_subagent_stops_only_that_subagent_or_goes_back(cx: &mut TestAppCo
 /// A Main `Agent` call reads as Claude's row (`Ran agent <task>`), runs
 /// with its agent — the line under the turn never names it a second time —
 /// and a press on it opens that agent in the right pane (`agent_pane`).
+/// While it runs its time counts on its own clock, not only when something
+/// else redraws the transcript.
 #[gpui::test]
 fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("subagents-row", 1);
@@ -734,6 +736,10 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("agent-running").is_some(), "its spinner");
     assert!(cx.debug_bounds("agent-row-Atlas").is_some());
+    assert!(
+        cx.debug_bounds("agent-elapsed-live").is_some(),
+        "its time counts on its own while it runs"
+    );
     view.read_with(cx, |view, _| {
         let activity = view
             .cockpit
@@ -775,6 +781,7 @@ fn an_agent_row_runs_with_its_agent_and_opens_it(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(view.read_with(cx, |view, _| !view.agent_drills.is_open(thread)));
     assert!(cx.debug_bounds("agent-running").is_none(), "settled");
+    assert!(cx.debug_bounds("agent-elapsed-live").is_none(), "its time holds");
 }
 
 /// Agents started together draw T3's subagent card: shut, its trigger

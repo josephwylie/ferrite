@@ -1652,11 +1652,15 @@ impl TranscriptView {
         }
         let call = matches!(&block.body, Body::Thinking(text) if !text.trim().is_empty())
             .then_some(DisclosureId::Reasoning(block.id));
+        // Still being thought: the running turn's last block.
+        let live = self.input.working.is_some()
+            && self.input.blocks.last().is_some_and(|last| last.id == block.id);
         pane::render_block(
             block,
             row_cx,
             call.as_ref()
                 .is_some_and(|call| self.tool_state(call) == DisclosureState::Expanded),
+            live,
             call.as_ref().and_then(|call| {
                 view.map(|view| self.disclosure_control(call, false, view.clone()))
             }),

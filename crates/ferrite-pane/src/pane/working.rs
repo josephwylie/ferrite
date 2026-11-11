@@ -263,7 +263,7 @@ pub(crate) struct FoldFace<'a> {
 /// A settled turn's fold (T3's turn fold, MessagesTimeline.tsx:1621-1652),
 /// on the header's frame (`turn_rule`): `Worked for 24m 55s` and its
 /// chevron, right while shut and down while open (the glyphs cross-fading,
-/// never turning), a press target with no ground, the words not
+/// never turning), the whole row a press target with no ground, the words not
 /// selectable. Under the pointer they go `INK_SUBTLE` → `INK_STRONG` over
 /// `motion::FOLD_HOVER`, and the turn's start time (`8:01 pm`) snaps in at
 /// the row's end, taking no room until it shows.
@@ -309,7 +309,7 @@ pub(crate) fn turn_fold(
                 .child(glyph(icons::CHEVRON_DOWN, down))
         },
     );
-    let mut words = div()
+    let words = div()
         .id(button_key.clone())
         .debug_selector(|| "turn-fold-words".into())
         .flex()
@@ -327,15 +327,6 @@ pub(crate) fn turn_fold(
             motion::FOLD_HOVER,
             motion::FOLD_HOVER,
         ));
-    if let Some(toggle) = toggle {
-        words = words
-            .cursor_pointer()
-            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-                cx.stop_propagation();
-                gpui::base::TextSelection::clear(window, cx);
-                toggle(window, cx);
-            });
-    }
     let time = face
         .started
         .filter(|_| hovered || face.targeted.is_some())
@@ -369,6 +360,16 @@ pub(crate) fn turn_fold(
         .on_hover(motion::hover_snap(row_key))
         .child(words)
         .children(time);
+    // The whole row is the press, as its hover time is the whole row's.
+    if let Some(toggle) = toggle {
+        row = row
+            .cursor_pointer()
+            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                cx.stop_propagation();
+                gpui::base::TextSelection::clear(window, cx);
+                toggle(window, cx);
+            });
+    }
     if let Some(focus) = face.targeted {
         row = row
             .bg(theme::paint::RAISED)
@@ -541,7 +542,21 @@ pub(super) fn starting_line(still: bool, solo: bool) -> Div {
 /// around it. Under reduced motion the header draws its seconds in place
 /// and is drawn again as they turn (`Header::seconds`).
 fn live_clock(started: std::time::Instant) -> AnyElement {
-    let clock = LiveClock { started };
+    counting_clock(started, "progress-clock", ferrite_core::progress::live_seconds)
+}
+
+/// A clock counting from `started` on its own as `live_clock` does, its
+/// time read by `format` (an agent's `2m 05s`).
+pub(crate) fn counting_clock(
+    started: std::time::Instant,
+    selector: &'static str,
+    format: fn(Duration) -> String,
+) -> AnyElement {
+    let clock = LiveClock {
+        started,
+        selector,
+        format,
+    };
     ferrite_ui::loops_overlay::hosted(move || clock.into_any_element()).into_any_element()
 }
 
@@ -577,6 +592,8 @@ pub fn background_clock(launched: std::time::Instant) -> Div {
 #[derive(IntoElement, Clone, Copy)]
 struct LiveClock {
     started: std::time::Instant,
+    selector: &'static str,
+    format: fn(Duration) -> String,
 }
 
 impl RenderOnce for LiveClock {
@@ -590,11 +607,10 @@ impl RenderOnce for LiveClock {
             cx,
         );
         let elapsed = ferrite_core::clock::instant().saturating_duration_since(self.started);
+        let selector = self.selector;
         div()
-            .debug_selector(|| "progress-clock".into())
-            .child(SharedString::from(ferrite_core::progress::live_seconds(
-                elapsed,
-            )))
+            .debug_selector(move || selector.into())
+            .child(SharedString::from((self.format)(elapsed)))
     }
 }
 

@@ -1372,8 +1372,11 @@ fn a_turn_heads_with_working_for_and_settles_into_its_fold(cx: &mut TestAppConte
         cx.debug_bounds("tool-row-fold-sed").is_some(),
         "the fold stays open across a re-projection"
     );
+    // The whole row is the press, not only its words.
+    let fold = cx.debug_bounds("turn-fold").unwrap();
     let words = cx.debug_bounds("turn-fold-words").unwrap();
-    cx.simulate_click(words.center(), gpui::Modifiers::none());
+    let past_the_words = gpui::point(words.right() + (fold.right() - words.right()) / 2., fold.center().y);
+    cx.simulate_click(past_the_words, gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds("tool-row-fold-sed").is_none());
     assert!(cx.debug_bounds("turn-fold-shut").is_some());
