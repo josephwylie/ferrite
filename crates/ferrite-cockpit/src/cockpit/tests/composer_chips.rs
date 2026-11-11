@@ -402,16 +402,24 @@ fn the_plus_menu_reaches_the_connectors(cx: &mut TestAppContext) {
         .contains(&ferrite_core::SessionControl::LoginMcp {
             server: "search".into()
         }));
-    view.update(cx, |view, cx| {
-        view.change_settings(|settings| settings.panel_shown = false, cx)
-    });
+    // The Thread's Panel shut, as the operator shuts it (ADR 0039: the
+    // Panel opens and shuts per Thread).
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    tick(cx);
+    assert!(cx.debug_bounds("panel").is_none(), "the premise: the panel is shut");
     open(&view, cx);
     let manage = cx.debug_bounds("choice-sub-1").expect("Manage connectors");
     cx.simulate_click(manage.center(), gpui::Modifiers::none());
     tick(cx);
+    assert!(cx.debug_bounds("panel").is_some(), "the panel shows");
     view.read_with(cx, |view, _| {
         assert!(view.attach_menu.is_none(), "a pick closes the menu");
-        assert!(view.prefs.settings.panel_shown, "the panel shows");
+        let thread = view.panes[0].thread().expect("a Thread");
+        assert_eq!(
+            view.active_surface(thread),
+            Some(crate::cockpit::surfaces::SurfaceId::Overview),
+            "on its Overview, where the connectors are"
+        );
     });
 }
 
