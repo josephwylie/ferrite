@@ -388,6 +388,41 @@ fn routes_problems_and_pickers(cx: &mut TestAppContext) {
         )
     });
     tick(cx);
+    // The Reviewer would complete what was never merged.
+    view.read_with(cx, |view, _| {
+        let problems: Vec<String> = view
+            .draft_problems()
+            .into_iter()
+            .map(|problem| problem.message)
+            .collect();
+        assert_eq!(
+            problems,
+            [
+                "Reviewer \u{b7} When finished reaches Completed with nothing merged: route it \
+              through Merge agent."
+            ]
+        );
+    });
+    view.update(cx, |view, cx| {
+        for (step, kind, to) in [
+            ("s-4", RouteKind::Finished, Destination::Coordinator),
+            (
+                "s-5",
+                RouteKind::Merge(ferrite_core::factory::MergeOutcome::Merged),
+                Destination::Complete,
+            ),
+        ] {
+            view.apply_pick(
+                Pick::Route {
+                    step: step.into(),
+                    kind,
+                    to,
+                },
+                cx,
+            );
+        }
+    });
+    tick(cx);
 
     click(cx, "workflow-save");
     view.read_with(cx, |view, _| {
