@@ -38,6 +38,7 @@ fn at(thread: ThreadId, busy: bool, turns: u64, decision: Option<&str>) -> (Thre
             turns,
             decision: decision.map(str::to_string),
             lost: false,
+            closed: false,
         },
     )
 }
@@ -193,8 +194,10 @@ fn interrogate_an_unreadable_part_lets_another_project_reuse_its_ids() {
 }
 
 /// Attack: the concurrency limit. A Task in Needs human for a Provider
-/// permission frees its slot; when the permission is answered it goes
-/// straight back to Working, past the limit.
+/// permission used to free its slot, and went straight back to Working
+/// past the limit when the permission was answered. Its Worker's run goes
+/// on the moment it is answered, so it keeps its place: the next Task
+/// waits for it.
 #[test]
 fn interrogate_an_answered_permission_goes_past_the_limit() {
     let mut factory = Factory::in_memory();
@@ -215,28 +218,43 @@ fn interrogate_an_answered_permission_goes_past_the_limit() {
     );
     assert_eq!(
         status(&factory, &second),
-        Status::Working,
-        "its slot was free"
+        Status::Queued,
+        "a permission waiting keeps its Task's place"
     );
-    worker(&mut factory, &second, SECOND);
 
     // The operator answers the permission in the first Task's Worker.
-    factory.step(
-        4,
-        &BTreeMap::from([at(WORKER, true, 0, None), at(SECOND, true, 0, None)]),
-    );
+    factory.step(4, &BTreeMap::from([at(WORKER, true, 0, None)]));
     println!(
         "limit {} · {first} {:?} · {second} {:?}",
         factory.limit(),
         status(&factory, &first),
         status(&factory, &second)
     );
+    assert_eq!(status(&factory, &first), Status::Working);
     assert!(
         working_count(&factory) <= factory.limit(),
         "{} Tasks Working with a limit of {}",
         working_count(&factory),
         factory.limit()
     );
+
+    report_finished(&mut factory, WORKER);
+    factory.step(5, &BTreeMap::from([at(WORKER, false, 1, None)]));
+    assert_eq!(status(&factory, &second), Status::Working, "its turn came");
+}
+
+fn report_finished(factory: &mut Factory, thread: ThreadId) {
+    factory
+        .command(
+            Command::Report {
+                worker: thread,
+                outcome: Outcome::Finished {
+                    summary: "Done".into(),
+                },
+            },
+            4,
+        )
+        .unwrap();
 }
 
 fn worker(factory: &mut Factory, task: &str, thread: ThreadId) {

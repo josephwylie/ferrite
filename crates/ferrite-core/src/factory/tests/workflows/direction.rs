@@ -14,6 +14,7 @@ fn at(thread: ThreadId, busy: bool, turns: u64) -> BTreeMap<ThreadId, Seen> {
             turns,
             decision: None,
             lost: false,
+            closed: false,
         },
     )])
 }
@@ -275,6 +276,7 @@ fn a_provider_decision_in_a_worker_needs_the_operator_in_the_task() {
             turns: 0,
             decision: Some("Run cargo test".into()),
             lost: false,
+            closed: false,
         },
     )]);
     let effects = factory.step(10, &asking);

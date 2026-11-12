@@ -61,14 +61,13 @@ pub(super) fn lost(
     let Some(thread) = task.worker else {
         return false;
     };
-    // A Provider Decision dies with its Session: nobody can answer it now.
-    task.oversight.permission = None;
     let session = session_name(task);
     let happened = match cause {
         Cause::Restart => format!("Ferrite restarted while {session} was working"),
         Cause::Ended => format!("{session} ended unexpectedly"),
     };
     if task.keeping.revived_ms.is_some() {
+        task.oversight.permission = None;
         task.note(
             now_ms,
             Actor::Ferrite,
@@ -84,8 +83,11 @@ pub(super) fn lost(
     task.keeping.revived_ms = Some(now_ms);
     task.reason = None;
     if task.status != Status::Working {
-        task.enter(Status::Working, effects);
+        // Waiting on a permission, it held its place in the limit.
+        task.to_work(effects);
     }
+    // A Provider Decision dies with its Session: nobody can answer it now.
+    task.oversight.permission = None;
     task.note(
         now_ms,
         Actor::Ferrite,
@@ -99,6 +101,29 @@ pub(super) fn lost(
         baseline: seen.turns,
         ..Watch::default()
     };
+    true
+}
+
+/// The Task's Worker was closed while its run went (parked by the
+/// operator, or gone): it is not revived against their word. The Task
+/// stops, holding no place in the limit; Resume reopens the Worker.
+/// Whether it did.
+pub(super) fn closed(task: &mut Task, seen: &Seen, now_ms: i64, effects: &mut Vec<Effect>) -> bool {
+    // A prompt waiting to be sent reopens it.
+    if !seen.closed || !task.running() || task.watch.prompt.is_some() {
+        return false;
+    }
+    task.oversight.permission = None;
+    let session = session_name(task);
+    task.note(
+        now_ms,
+        Actor::Ferrite,
+        format!("The Thread of {session} was closed; stopped the task"),
+    );
+    task.reason = Some(format!(
+        "The Thread of {session} was closed while it worked. Resume to reopen it and continue."
+    ));
+    task.enter(Status::Stopped, effects);
     true
 }
 

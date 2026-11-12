@@ -122,13 +122,23 @@ impl Server {
         kept
     }
 
-    /// What each open Worker's Thread is doing.
+    /// What each Worker's Thread is doing, the ones not open (parked by
+    /// `project.close` or `thread.close`, or gone) too.
     fn factory_workers(&self) -> BTreeMap<ThreadId, Seen> {
         let decisions = self.engine.unanswered_decisions();
         self.factory
             .watched()
             .filter_map(|thread| {
-                let view = self.engine.thread(thread)?;
+                let Some(view) = self.engine.thread(thread) else {
+                    let closed = Seen {
+                        busy: false,
+                        turns: 0,
+                        decision: None,
+                        lost: false,
+                        closed: true,
+                    };
+                    return Some((thread, closed));
+                };
                 self.engine.attention(thread)?;
                 let busy = !self.at_rest(thread);
                 let turns = self.engine.completion_seq(thread).unwrap_or(0);
@@ -149,6 +159,7 @@ impl Server {
                         turns,
                         decision,
                         lost,
+                        closed: false,
                     },
                 ))
             })
@@ -192,6 +203,10 @@ impl Server {
             Effect::Prompt { thread, text } => {
                 if !self.wake_coordinator(thread, &text) {
                     return None;
+                }
+                // A parked Worker is reopened in place to be told.
+                if self.engine.thread(thread).is_none() && self.factory.task_of(thread).is_some() {
+                    let _ = self.execute(crate::protocol::Op::Revive { thread });
                 }
                 let prompt = AgentPromptParams {
                     thread,

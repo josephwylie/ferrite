@@ -670,6 +670,7 @@ fn seen_at(thread: ThreadId, busy: bool, turns: u64) -> BTreeMap<ThreadId, Seen>
             turns,
             decision: None,
             lost: false,
+            closed: false,
         },
     )])
 }

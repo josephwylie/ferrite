@@ -50,6 +50,7 @@ fn seen(busy: bool, turns: u64) -> BTreeMap<ThreadId, Seen> {
             turns,
             decision: None,
             lost: false,
+            closed: false,
         },
     )])
 }
@@ -539,6 +540,7 @@ fn both_at_rest(turns: u64) -> BTreeMap<ThreadId, Seen> {
                     turns,
                     decision: None,
                     lost: false,
+                    closed: false,
                 },
             )
         })

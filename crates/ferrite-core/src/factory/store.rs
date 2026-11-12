@@ -743,8 +743,8 @@ impl Factory {
     }
 
     /// One pass: what to do now, given the time and what each Worker's
-    /// Thread is doing. A Worker the Server does not see (no open Thread)
-    /// is left as it is.
+    /// Thread is doing. A Worker the Server says nothing of is left as it
+    /// is.
     pub fn step(&mut self, now_ms: i64, workers: &BTreeMap<ThreadId, Seen>) -> Vec<Effect> {
         if self.trouble.is_some() {
             return Vec::new();
@@ -833,7 +833,9 @@ impl Factory {
     }
 
     /// Which Queued Tasks may start working now, oldest first, while
-    /// fewer than the limit work across every Project.
+    /// fewer than the limit hold a place across every Project: a Task
+    /// waiting on a Provider permission keeps its own, since answering
+    /// it lets its Worker go on at once.
     fn admissions(&self) -> BTreeMap<ProjectId, BTreeSet<TaskId>> {
         let readable = || {
             self.parts
@@ -842,7 +844,7 @@ impl Factory {
         };
         let working = readable()
             .flat_map(|(_, part)| &part.state.tasks)
-            .filter(|task| task.status == Status::Working)
+            .filter(|task| task.running())
             .count();
         let room = self.limit.saturating_sub(working);
         let mut queued: Vec<(u64, ProjectId, &TaskId)> = readable()

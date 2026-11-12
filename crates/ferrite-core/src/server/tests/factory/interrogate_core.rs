@@ -315,9 +315,22 @@ fn interrogate_a_worker_parked_by_project_close_leaves_its_task_working_forever(
         "3 s later: task status {} reason {}; worker thread.get: {}",
         after["status"], after["reason"], thread["error"]["code"]
     );
-    assert_ne!(
-        after["status"], "working",
+    assert_eq!(
+        after["status"], "stopped",
         "a Task whose Worker was parked does not stay Working: {after}"
+    );
+    let resumed = ok_call(&harness, "task.resume", serde_json::json!({ "task": task }));
+    eprintln!("resumed: {}", resumed["task"]["status"]);
+    let reopened = task_until(&mut caller, &task, |task| task["status"] == "working");
+    assert_eq!(
+        reopened["worker"],
+        serde_json::json!(worker),
+        "Resume reopens its Worker"
+    );
+    let thread = caller.answer("t", "thread.get", serde_json::json!({ "thread": worker }));
+    assert!(
+        thread["error"].is_null(),
+        "the Worker is open again: {thread}"
     );
 }
 
