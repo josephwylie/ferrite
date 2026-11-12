@@ -205,7 +205,8 @@ impl CockpitView {
     }
 
     fn panel_candidate_index(&self) -> Option<usize> {
-        if self.empty_board_shown() {
+        // A Panel is its Thread's: the Factory in the board's place has none.
+        if self.empty_board_shown() || self.factory_view.is_some() {
             return None;
         }
         let index = self.focused();

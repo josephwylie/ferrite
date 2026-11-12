@@ -167,10 +167,11 @@ fn the_outline_is_shaped_by_mouse_and_keyboard(cx: &mut TestAppContext) {
     assert_eq!(names(&view, cx).len(), 7);
     assert_eq!(selected(&view, cx), "New agent");
 
-    // Delete from its row's menu: the destructive row asks twice.
+    // Delete from its row's menu (the last row's offers no Move down):
+    // the destructive row asks twice.
     click(cx, "outline-row-s-7-more");
-    click(cx, "context-menu-row-3");
-    click(cx, "context-menu-row-3");
+    click(cx, "context-menu-row-2");
+    click(cx, "context-menu-row-2");
     assert_eq!(names(&view, cx).len(), 6);
 
     // A second Workflow, Blank, renamed by typing.

@@ -195,18 +195,16 @@ impl CockpitView {
                     )
                 })
                 .collect(),
-            "model" => std::iter::once(pick(
-                ferrite_ui::menu::Item::new("Default").checked(agent.model.is_none()),
-                CoordinatorPick::Model(String::new()),
-            ))
-            .chain(models.iter().map(|model| {
-                pick(
-                    ferrite_ui::menu::Item::new(model.display.clone())
-                        .checked(agent.model.as_deref() == Some(model.value.as_str())),
-                    CoordinatorPick::Model(model.value.clone()),
-                )
-            }))
-            .collect(),
+            "model" => super::workflows::model_choices(&models)
+                .into_iter()
+                .map(|(label, value)| {
+                    let chosen = super::workflows::model_chosen(agent.model.as_deref(), &value);
+                    pick(
+                        ferrite_ui::menu::Item::new(label).checked(chosen),
+                        CoordinatorPick::Model(value),
+                    )
+                })
+                .collect(),
             _ => {
                 let mut efforts: Vec<String> = agent
                     .model
@@ -263,40 +261,56 @@ impl CockpitView {
             .pb(px(SPACE_2))
             .child(
                 div()
+                    .flex_shrink_0()
                     .text_size(px(FS_META))
                     .text_color(rgb(INK_SUBTLE))
                     .child("Coordinator runs on"),
             )
-            .child(super::direction::chooser(
-                "coordinator-provider",
-                agent.provider.to_string(),
-                false,
-                self.coordinator_picks("provider"),
-                cx,
-            ))
-            .child(super::direction::chooser(
-                "coordinator-model",
-                agent
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| "Default model".into()),
-                false,
-                self.coordinator_picks("model"),
-                cx,
-            ))
-            .child(super::direction::chooser(
-                "coordinator-effort",
-                agent
-                    .effort
-                    .clone()
-                    .unwrap_or_else(|| "Default effort".into()),
-                false,
-                self.coordinator_picks("effort"),
-                cx,
-            ))
-            .child(div().flex_1())
+            .children(
+                [
+                    (
+                        "coordinator-provider",
+                        agent.provider.to_string(),
+                        "provider",
+                    ),
+                    (
+                        "coordinator-model",
+                        agent
+                            .model
+                            .clone()
+                            .unwrap_or_else(|| "Default model".into()),
+                        "model",
+                    ),
+                    (
+                        "coordinator-effort",
+                        agent
+                            .effort
+                            .clone()
+                            .unwrap_or_else(|| "Default effort".into()),
+                        "effort",
+                    ),
+                ]
+                .into_iter()
+                .map(|(selector, text, which)| {
+                    // Full-width choosers, each given a share of the row.
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .max_w(px(ferrite_ui::theme::SETTINGS_MENU_MAX_W))
+                        .child(super::direction::chooser(
+                            selector,
+                            text,
+                            false,
+                            self.coordinator_picks(which),
+                            cx,
+                        ))
+                }),
+            )
             .child(
                 div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
                     .text_size(px(FS_META))
                     .text_color(rgb(INK_SUBTLE))
                     .child("Talking starts nothing; work starts only when you accept."),

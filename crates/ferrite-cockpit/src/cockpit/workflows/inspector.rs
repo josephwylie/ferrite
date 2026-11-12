@@ -49,6 +49,7 @@ impl CockpitView {
                        picks: Vec<(ferrite_ui::menu::Item, Pick)>,
                        cx: &mut Context<Self>| {
             let picks = std::rc::Rc::new(picks);
+            let trigger = Trigger::default();
             div()
                 .id(selector)
                 .debug_selector(move || {
@@ -84,11 +85,13 @@ impl CockpitView {
                     ROW_ICON,
                     INK_SUBTLE,
                 ))
+                .relative()
+                .child(trigger.probe())
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
-                        view.open_picks((*picks).clone(), event.position, cx);
+                        view.open_picks((*picks).clone(), &trigger, event.position, cx);
                     }),
                 )
         };

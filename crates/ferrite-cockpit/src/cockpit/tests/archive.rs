@@ -94,8 +94,8 @@ fn world<'a>(
     (view, cx, project)
 }
 
-/// AC: an archived Task is off the board; the Completed column's Clear
-/// asks the Server to archive the Project's Completed Tasks at once.
+/// AC: an archived Task is off the board; Clear completed, in the board's
+/// head, asks the Server to archive the Project's Completed Tasks at once.
 #[gpui::test]
 fn archived_tasks_leave_the_board_and_clear_asks_for_the_rest(cx: &mut TestAppContext) {
     let (view, cx, project) = world(cx, "archive-clear");
@@ -104,14 +104,13 @@ fn archived_tasks_leave_the_board_and_clear_asks_for_the_rest(cx: &mut TestAppCo
     assert!(!shows(cx, "factory-card-t-1"), "archived: off the board");
     assert!(shows(cx, "factory-archive"), "the Archive is offered");
     let board = bounds(cx, "factory-board".into());
-    for button in ["factory-archive", "factory-new-task"] {
+    for button in ["factory-clear", "factory-archive", "factory-new-task"] {
         let at = bounds(cx, button.into());
         assert!(
             board.left() <= at.left() && at.right() <= board.right(),
             "{button} in the head: {at:?} in {board:?}"
         );
     }
-    reveal(cx, "factory-columns", "factory-clear");
     click(cx, "factory-clear");
     let asks = view.read_with(cx, |view, _| view.cockpit.fixture_task_asks().to_vec());
     assert_eq!(asks, vec![TaskAction::Clear { project }]);

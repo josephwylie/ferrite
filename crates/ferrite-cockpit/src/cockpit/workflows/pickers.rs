@@ -2,11 +2,61 @@
 
 use super::*;
 
+/// Where a picker's trigger was last drawn, so its menu hangs under it
+/// rather than over it.
+#[derive(Clone, Default)]
+pub(crate) struct Trigger(std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>);
+
+impl Trigger {
+    /// The trigger's child that records where it is drawn; the trigger is
+    /// `relative`, so this fills it.
+    pub(crate) fn probe(&self) -> impl IntoElement {
+        let drawn = self.0.clone();
+        gpui::canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+            .absolute()
+            .size_full()
+    }
+
+    pub(crate) fn bounds(&self) -> Option<gpui::Bounds<Pixels>> {
+        self.0.get()
+    }
+}
+
+/// A Provider's model choices as a picker offers them: its default first,
+/// named as the catalog names it (`Default · Opus 5.5`), then the rest.
+/// The value of the default is empty: no model is pinned.
+pub(crate) fn model_choices(catalog: &[ferrite_core::ModelInfo]) -> Vec<(String, String)> {
+    let default = catalog
+        .iter()
+        .find(|model| model.value == DEFAULT_MODEL)
+        .map_or_else(|| "Default".to_string(), |model| model.display.clone());
+    std::iter::once((default, String::new()))
+        .chain(
+            catalog
+                .iter()
+                .filter(|model| model.value != DEFAULT_MODEL)
+                .map(|model| (model.display.clone(), model.value.clone())),
+        )
+        .collect()
+}
+
+/// The catalog's own row for the Provider's default model.
+const DEFAULT_MODEL: &str = "default";
+
+/// Whether `chosen` is the model a picker's `value` row stands for.
+pub(crate) fn model_chosen(chosen: Option<&str>, value: &str) -> bool {
+    match chosen {
+        None | Some(DEFAULT_MODEL) => value.is_empty(),
+        Some(chosen) => chosen == value,
+    }
+}
+
 impl CockpitView {
-    /// Open a picker of `picks` at the pointer.
+    /// Open a picker of `picks` under its trigger, else at the pointer.
     pub(crate) fn open_picks(
         &mut self,
         picks: Vec<(ferrite_ui::menu::Item, Pick)>,
+        trigger: &Trigger,
         at: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
@@ -14,7 +64,31 @@ impl CockpitView {
             return;
         };
         view.picks = picks;
-        self.open_context_menu(context_menu::MenuTarget::Factory, at, cx);
+        let target = context_menu::MenuTarget::Factory;
+        match trigger.bounds() {
+            Some(under) => {
+                let gap = px(ferrite_ui::theme::MENU_UNDER_GAP);
+                self.open_context_menu_at(
+                    target,
+                    gpui::point(under.left(), under.top() - gap),
+                    gpui::Anchor::TopLeft,
+                    Some(under.size.height + gap * 2.),
+                    cx,
+                );
+            }
+            None => self.open_context_menu(target, at, cx),
+        }
+    }
+
+    /// A Factory picker that is up goes with the sheet that opened it.
+    pub(crate) fn close_factory_menu(&mut self) {
+        if self
+            .context_menu
+            .as_ref()
+            .is_some_and(|menu| matches!(menu.target, context_menu::MenuTarget::Factory))
+        {
+            self.context_menu = None;
+        }
     }
 
     /// The rows of the open Factory picker.
@@ -176,18 +250,16 @@ impl CockpitView {
     }
 
     pub(super) fn model_picks(&self, step: &Step) -> Vec<(ferrite_ui::menu::Item, Pick)> {
-        let mut picks = vec![(
-            ferrite_ui::menu::Item::new("Default").checked(step.agent.model.is_none()),
-            Pick::Model(step.id.clone(), String::new()),
-        )];
-        for model in self.cockpit.model_catalog(step.agent.provider) {
-            let chosen = step.agent.model.as_deref() == Some(model.value.as_str());
-            picks.push((
-                ferrite_ui::menu::Item::new(model.display.clone()).checked(chosen),
-                Pick::Model(step.id.clone(), model.value.clone()),
-            ));
-        }
-        picks
+        model_choices(&self.cockpit.model_catalog(step.agent.provider))
+            .into_iter()
+            .map(|(label, value)| {
+                let chosen = model_chosen(step.agent.model.as_deref(), &value);
+                (
+                    ferrite_ui::menu::Item::new(label).checked(chosen),
+                    Pick::Model(step.id.clone(), value),
+                )
+            })
+            .collect()
     }
 
     pub(super) fn effort_picks(&self, step: &Step) -> Vec<(ferrite_ui::menu::Item, Pick)> {
@@ -223,17 +295,28 @@ impl CockpitView {
         picks
     }
 
+    /// A row's menu: a move only where the row can go.
     pub(super) fn row_picks(&self, step: &Step) -> Vec<(ferrite_ui::menu::Item, Pick)> {
         let id = step.id.clone();
-        vec![
-            (
+        let steps = self
+            .shown_workflow()
+            .map(|workflow| workflow.draft.steps.as_slice())
+            .unwrap_or_default();
+        let at = steps.iter().position(|each| each.id == step.id);
+        let mut picks = Vec::new();
+        if at.is_some_and(|at| at > 0) {
+            picks.push((
                 ferrite_ui::menu::Item::new("Move up").shortcut("alt-up"),
                 Pick::MoveUp(id.clone()),
-            ),
-            (
+            ));
+        }
+        if at.is_some_and(|at| at + 1 < steps.len()) {
+            picks.push((
                 ferrite_ui::menu::Item::new("Move down").shortcut("alt-down"),
                 Pick::MoveDown(id.clone()),
-            ),
+            ));
+        }
+        picks.extend([
             (
                 ferrite_ui::menu::Item::new("Add agent after"),
                 Pick::AddAfter(id.clone()),
@@ -242,7 +325,8 @@ impl CockpitView {
                 ferrite_ui::menu::Item::new("Delete agent").destructive(),
                 Pick::Delete(id),
             ),
-        ]
+        ]);
+        picks
     }
 
     pub(super) fn workflow_picks(&self) -> Vec<(ferrite_ui::menu::Item, Pick)> {
