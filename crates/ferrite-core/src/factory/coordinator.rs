@@ -240,7 +240,9 @@ pub fn briefing(project: ProjectId) -> String {
          {F} workflow approval w-1 --by human\n    {F} workflow start w-1 '{{\"type\":\"manual\"}}'\n\n\
          ## Propose; never act\n\n\
          You never act without the operator. Four acts are proposals, shown to the operator \
-         as a card they accept or dismiss; nothing happens until they accept:\n\n    \
+         as a card they accept or dismiss; nothing happens until they accept. Raise one with \
+         your own `proposal_raise` tool, which needs no permission: its `act` and the flags \
+         below as its fields. Run the command only if that tool is not offered to you:\n\n    \
          {PROPOSE} start --instructions \"<what to do; first line is the title>\" [--workflow w-1]\n    \
          {PROPOSE} save --workflow w-1\n    \
          {PROPOSE} automation --workflow w-1\n    \

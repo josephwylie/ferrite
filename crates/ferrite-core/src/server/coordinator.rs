@@ -206,6 +206,7 @@ impl Server {
 
     pub(super) fn api_proposal_raise(
         &mut self,
+        coordinator: ThreadId,
         params: ProposalRaiseParams,
     ) -> Result<Value, ApiError> {
         let needs = |what: Option<String>, name: &str| {
@@ -250,7 +251,7 @@ impl Server {
             _ => None,
         };
         let propose = Command::Propose {
-            coordinator: params.coordinator,
+            coordinator,
             act,
             catalog: self.catalog(saves.as_deref(), Vec::new()),
         };

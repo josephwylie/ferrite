@@ -1474,6 +1474,7 @@ mod tests {
                 name: None,
                 additional_directories: Vec::new(),
                 launch: Default::default(),
+                owner: None,
             })
             .expect("demo spawns never fail");
         let events = revived.events();

@@ -25,20 +25,21 @@ use crate::workspace::registry::ProjectId;
 use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
 use crate::{Attention, ThreadId, ThreadOwner};
 
-/// How long a check waits on the Server's own listing of a Project's
-/// skills (G7).
-const SKILLS_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// How long a Project's listing of skills is reused before it is asked
 /// again.
 const SKILLS_KEPT_MS: i64 = 60_000;
 
 /// One Project root's skills for one Provider, as the Server last listed
-/// them and when (`None`: it could not).
+/// them (`None`: it could not, or has not yet), and the listing it waits
+/// on. The pump never waits for one (ADR 0025): a check uses what was
+/// listed last, as the GitHub reader's poll does.
 pub(super) struct SkillsSeen {
     root: std::path::PathBuf,
     provider: crate::store::Provider,
-    at_ms: i64,
+    /// When `listed` came back; `None` before any listing has.
+    at_ms: Option<i64>,
     listed: Option<Vec<String>>,
+    asking: Option<crate::providers::commands::Discovery>,
 }
 
 /// The Factory kept in the Store's directory. One whose file cannot be
@@ -564,9 +565,9 @@ impl Server {
     }
 
     /// The skills each Provider `workflow`'s Steps use lists in its
-    /// Project, as the Server's own discovery finds them: a listing is
-    /// reused for [`SKILLS_KEPT_MS`], and one that does not answer within
-    /// [`SKILLS_WAIT`] leaves that Provider unchecked.
+    /// Project, as the Server's own discovery last found them: a listing
+    /// is reused for [`SKILLS_KEPT_MS`], then asked again, and a Provider
+    /// whose listing has not come back yet is left unchecked.
     fn installed_skills(
         &mut self,
         workflow: Option<&str>,
@@ -594,37 +595,52 @@ impl Server {
             if installed.iter().any(|(each, _)| *each == provider) {
                 continue;
             }
-            let seen = self
+            let at = match self
                 .skills_seen
                 .iter()
-                .find(|seen| seen.root == root && seen.provider == provider);
-            let listed = match seen {
-                Some(seen) if now - seen.at_ms < SKILLS_KEPT_MS => seen.listed.clone(),
-                _ => {
-                    let listed = self
-                        .engine
-                        .discover_commands(provider, &root)
-                        .and_then(|pending| pending.recv_timeout(SKILLS_WAIT).ok())
-                        .and_then(Result::ok)
-                        .map(|commands| {
-                            commands
-                                .into_iter()
-                                .filter(crate::SessionCommand::is_skill)
-                                .map(|command| command.name)
-                                .collect::<Vec<_>>()
-                        });
-                    self.skills_seen
-                        .retain(|seen| seen.root != root || seen.provider != provider);
+                .position(|seen| seen.root == root && seen.provider == provider)
+            {
+                Some(at) => at,
+                None => {
                     self.skills_seen.push(SkillsSeen {
                         root: root.clone(),
                         provider,
-                        at_ms: now,
-                        listed: listed.clone(),
+                        at_ms: None,
+                        listed: None,
+                        asking: None,
                     });
-                    listed
+                    self.skills_seen.len() - 1
                 }
             };
-            if let Some(listed) = listed {
+            let seen = &mut self.skills_seen[at];
+            let stale = seen.at_ms.is_none_or(|at_ms| now - at_ms >= SKILLS_KEPT_MS);
+            if stale && seen.asking.is_none() {
+                seen.asking = self.engine.discover_commands(provider, &root);
+                if seen.asking.is_none() {
+                    seen.at_ms = Some(now);
+                }
+            }
+            // A listing that came back since, or at once.
+            let came = seen.asking.as_ref().map(|asking| asking.try_recv());
+            match came {
+                Some(Ok(listing)) => {
+                    seen.listed = listing.ok().map(|commands| {
+                        commands
+                            .into_iter()
+                            .filter(crate::SessionCommand::is_skill)
+                            .map(|command| command.name)
+                            .collect()
+                    });
+                    seen.at_ms = Some(now);
+                    seen.asking = None;
+                }
+                Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                    seen.at_ms = Some(now);
+                    seen.asking = None;
+                }
+                Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => {}
+            }
+            if let Some(listed) = seen.listed.clone() {
                 installed.push((provider, listed));
             }
         }
@@ -876,7 +892,11 @@ impl Server {
         Ok(answer)
     }
 
-    pub(super) fn api_report(&mut self, params: ReportOutcomeParams) -> Result<Value, ApiError> {
+    pub(super) fn api_report(
+        &mut self,
+        worker: ThreadId,
+        params: ReportOutcomeParams,
+    ) -> Result<Value, ApiError> {
         let summary = params.summary;
         let outcome = match params.outcome {
             ReportedOutcome::Finished => Outcome::Finished { summary },
@@ -895,20 +915,18 @@ impl Server {
                 summary,
             },
         };
-        self.api_worker_said(
-            params.worker,
-            Command::Report {
-                worker: params.worker,
-                outcome,
-            },
-        )
+        self.api_worker_said(worker, Command::Report { worker, outcome })
     }
 
-    pub(super) fn api_ask(&mut self, params: ReportQuestionParams) -> Result<Value, ApiError> {
+    pub(super) fn api_ask(
+        &mut self,
+        worker: ThreadId,
+        params: ReportQuestionParams,
+    ) -> Result<Value, ApiError> {
         self.api_worker_said(
-            params.worker,
+            worker,
             Command::Ask {
-                worker: params.worker,
+                worker,
                 text: params.text,
             },
         )

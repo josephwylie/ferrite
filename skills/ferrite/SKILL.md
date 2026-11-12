@@ -301,9 +301,14 @@ its own: the same identity again returns the Task it already started.
 "$F" task submit w-1 JIRA-12 "Fix the CSV export"
 ```
 
-If you are a Worker, report your Task's outcome with one command when you
-are done; your Task is known from your environment, and your outcome is
-read only from it:
+If you are a Worker, report your Task's outcome when you are done. Your
+outcome is read only from a report, never from your messages, and a
+report is always about your own Task: it is known from the Thread you run
+in, and no report can name another Worker. Report with Ferrite's own
+tools, which need no permission: `report_outcome` (`outcome`, `summary`),
+`report_question` (`text`), `report_revision` (`head`, `pr`) and
+`report_evidence` (`text`). Each command below is the same report; run it
+only if those tools are not offered to you:
 
 ```bash
 "$F" report outcome finished "Fixed the race in the login fixture"
@@ -359,7 +364,12 @@ If you are the Coordinator, read and draft freely (`task list`, `task get`,
 `workflow get`, `step edit`, …), but never act: starting a Task, saving a
 Workflow version, turning automatic starts on and redirecting a Task are
 **proposals**, shown to the user as a card they accept or dismiss. Nothing
-happens until they accept. A one-off handoff needs no Workflow.
+happens until they accept. A one-off handoff needs no Workflow. Raise one
+with your own `proposal_raise` tool (its `act` and the flags below as its
+fields), which needs no permission; the command is for when that tool is
+not offered. The Server refuses every other act from your Thread,
+starting a Thread, prompting, stopping or parking one, and answering a
+Decision included.
 
 ```bash
 "$F" proposal raise start --instructions "Fix the toolbar overflow" --workflow w-1

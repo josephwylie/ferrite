@@ -112,10 +112,11 @@ fn a_session_that_dies_is_revived_once_then_stops_and_another_project_is_untouch
     let mid = task_until(&mut caller, &other, |_| true);
     assert_eq!(mid["status"], "working", "{mid}");
     assert!(!read_contains(&mut caller, other_worker, "interrupted"));
-    ok(
+    ok_in(
         &harness,
+        other_worker,
         "report.outcome",
-        serde_json::json!({ "outcome": "finished", "summary": "Bumped", "worker": other_worker }),
+        serde_json::json!({ "outcome": "finished", "summary": "Bumped" }),
     );
     let done = task_until(&mut caller, &other, |task| task["status"] == "completed");
     assert_eq!(done["result"], "Bumped");
@@ -188,10 +189,11 @@ fn a_restart_mid_step_and_mid_approval_revives_once_and_waits() {
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
     let builder = worker_of(&mut caller, &waiting);
-    ok(
+    ok_in(
         &harness,
+        builder,
         "report.outcome",
-        serde_json::json!({ "outcome": "finished", "summary": "Added --fast", "worker": builder }),
+        serde_json::json!({ "outcome": "finished", "summary": "Added --fast" }),
     );
     turn_ends(&building);
     task_until(&mut caller, &waiting, |task| task["status"] == "approval");

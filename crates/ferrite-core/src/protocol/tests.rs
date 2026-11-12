@@ -1150,6 +1150,20 @@ fn samples() -> Vec<(&'static str, Sample)> {
             }),
         ),
         (
+            "factory_troubles",
+            Sample::Server(ServerMessage::Factory {
+                revision: 7,
+                board: crate::factory::Board {
+                    troubles: [(
+                        project_id(),
+                        "The Factory could not be saved: No space left on device".to_string(),
+                    )]
+                    .into(),
+                    ..Default::default()
+                },
+            }),
+        ),
+        (
             "factory_workflows",
             Sample::Server(ServerMessage::Factory {
                 revision: 4,

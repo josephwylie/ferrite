@@ -1,6 +1,7 @@
 //! Ferrite's in-band MCP server: how a Claude Session is offered
-//! `update_plan` and `wrap_up` (always) and `show_visual` (at the
-//! operator's level) with no server process of its own.
+//! `update_plan` and `wrap_up` (always), `show_visual` (at the operator's
+//! level), the browser, and an owned Thread's Factory tools
+//! (`api::tools`), with no server process of its own.
 //!
 //! The CLI's SDK MCP transport, as the Agent SDK speaks it (verified against
 //! 2.1.292, fixture `claude-show-visual-2.1.292`): the initialize control
@@ -38,6 +39,7 @@ const PROTOCOL_VERSION: &str = "2025-11-25";
 pub(super) struct Server {
     visuals: Option<Visuals>,
     browser: Option<crate::browser::ThreadClient>,
+    api_tools: Option<crate::api::tools::ThreadTools>,
     stdin: Arc<Mutex<std::process::ChildStdin>>,
     plan: Mutex<Plan>,
 }
@@ -66,11 +68,13 @@ impl Server {
     pub(super) fn new(
         visuals: Option<Visuals>,
         browser: Option<crate::browser::ThreadClient>,
+        api_tools: Option<crate::api::tools::ThreadTools>,
         stdin: Arc<Mutex<std::process::ChildStdin>>,
     ) -> Self {
         Self {
             visuals,
             browser,
+            api_tools,
             stdin,
             plan: Mutex::default(),
         }
@@ -101,7 +105,8 @@ impl Server {
                 if request["tool_name"] == visual::CLAUDE_NAME
                     || request["tool_name"] == crate::wrap_up::CLAUDE_NAME
                     || request["tool_name"] == update_plan::CLAUDE_NAME
-                    || request["tool_name"] == crate::browser::tools::CLAUDE_NAME =>
+                    || request["tool_name"] == crate::browser::tools::CLAUDE_NAME
+                    || self.offers_api_tool(&request["tool_name"]) =>
             {
                 respond(
                     &self.stdin,
@@ -112,6 +117,16 @@ impl Server {
             }
             _ => false,
         }
+    }
+
+    /// Whether a tool, as Claude names it, is one of the Thread's Factory
+    /// tools.
+    fn offers_api_tool(&self, claude_name: &Value) -> bool {
+        let tool = claude_name
+            .as_str()
+            .and_then(|name| name.strip_prefix(CLAUDE_PREFIX));
+        tool.zip(self.api_tools.as_ref())
+            .is_some_and(|(tool, tools)| tools.offers(tool))
     }
 
     /// The plan events a stream line confirms: a Main receipt for a call
@@ -192,6 +207,25 @@ impl Server {
     fn message(&self, request_id: &str, message: &Value) {
         let id = message.get("id").cloned();
         let method = message["method"].as_str().unwrap_or_default();
+        let name = message["params"]["name"].as_str().unwrap_or_default();
+        if let Some(tools) = self.api_tools.as_ref().filter(|tools| tools.offers(name)) {
+            if method == "tools/call" {
+                let stdin = Arc::clone(&self.stdin);
+                let request_id = request_id.to_owned();
+                tools.call(name, &message["params"]["arguments"], move |answer| {
+                    respond_mcp(
+                        &stdin,
+                        &request_id,
+                        id,
+                        Ok(json!({
+                            "content": [{"type": "text", "text": answer.text}],
+                            "isError": answer.is_error,
+                        })),
+                    );
+                });
+                return;
+            }
+        }
         let definition = self.visuals.as_ref().and_then(Visuals::definition);
         let result = match (method, &definition) {
             ("initialize", _) => Ok(json!({
@@ -207,19 +241,19 @@ impl Server {
             ("tools/list", _) => {
                 let ours = [
                     (
-                        crate::wrap_up::TOOL,
+                        crate::wrap_up::TOOL.to_owned(),
                         crate::wrap_up::DESCRIPTION.to_owned(),
                         crate::wrap_up::input_schema(),
                     ),
                     (
-                        update_plan::TOOL,
+                        update_plan::TOOL.to_owned(),
                         update_plan::description(),
                         update_plan::input_schema(),
                     ),
                 ];
                 let visual = definition.iter().map(|definition| {
                     (
-                        definition.name,
+                        definition.name.to_owned(),
                         definition.description.clone(),
                         definition.input_schema.clone(),
                     )
@@ -227,15 +261,27 @@ impl Server {
                 let browser = self.browser.as_ref().map(|_| {
                     let definition = crate::browser::tools::definition();
                     (
-                        definition.name,
+                        definition.name.to_owned(),
                         definition.description,
                         definition.input_schema,
                     )
                 });
+                let api_tools = self
+                    .api_tools
+                    .iter()
+                    .flat_map(|tools| tools.definitions())
+                    .map(|definition| {
+                        (
+                            definition.name,
+                            definition.description,
+                            definition.input_schema,
+                        )
+                    });
                 let tools: Vec<Value> = ours
                     .into_iter()
                     .chain(visual)
                     .chain(browser)
+                    .chain(api_tools)
                     .map(|(name, description, schema)| {
                         json!({
                             "name": name,
@@ -332,6 +378,13 @@ impl Server {
         };
         respond_mcp(&self.stdin, request_id, id, result);
     }
+}
+
+/// What Claude calls a tool of Ferrite's server: `mcp__ferrite__<tool>`.
+const CLAUDE_PREFIX: &str = "mcp__ferrite__";
+
+pub(super) fn claude_name(tool: &str) -> String {
+    format!("{CLAUDE_PREFIX}{tool}")
 }
 
 /// The streamed `tool_use` id a call carries, which its receipt quotes.

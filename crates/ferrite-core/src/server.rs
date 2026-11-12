@@ -32,9 +32,9 @@ mod bridge;
 mod browser;
 mod calls;
 mod coordinator;
+mod drive;
 mod factory;
 pub mod github;
-mod drive;
 mod render;
 mod signals;
 
@@ -165,9 +165,11 @@ pub fn run(options: Options) -> i32 {
     let defaults = Arc::new(Mutex::new(SessionDefaults::from_settings(&settings)));
     let (renderer, renders) = render::remote();
     let (browser_client, browser_requests) = crate::browser::channel();
+    let (heard, hear) = mpsc::channel();
     let spawner = Spawn {
         browser: Some(browser_client),
         api: api.is_some().then_some(api_address),
+        api_tools: Some(crate::api::tools::Tools::new(heard.clone())),
         ..Spawn::new(defaults.clone(), Some(Arc::new(renderer)))
     };
     let mut engine = match Engine::try_new(store, Box::new(spawner)) {
@@ -178,7 +180,6 @@ pub fn run(options: Options) -> i32 {
         }
     };
     engine.watch_memory(Box::new(ProcessRss::default()), RSS_LIMIT);
-    let (heard, hear) = mpsc::channel();
     if let Some(api) = api {
         if let Err(error) = crate::api::accept_all(api, heard.clone()) {
             crate::log!("server: cannot accept API connections: {error}");

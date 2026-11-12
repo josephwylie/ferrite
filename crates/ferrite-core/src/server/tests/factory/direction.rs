@@ -93,10 +93,11 @@ fn next_worker(caller: &mut Caller, task: &str, was: ThreadId) -> ThreadId {
 }
 
 fn report(harness: &Harness, worker: ThreadId, outcome: &str, summary: &str) -> serde_json::Value {
-    ok(
+    ok_in(
         harness,
+        worker,
         "report.outcome",
-        serde_json::json!({ "outcome": outcome, "summary": summary, "worker": worker }),
+        serde_json::json!({ "outcome": outcome, "summary": summary }),
     )
 }
 
@@ -124,10 +125,11 @@ fn a_question_waits_across_a_restart_and_the_answer_resumes_the_asker() {
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
     let builder = worker_of(&mut caller, &task);
-    let asked = ok(
+    let asked = ok_in(
         &harness,
+        builder,
         "report.question",
-        serde_json::json!({ "text": "Should --fast default to on?", "worker": builder }),
+        serde_json::json!({ "text": "Should --fast default to on?" }),
     );
     assert_eq!(asked["changed"], true, "{asked}");
     let held = task_until(&mut caller, &task, |task| task["status"] == "needs_human");
@@ -221,10 +223,11 @@ fn the_windows_are_alerted_on_the_four_task_events_and_not_between_steps() {
         .unwrap()
         .to_string();
     let worker = worker_of(&mut caller, &asked);
-    ok(
+    ok_in(
         &harness,
+        worker,
         "report.question",
-        serde_json::json!({ "text": "Which README?", "worker": worker }),
+        serde_json::json!({ "text": "Which README?" }),
     );
     task_until(&mut caller, &asked, |task| task["status"] == "needs_human");
     ok(&harness, "task.stop", serde_json::json!({ "task": asked }));

@@ -93,9 +93,8 @@ fn workflow(harness: &Harness, project: &str, steps: &[&str]) -> (String, Vec<St
     (workflow, ids)
 }
 
-fn raise(harness: &Harness, coordinator: ThreadId, mut params: serde_json::Value) -> String {
-    params["coordinator"] = serde_json::json!(coordinator);
-    let raised = ok(harness, "proposal.raise", params);
+fn raise(harness: &Harness, coordinator: ThreadId, params: serde_json::Value) -> String {
+    let raised = ok_in(harness, coordinator, "proposal.raise", params);
     assert_eq!(raised["proposal"]["status"], "pending", "{raised}");
     raised["proposal"]["id"].as_str().unwrap().to_string()
 }
@@ -269,10 +268,11 @@ fn each_proposal_waits_for_the_operator_and_runs_once_accepted() {
         serde_json::json!({ "workflow": built, "step": steps[1], "instructions": "Check twice" }),
     );
 
-    let refused = cli(
+    let refused = cli_in(
         &harness.api,
+        worker,
         "proposal.raise",
-        serde_json::json!({ "act": "start", "instructions": "x", "coordinator": worker }),
+        serde_json::json!({ "act": "start", "instructions": "x" }),
     )
     .2;
     assert_eq!(
@@ -457,10 +457,11 @@ fn a_task_routed_to_the_coordinator_is_told_to_it() {
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
     let worker = worker_of(&mut caller, &task);
-    ok(
+    ok_in(
         &harness,
+        worker,
         "report.outcome",
-        serde_json::json!({ "outcome": "finished", "summary": "Built; the API is unclear", "worker": worker }),
+        serde_json::json!({ "outcome": "finished", "summary": "Built; the API is unclear" }),
     );
     let held = task_until(&mut caller, &task, |task| task["status"] == "needs_human");
     assert!(

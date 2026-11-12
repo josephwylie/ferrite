@@ -121,6 +121,8 @@ pub struct ClaudeConfig {
     pub visuals: Option<crate::visual::Visuals>,
     /// Trusted browser capability bound to this Session's Thread.
     pub browser: Option<crate::browser::ThreadClient>,
+    /// A Worker's or Coordinator's Factory tools, bound to its Thread.
+    pub api_tools: Option<crate::api::tools::ThreadTools>,
     /// Ferrite's caller context for the agent (`api::caller_environment`):
     /// set over whatever the CLI inherited, after the Thread's own
     /// (`thread.start --env`).
@@ -155,6 +157,7 @@ impl Default for ClaudeConfig {
             fork: false,
             visuals: None,
             browser: None,
+            api_tools: None,
             env: Vec::new(),
             launcher: Vec::new(),
             args: Vec::new(),
@@ -366,6 +369,13 @@ impl ClaudeSession {
         if config.browser.is_some() {
             command.args(["--allowedTools", crate::browser::tools::CLAUDE_NAME]);
         }
+        for definition in config
+            .api_tools
+            .iter()
+            .flat_map(|tools| tools.definitions())
+        {
+            command.args(["--allowedTools", &mcp::claude_name(&definition.name)]);
+        }
         command.args(&config.args);
         let mut child = command
             .stdin(Stdio::piped())
@@ -407,6 +417,7 @@ impl ClaudeSession {
         let server = mcp::Server::new(
             config.visuals.clone(),
             config.browser.clone(),
+            config.api_tools.clone(),
             Arc::clone(&stdin),
         );
         let capabilities = read_stdout(
