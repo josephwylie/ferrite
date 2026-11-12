@@ -231,9 +231,13 @@ pub fn briefing(project: ProjectId) -> String {
          operator talks with you about priorities and requirements and hands work to the \
          Factory through you. Ferrite's skill teaches its commands: read it with `{F} --skill`.\n\n\
          ## Read and draft freely\n\n\
-         Read the board, a Task or a Workflow whenever it helps:\n\n    \
+         Read the board, a Task or a Workflow whenever it helps, with your own tools, which \
+         need no permission: `task_list`, `task_get`, `workflow_list`, `workflow_get` and \
+         `proposal_list` (what was accepted or dismissed). Run the commands only if those \
+         tools are not offered to you:\n\n    \
          {F} task list --project {project}\n    {F} task get t-1\n    \
-         {F} workflow list --project {project}\n    {F} workflow get w-1\n\n\
+         {F} workflow list --project {project}\n    {F} workflow get w-1\n    \
+         {F} proposal list --project {project}\n\n\
          Draft Workflow changes when the operator asks; a draft runs nothing:\n\n    \
          {F} workflow create --project {project}\n    {F} step add w-1\n    \
          {F} step edit w-1 s-1 --instructions \"…\"\n    {F} step move w-1 s-2 0\n    \
@@ -250,8 +254,7 @@ pub fn briefing(project: ProjectId) -> String {
          A one-off handoff (`start` without `--workflow`) needs no Workflow. Never run \
          `task start`, `workflow save`, `workflow automation`, `task redirect`, or answer, \
          approve, rework, stop or delete a Task yourself. Talking starts nothing: propose \
-         only what the operator wants, say what the card will do, and let them decide. \
-         `{F} proposal list --project {project}` shows what was accepted or dismissed.\n\n\
+         only what the operator wants, say what the card will do, and let them decide.\n\n\
          The operator says:\n\n"
     )
 }
@@ -265,8 +268,9 @@ pub(super) fn routed(task: &Task, from: &str, text: &str) -> String {
     };
     format!(
         "Factory task {id} (\"{title}\") was sent to you: {from} routed it to the \
-         Coordinator.{said}\n\nIt waits in Needs human. Read it with `{F} task get {id}`, \
-         talk it over with the operator when they come, and propose where it goes next \
+         Coordinator.{said}\n\nIt waits in Needs human. Read it with your `task_get` tool \
+         (or `{F} task get {id}`), talk it over with the operator when they come, and \
+         propose where it goes next \
          (`{PROPOSE} redirect --task {id} …`). Do nothing else with it.",
         id = task.id,
         title = task.title,

@@ -1,6 +1,7 @@
-//! The API as an owned Thread's own tools: a Worker's `report_*`, a
+//! The API as an owned Thread's own tools: a Worker's `report_*` and a
 //! Coordinator's `proposal_raise`, one per operation whose callers are
-//! that Thread's kind (`schema::Callers`). As Ferrite's own tools they are
+//! that Thread's kind (`schema::Callers`), and a Coordinator's Factory
+//! reads ([`COORDINATOR_READS`]). As Ferrite's own tools they are
 //! pre-allowed beside `update_plan`, never a permission Decision, and a
 //! call reaches the Server as an API request whose caller is the Thread
 //! its Session was spawned for: the agent never names it.
@@ -25,6 +26,16 @@ const ANSWER: Duration = Duration::from_secs(30);
 /// Tool calls are API callers of their own, numbered apart from the
 /// socket's connections.
 static NEXT_CALLER: AtomicU64 = AtomicU64::new(1 << 48);
+
+/// What a Coordinator reads of its Factory, as tools: open to anyone,
+/// but asked through a shell each could wait on a permission.
+const COORDINATOR_READS: [&str; 5] = [
+    "task.list",
+    "task.get",
+    "workflow.list",
+    "workflow.get",
+    "proposal.list",
+];
 
 /// The Server's end, where every owned Session's tools are bound.
 #[derive(Debug, Clone)]
@@ -72,9 +83,11 @@ pub struct Answer {
 
 impl ThreadTools {
     fn operations(&self) -> impl Iterator<Item = &'static Operation> + '_ {
-        Method::OPERATIONS
-            .iter()
-            .filter(move |operation| operation.callers == self.callers)
+        Method::OPERATIONS.iter().filter(move |operation| {
+            operation.callers == self.callers
+                || (self.callers == Callers::Coordinator
+                    && COORDINATOR_READS.contains(&operation.name))
+        })
     }
 
     pub fn definitions(&self) -> Vec<Definition> {
@@ -82,11 +95,15 @@ impl ThreadTools {
             .map(|operation| Definition {
                 name: tool_name(operation),
                 description: format!(
-                    "{} The same as `ferrite {} {}`, about your own Thread, with no \
-                     permission prompt: use this rather than the CLI.",
+                    "{} The same as `ferrite {} {}`{}, with no permission prompt: use this \
+                     rather than the CLI.",
                     operation.summary,
                     operation.words().0,
                     operation.words().1,
+                    match operation.callers == self.callers {
+                        true => ", about your own Thread",
+                        false => "",
+                    },
                 ),
                 input_schema: input_schema(operation),
             })
@@ -198,9 +215,10 @@ fn answered(line: &[u8]) -> Answer {
         ));
     }
     let result = &value["result"];
+    let report = result.get("changed").is_some();
     let text = match (result["said"].as_str(), result["task"].as_object()) {
         (Some(said), _) => said.to_string(),
-        (None, Some(task)) => format!(
+        (None, Some(task)) if report => format!(
             "Task {} is {}{}.",
             task["id"].as_str().unwrap_or_default(),
             task["status"].as_str().unwrap_or_default(),
@@ -308,6 +326,16 @@ mod tests {
             said.recv_timeout(Duration::from_secs(5)).unwrap(),
             ("Task t-1 is completed.".to_string(), false)
         );
+    }
+
+    /// A read answers the Task whole; only a report's answer is said as
+    /// the Task's state.
+    #[test]
+    fn a_read_answers_the_task_whole() {
+        let read = answered(
+            br#"{"id":"1","result":{"task":{"id":"t-1","status":"working","reason":null}}}"#,
+        );
+        assert!(read.text.contains("\"reason\""), "{}", read.text);
     }
 
     #[test]

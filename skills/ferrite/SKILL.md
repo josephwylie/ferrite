@@ -361,7 +361,9 @@ turn.
 ```
 
 If you are the Coordinator, read and draft freely (`task list`, `task get`,
-`workflow get`, `step edit`, …), but never act: starting a Task, saving a
+`workflow get`, `step edit`, …). Your reads are your own tools too, which
+need no permission: `task_list`, `task_get`, `workflow_list`,
+`workflow_get` and `proposal_list`. But never act: starting a Task, saving a
 Workflow version, turning automatic starts on and redirecting a Task are
 **proposals**, shown to the user as a card they accept or dismiss. Nothing
 happens until they accept. A one-off handoff needs no Workflow. Raise one
