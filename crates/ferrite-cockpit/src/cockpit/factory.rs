@@ -85,10 +85,10 @@ pub(crate) struct FactoryView {
     pub(crate) sheet: Option<NewTask>,
     /// The New task sheet as it was closed, for when it opens again.
     kept: Option<NewTask>,
-    /// The columns' sideways scroll, and the column still to bring into
-    /// view (the open Task's).
+    /// The columns' sideways scroll, and the open Task's column it last
+    /// brought into view with the frames that took (it settles on the second).
     columns: gpui::ScrollHandle,
-    reveal: std::cell::Cell<Option<(usize, bool)>>,
+    revealed: std::cell::Cell<Option<(String, usize, u8)>>,
     /// The Board or the Workflows.
     pub(crate) surface: super::workflows::Surface,
     pub(crate) workflows: super::workflows::Workflows,
@@ -141,7 +141,7 @@ impl CockpitView {
                     sheet: None,
                     kept: None,
                     columns: gpui::ScrollHandle::new(),
-                    reveal: Default::default(),
+                    revealed: Default::default(),
                     surface: super::workflows::Surface::Board,
                     workflows,
                     picks: Vec::new(),
@@ -158,11 +158,11 @@ impl CockpitView {
     /// on the Board, or the Archive for an archived Task. What it shows is
     /// the board's; nothing starts.
     pub(crate) fn open_task(&mut self, task: &str, cx: &mut Context<Self>) {
-        let Some((project, archived, status)) = self
+        let Some((project, archived)) = self
             .cockpit
             .factory()
             .task(task)
-            .map(|task| (task.project, task.archived(), task.status))
+            .map(|task| (task.project, task.archived()))
         else {
             return;
         };
@@ -184,12 +184,7 @@ impl CockpitView {
             view.tab = TaskTab::Overview;
             view.note = None;
             view.direct.focused = None;
-            view.reveal.set(
-                Status::ALL
-                    .iter()
-                    .position(|each| *each == status)
-                    .map(|at| (at, true)),
-            );
+            view.revealed.set(None);
         }
         self.ensure_drafts(task, cx);
         cx.notify();
@@ -446,8 +441,8 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use gpui::component::notification::{Notification, NotificationType};
         use gpui::component::WindowExt as _;
+        use gpui::component::notification::{Notification, NotificationType};
         let found = self.cockpit.factory().task(&task);
         let provider = found.map(|found| found.agent.provider);
         let cwd = found.and_then(|found| found.worktree.clone());
@@ -778,18 +773,30 @@ impl CockpitView {
                 .pb(px(SPACE_4))
                 .overflow_x_scroll()
                 .track_scroll(&view.columns);
-            // The open Task's column comes into view beside its panel. The
-            // scroll measures its area as the frame before laid it out, so
-            // it is asked again on the frame after the panel took its width.
-            if let Some((at, again)) = view.reveal.take() {
-                view.columns.scroll_to_item(at);
-                if again {
-                    view.reveal.set(Some((at, false)));
+            // The open Task's column comes into view beside its panel, and
+            // again when the Task moves column. The scroll measures its area
+            // as the frame before laid it out, so it is asked again on the
+            // frame after the panel took its width.
+            if let Some(task) = open.and_then(|open| tasks.iter().find(|task| task.id == open)) {
+                let at = Status::ALL
+                    .iter()
+                    .position(|each| *each == task.status)
+                    .unwrap_or_default();
+                let frames = match view.revealed.take() {
+                    Some((id, was, frames)) if id == task.id && was == at => frames,
+                    _ => 0,
+                };
+                if frames < 2 {
+                    view.columns.scroll_to_item(at);
+                }
+                if frames == 0 {
                     let me = cx.entity().downgrade();
                     cx.defer(move |cx| {
                         me.update(cx, |_, cx| cx.notify()).ok();
                     });
                 }
+                view.revealed
+                    .set(Some((task.id.clone(), at, (frames + 1).min(2))));
             }
             for status in Status::ALL {
                 let in_column: Vec<&&Task> =
@@ -913,6 +920,7 @@ impl CockpitView {
                 div()
                     .text_color(rgb(INK_STRONG))
                     .line_clamp(2)
+                    .text_ellipsis()
                     .child(SharedString::from(task.title.clone())),
             )
             .child(
@@ -954,6 +962,7 @@ impl CockpitView {
                         INK_STRONG
                     }))
                     .line_clamp(3)
+                    .text_ellipsis()
                     .child(SharedString::from(line))
             }))
             .children(super::delivery::card_line(task).map(|line| {
