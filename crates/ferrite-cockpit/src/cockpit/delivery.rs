@@ -39,6 +39,15 @@ pub(crate) fn approving_line(task: &Task) -> Option<String> {
     })
 }
 
+/// `text` with its first letter capital, as every line of evidence reads
+/// ("finished: written", an agent's own words, as "Finished: written").
+fn sentence_case(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
 /// The evidence, each item with its kind, who gave it and its revision;
 /// one about an older revision is dimmed and says so.
 pub(crate) fn evidence_list(task: &Task) -> Div {
@@ -86,7 +95,7 @@ pub(crate) fn evidence_list(task: &Task) -> Div {
                 .child(
                     div()
                         .text_color(rgb(if older { INK_SUBTLE } else { INK_STRONG }))
-                        .child(SharedString::from(each.text.clone())),
+                        .child(SharedString::from(sentence_case(&each.text))),
                 ),
         );
     }

@@ -1530,7 +1530,7 @@ impl CockpitView {
         // What it hangs under, at its width and right edge: the window's
         // head and a Pane's head row, `TOAST_BOX_RIGHT` in from the board's
         // right edge (the panel's left while it shows).
-        let right = self.panel_column_w() + TOAST_BOX_RIGHT;
+        let right = self.panel_column_w() + self.task_panel_w() + TOAST_BOX_RIGHT;
         let room = f32::from(viewport.width) - self.board_left() - right - TOAST_BOX_RIGHT;
         let width = TOAST_W.min(room.max(0.));
         let over = WIN_CHROME_H + PANE_HEAD_H;
@@ -1567,7 +1567,8 @@ impl CockpitView {
     /// transcript's column: its right margin follows the panel, written
     /// only when it moves.
     fn toast_margins(&self, cx: &mut gpui::App) {
-        let right = px(self.panel_column_w() + ferrite_ui::theme::TOAST_BOX_RIGHT);
+        let right =
+            px(self.panel_column_w() + self.task_panel_w() + ferrite_ui::theme::TOAST_BOX_RIGHT);
         if gpui::component::Theme::global(cx)
             .notification
             .margins

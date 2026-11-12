@@ -36,7 +36,9 @@ impl CockpitView {
         let mut tabs = div().flex().items_center().gap(px(SPACE_1));
         for (surface, word, count) in counts {
             let key = format!("factory-tab-{}", word.to_lowercase());
-            let selected = view.surface == surface;
+            // The Archive is the board's own view, under none of the tabs.
+            let selected =
+                view.surface == surface && !(surface == Surface::Board && view.archive.shown);
             tabs = tabs.child(
                 div()
                     .id(SharedString::from(key.clone()))
@@ -60,6 +62,14 @@ impl CockpitView {
                             .child(SharedString::from(count.to_string())),
                     )
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        if surface == Surface::Board
+                            && view
+                                .factory_view
+                                .as_ref()
+                                .is_some_and(|view| view.archive.shown)
+                        {
+                            view.close_archive(cx);
+                        }
                         view.factory_surface(surface, cx)
                     })),
             );
@@ -454,11 +464,11 @@ impl CockpitView {
         } else {
             step.name.clone()
         };
-        let mut meta = vec![core_factory::agent_label(&step.agent)
-            .split(" \u{b7} ")
-            .last()
-            .unwrap_or_default()
-            .to_string()];
+        let provider = step.agent.provider;
+        let mut meta = vec![match &step.agent.model {
+            Some(model) => model_name(&self.cockpit.model_catalog(provider), model),
+            None => provider.to_string(),
+        }];
         if let Some(effort) = &step.agent.effort {
             meta.push(effort.clone());
         }

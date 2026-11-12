@@ -14,8 +14,8 @@ use std::collections::HashMap;
 
 use super::*;
 use ferrite_core::factory::{
-    self as core_factory, ApprovalChange, Approver, Catalog, Destination, Problem, RouteKind, Step,
-    StepChange, StepId, Template, Workflow, WorkflowId,
+    ApprovalChange, Approver, Catalog, Destination, Problem, RouteKind, Step, StepChange, StepId,
+    Template, Workflow, WorkflowId,
 };
 use ferrite_core::protocol::{Done, WorkflowAction};
 use ferrite_pane::composer::{Composer, Edited, Role};
@@ -24,7 +24,7 @@ use gpui::component::Disableable as _;
 mod inspector;
 mod outline;
 mod pickers;
-pub(crate) use pickers::{model_choices, model_chosen, Trigger};
+pub(crate) use pickers::{model_choices, model_chosen, model_name, Trigger};
 mod save;
 mod skills;
 

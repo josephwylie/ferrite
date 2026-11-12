@@ -21,6 +21,56 @@ const TASK_PANEL_W: f32 = 480.;
 /// scrolls sideways past it (the Task panel open, a narrower window).
 const COLUMN_MIN_W: f32 = 168.;
 
+/// How the six columns take the board's width: shared, when they fit at
+/// their narrowest; otherwise as many whole columns as fit share it, so a
+/// sideways scroll a column at a time starts and ends on a column's edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ColumnFit {
+    /// Columns in view at once.
+    shown: usize,
+    /// Each one's width while they scroll; `None` while all six fit.
+    width: Option<f32>,
+}
+
+impl ColumnFit {
+    /// In a scroll area `room` wide past its left pad: each column in view
+    /// and the gap after it fill it, so the next one starts at its edge.
+    fn of(room: f32) -> Self {
+        let gap = ferrite_ui::theme::SPACE_3;
+        let all = Status::ALL.len();
+        let shown = ((room / (COLUMN_MIN_W + gap)).floor() as usize).clamp(1, all);
+        Self {
+            shown,
+            width: (shown < all).then(|| (room / shown as f32 - gap).max(0.)),
+        }
+    }
+
+    /// A column and the gap after it.
+    fn step(self) -> f32 {
+        self.width
+            .map_or(0., |width| width + ferrite_ui::theme::SPACE_3)
+    }
+
+    /// The first column in view once column `at` is: the one now first
+    /// (at scroll `offset`) while `at` is in view from it, else the
+    /// nearest that brings `at` in.
+    fn first_showing(self, at: usize, offset: Pixels) -> usize {
+        let step = self.step();
+        if step <= 0. {
+            return 0;
+        }
+        let now = (-f32::from(offset) / step).round().max(0.) as usize;
+        let first = if at < now {
+            at
+        } else if at >= now + self.shown {
+            at + 1 - self.shown
+        } else {
+            now
+        };
+        first.min(Status::ALL.len() - self.shown)
+    }
+}
+
 /// A Task panel's tabs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TaskTab {
@@ -85,10 +135,10 @@ pub(crate) struct FactoryView {
     pub(crate) sheet: Option<NewTask>,
     /// The New task sheet as it was closed, for when it opens again.
     kept: Option<NewTask>,
-    /// The columns' sideways scroll, and the open Task's column it last
-    /// brought into view with the frames that took (it settles on the second).
+    /// The columns' sideways scroll, and the open Task, its column and how
+    /// many columns fit when it last brought that column into view.
     columns: gpui::ScrollHandle,
-    revealed: std::cell::Cell<Option<(String, usize, u8)>>,
+    revealed: std::cell::Cell<Option<(String, usize, usize)>>,
     /// The Board or the Workflows.
     pub(crate) surface: super::workflows::Surface,
     pub(crate) workflows: super::workflows::Workflows,
@@ -203,6 +253,21 @@ impl CockpitView {
             }
         }
         cx.notify();
+    }
+
+    /// The open Task's panel's width on the Factory's board, which a
+    /// toast keeps clear of as it does the right panel.
+    pub(super) fn task_panel_w(&self) -> f32 {
+        let shown = self
+            .factory_view
+            .as_ref()
+            .is_some_and(|view| view.surface == super::workflows::Surface::Board)
+            && self.open_task_now().is_some();
+        if shown {
+            TASK_PANEL_W
+        } else {
+            0.
+        }
     }
 
     /// Whether `task`'s panel is on screen.
@@ -457,20 +522,45 @@ impl CockpitView {
             .registry()
             .project(project)
             .map(|project| project.title.clone());
-        let heading = format!("{} \u{b7} {title}", status.word());
-        let mut toast = Notification::new()
+        let heading = SharedString::from(format!(
+            "{} \u{b7} {}",
+            status.word(),
+            found.map_or(title.as_str(), |found| found.title.as_str())
+        ));
+        let line = SharedString::from(match &project_title {
+            Some(project_title) => format!("{project_title} \u{b7} {detail}"),
+            None => detail.clone(),
+        });
+        // Its board on screen shows the Task's state in its column, so the
+        // toast only passes by there.
+        let board_shown = self.factory_view.as_ref().is_some_and(|view| {
+            view.project == project
+                && view.surface == super::workflows::Surface::Board
+                && !view.archive.shown
+        });
+        let toast = Notification::new()
             .id1::<TaskToast>(SharedString::from(task.clone()))
-            .title(heading)
-            .message(detail.clone())
+            .content(move |_, _, _| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .min_w_0()
+                    .text_sm()
+                    .child(
+                        div()
+                            .truncate()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(heading.clone()),
+                    )
+                    .child(div().truncate().child(line.clone()))
+                    .into_any_element()
+            })
             .with_type(if status.needs_you() {
                 NotificationType::Warning
             } else {
                 NotificationType::Info
             })
-            .autohide(!status.needs_you());
-        if let Some(project_title) = &project_title {
-            toast = toast.message(format!("{project_title} \u{b7} {detail}"));
-        }
+            .autohide(board_shown || !status.needs_you());
         // As a Thread's toast is not raised over the Thread on screen.
         if !self.task_panel_shown(&task) {
             window.push_notification(toast, cx);
@@ -778,30 +868,25 @@ impl CockpitView {
                 .pb(px(SPACE_4))
                 .overflow_x_scroll()
                 .track_scroll(&view.columns);
+            let panel = self.task_panel(window, cx);
+            let room = self.board_bounds(window).w
+                - if panel.is_some() { TASK_PANEL_W } else { 0. }
+                - SPACE_4;
+            let fit = ColumnFit::of(room);
             // The open Task's column comes into view beside its panel, and
-            // again when the Task moves column. The scroll measures its area
-            // as the frame before laid it out, so it is asked again on the
-            // frame after the panel took its width.
+            // again when the Task moves column, whole columns either side.
             if let Some(task) = open.and_then(|open| tasks.iter().find(|task| task.id == open)) {
                 let at = Status::ALL
                     .iter()
                     .position(|each| *each == task.status)
                     .unwrap_or_default();
-                let frames = match view.revealed.take() {
-                    Some((id, was, frames)) if id == task.id && was == at => frames,
-                    _ => 0,
-                };
-                if frames < 2 {
-                    view.columns.scroll_to_item(at);
+                let key = (task.id.clone(), at, fit.shown);
+                if view.revealed.take().as_ref() != Some(&key) {
+                    let first = fit.first_showing(at, view.columns.offset().x);
+                    view.columns
+                        .set_offset(gpui::point(px(-fit.step() * first as f32), px(0.)));
                 }
-                if frames == 0 {
-                    let me = cx.entity().downgrade();
-                    cx.defer(move |cx| {
-                        me.update(cx, |_, cx| cx.notify()).ok();
-                    });
-                }
-                view.revealed
-                    .set(Some((task.id.clone(), at, (frames + 1).min(2))));
+                view.revealed.set(Some(key));
             }
             for status in Status::ALL {
                 let in_column: Vec<&&Task> =
@@ -815,8 +900,10 @@ impl CockpitView {
                     })
                     .flex()
                     .flex_col()
-                    .flex_1()
-                    .min_w(px(COLUMN_MIN_W))
+                    .map(|column| match fit.width {
+                        Some(width) => column.flex_shrink_0().w(px(width)),
+                        None => column.flex_1().min_w(px(COLUMN_MIN_W)),
+                    })
                     .min_h_0()
                     .gap(px(SPACE_2))
                     .overflow_y_scroll()
@@ -864,7 +951,7 @@ impl CockpitView {
                 .flex()
                 .flex_row()
                 .child(columns)
-                .children(self.task_panel(window, cx))
+                .children(panel)
         };
 
         div()
@@ -1133,6 +1220,10 @@ impl CockpitView {
 
         let content: AnyElement = match tab {
             TaskTab::Overview => {
+                // A question, a permission or the approval block says it.
+                let why_said = task.oversight.question.is_some()
+                    || task.oversight.permission.is_some()
+                    || task.status == Status::Approval;
                 let line = |label: &'static str, text: String| {
                     div()
                         .flex()
@@ -1165,9 +1256,7 @@ impl CockpitView {
                     .children(
                         task.reason
                             .clone()
-                            .filter(|_| {
-                                task.oversight.question.is_none() && task.status != Status::Approval
-                            })
+                            .filter(|_| !why_said)
                             .map(|reason| line("Why", reason)),
                     )
                     .child(line("Status", task.status.word().to_string()))

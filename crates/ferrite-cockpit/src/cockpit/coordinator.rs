@@ -275,10 +275,15 @@ impl CockpitView {
                     ),
                     (
                         "coordinator-model",
-                        agent
-                            .model
-                            .clone()
-                            .unwrap_or_else(|| "Default model".into()),
+                        agent.model.as_deref().map_or_else(
+                            || "Default model".into(),
+                            |model| {
+                                super::workflows::model_name(
+                                    &self.cockpit.model_catalog(agent.provider),
+                                    model,
+                                )
+                            },
+                        ),
                         "model",
                     ),
                     (
@@ -306,11 +311,17 @@ impl CockpitView {
                         ))
                 }),
             )
+            .child(div().flex_1());
+        // On its own line, so the choosers never cut it short.
+        let settings = div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .child(settings)
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
+                    .px(px(SPACE_4))
+                    .pb(px(SPACE_2))
                     .text_size(px(FS_META))
                     .text_color(rgb(INK_SUBTLE))
                     .child("Talking starts nothing; work starts only when you accept."),

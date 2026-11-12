@@ -40,6 +40,14 @@ pub(crate) fn model_choices(catalog: &[ferrite_core::ModelInfo]) -> Vec<(String,
         .collect()
 }
 
+/// A pinned model as its picker row names it (`Haiku 5.5`), else as pinned.
+pub(crate) fn model_name(catalog: &[ferrite_core::ModelInfo], value: &str) -> String {
+    catalog
+        .iter()
+        .find(|model| model.value == value)
+        .map_or_else(|| value.to_string(), |model| model.display.clone())
+}
+
 /// The catalog's own row for the Provider's default model.
 const DEFAULT_MODEL: &str = "default";
 
