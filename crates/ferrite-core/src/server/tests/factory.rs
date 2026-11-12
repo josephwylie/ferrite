@@ -219,6 +219,64 @@ fn a_worker_that_never_reports_is_prompted_once_then_needs_the_operator() {
     assert!(window.needs_you().is_empty(), "nothing in the Inbox");
 }
 
+/// A window reading one message at a time hears a Task's alert after the
+/// board that shows the Task in the alert's state, and the alert says the
+/// event itself: nothing it shows is read from a later board.
+#[test]
+fn a_task_alert_follows_its_board_and_says_its_event() {
+    let (harness, project, repo) = factory_project("factory-alert-order");
+    let mut window = attach(&harness.address);
+    let mut caller = call(&harness);
+    let task = caller.answer(
+        "1",
+        "task.start",
+        serde_json::json!({ "instructions": "Migrate the data", "project": project, "cwd": repo }),
+    )["result"]["task"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let _agent = harness
+        .sessions
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    let worker = worker_of(&mut caller, &task);
+    ok_in(
+        &harness,
+        worker,
+        "report.outcome",
+        serde_json::json!({ "outcome": "unable", "summary": "No access to the staging data" }),
+    );
+
+    let mut shown = None;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let alert = loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        assert!(!left.is_zero(), "no alert");
+        let Ok(message) = window.client.messages.recv_timeout(left) else {
+            continue;
+        };
+        match &message {
+            ServerMessage::Factory { board, .. } => {
+                if let Some(found) = board.tasks.iter().find(|found| found.id == task) {
+                    shown = Some(found.status);
+                }
+            }
+            ServerMessage::TaskAlert { task: alerted, .. } if *alerted == task => break message,
+            _ => {}
+        }
+    };
+    let ServerMessage::TaskAlert { status, .. } = &alert else {
+        unreachable!()
+    };
+    assert_eq!(*status, crate::factory::Status::NeedsHuman, "{alert:?}");
+    assert_eq!(shown, Some(*status), "the board before the alert shows it");
+    assert_eq!(
+        serde_json::to_value(&alert).unwrap()["detail"],
+        "No access to the staging data",
+        "{alert:?}"
+    );
+}
+
 /// AC (case 13): a Worker whose turn ended while a background task or a
 /// Subagent still runs is not prompted to report; once both settle it is,
 /// once.
