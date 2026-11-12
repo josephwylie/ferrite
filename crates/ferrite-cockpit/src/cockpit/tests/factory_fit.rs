@@ -150,6 +150,42 @@ fn the_board_fits_and_brings_an_open_tasks_column_into_view(cx: &mut TestAppCont
     }
 }
 
+/// V1: a Task that moves column while its panel is open is followed there:
+/// one that completes while open shows in Completed beside its panel.
+#[gpui::test]
+fn an_open_task_that_moves_column_stays_in_view(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("fit-moves", 1);
+    let project = core.project_id(core.threads()[0]).unwrap();
+    core.fixture_factory(every_column(project));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    wide(cx);
+    view.update(cx, |view, cx| {
+        view.open_factory(project, cx);
+        view.open_task("t-3", cx);
+    });
+    tick(cx);
+    tick(cx);
+    let mut board = every_column(project);
+    board.tasks[2].status = Status::Completed;
+    view.update(cx, |view, cx| {
+        view.cockpit.fixture_factory(board);
+        cx.notify();
+    });
+    tick(cx);
+    tick(cx);
+    let columns = bounds(cx, "factory-columns".into());
+    let card = bounds(cx, "factory-card-t-3".into());
+    let completed = bounds(cx, "factory-column-completed".into());
+    assert!(
+        completed.left() <= card.left() && card.right() <= completed.right(),
+        "t-3 moved to Completed: {card:?} in {completed:?}"
+    );
+    assert!(
+        inside(card, columns),
+        "t-3's card followed beside its panel: {card:?} in {columns:?}"
+    );
+}
+
 /// V3: an empty Project gets no nav row of its own, but its Factory is one
 /// palette search away.
 #[gpui::test]
