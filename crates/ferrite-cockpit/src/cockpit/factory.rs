@@ -207,15 +207,20 @@ impl CockpitView {
 
     /// Whether `task`'s panel is on screen.
     fn task_panel_shown(&self, task: &str) -> bool {
-        self.factory_view.as_ref().is_some_and(|view| {
-            view.surface == super::workflows::Surface::Board && view.open.as_deref() == Some(task)
-        })
+        self.factory_view
+            .as_ref()
+            .is_some_and(|view| view.surface == super::workflows::Surface::Board)
+            && self.open_task_now().is_some_and(|open| open.id == task)
     }
 
-    /// The open Task, as the board says it now.
+    /// The open Task, as the board says it now, while it is where the
+    /// Factory looks: a Task cleared to the Archive leaves the board's panel.
     pub(super) fn open_task_now(&self) -> Option<&Task> {
-        let id = self.factory_view.as_ref()?.open.as_deref()?;
-        self.cockpit.factory().task(id)
+        let view = self.factory_view.as_ref()?;
+        self.cockpit
+            .factory()
+            .task(view.open.as_deref()?)
+            .filter(|task| task.archived() == view.archive.shown)
     }
 
     /// The open Task's Worker's Pane in this window.

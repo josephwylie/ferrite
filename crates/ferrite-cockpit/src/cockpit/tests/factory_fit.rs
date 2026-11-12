@@ -481,6 +481,27 @@ fn the_title_bar_names_the_factory_and_its_open_task(cx: &mut TestAppContext) {
     tick(cx);
     assert!(!shows(cx, "view-head-task"), "the panel is not on screen");
     assert!(shows(cx, "view-head-factory"));
+
+    view.update(cx, |view, cx| view.open_task("t-6", cx));
+    tick(cx);
+    assert!(shows(cx, "view-head-task"), "the Completed Task");
+    let mut cleared = every_column(project);
+    cleared.tasks[5] = task(
+        "t-6",
+        project,
+        Status::Completed,
+        serde_json::json!({"result": "Created hello.txt", "archived_ms": 2_000}),
+    );
+    view.update(cx, |view, cx| {
+        view.cockpit.fixture_factory(cleared);
+        cx.notify();
+    });
+    tick(cx);
+    assert!(
+        !shows(cx, "task-panel"),
+        "cleared to the Archive: off the board"
+    );
+    assert!(!shows(cx, "view-head-task"), "and out of the title bar");
 }
 
 /// V9, O7, O6: an outside click closes the New task sheet and the menu it
