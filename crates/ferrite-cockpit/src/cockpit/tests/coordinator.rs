@@ -192,3 +192,38 @@ fn proposals_are_cards_accepted_or_dismissed_beside_the_conversation(cx: &mut Te
         assert_eq!(factory.open.as_deref(), Some(task.as_str()));
     });
 }
+
+/// Focusing a Coordinator's Thread by id lands on its Project's
+/// Coordinator tab, not on a free-standing Thread.
+#[gpui::test]
+fn focusing_a_coordinator_by_id_opens_its_projects_coordinator_tab(cx: &mut TestAppContext) {
+    let (mut core, project, _) = world("coordinator-focus");
+    let coordinator = core
+        .fixture_open_owned(
+            Provider::Claude,
+            WorkspaceChoice::Main { checkout: here() },
+            ferrite_core::ThreadOwner::Factory(project),
+        )
+        .unwrap();
+    core.fixture_factory_command(Command::CoordinatorStarted {
+        project,
+        thread: coordinator,
+    });
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.cockpit
+            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus {
+                thread: coordinator,
+            });
+        cx.notify();
+    });
+    tick(cx);
+    assert!(shows(cx, "coordinator-pane"));
+    view.read_with(cx, |view, _| {
+        let factory = view.factory_view.as_ref().expect("the Factory shows");
+        assert_eq!(factory.project, project);
+        assert_eq!(factory.surface, Surface::Coordinator);
+    });
+}

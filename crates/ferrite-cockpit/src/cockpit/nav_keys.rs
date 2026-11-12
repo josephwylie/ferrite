@@ -156,13 +156,17 @@ impl CockpitView {
         self.move_nav_cursor(next, window, cx);
     }
 
-    /// ⏎: what a press on the row does — a Thread's opens it, a header's
-    /// folds or opens its shelf.
+    /// ⏎: what a press on the row does — a Thread's opens it, a Factory
+    /// entry's opens its board, a header's folds or opens its shelf.
     fn open_nav_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = self.nav_cursor.as_ref().map(|cursor| cursor.item) else {
             return;
         };
         match item {
+            NavItem::Factory(project) => {
+                self.open_factory(project, cx);
+                self.leave_nav(window, cx);
+            }
             NavItem::Shelf(shelf) => {
                 let open = self.shelf_open(shelf);
                 self.set_shelf_open(shelf, !open, cx);
@@ -205,7 +209,7 @@ impl CockpitView {
                 self.move_nav_cursor(Some(NavCursor::shelf(shelf)), window, cx);
                 shelf
             }
-            NavItem::Thread(_) => return,
+            NavItem::Thread(_) | NavItem::Factory(_) => return,
         };
         self.set_shelf_open(shelf, !fold, cx);
     }
@@ -222,7 +226,7 @@ impl CockpitView {
                 MenuTarget::Thread(thread)
             }
             NavItem::Shelf(Shelf::Parked) => MenuTarget::Parked,
-            NavItem::Shelf(_) => return,
+            NavItem::Shelf(_) | NavItem::Factory(_) => return,
         };
         match self.nav_cursor_bounds.get() {
             Some(row) => self.open_context_menu_under(target, row, cx),

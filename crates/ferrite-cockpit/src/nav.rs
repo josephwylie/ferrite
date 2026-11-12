@@ -46,6 +46,7 @@
 use std::time::{Instant, SystemTime};
 
 use ferrite_core::store::Provider;
+use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
 
 use gpui::prelude::*;
@@ -124,9 +125,11 @@ pub(crate) trait NavTooltip: gpui::StatefulInteractiveElement + Sized {
 impl<E: gpui::StatefulInteractiveElement> NavTooltip for E {}
 
 /// A row the nav's keyboard can stand on (`cockpit/nav_keys.rs`): a
-/// shelf's header, or a Thread's card or slim row, wherever it is listed.
+/// Project's Factory entry, a shelf's header, or a Thread's card or slim
+/// row, wherever it is listed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NavItem {
+    Factory(ProjectId),
     Shelf(Shelf),
     Thread(ThreadId),
 }
@@ -140,6 +143,13 @@ pub(crate) struct NavCursor {
 }
 
 impl NavCursor {
+    pub fn factory(project: ProjectId) -> Self {
+        NavCursor {
+            item: NavItem::Factory(project),
+            key: factory_key(project),
+        }
+    }
+
     pub fn shelf(shelf: Shelf) -> Self {
         NavCursor {
             item: NavItem::Shelf(shelf),
@@ -626,16 +636,20 @@ pub fn collapse_button(rail: bool) -> Stateful<Div> {
     ))
 }
 
+fn factory_key(project: ProjectId) -> SharedString {
+    format!("nav-factory-{}", project.get()).into()
+}
+
 /// A Project's Factory entry (ADR 0037), over the list's cards: the
 /// board's icon, `Factory` and the Project's name, and how many of its
 /// Tasks need the operator. Selected while its board shows.
 pub fn factory_row(
-    project: ferrite_core::workspace::registry::ProjectId,
+    project: ProjectId,
     title: SharedString,
     count: usize,
     active: bool,
 ) -> Stateful<Div> {
-    let key = format!("nav-factory-{}", project.get());
+    let key = factory_key(project).to_string();
     let label = key.clone();
     let tally = key.clone();
     line_frame(

@@ -276,3 +276,139 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
         [crate::cockpit::factory::task_tag("t-1")]
     );
 }
+
+/// A Task's toast says the event it announced and goes when the Task
+/// leaves that state, as a Thread's goes once answered; an alert for a
+/// state the Task is already out of says nothing.
+#[gpui::test]
+fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("factory-alert-leaves", 2);
+    let project = core.project_id(core.threads()[0]).unwrap();
+    let needs_human = |status, result| Board {
+        workflows: Vec::new(),
+        tasks: vec![task("t-1", project, status, None, result, Some("No access"))],
+        ..Default::default()
+    };
+    core.fixture_factory(needs_human(Status::NeedsHuman, None));
+    cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    tick(cx);
+    let toasts = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| {
+            use gpui::component::WindowExt as _;
+            window.notifications(cx).len()
+        })
+    };
+    let alert = |view: &mut CockpitView, cx: &mut Context<CockpitView>| {
+        view.cockpit
+            .fixture_task_alert(ferrite_core::protocol::ServerMessage::TaskAlert {
+                project,
+                task: "t-1".into(),
+                status: Status::NeedsHuman,
+                title: "Task needs you: Task t-1".into(),
+            });
+        cx.notify();
+    };
+    let before = toasts(cx);
+    view.update(cx, |view, cx| {
+        let watched = view.cockpit.threads()[0];
+        view.focus_thread(watched, cx);
+        alert(view, cx);
+    });
+    tick(cx);
+    ring(cx);
+    assert_eq!(toasts(cx), before + 1, "it needs the operator: a toast");
+
+    view.update(cx, |view, cx| {
+        view.cockpit
+            .fixture_factory(needs_human(Status::Working, None));
+        cx.notify();
+    });
+    tick(cx);
+    assert_eq!(toasts(cx), before, "answered: the toast goes");
+
+    view.update(cx, |view, cx| {
+        view.cockpit
+            .fixture_factory(needs_human(Status::Completed, Some("Created hello.txt")));
+        alert(view, cx);
+    });
+    tick(cx);
+    ring(cx);
+    assert_eq!(toasts(cx), before, "a state the Task has left is not announced");
+    view.read_with(cx, |view, _| assert_eq!(view.chimed, [Sound::NeedsYou]));
+}
+
+/// An empty Project's Factory opens from the nav: the Filter menu names
+/// the Project, its Factory row stands, and the list's keyboard walks to
+/// it and opens it.
+#[gpui::test]
+fn an_empty_projects_factory_opens_from_the_nav_and_its_keys(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("factory-empty-project", 1);
+    let repo = repo_in(&scratch("factory-empty-project-repo"));
+    let empty = core.register_project(&repo).unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    tick(cx);
+    view.update_in(cx, |view, window, cx| {
+        view.run_menu_verb(
+            MenuTarget::NavFilter,
+            MenuVerb::FilterProject(Some(empty)),
+            window,
+            cx,
+        )
+    });
+    tick(cx);
+    assert!(shows(cx, &format!("nav-factory-{}", empty.get())), "its row");
+    view.update_in(cx, |view, window, cx| view.focus_nav(window, cx));
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.nav_cursor.clone().map(|cursor| cursor.item),
+            Some(nav::NavItem::Factory(empty)),
+            "the keyboard starts on the Factory row"
+        );
+    });
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(shows(cx, "factory-board"));
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.factory_view.as_ref().map(|view| view.project), Some(empty));
+    });
+}
+
+/// Focusing a Worker by id (the CLI's `thread focus`) lands on its Task's
+/// panel with the Worker tab showing, not on a free-standing Thread.
+#[gpui::test]
+fn focusing_a_worker_by_id_opens_its_tasks_worker_tab(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("factory-focus-worker", 1);
+    let project = core.project_id(core.threads()[0]).unwrap();
+    let worker = core
+        .fixture_open_owned(
+            Provider::Claude,
+            WorkspaceChoice::Main { checkout: here() },
+            ferrite_core::ThreadOwner::Task("t-1".into()),
+        )
+        .unwrap();
+    core.fixture_factory(Board {
+        workflows: Vec::new(),
+        tasks: vec![task("t-1", project, Status::Working, Some(worker), None, None)],
+        ..Default::default()
+    });
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.cockpit
+            .fixture_task_alert(ferrite_core::protocol::ServerMessage::Focus { thread: worker });
+        cx.notify();
+    });
+    tick(cx);
+    assert!(shows(cx, "task-panel"));
+    assert!(shows(cx, "task-worker"), "the Worker tab");
+    view.read_with(cx, |view, _| {
+        let factory = view.factory_view.as_ref().expect("the Factory shows");
+        assert_eq!(factory.open.as_deref(), Some("t-1"));
+        assert_eq!(factory.tab, crate::cockpit::factory::TaskTab::Worker);
+    });
+}
