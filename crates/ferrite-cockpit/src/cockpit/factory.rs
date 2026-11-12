@@ -94,6 +94,9 @@ pub(crate) struct FactoryView {
     pub(crate) archive: super::archive::Archive,
 }
 
+/// What identifies a Task's toast among the window's notifications.
+struct TaskToast;
+
 /// A system notification's tag for a Task.
 pub(crate) fn task_tag(task: &str) -> String {
     format!("ferrite-task-{task}")
@@ -403,11 +406,18 @@ impl CockpitView {
     ) {
         use gpui::component::notification::{Notification, NotificationType};
         use gpui::component::WindowExt as _;
-        let found = self.cockpit.factory().task(&task).cloned();
-        let detail = found
-            .as_ref()
-            .and_then(outcome_line)
-            .unwrap_or_else(|| title.clone());
+        // The Task has since left the state this announced: that event is
+        // over, and what it says now is some other state's.
+        let Some(found) = self
+            .cockpit
+            .factory()
+            .task(&task)
+            .filter(|found| found.status == status)
+            .cloned()
+        else {
+            return;
+        };
+        let detail = outcome_line(&found).unwrap_or_else(|| title.clone());
         let project_title = self
             .cockpit
             .registry()
@@ -415,6 +425,7 @@ impl CockpitView {
             .map(|project| project.title.clone());
         let heading = format!("{} \u{b7} {title}", status.word());
         let mut toast = Notification::new()
+            .id1::<TaskToast>(SharedString::from(task.clone()))
             .title(heading)
             .message(detail.clone())
             .with_type(if status.needs_you() {
@@ -427,10 +438,11 @@ impl CockpitView {
             toast = toast.message(format!("{project_title} \u{b7} {detail}"));
         }
         window.push_notification(toast, cx);
-        let provider = found.as_ref().map(|task| task.agent.provider);
-        if provider.map_or(self.prefs.settings.sounds, |provider| {
-            self.prefs.settings.sounds_for(provider)
-        }) {
+        if status.needs_you() {
+            self.task_toasts.insert(task.clone(), status);
+        }
+        let provider = found.agent.provider;
+        if self.prefs.settings.sounds_for(provider) {
             self.chime(if status.needs_you() {
                 Sound::NeedsYou
             } else {
@@ -447,11 +459,65 @@ impl CockpitView {
                     word: status.word(),
                     title,
                     detail,
-                    agent: provider.map(|provider| provider.to_string()),
-                    cwd: found.and_then(|task| task.worktree),
+                    agent: Some(provider.to_string()),
+                    cwd: found.worktree,
                 },
                 cx,
             );
+        }
+    }
+
+    /// A Task's standing toast goes, with its system notification, once
+    /// the Task is out of the state it announced, as a Thread's does once
+    /// its request is answered.
+    pub(super) fn retire_task_toasts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui::component::WindowExt as _;
+        let board = self.cockpit.factory();
+        let gone: Vec<String> = self
+            .task_toasts
+            .iter()
+            .filter(|(task, status)| {
+                board
+                    .task(task)
+                    .is_none_or(|found| found.status != **status)
+            })
+            .map(|(task, _)| task.clone())
+            .collect();
+        for task in gone {
+            self.task_toasts.remove(&task);
+            window.remove_notification1::<TaskToast>(SharedString::from(task.clone()), cx);
+            crate::system_notifications::withdraw(&task_tag(&task), cx);
+        }
+    }
+
+    /// Land on an owned Thread through what owns it: a Worker, on its
+    /// Task's Worker tab (an earlier Worker's transcript read there); a
+    /// Coordinator, on its Project's Coordinator tab.
+    pub(super) fn land_on_owned(
+        &mut self,
+        thread: ThreadId,
+        owner: ferrite_core::ThreadOwner,
+        cx: &mut Context<Self>,
+    ) {
+        match owner {
+            ferrite_core::ThreadOwner::Task(task) => {
+                self.open_task(&task, cx);
+                if self
+                    .open_task_now()
+                    .is_some_and(|task| task.worker == Some(thread))
+                {
+                    self.task_tab(TaskTab::Worker, cx);
+                } else {
+                    self.read_worker(Some(thread), cx);
+                    if let Some(view) = self.factory_view.as_mut() {
+                        view.tab = TaskTab::Worker;
+                    }
+                }
+            }
+            ferrite_core::ThreadOwner::Factory(project) => {
+                self.open_factory(project, cx);
+                self.factory_surface(super::workflows::Surface::Coordinator, cx);
+            }
         }
     }
 
@@ -465,14 +531,10 @@ impl CockpitView {
         true
     }
 
-    /// The Factory entries over the nav's cards: one for each Project an
+    /// The Projects with a Factory entry over the nav's cards: each one an
     /// operator's Thread or a Task is in, the chosen one's alone while the
-    /// list is filtered to a Project.
-    pub(super) fn factory_nav_rows(
-        &self,
-        state: &nav::NavState,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
+    /// list is filtered to a Project, which shows it even when empty.
+    pub(super) fn factory_nav_projects(&self, state: &nav::NavState) -> Vec<ProjectId> {
         let mut projects: Vec<ProjectId> = state
             .open_rows()
             .chain(&state.parked)
@@ -484,6 +546,14 @@ impl CockpitView {
         projects.sort();
         projects.dedup();
         projects
+    }
+
+    pub(super) fn factory_nav_rows(
+        &self,
+        state: &nav::NavState,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        self.factory_nav_projects(state)
             .into_iter()
             .map(|project| self.factory_nav_row(project, cx))
             .collect()
@@ -503,6 +573,7 @@ impl CockpitView {
             .map(|project| SharedString::from(project.title.clone()))
             .unwrap_or_default();
         nav::factory_row(project, title, count, active)
+            .children(self.cursor_reveal(nav::NavItem::Factory(project)))
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 view.open_factory(project, cx);
             }))

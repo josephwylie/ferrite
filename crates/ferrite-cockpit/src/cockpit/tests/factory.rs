@@ -265,7 +265,11 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
     assert_eq!(toasts(cx), before + 1, "a toast");
     view.read_with(cx, |view, cx| {
         assert_eq!(view.chimed, [Sound::NeedsYou], "a chime");
-        assert_eq!(inbox_len(view, cx), inbox_before, "nothing reaches the Inbox");
+        assert_eq!(
+            inbox_len(view, cx),
+            inbox_before,
+            "nothing reaches the Inbox"
+        );
         assert!(view.needs_you.toasts().is_empty());
     });
     assert_eq!(
@@ -286,7 +290,14 @@ fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAp
     let project = core.project_id(core.threads()[0]).unwrap();
     let needs_human = |status, result| Board {
         workflows: Vec::new(),
-        tasks: vec![task("t-1", project, status, None, result, Some("No access"))],
+        tasks: vec![task(
+            "t-1",
+            project,
+            status,
+            None,
+            result,
+            Some("No access"),
+        )],
         ..Default::default()
     };
     core.fixture_factory(needs_human(Status::NeedsHuman, None));
@@ -326,6 +337,8 @@ fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAp
         cx.notify();
     });
     tick(cx);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    tick(cx);
     assert_eq!(toasts(cx), before, "answered: the toast goes");
 
     view.update(cx, |view, cx| {
@@ -335,7 +348,11 @@ fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAp
     });
     tick(cx);
     ring(cx);
-    assert_eq!(toasts(cx), before, "a state the Task has left is not announced");
+    assert_eq!(
+        toasts(cx),
+        before,
+        "a state the Task has left is not announced"
+    );
     view.read_with(cx, |view, _| assert_eq!(view.chimed, [Sound::NeedsYou]));
 }
 
@@ -347,6 +364,7 @@ fn an_empty_projects_factory_opens_from_the_nav_and_its_keys(cx: &mut TestAppCon
     let (mut core, _fake) = cockpit("factory-empty-project", 1);
     let repo = repo_in(&scratch("factory-empty-project-repo"));
     let empty = core.register_project(&repo).unwrap();
+    bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
@@ -359,7 +377,10 @@ fn an_empty_projects_factory_opens_from_the_nav_and_its_keys(cx: &mut TestAppCon
         )
     });
     tick(cx);
-    assert!(shows(cx, &format!("nav-factory-{}", empty.get())), "its row");
+    assert!(
+        shows(cx, &format!("nav-factory-{}", empty.get())),
+        "its row"
+    );
     view.update_in(cx, |view, window, cx| view.focus_nav(window, cx));
     tick(cx);
     view.read_with(cx, |view, _| {
@@ -373,7 +394,10 @@ fn an_empty_projects_factory_opens_from_the_nav_and_its_keys(cx: &mut TestAppCon
     tick(cx);
     assert!(shows(cx, "factory-board"));
     view.read_with(cx, |view, _| {
-        assert_eq!(view.factory_view.as_ref().map(|view| view.project), Some(empty));
+        assert_eq!(
+            view.factory_view.as_ref().map(|view| view.project),
+            Some(empty)
+        );
     });
 }
 
@@ -392,7 +416,14 @@ fn focusing_a_worker_by_id_opens_its_tasks_worker_tab(cx: &mut TestAppContext) {
         .unwrap();
     core.fixture_factory(Board {
         workflows: Vec::new(),
-        tasks: vec![task("t-1", project, Status::Working, Some(worker), None, None)],
+        tasks: vec![task(
+            "t-1",
+            project,
+            Status::Working,
+            Some(worker),
+            None,
+            None,
+        )],
         ..Default::default()
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));

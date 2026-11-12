@@ -675,6 +675,8 @@ pub struct CockpitView {
     empty_shown: bool,
     /// A Project's Factory board, shown in the board's place (ADR 0037).
     factory_view: Option<factory::FactoryView>,
+    /// The Tasks whose needs-you toast stands, and the state it announced.
+    task_toasts: std::collections::HashMap<String, ferrite_core::factory::Status>,
     /// The empty board's selected row, and the list's own focus.
     empty_cursor: usize,
     empty_focus: FocusHandle,
@@ -1616,6 +1618,7 @@ impl CockpitView {
             nav_measure_rest: std::cell::Cell::new(false),
             empty_shown: false,
             factory_view: None,
+            task_toasts: Default::default(),
             empty_cursor: 0,
             empty_focus: cx.focus_handle(),
             solo_beside: None,
@@ -9012,8 +9015,13 @@ impl CockpitView {
     /// Land on a Thread from the nav's other doors — an Activity or rail
     /// row: the Group on screen when it holds the Thread, else its
     /// home Group's view, else its Pane if open, else revived — exactly as
-    /// a press on its own row does.
+    /// a press on its own row does. A Worker or a Coordinator is reached
+    /// through its owner instead (`land_on_owned`).
     fn land_on_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        if let Some(owner) = self.cockpit.owner(thread) {
+            self.land_on_owned(thread, owner, cx);
+            return;
+        }
         let target: Option<GroupId> = {
             let groups = self.cockpit.groups();
             let viewed = match self.cockpit.roster().view() {
@@ -9954,6 +9962,7 @@ impl CockpitView {
         self.present_user_commands(window, cx);
         self.present_allowance_warnings(window, cx);
         self.present_asked(window, cx);
+        self.retire_task_toasts(window, cx);
         self.maximized = window.is_maximized();
         // The fullscreened Pane, if the roster still shows it: a Pane gone
         // by any path is the roster's to notice, and it falls back to the
@@ -12291,7 +12300,7 @@ impl CockpitView {
         self.context_menu = None;
         self.floats.palette = None;
         self.floats.shortcuts = None;
-        let first = self.nav_items(cx).into_iter().next();
+        let first = self.first_nav_card(cx);
         self.focus_nav_on(first, window, cx);
     }
 

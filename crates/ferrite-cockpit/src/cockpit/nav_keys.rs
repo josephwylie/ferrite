@@ -1,8 +1,9 @@
 //! The nav list's keyboard: ⌘I (on the first card) or ⌘⇧E (on the shown
 //! Thread's) hands the list the keys. ↑↓ walk the rows the list draws, in
-//! its order — Pinned and Active cards, then each shelf's header and the
-//! rows it draws — and Home/End go to its ends. ⏎ opens what the row
-//! stands for (a header's ⏎ folds or opens its shelf), ← folds the shelf
+//! its order — the Factory entries, Pinned and Active cards, then each
+//! shelf's header and the rows it draws — and Home/End go to its ends. ⏎
+//! opens what the row stands for (a Factory entry's opens its board, a
+//! header's folds or opens its shelf), ← folds the shelf
 //! the cursor heads or sits in (from a row, onto its header), → opens it.
 //! F2 renames, the ContextMenu key or ⇧F10 opens the row's menu, ⌘W parks
 //! the cursor's Thread and ⌘Z takes back the last Park or Snooze. Esc
@@ -26,8 +27,8 @@ use gpui::{App, Bounds};
 
 impl CockpitView {
     /// Every row the keyboard can stand on, in the list's drawing order:
-    /// the local cards (a connected machine's rows are the pointer's),
-    /// then each shelf's header and the rows it draws.
+    /// the Factory entries, the local cards (a connected machine's rows
+    /// are the pointer's), then each shelf's header and the rows it draws.
     pub(super) fn nav_items(&self, cx: &App) -> Vec<NavCursor> {
         let state = self.nav_state();
         let mut items = Vec::new();
@@ -38,6 +39,11 @@ impl CockpitView {
         if machine_folded {
             return items;
         }
+        items.extend(
+            self.factory_nav_projects(&state)
+                .into_iter()
+                .map(NavCursor::factory),
+        );
         items.extend(
             state
                 .pinned
@@ -59,16 +65,26 @@ impl CockpitView {
         items
     }
 
-    /// ⌘⇧E: the list takes the keyboard, its cursor on the row the board
-    /// shows (else the first).
-    pub(super) fn focus_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// The first card the keyboard can stand on, else the first row: the
+    /// Factory entries above the cards are not where it starts.
+    pub(super) fn first_nav_card(&self, cx: &App) -> Option<NavCursor> {
         let items = self.nav_items(cx);
-        let shown = self.focused_thread();
-        let start = items
+        items
             .iter()
-            .find(|cursor| matches!(cursor.item, NavItem::Thread(thread) if Some(thread) == shown))
+            .find(|cursor| matches!(cursor.item, NavItem::Thread(_)))
             .or(items.first())
-            .cloned();
+            .cloned()
+    }
+
+    /// ⌘⇧E: the list takes the keyboard, its cursor on the row the board
+    /// shows (else the first card).
+    pub(super) fn focus_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let shown = self.focused_thread();
+        let start = self
+            .nav_items(cx)
+            .into_iter()
+            .find(|cursor| matches!(cursor.item, NavItem::Thread(thread) if Some(thread) == shown))
+            .or_else(|| self.first_nav_card(cx));
         self.focus_nav_on(start, window, cx);
     }
 
@@ -287,12 +303,10 @@ impl CockpitView {
             .on_action(
                 cx.listener(|view, _: &nav::CloseView, window, cx| view.leave_nav(window, cx)),
             )
-            .on_action(cx.listener(|view, _: &nav::Rename, window, cx| {
-                view.rename_nav_cursor(window, cx)
-            }))
             .on_action(
-                cx.listener(|view, _: &nav::OpenMenu, _, cx| view.open_nav_cursor_menu(cx)),
+                cx.listener(|view, _: &nav::Rename, window, cx| view.rename_nav_cursor(window, cx)),
             )
+            .on_action(cx.listener(|view, _: &nav::OpenMenu, _, cx| view.open_nav_cursor_menu(cx)))
             .on_action(cx.listener(|view, _: &nav::Undo, _, cx| view.undo_nav(cx)))
     }
 
