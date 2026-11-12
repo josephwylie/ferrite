@@ -1910,8 +1910,7 @@ impl CockpitView {
         let workspace =
             ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
                 .map(std::path::Path::to_path_buf);
-        let solo = self.cockpit.roster().fullscreen().is_some()
-            || matches!(self.cockpit.roster().view(), View::Solo);
+        let solo = self.on_plane(thread);
         // While the turn runs, its header under its prompt and its live
         // row at the tail (`pane::working_tail`), over a Decision that
         // waits.
@@ -2029,8 +2028,26 @@ impl CockpitView {
         }
     }
 
+    /// Whether `thread`'s Pane is the window's plane (Solo, or
+    /// fullscreen), on its black ground, rather than a cell on another
+    /// surface: a Group's board, or the Factory that draws a Worker or a
+    /// Coordinator on its own ground.
+    fn on_plane(&self, thread: ThreadId) -> bool {
+        (self.cockpit.roster().fullscreen().is_some()
+            || matches!(self.cockpit.roster().view(), View::Solo))
+            && self.factory_worker_drawn() != Some(thread)
+    }
+
     fn sync_visible_transcripts(&mut self, cx: &mut Context<Self>) {
-        for index in self.visible_indices() {
+        let mut shown = self.visible_indices();
+        // The Factory draws a Worker or its Coordinator the roster does not
+        // show (its Task's Worker tab, the Coordinator surface).
+        shown.extend(
+            self.factory_worker_drawn()
+                .and_then(|thread| self.pane_for(thread))
+                .filter(|index| !shown.contains(index)),
+        );
+        for index in shown {
             self.sync_transcript(index, cx);
         }
     }
@@ -10902,6 +10919,7 @@ impl CockpitView {
                 && pane.composer.read(cx).focus_handle(cx).is_focused(window),
             drop_target: self.drop_target(index, cx),
             show_focus: self.grid_board(),
+            plane: self.on_plane(thread),
             // Every head names its provider (theme WP-C): the mark is the
             // one thing a head carries beside the Thread.
             provider_mark: open

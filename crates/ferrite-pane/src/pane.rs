@@ -612,6 +612,10 @@ pub struct PaneFacts<'a> {
     /// More than one Pane is on the board, so which one holds the keyboard
     /// needs showing: only then does focus draw the `FOCUS_RING` edge.
     pub show_focus: bool,
+    /// The Pane is the window's plane (Solo, fullscreen), on the
+    /// transcript's black ground; drawn inside another surface (the
+    /// Factory's), it takes that surface's `CARD` ground instead.
+    pub plane: bool,
     /// This Thread's provider: the Group head's mark at its right.
     pub provider_mark: Option<Provider>,
     /// This Pane's docked Decision merges into its live Composer (one
@@ -891,6 +895,7 @@ pub fn render_pane(
         editing,
         drop_target,
         show_focus,
+        plane,
         provider_mark,
         decision_joined,
         cell_width,
@@ -948,7 +953,7 @@ pub fn render_pane(
     let framed = focused && show_focus;
     let edge = PaneEdge::of(framed, attention_pending, !show_focus);
     let key = view.thread().map_or(0, ThreadId::get);
-    let shell = record_card(pane_shell(edge), view);
+    let shell = record_card(pane_shell(edge, plane), view);
     let frame = |pane: Div| pane_frame(pane, edge, key);
     // What a pending request asks, as the lexicon names it: the tile's
     // state word and the question door at the Pane's foot read it.
@@ -1178,7 +1183,7 @@ fn record_card(shell: Div, view: &PaneView) -> Div {
 /// never a border in layout. A Group's Pane is a cell at `R_CARD`; a Solo
 /// Pane (`PaneEdge::Flush`) is the plane itself, square. `overflow:
 /// hidden` clips the children to the box.
-fn pane_shell(edge: PaneEdge) -> Div {
+fn pane_shell(edge: PaneEdge, plane: bool) -> Div {
     let radius = if edge == PaneEdge::Flush {
         0.0
     } else {
@@ -1192,7 +1197,7 @@ fn pane_shell(edge: PaneEdge) -> Div {
         .min_h_0()
         .min_w_0()
         .rounded(px(radius))
-        .bg(rgb(theme::tx_ground(edge == PaneEdge::Flush)))
+        .bg(rgb(theme::tx_ground(edge == PaneEdge::Flush && plane)))
         .font_family(theme::FONT_UI)
         .overflow_hidden()
 }
@@ -1330,7 +1335,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
     let framed = focused && show_focus;
     let edge = PaneEdge::of(framed, false, !show_focus);
     let key = view.identity.draft().map_or(0, DraftId::get);
-    let mut shell = record_card(pane_shell(edge), view);
+    let mut shell = record_card(pane_shell(edge, true), view);
     if show_focus {
         shell = shell.child(group_head(GroupHead {
             key,

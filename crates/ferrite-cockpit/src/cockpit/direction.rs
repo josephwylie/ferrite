@@ -79,8 +79,8 @@ pub(crate) enum TaskPick {
 }
 
 /// A Factory picker's button: the shared chooser face, full width, its
-/// rows opened in the window's picker at the press (anchored to it from
-/// the keyboard). Flagged, it is selected as `{selector}-flagged`.
+/// rows opened in the window's picker under it. Flagged, it is selected
+/// as `{selector}-flagged`.
 pub(crate) fn chooser(
     selector: &'static str,
     text: String,
@@ -94,6 +94,7 @@ pub(crate) fn chooser(
         full_width: true,
         disabled: false,
     };
+    let trigger = super::workflows::Trigger::default();
     ferrite_ui::controls::chooser(selector, "", text.into(), look, cx)
         .debug_selector(move || {
             if flagged {
@@ -102,9 +103,11 @@ pub(crate) fn chooser(
                 selector.to_string()
             }
         })
+        .relative()
+        .child(trigger.probe())
         .on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
             cx.stop_propagation();
-            view.open_picks((*picks).clone(), event.position(), cx);
+            view.open_picks((*picks).clone(), &trigger, event.position(), cx);
         }))
 }
 
@@ -213,16 +216,20 @@ impl CockpitView {
             .unwrap_or_default()
     }
 
-    /// The field holding the keyboard on the open Task's say.
+    /// The field holding the keyboard on the open Task's say, while it is
+    /// on screen: its sheet, or the answer box on the Board's Overview.
     pub(super) fn direct_focus(&self, cx: &gpui::App) -> Option<FocusHandle> {
         let view = self.factory_view.as_ref()?;
         let field = view.direct.focused?;
-        let task = view
-            .direct
-            .sheet
-            .as_ref()
-            .map(|(task, _)| task.as_str())
-            .or(view.open.as_deref())?;
+        let task = match &view.direct.sheet {
+            Some((task, _)) => task.as_str(),
+            None if view.surface == super::workflows::Surface::Board
+                && view.tab == super::factory::TaskTab::Overview =>
+            {
+                view.open.as_deref()?
+            }
+            None => return None,
+        };
         let drafts = view.direct.drafts.get(task)?;
         Some(field.of(drafts).read(cx).focus_handle(cx))
     }
@@ -281,6 +288,10 @@ impl CockpitView {
         };
         if self.direct_command(action, cx) {
             self.clear_field(&task.id, DirectField::Answer, cx);
+            // Answered, the box lets the keyboard go.
+            if let Some(view) = self.factory_view.as_mut() {
+                view.direct.focused = None;
+            }
         }
     }
 
@@ -315,6 +326,7 @@ impl CockpitView {
             view.direct.tried = false;
             view.direct.focused = None;
         }
+        self.close_factory_menu();
         cx.notify();
     }
 

@@ -122,7 +122,10 @@ fn the_board_fits_and_brings_an_open_tasks_column_into_view(cx: &mut TestAppCont
         );
     }
     let clear = bounds(cx, "factory-clear".into());
-    assert!(inside(clear, board) && inside(clear, window_bounds()), "{clear:?}");
+    assert!(
+        inside(clear, board) && inside(clear, window_bounds()),
+        "{clear:?}"
+    );
 
     for open in ["t-4", "t-6", "t-1"] {
         view.update(cx, |view, cx| view.open_task(open, cx));
@@ -136,8 +139,14 @@ fn the_board_fits_and_brings_an_open_tasks_column_into_view(cx: &mut TestAppCont
             inside(card, columns),
             "{open}'s card in view beside its panel: {card:?} in {columns:?}"
         );
-        let clear = bounds(cx, "factory-clear".into());
-        assert!(inside(clear, window_bounds()), "Clear with {open} open: {clear:?}");
+        let board = bounds(cx, "factory-board".into());
+        for control in ["factory-clear", "factory-new-task"] {
+            let at = bounds(cx, control.into());
+            assert!(
+                inside(at, board) && inside(at, window_bounds()),
+                "{control} with {open} open: {at:?}"
+            );
+        }
     }
 }
 
@@ -156,7 +165,12 @@ fn an_empty_projects_factory_is_one_palette_search_away(cx: &mut TestAppContext)
         "no row for every Project"
     );
     let title = view.read_with(cx, |view, _| {
-        view.cockpit.registry().project(empty).unwrap().title.clone()
+        view.cockpit
+            .registry()
+            .project(empty)
+            .unwrap()
+            .title
+            .clone()
     });
     view.update_in(cx, |view, window, cx| {
         view.open_palette(
@@ -165,6 +179,19 @@ fn an_empty_projects_factory_is_one_palette_search_away(cx: &mut TestAppContext)
             window,
             cx,
         )
+    });
+    tick(cx);
+    let wanted = format!("Factory: {title}");
+    view.update(cx, |view, cx| {
+        let palette = view.floats.palette.clone().expect("the palette");
+        palette.update(cx, |palette, cx| {
+            let at = palette
+                .survivors()
+                .iter()
+                .position(|row| row.name.as_ref() == wanted)
+                .unwrap_or_else(|| panic!("{wanted} among the rows"));
+            palette.set_cursor(at, cx);
+        });
     });
     tick(cx);
     cx.simulate_keystrokes("enter");
@@ -210,7 +237,11 @@ fn an_answer_sent_lets_the_keyboard_go(cx: &mut TestAppContext) {
     cx.simulate_input("mango");
     tick(cx);
     assert_eq!(
-        view.read_with(cx, |view, cx| view.direct_text("t-1", DirectField::Answer, cx)),
+        view.read_with(cx, |view, cx| view.direct_text(
+            "t-1",
+            DirectField::Answer,
+            cx
+        )),
         "mango"
     );
     view.update(cx, |view, cx| view.send_answer(cx));
@@ -224,7 +255,9 @@ fn an_answer_sent_lets_the_keyboard_go(cx: &mut TestAppContext) {
     };
     assert!(!answer_holds(&view, cx), "sent: the answer box lets go");
 
-    view.update(cx, |view, cx| view.factory_surface(Surface::Coordinator, cx));
+    view.update(cx, |view, cx| {
+        view.factory_surface(Surface::Coordinator, cx)
+    });
     tick(cx);
     cx.simulate_input("plan the week");
     tick(cx);
@@ -346,7 +379,9 @@ fn a_tasks_toast_is_not_raised_over_its_own_panel(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("fit-toast", 1);
     let project = core.project_id(core.threads()[0]).unwrap();
     let mut board = every_column(project);
-    board.tasks.retain(|task| task.id == "t-3" || task.id == "t-4");
+    board
+        .tasks
+        .retain(|task| task.id == "t-3" || task.id == "t-4");
     core.fixture_factory(board);
     cx.update(|cx| cx.set_app_identity("com.github.josephwylie.ferrite", "Ferrite"));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -368,7 +403,8 @@ fn a_tasks_toast_is_not_raised_over_its_own_panel(cx: &mut TestAppContext) {
         detail: None,
     };
     view.update(cx, |view, cx| {
-        view.cockpit.fixture_task_alert(alert("t-4", Status::Approval));
+        view.cockpit
+            .fixture_task_alert(alert("t-4", Status::Approval));
         cx.notify();
     });
     tick(cx);
@@ -599,9 +635,7 @@ fn step_instructions_are_a_text_area_that_grows(cx: &mut TestAppContext) {
 /// down on the last; a route's menu hangs under its trigger; ↓ keeps the
 /// chosen row in view.
 #[gpui::test]
-fn the_workflow_menus_offer_what_applies_and_keep_the_selection_in_view(
-    cx: &mut TestAppContext,
-) {
+fn the_workflow_menus_offer_what_applies_and_keep_the_selection_in_view(cx: &mut TestAppContext) {
     let model = |value: &str, display: &str| ferrite_core::ModelInfo {
         value: value.into(),
         display: display.into(),
@@ -629,7 +663,10 @@ fn the_workflow_menus_offer_what_applies_and_keep_the_selection_in_view(
     click(cx, "inspector-model");
     let models = labels(&view, cx);
     assert_eq!(
-        models.iter().filter(|label| label.starts_with("Default")).count(),
+        models
+            .iter()
+            .filter(|label| label.starts_with("Default"))
+            .count(),
         1,
         "{models:?}"
     );
@@ -704,7 +741,11 @@ fn the_coordinators_settings_fit_the_window(cx: &mut TestAppContext) {
     });
     tick(cx);
     let board = bounds(cx, "factory-board".into());
-    for chooser in ["coordinator-provider", "coordinator-model", "coordinator-effort"] {
+    for chooser in [
+        "coordinator-provider",
+        "coordinator-model",
+        "coordinator-effort",
+    ] {
         let at = bounds(cx, chooser.into());
         assert!(inside(at, board), "{chooser}: {at:?} in {board:?}");
     }

@@ -209,6 +209,7 @@ impl CockpitView {
             PaletteScope::All => {
                 let mut rows = self.palette_thread_rows(window);
                 rows.extend(self.palette_project_rows());
+                rows.extend(self.palette_factory_rows());
                 rows.extend(self.palette_group_rows());
                 rows.extend(self.palette_command_rows(window, cx));
                 rows
@@ -285,6 +286,7 @@ impl CockpitView {
                     self.land_on_thread(thread, cx);
                 }
             }
+            Act::Factory(project) => self.open_factory(project, cx),
             Act::Command(command) => self.run_command(command, window, cx),
             Act::Adopt { path, into } => self.adopt_file(into, &path, window, cx),
         }
@@ -599,6 +601,35 @@ impl CockpitView {
                     used: None,
                     act: Act::Project(project.id),
                 })
+            })
+            .collect()
+    }
+
+    /// Every Project's Factory (`Act::Factory`), `Factory: <Project>`,
+    /// an empty one's too: the nav lists only the busy ones.
+    fn palette_factory_rows(&self) -> Vec<PaletteRow> {
+        let board = self.cockpit.factory();
+        self.cockpit
+            .registry()
+            .projects()
+            .iter()
+            .map(|project| {
+                let tasks = board.on_board(project.id).count();
+                PaletteRow {
+                    section: PaletteSection::Projects,
+                    name: format!("Factory: {}", project.title).into(),
+                    context: match tasks {
+                        0 => "No tasks".to_string(),
+                        1 => "1 task".to_string(),
+                        n => format!("{n} tasks"),
+                    }
+                    .into(),
+                    status: None,
+                    detail: None,
+                    keys: None,
+                    used: None,
+                    act: Act::Factory(project.id),
+                }
             })
             .collect()
     }

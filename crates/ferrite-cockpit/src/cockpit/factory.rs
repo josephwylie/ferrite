@@ -16,8 +16,10 @@ use ferrite_pane::composer::{Composer, Role};
 
 /// The Task panel's width beside the columns.
 const TASK_PANEL_W: f32 = 480.;
-/// A column's width; the board scrolls sideways when they do not fit.
-const COLUMN_W: f32 = 232.;
+/// A column's narrowest: the six share the board's width down to this,
+/// so they fit a 1440 pt window with the sidebar open, and the board
+/// scrolls sideways past it (the Task panel open, a narrower window).
+const COLUMN_MIN_W: f32 = 168.;
 
 /// A Task panel's tabs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,6 +83,12 @@ pub(crate) struct FactoryView {
     /// What the last command said back (a refusal, a worktree kept).
     pub(crate) note: Option<SharedString>,
     pub(crate) sheet: Option<NewTask>,
+    /// The New task sheet as it was closed, for when it opens again.
+    kept: Option<NewTask>,
+    /// The columns' sideways scroll, and the column still to bring into
+    /// view (the open Task's).
+    columns: gpui::ScrollHandle,
+    reveal: std::cell::Cell<Option<(usize, bool)>>,
     /// The Board or the Workflows.
     pub(crate) surface: super::workflows::Surface,
     pub(crate) workflows: super::workflows::Workflows,
@@ -131,6 +139,9 @@ impl CockpitView {
                     tab: TaskTab::Overview,
                     note: None,
                     sheet: None,
+                    kept: None,
+                    columns: gpui::ScrollHandle::new(),
+                    reveal: Default::default(),
                     surface: super::workflows::Surface::Board,
                     workflows,
                     picks: Vec::new(),
@@ -143,20 +154,42 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Open a Task's panel: what it shows is the board's; nothing starts.
+    /// Open a Task's panel, brought forward from whichever surface shows:
+    /// on the Board, or the Archive for an archived Task. What it shows is
+    /// the board's; nothing starts.
     pub(crate) fn open_task(&mut self, task: &str, cx: &mut Context<Self>) {
-        let Some(project) = self.cockpit.factory().task(task).map(|task| task.project) else {
+        let Some((project, archived, status)) = self
+            .cockpit
+            .factory()
+            .task(task)
+            .map(|task| (task.project, task.archived(), task.status))
+        else {
             return;
         };
         if self.factory_view.as_ref().map(|view| view.project) != Some(project) {
             self.open_factory(project, cx);
         }
         self.read_worker(None, cx);
+        let archive_shown = self
+            .factory_view
+            .as_ref()
+            .is_some_and(|view| view.archive.shown);
+        if archived && !archive_shown {
+            self.open_archive(cx);
+        }
         if let Some(view) = self.factory_view.as_mut() {
+            view.surface = super::workflows::Surface::Board;
+            view.archive.shown = archived;
             view.open = Some(task.to_string());
             view.tab = TaskTab::Overview;
             view.note = None;
             view.direct.focused = None;
+            view.reveal.set(
+                Status::ALL
+                    .iter()
+                    .position(|each| *each == status)
+                    .map(|at| (at, true)),
+            );
         }
         self.ensure_drafts(task, cx);
         cx.notify();
@@ -175,6 +208,13 @@ impl CockpitView {
             }
         }
         cx.notify();
+    }
+
+    /// Whether `task`'s panel is on screen.
+    fn task_panel_shown(&self, task: &str) -> bool {
+        self.factory_view.as_ref().is_some_and(|view| {
+            view.surface == super::workflows::Surface::Board && view.open.as_deref() == Some(task)
+        })
     }
 
     /// The open Task, as the board says it now.
@@ -298,6 +338,13 @@ impl CockpitView {
         let Some(view) = self.factory_view.as_mut() else {
             return;
         };
+        if let Some(mut kept) = view.kept.take() {
+            kept.error = None;
+            kept.pr_focused = false;
+            view.sheet = Some(kept);
+            cx.notify();
+            return;
+        }
         let instructions = cx.new(Composer::new);
         instructions.update(cx, |field, cx| field.set_role(Role::Field(None), cx));
         let pr = cx.new(Composer::new);
@@ -330,10 +377,13 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// Close the sheet and any menu it opened; what was typed stays for
+    /// the next time it opens.
     pub(crate) fn close_new_task(&mut self, cx: &mut Context<Self>) {
         if let Some(view) = self.factory_view.as_mut() {
-            view.sheet = None;
+            view.kept = view.sheet.take();
         }
+        self.close_factory_menu();
         cx.notify();
     }
 
@@ -421,9 +471,12 @@ impl CockpitView {
         if let Some(project_title) = &project_title {
             toast = toast.message(format!("{project_title} \u{b7} {detail}"));
         }
-        window.push_notification(toast, cx);
-        if status.needs_you() {
-            self.task_toasts.insert(task.clone(), status);
+        // As a Thread's toast is not raised over the Thread on screen.
+        if !self.task_panel_shown(&task) {
+            window.push_notification(toast, cx);
+            if status.needs_you() {
+                self.task_toasts.insert(task.clone(), status);
+            }
         }
         let sounds = match provider {
             Some(provider) => self.prefs.settings.sounds_for(provider),
@@ -519,14 +572,23 @@ impl CockpitView {
     }
 
     /// The Projects with a Factory entry over the nav's cards: each one an
-    /// operator's Thread or a Task is in, the chosen one's alone while the
-    /// list is filtered to a Project, which shows it even when empty.
+    /// operator's Thread or a Task is in or whose automatic starts are on,
+    /// the chosen one's alone while the list is filtered to a Project,
+    /// which shows it even when empty. Any other Project's Factory is the
+    /// palette's (`Factory: <Project>`).
     pub(super) fn factory_nav_projects(&self, state: &nav::NavState) -> Vec<ProjectId> {
+        let board = self.cockpit.factory();
+        let automatic = board
+            .workflows
+            .iter()
+            .filter(|workflow| workflow.automation.switch == ferrite_core::factory::Switch::On)
+            .map(|workflow| workflow.project);
         let mut projects: Vec<ProjectId> = state
             .open_rows()
             .chain(&state.parked)
             .filter_map(|row| self.facts.get(row.thread).and_then(|facts| facts.project))
-            .chain(self.cockpit.factory().tasks.iter().map(|task| task.project))
+            .chain(board.tasks.iter().map(|task| task.project))
+            .chain(automatic)
             .chain(self.nav_filter)
             .filter(|project| self.nav_filter.is_none_or(|wanted| wanted == *project))
             .collect();
@@ -646,6 +708,12 @@ impl CockpitView {
                     )
             }))
             .when(
+                view.surface == super::workflows::Surface::Board
+                    && !view.archive.shown
+                    && tasks.iter().any(|task| task.status == Status::Completed),
+                |head| head.child(self.clear_button(cx)),
+            )
+            .when(
                 view.surface == super::workflows::Surface::Board && !view.archive.shown,
                 |head| head.child(self.archive_button(archived, cx)),
             )
@@ -708,7 +776,21 @@ impl CockpitView {
                 .gap(px(SPACE_3))
                 .px(px(SPACE_4))
                 .pb(px(SPACE_4))
-                .overflow_x_scroll();
+                .overflow_x_scroll()
+                .track_scroll(&view.columns);
+            // The open Task's column comes into view beside its panel. The
+            // scroll measures its area as the frame before laid it out, so
+            // it is asked again on the frame after the panel took its width.
+            if let Some((at, again)) = view.reveal.take() {
+                view.columns.scroll_to_item(at);
+                if again {
+                    view.reveal.set(Some((at, false)));
+                    let me = cx.entity().downgrade();
+                    cx.defer(move |cx| {
+                        me.update(cx, |_, cx| cx.notify()).ok();
+                    });
+                }
+            }
             for status in Status::ALL {
                 let in_column: Vec<&&Task> =
                     tasks.iter().filter(|task| task.status == status).collect();
@@ -721,8 +803,8 @@ impl CockpitView {
                     })
                     .flex()
                     .flex_col()
-                    .flex_shrink_0()
-                    .w(px(COLUMN_W))
+                    .flex_1()
+                    .min_w(px(COLUMN_MIN_W))
                     .min_h_0()
                     .gap(px(SPACE_2))
                     .overflow_y_scroll()
@@ -731,13 +813,13 @@ impl CockpitView {
                             .flex()
                             .items_center()
                             .gap(px(SPACE_2))
-                            // As tall as Completed's Clear, so the column's
-                            // scroll never clips its top.
                             .h(px(CONTROL_H))
                             .flex_shrink_0()
                             .child(ferrite_ui::components::status_dot(status_ink(status)))
                             .child(
                                 div()
+                                    .min_w_0()
+                                    .truncate()
                                     .font_weight(W_LABEL)
                                     .text_size(px(FS_LABEL))
                                     .text_color(rgb(INK_STRONG))
@@ -745,15 +827,10 @@ impl CockpitView {
                             )
                             .child(
                                 div()
+                                    .flex_shrink_0()
                                     .text_size(px(FS_META))
                                     .text_color(rgb(INK_SUBTLE))
                                     .child(SharedString::from(in_column.len().to_string())),
-                            )
-                            .when(
-                                status == Status::Completed && !in_column.is_empty(),
-                                |heading| {
-                                    heading.child(div().flex_1()).child(self.clear_button(cx))
-                                },
                             ),
                     );
                 if in_column.is_empty() {
@@ -811,6 +888,7 @@ impl CockpitView {
             .flex()
             .flex_col()
             .flex_shrink_0()
+            .min_w_0()
             .gap(px(SPACE_1))
             .p(px(SPACE_3))
             .rounded(px(R_CONTROL))
@@ -842,6 +920,7 @@ impl CockpitView {
                     .debug_selector(move || agent_key.clone())
                     .flex()
                     .items_center()
+                    .min_w_0()
                     .gap(px(SPACE_1))
                     .text_size(px(FS_META))
                     .text_color(rgb(INK_SUBTLE))
@@ -849,19 +928,21 @@ impl CockpitView {
                         let (mark, ink) = ferrite_ui::provider::mark(task.agent.provider);
                         ferrite_ui::icons::icon(mark, BAR_MARK, ink)
                     })
-                    .child(SharedString::from(match task.current_step() {
-                        Some(step) => format!(
-                            "{}{} \u{b7} {}",
-                            step.name,
-                            if task.oversight.deciding {
-                                " \u{b7} approval decision"
-                            } else {
-                                ""
-                            },
-                            core_factory::agent_label(&task.agent)
-                        ),
-                        None => core_factory::agent_label(&task.agent),
-                    })),
+                    .child(div().min_w_0().truncate().child(SharedString::from(
+                        match task.current_step() {
+                            Some(step) => format!(
+                                "{}{} \u{b7} {}",
+                                step.name,
+                                if task.oversight.deciding {
+                                    " \u{b7} approval decision"
+                                } else {
+                                    ""
+                                },
+                                core_factory::agent_label(&task.agent)
+                            ),
+                            None => core_factory::agent_label(&task.agent),
+                        },
+                    ))),
             )
             .children(task.outcome().map(|line| {
                 div()
@@ -1248,6 +1329,7 @@ impl CockpitView {
             ),
             None => "One-off: a single agent".into(),
         };
+        let process_trigger = super::workflows::Trigger::default();
         let mut body = crate::project_editor::body()
             .child(
                 div()
@@ -1258,7 +1340,7 @@ impl CockpitView {
                             view.focus_new_task_pr(false, cx)
                         }),
                     )
-                    .child(crate::project_editor::text_field(
+                    .child(crate::project_editor::text_area(
                         "Instructions".into(),
                         sheet.instructions.clone(),
                         focused,
@@ -1307,12 +1389,14 @@ impl CockpitView {
                                 ferrite_ui::theme::ROW_ICON,
                                 ferrite_ui::theme::INK_SUBTLE,
                             ))
+                            .relative()
+                            .child(process_trigger.probe())
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|view, event: &MouseDownEvent, _, cx| {
+                                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                                     cx.stop_propagation();
                                     let picks = view.process_picks();
-                                    view.open_picks(picks, event.position, cx);
+                                    view.open_picks(picks, &process_trigger, event.position, cx);
                                 }),
                             ),
                     ),

@@ -110,6 +110,7 @@ impl CockpitView {
         };
         let runnable = workflow.latest().is_some() && problems.is_empty();
         let save_disabled = !unsaved || !problems.is_empty();
+        let picker = Trigger::default();
         let head = div()
             .debug_selector(|| "workflows-head".into())
             .flex()
@@ -139,12 +140,14 @@ impl CockpitView {
                         ROW_ICON,
                         INK_SUBTLE,
                     ))
+                    .relative()
+                    .child(picker.probe())
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|view, event: &MouseDownEvent, _, cx| {
+                        cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
                             let picks = view.workflow_picks();
-                            view.open_picks(picks, event.position, cx);
+                            view.open_picks(picks, &picker, event.position, cx);
                         }),
                     ),
             )
@@ -255,6 +258,7 @@ impl CockpitView {
 
     pub(super) fn new_workflow_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         use ferrite_ui::theme::*;
+        let trigger = Trigger::default();
         div()
             .id("workflow-new")
             .debug_selector(|| "workflow-new".into())
@@ -277,11 +281,13 @@ impl CockpitView {
                 INK_STRONG,
             ))
             .child("New workflow")
+            .relative()
+            .child(trigger.probe())
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|view, event: &MouseDownEvent, _, cx| {
+                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    view.open_picks(Self::template_picks(), event.position, cx);
+                    view.open_picks(Self::template_picks(), &trigger, event.position, cx);
                 }),
             )
     }
@@ -320,6 +326,7 @@ impl CockpitView {
             .border_r_1()
             .border_color(paint::LINE)
             .overflow_y_scroll()
+            .track_scroll(&view.workflows.outline_scroll)
             .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, _, cx| {
                 view.outline_key(&event.keystroke, cx)
             }))
@@ -332,17 +339,23 @@ impl CockpitView {
                     cx.notify();
                 }),
             )
-            .children(self.text_input(&name_field, "Workflow name", window, cx))
-            .child(self.start_outline_row(workflow, cx))
             .child(
                 div()
                     .flex()
-                    .gap(px(SPACE_2))
-                    .pt(px(SPACE_2))
-                    .text_size(px(FS_META))
-                    .text_color(rgb(INK_SUBTLE))
-                    .child(div().font_weight(W_LABEL).child("Agents, in order"))
-                    .child("\u{201c}Next agent\u{201d} follows this order"),
+                    .flex_col()
+                    .gap(px(SPACE_1))
+                    .children(self.text_input(&name_field, "Workflow name", window, cx))
+                    .child(self.start_outline_row(workflow, cx))
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(SPACE_2))
+                            .pt(px(SPACE_2))
+                            .text_size(px(FS_META))
+                            .text_color(rgb(INK_SUBTLE))
+                            .child(div().font_weight(W_LABEL).child("Agents, in order"))
+                            .child("\u{201c}Next agent\u{201d} follows this order"),
+                    ),
             );
         for (at, step) in workflow.draft.steps.iter().enumerate() {
             let flagged = problems
@@ -458,6 +471,7 @@ impl CockpitView {
             meta.push("starts fresh".into());
         }
         let route = |kind: RouteKind, to: &Destination, cx: &mut Context<Self>| {
+            let trigger = Trigger::default();
             let label = workflow.draft.route_label(&step.id, to);
             let broken = workflow.draft.broken(&step.id, to).is_some();
             let which = kind.word();
@@ -504,6 +518,8 @@ impl CockpitView {
                             ROW_ICON,
                             INK_SUBTLE,
                         ))
+                        .relative()
+                        .child(trigger.probe())
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |view, event: &MouseDownEvent, _, cx| {
@@ -516,7 +532,7 @@ impl CockpitView {
                                     return;
                                 };
                                 let picks = view.route_picks(&step, kind);
-                                view.open_picks(picks, event.position, cx);
+                                view.open_picks(picks, &trigger, event.position, cx);
                             }),
                         ),
                 )
@@ -529,6 +545,7 @@ impl CockpitView {
             .collect();
         let more_id = step.id.clone();
         let more_key = format!("{key}-more");
+        let more = Trigger::default();
         let drag = StepDrag {
             step: step.id.clone(),
             name: SharedString::from(name.clone()),
@@ -616,6 +633,8 @@ impl CockpitView {
                                         ROW_ICON,
                                         INK_SUBTLE,
                                     ))
+                                    .relative()
+                                    .child(more.probe())
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |view, event: &MouseDownEvent, _, cx| {
@@ -628,7 +647,7 @@ impl CockpitView {
                                                 return;
                                             };
                                             let picks = view.row_picks(&step);
-                                            view.open_picks(picks, event.position, cx);
+                                            view.open_picks(picks, &more, event.position, cx);
                                         }),
                                     ),
                             ),
@@ -669,12 +688,21 @@ impl CockpitView {
                     view.focus_field(chosen.clone(), cx)
                 }))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(crate::project_editor::text_field(
-                    label.into(),
-                    composer.clone(),
-                    focused,
-                    "factory-field-focused",
-                ))
+                .child(if field.prose() {
+                    crate::project_editor::text_area(
+                        label.into(),
+                        composer.clone(),
+                        focused,
+                        "factory-field-focused",
+                    )
+                } else {
+                    crate::project_editor::text_field(
+                        label.into(),
+                        composer.clone(),
+                        focused,
+                        "factory-field-focused",
+                    )
+                })
                 .into_any_element(),
         )
     }

@@ -24,6 +24,7 @@ use gpui::component::Disableable as _;
 mod inspector;
 mod outline;
 mod pickers;
+pub(crate) use pickers::{model_choices, model_chosen, Trigger};
 mod save;
 mod skills;
 
@@ -58,6 +59,17 @@ pub(crate) enum Field {
 }
 
 impl Field {
+    /// Instructions, written as prose in a text area that grows.
+    pub(crate) fn prose(&self) -> bool {
+        matches!(
+            self,
+            Field::Instructions(..)
+                | Field::ApprovalInstructions(_)
+                | Field::ScheduleInstructions(_)
+                | Field::ExtraInstructions(_)
+        )
+    }
+
     /// Its selector.
     pub(crate) fn key(&self) -> String {
         match self {
@@ -123,6 +135,9 @@ pub(crate) struct Workflows {
     pub(crate) fields: HashMap<Field, Entity<Composer>>,
     pub(crate) focused: Option<Field>,
     pub(crate) outline_focus: FocusHandle,
+    /// The outline's scroll: its first child is its head, then one per
+    /// Step's row (`outline`).
+    pub(crate) outline_scroll: gpui::ScrollHandle,
     /// The skills search is revealed.
     pub(crate) skills_open: bool,
     pub(crate) skills: Vec<SkillsFound>,
@@ -142,6 +157,7 @@ impl Workflows {
             fields: HashMap::new(),
             focused: None,
             outline_focus: cx.focus_handle(),
+            outline_scroll: gpui::ScrollHandle::new(),
             skills_open: false,
             skills: Vec::new(),
             approval: false,
@@ -418,6 +434,10 @@ impl CockpitView {
             self.move_step(step, to, cx);
         } else {
             self.select_step(steps[to].clone(), cx);
+        }
+        // The chosen row stays in view: the head is the outline's first child.
+        if let Some(view) = self.factory_view.as_ref() {
+            view.workflows.outline_scroll.scroll_to_item(to + 1);
         }
     }
 

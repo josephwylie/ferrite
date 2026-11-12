@@ -1,6 +1,6 @@
 //! A Project's Archive in the window (#226): Completed Tasks leave the
-//! board 7 days after completing, or at once with the Completed column's
-//! Clear. The Archive is searched by title and instructions; an archived
+//! board 7 days after completing, or at once with the board head's Clear
+//! completed. The Archive is searched by title and instructions; an archived
 //! Task opens in the ordinary Task panel, read-only, with its activity
 //! and the Workers it had.
 
@@ -179,7 +179,7 @@ impl CockpitView {
         Some(view.archive.search.as_ref()?.read(cx).focus_handle(cx))
     }
 
-    /// The Completed column's Clear.
+    /// Clear: the Completed Tasks go to the Archive at once.
     pub(crate) fn clear_completed(&mut self, cx: &mut Context<Self>) {
         let Some(project) = self.factory_view.as_ref().map(|view| view.project) else {
             return;
@@ -187,9 +187,11 @@ impl CockpitView {
         self.task_command(TaskAction::Clear { project }, cx);
     }
 
-    /// The Clear in the Completed column's heading.
+    /// Clear, in the board's head while Completed holds a Task: where it
+    /// stays clickable however far the columns scroll.
     pub(super) fn clear_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        ferrite_ui::components::ghost_button("factory-clear", "Clear", cx)
+        ferrite_ui::components::ghost_button("factory-clear", "Clear completed", cx)
+            .flex_shrink_0()
             .debug_selector(|| "factory-clear".into())
             .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();

@@ -516,9 +516,12 @@ impl CockpitView {
             full_width: true,
             disabled,
         };
-        div().flex_1().min_w_0().child(
+        let trigger = super::workflows::Trigger::default();
+        div().min_w_0().child(
             ferrite_ui::controls::chooser(selector, "", text.into(), look, cx)
                 .disabled(disabled)
+                .relative()
+                .child(trigger.probe())
                 .debug_selector(move || {
                     if flagged {
                         format!("{selector}-flagged")
@@ -529,7 +532,7 @@ impl CockpitView {
                 .when(!disabled, |chooser| {
                     chooser.on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
                         cx.stop_propagation();
-                        view.open_picks((*picks).clone(), event.position(), cx);
+                        view.open_picks((*picks).clone(), &trigger, event.position(), cx);
                     }))
                 }),
         )
