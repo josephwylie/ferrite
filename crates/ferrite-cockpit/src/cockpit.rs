@@ -12858,7 +12858,7 @@ impl CockpitView {
     }
 
     fn nav_edge_tab(&self, cx: &mut Context<Self>) -> AnyElement {
-        use ferrite_ui::theme::NAV_INSET_FOOT;
+        use ferrite_ui::theme::NAV_INSET_Y;
         let open = !self.nav_folded();
         let left = if open {
             nav::EDGE_TAB_OPEN_X_OVER_RING
@@ -12868,7 +12868,7 @@ impl CockpitView {
         div()
             .absolute()
             .top(px(nav::CARD_TOP))
-            .bottom(px(NAV_INSET_FOOT))
+            .bottom(px(NAV_INSET_Y))
             .left(px(left))
             .flex()
             .items_center()

@@ -79,7 +79,8 @@ fn the_board_starts_past_the_card(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("nav-seam").is_none(), "no seam");
     assert!(cx.debug_bounds("chrome-seam").is_none(), "no seam");
     assert_eq!(card.left(), px(12.), "in from the window's edge");
-    assert_eq!(card.bottom(), px(700. - 24.), "short of the window's foot");
+    assert_eq!(card.bottom(), px(700. - 40.), "short of the window's foot");
+    assert_eq!(card.top(), px(ferrite_ui::theme::WIN_CHROME_H + 40.), "the same under the head row");
     view.read_with(cx, |view, _| {
         assert!(
             (view.nav_width() - f32::from(column.right())).abs() < 0.5,

@@ -501,7 +501,7 @@ pub fn column(ground: Paint) -> Div {
         )
 }
 
-pub const CARD_TOP: f32 = WIN_CHROME_H + NAV_INSET;
+pub const CARD_TOP: f32 = WIN_CHROME_H + NAV_INSET_Y;
 pub const EDGE_TAB_OPEN_X_OVER_RING: f32 = NAV_INSET + WIDTH - HAIRLINE_W;
 
 pub fn card(content: impl IntoElement) -> Div {
@@ -509,7 +509,7 @@ pub fn card(content: impl IntoElement) -> Div {
         .debug_selector(|| "nav-card".into())
         .absolute()
         .top(px(CARD_TOP))
-        .bottom(px(NAV_INSET_FOOT))
+        .bottom(px(NAV_INSET_Y))
         .left(px(NAV_INSET))
         .w(px(WIDTH))
         .flex()
@@ -1335,9 +1335,9 @@ mod tests {
         );
         let mut drawn = card(div());
         let style = drawn.style();
-        assert_eq!(style.inset.top, Some(px(WIN_CHROME_H + 12.).into()), "under the head row");
+        assert_eq!(style.inset.top, Some(px(WIN_CHROME_H + 40.).into()), "under the head row");
         assert_eq!(style.inset.left, Some(px(12.).into()));
-        assert_eq!(style.inset.bottom, Some(px(24.).into()), "short of the window's foot");
+        assert_eq!(style.inset.bottom, Some(px(40.).into()), "short of the window's foot");
         assert_eq!(style.size.width, Some(px(256.).into()));
         assert_eq!(style.corner_radii.top_left, Some(px(18.).into()));
         assert_eq!(style.corner_radii.bottom_right, Some(px(18.).into()));
