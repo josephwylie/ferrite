@@ -288,6 +288,14 @@ impl Server {
         None
     }
 
+    /// Delete `task` with every Worker it owns, a stray it never recorded
+    /// too: what its worktree's removal left behind.
+    fn delete_task(&mut self, task: String) -> Result<Vec<String>, ApiError> {
+        self.adopt_strays(&task);
+        let (_, kept) = self.factory_command(Command::Delete { task })?;
+        Ok(kept)
+    }
+
     /// An open Thread `task` owns but never heard of was a Worker whose
     /// start was not written (a failed save, then a restart): it is told
     /// to the Factory as one, so the next start replaces it and keeps it
@@ -514,9 +522,7 @@ impl Server {
                 Ok(Some(done(answer)))
             }
             TaskAction::Delete { task } => {
-                let (_, kept) = self
-                    .factory_command(Command::Delete { task })
-                    .map_err(wire_error)?;
+                let kept = self.delete_task(task).map_err(wire_error)?;
                 Ok(Some(Done::Deleted {
                     kept: (!kept.is_empty()).then(|| kept.join(" ")),
                 }))
@@ -884,9 +890,7 @@ impl Server {
     }
 
     pub(super) fn api_task_delete(&mut self, params: TaskParams) -> Result<Value, ApiError> {
-        let (_, kept) = self.factory_command(Command::Delete {
-            task: params.task.clone(),
-        })?;
+        let kept = self.delete_task(params.task.clone())?;
         let mut answer = json!({ "deleted": params.task });
         if !kept.is_empty() {
             answer["kept"] = json!(kept.join(" "));
