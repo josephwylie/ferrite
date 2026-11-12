@@ -52,6 +52,7 @@ struct Facts {
     effort: Option<String>,
     title: Option<String>,
     snooze: Option<crate::snooze::Snooze>,
+    owner: Option<crate::ThreadOwner>,
     workspace: Option<WorkspaceBinding>,
     session_project_root: Option<PathBuf>,
     first_prompt_sent: bool,
@@ -98,6 +99,7 @@ impl From<ThreadState> for Facts {
             effort: state.effort,
             title: state.title,
             snooze: state.snooze,
+            owner: state.owner,
             workspace: state
                 .workspace
                 .as_ref()
@@ -644,6 +646,11 @@ impl<'a> ThreadView<'a> {
     /// The durable operator title, as this open Thread holds it.
     pub fn title(&self) -> Option<&'a str> {
         self.facts.title.as_deref()
+    }
+
+    /// Whose the Thread is when not the operator's (ADR 0037).
+    pub fn owner(&self) -> Option<&'a crate::ThreadOwner> {
+        self.facts.owner.as_ref()
     }
 
     /// The follow-up predicted for this Thread's last response, if one has

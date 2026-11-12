@@ -432,8 +432,9 @@ pub struct SessionCommand {
 }
 
 impl SessionCommand {
-    /// Whether it is a skill, the Composer's `$name`: one Codex lists with
-    /// its SKILL.md, or one the operator, the project or a plugin installed.
+    /// Whether it is a skill, the Composer's `$name` and what a Workflow
+    /// Step can name: one Codex lists with its SKILL.md, or one the
+    /// operator, the project or a plugin installed.
     pub fn is_skill(&self) -> bool {
         self.path.is_some()
             || matches!(

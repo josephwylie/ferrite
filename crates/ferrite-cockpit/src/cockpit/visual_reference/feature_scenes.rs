@@ -65,6 +65,12 @@ pub(super) const STATES: &[&str] = &[
     "compaction",
     "long-prompt",
     "cite",
+    "factory",
+    "factory-workflows",
+    "factory-start-schedule",
+    "factory-start-github",
+    "factory-start-script",
+    "factory-coordinator",
 ];
 
 pub(super) fn handles(state: &str) -> bool {
@@ -122,6 +128,12 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "compaction" => compaction(),
         "long-prompt" => long_prompt(),
         "cite" => cite(),
+        "factory" => factory(),
+        "factory-workflows" => factory_workflows(),
+        "factory-start-schedule" => factory_start(ferrite_core::factory::StartKind::Schedule),
+        "factory-start-github" => factory_start(ferrite_core::factory::StartKind::GithubIssue),
+        "factory-start-script" => factory_start(ferrite_core::factory::StartKind::External),
+        "factory-coordinator" => factory_coordinator(),
         _ => unreachable!("`handles` lists every state"),
     }
 }
@@ -802,6 +814,122 @@ fn toast_done() -> (Scene, Setup) {
     (scene, Box::new(|_, _, _| {}))
 }
 
+/// A Project's Factory board (#220): a Task in each state but Ready to
+/// approve, the one that needs the operator open in its panel on its
+/// Activity.
+fn factory() -> (Scene, Setup) {
+    use ferrite_core::factory::{Board, Status, Task};
+    let mut scene = Scene::new("factory");
+    let ferrite = scene.project("ferrite");
+    let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
+    let project = scene.core.project_id(mine).expect("a Project");
+    let worker = scene
+        .core
+        .fixture_open_owned(
+            Provider::Claude,
+            ferrite_core::workspace::WorkspaceChoice::Main {
+                checkout: ferrite.clone(),
+            },
+            ferrite_core::ThreadOwner::Task("t-2".into()),
+        )
+        .expect("open the Worker");
+    scene.core.focus_thread(mine);
+    let task = |id: &str,
+                title: &str,
+                status: Status,
+                model: &str,
+                result: Option<&str>,
+                reason: Option<&str>,
+                activity: serde_json::Value| {
+        let task: Task = serde_json::from_value(serde_json::json!({
+            "id": id,
+            "project": project,
+            "title": title,
+            "instructions": title,
+            "status": status,
+            "agent": {"provider": "claude", "model": model},
+            "branch": format!("factory/{id}"),
+            "worker": (id == "t-2").then_some(worker),
+            "worktree": format!("~/work/ferrite/.worktrees/factory/{id}"),
+            "result": result,
+            "reason": reason,
+            "activity": activity,
+            "created_ms": 1_700_000_000_000_i64,
+        }))
+        .expect("a fixture Task");
+        task
+    };
+    let at = |by: &str, text: &str| serde_json::json!({"at_ms": 1_700_000_000_000_i64, "by": by, "text": text});
+    let board = Board {
+        workflows: Vec::new(),
+        tasks: vec![
+            task(
+                "t-1",
+                "Bump the toolchain to 1.92",
+                Status::Queued,
+                "claude-sonnet-4",
+                None,
+                None,
+                serde_json::json!([at("operator", "Started the task")]),
+            ),
+            task(
+                "t-2",
+                "Fix the flaky login test",
+                Status::NeedsHuman,
+                "claude-opus-4",
+                None,
+                Some("No access to the staging database"),
+                serde_json::json!([
+                    at("operator", "Started the task"),
+                    at("ferrite", "Started a Worker on factory/t-2"),
+                    at(
+                        "agent",
+                        "Unable to finish: No access to the staging database"
+                    ),
+                ]),
+            ),
+            task(
+                "t-3",
+                "Add a retry to the uploader",
+                Status::Working,
+                "claude-opus-4",
+                None,
+                None,
+                serde_json::json!([at("ferrite", "Started a Worker on factory/t-3")]),
+            ),
+            task(
+                "t-4",
+                "Rename the settings rows",
+                Status::Stopped,
+                "claude-sonnet-4",
+                None,
+                Some("Stopped by you"),
+                serde_json::json!([at("operator", "Stopped the task")]),
+            ),
+            task(
+                "t-5",
+                "Write the 0.9 changelog",
+                Status::Completed,
+                "claude-opus-4",
+                Some("Drafted CHANGELOG.md with 14 changes"),
+                None,
+                serde_json::json!([at(
+                    "agent",
+                    "Finished: Drafted CHANGELOG.md with 14 changes"
+                )]),
+            ),
+        ],
+        ..Default::default()
+    };
+    scene.core.fixture_factory(board);
+    let setup: Setup = Box::new(move |view, _, cx| {
+        view.open_factory(project, cx);
+        view.open_task("t-2", cx);
+        view.task_tab(crate::cockpit::factory::TaskTab::Activity, cx);
+    });
+    (scene, setup)
+}
+
 /// A turn that did a little work and closed with its wrap-up box: recap, the
 /// question and two steps (`claude/parity/wrapup-question.png`); `spent`,
 /// the first step sent (`wrapup-used.png`).
@@ -1079,6 +1207,198 @@ fn cite() -> (Scene, Setup) {
                 )
             });
         }
+    });
+    (scene, setup)
+}
+
+/// A Project's Workflows (#221): the "Issue to reviewed PR" template with
+/// its Reviewer chosen in the inspector, a route to a deleted agent
+/// flagged on its row, and the draft's problems listed above.
+fn factory_workflows() -> (Scene, Setup) {
+    let mut scene = Scene::new("factory-workflows");
+    let ferrite = scene.project("ferrite");
+    let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
+    let project = scene.core.project_id(mine).expect("a Project");
+    scene.core.focus_thread(mine);
+    scene.core.fixture_live_factory();
+    let setup: Setup = Box::new(move |view, _, cx| {
+        view.open_factory(project, cx);
+        view.create_workflow(ferrite_core::factory::Template::IssueToReviewedPr, cx);
+        view.save_workflow(cx);
+        view.select_step("s-4".into(), cx);
+        view.delete_step("s-3".into(), cx);
+        view.select_step("s-4".into(), cx);
+    });
+    (scene, setup)
+}
+
+/// A saved Workflow's "Tasks start" settings for one source (#225): a
+/// weekday schedule, an issue start with its repository and label from
+/// the login, or a script's command, each with automatic starts on.
+fn factory_start(kind: ferrite_core::factory::StartKind) -> (Scene, Setup) {
+    use ferrite_core::factory::{GitHubSource, Recurrence, Schedule, Start, StartKind, Trigger};
+    let mut scene = Scene::new(match kind {
+        StartKind::Schedule => "factory-start-schedule",
+        StartKind::External => "factory-start-script",
+        _ => "factory-start-github",
+    });
+    let ferrite = scene.project("ferrite");
+    let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
+    let project = scene.core.project_id(mine).expect("a Project");
+    scene.core.focus_thread(mine);
+    scene.core.fixture_live_factory();
+    scene.core.fixture_github(vec![(
+        "acme/app".into(),
+        vec!["bug".into(), "ready-for-agent".into()],
+    )]);
+    let setup: Setup = Box::new(move |view, _, cx| {
+        view.open_factory(project, cx);
+        view.create_workflow(ferrite_core::factory::Template::IssueToReviewedPr, cx);
+        view.edit_start(
+            |start| {
+                *start = Start {
+                    kind,
+                    schedule: Schedule {
+                        recurrence: Recurrence::Weekdays,
+                        time: Some("09:00".into()),
+                        instructions: "Triage the issues opened since the last run".into(),
+                        ..Schedule::default()
+                    },
+                    github: GitHubSource {
+                        repository: Some("acme/app".into()),
+                        trigger: Trigger::Labelled,
+                        label: Some("ready-for-agent".into()),
+                        extra_instructions: "Open a pull request that closes the issue.".into(),
+                    },
+                }
+            },
+            cx,
+        );
+        view.save_workflow(cx);
+        view.open_start(cx);
+        view.turn_automation(ferrite_core::factory::Turn::On, cx);
+    });
+    (scene, setup)
+}
+
+/// The Coordinator surface (#224): the Coordinator's ordinary Pane beside
+/// its proposals, one of each act: a one-off handoff (accepted, with its
+/// Task), saving a version, turning automatic starts on and redirecting a
+/// Task (waiting), and a dismissed one.
+fn factory_coordinator() -> (Scene, Setup) {
+    use ferrite_core::factory::{
+        Act, Agent, Catalog, Command, Override, Start, StartKind, Template, ThenReturn,
+    };
+    let mut scene = Scene::new("factory-coordinator");
+    let ferrite = scene.project("ferrite");
+    let (mine, _feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
+    let project = scene.core.project_id(mine).expect("a Project");
+    let root = scene
+        .core
+        .registry()
+        .project(project)
+        .expect("its Project")
+        .root
+        .clone();
+    scene.core.focus_thread(mine);
+    scene.core.fixture_live_factory();
+    let coordinator = scene
+        .core
+        .fixture_open_owned(
+            Provider::Claude,
+            ferrite_core::workspace::WorkspaceChoice::Main { checkout: root },
+            ferrite_core::ThreadOwner::Factory(project),
+        )
+        .expect("the Coordinator");
+    let agent = Agent {
+        provider: Provider::Claude,
+        model: Some("claude-opus-4".into()),
+        effort: None,
+    };
+    let core = &mut scene.core;
+    for command in [
+        Command::CoordinatorStarted {
+            project,
+            thread: coordinator,
+        },
+        Command::CreateWorkflow {
+            project,
+            template: Template::IssueToReviewedPr,
+            agent: agent.clone(),
+        },
+        Command::SaveWorkflow {
+            workflow: "w-1".into(),
+            catalog: Catalog::default(),
+        },
+        Command::EditStart {
+            workflow: "w-1".into(),
+            start: Start {
+                kind: StartKind::External,
+                ..Start::default()
+            },
+        },
+        Command::SaveWorkflow {
+            workflow: "w-1".into(),
+            catalog: Catalog::default(),
+        },
+        Command::Start {
+            project,
+            instructions: "Reconnect drops the draft".into(),
+            agent: agent.clone(),
+            request: None,
+            workflow: Some("w-1".into()),
+            pr: None,
+        },
+        Command::RenameWorkflow {
+            workflow: "w-1".into(),
+            name: "Issue to reviewed PR, with docs".into(),
+        },
+    ] {
+        core.fixture_factory_command(command);
+    }
+    let draft = core
+        .factory()
+        .workflow("w-1")
+        .map(|workflow| workflow.draft.clone())
+        .expect("the draft");
+    for act in [
+        Act::Start {
+            instructions: "Fix the toolbar overflow on narrow windows".into(),
+            workflow: None,
+        },
+        Act::Start {
+            instructions: "Load the example".into(),
+            workflow: None,
+        },
+        Act::Save {
+            workflow: "w-1".into(),
+            version: 3,
+            draft,
+        },
+        Act::Automation {
+            workflow: "w-1".into(),
+        },
+        Act::Redirect {
+            task: "t-1".into(),
+            direction: Override {
+                to: "s-3".into(),
+                skip: vec!["s-2".into()],
+                then: ThenReturn::Me,
+                note: "Only the docs changed".into(),
+            },
+        },
+    ] {
+        core.fixture_factory_command(Command::Propose {
+            coordinator,
+            act,
+            catalog: Catalog::default(),
+        });
+    }
+    let setup: Setup = Box::new(move |view, _, cx| {
+        view.open_factory(project, cx);
+        view.factory_surface(crate::cockpit::workflows::Surface::Coordinator, cx);
+        view.accept_proposal("p-1", cx);
+        view.dismiss_proposal("p-2", cx);
     });
     (scene, setup)
 }

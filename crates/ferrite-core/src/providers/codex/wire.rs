@@ -172,6 +172,17 @@ pub(super) fn offer_plan(params: &mut Value) {
     params["developerInstructions"] = Value::String(crate::update_plan::GUIDANCE.into());
 }
 
+/// Tell the thread `instructions` after the plan guidance: its developer
+/// instructions, so none of it shows as a message of the operator's. Every
+/// start and resume carries them again.
+pub(super) fn offer_instructions(params: &mut Value, instructions: Option<&str>) {
+    let Some(instructions) = instructions else {
+        return;
+    };
+    let guidance = params["developerInstructions"].as_str().unwrap_or_default();
+    params["developerInstructions"] = format!("{guidance}\n\n{instructions}").into();
+}
+
 /// Answer the server's `item/tool/call` for `show_visual`, off this thread:
 /// the render's text and screenshot as the call's content items. Returns
 /// whether `frame` was that call. Any other dynamic call is not Ferrite's.
@@ -216,6 +227,56 @@ pub(super) fn answer_visual(
         ),
         None => respond(crate::visual::Answer::unavailable()),
     }
+    true
+}
+
+/// Offer an owned Thread its Factory tools (`api::tools`). Dynamic tools
+/// are a Codex thread's from its start: a resumed one keeps what it was
+/// started with, and reports through the CLI as before.
+pub(super) fn offer_api_tools(
+    params: &mut Value,
+    tools: Option<&crate::api::tools::ThreadTools>,
+    start: bool,
+) {
+    for definition in tools.iter().flat_map(|tools| tools.definitions()) {
+        offer_function(
+            params,
+            &definition.name,
+            definition.description,
+            definition.input_schema,
+            start,
+        );
+    }
+}
+
+/// Answer the server's `item/tool/call` for one of the Thread's Factory
+/// tools, off this thread. Returns whether `frame` was one.
+pub(super) fn answer_api_tool(
+    frame: &Value,
+    tools: Option<&crate::api::tools::ThreadTools>,
+    stdin: std::sync::Arc<std::sync::Mutex<std::process::ChildStdin>>,
+) -> bool {
+    let params = &frame["params"];
+    let tool = params["tool"].as_str().unwrap_or_default();
+    let Some(tools) = tools.filter(|tools| {
+        frame["method"] == "item/tool/call"
+            && params["namespace"] == crate::visual::SERVER
+            && tools.offers(tool)
+    }) else {
+        return false;
+    };
+    let Some(id) = frame.get("id").cloned() else {
+        return false;
+    };
+    tools.call(tool, &params["arguments"], move |answer| {
+        let _ = super::write_request(
+            &stdin,
+            &serde_json::json!({"jsonrpc": "2.0", "id": id, "result": {
+                "success": !answer.is_error,
+                "contentItems": [{"type": "inputText", "text": answer.text}],
+            }}),
+        );
+    });
     true
 }
 

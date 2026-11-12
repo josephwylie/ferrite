@@ -1,9 +1,11 @@
+mod archive;
 mod attention_alerts;
 mod background_work;
 mod boards;
 mod changes;
 mod checks;
 mod completion_checks;
+mod coordinator;
 mod composer_chips;
 mod browser_annotations;
 mod composer_controls;
@@ -12,7 +14,11 @@ mod core_transcript_parity;
 mod decision_cards;
 mod decisions_parity;
 mod diagnostics;
+mod delivery;
+mod direction;
 mod drafts;
+mod factory;
+mod factory_fit;
 mod files;
 mod find;
 mod floats_parity;
@@ -32,6 +38,7 @@ mod nav_parity;
 mod nav_shelves;
 mod navigation;
 mod output_cards;
+mod owned_threads;
 mod panel;
 mod panel_preview;
 mod parking;
@@ -52,6 +59,7 @@ mod settings_window;
 mod side_chat;
 mod stab;
 mod stale_chrome;
+mod starts;
 mod startup;
 mod subagents;
 mod thread_groups;
@@ -71,6 +79,7 @@ mod updating;
 mod user_commands;
 mod visuals;
 mod wall;
+mod workflows;
 mod workspace_binding;
 
 use super::*;
@@ -430,6 +439,57 @@ fn debug_bounds(
     id: String,
 ) -> Option<gpui::Bounds<gpui::Pixels>> {
     cx.debug_bounds(Box::leak(id.into_boxed_str()))
+}
+
+/// Wheel the scrolling `area` until `target` lies inside it and the
+/// window, as the operator scrolls to what is off screen.
+fn reveal(cx: &mut gpui::VisualTestContext, area: &str, target: &str) {
+    for _ in 0..6 {
+        let size = cx.update(|window, _| window.viewport_size());
+        let space = bounds(cx, area.to_string());
+        let clamp = |at: gpui::Pixels, low: gpui::Pixels, high: gpui::Pixels| {
+            if at < low {
+                low
+            } else if at > high {
+                high
+            } else {
+                at
+            }
+        };
+        let space = gpui::Bounds::from_corners(
+            gpui::point(
+                clamp(space.left(), px(0.), size.width),
+                clamp(space.top(), px(0.), size.height),
+            ),
+            gpui::point(
+                clamp(space.right(), px(0.), size.width),
+                clamp(space.bottom(), px(0.), size.height),
+            ),
+        );
+        let at = bounds(cx, target.to_string());
+        let along =
+            |near: gpui::Pixels, far: gpui::Pixels, from: gpui::Pixels, to: gpui::Pixels| {
+                if to > far {
+                    far - to - px(8.)
+                } else if from < near {
+                    near - from + px(8.)
+                } else {
+                    px(0.)
+                }
+            };
+        let dx = along(space.left(), space.right(), at.left(), at.right());
+        let dy = along(space.top(), space.bottom(), at.top(), at.bottom());
+        if dx == px(0.) && dy == px(0.) {
+            return;
+        }
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: space.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(dx, dy)),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+    }
+    panic!("{target} never came into view in {area}");
 }
 
 fn bounds(cx: &mut gpui::VisualTestContext, id: String) -> gpui::Bounds<gpui::Pixels> {

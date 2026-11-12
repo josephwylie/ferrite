@@ -36,6 +36,7 @@ pub use mirror::ThreadView;
 pub use remote::{Attach, Endpoint, ServerRestart, ServerState};
 pub use status::{ServerStatus, StatusRow};
 
+mod factory_fixture;
 pub(crate) mod mirror;
 mod parked;
 mod remote;
@@ -74,6 +75,9 @@ pub struct Cockpit {
     allowance_warnings: Vec<crate::providers::limits::AllowanceWarning>,
     /// What API callers asked of the windows, oldest first.
     asked: Vec<Asked>,
+    /// A fixture world's Factory, answering its Factory asks as a
+    /// Server's would; a real window has none.
+    factory_fixture: Option<factory_fixture::FactoryFixture>,
     /// The `window.*` actions this window was handed and has not done:
     /// only a `ferrite --headless` one is (ADR 0038).
     drives: Vec<(u64, crate::drive::Action)>,
@@ -230,6 +234,7 @@ impl Cockpit {
             browser_messages: Vec::new(),
             allowance_warnings: Vec::new(),
             asked: Vec::new(),
+            factory_fixture: None,
             drives: Vec::new(),
             visible_subjects: std::collections::BTreeMap::new(),
             window_active: true,
@@ -709,6 +714,11 @@ impl Cockpit {
         self.assert_mirrors_match();
     }
 
+    /// A message a fixture world's Server would have sent.
+    fn receive_fixture(&mut self, message: ServerMessage) {
+        self.arrive(vec![remote::Arrival::Message(message)]);
+    }
+
     fn arrive(&mut self, arrived: Vec<remote::Arrival>) {
         let open_before = self.shared.open.clone();
         let focused = self.focused_member();
@@ -881,6 +891,19 @@ impl Cockpit {
                 body: body.clone(),
                 sound: sound.sound(),
                 important: *important,
+            }),
+            ServerMessage::TaskAlert {
+                project,
+                task,
+                status,
+                title,
+                detail,
+            } => self.asked.push(Asked::TaskAlert {
+                project: *project,
+                task: task.clone(),
+                status: *status,
+                title: title.clone(),
+                detail: detail.clone(),
             }),
             _ => {}
         }
@@ -2066,6 +2089,34 @@ impl Cockpit {
         }
     }
 
+    /// What a GitHub start's picker lists, read by `gh` where the Server
+    /// runs (or here, when this window runs its agents itself).
+    pub fn github_names(
+        &mut self,
+        ask: crate::protocol::GitHubAsk,
+    ) -> io::Result<Receiver<io::Result<Vec<String>>>> {
+        use crate::protocol::GitHubAsk;
+        if let Some(names) = self
+            .factory_fixture
+            .as_ref()
+            .and_then(|fixture| fixture.github_names(&ask))
+        {
+            return Ok(read_here(move || Ok(names)));
+        }
+        match &mut self.link {
+            Link::Server(server) => server.github_names(ask),
+            Link::InProcess(_) => Ok(read_here(move || {
+                use crate::server::github::GitHub;
+                let gh = crate::server::github::Gh;
+                match ask {
+                    GitHubAsk::Repositories => gh.repositories(),
+                    GitHubAsk::Labels { repository } => gh.labels(&repository),
+                    GitHubAsk::Unknown => Ok(Vec::new()),
+                }
+            })),
+        }
+    }
+
     pub fn control(&mut self, thread: ThreadId, action: crate::SessionControl) -> io::Result<()> {
         self.act(
             |engine| engine.control(thread, action.clone()),
@@ -2081,14 +2132,30 @@ impl Cockpit {
         )
     }
 
-    /// The Threads not open, in creation order, as the Server published
-    /// them.
+    /// The operator's Threads not open, in creation order, as the Server
+    /// published them: an owned Thread (ADR 0037) is its owner's to list.
     pub fn parked(&self) -> io::Result<Vec<ThreadId>> {
         Ok(self
             .parked
             .thread_ids()
-            .filter(|thread| self.thread(*thread).is_none())
+            .filter(|thread| self.thread(*thread).is_none() && self.parked.owner(*thread).is_none())
             .collect())
+    }
+
+    /// Whose `thread` is when not the operator's (ADR 0037), open or
+    /// parked: a Worker's Task, a Coordinator's Factory.
+    pub fn owner(&self, thread: ThreadId) -> Option<crate::ThreadOwner> {
+        match self.thread(thread) {
+            Some(open) => open.owner().cloned(),
+            None => self.parked.owner(thread),
+        }
+    }
+
+    /// Whether `thread` is the operator's own: what the nav, the palette's
+    /// Thread search, the Inbox, the Attention list and the alerts list.
+    /// An owned Thread is reached through its owner instead.
+    pub fn operators(&self, thread: ThreadId) -> bool {
+        self.owner(thread).is_none()
     }
 
     /// Whether some Thread's binding waits on a fresh worktree listing:
@@ -2453,6 +2520,56 @@ impl Cockpit {
         std::mem::take(&mut self.asked)
     }
 
+    /// Every Factory's Tasks, as the Server last said them (ADR 0037).
+    pub fn factory(&self) -> &crate::factory::Board {
+        &self.shared.factory
+    }
+
+    /// Whether the Tasks changed since the last ask.
+    pub fn take_factory_changed(&mut self) -> bool {
+        self.shared.take_factory_changed()
+    }
+
+    /// A Factory command. The Factory runs in the Server: a window that
+    /// runs its agents itself has none.
+    pub fn task(&mut self, action: crate::protocol::TaskAction) -> io::Result<Option<Done>> {
+        self.factory_ask(Op::Task { action })
+    }
+
+    /// A Workflow authoring command (#221), answered by the Server's
+    /// Factory.
+    pub fn workflow(
+        &mut self,
+        action: crate::protocol::WorkflowAction,
+    ) -> io::Result<Option<Done>> {
+        self.factory_ask(Op::Workflow { action })
+    }
+
+    /// A Coordinator command (#224), answered by the Server's Factory.
+    pub fn coordinator(
+        &mut self,
+        action: crate::protocol::CoordinatorAction,
+    ) -> io::Result<Option<Done>> {
+        self.factory_ask(Op::Coordinator { action })
+    }
+
+    /// One Factory ask, of the Server (or a fixture world's own Factory).
+    fn factory_ask(&mut self, op: Op) -> io::Result<Option<Done>> {
+        if let Some((done, board)) = self
+            .factory_fixture
+            .as_mut()
+            .and_then(|fixture| fixture.execute(op.clone()))
+        {
+            if let Some(board) = board {
+                self.receive_fixture(ServerMessage::Factory { revision: 0, board });
+            }
+            return done;
+        }
+        let done = self.remote()?.execute(op).map_err(io::Error::from);
+        self.settle();
+        done
+    }
+
     /// The `window.*` actions handed to this window since the last take,
     /// each by its request; [`Self::driven`] answers it.
     pub fn take_drives(&mut self) -> Vec<(u64, crate::drive::Action)> {
@@ -2533,6 +2650,8 @@ impl Cockpit {
     /// notification record yet queues behind the rest, in Thread order.
     pub fn needs_you(&self) -> Vec<ThreadId> {
         let mut queue = self.blocked();
+        // An owned Thread's Decision is answered through its owner.
+        queue.retain(|thread| self.operators(*thread));
         queue.sort_by_key(|thread| {
             (
                 self.shared
@@ -2634,6 +2753,12 @@ impl Cockpit {
         self.forge_fixture.insert(path, view);
     }
 
+    /// A fixture world's GitHub login: the repositories it reaches and
+    /// each one's labels, answered in place of `gh` (#225).
+    pub fn fixture_github(&mut self, repositories: Vec<(String, Vec<String>)>) {
+        self.factory_fixture.get_or_insert_default().github = Some(repositories);
+    }
+
     /// Whether a fixture world's forge answers for the checkout at `path`:
     /// the one PR read tests and captures make, since they never run a CLI.
     pub fn has_forge_fixture(&self, path: &Path) -> bool {
@@ -2649,6 +2774,67 @@ impl Cockpit {
     /// The free bytes a fixture world stands in for the volume, if any.
     pub fn free_disk_fixture(&self) -> Option<u64> {
         self.free_disk_fixture
+    }
+
+    /// A fixture world's owned Thread (ADR 0037): one a Task or a
+    /// Factory started, as the Server's API starts one for it.
+    pub fn fixture_open_owned(
+        &mut self,
+        provider: Provider,
+        workspace: WorkspaceChoice,
+        owner: crate::ThreadOwner,
+    ) -> io::Result<ThreadId> {
+        let launch = crate::engine::Launch {
+            owner: Some(owner),
+            ..Default::default()
+        };
+        let opened = self.in_process().open_with(provider, workspace, launch);
+        self.settle();
+        opened
+    }
+
+    /// A fixture world's Factory board, as a Server would say it.
+    pub fn fixture_factory(&mut self, board: crate::factory::Board) {
+        self.receive_fixture(ServerMessage::Factory { revision: 0, board });
+    }
+
+    /// A fixture world with a Factory of its own that answers Workflow
+    /// asks as a Server's does, starting empty.
+    pub fn fixture_live_factory(&mut self) {
+        let factory = crate::factory::Factory::in_memory();
+        let board = factory.board();
+        self.factory_fixture.get_or_insert_default().factory = Some(factory);
+        self.receive_fixture(ServerMessage::Factory { revision: 0, board });
+    }
+
+    /// A fixture world keeps its Task asks, each answered as changed, to
+    /// be read back with `fixture_task_asks`.
+    pub fn fixture_record_tasks(&mut self) {
+        self.factory_fixture.get_or_insert_default().asks = Some(Vec::new());
+    }
+
+    pub fn fixture_task_asks(&self) -> &[crate::protocol::TaskAction] {
+        self.factory_fixture
+            .as_ref()
+            .and_then(|fixture| fixture.asks.as_deref())
+            .unwrap_or_default()
+    }
+
+    /// A fixture world's Factory hears `command` as a Server's would
+    /// (a GitHub read's answer, say), and the window is told the board.
+    pub fn fixture_factory_command(&mut self, command: crate::factory::Command) {
+        if let Some(board) = self
+            .factory_fixture
+            .as_mut()
+            .and_then(|fixture| fixture.hear(command))
+        {
+            self.receive_fixture(ServerMessage::Factory { revision: 0, board });
+        }
+    }
+
+    /// A fixture world's Task alert, as a Server would say it.
+    pub fn fixture_task_alert(&mut self, alert: ServerMessage) {
+        self.receive_fixture(alert);
     }
 
     pub fn fixture_notice(&mut self, thread: ThreadId, outcome: crate::TurnOutcome) {
@@ -2708,6 +2894,15 @@ pub enum Asked {
         body: Option<String>,
         sound: Option<crate::sound::Sound>,
         important: bool,
+    },
+    /// A Task needs the operator, stopped or completed (ADR 0037): a
+    /// toast, a chime and a system notification.
+    TaskAlert {
+        project: ProjectId,
+        task: String,
+        status: crate::factory::Status,
+        title: String,
+        detail: Option<String>,
     },
 }
 

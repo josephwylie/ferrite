@@ -253,6 +253,8 @@ pub(crate) enum Act {
     Group(GroupId),
     /// Land on the Project's Thread that most needs the operator.
     Project(ProjectId),
+    /// Open the Project's Factory.
+    Factory(ProjectId),
     Command(Command),
     /// Import the session file and resume it: in place of `into` (a blank
     /// Pane the picker was opened for), else alongside.

@@ -37,7 +37,9 @@ impl CockpitView {
     /// — a Thread in Solo, or a Group.
     pub(super) fn view_head(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut parts = Vec::new();
-        if !self.empty_board_shown() {
+        if self.factory_view.is_some() {
+            parts.extend(self.factory_head());
+        } else if !self.empty_board_shown() {
             let named = match self.cockpit.roster().view() {
                 View::Solo => self.solo_head(cx),
                 View::Group(group) => self.group_view_head(group, cx),
@@ -50,7 +52,7 @@ impl CockpitView {
         let menu_thread = matches!(self.cockpit.roster().view(), View::Solo)
             .then(|| self.focused_thread())
             .flatten()
-            .filter(|_| !self.empty_board_shown());
+            .filter(|_| !self.empty_board_shown() && self.factory_view.is_none());
         div()
             .debug_selector(|| "view-head".into())
             .when_some(menu_thread, |head, thread| {
@@ -172,7 +174,63 @@ impl CockpitView {
     /// Whether the title bar shows the Panel's toggle: for a Thread, not a
     /// draft or the empty board.
     fn panel_toggle_shown(&self) -> bool {
-        !self.empty_board_shown() && self.focused_thread().is_some()
+        !self.empty_board_shown() && self.factory_view.is_none() && self.focused_thread().is_some()
+    }
+
+    /// The Factory's breadcrumb: its Project, `Factory`, then the Task
+    /// whose panel is on screen.
+    fn factory_head(&self) -> Vec<AnyElement> {
+        let Some(view) = self.factory_view.as_ref() else {
+            return Vec::new();
+        };
+        let project = self
+            .cockpit
+            .registry()
+            .project(view.project)
+            .map(|project| SharedString::from(project.title.clone()))
+            .unwrap_or_else(|| "Project".into());
+        let crumb = |text: SharedString, current: bool| {
+            div()
+                .flex_shrink_0()
+                .text_size(px(theme::FS_TITLE))
+                .when(current, |crumb| crumb.font_weight(theme::W_LABEL))
+                .text_color(rgb(if current {
+                    theme::INK_STRONG
+                } else {
+                    theme::INK_SUBTLE
+                }))
+                .child(text)
+        };
+        let task = self
+            .open_task_now()
+            .filter(|_| view.surface == super::workflows::Surface::Board);
+        let mut crumbs = vec![
+            crumb(project, false).into_any_element(),
+            separator(),
+            crumb("Factory".into(), task.is_none())
+                .debug_selector(|| "view-head-factory".into())
+                .into_any_element(),
+        ];
+        if let Some(task) = task {
+            crumbs.push(separator());
+            crumbs.push(
+                crumb(task.title.clone().into(), true)
+                    .debug_selector(|| "view-head-task".into())
+                    .flex_shrink(1.)
+                    .min_w_0()
+                    .truncate()
+                    .into_any_element(),
+            );
+        }
+        vec![div()
+            .debug_selector(|| "view-breadcrumb".into())
+            .flex()
+            .flex_shrink(1.)
+            .min_w_0()
+            .items_center()
+            .gap(px(theme::HEAD_CRUMB_GAP))
+            .children(crumbs)
+            .into_any_element()]
     }
 
     /// The title bar's one tool (ADR 0039), laid by the frame at the row's

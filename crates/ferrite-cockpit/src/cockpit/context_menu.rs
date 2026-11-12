@@ -51,6 +51,8 @@ pub(super) enum MenuTarget {
     SurfaceTab { thread: ThreadId, at: usize },
     /// The pull request Surface's `⋯`.
     PrMore(ThreadId),
+    /// A Factory picker (#221): its rows are the Factory view's `picks`.
+    Factory,
 }
 
 /// One thing a context-menu row does.
@@ -125,6 +127,8 @@ pub(super) enum MenuVerb {
     OpenGroup(GroupId),
     /// A pull request Surface's row.
     Pr(panel::PrAction),
+    /// The Factory picker's row at this index.
+    Factory(usize),
 }
 
 /// A parent row's submenu.
@@ -340,6 +344,14 @@ impl CockpitView {
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread),
             MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at),
             MenuTarget::PrMore(thread) => rows = self.pr_menu_rows(thread),
+            MenuTarget::Factory => {
+                rows = self
+                    .factory_pick_rows()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, item)| Some((item, MenuVerb::Factory(index))))
+                    .collect()
+            }
             MenuTarget::Page(owner) => {
                 let address = self
                     .page_source(owner)
@@ -616,6 +628,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         match (target, verb) {
+            (_, MenuVerb::Factory(index)) => self.factory_pick(index, cx),
             (
                 MenuTarget::Thread(thread) | MenuTarget::Pane(thread) | MenuTarget::Snooze(thread),
                 MenuVerb::Snooze(preset),
@@ -630,9 +643,7 @@ impl CockpitView {
             (
                 MenuTarget::Thread(thread) | MenuTarget::Pane(thread) | MenuTarget::Snooze(thread),
                 MenuVerb::SnoozeCustom,
-            ) => {
-                self.edit_snooze(thread, window, cx)
-            }
+            ) => self.edit_snooze(thread, window, cx),
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Wake) => {
                 self.snooze_thread(thread, None, cx)
             }
@@ -772,6 +783,7 @@ impl CockpitView {
                     | MenuTarget::SurfaceMenu(_)
                     | MenuTarget::SurfaceTab { .. }
                     | MenuTarget::PrMore(_)
+                    | MenuTarget::Factory
                     | MenuTarget::Page(_) => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);
@@ -845,7 +857,11 @@ impl CockpitView {
     /// The context menu, floated at the pointer and clamped inside the
     /// window; `deferred` so nothing later in the tree paints over it. A
     /// press on the menu's own dead space is swallowed.
-    pub(super) fn context_menu_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn context_menu_element(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let open = self.context_menu.as_ref()?;
         let mut shell = menu::shell().on_mouse_down(
             MouseButton::Left,
@@ -908,6 +924,19 @@ impl CockpitView {
                 }
             };
         }
+        // Hung under its trigger, a long menu keeps below it and scrolls,
+        // rather than flipping up over what stands above the trigger.
+        let below = open.drop.map(|drop| {
+            window.viewport_size().height - open.at.y - drop - px(ferrite_ui::theme::GRID_PAD)
+        });
+        let shell = match below {
+            Some(room) if y + px(ferrite_ui::theme::FLOAT_PAD) > room => shell
+                .max_h(room)
+                .id("context-menu-scroll")
+                .overflow_y_scroll()
+                .into_any_element(),
+            _ => shell.into_any_element(),
+        };
         let side = open.sub.as_ref().map(|(parent, rows)| {
             let mut side = menu::shell().debug_selector(|| "context-submenu".into());
             for (index, (item, _)) in rows.iter().enumerate() {
@@ -949,7 +978,8 @@ impl CockpitView {
                 shell,
                 ferrite_ui::motion::Opens::Down,
             )))
-            .with_priority(2)
+            // Over the sheets (`VEIL_PRIORITY`), whose pickers open it.
+            .with_priority(crate::float::FLOAT_PRIORITY)
             .into_any_element(),
         )
     }

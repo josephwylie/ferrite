@@ -1,0 +1,1 @@
+{"id":"1","method":"report.outcome","params":{"outcome":"head_changed","summary":"The head is 2222222, not the approved 1111111","worker":12}}

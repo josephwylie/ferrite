@@ -209,6 +209,7 @@ impl CockpitView {
             PaletteScope::All => {
                 let mut rows = self.palette_thread_rows(window);
                 rows.extend(self.palette_project_rows());
+                rows.extend(self.palette_factory_rows());
                 rows.extend(self.palette_group_rows());
                 rows.extend(self.palette_command_rows(window, cx));
                 rows
@@ -285,6 +286,7 @@ impl CockpitView {
                     self.land_on_thread(thread, cx);
                 }
             }
+            Act::Factory(project) => self.open_factory(project, cx),
             Act::Command(command) => self.run_command(command, window, cx),
             Act::Adopt { path, into } => self.adopt_file(into, &path, window, cx),
         }
@@ -443,7 +445,7 @@ impl CockpitView {
         let project_of = |thread: ThreadId| self.facts.get(thread).and_then(|facts| facts.project);
         let open_threads: Vec<ThreadId> = {
             let mut open = self.cockpit.threads();
-            open.retain(|thread| !self.side_chats.owns(*thread));
+            open.retain(|thread| !self.side_chats.owns(*thread) && self.cockpit.operators(*thread));
             open.sort();
             open
         };
@@ -599,6 +601,35 @@ impl CockpitView {
                     used: None,
                     act: Act::Project(project.id),
                 })
+            })
+            .collect()
+    }
+
+    /// Every Project's Factory (`Act::Factory`), `Factory: <Project>`,
+    /// an empty one's too: the nav lists only the busy ones.
+    fn palette_factory_rows(&self) -> Vec<PaletteRow> {
+        let board = self.cockpit.factory();
+        self.cockpit
+            .registry()
+            .projects()
+            .iter()
+            .map(|project| {
+                let tasks = board.on_board(project.id).count();
+                PaletteRow {
+                    section: PaletteSection::Projects,
+                    name: format!("Factory: {}", project.title).into(),
+                    context: match tasks {
+                        0 => "No tasks".to_string(),
+                        1 => "1 task".to_string(),
+                        n => format!("{n} tasks"),
+                    }
+                    .into(),
+                    status: None,
+                    detail: None,
+                    keys: None,
+                    used: None,
+                    act: Act::Factory(project.id),
+                }
             })
             .collect()
     }
@@ -1499,7 +1530,7 @@ impl CockpitView {
         // What it hangs under, at its width and right edge: the window's
         // head and a Pane's head row, `TOAST_BOX_RIGHT` in from the board's
         // right edge (the panel's left while it shows).
-        let right = self.panel_column_w() + TOAST_BOX_RIGHT;
+        let right = self.panel_column_w() + self.task_panel_w() + TOAST_BOX_RIGHT;
         let room = f32::from(viewport.width) - self.board_left() - right - TOAST_BOX_RIGHT;
         let width = TOAST_W.min(room.max(0.));
         let over = WIN_CHROME_H + PANE_HEAD_H;
@@ -1536,7 +1567,8 @@ impl CockpitView {
     /// transcript's column: its right margin follows the panel, written
     /// only when it moves.
     fn toast_margins(&self, cx: &mut gpui::App) {
-        let right = px(self.panel_column_w() + ferrite_ui::theme::TOAST_BOX_RIGHT);
+        let right =
+            px(self.panel_column_w() + self.task_panel_w() + ferrite_ui::theme::TOAST_BOX_RIGHT);
         if gpui::component::Theme::global(cx)
             .notification
             .margins

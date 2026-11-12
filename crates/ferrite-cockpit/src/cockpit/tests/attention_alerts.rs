@@ -814,7 +814,7 @@ fn the_list_empty_over_working_then_a_decision_parks_from_the_keyboard(cx: &mut 
         1
     );
     // Park the only Active card; the two agents still working remain.
-    cx.simulate_keystrokes("home cmd-w");
+    cx.simulate_keystrokes("home down cmd-w");
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.needs_you_rows(cx).is_empty());
@@ -849,13 +849,13 @@ fn the_keyboard_parks_the_cursors_card_and_the_cursor_follows_it(cx: &mut TestAp
             "the cursor follows its Thread into the Parked shelf"
         );
     });
-    cx.simulate_keystrokes("up cmd-w");
+    cx.simulate_keystrokes("up down cmd-w");
     tick(cx);
     assert_eq!(
         view.read_with(cx, |view, cx| view.needs_you_rows(cx).len()),
         1
     );
-    cx.simulate_keystrokes("home cmd-w");
+    cx.simulate_keystrokes("home down cmd-w");
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert!(view.needs_you_rows(cx).is_empty());

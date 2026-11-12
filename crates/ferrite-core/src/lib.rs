@@ -19,6 +19,7 @@ pub mod draft;
 pub mod drafts;
 pub mod drive;
 pub mod engine;
+pub mod factory;
 pub mod followup;
 pub mod groups;
 pub mod import;
@@ -62,7 +63,7 @@ pub use session_event::{
     PermissionModeChoice, QueueEvent, QueuedPrompt, RateLimitWindow, RunState, SessionCommand,
     SessionControl, SessionEvent, ToolResult, TurnOutcome, UsageDetails, UsageScope,
 };
-pub use thread::ThreadId;
+pub use thread::{ThreadId, ThreadOwner};
 
 /// Conversation-owned website tabs and lifecycle.
 pub mod browser;

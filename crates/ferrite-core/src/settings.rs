@@ -135,6 +135,9 @@ pub struct Settings {
     /// github.com, gitlab.com and Azure DevOps (reviewr's `*_host` keys,
     /// ADR 0021). Default: none.
     pub forge_hosts: ForgeHosts,
+    /// How many Factory Tasks work at once; the rest wait in Queued
+    /// (ADR 0037, #225). Default: 3.
+    pub factory_tasks_at_once: usize,
     /// The models the model picker's star marked, in the order they were
     /// starred: its Favourites tab, and the first rows of their provider's
     /// own tab. Default: none.
@@ -268,6 +271,7 @@ impl Default for Settings {
             allowance_warnings: vec![80, 95],
             machines: Vec::new(),
             forge_hosts: ForgeHosts::default(),
+            factory_tasks_at_once: crate::factory::DEFAULT_LIMIT,
             favourite_models: Vec::new(),
         }
     }
@@ -513,6 +517,7 @@ mod tests {
                 gitlab: None,
                 azure_devops: None,
             },
+            factory_tasks_at_once: 5,
             favourite_models: vec![FavouriteModel {
                 provider: Provider::Codex,
                 model: "gpt-5.6".into(),

@@ -72,6 +72,7 @@ impl Parked {
             project_id: row.project,
             title: row.title.clone(),
             effort: None,
+            owner: row.owner.clone(),
             summary: None,
         })
     }
@@ -86,6 +87,11 @@ impl Parked {
     /// The first prompt, shortened: what an untitled Thread is called.
     pub(crate) fn prompt_title(&self, thread: ThreadId) -> Option<String> {
         self.rows.get(&thread)?.prompt_title.clone()
+    }
+
+    /// Whose a parked Thread is when not the operator's (ADR 0037).
+    pub(crate) fn owner(&self, thread: ThreadId) -> Option<crate::ThreadOwner> {
+        self.rows.get(&thread)?.owner.clone()
     }
 
     /// The turns the Server counted off the log's tail.

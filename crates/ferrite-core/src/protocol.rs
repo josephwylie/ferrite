@@ -361,6 +361,23 @@ pub enum Op {
     Project {
         action: ProjectAction,
     },
+    /// A Factory command (ADR 0037), as a window asks it.
+    Task {
+        action: TaskAction,
+    },
+    /// A Workflow authoring command (ADR 0037, #221), as a window asks it.
+    Workflow {
+        action: WorkflowAction,
+    },
+    /// What the operator's `gh` login lists for a GitHub start's pickers
+    /// (#225), read where the Server runs. Replied `names`.
+    GitHub {
+        ask: GitHubAsk,
+    },
+    /// A Project's Coordinator and its proposals (#224), as a window asks.
+    Coordinator {
+        action: CoordinatorAction,
+    },
     Notice {
         action: NoticeAction,
     },
@@ -556,6 +573,10 @@ impl Op {
             | Op::Group { .. }
             | Op::Layout { .. }
             | Op::Project { .. }
+            | Op::Task { .. }
+            | Op::Workflow { .. }
+            | Op::GitHub { .. }
+            | Op::Coordinator { .. }
             | Op::Notice { .. }
             | Op::SettingsChanged
             | Op::CliReplaced { .. }
@@ -795,6 +816,169 @@ pub enum ProjectAction {
     Unknown,
 }
 
+/// What a window asks of a Project's Factory (ADR 0037).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TaskAction {
+    /// A Task with these instructions: one-off, or on `workflow`'s
+    /// latest saved version. `request` names the ask, so asking again is
+    /// the same Task.
+    Start {
+        project: ProjectId,
+        instructions: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workflow: Option<String>,
+        /// Its pull request: `owner/repository#number` or a URL (#223).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pr: Option<String>,
+    },
+    Stop {
+        task: String,
+    },
+    Resume {
+        task: String,
+    },
+    Delete {
+        task: String,
+    },
+    /// Answer the Task's question (`question`, its id).
+    Answer {
+        task: String,
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        question: Option<u64>,
+    },
+    Approve {
+        task: String,
+    },
+    /// Rework with `feedback`, to `to` (the Workflow's recipient when
+    /// none).
+    Rework {
+        task: String,
+        feedback: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to: Option<crate::factory::Destination>,
+    },
+    /// One Task's direction; the saved Workflow is unchanged.
+    Redirect {
+        task: String,
+        direction: crate::factory::Override,
+    },
+    /// The Completed column's Clear: the Project's Completed Tasks go to
+    /// its Archive (#226).
+    Clear {
+        project: ProjectId,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+/// What a window asks of a Project's Workflows (ADR 0037, #221).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorkflowAction {
+    Create {
+        project: ProjectId,
+        template: crate::factory::Template,
+    },
+    Rename {
+        workflow: String,
+        name: String,
+    },
+    AddStep {
+        workflow: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<String>,
+    },
+    EditStep {
+        workflow: String,
+        step: String,
+        change: crate::factory::StepChange,
+    },
+    MoveStep {
+        workflow: String,
+        step: String,
+        to: usize,
+    },
+    DeleteStep {
+        workflow: String,
+        step: String,
+    },
+    /// Save the draft as the next version. `skills` are the ones this
+    /// window found installed, per Provider, so the Server can flag a
+    /// missing one too.
+    Save {
+        workflow: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skills: Vec<(crate::store::Provider, Vec<String>)>,
+    },
+    /// Who approves the draft's results, and what follows (#222).
+    EditApproval {
+        workflow: String,
+        change: crate::factory::ApprovalChange,
+    },
+    /// How the draft's Tasks start (#225), whole.
+    EditStart {
+        workflow: String,
+        start: crate::factory::Start,
+    },
+    /// Turn automatic starts on, pause, resume or off.
+    Automation {
+        workflow: String,
+        turn: crate::factory::Turn,
+    },
+    /// Take what already matched when a GitHub start was turned on, or
+    /// pass it over.
+    Backlog {
+        workflow: String,
+        take: bool,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+/// What a window asks of a Project's Coordinator (#224).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CoordinatorAction {
+    /// The operator's words; the Coordinator starts on the first.
+    Say {
+        project: ProjectId,
+        text: String,
+    },
+    /// Its Provider, model and effort, from its next turn.
+    Agent {
+        project: ProjectId,
+        agent: crate::factory::Agent,
+    },
+    /// Run a proposal's act as the operator's. `skills`, as a save's are.
+    Accept {
+        proposal: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skills: Vec<(Provider, Vec<String>)>,
+    },
+    Dismiss {
+        proposal: String,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+/// What a GitHub start's pickers list (#225).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GitHubAsk {
+    /// Every repository the login reaches, `owner/name`.
+    Repositories,
+    Labels {
+        repository: String,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum NoticeAction {
@@ -992,6 +1176,24 @@ pub enum ServerMessage {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         important: bool,
     },
+    /// Every Factory's Tasks (ADR 0037), whenever they change; latest
+    /// wins.
+    Factory {
+        revision: u64,
+        board: crate::factory::Board,
+    },
+    /// A Task needs the operator, stopped or completed: a toast, a chime
+    /// and a system notification. It follows the board that shows the
+    /// Task in `status`.
+    TaskAlert {
+        project: ProjectId,
+        task: String,
+        status: crate::factory::Status,
+        title: String,
+        /// What the event said: the result, or why.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
     /// The Server is about to restart: reconnect.
     Restarting {
         when: When,
@@ -1063,6 +1265,9 @@ pub struct Snapshot {
     /// open Thread whole to its windows, as generation 1 began.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digests: Option<Vec<ThreadDigest>>,
+    /// Every Factory's Tasks (ADR 0037).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factory: Option<crate::factory::Board>,
 }
 
 /// One open Thread's digest, as the snapshot lists them.
@@ -1100,6 +1305,9 @@ pub struct ParkedThread {
     pub turns: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagents: Option<usize>,
+    /// Whose it is when not the operator's (ADR 0037).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<crate::ThreadOwner>,
 }
 
 /// One pending Decision, as the snapshot lists them.
@@ -1169,6 +1377,31 @@ pub enum Done {
     },
     Project {
         project: ProjectId,
+    },
+    /// The Task a `task` start made, or was already.
+    Task {
+        task: String,
+    },
+    /// The Workflow a `workflow` create made.
+    Workflow {
+        workflow: String,
+    },
+    /// The Step an `add_step` made.
+    Step {
+        step: String,
+    },
+    /// The version a save made, or the latest when nothing changed.
+    Version {
+        version: u32,
+    },
+    /// The proposal raised (#224).
+    Proposal {
+        proposal: String,
+    },
+    /// A Task deleted; `kept` says why its worktree was left.
+    Deleted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kept: Option<String>,
     },
     /// A prompt handed back to the Composer (`unqueue`), or the file a
     /// `read_file` read.
@@ -1256,6 +1489,10 @@ pub enum Done {
         bases: Vec<WireBase>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         picked: Option<String>,
+    },
+    /// What a `git_hub` ask listed: repositories or labels.
+    Names {
+        names: Vec<String>,
     },
     /// A `pull_request`'s reading: `gh pr view`'s JSON as `gh` printed it
     /// (`workspace::pr_view`), or none when `gh` had nothing to say — no
@@ -1377,6 +1614,10 @@ pub struct ThreadState {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snooze: Option<crate::snooze::Snooze>,
+    /// Whose it is when not the operator's (ADR 0037): the operator's own
+    /// lists leave it out. A Server older than it sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<crate::ThreadOwner>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<WireBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

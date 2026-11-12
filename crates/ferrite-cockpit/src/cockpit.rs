@@ -4,15 +4,20 @@
 //! Decision, the held prompt — is folded in core and read from there.
 
 mod agent_pane;
+pub(crate) mod archive;
 mod background_work;
 pub(crate) mod beside;
 mod browser;
 #[cfg(feature = "browser-smoke")]
 mod browser_smoke;
 mod context_menu;
+pub(crate) mod coordinator;
 pub(crate) mod decisions;
+mod delivery;
+pub(crate) mod direction;
 mod drafts;
 pub(crate) mod empty_board;
+pub(crate) mod factory;
 mod history;
 mod leaving;
 mod lightbox;
@@ -29,6 +34,7 @@ mod parts;
 mod server;
 mod side_chat;
 mod snooze;
+pub(crate) mod starts;
 mod surfaces;
 pub(crate) mod subagents;
 pub(crate) mod tools;
@@ -36,6 +42,7 @@ mod transcript_glue;
 mod updating;
 mod user_commands;
 mod view_head;
+pub(crate) mod workflows;
 
 /// Card triggers' bounds by key, recorded in prepaint.
 type FloatTriggers =
@@ -218,13 +225,24 @@ type LiveRequest = (ferrite_core::notifications::DecisionNoticeId, bool);
 fn news(
     notifications: &ferrite_core::notifications::Notifications,
     after: Option<ferrite_core::notifications::NoticeId>,
+    operators: &dyn Fn(ThreadId) -> bool,
 ) -> (Vec<FreshNotice>, Vec<LiveRequest>) {
+    // An owned Thread's Notices and requests ring nothing: its owner
+    // (a Task, a Factory) tells the operator in its own way (ADR 0037).
+    // Its Notices still move the watermark, so they are never news later.
     let fresh = notifications
         .since(after)
-        .map(|notice| (notice.id, notice.thread, notice.read))
+        .map(|notice| {
+            (
+                notice.id,
+                notice.thread,
+                notice.read || !operators(notice.thread),
+            )
+        })
         .collect();
     let requests = notifications
         .decisions()
+        .filter(|notice| operators(notice.id.thread))
         .map(|notice| (notice.id.clone(), notice.read))
         .collect();
     (fresh, requests)
@@ -655,6 +673,10 @@ pub struct CockpitView {
     nav_measure_rest: std::cell::Cell<bool>,
     /// The empty board shown while Threads stay open (`show_empty_board`).
     empty_shown: bool,
+    /// A Project's Factory board, shown in the board's place (ADR 0037).
+    factory_view: Option<factory::FactoryView>,
+    /// The Tasks whose needs-you toast stands, and the state it announced.
+    task_toasts: std::collections::HashMap<String, ferrite_core::factory::Status>,
     /// The empty board's selected row, and the list's own focus.
     empty_cursor: usize,
     empty_focus: FocusHandle,
@@ -1595,6 +1617,8 @@ impl CockpitView {
             decisions: decisions::DecisionState::new(cx.weak_entity()),
             nav_measure_rest: std::cell::Cell::new(false),
             empty_shown: false,
+            factory_view: None,
+            task_toasts: Default::default(),
             empty_cursor: 0,
             empty_focus: cx.focus_handle(),
             solo_beside: None,
@@ -1886,8 +1910,7 @@ impl CockpitView {
         let workspace =
             ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
                 .map(std::path::Path::to_path_buf);
-        let solo = self.cockpit.roster().fullscreen().is_some()
-            || matches!(self.cockpit.roster().view(), View::Solo);
+        let solo = self.on_plane(thread);
         // While the turn runs, its header under its prompt and its live
         // row at the tail (`pane::working_tail`), over a Decision that
         // waits.
@@ -2005,8 +2028,26 @@ impl CockpitView {
         }
     }
 
+    /// Whether `thread`'s Pane is the window's plane (Solo, or
+    /// fullscreen), on its black ground, rather than a cell on another
+    /// surface: a Group's board, or the Factory that draws a Worker or a
+    /// Coordinator on its own ground.
+    fn on_plane(&self, thread: ThreadId) -> bool {
+        (self.cockpit.roster().fullscreen().is_some()
+            || matches!(self.cockpit.roster().view(), View::Solo))
+            && self.factory_worker_drawn() != Some(thread)
+    }
+
     fn sync_visible_transcripts(&mut self, cx: &mut Context<Self>) {
-        for index in self.visible_indices() {
+        let mut shown = self.visible_indices();
+        // The Factory draws a Worker or its Coordinator the roster does not
+        // show (its Task's Worker tab, the Coordinator surface).
+        shown.extend(
+            self.factory_worker_drawn()
+                .and_then(|thread| self.pane_for(thread))
+                .filter(|index| !shown.contains(index)),
+        );
+        for index in shown {
             self.sync_transcript(index, cx);
         }
     }
@@ -2299,6 +2340,10 @@ impl CockpitView {
         if parked_moved {
             self.parked_changed(cx);
         }
+        if self.cockpit.take_factory_changed() {
+            self.factory_changed(cx);
+        }
+        self.poll_factory_skills(cx);
         self.apply_thread_rules(&frame, cx);
         self.land(cx);
         self.ring_alerts(cx);
@@ -3502,6 +3547,7 @@ impl CockpitView {
             | MenuTarget::NavFilter
             | MenuTarget::Review { .. }
             | MenuTarget::Prompt { .. }
+            | MenuTarget::Factory
             | MenuTarget::Page(_) => None,
         }
     }
@@ -4273,6 +4319,13 @@ impl CockpitView {
                     self.chime(sound);
                 }
             }
+            Asked::TaskAlert {
+                project,
+                task,
+                status,
+                title,
+                detail,
+            } => self.present_task_alert(project, task, status, title, detail, window, cx),
         }
     }
 
@@ -4665,6 +4718,21 @@ impl CockpitView {
                 }
             },
         )];
+        let at_once = settings.factory_tasks_at_once;
+        let factory = vec![settings::stepper(
+            "settings-factory-limit",
+            "Tasks working at once",
+            "In each Server's Factory · the rest wait in Queued",
+            at_once.to_string().into(),
+            at_once > *ferrite_core::factory::LIMIT_RANGE.start(),
+            at_once < *ferrite_core::factory::LIMIT_RANGE.end(),
+            {
+                let view = cx.entity().downgrade();
+                move |delta, cx| {
+                    let _ = view.update(cx, |view, cx| view.step_factory_limit(delta, cx));
+                }
+            },
+        )];
         let sounds = vec![
             settings::toggle(
                 "settings-sounds",
@@ -4795,6 +4863,7 @@ impl CockpitView {
                 vec![
                     settings::Group::new(Some("Reading")).rows(reading),
                     settings::Group::new(Some("Threads and navigation")).rows(behaviour),
+                    settings::Group::new(Some("Factory")).rows(factory),
                 ],
             ),
             settings::page(
@@ -8859,6 +8928,10 @@ impl CockpitView {
     /// `All projects` alone, rather than being quietly filed under someone
     /// else's Project.
     fn admitted(&self, thread: ThreadId) -> bool {
+        // An owned Thread (a Worker, a Coordinator) is its owner's to list.
+        if !self.cockpit.operators(thread) {
+            return false;
+        }
         let Some(wanted) = self.nav_filter else {
             return true;
         };
@@ -8960,8 +9033,13 @@ impl CockpitView {
     /// Land on a Thread from the nav's other doors — an Activity or rail
     /// row: the Group on screen when it holds the Thread, else its
     /// home Group's view, else its Pane if open, else revived — exactly as
-    /// a press on its own row does.
+    /// a press on its own row does. A Worker or a Coordinator is reached
+    /// through its owner instead (`land_on_owned`).
     fn land_on_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        if let Some(owner) = self.cockpit.owner(thread) {
+            self.land_on_owned(thread, owner, cx);
+            return;
+        }
         let target: Option<GroupId> = {
             let groups = self.cockpit.groups();
             let viewed = match self.cockpit.roster().view() {
@@ -9013,6 +9091,7 @@ impl CockpitView {
     /// re-aims to the clicked Thread like every other deliberate move.
     fn focus_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         self.empty_shown = false;
+        self.factory_view = None;
         if self.cockpit.focus_thread(thread) {
             if let Some(index) = self.pane_for(thread) {
                 self.focus_pane(index);
@@ -9026,6 +9105,7 @@ impl CockpitView {
     /// mirror follows.
     pub fn enter_group(&mut self, group: GroupId, cx: &mut Context<Self>) {
         self.empty_shown = false;
+        self.factory_view = None;
         match self.cockpit.enter_group(group) {
             Ok(()) => {
                 self.sync_panes(cx);
@@ -9041,6 +9121,7 @@ impl CockpitView {
     /// tail of cmd-o and a parked nav row's click (#21).
     fn revive_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         self.empty_shown = false;
+        self.factory_view = None;
         match self.cockpit.reopen(thread) {
             Ok(()) => {
                 self.sync_panes(cx);
@@ -9899,6 +9980,7 @@ impl CockpitView {
         self.present_user_commands(window, cx);
         self.present_allowance_warnings(window, cx);
         self.present_asked(window, cx);
+        self.retire_task_toasts(window, cx);
         self.maximized = window.is_maximized();
         // The fullscreened Pane, if the roster still shows it: a Pane gone
         // by any path is the roster's to notice, and it falls back to the
@@ -9919,6 +10001,12 @@ impl CockpitView {
                 .filter_map(|index| self.panes[index].thread())
                 .collect(),
             _ => Vec::new(),
+        };
+        // The open Task's Worker, drawn in its panel, streams whole too.
+        self.leave_factory_if_moved();
+        let drawn: Vec<ThreadId> = match self.factory_worker_drawn() {
+            Some(worker) => vec![worker],
+            None => drawn,
         };
         self.cockpit.draws_transcripts(drawn);
 
@@ -10148,6 +10236,8 @@ impl CockpitView {
         // its rows answer ↑ ↓ ⏎ under the `EmptyBoard` context.
         let wanted = if lost {
             self.focus.clone()
+        } else if let Some(focus) = self.factory_focus(window, cx) {
+            focus
         } else if self.rename.is_none() && fullscreen.is_none() && self.empty_board_shown() {
             self.empty_focus.clone()
         } else {
@@ -10269,7 +10359,10 @@ impl CockpitView {
             self.probe_cli_versions(cx);
         }
         let board = self.board_bounds(window);
-        let grid = if self.empty_shown && fullscreen.is_none() {
+        let grid = if self.factory_view.is_some() {
+            // A Project's Factory board stands in the board's place.
+            frame().flex().child(self.factory_board(window, cx))
+        } else if self.empty_shown && fullscreen.is_none() {
             // Shown on purpose while Threads stay open (`show_empty_board`).
             frame().flex().child(self.empty_board(cx))
         } else if let Some(index) = fullscreen.filter(|index| !self.has_reader(*index)) {
@@ -10620,7 +10713,7 @@ impl CockpitView {
             .child(self.plane_seams(panel_w))
             .children(self.title_tools_element(cx))
             .children(self.plan_card_element(window, cx))
-            .children(self.context_menu_element(cx))
+            .children(self.context_menu_element(window, cx))
             .children(self.session_controls_element(window, cx))
             .children(self.context_checks_element(window, cx))
             .children(self.band_menu_element(window, cx))
@@ -10628,6 +10721,8 @@ impl CockpitView {
             .children(self.mode_menu_element(window, cx))
             .children(self.settings_element(window, cx))
             .children(self.project_editor_element(window, cx))
+            .children(self.new_task_sheet(window, cx))
+            .children(self.direct_sheet(window, cx))
             .children(self.background_dialog_element(window, cx))
             .children(self.toast_float(window, cx))
             .children(self.sheet_floats(window, cx))
@@ -10824,6 +10919,7 @@ impl CockpitView {
                 && pane.composer.read(cx).focus_handle(cx).is_focused(window),
             drop_target: self.drop_target(index, cx),
             show_focus: self.grid_board(),
+            plane: self.on_plane(thread),
             // Every head names its provider (theme WP-C): the mark is the
             // one thing a head carries beside the Thread.
             provider_mark: open
@@ -12223,7 +12319,7 @@ impl CockpitView {
         self.context_menu = None;
         self.floats.palette = None;
         self.floats.shortcuts = None;
-        let first = self.nav_items(cx).into_iter().next();
+        let first = self.first_nav_card(cx);
         self.focus_nav_on(first, window, cx);
     }
 
@@ -12417,13 +12513,16 @@ impl CockpitView {
         // its alerts by them would drop the ones the window brought along.
         let here = self.attached().then_some(notifications);
         if let Some(here) = here {
-            let (fresh, requests) = news(here, self.needs_you.presented(None));
+            let operators = |thread: ThreadId| self.cockpit.operators(thread);
+            let (fresh, requests) = news(here, self.needs_you.presented(None), &operators);
             self.needs_you.hear(None, fresh, requests, now);
         }
         for away in machines.iter().flat_map(|machines| machines.off_screen()) {
+            let operators = |thread: ThreadId| away.status.operators(thread);
             let (fresh, requests) = news(
                 away.notifications,
                 self.needs_you.presented(Some(&away.key)),
+                &operators,
             );
             self.needs_you.hear(Some(away.key), fresh, requests, now);
         }
@@ -12564,6 +12663,9 @@ impl CockpitView {
     /// (the click handler's doing) and lands on what it was about — on its
     /// machine, when that is off screen.
     pub(crate) fn open_system_notification(&mut self, tag: &str, cx: &mut Context<Self>) {
+        if self.open_task_notification(tag, cx) {
+            return;
+        }
         // Its entry stays: read now, the next pump takes it out of the
         // notification centre with the rest.
         if let Some(alert) = self.needs_you.posted.get(tag).cloned() {

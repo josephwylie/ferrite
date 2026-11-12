@@ -1,0 +1,1 @@
+{"id":"1","method":"workflow.start","params":{"workflow":"w-1","start":{"type":"github_issue","schedule":{"recurrence":"daily","weekday":1,"interval_hours":4,"instructions":"","missed":"skip","overlap":"skip"},"github":{"repository":"acme/app","trigger":"labelled","label":"ready-for-agent","extra_instructions":"Open a PR that closes the issue"}}}}

@@ -651,3 +651,99 @@ fn a_visual_is_persisted_and_reloads_as_it_was_shown() {
     assert_eq!(reloaded[0].status, Status::Shown);
     assert_eq!(reloaded[0].html, "<h1>Hello world</h1>");
 }
+
+/// A Worker's Session is offered its reports as Ferrite's own tools:
+/// pre-allowed, a permission request for one allowed without a Decision,
+/// and a call reaches the Server as a request from the Session's own
+/// Thread, whatever Thread the agent writes in.
+#[test]
+fn a_workers_report_is_its_own_tool_needing_no_permission() {
+    use ferrite_core::api::{self, tools::Tools};
+    use ferrite_core::{link, ThreadId, ThreadOwner};
+
+    let host = dir().join("claude-report.host.jsonl");
+    let argv = dir().join("claude-report.argv");
+    let _ = fs::remove_file(&host);
+    let mcp = |id: &str, message: Value| {
+        json!({"type": "control_request", "request_id": id, "request": {
+            "subtype": "mcp_message", "server_name": "ferrite", "message": message}})
+    };
+    let output = [
+        json!({"type":"control_response","response":{"subtype":"success","request_id":"req_1","response":{}}}),
+        mcp("list-1", json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})),
+        json!({"type": "control_request", "request_id": "ask-1", "request": {
+            "subtype": "can_use_tool", "tool_name": "mcp__ferrite__report_outcome",
+            "input": {"outcome": "finished", "summary": "Done"}, "tool_use_id": "toolu_r"}}),
+        mcp("call-1", json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "report_outcome",
+            "arguments": {"outcome": "finished", "summary": "Done", "worker": 99},
+            "_meta": {"claudecode/toolUseId": "toolu_r"}}})),
+    ]
+    .into_iter()
+    .map(|frame| frame.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+    let (program, env) = stub("claude", output, &host, Some(&argv));
+    let (heard, hear) = std::sync::mpsc::channel();
+    let tools = Tools::new(heard).for_thread(ThreadId::new(7), &ThreadOwner::Task("t-1".into()));
+    let session = ClaudeSession::spawn(ClaudeConfig {
+        program,
+        env,
+        api_tools: Some(tools),
+        ..Default::default()
+    })
+    .unwrap();
+    let server = std::thread::spawn(move || {
+        let mut asked = None;
+        while let Ok(link::Heard::Api(heard)) = hear.recv_timeout(Duration::from_secs(10)) {
+            match heard {
+                api::Heard::Joined(_, answers) => asked = Some(answers),
+                api::Heard::Request(_, request) => {
+                    let answer = json!({"id": request.id, "result": {
+                        "task": {"id": "t-1", "status": "completed"}, "changed": true}});
+                    let _ = asked
+                        .as_ref()
+                        .unwrap()
+                        .send(answer.to_string().into_bytes());
+                    return Some(request);
+                }
+                api::Heard::Hungup(_) => {}
+            }
+        }
+        None
+    });
+
+    let lines = host_lines(&host, |lines| answer_to(lines, "call-1").is_some());
+    let request = server.join().unwrap().expect("the call reached the Server");
+    drop(session);
+    let argv = fs::read_to_string(argv).unwrap();
+    assert!(
+        argv.contains("--allowedTools mcp__ferrite__report_outcome"),
+        "{argv}"
+    );
+    let listed = &answer_to(&lines, "list-1").unwrap()["response"]["response"]["mcp_response"];
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"report_outcome") && names.contains(&"report_question"),
+        "{names:?}"
+    );
+    let allowed = &answer_to(&lines, "ask-1").unwrap()["response"]["response"];
+    assert_eq!(allowed["behavior"], "allow");
+    assert_eq!(
+        request.caller,
+        Some(ThreadId::new(7)),
+        "the Session's own Thread"
+    );
+    assert_eq!(request.method.name(), "report.outcome");
+    let result = &answer_to(&lines, "call-1").unwrap()["response"]["response"]["mcp_response"];
+    assert_eq!(result["result"]["isError"], false);
+    assert_eq!(
+        result["result"]["content"][0]["text"],
+        "Task t-1 is completed."
+    );
+}

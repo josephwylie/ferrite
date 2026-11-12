@@ -607,6 +607,7 @@ fn box_thread(thread: ThreadId, title: &str) -> ferrite_core::protocol::ThreadSt
         effort: None,
         title: Some(title.into()),
         snooze: None,
+        owner: None,
         workspace: None,
         session_project_root: None,
         first_prompt_sent: true,
@@ -685,6 +686,7 @@ fn box_snapshot(
         providers: None,
         parked: None,
         digests: None,
+        factory: None,
     })
 }
 

@@ -243,6 +243,10 @@ struct Header {
     /// every v1–v7 header — means the provider's default.
     #[serde(default)]
     effort: Option<String>,
+    /// Whose the Thread is when not the operator's (ADR 0037). Absent —
+    /// every Thread before it, and the operator's own — means theirs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    owner: Option<crate::ThreadOwner>,
 }
 
 impl Header {
@@ -256,6 +260,7 @@ impl Header {
             title: self.title.clone(),
             snooze: self.snooze,
             effort: self.effort.clone(),
+            owner: self.owner.clone(),
         }
     }
 
@@ -270,6 +275,7 @@ impl Header {
             title: facts.title,
             snooze: facts.snooze,
             effort: facts.effort,
+            owner: facts.owner,
         }
     }
 }
@@ -294,6 +300,8 @@ struct Facts {
     snooze: Option<crate::snooze::Snooze>,
     #[serde(default)]
     effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    owner: Option<crate::ThreadOwner>,
 }
 
 impl Facts {
@@ -307,6 +315,7 @@ impl Facts {
             title: self.title,
             snooze: self.snooze,
             effort: self.effort,
+            owner: self.owner,
             summary: None,
         }
     }
@@ -2727,6 +2736,19 @@ impl Store {
         project: Option<ProjectId>,
         binding: WorkspaceBinding,
     ) -> io::Result<(ThreadId, ThreadWriter)> {
+        self.create_owned(provider, model, project, binding, None)
+    }
+
+    /// `create_with_model`, for `owner` when it is not the operator's
+    /// (ADR 0037): the owner is written in the header, with the Thread.
+    pub(crate) fn create_owned(
+        &self,
+        provider: Provider,
+        model: Option<String>,
+        project: Option<ProjectId>,
+        binding: WorkspaceBinding,
+        owner: Option<crate::ThreadOwner>,
+    ) -> io::Result<(ThreadId, ThreadWriter)> {
         #[cfg(test)]
         if self.fail_create {
             return Err(io::Error::other("stub refused Thread creation"));
@@ -2751,6 +2773,7 @@ impl Store {
             snooze: None,
             // And on its default effort.
             effort: None,
+            owner,
         };
         let written = line(&header)?;
         file.write_all(written.as_bytes())?;
@@ -2805,9 +2828,11 @@ impl Store {
                 )
             })
             .map_or(0, |at| at + 1);
+        // A fork is the operator's own, whoever's its source was.
         let facts = Facts {
             snooze: None,
             title: None,
+            owner: None,
             ..snapshot.facts()
         };
         let binding = facts
@@ -3907,6 +3932,8 @@ pub struct ThreadMeta {
     /// `None` — including every pre-v8 log — means the provider's default
     /// reasoning effort.
     pub effort: Option<String>,
+    /// Whose the Thread is when not the operator's (ADR 0037).
+    pub owner: Option<crate::ThreadOwner>,
     /// The counts a parked row shows, read off the log's tail; `None` for
     /// a log from before schema 13 (see `Store::summary`).
     pub summary: Option<ThreadSummary>,
@@ -3998,6 +4025,7 @@ pub struct ThreadSnapshot {
     title: Option<String>,
     snooze: Option<crate::snooze::Snooze>,
     effort: Option<String>,
+    owner: Option<crate::ThreadOwner>,
     records: Vec<Record>,
 }
 
@@ -4122,6 +4150,7 @@ impl ThreadSnapshot {
             title: facts.title,
             snooze: facts.snooze,
             effort: facts.effort,
+            owner: facts.owner,
             records,
         }
     }
@@ -4136,6 +4165,7 @@ impl ThreadSnapshot {
             title: self.title.clone(),
             snooze: self.snooze,
             effort: self.effort.clone(),
+            owner: self.owner.clone(),
         }
     }
 
@@ -4171,6 +4201,11 @@ impl ThreadSnapshot {
 
     pub fn snooze(&self) -> Option<crate::snooze::Snooze> {
         self.snooze
+    }
+
+    /// Whose the Thread is when not the operator's (ADR 0037).
+    pub fn owner(&self) -> Option<&crate::ThreadOwner> {
+        self.owner.as_ref()
     }
 
     pub fn title(&self) -> Option<&str> {
@@ -5123,6 +5158,7 @@ fn parse(id: ThreadId, bytes: &[u8]) -> Result<Parsed, LoadError> {
             title: facts.title,
             snooze: facts.snooze,
             effort: facts.effort,
+            owner: facts.owner,
             records,
         },
         offsets,

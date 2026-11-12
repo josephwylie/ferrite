@@ -742,17 +742,22 @@ pub fn pr_view(cwd: &Path) -> Option<String> {
 /// Run one `gh` command in `cwd`, answering its stdout; `None` on every
 /// failure.
 fn gh(cwd: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("gh")
+    let output = gh_output(cwd, args).ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Run one `gh` command in `cwd` as the PR reads do, answering all it
+/// said: what a Factory's GitHub start reads through as well.
+pub(crate) fn gh_output(cwd: &Path, args: &[&str]) -> io::Result<std::process::Output> {
+    Command::new("gh")
         .args(args)
         .current_dir(cwd)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .no_console_window()
         .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Read `gh pr view`'s JSON. The rollup is a heterogeneous array —

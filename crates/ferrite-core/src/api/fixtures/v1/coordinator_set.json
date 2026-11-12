@@ -1,0 +1,1 @@
+{"id":"1","method":"coordinator.set","params":{"provider":"codex","model":"gpt-5-codex","effort":"high","project":"3"}}

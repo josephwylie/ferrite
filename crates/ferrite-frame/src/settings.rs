@@ -18,6 +18,7 @@ use gpui::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui::component::{Disableable, Selectable, Sizable};
 
 use ferrite_ui::components::{self, MenuItem};
+use ferrite_ui::controls;
 use ferrite_ui::frame::settings::{Control, Group, Page, PageKey, Row, CLI_DEFAULT};
 use ferrite_ui::frame::SettingsSheet;
 use ferrite_ui::icons::{self, icon};
@@ -503,24 +504,19 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
     match row.control.clone() {
         // Two options: a token each, the chosen one inverse.
         // A short choice: a segmented control, the chosen segment lit.
-        Control::Tokens { id, options, pick } => div()
-            .flex()
-            .items_center()
-            .p(px(SPACE_0_5))
-            .gap(px(SPACE_0_5))
-            .rounded(px(R_CONTROL))
-            .border_1()
-            .border_color(paint::FLOAT_EDGE)
+        Control::Tokens { id, options, pick } => controls::segments(false)
             .children(
                 options
                     .into_iter()
                     .enumerate()
                     .map(|(at, (label, selected))| {
                         let pick = pick.clone();
-                        segment((id, at), label, selected, cx).on_click(move |_, _, cx| {
-                            cx.stop_propagation();
-                            pick(at, cx);
-                        })
+                        controls::segment((id, at), label, selected, false, cx).on_click(
+                            move |_, _, cx| {
+                                cx.stop_propagation();
+                                pick(at, cx);
+                            },
+                        )
                     }),
             )
             .into_any_element(),
@@ -532,29 +528,8 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
             selected,
             options,
             pick,
-        } => components::form_button(id, cx)
+        } => controls::chooser(id, &title, selected.clone(), Default::default(), cx)
             .debug_selector(move || id.into())
-            .accessibility_label(format!("{title}: {selected}"))
-            .h(px(SETTINGS_BUTTON_H))
-            .max_w(px(SETTINGS_MENU_MAX_W))
-            .px(px(SETTINGS_SEGMENT_PAD_X))
-            .rounded(px(R_CONTROL))
-            .border_1()
-            .border_color(paint::FLOAT_EDGE)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .min_w_0()
-                    .gap(px(CH))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .child(components::form_label(selected.clone(), INK_STRONG)),
-                    )
-                    .child(icon(icons::CHEVRON_DOWN, ICON_CHEVRON, INK_STRONG).flex_shrink_0()),
-            )
             .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu, _, _| {
                 options.iter().enumerate().fold(
                     menu.min_w(px(CHOICE_MENU_MIN_W))
@@ -570,7 +545,10 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
                         }
                         menu.item(
                             PopupMenuItem::element(move |_, _| {
-                                components::kit_row(ferrite_ui::menu::row_face(&item, false, false))
+                                components::kit_row(
+                                    ferrite_ui::menu::row_face(&item, false, false)
+                                        .debug_selector(move || format!("{id}-option-{at}")),
+                                )
                             })
                             .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
@@ -796,35 +774,6 @@ fn control(row: &Row, _window: &mut Window, cx: &mut App) -> AnyElement {
 /// What a chooser's `CLI default` row says about itself.
 const CLI_DEFAULT_NOTE: &str = "follows the CLI";
 
-/// One segment of a short choice (theme `SETTINGS_SEGMENT_*`): chosen, it
-/// is lit — `paint::FLOAT_SEL` with `INK_STRONG` at `W_LABEL`; the rest
-/// `INK_SUBTLE` on nothing, `paint::HOVER` under the pointer. A tab stop.
-fn segment(id: (&'static str, usize), label: SharedString, selected: bool, cx: &App) -> Button {
-    let (rest, hover, ink): (gpui::Hsla, gpui::Hsla, u32) = if selected {
-        (paint::FLOAT_SEL.into(), paint::FLOAT_SEL.into(), INK_STRONG)
-    } else {
-        (
-            gpui::rgba(TRANSPARENT).into(),
-            paint::HOVER.into(),
-            INK_SUBTLE,
-        )
-    };
-    components::faded_button(id, rest, hover, paint::PRESS.into(), rgb(ink).into(), cx)
-        .tab_stop(true)
-        .selected(selected)
-        .toggled(selected)
-        .debug_selector(move || format!("{}-{}", id.0, id.1))
-        .h(px(SETTINGS_SEGMENT_H))
-        .px(px(SETTINGS_SEGMENT_PAD_X))
-        .rounded(px(R_CONTROL))
-        .child(
-            components::text_ui()
-                .font_weight(if selected { W_LABEL } else { W_BODY })
-                .text_color(rgb(ink))
-                .child(label),
-        )
-}
-
 /// An action on a row (`Copy`, `Restart`, `Add`, `Remove`): the quiet
 /// bordered button — `INK_STRONG` on nothing in a `FLOAT_EDGE` ring, radius
 /// `R_CONTROL`, `paint::HOVER` under the pointer. Settings has no filled
@@ -951,10 +900,86 @@ mod tests {
     fn a_chosen_segment_is_lit_and_the_rest_lie_flat(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             ferrite_pane::pane::init_components(cx);
-            let mut on = segment(("c", 0), "Claude".into(), true, cx);
-            let mut off = segment(("c", 1), "Codex".into(), false, cx);
+            let mut on = controls::segment(("c", 0), "Claude", true, false, cx);
+            let mut off = controls::segment(("c", 1), "Codex", false, false, cx);
             assert_eq!(on.style().background, Some(paint::FLOAT_SEL.into()));
             assert_eq!(off.style().background, None);
         });
+    }
+
+    /// A choice from a list shows its current value; its menu lists every
+    /// option with the current one checked, and picking one makes it the
+    /// value shown and the one checked.
+    #[gpui::test]
+    fn a_chooser_shows_its_value_and_its_menu_picks_another(cx: &mut gpui::TestAppContext) {
+        use std::cell::Cell;
+        const OPTIONS: [&str; 2] = ["Opus", "Sonnet"];
+        struct Host {
+            current: Rc<Cell<usize>>,
+        }
+        impl Render for Host {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let now = self.current.get();
+                let current = self.current.clone();
+                let row = Row::new(
+                    "Model",
+                    "",
+                    Vec::new(),
+                    Control::Chooser {
+                        id: "model",
+                        selected: OPTIONS[now].into(),
+                        options: OPTIONS
+                            .iter()
+                            .enumerate()
+                            .map(|(at, label)| (SharedString::from(*label), at == now))
+                            .collect(),
+                        pick: Rc::new(move |at, _| current.set(at)),
+                    },
+                );
+                div().size_full().child(control(&row, window, cx))
+            }
+        }
+        cx.update(ferrite_pane::pane::init_components);
+        let current = Rc::new(Cell::new(1));
+        let (host, cx) = cx.add_window_view({
+            let current = current.clone();
+            |_, _| Host { current }
+        });
+        cx.run_until_parked();
+        let sonnet_shown = cx.debug_bounds("chooser-value").expect("its value");
+        let chooser = cx.debug_bounds("model").expect("the chooser");
+        assert!(chooser.contains(&sonnet_shown.center()));
+
+        let checked = |cx: &mut gpui::VisualTestContext| {
+            let rows = [
+                cx.debug_bounds("model-option-0")
+                    .expect("the menu lists Opus"),
+                cx.debug_bounds("model-option-1").expect("and Sonnet"),
+            ];
+            let check = cx.debug_bounds("float-check").expect("one is checked");
+            let lit: Vec<usize> = (0..2)
+                .filter(|at| rows[*at].contains(&check.center()))
+                .collect();
+            (rows, lit)
+        };
+        cx.simulate_click(chooser.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        let (rows, lit) = checked(cx);
+        assert_eq!(lit, [1], "Sonnet, the current one, is checked");
+
+        cx.simulate_click(rows[0].center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(current.get(), 0, "picking Opus picks it");
+        host.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        let opus_shown = cx.debug_bounds("chooser-value").expect("its value");
+        assert!(
+            opus_shown.size.width < sonnet_shown.size.width,
+            "the shorter Opus is shown: {opus_shown:?} after {sonnet_shown:?}"
+        );
+        let chooser = cx.debug_bounds("model").expect("the chooser");
+        cx.simulate_click(chooser.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(checked(cx).1, [0], "now Opus is checked");
     }
 }

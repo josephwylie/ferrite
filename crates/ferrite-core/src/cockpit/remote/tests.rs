@@ -75,6 +75,7 @@ fn server_answering(
                             providers: None,
                             parked: None,
                             digests: None,
+                            factory: None,
                         }))
                         .unwrap();
                 }

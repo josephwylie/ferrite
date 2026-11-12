@@ -176,6 +176,7 @@ fn parked_row() -> ParkedThread {
         last_used_ms: Some(1_759_990_000_000),
         turns: Some(11),
         subagents: Some(2),
+        owner: None,
     }
 }
 
@@ -248,6 +249,7 @@ fn state() -> ThreadState {
         effort: Some("high".into()),
         title: Some("Fix the parser".into()),
         snooze: None,
+        owner: None,
         workspace: Some(WireBinding::Worktree {
             repo: "/src/ferrite".into(),
             path: "/src/ferrite-wt/4".into(),
@@ -771,6 +773,473 @@ fn samples() -> Vec<(&'static str, Sample)> {
             ),
         ),
         (
+            "command_task_start",
+            command(
+                21,
+                Op::Task {
+                    action: TaskAction::Start {
+                        project,
+                        instructions: "Fix the flaky login test".into(),
+                        request: Some("board-1".into()),
+                        workflow: None,
+                        pr: None,
+                    },
+                },
+            ),
+        ),
+        (
+            "command_task_delete",
+            command(
+                21,
+                Op::Task {
+                    action: TaskAction::Delete { task: "t-1".into() },
+                },
+            ),
+        ),
+        (
+            "factory",
+            Sample::Server(ServerMessage::Factory {
+                revision: 3,
+                board: crate::factory::Board {
+                    tasks: vec![crate::factory::Task {
+                        id: "t-1".into(),
+                        project,
+                        title: "Fix the flaky login test".into(),
+                        instructions: "Fix the flaky login test".into(),
+                        status: crate::factory::Status::NeedsHuman,
+                        agent: crate::factory::Agent {
+                            provider: crate::store::Provider::Claude,
+                            model: Some("claude-opus-4".into()),
+                            effort: None,
+                        },
+                        branch: "factory/t-1".into(),
+                        worker: Some(thread),
+                        worktree: Some("/src/ferrite/.worktrees/factory/t-1".into()),
+                        result: None,
+                        reason: Some("No access to the staging database".into()),
+                        activity: vec![crate::factory::Entry {
+                            at_ms: 1_700_000_000_000,
+                            by: crate::factory::Actor::Agent,
+                            text: "Unable to finish: No access to the staging database".into(),
+                            revision: None,
+                        }],
+                        created_ms: 1_700_000_000_000,
+                        request: None,
+                        watch: Default::default(),
+                        workflow: None,
+                        step: None,
+                        results: Vec::new(),
+                        workers: Vec::new(),
+                        oversight: Default::default(),
+                        source: None,
+                        delivery: Default::default(),
+                        keeping: Default::default(),
+                    }],
+                    workflows: Vec::new(),
+                    ..Default::default()
+                },
+            }),
+        ),
+        (
+            "command_task_start_workflow",
+            command(
+                21,
+                Op::Task {
+                    action: TaskAction::Start {
+                        project,
+                        instructions: "Fix the flaky login test".into(),
+                        request: Some("board-2".into()),
+                        workflow: Some("w-1".into()),
+                        pr: None,
+                    },
+                },
+            ),
+        ),
+        (
+            "command_workflow_edit_step",
+            command(
+                22,
+                Op::Workflow {
+                    action: WorkflowAction::EditStep {
+                        workflow: "w-1".into(),
+                        step: "s-2".into(),
+                        change: crate::factory::StepChange {
+                            instructions: Some("Review the PR".into()),
+                            on_unable: Some(crate::factory::Destination::Step("s-1".into())),
+                            fresh: Some(true),
+                            ..Default::default()
+                        },
+                    },
+                },
+            ),
+        ),
+        (
+            "command_workflow_save",
+            command(
+                22,
+                Op::Workflow {
+                    action: WorkflowAction::Save {
+                        workflow: "w-1".into(),
+                        skills: vec![(crate::store::Provider::Claude, vec!["code-review".into()])],
+                    },
+                },
+            ),
+        ),
+        (
+            "command_task_answer",
+            command(
+                23,
+                Op::Task {
+                    action: TaskAction::Answer {
+                        task: "t-1".into(),
+                        text: "Call the flag --fast".into(),
+                        question: Some(1),
+                    },
+                },
+            ),
+        ),
+        (
+            "command_task_rework",
+            command(
+                24,
+                Op::Task {
+                    action: TaskAction::Rework {
+                        task: "t-1".into(),
+                        feedback: "Add a test for the flag".into(),
+                        to: Some(crate::factory::Destination::Step("s-3".into())),
+                    },
+                },
+            ),
+        ),
+        (
+            "command_task_redirect",
+            command(
+                25,
+                Op::Task {
+                    action: TaskAction::Redirect {
+                        task: "t-1".into(),
+                        direction: crate::factory::Override {
+                            to: "s-3".into(),
+                            skip: vec!["s-2".into()],
+                            then: crate::factory::ThenReturn::Me,
+                            note: "Only the docs changed".into(),
+                        },
+                    },
+                },
+            ),
+        ),
+        (
+            "command_workflow_edit_approval",
+            command(
+                26,
+                Op::Workflow {
+                    action: WorkflowAction::EditApproval {
+                        workflow: "w-1".into(),
+                        change: crate::factory::ApprovalChange {
+                            by: Some(crate::factory::Approver::Agent),
+                            step: Some("s-4".into()),
+                            instructions: Some("Approve when the checks pass".into()),
+                            after: Some(crate::factory::Destination::Complete),
+                            rework_to: Some(crate::factory::Destination::Step("s-3".into())),
+                        },
+                    },
+                },
+            ),
+        ),
+        (
+            "reply_version",
+            Sample::Server(ServerMessage::Reply {
+                id: 22,
+                ok: Some(Done::Version { version: 2 }),
+                error: None,
+            }),
+        ),
+        (
+            "command_workflow_edit_start",
+            command(
+                23,
+                Op::Workflow {
+                    action: WorkflowAction::EditStart {
+                        workflow: "w-1".into(),
+                        start: crate::factory::Start {
+                            kind: crate::factory::StartKind::Schedule,
+                            schedule: crate::factory::Schedule {
+                                recurrence: crate::factory::Recurrence::Weekdays,
+                                time: Some("09:00".into()),
+                                instructions: "Triage new issues".into(),
+                                missed: crate::factory::Missed::RunOnce,
+                                overlap: crate::factory::Overlap::Queue,
+                                ..Default::default()
+                            },
+                            github: crate::factory::GitHubSource {
+                                repository: Some("acme/app".into()),
+                                ..Default::default()
+                            },
+                        },
+                    },
+                },
+            ),
+        ),
+        (
+            "command_workflow_automation",
+            command(
+                24,
+                Op::Workflow {
+                    action: WorkflowAction::Automation {
+                        workflow: "w-1".into(),
+                        turn: crate::factory::Turn::Pause,
+                    },
+                },
+            ),
+        ),
+        (
+            "command_workflow_backlog",
+            command(
+                25,
+                Op::Workflow {
+                    action: WorkflowAction::Backlog {
+                        workflow: "w-1".into(),
+                        take: true,
+                    },
+                },
+            ),
+        ),
+        (
+            "command_github_labels",
+            command(
+                26,
+                Op::GitHub {
+                    ask: crate::protocol::GitHubAsk::Labels {
+                        repository: "acme/app".into(),
+                    },
+                },
+            ),
+        ),
+        (
+            "reply_names",
+            Sample::Server(ServerMessage::Reply {
+                id: 26,
+                ok: Some(Done::Names {
+                    names: vec!["bug".into(), "ready-for-agent".into()],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "factory_automation",
+            Sample::Server(ServerMessage::Factory {
+                revision: 5,
+                board: serde_json::from_value(serde_json::json!({
+                    "tasks": [{
+                        "id": "t-2", "project": 3, "title": "Login fails",
+                        "instructions": "Login fails\n\nGitHub issue: https://github.com/acme/app/issues/7",
+                        "status": "queued", "agent": { "provider": "claude" },
+                        "branch": "factory/t-2", "activity": [], "created_ms": 1_700_000_000_000_i64,
+                        "request": "https://github.com/acme/app/issues/7",
+                        "source": {
+                            "kind": "issue", "repository": "acme/app", "number": 7,
+                            "url": "https://github.com/acme/app/issues/7",
+                        },
+                    }],
+                    "workflows": [{
+                        "id": "w-1", "project": 3, "next_step": 2,
+                        "draft": { "name": "Intake", "steps": [], "start": {
+                            "type": "github_issue",
+                            "github": { "repository": "acme/app", "trigger": "opened" },
+                        }},
+                        "automation": {
+                            "switch": "on", "error": "gh: HTTP 502", "primed": true,
+                            "seen": ["https://github.com/acme/app/issues/7"],
+                        },
+                    }],
+                }))
+                .unwrap(),
+            }),
+        ),
+        (
+            "command_coordinator_say",
+            command(
+                27,
+                Op::Coordinator {
+                    action: crate::protocol::CoordinatorAction::Say {
+                        project,
+                        text: "What is left on the board?".into(),
+                    },
+                },
+            ),
+        ),
+        (
+            "command_coordinator_agent",
+            command(
+                28,
+                Op::Coordinator {
+                    action: crate::protocol::CoordinatorAction::Agent {
+                        project,
+                        agent: crate::factory::Agent {
+                            provider: Provider::Codex,
+                            model: Some("gpt-5-codex".into()),
+                            effort: Some("high".into()),
+                        },
+                    },
+                },
+            ),
+        ),
+        (
+            "command_coordinator_accept",
+            command(
+                29,
+                Op::Coordinator {
+                    action: crate::protocol::CoordinatorAction::Accept {
+                        proposal: "p-1".into(),
+                        skills: vec![(Provider::Claude, vec!["code-review".into()])],
+                    },
+                },
+            ),
+        ),
+        (
+            "command_coordinator_dismiss",
+            command(
+                30,
+                Op::Coordinator {
+                    action: crate::protocol::CoordinatorAction::Dismiss {
+                        proposal: "p-2".into(),
+                    },
+                },
+            ),
+        ),
+        (
+            "reply_proposal",
+            Sample::Server(ServerMessage::Reply {
+                id: 31,
+                ok: Some(Done::Proposal {
+                    proposal: "p-1".into(),
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "factory_coordinator",
+            Sample::Server(ServerMessage::Factory {
+                revision: 6,
+                board: serde_json::from_value(serde_json::json!({
+                    "tasks": [],
+                    "coordinators": [{
+                        "project": 3, "thread": 12,
+                        "agent": { "provider": "codex", "model": "gpt-5-codex", "effort": "high" },
+                    }],
+                    "proposals": [
+                        {
+                            "id": "p-1", "project": 3, "status": "accepted", "raised_ms": 1_700_000_000_000_i64,
+                            "act": { "kind": "start", "instructions": "Fix the toolbar overflow" },
+                            "task": "t-4",
+                        },
+                        {
+                            "id": "p-2", "project": 3, "status": "pending", "raised_ms": 1_700_000_000_001_i64,
+                            "act": {
+                                "kind": "redirect", "task": "t-1",
+                                "direction": { "to": "s-3", "skip": ["s-2"], "then": "me", "note": "Docs only" },
+                            },
+                        },
+                        {
+                            "id": "p-3", "project": 3, "status": "dismissed", "raised_ms": 1_700_000_000_002_i64,
+                            "act": { "kind": "automation", "workflow": "w-1" },
+                        },
+                    ],
+                }))
+                .unwrap(),
+            }),
+        ),
+        (
+            "factory_troubles",
+            Sample::Server(ServerMessage::Factory {
+                revision: 7,
+                board: crate::factory::Board {
+                    troubles: [(
+                        project_id(),
+                        "The Factory could not be saved: No space left on device".to_string(),
+                    )]
+                    .into(),
+                    ..Default::default()
+                },
+            }),
+        ),
+        (
+            "factory_workflows",
+            Sample::Server(ServerMessage::Factory {
+                revision: 4,
+                board: crate::factory::Board {
+                    tasks: Vec::new(),
+                    trouble: None,
+                    workflows: vec![crate::factory::Workflow {
+                        id: "w-1".into(),
+                        project,
+                        draft: crate::factory::Definition {
+                            name: "Docs fixes".into(),
+                            steps: vec![crate::factory::Step {
+                                id: "s-1".into(),
+                                name: "Writer".into(),
+                                instructions: "Fix the docs".into(),
+                                skills: vec!["docs".into()],
+                                agent: crate::factory::Agent {
+                                    provider: crate::store::Provider::Codex,
+                                    model: Some("gpt-5.5".into()),
+                                    effort: Some("high".into()),
+                                },
+                                on_finished: crate::factory::Destination::Complete,
+                                on_unable: crate::factory::Destination::Human,
+                                fresh: false,
+                                outcome_routes: None,
+                            }],
+                            approval: Default::default(),
+                            start: Default::default(),
+                        },
+                        versions: Vec::new(),
+                        next_step: 2,
+                        automation: Default::default(),
+                    }],
+                    ..Default::default()
+                },
+            }),
+        ),
+        (
+            "task_alert",
+            Sample::Server(ServerMessage::TaskAlert {
+                project,
+                task: "t-1".into(),
+                status: crate::factory::Status::Completed,
+                title: "Task completed: Fix the flaky login test".into(),
+                detail: None,
+            }),
+        ),
+        (
+            "task_alert_detail",
+            Sample::Server(ServerMessage::TaskAlert {
+                project,
+                task: "t-1".into(),
+                status: crate::factory::Status::NeedsHuman,
+                title: "Task needs you: Fix the flaky login test".into(),
+                detail: Some("No access to the staging data".into()),
+            }),
+        ),
+        (
+            "reply_task",
+            Sample::Server(ServerMessage::Reply {
+                id: 21,
+                ok: Some(Done::Task { task: "t-1".into() }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_deleted_kept",
+            Sample::Server(ServerMessage::Reply {
+                id: 21,
+                ok: Some(Done::Deleted {
+                    kept: Some("The worktree has uncommitted changes, so it was left in place.".into()),
+                }),
+                error: None,
+            }),
+        ),
+        (
             "command_notice",
             command(
                 22,
@@ -996,6 +1465,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 }]),
                 parked: None,
                 digests: None,
+                factory: None,
             })),
         ),
         (
@@ -1018,6 +1488,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     thread,
                     digest: digest(),
                 }]),
+                factory: None,
             })),
         ),
         (
@@ -1037,6 +1508,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 providers: None,
                 parked: Some(vec![parked_row()]),
                 digests: None,
+                factory: None,
             })),
         ),
         (
@@ -1600,6 +2072,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         last_used_ms: Some(1_760_000_000_000),
                         turns: None,
                         subagents: None,
+                        owner: None,
                     },
                 ],
             }),
@@ -1951,6 +2424,105 @@ fn samples() -> Vec<(&'static str, Sample)> {
                     },
                 },
             ),
+        ),
+        (
+            "command_task_clear",
+            command(
+                22,
+                Op::Task {
+                    action: TaskAction::Clear { project },
+                },
+            ),
+        ),
+        (
+            "command_task_start_pr",
+            command(
+                21,
+                Op::Task {
+                    action: TaskAction::Start {
+                        project,
+                        instructions: "Ship the flag".into(),
+                        request: Some("board-3".into()),
+                        workflow: Some("w-1".into()),
+                        pr: Some("acme/widgets#12".into()),
+                    },
+                },
+            ),
+        ),
+        (
+            "factory_pull_request",
+            Sample::Server(ServerMessage::Factory {
+                revision: 5,
+                board: serde_json::from_value(serde_json::json!({
+                    "tasks": [{
+                        "id": "t-1",
+                        "project": project,
+                        "title": "Ship the flag",
+                        "instructions": "Ship the flag",
+                        "status": "completed",
+                        "agent": { "provider": "claude" },
+                        "branch": "factory/t-1",
+                        "activity": [{
+                            "at_ms": 1_700_000_000_000_i64,
+                            "by": "tool",
+                            "text": "Build reported: cargo test: 12 passed",
+                            "revision": 1,
+                        }],
+                        "created_ms": 1_700_000_000_000_i64,
+                        "workflow": {
+                            "id": "w-1",
+                            "version": 1,
+                            "definition": {
+                                "name": "Ship it",
+                                "steps": [{
+                                    "id": "s-1",
+                                    "name": "Merge agent",
+                                    "instructions": "Merge it",
+                                    "skills": [],
+                                    "provider": "claude",
+                                    "on_finished": "complete",
+                                    "on_unable": "human",
+                                    "fresh": false,
+                                    "outcome_routes": {
+                                        "merged": "complete",
+                                        "conflict": "step:s-2",
+                                        "pending": "wait",
+                                        "denied": "human",
+                                        "head_changed": "human",
+                                        "unknown": "coordinator",
+                                    },
+                                }],
+                            },
+                        },
+                        "results": [{
+                            "step": "s-1",
+                            "name": "Merge agent",
+                            "outcome": { "merge": { "result": "merged", "summary": "MERGED" } },
+                        }],
+                        "pr": {
+                            "repository": "acme/widgets",
+                            "number": 12,
+                            "revisions": [{
+                                "revision": 1,
+                                "head": "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                "by": "Build",
+                                "at_ms": 1_700_000_000_000_i64,
+                            }],
+                            "approved": 1,
+                            "merged": true,
+                        },
+                        "evidence": [{
+                            "kind": "decision",
+                            "by": "You",
+                            "text": "Approved",
+                            "revision": 1,
+                            "at_ms": 1_700_000_000_000_i64,
+                        }],
+                        "kept": "The worktree has uncommitted changes, so it was left in place.",
+                    }],
+                }))
+                .unwrap(),
+            }),
         ),
     ]
 }

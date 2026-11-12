@@ -224,6 +224,171 @@ prompt was taken, rather than when the turn ends:
 `"$F" notification show "Ready" --sound done` rings a chime with the
 toast (`--important` keeps it up).
 
+## The Factory
+
+A Project's **Factory** runs **Tasks** the user hands off: each Task gets
+its own worktree and branch, and a **Worker** (an agent Thread the Task
+owns, `owner: {"task": "t-1"}`) does it. Start one only when the user asks.
+
+```bash
+"$F" task start "Fix the flaky login test" --project 3
+"$F" task list --project 3
+"$F" task get t-1
+"$F" task stop t-1
+"$F" task resume t-1
+"$F" task delete t-1
+"$F" task answer t-1 "Call the flag --fast"
+"$F" task approve t-1
+"$F" task rework t-1 "Add a test for the flag" --to step:s-3
+"$F" task redirect t-1 s-3 --skip s-2 --then me --note "Only the docs changed"
+"$F" task clear --project 3
+```
+
+A Task waits in Needs human for a question (`task answer`) and in Ready to
+approve for approval (`task approve`, or `task rework` with feedback).
+`task redirect` sends one Task to a Step, skipping Steps, then following
+the routes or returning it to the user (`--then me`); the saved Workflow
+is unchanged. Do these only when the user asks.
+
+Completed Tasks leave the board for the Project's Archive 7 days after
+they complete; `task clear` moves them now. Archived Tasks are kept whole
+and still listed by `task list` (with `archived_ms`). A Worker interrupted
+by a restart or a crash is revived once and told so; a second failure
+stops its Task with the reason, for the user to resume or redirect.
+
+`task start` uses the Project holding the CLI's directory when no
+`--project` is given. `task delete` takes a Queued, Stopped or Completed
+Task; its worktree is removed only when clean (otherwise it stays and the
+answer says why), and its branch always stays.
+
+A **Workflow** is the user's own process for a Project: ordered **Steps**,
+each an agent with a name, instructions, skills, provider, model, effort,
+and routes for "finished" and "unable" (`next`, `step:<id>`, `approval`,
+`complete`, `human`, `coordinator`). Change one only when the user asks; saving makes
+a numbered version and starts nothing, and a draft with problems is
+refused with every problem listed. A Task started on a Workflow
+(`task start … --workflow w-1`) keeps the version it started with.
+
+```bash
+"$F" workflow create --template issue_to_reviewed_pr --project 3
+"$F" workflow list --project 3
+"$F" workflow get w-1
+"$F" workflow rename w-1 "Docs fixes"
+"$F" step add w-1 --after s-2
+"$F" step edit w-1 s-3 --name Reviewer --instructions "Review the PR" --skills code-review --on-unable step:s-2 --fresh
+"$F" step move w-1 s-3 0
+"$F" step delete w-1 s-3
+"$F" workflow approval w-1 --by agent --step s-4 --instructions "Approve when the checks pass" --after complete --rework-to step:s-3
+"$F" workflow save w-1
+```
+
+A route to `approval` waits in Ready to approve. `workflow approval` says
+who decides (`human` or `agent`; an agent needs a deciding Step and
+instructions), what follows approval (`complete` or `step:<id>`) and where
+rework goes (`step:<id>` or `coordinator`).
+
+A Workflow's Tasks can start without the user: on a schedule, from a
+GitHub issue or pull request, or from the user's own script. The start is
+part of the draft (`workflow start`, then save); automatic starts are a
+separate switch that saving never turns on. Turn it on, pause or resume
+it only when the user asks. A script submits Tasks with an identity of
+its own: the same identity again returns the Task it already started.
+
+```bash
+"$F" workflow start w-1 '{"type":"github_issue","github":{"repository":"acme/app","trigger":"labelled","label":"ready-for-agent"}}'
+"$F" workflow automation w-1 on
+"$F" workflow backlog w-1 false
+"$F" task submit w-1 JIRA-12 "Fix the CSV export"
+```
+
+If you are a Worker, report your Task's outcome when you are done. Your
+outcome is read only from a report, never from your messages, and a
+report is always about your own Task: it is known from the Thread you run
+in, and no report can name another Worker. Report with Ferrite's own
+tools, which need no permission: `report_outcome` (`outcome`, `summary`),
+`report_question` (`text`), `report_revision` (`head`, `pr`) and
+`report_evidence` (`text`). Each command below is the same report; run it
+only if those tools are not offered to you:
+
+```bash
+"$F" report outcome finished "Fixed the race in the login fixture"
+"$F" report outcome unable "Tried X and Y; blocked on Z"
+"$F" report question "Should the flag default to on?"
+```
+
+A question holds your Task until the user answers; end your turn after
+asking. When you decide an approval, report `approved` (what you
+verified) or `rejected` (your reasons):
+
+```bash
+"$F" report outcome approved "All checks pass on the reviewed PR"
+"$F" report outcome rejected "The changelog entry is missing"
+```
+
+A Task can carry a pull request (`task start … --pr owner/repo#12` or its
+URL). Report its head each time you push, naming the PR the first time,
+and keep what a check showed as evidence; both are tied to the PR's
+current revision:
+
+```bash
+"$F" report revision 1111111aaaa --pr acme/widgets#12
+"$F" report evidence "cargo test: 12 passed"
+```
+
+A Step that routes by merge result (`step edit … --by-merge-result
+--on-conflict step:s-6`) reports one of six results, `merged` only once
+the merge is confirmed: `merged`, `conflict`, `pending`, `denied`,
+`head_changed` (the PR is not at the approved revision) or `unknown`.
+Only `merged` may route to Completed; `--on-pending wait` keeps waiting.
+
+```bash
+"$F" report outcome merged "gh pr view shows MERGED at 2b3c4d5"
+"$F" report outcome unknown "gh pr merge timed out"
+```
+
+### The Coordinator
+
+Each Project's Factory has one **Coordinator** (an agent Thread the
+Factory owns, `owner: {"factory": 3}`, in the main checkout) that the
+user talks to in the Factory's Coordinator view; it starts on their
+first word. `coordinator say` speaks to it from a script, and
+`coordinator set` chooses its provider, model and effort from its next
+turn.
+
+```bash
+"$F" coordinator say "What is left on the board?" --project 3
+"$F" coordinator set codex --model gpt-5-codex --effort high --project 3
+```
+
+If you are the Coordinator, read and draft freely (`task list`, `task get`,
+`workflow get`, `step edit`, …). Your reads are your own tools too, which
+need no permission: `task_list`, `task_get`, `workflow_list`,
+`workflow_get` and `proposal_list`. But never act: starting a Task, saving a
+Workflow version, turning automatic starts on and redirecting a Task are
+**proposals**, shown to the user as a card they accept or dismiss. Nothing
+happens until they accept. A one-off handoff needs no Workflow. Raise one
+with your own `proposal_raise` tool (its `act` and the flags below as its
+fields), which needs no permission; the command is for when that tool is
+not offered. The Server refuses every other act from your Thread,
+starting a Thread, prompting, stopping or parking one, and answering a
+Decision included.
+
+```bash
+"$F" proposal raise start --instructions "Fix the toolbar overflow" --workflow w-1
+"$F" proposal raise save --workflow w-1
+"$F" proposal raise automation --workflow w-1
+"$F" proposal raise redirect --task t-1 --to s-3 --skip s-2 --then me --note "Only the docs changed"
+"$F" proposal list --project 3
+```
+
+`proposal accept` and `proposal dismiss` are the user's: run them only on
+their word.
+
+```bash
+"$F" proposal accept p-1
+"$F" proposal dismiss p-1
+```
+
 ## Drive a headless window
 
 To check a change to Ferrite's own UI, run a `ferrite --headless` built

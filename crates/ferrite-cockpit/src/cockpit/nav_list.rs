@@ -133,6 +133,9 @@ impl CockpitView {
             rows.push(self.machine_heading(on, cx));
         }
         let folded = on.is_some_and(|on| on.folded);
+        if !folded {
+            rows.extend(self.factory_nav_rows(state, cx));
+        }
         for row in state.pinned.iter().filter(|_| !folded) {
             rows.push(self.nav_card(row, None, &mut faces, cx));
         }

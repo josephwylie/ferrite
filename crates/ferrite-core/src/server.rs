@@ -31,7 +31,10 @@ pub mod agent;
 mod bridge;
 mod browser;
 mod calls;
+mod coordinator;
 mod drive;
+mod factory;
+pub mod github;
 mod render;
 mod signals;
 
@@ -162,9 +165,11 @@ pub fn run(options: Options) -> i32 {
     let defaults = Arc::new(Mutex::new(SessionDefaults::from_settings(&settings)));
     let (renderer, renders) = render::remote();
     let (browser_client, browser_requests) = crate::browser::channel();
+    let (heard, hear) = mpsc::channel();
     let spawner = Spawn {
         browser: Some(browser_client),
         api: api.is_some().then_some(api_address),
+        api_tools: Some(crate::api::tools::Tools::new(heard.clone())),
         ..Spawn::new(defaults.clone(), Some(Arc::new(renderer)))
     };
     let mut engine = match Engine::try_new(store, Box::new(spawner)) {
@@ -175,7 +180,6 @@ pub fn run(options: Options) -> i32 {
         }
     };
     engine.watch_memory(Box::new(ProcessRss::default()), RSS_LIMIT);
-    let (heard, hear) = mpsc::channel();
     if let Some(api) = api {
         if let Err(error) = crate::api::accept_all(api, heard.clone()) {
             crate::log!("server: cannot accept API connections: {error}");
@@ -372,6 +376,32 @@ struct Server {
     relaunch: Box<Relaunch>,
     /// The self-hosted forges a review's pull request is read from.
     forge: ferrite_reviewr::config::PluginConfig,
+    /// Every Project's Factory (ADR 0037), stepped once a pass.
+    factory: crate::factory::Factory,
+    /// The board revision the windows were last told.
+    told_factory: Option<u64>,
+    /// Task alerts held until the board that shows them goes, so a window
+    /// never hears one before its Task is in that state.
+    task_alerts: Vec<ServerMessage>,
+    /// The Archive's revision the windows were last sent.
+    told_archive: Option<u64>,
+    /// What a one-off Task's Worker runs on: the operator's defaults.
+    factory_agent: crate::factory::Agent,
+    /// The settings each Coordinator's Session was last tuned to (#224),
+    /// so one it refused is not tried again every pass.
+    coordinators_tuned: std::collections::BTreeMap<crate::ThreadId, crate::factory::Agent>,
+    /// What the Factory's GitHub starts are read through (#225): the
+    /// operator's `gh`, or a test's scripted reader.
+    github: Arc<dyn github::GitHub>,
+    /// GitHub reads still out.
+    github_reads: Vec<github::Reading>,
+    /// Task PR head reads still out (#223).
+    head_reads: Vec<github::HeadReading>,
+    /// Each Project root's skills per Provider, as the Server last listed
+    /// them and when (`None`: it could not), for a Workflow's check (G7).
+    skills_seen: Vec<factory::SkillsSeen>,
+    /// The Factory's wall clock, in milliseconds: a test passes its own.
+    clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
 impl Server {
@@ -384,6 +414,7 @@ impl Server {
     ) -> Self {
         let browser = browser::load(engine.browser_store());
         let browser_disk = browser::Disk::new(engine.browser_store().clone());
+        let factory = factory::load(engine.browser_store().dir());
         Self {
             engine,
             info,
@@ -417,6 +448,17 @@ impl Server {
             default_provider: Provider::Claude,
             relaunch: Box::new(relaunch),
             forge: Default::default(),
+            factory,
+            told_factory: None,
+            task_alerts: Vec::new(),
+            told_archive: None,
+            factory_agent: factory::default_agent(&Settings::default()),
+            coordinators_tuned: Default::default(),
+            github: Arc::new(github::Gh),
+            github_reads: Vec::new(),
+            head_reads: Vec::new(),
+            skills_seen: Vec::new(),
+            clock: Arc::new(|| crate::clock::now().timestamp_millis()),
         }
     }
 
@@ -442,6 +484,7 @@ impl Server {
             }
             self.tell_watched();
             self.engine.pump();
+            self.step_factory();
             if self.swept.elapsed() >= SWEEP_INTERVAL {
                 self.swept = Instant::now();
                 self.engine.sweep();
@@ -529,7 +572,8 @@ impl Server {
                     client.browser_capable =
                         capabilities.contains(&Capability::ConversationBrowser);
                     client.driven = capabilities.contains(&Capability::Driven);
-                    let snapshot = self.engine.snapshot();
+                    let mut snapshot = self.engine.snapshot();
+                    snapshot.factory = Some(self.factory.board());
                     self.send(id, ServerMessage::Snapshot(snapshot));
                 }
             }
@@ -931,6 +975,15 @@ impl Server {
                 self.stopping = Some(*when);
                 Ok(None)
             }
+            Op::Task { action } => self.task_command(action),
+            Op::Workflow { action } => self.workflow_command(action),
+            Op::Coordinator { action } => self.coordinator_command(action),
+            Op::GitHub { ask } => {
+                let github = Arc::clone(&self.github);
+                let ask = ask.clone();
+                self.read_off_pump(id, request, move || github::list(&*github, &ask));
+                return;
+            }
             Op::Restart { when } => match self.successor() {
                 Ok(_) => {
                     self.restarting = Some(*when);
@@ -940,8 +993,14 @@ impl Server {
             },
             op => {
                 let executed = self.engine.execute(op);
-                if let (Op::Answer { thread, handle, .. }, Ok(_)) = (op, &executed) {
-                    self.answered.insert((*thread, handle.clone()), id);
+                match (op, &executed) {
+                    (Op::Answer { thread, handle, .. }, Ok(_)) => {
+                        self.answered.insert((*thread, handle.clone()), id);
+                    }
+                    (Op::Send { thread, text } | Op::Queue { thread, text }, Ok(_)) => {
+                        self.heard_operator(*thread, text);
+                    }
+                    _ => {}
                 }
                 executed
             }
@@ -990,6 +1049,8 @@ impl Server {
             .set_allowance_thresholds(settings.allowance_warnings.clone());
         self.default_provider = settings.default_provider;
         self.forge = settings.forge_hosts.review_config();
+        self.factory_agent = factory::default_agent(settings);
+        self.factory.set_limit(settings.factory_tasks_at_once);
     }
 
     /// A first send that settled answers the command that started it.
@@ -1124,6 +1185,8 @@ impl Server {
     fn broadcast(&mut self) {
         let mut messages = self.engine.take_messages();
         messages.extend(self.decision_changes());
+        messages.extend(self.factory_changes());
+        messages.append(&mut self.task_alerts);
         for message in messages {
             self.api.relay(&message);
             match &message {

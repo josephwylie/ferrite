@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use super::Server;
+use crate::api::schema::Callers;
 use crate::api::schema::{
     AgentPromptParams, AgentReadParams, AgentWaitParams, DecisionAnswerParams, ThreadReviveParams,
     ThreadStartParams,
@@ -36,7 +37,20 @@ impl Server {
         }
     }
 
-    fn api_request(&mut self, caller: CallerId, Request { id, method }: Request) {
+    fn api_request(
+        &mut self,
+        caller_id: CallerId,
+        Request {
+            id,
+            method,
+            caller: from,
+        }: Request,
+    ) {
+        let caller = self.caller(from);
+        if let Err(refused) = caller.may(&method) {
+            self.api.reply(caller_id, id, Err(refused));
+            return;
+        }
         // What changed before the request reaches the windows and the
         // subscribers first.
         self.broadcast();
@@ -50,7 +64,7 @@ impl Server {
                 });
                 match (self.start_thread(params), ready) {
                     (Ok(thread), Some(wait)) => {
-                        self.api.wait(&self.engine, caller, id, thread, wait);
+                        self.api.wait(&self.engine, caller_id, id, thread, wait);
                         return;
                     }
                     (Ok(thread), None) => thread_result(&self.engine, thread),
@@ -65,7 +79,7 @@ impl Server {
                 let thread = params.thread;
                 match (self.revive_thread(params), ready) {
                     (Ok(()), Some(wait)) => {
-                        self.api.wait(&self.engine, caller, id, thread, wait);
+                        self.api.wait(&self.engine, caller_id, id, thread, wait);
                         return;
                     }
                     (Ok(()), None) => thread_result(&self.engine, thread),
@@ -108,7 +122,8 @@ impl Server {
                         false => Until::AnyOf(params.until),
                     };
                     let wait = Wait::after_prompt_until(until, timeout(params.timeout_ms), now);
-                    self.api.wait(&self.engine, caller, id, params.thread, wait);
+                    self.api
+                        .wait(&self.engine, caller_id, id, params.thread, wait);
                     return;
                 }
                 Ok(()) => thread_result(&self.engine, params.thread),
@@ -122,7 +137,7 @@ impl Server {
                 Some(_) => {
                     let until = until.map_or(Until::Settled, Until::Attention);
                     let wait = Wait::until(until, timeout(timeout_ms), now);
-                    self.api.wait(&self.engine, caller, id, thread, wait);
+                    self.api.wait(&self.engine, caller_id, id, thread, wait);
                     return;
                 }
                 None => Err(unknown_thread()),
@@ -141,7 +156,7 @@ impl Server {
                     .collect();
                 Ok(json!({ "decisions": decisions }))
             }
-            Method::DecisionAnswer(params) => self.answer(caller, params),
+            Method::DecisionAnswer(params) => self.answer(caller_id, params),
             Method::ProjectList(_) => Ok(json!({ "projects": api::project_infos(&self.engine) })),
             Method::ProjectGet(params) => self
                 .project(&params.project)
@@ -171,14 +186,152 @@ impl Server {
             Method::WorktreeRemove(params) => self.remove_worktree(&params.path),
             Method::MachineList(_) => self.machines(),
             Method::EventsSubscribe(params) => {
-                self.api.subscribe(&self.engine, caller, id, params.threads);
+                self.api
+                    .subscribe(&self.engine, caller_id, id, params.threads);
                 return;
             }
-            Method::WindowKey(keys) => return self.drive(caller, id, Action::Key(keys)),
-            Method::WindowType(text) => return self.drive(caller, id, Action::Type(text)),
-            Method::WindowClick(click) => return self.drive(caller, id, Action::Click(click)),
-            Method::WindowFind(find) => return self.drive(caller, id, Action::Find(find)),
-            Method::WindowShot(shot) => return self.drive(caller, id, Action::Shot(shot)),
+            Method::TaskStart(params) => self.api_task_start(params),
+            Method::TaskList(params) => self.api_task_list(params),
+            Method::TaskGet(params) => self.api_task_get(params),
+            Method::TaskStop(params) => self.api_task_command(
+                &params.task.clone(),
+                crate::factory::Command::Stop { task: params.task },
+            ),
+            Method::TaskResume(params) => self.api_task_command(
+                &params.task.clone(),
+                crate::factory::Command::Resume { task: params.task },
+            ),
+            Method::TaskDelete(params) => self.api_task_delete(params),
+            Method::ReportOutcome(params) => caller
+                .worker()
+                .and_then(|worker| self.api_report(worker, params)),
+            Method::WorkflowCreate(params) => self.api_workflow_create(params),
+            Method::WorkflowList(params) => self.api_workflow_list(params),
+            Method::WorkflowGet(params) => self.api_workflow_answer(&params.workflow, None),
+            Method::WorkflowRename(params) => self.api_author(
+                params.workflow.clone(),
+                crate::factory::Command::RenameWorkflow {
+                    workflow: params.workflow,
+                    name: params.name,
+                },
+            ),
+            Method::WorkflowSave(params) => self.api_workflow_save(params.workflow),
+            Method::StepAdd(params) => self.api_author(
+                params.workflow.clone(),
+                crate::factory::Command::AddStep {
+                    workflow: params.workflow,
+                    after: params.after,
+                    agent: self.factory_agent.clone(),
+                },
+            ),
+            Method::StepEdit(params) => self.api_author(
+                params.workflow.clone(),
+                crate::factory::Command::EditStep {
+                    workflow: params.workflow,
+                    step: params.step,
+                    change: params.change,
+                },
+            ),
+            Method::StepMove(params) => self.api_author(
+                params.workflow.clone(),
+                crate::factory::Command::MoveStep {
+                    workflow: params.workflow,
+                    step: params.step,
+                    to: params.to,
+                },
+            ),
+            Method::StepDelete(params) => self.api_author(
+                params.workflow.clone(),
+                crate::factory::Command::DeleteStep {
+                    workflow: params.workflow,
+                    step: params.step,
+                },
+            ),
+            Method::ReportQuestion(params) => caller
+                .worker()
+                .and_then(|worker| self.api_ask(worker, params)),
+            Method::ReportRevision(params) => caller.worker().and_then(|worker| {
+                self.api_worker_said(
+                    worker,
+                    crate::factory::Command::ReportRevision {
+                        worker,
+                        head: params.head,
+                        pr: params.pr,
+                    },
+                )
+            }),
+            Method::TaskClear(params) => self.api_task_clear(params),
+            Method::ReportEvidence(params) => caller.worker().and_then(|worker| {
+                self.api_worker_said(
+                    worker,
+                    crate::factory::Command::ReportEvidence {
+                        worker,
+                        text: params.text,
+                    },
+                )
+            }),
+            Method::TaskAnswer(params) => {
+                let task = params.task.clone();
+                self.api_task_command(
+                    &task,
+                    crate::factory::Command::AnswerQuestion {
+                        task: params.task,
+                        text: params.text,
+                        question: params.question,
+                    },
+                )
+            }
+            Method::TaskApprove(params) => {
+                let task = params.task.clone();
+                self.api_task_command(
+                    &task,
+                    crate::factory::Command::Approve { task: params.task },
+                )
+            }
+            Method::TaskRework(params) => self.api_task_rework(params),
+            Method::TaskRedirect(params) => self.api_task_redirect(params),
+            Method::WorkflowApproval(params) => self.api_author(
+                params.workflow.clone(),
+                crate::factory::Command::EditApproval {
+                    workflow: params.workflow,
+                    change: params.change,
+                },
+            ),
+            Method::WorkflowStart(params) => self.api_automate(
+                params.workflow.clone(),
+                crate::factory::Command::EditStart {
+                    workflow: params.workflow,
+                    start: params.start,
+                },
+            ),
+            Method::WorkflowAutomation(params) => self.api_automate(
+                params.workflow.clone(),
+                crate::factory::Command::Automation {
+                    workflow: params.workflow,
+                    turn: params.turn,
+                },
+            ),
+            Method::WorkflowBacklog(params) => self.api_automate(
+                params.workflow.clone(),
+                crate::factory::Command::Backlog {
+                    workflow: params.workflow,
+                    take: params.take,
+                },
+            ),
+            Method::TaskSubmit(params) => self.api_task_submit(params),
+            Method::ProposalRaise(params) => caller
+                .coordinator()
+                .and_then(|coordinator| self.api_proposal_raise(coordinator, params)),
+            Method::ProposalList(params) => self.api_proposal_list(params),
+            Method::ProposalAccept(params) => self.api_proposal_answer(params.proposal, true),
+            Method::ProposalDismiss(params) => self.api_proposal_answer(params.proposal, false),
+            Method::CoordinatorSay(params) => self.api_coordinator_say(params),
+            Method::CoordinatorSet(params) => self.api_coordinator_set(params),
+            Method::WindowKey(keys) => return self.drive(caller_id, id, Action::Key(keys)),
+            Method::WindowType(text) => return self.drive(caller_id, id, Action::Type(text)),
+            Method::WindowClick(click) => return self.drive(caller_id, id, Action::Click(click)),
+            Method::WindowFind(find) => return self.drive(caller_id, id, Action::Find(find)),
+            Method::WindowShot(shot) => return self.drive(caller_id, id, Action::Shot(shot)),
             Method::NotificationShow(params) => {
                 self.say(ServerMessage::Notification {
                     title: params.title,
@@ -191,7 +344,18 @@ impl Server {
         };
         // What the request changed reaches the windows before its answer.
         self.broadcast();
-        self.api.reply(caller, id, result);
+        self.api.reply(caller_id, id, result);
+    }
+
+    /// Who a request comes from: the Thread it names, as the Factory knows
+    /// that Thread.
+    fn caller(&self, from: Option<ThreadId>) -> Caller {
+        match from {
+            None => Caller::Operator,
+            Some(thread) if self.factory.coordinates(thread) => Caller::Coordinator(thread),
+            Some(thread) if self.factory.task_of(thread).is_some() => Caller::Worker(thread),
+            Some(_) => Caller::Thread,
+        }
     }
 
     pub(super) fn execute(&mut self, op: Op) -> Result<Option<Done>, ApiError> {
@@ -247,6 +411,13 @@ impl Server {
             }
             None => (params.cwd, None),
         };
+        let owner = match params.owner {
+            None => None,
+            Some(api::schema::Owner::Task(task)) => Some(crate::ThreadOwner::Task(task)),
+            Some(api::schema::Owner::Factory(project)) => {
+                Some(crate::ThreadOwner::Factory(self.project(&project)?))
+            }
+        };
         let workspace = workspace_choice(checkout, params.worktree, params.branch, params.base)?;
         let launch = Launch {
             launch_provider: params.provider,
@@ -255,6 +426,7 @@ impl Server {
             launcher: params.launcher,
             resume: params.resume,
             project,
+            owner,
         };
         let thread = self
             .engine
@@ -301,6 +473,7 @@ impl Server {
             launcher: params.launcher,
             resume: params.resume,
             project: None,
+            owner: None,
         };
         self.engine
             .revive_with(thread, launch)
@@ -372,6 +545,62 @@ impl Server {
         })?;
         self.answered.insert((thread, handle), caller);
         thread_result(&self.engine, thread)
+    }
+}
+
+/// Who a request comes from. A call that names no Thread is the
+/// operator's CLI.
+#[derive(Debug, Clone, Copy)]
+enum Caller {
+    Operator,
+    /// An ordinary Thread: the operator's agent.
+    Thread,
+    /// A Thread that is, or was, a Task's Worker.
+    Worker(ThreadId),
+    Coordinator(ThreadId),
+}
+
+impl Caller {
+    /// Refused unless `method`'s callers ([`Callers`]) take this one.
+    fn may(self, method: &Method) -> Result<(), ApiError> {
+        match method.callers() {
+            Callers::Anyone => Ok(()),
+            Callers::Operator => match self {
+                Caller::Coordinator(_) => Err(ApiError::new(
+                    Code::ProposeInstead,
+                    format!(
+                        "the Coordinator does not {}: raise it as a proposal for the user to \
+                         accept, with `\"${{FERRITE_BIN:-ferrite}}\" proposal raise`",
+                        method.name()
+                    ),
+                )),
+                _ => Ok(()),
+            },
+            Callers::Worker => self.worker().map(drop),
+            Callers::Coordinator => self.coordinator().map(drop),
+        }
+    }
+
+    /// The Worker that reports: the Thread the call runs in, never one it
+    /// names.
+    fn worker(self) -> Result<ThreadId, ApiError> {
+        match self {
+            Caller::Worker(thread) => Ok(thread),
+            _ => Err(ApiError::new(
+                Code::NotAWorker,
+                "a report is a Task's Worker's own: this call runs in no Worker's Thread",
+            )),
+        }
+    }
+
+    fn coordinator(self) -> Result<ThreadId, ApiError> {
+        match self {
+            Caller::Coordinator(thread) => Ok(thread),
+            _ => Err(ApiError::new(
+                Code::NotACoordinator,
+                "a proposal is a Coordinator's own: this call runs in no Coordinator's Thread",
+            )),
+        }
     }
 }
 

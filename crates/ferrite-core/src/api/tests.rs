@@ -193,6 +193,41 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "notification.show",
             "project.focus",
             "thread.revive",
+            "task.start",
+            "task.list",
+            "task.get",
+            "task.stop",
+            "task.resume",
+            "task.delete",
+            "report.outcome",
+            "workflow.create",
+            "workflow.list",
+            "workflow.get",
+            "workflow.rename",
+            "workflow.save",
+            "step.add",
+            "step.edit",
+            "step.move",
+            "step.delete",
+            "report.question",
+            "task.answer",
+            "task.approve",
+            "task.rework",
+            "task.redirect",
+            "workflow.approval",
+            "workflow.start",
+            "workflow.automation",
+            "workflow.backlog",
+            "task.submit",
+            "report.revision",
+            "report.evidence",
+            "proposal.raise",
+            "proposal.list",
+            "proposal.accept",
+            "proposal.dismiss",
+            "coordinator.say",
+            "coordinator.set",
+            "task.clear",
             "window.key",
             "window.type",
             "window.click",
@@ -286,6 +321,7 @@ fn request(method: Method) -> Request {
     Request {
         id: "1".into(),
         method,
+        caller: None,
     }
 }
 
@@ -380,6 +416,171 @@ fn samples() -> Vec<Request> {
             ready: true,
             timeout_ms: Some(60_000),
         })),
+        request(Method::TaskStart(TaskStartParams {
+            instructions: "Fix the flaky login test".into(),
+            project: Some("3".into()),
+            cwd: Some(PathBuf::from("/work/app")),
+            workflow: None,
+            pr: None,
+        })),
+        request(Method::TaskList(TaskListParams {
+            project: Some("3".into()),
+        })),
+        request(Method::TaskGet(TaskParams { task: "t-1".into() })),
+        request(Method::TaskStop(TaskParams { task: "t-1".into() })),
+        request(Method::TaskResume(TaskParams { task: "t-1".into() })),
+        request(Method::TaskDelete(TaskParams { task: "t-1".into() })),
+        request(Method::ReportOutcome(ReportOutcomeParams {
+            outcome: ReportedOutcome::Finished,
+            summary: "Fixed the race in the login fixture".into(),
+        })),
+        request(Method::WorkflowCreate(WorkflowCreateParams {
+            template: Some(crate::factory::Template::IssueToReviewedPr),
+            name: Some("Docs fixes".into()),
+            project: Some("3".into()),
+            cwd: Some(PathBuf::from("/work/app")),
+        })),
+        request(Method::WorkflowList(TaskListParams {
+            project: Some("3".into()),
+        })),
+        request(Method::WorkflowGet(WorkflowParams {
+            workflow: "w-1".into(),
+        })),
+        request(Method::WorkflowRename(WorkflowRenameParams {
+            workflow: "w-1".into(),
+            name: "Docs fixes".into(),
+        })),
+        request(Method::WorkflowSave(WorkflowParams {
+            workflow: "w-1".into(),
+        })),
+        request(Method::StepAdd(StepAddParams {
+            workflow: "w-1".into(),
+            after: Some("s-1".into()),
+        })),
+        request(Method::StepEdit(StepEditParams {
+            workflow: "w-1".into(),
+            step: "s-2".into(),
+            change: crate::factory::StepChange {
+                name: Some("Reviewer".into()),
+                instructions: Some("Review the PR".into()),
+                skills: Some(vec!["code-review".into()]),
+                provider: Some(Provider::Claude),
+                model: Some("claude-opus-4".into()),
+                effort: Some("high".into()),
+                on_finished: Some(crate::factory::Destination::Complete),
+                on_unable: Some(crate::factory::Destination::Step("s-1".into())),
+                fresh: Some(true),
+                ..Default::default()
+            },
+        })),
+        request(Method::StepMove(StepMoveParams {
+            workflow: "w-1".into(),
+            step: "s-2".into(),
+            to: 0,
+        })),
+        request(Method::StepDelete(StepParams {
+            workflow: "w-1".into(),
+            step: "s-2".into(),
+        })),
+        request(Method::ReportQuestion(ReportQuestionParams {
+            text: "Which flag name should it use?".into(),
+        })),
+        request(Method::TaskAnswer(TaskAnswerParams {
+            task: "t-1".into(),
+            text: "Call it --fast".into(),
+            question: Some(1),
+        })),
+        request(Method::TaskApprove(TaskParams { task: "t-1".into() })),
+        request(Method::TaskRework(TaskReworkParams {
+            task: "t-1".into(),
+            feedback: "Add a test for the flag".into(),
+            to: Some("step:s-3".into()),
+        })),
+        request(Method::TaskRedirect(TaskRedirectParams {
+            task: "t-1".into(),
+            to: "s-3".into(),
+            skip: vec!["s-2".into()],
+            then: Some(crate::factory::ThenReturn::Me),
+            note: Some("Only the docs changed".into()),
+        })),
+        request(Method::WorkflowApproval(WorkflowApprovalParams {
+            workflow: "w-1".into(),
+            change: crate::factory::ApprovalChange {
+                by: Some(crate::factory::Approver::Agent),
+                step: Some("s-4".into()),
+                instructions: Some("Approve when the checks pass".into()),
+                after: Some(crate::factory::Destination::Complete),
+                rework_to: Some(crate::factory::Destination::Step("s-3".into())),
+            },
+        })),
+        request(Method::WorkflowStart(WorkflowStartParams {
+            workflow: "w-1".into(),
+            start: crate::factory::Start {
+                kind: crate::factory::StartKind::GithubIssue,
+                schedule: Default::default(),
+                github: crate::factory::GitHubSource {
+                    repository: Some("acme/app".into()),
+                    trigger: crate::factory::Trigger::Labelled,
+                    label: Some("ready-for-agent".into()),
+                    extra_instructions: "Open a PR that closes the issue".into(),
+                },
+            },
+        })),
+        request(Method::WorkflowAutomation(WorkflowAutomationParams {
+            workflow: "w-1".into(),
+            turn: crate::factory::Turn::On,
+        })),
+        request(Method::WorkflowBacklog(WorkflowBacklogParams {
+            workflow: "w-1".into(),
+            take: false,
+        })),
+        request(Method::TaskSubmit(TaskSubmitParams {
+            workflow: "w-1".into(),
+            identity: "JIRA-12".into(),
+            instructions: "Fix the CSV export".into(),
+        })),
+        request(Method::ReportRevision(ReportRevisionParams {
+            head: "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            pr: Some("acme/widgets#12".into()),
+        })),
+        request(Method::ReportEvidence(ReportEvidenceParams {
+            text: "cargo test: 12 passed".into(),
+        })),
+        request(Method::ProposalRaise(ProposalRaiseParams {
+            act: ProposedAct::Redirect,
+            instructions: None,
+            workflow: None,
+            task: Some("t-1".into()),
+            to: Some("s-3".into()),
+            skip: vec!["s-2".into()],
+            then: Some(crate::factory::ThenReturn::Me),
+            note: Some("Only the docs changed".into()),
+        })),
+        request(Method::ProposalList(TaskListParams {
+            project: Some("3".into()),
+        })),
+        request(Method::ProposalAccept(ProposalParams {
+            proposal: "p-1".into(),
+        })),
+        request(Method::ProposalDismiss(ProposalParams {
+            proposal: "p-2".into(),
+        })),
+        request(Method::CoordinatorSay(CoordinatorSayParams {
+            text: "What is left?".into(),
+            project: Some("3".into()),
+            cwd: None,
+        })),
+        request(Method::CoordinatorSet(CoordinatorSetParams {
+            provider: Provider::Codex,
+            model: Some("gpt-5-codex".into()),
+            effort: Some("high".into()),
+            project: Some("3".into()),
+            cwd: None,
+        })),
+        request(Method::TaskClear(TaskClearParams {
+            project: Some("3".into()),
+            cwd: None,
+        })),
         request(Method::WindowKey(drive::Keys {
             keys: vec!["cmd-,".into()],
         })),
@@ -417,12 +618,53 @@ fn thread_start() -> ThreadStartParams {
         resume: None,
         env: Default::default(),
         launcher: Vec::new(),
+        owner: None,
     }
 }
 
 /// Requests a later parameter changed, frozen beside the operations' own.
 fn later_samples() -> Vec<(&'static str, Request)> {
     vec![
+        (
+            "task_start_pr",
+            request(Method::TaskStart(TaskStartParams {
+                instructions: "Ship the flag".into(),
+                project: Some("3".into()),
+                cwd: None,
+                workflow: Some("w-1".into()),
+                pr: Some("https://github.com/acme/widgets/pull/12".into()),
+            })),
+        ),
+        (
+            "report_outcome_merge",
+            request(Method::ReportOutcome(ReportOutcomeParams {
+                outcome: ReportedOutcome::HeadChanged,
+                summary: "The head is 2222222, not the approved 1111111".into(),
+            })),
+        ),
+        (
+            "step_edit_merge_routes",
+            request(Method::StepEdit(StepEditParams {
+                workflow: "w-1".into(),
+                step: "s-5".into(),
+                change: crate::factory::StepChange {
+                    by_merge_result: Some(true),
+                    on_conflict: Some(crate::factory::Destination::Step("s-6".into())),
+                    on_pending: Some(crate::factory::Destination::Wait),
+                    ..Default::default()
+                },
+            })),
+        ),
+        (
+            "task_start_workflow",
+            request(Method::TaskStart(TaskStartParams {
+                instructions: "Fix the flaky login test".into(),
+                project: Some("3".into()),
+                cwd: None,
+                workflow: Some("w-1".into()),
+                pr: None,
+            })),
+        ),
         (
             "thread_start_options",
             request(Method::ThreadStart(ThreadStartParams {
@@ -492,7 +734,30 @@ fn later_samples() -> Vec<(&'static str, Request)> {
                 ..thread_start()
             })),
         ),
+        (
+            "thread_start_owner",
+            request(Method::ThreadStart(ThreadStartParams {
+                worktree: false,
+                owner: Some(Owner::Task("t-1".into())),
+                ..thread_start()
+            })),
+        ),
     ]
+}
+
+/// `thread start --owner`: a Worker's Task or a Coordinator's Factory,
+/// written as JSON (#219).
+#[test]
+fn an_owner_is_given_as_json() {
+    for (written, owner) in [
+        (r#"{"task":"t-1"}"#, Owner::Task("t-1".into())),
+        (r#"{"factory":"3"}"#, Owner::Factory("3".into())),
+    ] {
+        match parse("thread.start", &["--owner", written]) {
+            Ok(Method::ThreadStart(params)) => assert_eq!(params.owner, Some(owner)),
+            other => panic!("{other:?}"),
+        }
+    }
 }
 
 /// A later parameter freezes as its own fixture: what a script sends with
@@ -600,6 +865,7 @@ fn answers_refusals_and_events_keep_their_shape() {
         draft: true,
         worktree: Some(PathBuf::from("/work/.worktrees/app/invoices")),
         branch: Some("hp/billing/invoices".into()),
+        owner: None,
     };
     let answer = Response::Result {
         id: "1".into(),
@@ -824,6 +1090,241 @@ fn current_names_the_calling_thread_and_frees_its_position() {
     assert!(refused.contains("takes no Thread"), "{refused}");
 }
 
+/// A Worker's report carries the Thread it runs in as the request's
+/// caller, so its Task is known without being named, and no report can
+/// name another Worker: the CLI takes no `--worker`.
+#[test]
+fn a_report_names_the_worker_it_runs_in() {
+    let request = cli::parse(
+        op("report.outcome"),
+        &["unable", "Tried X; blocked on Y"],
+        &context(),
+    )
+    .unwrap();
+    assert_eq!(request.caller, Some(ThreadId::new(7)));
+    assert_eq!(
+        request.method,
+        Method::ReportOutcome(ReportOutcomeParams {
+            outcome: ReportedOutcome::Unable,
+            summary: "Tried X; blocked on Y".into(),
+        })
+    );
+    let named = parse("report.outcome", &["finished", "done", "--worker", "8"]);
+    assert!(named.is_err(), "{named:?}");
+    assert_eq!(
+        parse("task.start", &["Fix it"]),
+        Ok(Method::TaskStart(TaskStartParams {
+            instructions: "Fix it".into(),
+            project: None,
+            cwd: Some(PathBuf::from("/work/app")),
+            workflow: None,
+            pr: None,
+        }))
+    );
+}
+
+/// Every authoring act is a CLI command: a Step's routes and skills
+/// as flags, its place as a number.
+/// The automatic starts' operations as the bundled skill writes them.
+#[test]
+fn automatic_starts_parse_from_the_cli() {
+    assert_eq!(
+        parse(
+            "workflow.start",
+            &["w-1", r#"{"type":"schedule","schedule":{"time":"09:00"}}"#]
+        ),
+        Ok(Method::WorkflowStart(WorkflowStartParams {
+            workflow: "w-1".into(),
+            start: crate::factory::Start {
+                kind: crate::factory::StartKind::Schedule,
+                schedule: crate::factory::Schedule {
+                    time: Some("09:00".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        }))
+    );
+    assert_eq!(
+        parse("workflow.automation", &["w-1", "pause"]),
+        Ok(Method::WorkflowAutomation(WorkflowAutomationParams {
+            workflow: "w-1".into(),
+            turn: crate::factory::Turn::Pause,
+        }))
+    );
+    assert_eq!(
+        parse("workflow.backlog", &["w-1", "false"]),
+        Ok(Method::WorkflowBacklog(WorkflowBacklogParams {
+            workflow: "w-1".into(),
+            take: false,
+        }))
+    );
+    assert_eq!(
+        parse("task.submit", &["w-1", "JIRA-12", "Fix the CSV export"]),
+        Ok(Method::TaskSubmit(TaskSubmitParams {
+            workflow: "w-1".into(),
+            identity: "JIRA-12".into(),
+            instructions: "Fix the CSV export".into(),
+        }))
+    );
+}
+
+/// The Coordinator's proposals name its own Thread from where it runs;
+/// accepting and dismissing name the proposal.
+#[test]
+fn proposals_parse_from_the_cli() {
+    assert_eq!(
+        parse(
+            "proposal.raise",
+            &[
+                "start",
+                "--instructions",
+                "Fix the toolbar",
+                "--workflow",
+                "w-1"
+            ]
+        ),
+        Ok(Method::ProposalRaise(ProposalRaiseParams {
+            act: ProposedAct::Start,
+            instructions: Some("Fix the toolbar".into()),
+            workflow: Some("w-1".into()),
+            task: None,
+            to: None,
+            skip: Vec::new(),
+            then: None,
+            note: None,
+        }))
+    );
+    assert_eq!(
+        parse("proposal.accept", &["p-1"]),
+        Ok(Method::ProposalAccept(ProposalParams {
+            proposal: "p-1".into()
+        }))
+    );
+    assert_eq!(
+        parse("coordinator.set", &["codex", "--model", "gpt-5-codex"]),
+        Ok(Method::CoordinatorSet(CoordinatorSetParams {
+            provider: Provider::Codex,
+            model: Some("gpt-5-codex".into()),
+            effort: None,
+            project: None,
+            cwd: Some(PathBuf::from("/work/app")),
+        }))
+    );
+}
+
+#[test]
+fn workflow_authoring_parses_from_the_cli() {
+    assert_eq!(
+        parse(
+            "step.edit",
+            &[
+                "w-1",
+                "s-2",
+                "--name",
+                "Reviewer",
+                "--skills",
+                "code-review",
+                "--on-unable",
+                "step:s-1",
+                "--fresh",
+            ]
+        ),
+        Ok(Method::StepEdit(StepEditParams {
+            workflow: "w-1".into(),
+            step: "s-2".into(),
+            change: crate::factory::StepChange {
+                name: Some("Reviewer".into()),
+                skills: Some(vec!["code-review".into()]),
+                on_unable: Some(crate::factory::Destination::Step("s-1".into())),
+                fresh: Some(true),
+                ..Default::default()
+            },
+        }))
+    );
+    assert_eq!(
+        parse("step.move", &["w-1", "s-2", "0"]),
+        Ok(Method::StepMove(StepMoveParams {
+            workflow: "w-1".into(),
+            step: "s-2".into(),
+            to: 0,
+        }))
+    );
+    assert_eq!(
+        parse("workflow.create", &["--template", "issue_to_reviewed_pr"]),
+        Ok(Method::WorkflowCreate(WorkflowCreateParams {
+            template: Some(crate::factory::Template::IssueToReviewedPr),
+            name: None,
+            project: None,
+            cwd: Some(PathBuf::from("/work/app")),
+        }))
+    );
+}
+
+/// A Worker asks from where it runs; the operator's answer, rework,
+/// redirect and a Workflow's approval settings are CLI commands too.
+#[test]
+fn questions_approval_and_direction_parse_from_the_cli() {
+    assert_eq!(
+        parse("report.question", &["Which flag name?"]),
+        Ok(Method::ReportQuestion(ReportQuestionParams {
+            text: "Which flag name?".into(),
+        }))
+    );
+    assert_eq!(
+        parse("report.outcome", &["rejected", "No changelog entry"]),
+        Ok(Method::ReportOutcome(ReportOutcomeParams {
+            outcome: ReportedOutcome::Rejected,
+            summary: "No changelog entry".into(),
+        }))
+    );
+    assert_eq!(
+        parse(
+            "task.redirect",
+            &[
+                "t-1",
+                "s-3",
+                "--skip",
+                "s-2",
+                "--then",
+                "me",
+                "--note",
+                "Docs only"
+            ]
+        ),
+        Ok(Method::TaskRedirect(TaskRedirectParams {
+            task: "t-1".into(),
+            to: "s-3".into(),
+            skip: vec!["s-2".into()],
+            then: Some(crate::factory::ThenReturn::Me),
+            note: Some("Docs only".into()),
+        }))
+    );
+    assert_eq!(
+        parse(
+            "workflow.approval",
+            &[
+                "w-1",
+                "--by",
+                "agent",
+                "--step",
+                "s-4",
+                "--rework-to",
+                "step:s-3"
+            ]
+        ),
+        Ok(Method::WorkflowApproval(WorkflowApprovalParams {
+            workflow: "w-1".into(),
+            change: crate::factory::ApprovalChange {
+                by: Some(crate::factory::Approver::Agent),
+                step: Some("s-4".into()),
+                rework_to: Some(crate::factory::Destination::Step("s-3".into())),
+                ..Default::default()
+            },
+        }))
+    );
+}
+
 /// `--machine` is the CLI's own, anywhere before `--`; it never names a
 /// Thread with `--current`, whose id is this computer's Store's.
 #[test]
@@ -939,7 +1440,10 @@ fn window_actions_read_as_the_window_takes_them() {
         }))
     );
     assert_eq!(
-        parse("window.click", &["--selector", "settings-close", "--double"]),
+        parse(
+            "window.click",
+            &["--selector", "settings-close", "--double"]
+        ),
         Ok(Method::WindowClick(drive::Click {
             at: drive::Target::Selector("settings-close".into()),
             press: drive::Press::Double,
@@ -1287,5 +1791,77 @@ fn a_ready_wait_answers_once_the_agent_is_up_and_at_rest() {
     assert_eq!(
         wait.observe(starting(), at(start, 20_000)),
         Some(Settled::NotReady)
+    );
+}
+
+/// A Task's PR at start, a Worker's revisions, evidence and merge
+/// results, and a Step's routes by merge result are CLI commands (#223).
+#[test]
+fn pull_requests_and_merging_parse_from_the_cli() {
+    assert_eq!(
+        parse(
+            "task.start",
+            &["Ship it", "--workflow", "w-1", "--pr", "acme/widgets#12"]
+        ),
+        Ok(Method::TaskStart(TaskStartParams {
+            instructions: "Ship it".into(),
+            project: None,
+            cwd: Some(PathBuf::from("/work/app")),
+            workflow: Some("w-1".into()),
+            pr: Some("acme/widgets#12".into()),
+        }))
+    );
+    assert_eq!(
+        parse("report.revision", &["abc1234", "--pr", "acme/widgets#12"]),
+        Ok(Method::ReportRevision(ReportRevisionParams {
+            head: "abc1234".into(),
+            pr: Some("acme/widgets#12".into()),
+        }))
+    );
+    assert_eq!(
+        parse("report.evidence", &["cargo test: 12 passed"]),
+        Ok(Method::ReportEvidence(ReportEvidenceParams {
+            text: "cargo test: 12 passed".into(),
+        }))
+    );
+    for (word, outcome) in [
+        ("merged", ReportedOutcome::Merged),
+        ("conflict", ReportedOutcome::Conflict),
+        ("pending", ReportedOutcome::Pending),
+        ("denied", ReportedOutcome::Denied),
+        ("head_changed", ReportedOutcome::HeadChanged),
+        ("unknown", ReportedOutcome::Unknown),
+    ] {
+        assert_eq!(
+            parse("report.outcome", &[word, "what gh said"]),
+            Ok(Method::ReportOutcome(ReportOutcomeParams {
+                outcome,
+                summary: "what gh said".into(),
+            }))
+        );
+    }
+    assert_eq!(
+        parse(
+            "step.edit",
+            &[
+                "w-1",
+                "s-5",
+                "--by-merge-result",
+                "--on-conflict",
+                "step:s-6",
+                "--on-pending",
+                "wait",
+            ]
+        ),
+        Ok(Method::StepEdit(StepEditParams {
+            workflow: "w-1".into(),
+            step: "s-5".into(),
+            change: crate::factory::StepChange {
+                by_merge_result: Some(true),
+                on_conflict: Some(crate::factory::Destination::Step("s-6".into())),
+                on_pending: Some(crate::factory::Destination::Wait),
+                ..Default::default()
+            },
+        }))
     );
 }

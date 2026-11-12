@@ -289,6 +289,10 @@ impl Engine {
             | Op::PullRequest { .. }
             | Op::Restart { .. }
             | Op::Stop { .. }
+            | Op::Task { .. }
+            | Op::Workflow { .. }
+            | Op::GitHub { .. }
+            | Op::Coordinator { .. }
             | Op::Unknown => Err(unknown()),
         }
     }

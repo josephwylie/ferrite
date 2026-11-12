@@ -1,0 +1,1 @@
+{"id":"1","method":"proposal.raise","params":{"act":"redirect","task":"t-1","to":"s-3","skip":["s-2"],"then":"me","note":"Only the docs changed"}}

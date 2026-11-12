@@ -35,6 +35,7 @@ use crate::{Attention, ThreadId};
 
 pub mod cli;
 pub mod schema;
+pub mod tools;
 
 pub use schema::Method;
 
@@ -76,6 +77,11 @@ pub struct Request {
     pub id: String,
     #[serde(flatten)]
     pub method: Method,
+    /// The Thread the call runs in (`FERRITE_THREAD_ID`), when it runs in
+    /// one: what it may call is its operation's [`schema::Callers`], and a
+    /// report or proposal is that Thread's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<ThreadId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -145,9 +151,44 @@ pub enum Code {
     NoHeadlessWindow,
     AlreadyAnswered,
     InvalidAnswer,
+    /// No Task has that id.
+    UnknownTask,
+    /// No Workflow has that id.
+    UnknownWorkflow,
+    /// The Workflow has no Step with that id.
+    UnknownStep,
+    /// A report from a Thread that is no Task's Worker.
+    NotAWorker,
+    /// The Task's state does not allow it.
+    NotNow,
+    /// No proposal has that id (#224).
+    UnknownProposal,
+    /// A proposal from a Thread that is no Project's Coordinator.
+    NotACoordinator,
     Failed,
     /// The CLI's own: no Server answers at the socket.
     ServerUnavailable,
+    /// A Coordinator's Thread asked for what only the operator does: it
+    /// raises a proposal instead (#224).
+    ProposeInstead,
+}
+
+impl From<crate::factory::Refusal> for ApiError {
+    fn from(refusal: crate::factory::Refusal) -> Self {
+        use crate::factory::RefusalCode;
+        let code = match refusal.code {
+            RefusalCode::UnknownTask => Code::UnknownTask,
+            RefusalCode::UnknownWorkflow => Code::UnknownWorkflow,
+            RefusalCode::UnknownStep => Code::UnknownStep,
+            RefusalCode::NotAWorker => Code::NotAWorker,
+            RefusalCode::NotNow => Code::NotNow,
+            RefusalCode::UnknownProposal => Code::UnknownProposal,
+            RefusalCode::NotACoordinator => Code::NotACoordinator,
+            RefusalCode::Invalid => Code::InvalidRequest,
+            RefusalCode::Failed => Code::Failed,
+        };
+        Self::new(code, refusal.message)
+    }
 }
 
 impl From<WireError> for ApiError {
@@ -205,6 +246,9 @@ pub struct ThreadInfo {
     /// The worktree it works in, when it works in one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<PathBuf>,
+    /// Whose it is when not the operator's (ADR 0037).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<schema::Owner>,
     /// The branch of that worktree, when Ferrite made it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
@@ -237,7 +281,16 @@ pub fn thread_info(engine: &Engine, thread: ThreadId) -> Option<ThreadInfo> {
         branch: worktree
             .and_then(|path| engine.registry().branch_for(path))
             .map(Into::into),
+        owner: view.owner().map(owner),
     })
+}
+
+/// A Thread's owner as the API spells it.
+pub fn owner(owner: &crate::ThreadOwner) -> schema::Owner {
+    match owner {
+        crate::ThreadOwner::Task(task) => schema::Owner::Task(task.clone()),
+        crate::ThreadOwner::Factory(project) => schema::Owner::Factory(project_id(*project)),
+    }
 }
 
 /// A Project's id as the API spells it: a string, as Herdr's workspace
