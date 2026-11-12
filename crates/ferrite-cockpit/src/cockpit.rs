@@ -10713,7 +10713,7 @@ impl CockpitView {
             .child(self.plane_seams(panel_w))
             .children(self.title_tools_element(cx))
             .children(self.plan_card_element(window, cx))
-            .children(self.context_menu_element(cx))
+            .children(self.context_menu_element(window, cx))
             .children(self.session_controls_element(window, cx))
             .children(self.context_checks_element(window, cx))
             .children(self.band_menu_element(window, cx))
