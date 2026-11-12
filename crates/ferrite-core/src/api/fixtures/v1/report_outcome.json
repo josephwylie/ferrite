@@ -1,1 +1,1 @@
-{"id":"1","method":"report.outcome","params":{"outcome":"finished","summary":"Fixed the race in the login fixture","worker":12}}
+{"id":"1","method":"report.outcome","params":{"outcome":"finished","summary":"Fixed the race in the login fixture"}}

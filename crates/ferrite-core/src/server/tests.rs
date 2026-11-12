@@ -21,9 +21,9 @@ use crate::{Decision, DecisionAnswer, SessionEvent};
 mod browser_annotations;
 #[cfg(unix)]
 mod browser_providers;
+mod drive;
 mod factory;
 mod owned;
-mod drive;
 mod park;
 mod publish;
 mod starts;
@@ -4000,6 +4000,22 @@ fn cli(
 ) -> (i32, Vec<serde_json::Value>, Vec<serde_json::Value>) {
     let ((mut out, said), (mut err, refused)) = (printed(), printed());
     let status = crate::api::cli::call(&request(method, params), socket, &mut out, &mut err);
+    drop((out, err));
+    let lines = |told: Receiver<String>| told.iter().map(|text| line(&text)).collect();
+    (status, lines(said), lines(refused))
+}
+
+/// One CLI call from inside `thread` (`FERRITE_THREAD_ID`), as [`cli`].
+fn cli_in(
+    socket: &Path,
+    thread: ThreadId,
+    method: &str,
+    params: serde_json::Value,
+) -> (i32, Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    let mut request = request(method, params);
+    request.caller = Some(thread);
+    let ((mut out, said), (mut err, refused)) = (printed(), printed());
+    let status = crate::api::cli::call(&request, socket, &mut out, &mut err);
     drop((out, err));
     let lines = |told: Receiver<String>| told.iter().map(|text| line(&text)).collect();
     (status, lines(said), lines(refused))

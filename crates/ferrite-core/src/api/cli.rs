@@ -294,21 +294,6 @@ pub fn parse(op: &Operation, args: &[&str], context: &Context) -> Result<Request
         };
         params.insert(name.into(), value);
     }
-    // A Worker's report names its own Thread, from where it runs.
-    if properties.contains_key("worker") && !params.contains_key("worker") {
-        let thread = context.thread.as_deref().ok_or(
-            "a report is a Worker's: run it from inside a Factory Worker (FERRITE_THREAD_ID)",
-        )?;
-        params.insert("worker".into(), Kind::Integer.parse(thread)?);
-    }
-    // A proposal names its Coordinator's own Thread, from where it runs.
-    if properties.contains_key("coordinator") && !params.contains_key("coordinator") {
-        let thread = context.thread.as_deref().ok_or(
-            "a proposal is a Coordinator's: run it from inside a Factory Coordinator \
-             (FERRITE_THREAD_ID)",
-        )?;
-        params.insert("coordinator".into(), Kind::Integer.parse(thread)?);
-    }
     if properties.contains_key("cwd") {
         let given = params.get("cwd").and_then(Value::as_str).map(PathBuf::from);
         let cwd = match (&context.cwd, given) {

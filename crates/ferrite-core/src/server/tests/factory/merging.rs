@@ -33,10 +33,11 @@ fn next_worker(caller: &mut Caller, task: &str, was: ThreadId) -> ThreadId {
 }
 
 fn report(harness: &Harness, worker: ThreadId, outcome: &str, summary: &str) -> serde_json::Value {
-    ok(
+    ok_in(
         harness,
+        worker,
         "report.outcome",
-        serde_json::json!({ "outcome": outcome, "summary": summary, "worker": worker }),
+        serde_json::json!({ "outcome": outcome, "summary": summary }),
     )
 }
 
@@ -149,16 +150,18 @@ fn a_merge_step_reports_each_result_and_a_merged_task_tidies_its_worktree() {
         .unwrap();
     let builder = worker_of(&mut caller, &task);
     told(&mut caller, builder, "acme/widgets#12");
-    let reported = ok(
+    let reported = ok_in(
         &harness,
+        builder,
         "report.revision",
-        serde_json::json!({ "head": HEAD_1, "worker": builder }),
+        serde_json::json!({ "head": HEAD_1 }),
     );
     assert_eq!(reported["changed"], true, "{reported}");
-    ok(
+    ok_in(
         &harness,
+        builder,
         "report.evidence",
-        serde_json::json!({ "text": "cargo test: 12 passed", "worker": builder }),
+        serde_json::json!({ "text": "cargo test: 12 passed" }),
     );
     report(&harness, builder, "finished", "Opened the PR");
 
@@ -188,10 +191,11 @@ fn a_merge_step_reports_each_result_and_a_merged_task_tidies_its_worktree() {
         .unwrap();
     let resolver = next_worker(&mut caller, &task, merger);
     told(&mut caller, resolver, "Resolve the conflicts");
-    ok(
+    ok_in(
         &harness,
+        resolver,
         "report.revision",
-        serde_json::json!({ "head": HEAD_2, "worker": resolver }),
+        serde_json::json!({ "head": HEAD_2 }),
     );
     report(&harness, resolver, "finished", "Resolved and pushed");
     let back = task_until(&mut caller, &task, |task| {

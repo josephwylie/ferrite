@@ -25,12 +25,15 @@
 //! - `unknown_task`: no Task has that id.
 //! - `unknown_workflow`, `unknown_step`: no Workflow, or no Step in it,
 //!   has that id.
-//! - `not_a_worker`: `report` from a Thread that is no Task's Worker.
+//! - `not_a_worker`: `report` from a Thread that is no Task's Worker, or
+//!   from no Thread. A report is always about the Thread it runs in.
 //! - `not_now`: the Task's state does not allow it (delete a working
 //!   Task: stop it first).
 //! - `unknown_proposal`: no proposal has that id.
 //! - `not_a_coordinator`: `proposal raise` from a Thread that is no
 //!   Project's Coordinator.
+//! - `propose_instead`: a Coordinator's Thread asked for what only the
+//!   operator does; it raises a proposal instead.
 //! - `failed`: anything else, in its own words.
 //! - `server_unavailable`: the CLI's own, no Server answered.
 //!
@@ -71,7 +74,7 @@ impl Operation {
 }
 
 macro_rules! operations {
-    ($( $variant:ident($params:ty) => $name:literal, [$($positional:literal),*], $summary:literal; )*) => {
+    ($( $variant:ident($params:ty) => $name:literal, [$($positional:literal),*], $callers:ident, $summary:literal; )*) => {
         /// What a request asks for, and with what.
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
         #[serde(tag = "method", content = "params")]
@@ -94,167 +97,162 @@ macro_rules! operations {
                     $(Self::$variant(_) => $name,)*
                 }
             }
+
+            /// Who may call it.
+            pub fn callers(&self) -> Callers {
+                match self {
+                    $(Self::$variant(_) => Callers::$callers,)*
+                }
+            }
         }
     };
 }
 
 operations! {
-    ThreadStart(ThreadStartParams) => "thread.start", [],
+    ThreadStart(ThreadStartParams) => "thread.start", [], Operator,
         "Start a Thread: a new agent Session working in a directory.";
-    ThreadList(Empty) => "thread.list", [],
+    ThreadList(Empty) => "thread.list", [], Anyone,
         "List the open Threads and their Attention.";
-    ThreadGet(ThreadParams) => "thread.get", ["thread"],
+    ThreadGet(ThreadParams) => "thread.get", ["thread"], Anyone,
         "One open Thread and its Attention.";
-    ThreadFocus(ThreadParams) => "thread.focus", ["thread"],
+    ThreadFocus(ThreadParams) => "thread.focus", ["thread"], Operator,
         "Land every Ferrite window on a Thread.";
-    ThreadRename(ThreadRenameParams) => "thread.rename", ["thread", "title"],
+    ThreadRename(ThreadRenameParams) => "thread.rename", ["thread", "title"], Operator,
         "Give a Thread a title.";
-    ThreadClose(ThreadParams) => "thread.close", ["thread"],
+    ThreadClose(ThreadParams) => "thread.close", ["thread"], Operator,
         "Park a Thread: its Session ends, its history stays.";
-    AgentPrompt(AgentPromptParams) => "agent.prompt", ["thread", "text"],
+    AgentPrompt(AgentPromptParams) => "agent.prompt", ["thread", "text"], Operator,
         "Send a Thread's agent a prompt; with wait, until it settles.";
-    AgentWait(AgentWaitParams) => "agent.wait", ["thread"],
+    AgentWait(AgentWaitParams) => "agent.wait", ["thread"], Anyone,
         "Wait until a Thread's agent settles, or reaches one Attention.";
-    AgentRead(AgentReadParams) => "agent.read", ["thread"],
+    AgentRead(AgentReadParams) => "agent.read", ["thread"], Anyone,
         "The tail of a Thread's transcript, as plain text.";
-    AgentInterrupt(ThreadParams) => "agent.interrupt", ["thread"],
+    AgentInterrupt(ThreadParams) => "agent.interrupt", ["thread"], Operator,
         "Stop a Thread's running turn, as the operator's Esc does.";
-    DecisionList(DecisionListParams) => "decision.list", [],
+    DecisionList(DecisionListParams) => "decision.list", [], Anyone,
         "The pending Decisions, of every Thread or of one.";
-    DecisionAnswer(DecisionAnswerParams) => "decision.answer", ["thread", "decision"],
+    DecisionAnswer(DecisionAnswerParams) => "decision.answer", ["thread", "decision"], Operator,
         "Answer a pending Decision. Only on the operator's word.";
-    ProjectList(Empty) => "project.list", [],
+    ProjectList(Empty) => "project.list", [], Anyone,
         "List the Projects, how many open Threads each has, and the focused one.";
-    ProjectGet(ProjectParams) => "project.get", ["project"],
+    ProjectGet(ProjectParams) => "project.get", ["project"], Anyone,
         "One Project.";
-    ProjectOpen(ProjectOpenParams) => "project.open", [],
+    ProjectOpen(ProjectOpenParams) => "project.open", [], Operator,
         "The Project holding a directory, registered if there is none.";
-    ProjectRename(ProjectRenameParams) => "project.rename", ["project", "label"],
+    ProjectRename(ProjectRenameParams) => "project.rename", ["project", "label"], Operator,
         "Give a Project a label.";
-    ProjectClose(ProjectParams) => "project.close", ["project"],
+    ProjectClose(ProjectParams) => "project.close", ["project"], Operator,
         "Park every open Thread of a Project.";
-    WorktreeCreate(WorktreeCreateParams) => "worktree.create", [],
+    WorktreeCreate(WorktreeCreateParams) => "worktree.create", [], Operator,
         "Make a new worktree of a repository on a new branch, for a Thread to start in.";
-    WorktreeRemove(WorktreeRemoveParams) => "worktree.remove", ["path"],
+    WorktreeRemove(WorktreeRemoveParams) => "worktree.remove", ["path"], Operator,
         "Remove a clean worktree, parking the Threads in it; its branch stays. Never forced.";
-    MachineList(Empty) => "machine.list", [],
+    MachineList(Empty) => "machine.list", [], Anyone,
         "The saved machines another Server is asked on (--machine).";
-    EventsSubscribe(EventsSubscribeParams) => "events.subscribe", [],
+    EventsSubscribe(EventsSubscribeParams) => "events.subscribe", [], Anyone,
         "What the Threads are now, then every change as it happens.";
-    NotificationShow(NotificationShowParams) => "notification.show", ["title"],
+    NotificationShow(NotificationShowParams) => "notification.show", ["title"], Operator,
         "Show a toast in every Ferrite window.";
-    ProjectFocus(ProjectParams) => "project.focus", ["project"],
+    ProjectFocus(ProjectParams) => "project.focus", ["project"], Operator,
         "Land every Ferrite window on a Project's first open Thread.";
-    ThreadRevive(ThreadReviveParams) => "thread.revive", ["thread"],
+    ThreadRevive(ThreadReviveParams) => "thread.revive", ["thread"], Operator,
         "Start a parked Thread's agent again in place, keeping its id.";
-    TaskStart(TaskStartParams) => "task.start", ["instructions"],
+    TaskStart(TaskStartParams) => "task.start", ["instructions"], Operator,
         "Hand a Project's Factory a one-off Task: one agent in its own worktree.";
-    TaskList(TaskListParams) => "task.list", [],
+    TaskList(TaskListParams) => "task.list", [], Anyone,
         "The Factory's Tasks, of every Project or of one.";
-    TaskGet(TaskParams) => "task.get", ["task"],
+    TaskGet(TaskParams) => "task.get", ["task"], Anyone,
         "One Task: its state, activity, Worker and worktree.";
-    TaskStop(TaskParams) => "task.stop", ["task"],
+    TaskStop(TaskParams) => "task.stop", ["task"], Operator,
         "Stop a Task: its Worker is interrupted.";
-    TaskResume(TaskParams) => "task.resume", ["task"],
+    TaskResume(TaskParams) => "task.resume", ["task"], Operator,
         "Resume a stopped Task: its Worker carries on.";
-    TaskDelete(TaskParams) => "task.delete", ["task"],
+    TaskDelete(TaskParams) => "task.delete", ["task"], Operator,
         "Delete a Queued, Stopped or Completed Task; its worktree only if clean.";
-    ReportOutcome(ReportOutcomeParams) => "report.outcome", ["outcome", "summary"],
+    ReportOutcome(ReportOutcomeParams) => "report.outcome", ["outcome", "summary"], Worker,
         "A Worker reports its Task finished, or unable to finish and what it tried.";
-    WorkflowCreate(WorkflowCreateParams) => "workflow.create", [],
+    WorkflowCreate(WorkflowCreateParams) => "workflow.create", [], Anyone,
         "Make a Project's Workflow, Blank or from the issue_to_reviewed_pr template.";
-    WorkflowList(TaskListParams) => "workflow.list", [],
+    WorkflowList(TaskListParams) => "workflow.list", [], Anyone,
         "The Factory's Workflows, of every Project or of one.";
-    WorkflowGet(WorkflowParams) => "workflow.get", ["workflow"],
+    WorkflowGet(WorkflowParams) => "workflow.get", ["workflow"], Anyone,
         "One Workflow: its draft, saved versions and the draft's problems.";
-    WorkflowRename(WorkflowRenameParams) => "workflow.rename", ["workflow", "name"],
+    WorkflowRename(WorkflowRenameParams) => "workflow.rename", ["workflow", "name"], Anyone,
         "Rename a Workflow's draft.";
-    WorkflowSave(WorkflowParams) => "workflow.save", ["workflow"],
+    WorkflowSave(WorkflowParams) => "workflow.save", ["workflow"], Operator,
         "Save a Workflow's draft as its next version. Starts nothing.";
-    StepAdd(StepAddParams) => "step.add", ["workflow"],
+    StepAdd(StepAddParams) => "step.add", ["workflow"], Anyone,
         "Add a Step to a Workflow's draft, after a Step or last.";
-    StepEdit(StepEditParams) => "step.edit", ["workflow", "step"],
+    StepEdit(StepEditParams) => "step.edit", ["workflow", "step"], Anyone,
         "Change a Step: name, instructions, skills, provider, model, effort, routes, fresh.";
-    StepMove(StepMoveParams) => "step.move", ["workflow", "step", "to"],
+    StepMove(StepMoveParams) => "step.move", ["workflow", "step", "to"], Anyone,
         "Move a Step to a place in the outline (0 is first).";
-    StepDelete(StepParams) => "step.delete", ["workflow", "step"],
+    StepDelete(StepParams) => "step.delete", ["workflow", "step"], Anyone,
         "Delete a Step; routes to it stay, flagged.";
-    ReportQuestion(ReportQuestionParams) => "report.question", ["text"],
+    ReportQuestion(ReportQuestionParams) => "report.question", ["text"], Worker,
         "A Worker asks the operator; its Task waits in Needs human for the answer.";
-    TaskAnswer(TaskAnswerParams) => "task.answer", ["task", "text"],
+    TaskAnswer(TaskAnswerParams) => "task.answer", ["task", "text"], Operator,
         "Answer a Task's question: the agent that asked continues with it.";
-    TaskApprove(TaskParams) => "task.approve", ["task"],
+    TaskApprove(TaskParams) => "task.approve", ["task"], Operator,
         "Approve a Task that is Ready to approve: what follows approval runs.";
-    TaskRework(TaskReworkParams) => "task.rework", ["task", "feedback"],
+    TaskRework(TaskReworkParams) => "task.rework", ["task", "feedback"], Operator,
         "Send a Task back with feedback, to the Workflow's rework recipient or one chosen.";
-    TaskRedirect(TaskRedirectParams) => "task.redirect", ["task", "to"],
+    TaskRedirect(TaskRedirectParams) => "task.redirect", ["task", "to"], Operator,
         "Send one Task to a Step, skipping Steps, then its routes or back to you. The Workflow is unchanged.";
-    WorkflowApproval(WorkflowApprovalParams) => "workflow.approval", ["workflow"],
+    WorkflowApproval(WorkflowApprovalParams) => "workflow.approval", ["workflow"], Anyone,
         "Change who approves a Workflow's draft: you or an agent, its instructions, what follows, where rework goes.";
-    WorkflowStart(WorkflowStartParams) => "workflow.start", ["workflow", "start"],
+    WorkflowStart(WorkflowStartParams) => "workflow.start", ["workflow", "start"], Anyone,
         "Set how a Workflow's draft starts Tasks: manual, schedule, github_issue, github_pr or external.";
-    WorkflowAutomation(WorkflowAutomationParams) => "workflow.automation", ["workflow", "turn"],
+    WorkflowAutomation(WorkflowAutomationParams) => "workflow.automation", ["workflow", "turn"], Operator,
         "Turn a Workflow's automatic starts on, pause, resume or off. Saving never turns them on.";
-    WorkflowBacklog(WorkflowBacklogParams) => "workflow.backlog", ["workflow", "take"],
+    WorkflowBacklog(WorkflowBacklogParams) => "workflow.backlog", ["workflow", "take"], Operator,
         "Take, or pass over, what already matched when a GitHub start was turned on.";
-    TaskSubmit(TaskSubmitParams) => "task.submit", ["workflow", "identity", "instructions"],
+    TaskSubmit(TaskSubmitParams) => "task.submit", ["workflow", "identity", "instructions"], Operator,
         "Submit a Task to a Workflow that starts from your own script; a repeated identity returns its Task.";
-    ReportRevision(ReportRevisionParams) => "report.revision", ["head"],
+    ReportRevision(ReportRevisionParams) => "report.revision", ["head"], Worker,
         "A Worker reports its Task's PR head (and which PR, the first time): each new head is a revision.";
-    ReportEvidence(ReportEvidenceParams) => "report.evidence", ["text"],
+    ReportEvidence(ReportEvidenceParams) => "report.evidence", ["text"], Worker,
         "A Worker keeps what a check or tool showed as evidence, about the PR's current revision.";
-    ProposalRaise(ProposalRaiseParams) => "proposal.raise", ["act"],
+    ProposalRaise(ProposalRaiseParams) => "proposal.raise", ["act"], Coordinator,
         "The Coordinator proposes starting a Task, saving a version, automatic starts or a redirect; nothing happens until the user accepts.";
-    ProposalList(TaskListParams) => "proposal.list", [],
+    ProposalList(TaskListParams) => "proposal.list", [], Anyone,
         "The Coordinators' proposals, pending, accepted or dismissed, of every Project or of one.";
-    ProposalAccept(ProposalParams) => "proposal.accept", ["proposal"],
+    ProposalAccept(ProposalParams) => "proposal.accept", ["proposal"], Operator,
         "Accept a proposal: its act runs as the user's. Only on the user's word.";
-    ProposalDismiss(ProposalParams) => "proposal.dismiss", ["proposal"],
+    ProposalDismiss(ProposalParams) => "proposal.dismiss", ["proposal"], Operator,
         "Dismiss a proposal: nothing changes.";
-    CoordinatorSay(CoordinatorSayParams) => "coordinator.say", ["text"],
+    CoordinatorSay(CoordinatorSayParams) => "coordinator.say", ["text"], Operator,
         "Say something to a Project's Coordinator, starting it on first use.";
-    CoordinatorSet(CoordinatorSetParams) => "coordinator.set", ["provider"],
+    CoordinatorSet(CoordinatorSetParams) => "coordinator.set", ["provider"], Operator,
         "Choose the Coordinator's provider, model and effort, from its next turn.";
-    TaskClear(TaskClearParams) => "task.clear", [],
+    TaskClear(TaskClearParams) => "task.clear", [], Operator,
         "Move a Project's Completed Tasks to its Archive now, off the board; they are kept whole.";
-    WindowKey(drive::Keys) => "window.key", ["keys"],
+    WindowKey(drive::Keys) => "window.key", ["keys"], Operator,
         "Press keys in the headless window (`ferrite --headless`), in order.";
-    WindowType(drive::Text) => "window.type", ["text"],
+    WindowType(drive::Text) => "window.type", ["text"], Operator,
         "Type text into whatever holds the headless window's keyboard.";
-    WindowClick(drive::Click) => "window.click", [],
+    WindowClick(drive::Click) => "window.click", [], Operator,
         "Click in the headless window: an element by its debug selector, or a point.";
-    WindowFind(drive::Find) => "window.find", ["selector"],
+    WindowFind(drive::Find) => "window.find", ["selector"], Operator,
         "Where the headless window last drew an element, by its debug selector.";
-    WindowShot(drive::Shot) => "window.shot", ["path"],
+    WindowShot(drive::Shot) => "window.shot", ["path"], Operator,
         "Save the headless window's frame as a PNG at a path.";
 }
 
-impl Method {
-    /// Only the operator does it: a call from a Coordinator's Thread is
-    /// refused, its act raised as a proposal instead (#224). Reads,
-    /// drafts and `proposal raise` are not.
-    pub fn operators_only(&self) -> bool {
-        matches!(
-            self,
-            Method::TaskStart(_)
-                | Method::TaskStop(_)
-                | Method::TaskResume(_)
-                | Method::TaskDelete(_)
-                | Method::TaskAnswer(_)
-                | Method::TaskApprove(_)
-                | Method::TaskRework(_)
-                | Method::TaskRedirect(_)
-                | Method::TaskClear(_)
-                | Method::TaskSubmit(_)
-                | Method::WorkflowSave(_)
-                | Method::WorkflowAutomation(_)
-                | Method::WorkflowBacklog(_)
-                | Method::ProposalAccept(_)
-                | Method::ProposalDismiss(_)
-                | Method::CoordinatorSay(_)
-                | Method::CoordinatorSet(_)
-        )
-    }
+/// Who may call an operation (#224). A call that names no Thread is the
+/// operator's CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Callers {
+    /// Anyone, a Coordinator too: reads, and drafting a Workflow.
+    Anyone,
+    /// The operator, from the CLI or any Thread but a Coordinator's: the
+    /// Coordinator raises a proposal instead.
+    Operator,
+    /// A Task's Worker, about itself: the Server names it from the Thread
+    /// the call runs in.
+    Worker,
+    /// A Project's Coordinator, from its own Thread.
+    Coordinator,
 }
 
 /// No parameters.
@@ -569,9 +567,6 @@ pub enum ReportedOutcome {
 pub struct ReportOutcomeParams {
     pub outcome: ReportedOutcome,
     pub summary: String,
-    /// The reporting Worker's own Thread: the CLI sends
-    /// `FERRITE_THREAD_ID`, so its Task is known from where it runs.
-    pub worker: ThreadId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -582,26 +577,18 @@ pub struct ReportRevisionParams {
     /// time, when the Task has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr: Option<String>,
-    /// The reporting Worker's own Thread (the CLI sends
-    /// `FERRITE_THREAD_ID`).
-    pub worker: ThreadId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReportEvidenceParams {
     /// What a command or tool showed: `<the command>: <what it showed>`.
     pub text: String,
-    /// The reporting Worker's own Thread (the CLI sends
-    /// `FERRITE_THREAD_ID`).
-    pub worker: ThreadId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReportQuestionParams {
     /// What the Worker needs the operator to decide.
     pub text: String,
-    /// The asking Worker's own Thread (the CLI sends `FERRITE_THREAD_ID`).
-    pub worker: ThreadId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -775,9 +762,6 @@ pub struct ProposalRaiseParams {
     pub then: Option<crate::factory::ThenReturn>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// The proposing Coordinator's own Thread (the CLI sends
-    /// `FERRITE_THREAD_ID`).
-    pub coordinator: ThreadId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

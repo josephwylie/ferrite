@@ -812,7 +812,11 @@ impl Server {
         Ok(answer)
     }
 
-    pub(super) fn api_report(&mut self, params: ReportOutcomeParams) -> Result<Value, ApiError> {
+    pub(super) fn api_report(
+        &mut self,
+        worker: ThreadId,
+        params: ReportOutcomeParams,
+    ) -> Result<Value, ApiError> {
         let summary = params.summary;
         let outcome = match params.outcome {
             ReportedOutcome::Finished => Outcome::Finished { summary },
@@ -831,20 +835,18 @@ impl Server {
                 summary,
             },
         };
-        self.api_worker_said(
-            params.worker,
-            Command::Report {
-                worker: params.worker,
-                outcome,
-            },
-        )
+        self.api_worker_said(worker, Command::Report { worker, outcome })
     }
 
-    pub(super) fn api_ask(&mut self, params: ReportQuestionParams) -> Result<Value, ApiError> {
+    pub(super) fn api_ask(
+        &mut self,
+        worker: ThreadId,
+        params: ReportQuestionParams,
+    ) -> Result<Value, ApiError> {
         self.api_worker_said(
-            params.worker,
+            worker,
             Command::Ask {
-                worker: params.worker,
+                worker,
                 text: params.text,
             },
         )

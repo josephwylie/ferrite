@@ -77,7 +77,8 @@ pub struct Request {
     #[serde(flatten)]
     pub method: Method,
     /// The Thread the call runs in (`FERRITE_THREAD_ID`), when it runs in
-    /// one: a Coordinator's may only read and propose (#224).
+    /// one: what it may call is its operation's [`schema::Callers`], and a
+    /// report or proposal is that Thread's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller: Option<ThreadId>,
 }

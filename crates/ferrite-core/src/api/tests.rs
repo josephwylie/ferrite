@@ -433,7 +433,6 @@ fn samples() -> Vec<Request> {
         request(Method::ReportOutcome(ReportOutcomeParams {
             outcome: ReportedOutcome::Finished,
             summary: "Fixed the race in the login fixture".into(),
-            worker: thread(),
         })),
         request(Method::WorkflowCreate(WorkflowCreateParams {
             template: Some(crate::factory::Template::IssueToReviewedPr),
@@ -485,7 +484,6 @@ fn samples() -> Vec<Request> {
         })),
         request(Method::ReportQuestion(ReportQuestionParams {
             text: "Which flag name should it use?".into(),
-            worker: thread(),
         })),
         request(Method::TaskAnswer(TaskAnswerParams {
             task: "t-1".into(),
@@ -544,11 +542,9 @@ fn samples() -> Vec<Request> {
         request(Method::ReportRevision(ReportRevisionParams {
             head: "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
             pr: Some("acme/widgets#12".into()),
-            worker: thread(),
         })),
         request(Method::ReportEvidence(ReportEvidenceParams {
             text: "cargo test: 12 passed".into(),
-            worker: thread(),
         })),
         request(Method::ProposalRaise(ProposalRaiseParams {
             act: ProposedAct::Redirect,
@@ -559,7 +555,6 @@ fn samples() -> Vec<Request> {
             skip: vec!["s-2".into()],
             then: Some(crate::factory::ThenReturn::Me),
             note: Some("Only the docs changed".into()),
-            coordinator: thread(),
         })),
         request(Method::ProposalList(TaskListParams {
             project: Some("3".into()),
@@ -645,7 +640,6 @@ fn later_samples() -> Vec<(&'static str, Request)> {
             request(Method::ReportOutcome(ReportOutcomeParams {
                 outcome: ReportedOutcome::HeadChanged,
                 summary: "The head is 2222222, not the approved 1111111".into(),
-                worker: thread(),
             })),
         ),
         (
@@ -1096,24 +1090,27 @@ fn current_names_the_calling_thread_and_frees_its_position() {
     assert!(refused.contains("takes no Thread"), "{refused}");
 }
 
-/// A Worker's report names its own Thread from where it runs, so its Task
-/// is known without being named; outside a Thread it is refused.
+/// A Worker's report carries the Thread it runs in as the request's
+/// caller, so its Task is known without being named, and no report can
+/// name another Worker: the CLI takes no `--worker`.
 #[test]
 fn a_report_names_the_worker_it_runs_in() {
+    let request = cli::parse(
+        op("report.outcome"),
+        &["unable", "Tried X; blocked on Y"],
+        &context(),
+    )
+    .unwrap();
+    assert_eq!(request.caller, Some(ThreadId::new(7)));
     assert_eq!(
-        parse("report.outcome", &["unable", "Tried X; blocked on Y"]),
-        Ok(Method::ReportOutcome(ReportOutcomeParams {
+        request.method,
+        Method::ReportOutcome(ReportOutcomeParams {
             outcome: ReportedOutcome::Unable,
             summary: "Tried X; blocked on Y".into(),
-            worker: ThreadId::new(7),
-        }))
+        })
     );
-    let outside = Context {
-        thread: None,
-        ..context()
-    };
-    let refused = cli::parse(op("report.outcome"), &["finished", "done"], &outside).unwrap_err();
-    assert!(refused.contains("FERRITE_THREAD_ID"), "{refused}");
+    let named = parse("report.outcome", &["finished", "done", "--worker", "8"]);
+    assert!(named.is_err(), "{named:?}");
     assert_eq!(
         parse("task.start", &["Fix it"]),
         Ok(Method::TaskStart(TaskStartParams {
@@ -1179,7 +1176,13 @@ fn proposals_parse_from_the_cli() {
     assert_eq!(
         parse(
             "proposal.raise",
-            &["start", "--instructions", "Fix the toolbar", "--workflow", "w-1"]
+            &[
+                "start",
+                "--instructions",
+                "Fix the toolbar",
+                "--workflow",
+                "w-1"
+            ]
         ),
         Ok(Method::ProposalRaise(ProposalRaiseParams {
             act: ProposedAct::Start,
@@ -1190,7 +1193,6 @@ fn proposals_parse_from_the_cli() {
             skip: Vec::new(),
             then: None,
             note: None,
-            coordinator: ThreadId::new(7),
         }))
     );
     assert_eq!(
@@ -1267,7 +1269,6 @@ fn questions_approval_and_direction_parse_from_the_cli() {
         parse("report.question", &["Which flag name?"]),
         Ok(Method::ReportQuestion(ReportQuestionParams {
             text: "Which flag name?".into(),
-            worker: ThreadId::new(7),
         }))
     );
     assert_eq!(
@@ -1275,7 +1276,6 @@ fn questions_approval_and_direction_parse_from_the_cli() {
         Ok(Method::ReportOutcome(ReportOutcomeParams {
             outcome: ReportedOutcome::Rejected,
             summary: "No changelog entry".into(),
-            worker: ThreadId::new(7),
         }))
     );
     assert_eq!(
@@ -1440,7 +1440,10 @@ fn window_actions_read_as_the_window_takes_them() {
         }))
     );
     assert_eq!(
-        parse("window.click", &["--selector", "settings-close", "--double"]),
+        parse(
+            "window.click",
+            &["--selector", "settings-close", "--double"]
+        ),
         Ok(Method::WindowClick(drive::Click {
             at: drive::Target::Selector("settings-close".into()),
             press: drive::Press::Double,
@@ -1813,14 +1816,12 @@ fn pull_requests_and_merging_parse_from_the_cli() {
         Ok(Method::ReportRevision(ReportRevisionParams {
             head: "abc1234".into(),
             pr: Some("acme/widgets#12".into()),
-            worker: ThreadId::new(7),
         }))
     );
     assert_eq!(
         parse("report.evidence", &["cargo test: 12 passed"]),
         Ok(Method::ReportEvidence(ReportEvidenceParams {
             text: "cargo test: 12 passed".into(),
-            worker: ThreadId::new(7),
         }))
     );
     for (word, outcome) in [
@@ -1836,7 +1837,6 @@ fn pull_requests_and_merging_parse_from_the_cli() {
             Ok(Method::ReportOutcome(ReportOutcomeParams {
                 outcome,
                 summary: "what gh said".into(),
-                worker: ThreadId::new(7),
             }))
         );
     }

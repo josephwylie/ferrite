@@ -21,6 +21,18 @@ fn factory_project(name: &str) -> (Harness, String, PathBuf) {
 
 /// Stop the Server as `ferrite server stop` does and serve its Store
 /// again: a restart.
+/// A call from inside `thread` that succeeds: its result.
+fn ok_in(
+    harness: &Harness,
+    thread: ThreadId,
+    method: &str,
+    params: serde_json::Value,
+) -> serde_json::Value {
+    let (status, said, refused) = cli_in(&harness.api, thread, method, params);
+    assert_eq!((status, refused.len()), (0, 0), "{method}: {refused:?}");
+    said[0]["result"].clone()
+}
+
 fn restart(harness: Harness) -> Harness {
     let mut control = attach(&harness.address);
     control.command(226, Op::Stop { when: When::Now });
@@ -115,14 +127,12 @@ fn a_task_from_the_cli_runs_one_worker_in_its_own_worktree_with_no_window() {
     assert!(told.contains("report outcome finished"), "{told}");
 
     let report = || {
-        cli(
+        cli_in(
             &harness.api,
+            worker,
             "report.outcome",
-            serde_json::json!({
-                "outcome": "finished",
-                "summary": "Fixed the race in setup",
-                "worker": worker,
-            }),
+            serde_json::json!({ "outcome": "finished",
+                "summary": "Fixed the race in setup" }),
         )
     };
     let (status, said, refused) = report();
@@ -137,10 +147,11 @@ fn a_task_from_the_cli_runs_one_worker_in_its_own_worktree_with_no_window() {
     );
     assert!(harness.sessions.try_recv().is_err(), "and starts nothing");
 
-    let (_, _, refused) = cli(
+    let (_, _, refused) = cli_in(
         &harness.api,
+        ThreadId::new(999),
         "report.outcome",
-        serde_json::json!({ "outcome": "finished", "summary": "x", "worker": 999 }),
+        serde_json::json!({ "outcome": "finished", "summary": "x" }),
     );
     assert_eq!(refused[0]["error"]["code"], "not_a_worker", "{refused:?}");
 }
@@ -565,12 +576,11 @@ fn a_workflow_task_runs_each_step_with_its_own_agent_and_context() {
     let again = author("workflow.save", serde_json::json!({ "workflow": workflow }));
     assert_eq!(again["version"], 2, "{again}");
 
-    let (status, _, refused) = cli(
+    let (status, _, refused) = cli_in(
         &harness.api,
+        scouting,
         "report.outcome",
-        serde_json::json!({
-            "outcome": "finished", "summary": "Found three modules", "worker": scouting,
-        }),
+        serde_json::json!({ "outcome": "finished", "summary": "Found three modules" }),
     );
     assert_eq!((status, refused.len()), (0, 0), "{refused:?}");
     let _second = harness
@@ -615,12 +625,11 @@ fn a_workflow_task_runs_each_step_with_its_own_agent_and_context() {
         "one shared worktree"
     );
 
-    cli(
+    cli_in(
         &harness.api,
+        writing,
         "report.outcome",
-        serde_json::json!({
-            "outcome": "finished", "summary": "Wrote CHANGELOG.md", "worker": writing,
-        }),
+        serde_json::json!({ "outcome": "finished", "summary": "Wrote CHANGELOG.md" }),
     );
     let done = task_until(&mut caller, &task, |task| task["status"] == "completed");
     assert_eq!(done["result"], "Wrote CHANGELOG.md");
