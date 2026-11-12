@@ -18,6 +18,7 @@ mod delivery;
 mod direction;
 mod drafts;
 mod factory;
+mod factory_fit;
 mod files;
 mod find;
 mod floats_parity;
