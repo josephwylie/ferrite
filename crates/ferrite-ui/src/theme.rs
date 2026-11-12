@@ -3176,11 +3176,13 @@ pub const SUBAGENT_NAME_GAP: f32 = SPACE_2;
 // truncating box is pinned to what its row leaves it, measured from the
 // face's own advances (`nav::Measure`).
 
-pub const NAV_INSET: f32 = SPACE_2;
+pub const NAV_INSET: f32 = SPACE_3;
+pub const NAV_INSET_FOOT: f32 = SPACE_6;
+pub const NAV_R: f32 = 18.0;
 pub const NAV_COL_PAD: f32 = SPACE_2;
 pub const NAV_EDGE_TAB_W: f32 = 14.0;
 pub const NAV_EDGE_TAB_H: f32 = 44.0;
-pub const NAV_EDGE_TAB_R: f32 = R_CONTROL;
+pub const NAV_EDGE_TAB_R: f32 = 8.0;
 pub const NAV_EDGE_TAB_GLYPH: f32 = 12.0;
 /// 10px — every row's inline padding inside the column; the icons and the
 /// labels of views, headings and Projects start here.

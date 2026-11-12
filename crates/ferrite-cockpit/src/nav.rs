@@ -509,26 +509,26 @@ pub fn card(content: impl IntoElement) -> Div {
         .debug_selector(|| "nav-card".into())
         .absolute()
         .top(px(CARD_TOP))
-        .bottom(px(NAV_INSET))
+        .bottom(px(NAV_INSET_FOOT))
         .left(px(NAV_INSET))
         .w(px(WIDTH))
         .flex()
         .flex_col()
         .overflow_hidden()
-        .rounded(px(R_FLOAT))
+        .rounded(px(NAV_R))
         .bg(paint::SIDEBAR)
         .shadow(components::float_shadow())
         .font_family(FONT_UI)
         .text_size(px(FS_NAV))
         .line_height(px(NAV_LINE))
         .text_color(rgb(INK_STRONG))
-        .child(list::grain(R_FLOAT))
+        .child(list::grain(NAV_R))
         .child(content)
         .child(
             div()
                 .absolute()
                 .inset_0()
-                .rounded(px(R_FLOAT))
+                .rounded(px(NAV_R))
                 .border_1()
                 .border_color(rgba(NAV_BORDER)),
         )
@@ -1328,17 +1328,21 @@ mod tests {
     #[test]
     fn the_nav_is_a_card_floating_under_the_head_row() {
         let mut column = column(Paint::solid(TX_GROUND));
-        assert_eq!(column.style().size.width, Some(px(WIDTH + 2.0 * NAV_INSET).into()));
+        assert_eq!(
+            column.style().size.width,
+            Some(px(280.).into()),
+            "the card and a 12px gap either side"
+        );
         let mut drawn = card(div());
         let style = drawn.style();
-        assert_eq!(style.inset.top, Some(px(WIN_CHROME_H + NAV_INSET).into()), "under the head row");
-        assert_eq!(style.inset.left, Some(px(NAV_INSET).into()));
-        assert_eq!(style.inset.bottom, Some(px(NAV_INSET).into()));
-        assert_eq!(style.size.width, Some(px(WIDTH).into()));
-        assert_eq!(style.corner_radii.top_left, Some(px(R_FLOAT).into()));
+        assert_eq!(style.inset.top, Some(px(WIN_CHROME_H + 12.).into()), "under the head row");
+        assert_eq!(style.inset.left, Some(px(12.).into()));
+        assert_eq!(style.inset.bottom, Some(px(24.).into()), "short of the window's foot");
+        assert_eq!(style.size.width, Some(px(256.).into()));
+        assert_eq!(style.corner_radii.top_left, Some(px(18.).into()));
+        assert_eq!(style.corner_radii.bottom_right, Some(px(18.).into()));
         assert_eq!(style.background, Some(paint::SIDEBAR.into()));
         assert_eq!(style.box_shadow, Some(components::float_shadow()), "it floats");
-        assert_eq!(NAV_INSET, 8.0);
         let mut inner = content();
         let style = inner.style();
         assert_eq!(style.size.width, Some(px(WIDTH).into()));
@@ -1354,7 +1358,7 @@ mod tests {
             assert_eq!(style.background, Some(paint::SIDEBAR.into()));
             assert_eq!(style.border_color, Some(gpui::Hsla::from(rgba(NAV_BORDER))));
             assert_eq!(style.border_widths.left, None, "no edge on the card's side");
-            assert_eq!(style.corner_radii.top_right, Some(px(NAV_EDGE_TAB_R).into()));
+            assert_eq!(style.corner_radii.top_right, Some(px(8.).into()));
             assert_eq!(style.corner_radii.top_left, None);
         }
     }

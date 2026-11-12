@@ -70,7 +70,6 @@ fn the_nav_scrollbar_sits_beside_the_rows(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_board_starts_past_the_card(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::NAV_INSET;
     let (core, _fake) = cockpit("nav-one-seam", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1400.), px(700.)));
@@ -79,15 +78,15 @@ fn the_board_starts_past_the_card(cx: &mut TestAppContext) {
     let card = cx.debug_bounds("nav-card").expect("the card");
     assert!(cx.debug_bounds("nav-seam").is_none(), "no seam");
     assert!(cx.debug_bounds("chrome-seam").is_none(), "no seam");
-    assert_eq!(card.left(), px(NAV_INSET), "in from the window's edge");
-    assert_eq!(card.bottom(), px(700. - NAV_INSET), "over the window's foot");
+    assert_eq!(card.left(), px(12.), "in from the window's edge");
+    assert_eq!(card.bottom(), px(700. - 24.), "short of the window's foot");
     view.read_with(cx, |view, _| {
         assert!(
             (view.nav_width() - f32::from(column.right())).abs() < 0.5,
             "the board starts at the column's edge"
         );
         assert!(
-            (view.nav_width() - f32::from(card.right()) - NAV_INSET).abs() < 0.5,
+            (view.nav_width() - f32::from(card.right()) - 12.).abs() < 0.5,
             "the gap past the card"
         );
     });
