@@ -227,7 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn a_worker_is_offered_its_reports_and_a_coordinator_its_proposal() {
+    fn a_worker_is_offered_its_reports_and_a_coordinator_its_proposal_and_reads() {
         let names = |tools: &ThreadTools| {
             tools
                 .definitions()
@@ -257,8 +257,26 @@ mod tests {
         let (coordinator, _) = tools(ThreadOwner::Factory(
             serde_json::from_value(json!(3)).unwrap(),
         ));
-        assert_eq!(names(&coordinator), ["proposal_raise"]);
+        assert_eq!(
+            names(&coordinator),
+            [
+                "task_list",
+                "task_get",
+                "workflow_list",
+                "workflow_get",
+                "proposal_raise",
+                "proposal_list"
+            ]
+        );
         assert!(!coordinator.offers("report_outcome"));
+        assert!(!coordinator.offers("workflow_save"), "reads, not acts");
+        let briefing = crate::factory::briefing(serde_json::from_value(json!(3)).unwrap());
+        for tool in names(&coordinator) {
+            assert!(
+                briefing.contains(&format!("`{tool}`")),
+                "{tool}: {briefing}"
+            );
+        }
     }
 
     /// A call is an API request from the bound Thread: whatever the agent
