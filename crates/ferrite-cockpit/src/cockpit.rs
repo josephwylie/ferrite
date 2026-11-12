@@ -71,7 +71,7 @@ use ferrite_pane::page::PageSource;
 
 /// The action ⌘`ordinal` is bound to: the shown board's `ordinal`th Pane in
 /// head order (R5, `CockpitView::board_order`; Solo's ⌘1 is the Solo Pane).
-pub(crate) fn focus_rail_action(ordinal: usize) -> Option<&'static str> {
+pub(crate) fn focus_thread_action(ordinal: usize) -> Option<&'static str> {
     [
         "cockpit::FocusThread1",
         "cockpit::FocusThread2",
@@ -395,19 +395,19 @@ pub struct CockpitView {
     tools: tools::Tools,
     agent_drills: agent_pane::AgentDrills,
     native_copy: Option<String>,
-    /// cmd-b (#21): the nav folded to its rail by the operator. In memory
+    /// cmd-b (#21): the nav folded away by the operator. In memory
     /// only; the Settings preference is where a launch starts from.
     nav_collapsed: bool,
-    /// The window is too narrow for the full column beside the board
-    /// (rule 2.7.7, `update_auto_rail`): the nav draws as the rail, and
-    /// nothing is saved. Held with `NAV_AUTO_RAIL_HYSTERESIS`.
-    nav_auto_rail: std::cell::Cell<bool>,
+    /// The window is too narrow for the open nav beside the board
+    /// (rule 2.7.7, `update_auto_fold`): the nav is folded away, and
+    /// nothing is saved. Held with `NAV_AUTO_FOLD_HYSTERESIS`.
+    nav_auto_fold: std::cell::Cell<bool>,
     /// cmd-B while the window holds the nav folded: the operator's override
-    /// of the narrow-window rail, kept for the session (another cmd-B while
-    /// narrow gives the rail back). Never saved.
+    /// of the narrow-window fold, kept for the session (another cmd-B while
+    /// narrow folds it again). Never saved.
     nav_forced_open: bool,
-    /// Measuring what the board would be beside the full column
-    /// (`update_auto_rail`): `nav_width` answers the full width meanwhile.
+    /// Measuring what the board would be beside the open nav
+    /// (`update_auto_fold`): `nav_width` answers the full width meanwhile.
     nav_measure_full: std::cell::Cell<bool>,
     /// The pointer is inside the nav column: its scrollbar shows.
     nav_hovered: bool,
@@ -465,8 +465,6 @@ pub struct CockpitView {
     /// The foot's undo notice: what the last Park or Snooze did, until it
     /// fades (`nav_chrome::NavUndo`).
     nav_undo: Option<nav_chrome::NavUndo>,
-    /// The rail's own scroll (cmd-B folded).
-    nav_rail_scroll: ScrollHandle,
     /// The window's activation, followed into the Cockpit
     /// (`Cockpit::set_window_active`) once the first frame has a window.
     activation: Option<gpui::Subscription>,
@@ -1524,7 +1522,6 @@ impl CockpitView {
             nav_keys_held: false,
             nav_blur: None,
             nav_reveal: Default::default(),
-            nav_rail_scroll: ScrollHandle::new(),
             activation: None,
             popover: None,
             menu_muted: false,
@@ -1560,7 +1557,7 @@ impl CockpitView {
             band_from_hero: false,
             card_waits: Default::default(),
             nav_collapsed: prefs.settings.nav_collapsed,
-            nav_auto_rail: std::cell::Cell::new(false),
+            nav_auto_fold: std::cell::Cell::new(false),
             nav_forced_open: false,
             nav_measure_full: std::cell::Cell::new(false),
             nav_hovered: false,
@@ -2839,45 +2836,40 @@ impl CockpitView {
             || self.sheet_float_open()
     }
 
-    /// How much of the window the nav holds right now: the full column, or
-    /// the rail — folded by cmd-b, or by a window too narrow for the column
-    /// (`nav_railed`).
+    /// How much of the window's left edge the nav holds right now: its
+    /// column open, nothing folded — by cmd-b, or by a window too narrow
+    /// for it (`nav_folded`).
     fn nav_width(&self) -> f32 {
-        if self.nav_measure_full.get() {
-            return nav::WIDTH;
-        }
-        if self.nav_railed() {
-            nav::FOLDED_WIDTH
+        if !self.nav_measure_full.get() && self.nav_folded() {
+            0.0
         } else {
-            nav::WIDTH
+            nav::COLUMN_WIDTH
         }
     }
 
-    /// Whether the nav draws as the rail: the operator folded it, or the
-    /// window is too narrow for the column and cmd-B has not overridden it.
-    fn nav_railed(&self) -> bool {
-        self.nav_collapsed || (self.nav_auto_rail.get() && !self.nav_forced_open)
+    /// Whether the nav is folded away: the operator folded it, or the
+    /// window is too narrow for it and cmd-B has not overridden that.
+    fn nav_folded(&self) -> bool {
+        self.nav_collapsed || (self.nav_auto_fold.get() && !self.nav_forced_open)
     }
 
-    /// Rule 2.7.7, once per frame: fold the nav to the rail — shown, never
-    /// saved — while the board beside the full column would be narrower
-    /// than `NAV_AUTO_RAIL_BOARD_W`, or a board cell narrower than the tile
-    /// floor (`TILE_FLOOR_WIDTH`) that folding would lift it over. It unfolds only once both
-    /// clear their threshold by `NAV_AUTO_RAIL_HYSTERESIS`. The operator's
-    /// cmd-B override (`nav_forced_open`) outranks it either way. The board
-    /// beside the 264px column is the window less the column and what the
-    /// board leaves at its right (`board_right`: the panel, or the board's
-    /// gutter), so with the
-    /// panel hidden a Solo nav folds under 824px (the Pane keeps 560px, as
-    /// it did beside the 36ch column).
-    fn update_auto_rail(&mut self, window: &Window) {
+    /// Rule 2.7.7, once per frame: fold the nav away — shown, never saved —
+    /// while the board beside the open nav would be narrower than
+    /// `NAV_AUTO_FOLD_BOARD_W`, or a board cell narrower than the tile
+    /// floor (`TILE_FLOOR_WIDTH`) that folding would lift it over. It opens
+    /// only once both clear their threshold by `NAV_AUTO_FOLD_HYSTERESIS`.
+    /// The operator's cmd-B override (`nav_forced_open`) outranks it either
+    /// way. The board beside the open nav is the window less its column and
+    /// what the board leaves at its right (`board_right`: the panel, or the
+    /// board's gutter).
+    fn update_auto_fold(&mut self, window: &Window) {
         use ferrite_core::docview::TILE_FLOOR_WIDTH;
-        use ferrite_ui::theme::{NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS};
-        let held = self.nav_auto_rail.get();
-        let slack = if held { NAV_AUTO_RAIL_HYSTERESIS } else { 0.0 };
+        use ferrite_ui::theme::{NAV_AUTO_FOLD_BOARD_W, NAV_AUTO_FOLD_HYSTERESIS};
+        let held = self.nav_auto_fold.get();
+        let slack = if held { NAV_AUTO_FOLD_HYSTERESIS } else { 0.0 };
         let width = f32::from(window.viewport_size().width);
         let right = self.board_right();
-        let board = width - nav::WIDTH - right;
+        let board = width - nav::COLUMN_WIDTH - right;
         let narrowest = |view: &Self| {
             view.pane_rects(window)
                 .iter()
@@ -2887,17 +2879,13 @@ impl CockpitView {
         self.nav_measure_full.set(true);
         let full = narrowest(self);
         self.nav_measure_full.set(false);
-        let railed_board = layout::Rect {
-            w: width - nav::FOLDED_WIDTH - right,
-            ..self.board.get()
-        };
-        // What the narrowest cell would be beside the rail: the same tree,
-        // every column widened by the board's gain.
-        let gain = railed_board.w / board.max(1.0);
-        let railed = full * gain;
-        let cramped = full < TILE_FLOOR_WIDTH + slack && railed >= TILE_FLOOR_WIDTH;
-        let rail = board < NAV_AUTO_RAIL_BOARD_W + slack || cramped;
-        self.nav_auto_rail.set(rail);
+        // What the narrowest cell would be with the nav folded: the same
+        // tree, every column widened by the board's gain.
+        let gain = (width - right) / board.max(1.0);
+        let folded = full * gain;
+        let cramped = full < TILE_FLOOR_WIDTH + slack && folded >= TILE_FLOOR_WIDTH;
+        let fold = board < NAV_AUTO_FOLD_BOARD_W + slack || cramped;
+        self.nav_auto_fold.set(fold);
         // `board_bounds` cached the full-column board while measuring.
         self.board_bounds(window);
     }
@@ -2981,14 +2969,10 @@ impl CockpitView {
         }
     }
 
-    /// Where the board's left edge sits: the nav's width (no seam: the
-    /// card's edge separates). cmd-B moves it at once.
+    /// Where the board's left edge sits: past the nav's column, or the
+    /// window's edge with the nav folded. cmd-B moves it at once.
     fn board_left(&self) -> f32 {
-        if self.nav_measure_full.get() {
-            nav::WIDTH
-        } else {
-            self.nav_width()
-        }
+        self.nav_width()
     }
 
     /// A Group's tree in the board as the last frame laid it out: the
@@ -5512,12 +5496,11 @@ impl CockpitView {
             .inset_0()
             .child(
                 line()
-                    .left(px(self.board_left() - HAIRLINE_W))
+                    .left_0()
                     .right_0()
                     .top(px(WIN_CHROME_H - HAIRLINE_W))
                     .h(px(HAIRLINE_W)),
             )
-            .child(column(line().left(px(self.board_left() - HAIRLINE_W))))
             .when(panel_w > 0.0, |seams| {
                 seams.child(column(line().right(px(panel_w))))
             })
@@ -6219,13 +6202,13 @@ impl CockpitView {
         self.toggle_nav_now(cx);
     }
 
-    /// cmd-B, the collapse button: flip what is drawn. While the window
-    /// holds the nav folded (`nav_auto_rail`), the flip is an override that
+    /// cmd-B, the edge tab: flip what is drawn. While the window
+    /// holds the nav folded (`nav_auto_fold`), the flip is an override that
     /// is shown and never saved; otherwise it folds or opens the column.
     fn toggle_nav_now(&mut self, cx: &mut Context<Self>) {
-        if !self.nav_collapsed && self.nav_auto_rail.get() {
+        if !self.nav_collapsed && self.nav_auto_fold.get() {
             self.nav_forced_open = !self.nav_forced_open;
-            if self.nav_railed() {
+            if self.nav_folded() {
                 self.snooze_editor = None;
             }
             cx.notify();
@@ -6234,7 +6217,7 @@ impl CockpitView {
         self.set_nav_collapsed(!self.nav_collapsed, cx);
     }
 
-    /// cmd-B folds the column to the rail or opens it, at once: Claude's
+    /// cmd-B folds the nav away or opens it, at once: Claude's
     /// sidebar snaps, and a ride would lay the whole board out again every
     /// frame.
     fn set_nav_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
@@ -9030,7 +9013,7 @@ impl CockpitView {
             .or_else(|| facts.branch.clone())
     }
 
-    /// Land on a Thread from the nav's other doors — an Activity or rail
+    /// Land on a Thread from the nav's other doors — an Activity
     /// row: the Group on screen when it holds the Thread, else its
     /// home Group's view, else its Pane if open, else revived — exactly as
     /// a press on its own row does. A Worker or a Coordinator is reached
@@ -9067,7 +9050,7 @@ impl CockpitView {
     /// ⌘1…⌘9 (R5): focus the shown board's `ordinal`th Pane in head order
     /// (`board_order`); Solo's ⌘1 is the Solo Pane. A digit past the board's
     /// Panes does nothing.
-    fn focus_rail(&mut self, ordinal: usize, window: &Window, cx: &mut Context<Self>) {
+    fn focus_ordinal(&mut self, ordinal: usize, window: &Window, cx: &mut Context<Self>) {
         let index = ordinal
             .checked_sub(1)
             .and_then(|at| self.board_order(window).get(at).copied());
@@ -9967,8 +9950,8 @@ impl CockpitView {
         if self.solo_beside.is_some() && self.solo_pair().is_none() {
             self.solo_beside = None;
         }
-        self.update_auto_rail(window);
-        if self.nav_railed() {
+        self.update_auto_fold(window);
+        if self.nav_folded() {
             self.snooze_editor = None;
         }
         self.nav_drag_live.set(cx.has_active_drag());
@@ -10506,7 +10489,7 @@ impl CockpitView {
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::go_forward))
             .on_action(
-                cx.listener(|view, _: &FocusThread1, window, cx| view.focus_rail(1, window, cx)),
+                cx.listener(|view, _: &FocusThread1, window, cx| view.focus_ordinal(1, window, cx)),
             )
             .on_action(cx.listener(Self::toggle_terminal))
             .on_action(cx.listener(Self::toggle_changes))
@@ -10514,28 +10497,28 @@ impl CockpitView {
             .on_action(cx.listener(Self::toggle_file_tree_action))
             .on_action(cx.listener(Self::go_to_file_action))
             .on_action(
-                cx.listener(|view, _: &FocusThread2, window, cx| view.focus_rail(2, window, cx)),
+                cx.listener(|view, _: &FocusThread2, window, cx| view.focus_ordinal(2, window, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread3, window, cx| view.focus_rail(3, window, cx)),
+                cx.listener(|view, _: &FocusThread3, window, cx| view.focus_ordinal(3, window, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread4, window, cx| view.focus_rail(4, window, cx)),
+                cx.listener(|view, _: &FocusThread4, window, cx| view.focus_ordinal(4, window, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread5, window, cx| view.focus_rail(5, window, cx)),
+                cx.listener(|view, _: &FocusThread5, window, cx| view.focus_ordinal(5, window, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread6, window, cx| view.focus_rail(6, window, cx)),
+                cx.listener(|view, _: &FocusThread6, window, cx| view.focus_ordinal(6, window, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread7, window, cx| view.focus_rail(7, window, cx)),
+                cx.listener(|view, _: &FocusThread7, window, cx| view.focus_ordinal(7, window, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread8, window, cx| view.focus_rail(8, window, cx)),
+                cx.listener(|view, _: &FocusThread8, window, cx| view.focus_ordinal(8, window, cx)),
             )
             .on_action(
-                cx.listener(|view, _: &FocusThread9, window, cx| view.focus_rail(9, window, cx)),
+                cx.listener(|view, _: &FocusThread9, window, cx| view.focus_ordinal(9, window, cx)),
             )
             .on_action(cx.listener(Self::toggle_notifications))
             .on_action(cx.listener(|view, _: &nav::Focus, window, cx| view.focus_nav(window, cx)))
@@ -10682,7 +10665,7 @@ impl CockpitView {
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .child(self.nav(window, cx))
+                    .children(self.nav(window, cx))
                     // The board lies from its own left edge — the column's
                     // width this frame — so it rides cmd-B with the column,
                     // every frame (F-12).
@@ -10703,9 +10686,10 @@ impl CockpitView {
             // thing under a menu: an overlay that reached into the band
             // would be answering the frame's hit test, not its own rows, so
             // the drag region stands down while one is open.
-            .child(crate::frame().titlebar(self.board_left(), !self.overlay_open(), self.maximized))
+            .child(crate::frame().titlebar(!self.overlay_open(), self.maximized))
             .child(self.view_head(cx))
-            .child(self.history_arrows_element(cx))
+            .children(self.history_arrows_element(cx))
+            .child(self.nav_edge_tab(cx))
             // The panel over the strip's right end: its tabs take
             // their presses, the gaps between them still drag. Its toggle
             // over both heads, in one place.
@@ -12900,72 +12884,56 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The sidebar toggle (§5.1.1): in the head, or at the rail's top.
-    fn nav_toggle(&self, rail: bool, cx: &mut Context<Self>) -> Stateful<Div> {
-        nav::collapse_button(rail).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                view.toggle_nav_now(cx);
-            }),
+    /// The open nav: its column on the board's ground, holding the card
+    /// and its rows. Nothing while it is folded.
+    fn nav(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.nav_folded() {
+            return None;
+        }
+        Some(
+            nav::column(self.board_ground())
+                .child(nav::card(self.nav_rows(window, cx)))
+                .into_any_element(),
         )
     }
 
-    fn nav(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let collapsed = self.nav_railed();
-        let width = if collapsed {
-            nav::FOLDED_WIDTH
-        } else {
-            nav::WIDTH
-        };
-        let frame = div().flex().flex_row().flex_shrink_0().h_full();
-        let shell = nav::shell(width).child(nav::body());
-        let state = std::cell::OnceCell::new();
-        let shell = if collapsed {
-            let state = state.get_or_init(|| self.nav_state());
-            shell.child(self.nav_rail(state, window, cx))
-        } else {
-            shell.child(self.nav_rows(&state, window, cx))
-        };
-        frame.child(shell).into_any_element()
+    /// What the board paints at its left edge, which the nav's column
+    /// continues: the transcript's black while one Pane fills the board on
+    /// the plane, else the plane's grey (a Group's cells, the Factory, the
+    /// empty board).
+    fn board_ground(&self) -> ferrite_ui::theme::Paint {
+        let lone = !self.grid_board() && self.factory_view.is_none() && !self.empty_board_shown();
+        ferrite_ui::theme::Paint::solid(ferrite_ui::theme::tx_ground(lone))
     }
 
-    /// The rail (cmd-B folded): every open Thread in the list's order,
-    /// shelves folded or not, with its mark, and the digit of the ⌘1–9 that
-    /// focuses it where one does (the board's head order, R5). A press
-    /// lands on the Thread as its card's does.
-    fn nav_rail(
-        &self,
-        state: &nav::NavState,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let keyed: Vec<Option<ThreadId>> = self
-            .board_order(window)
-            .into_iter()
-            .take(9)
-            .map(|index| self.panes[index].thread())
-            .collect();
-        let rows: Vec<nav::RailRow> = state
-            .open_rows()
-            .map(|row| nav::RailRow {
-                key: keyed
-                    .iter()
-                    .position(|shown| *shown == Some(row.thread))
-                    .map(|at| at + 1),
-                thread: row.thread,
-                status: row.status,
-                selected: row.selected,
-            })
-            .collect();
-        let mut rail = nav::rail(&self.nav_rail_scroll, self.nav_toggle(true, cx));
-        for row in &rows {
-            let thread = row.thread;
-            rail = rail.child(nav::rail_row(row).on_click(
-                cx.listener(move |view, _: &ClickEvent, _, cx| view.land_on_thread(thread, cx)),
-            ));
-        }
-        rail
+    /// The edge tab (`nav::edge_tab`), the one control that folds and
+    /// opens the nav: on the card's right edge at the card's mid-height, or
+    /// at the window's left edge while folded. Over the board, so it is
+    /// never under a Pane.
+    fn nav_edge_tab(&self, cx: &mut Context<Self>) -> AnyElement {
+        use ferrite_ui::theme::{HAIRLINE_W, NAV_INSET};
+        let open = !self.nav_folded();
+        // Open, it overlaps the card's ring so the two read as one edge.
+        let left = if open {
+            NAV_INSET + nav::WIDTH - HAIRLINE_W
+        } else {
+            0.0
+        };
+        div()
+            .absolute()
+            .top(px(nav::CARD_TOP))
+            .bottom(px(NAV_INSET))
+            .left(px(left))
+            .flex()
+            .items_center()
+            .child(nav::edge_tab(open).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.toggle_nav_now(cx);
+                }),
+            ))
+            .into_any_element()
     }
 }
 

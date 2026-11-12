@@ -793,7 +793,7 @@ fn the_titlebar_remains_draggable_across_the_window(cx: &mut TestAppContext) {
         if ferrite_ui::frame::CUSTOM || cfg!(target_os = "macos") {
             // Open, the nav's head drags the window over the nav; folded,
             // the rail's head row is the traffic lights'.
-            if !view.read_with(cx, |view, _| view.nav_railed()) {
+            if !view.read_with(cx, |view, _| view.nav_folded()) {
                 let head = cx
                     .debug_bounds("nav-head-drag")
                     .expect("the nav head's stretch");

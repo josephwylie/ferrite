@@ -200,7 +200,7 @@ fn a_folded_nav_keeps_its_toggle_at_the_rails_top(cx: &mut TestAppContext) {
 
     cx.simulate_keystrokes("cmd-b");
     tick(cx);
-    assert!(!view.read_with(cx, |view, _| view.nav_railed()));
+    assert!(!view.read_with(cx, |view, _| view.nav_folded()));
     assert!(
         cx.debug_bounds(row).is_some(),
         "open again, the rows are back"

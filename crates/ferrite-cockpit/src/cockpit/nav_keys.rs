@@ -96,7 +96,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.nav_railed() {
+        if self.nav_folded() {
             self.toggle_nav_now(cx);
         }
         self.snooze_editor = None;
