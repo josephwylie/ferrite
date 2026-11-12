@@ -816,6 +816,7 @@ impl Definition {
             add(None, message);
         }
         problems.extend(self.approval_problems());
+        problems.extend(self.unmerged_completions());
         if !self.steps.is_empty() && self.completion_paths().is_empty() {
             problems.push(Problem {
                 step: None,
@@ -868,6 +869,85 @@ impl Definition {
             Destination::Step(_) => add("Rework goes to a deleted agent. Choose another."),
             _ => add("Rework goes to: choose an agent or the Coordinator."),
         }
+        problems
+    }
+
+    /// In a merging Workflow, each way from the first Step to Completed
+    /// that no reported merge is on: the run-time gate would send its
+    /// Task to Needs human instead. A merge Step's own routes are checked
+    /// in [`Definition::problems`]; Needs human and the Coordinator end
+    /// the walk, since the operator chooses what follows.
+    fn unmerged_completions(&self) -> Vec<Problem> {
+        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        enum At<'a> {
+            Step(&'a str),
+            Approval,
+        }
+        let (Some(first), Some(merge)) = (
+            self.steps.first(),
+            self.steps.iter().find(|step| step.outcome_routes.is_some()),
+        ) else {
+            return Vec::new();
+        };
+        let mut problems = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut walk = vec![(At::Step(&first.id), false)];
+        while let Some((at, merged)) = walk.pop() {
+            if !seen.insert((at, merged)) {
+                continue;
+            }
+            match at {
+                At::Step(id) => {
+                    let Some(step) = self.step(id) else { continue };
+                    for (kind, route) in step.routes() {
+                        let merged = merged || kind == RouteKind::Merge(MergeOutcome::Merged);
+                        match self.resolve(id, route) {
+                            Resolved::Step(next) => walk.push((At::Step(&next.id), merged)),
+                            Resolved::Approval => walk.push((At::Approval, merged)),
+                            Resolved::Complete if !merged && step.outcome_routes.is_none() => {
+                                problems.push(Problem {
+                                    step: Some(step.id.clone()),
+                                    message: format!(
+                                        "{} \u{b7} {} reaches Completed with nothing merged: \
+                                         route it through {}.",
+                                        step.name,
+                                        kind.label(),
+                                        merge.name
+                                    ),
+                                    approval: false,
+                                })
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                At::Approval => {
+                    for route in [&self.approval.after, &self.approval.rework_to] {
+                        if let Destination::Step(id) = route {
+                            walk.push((At::Step(id), merged));
+                        }
+                    }
+                    if self.approval.after == Destination::Complete && !merged {
+                        problems.push(Problem {
+                            step: None,
+                            message: format!(
+                                "After approval reaches Completed with nothing merged: choose \
+                                 {} to run after approval.",
+                                merge.name
+                            ),
+                            approval: true,
+                        });
+                    }
+                }
+            }
+        }
+        let place = |problem: &Problem| {
+            let step = problem.step.as_deref();
+            self.steps
+                .iter()
+                .position(|each| Some(each.id.as_str()) == step)
+        };
+        problems.sort_by_key(|problem| place(problem).unwrap_or(usize::MAX));
         problems
     }
 
