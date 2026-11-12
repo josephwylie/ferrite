@@ -207,10 +207,10 @@ fn a_page_card_opens_the_page_beside_the_transcript(cx: &mut TestAppContext) {
     tick(cx);
     let expanded = f32::from(cx.debug_bounds("panel").unwrap().size.width);
     // Beside the full column the board would fall under its least, so the
-    // nav folds to the rail and the Panel takes the rail's room too.
-    use ferrite_ui::theme::{DOCK_THREAD_MIN_W, NAV_FOLDED_W};
-    assert!(cx.debug_bounds("nav-rail").is_some(), "the nav rails");
-    let most = 1600. - NAV_FOLDED_W - DOCK_THREAD_MIN_W;
+    // nav folds away and the Panel takes its room too.
+    use ferrite_ui::theme::DOCK_THREAD_MIN_W;
+    assert!(cx.debug_bounds("nav-card").is_none(), "the nav folds");
+    let most = 1600. - DOCK_THREAD_MIN_W;
     assert!(expanded > wide, "expanded is wider: {expanded} vs {wide}");
     assert!((expanded - most).abs() < 1., "{expanded} vs {most}");
     let expand = cx.debug_bounds("panel-restore").unwrap();

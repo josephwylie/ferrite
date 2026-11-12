@@ -88,7 +88,7 @@ impl CockpitView {
         self.focus_nav_on(start, window, cx);
     }
 
-    /// The list takes the keyboard, its cursor on `start`; from the rail,
+    /// The list takes the keyboard, its cursor on `start`; folded,
     /// the column opens first.
     pub(super) fn focus_nav_on(
         &mut self,

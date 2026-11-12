@@ -967,7 +967,7 @@ fn a_toast_press_goes_to_its_machine(cx: &mut TestAppContext) {
         view.prefs
             .settings
             .set_provider_sounds(Provider::Claude, false);
-        // A toast is the rail's voice (C8): the nav folded.
+        // A toast speaks for a folded nav (C8).
         view.set_nav_collapsed(true, cx);
     });
     let thread = ThreadId::new(4);

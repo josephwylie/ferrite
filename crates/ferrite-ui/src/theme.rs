@@ -4123,9 +4123,9 @@ mod tests {
         assert_eq!(paint::WINDOW, paint::CARD);
         assert_eq!(paint::PANEL, paint::FRAME);
         assert_eq!(FRAME, CARD, "one plane");
-        // The sidebar sits below the plane, black; its rows step up from
+        // The nav's card is the right panel's fill; its rows step up from
         // it in alpha fills, the shown one over the hovered.
-        assert!(SIDEBAR < CARD);
+        assert_eq!(paint::SIDEBAR, paint::PANEL);
         assert!(over(NAV_CARD_HOVER, SIDEBAR) < over(NAV_CARD_ACTIVE, SIDEBAR));
         assert_eq!(paint::PRESS, paint::SELECTION_HOVER);
         // Hover is one equal step on every ground (rule 3).
@@ -4185,7 +4185,6 @@ mod tests {
             FS_PANEL_DIFF,
             FS_CHROME_CODE,
             FS_HOME_TITLE,
-            NAV_RAIL_KEY_FS,
         ] {
             assert!(TYPE_SCALE.contains(&size), "{size} is off the scale");
         }

@@ -695,7 +695,7 @@ fn a_card_title_takes_its_line_and_the_branch_its_own(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(
         view.read_with(cx, |view, _| view.nav_width()),
-        crate::nav::WIDTH,
+        crate::nav::COLUMN_WIDTH,
         "the nav at its default width"
     );
     for thread in &threads {
