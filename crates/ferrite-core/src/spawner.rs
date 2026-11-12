@@ -610,6 +610,52 @@ mod tests {
         assert!(ordinary.api_tools.is_none());
     }
 
+    /// A Coordinator's Session is told its briefing as its own
+    /// instructions, so the operator's words are all its transcript shows
+    /// as theirs; a Worker's and an ordinary Thread's are told none.
+    #[test]
+    fn a_coordinators_session_carries_its_briefing_as_instructions() {
+        let served = Spawn::new(Arc::default(), None);
+        let coordinator = crate::ThreadOwner::Factory(serde_json::from_value(3.into()).unwrap());
+        let worker = crate::ThreadOwner::Task("t-1".into());
+        let request = |provider, owner| SpawnRequest {
+            thread: ThreadId::new(12),
+            provider,
+            model: None,
+            effort: None,
+            resume: None,
+            resume_at: None,
+            permission_mode: None,
+            name: None,
+            cwd: None,
+            additional_directories: Vec::new(),
+            launch: Default::default(),
+            owner,
+        };
+        let SessionConfig::Claude(claude) =
+            served.config(request(Provider::Claude, Some(&coordinator)))
+        else {
+            panic!("a Claude config");
+        };
+        let SessionConfig::Codex(codex) =
+            served.config(request(Provider::Codex, Some(&coordinator)))
+        else {
+            panic!("a Codex config");
+        };
+        for instructions in [claude.instructions, codex.instructions] {
+            let told = instructions.expect("a Coordinator is briefed");
+            assert!(told.contains("You are the Coordinator"), "{told}");
+            assert!(told.contains("`proposal_raise`"), "{told}");
+        }
+        for owner in [Some(&worker), None] {
+            let SessionConfig::Claude(claude) = served.config(request(Provider::Claude, owner))
+            else {
+                panic!("a Claude config");
+            };
+            assert_eq!(claude.instructions, None);
+        }
+    }
+
     /// Every agent knows its own Thread; one the Server runs also knows
     /// how to reach the API, and with which binary (ADR 0027).
     #[test]

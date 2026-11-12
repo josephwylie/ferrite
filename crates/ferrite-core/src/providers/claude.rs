@@ -123,6 +123,9 @@ pub struct ClaudeConfig {
     pub browser: Option<crate::browser::ThreadClient>,
     /// A Worker's or Coordinator's Factory tools, bound to its Thread.
     pub api_tools: Option<crate::api::tools::ThreadTools>,
+    /// What Ferrite tells this Session beyond the operator's words, as the
+    /// CLI's appended system prompt: never a message in its transcript.
+    pub instructions: Option<String>,
     /// Ferrite's caller context for the agent (`api::caller_environment`):
     /// set over whatever the CLI inherited, after the Thread's own
     /// (`thread.start --env`).
@@ -158,6 +161,7 @@ impl Default for ClaudeConfig {
             visuals: None,
             browser: None,
             api_tools: None,
+            instructions: None,
             env: Vec::new(),
             launcher: Vec::new(),
             args: Vec::new(),

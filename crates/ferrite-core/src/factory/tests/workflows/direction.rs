@@ -393,7 +393,7 @@ fn a_deciding_step_whose_route_leads_to_approval_decides_in_the_same_run() {
     let effects = finished(&mut factory, FIRST, "Built");
     let [(_, _, prompt)] = starts(&effects).try_into().unwrap();
     assert!(prompt.contains("Approve when the tests pass"), "{prompt}");
-    assert!(prompt.contains("report outcome approved"), "{prompt}");
+    reports_by_tool(&prompt, "approved");
     started(&mut factory, &task, SECOND);
 
     let effects = decided(
@@ -480,7 +480,7 @@ fn another_deciding_step_runs_once_more_and_a_rejection_reaches_rework() {
     let effects = factory.step(12, &at(FIRST, false, 2));
     let told = prompts(&effects);
     assert!(told[0].contains("No changelog entry"), "{}", told[0]);
-    assert!(told[0].contains("report outcome finished"), "{}", told[0]);
+    reports_by_tool(told[0], "finished");
 }
 
 /// AC: approving runs the configured continuation: a Step, told what was
@@ -850,16 +850,16 @@ fn a_deciding_run_is_nudged_and_resumed_to_report_its_decision() {
     let effects = factory.step(11, &at(FIRST, false, 2));
     let told = prompts(&effects);
     assert_eq!(told.len(), 1, "asked to report: {effects:?}");
-    assert!(told[0].contains("report outcome approved"), "{}", told[0]);
-    assert!(!told[0].contains("report outcome finished"), "{}", told[0]);
+    reports_by_tool(told[0], "approved");
+    assert!(!told[0].contains("outcome `finished`"), "{}", told[0]);
 
     command(&mut factory, Command::Stop { task: task.clone() }).unwrap();
     command(&mut factory, Command::Resume { task: task.clone() }).unwrap();
     let effects = factory.step(12, &at(FIRST, false, 3));
     let told = prompts(&effects);
     assert_eq!(told.len(), 1, "{effects:?}");
-    assert!(told[0].contains("report outcome approved"), "{}", told[0]);
-    assert!(!told[0].contains("report outcome finished"), "{}", told[0]);
+    reports_by_tool(told[0], "approved");
+    assert!(!told[0].contains("outcome `finished`"), "{}", told[0]);
 }
 
 /// Story 23: a Task waiting in Ready to approve can be stopped too.

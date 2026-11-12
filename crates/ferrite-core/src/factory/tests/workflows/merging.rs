@@ -345,7 +345,7 @@ fn each_merge_result_follows_its_route_and_only_merged_completes() {
     let effects = finished(&mut factory, FIRST, "Built");
     let prompt = &starts(&effects)[0].2;
     assert!(prompt.contains("acme/widgets#12"), "{prompt}");
-    assert!(prompt.contains("report outcome head_changed"), "{prompt}");
+    reports_by_tool(prompt, "head_changed");
     assert!(
         prompt.contains("Confirm the PR actually merged"),
         "{prompt}"
@@ -783,8 +783,8 @@ fn a_merge_step_is_nudged_and_resumed_with_the_results_it_reports() {
     let effects = factory.step(9, &seen_at(SECOND, false, 1));
     let told = prompts(&effects);
     assert_eq!(told.len(), 1, "{effects:?}");
-    assert!(told[0].contains("report outcome merged"), "{}", told[0]);
-    assert!(!told[0].contains("report outcome finished"), "{}", told[0]);
+    reports_by_tool(told[0], "merged");
+    assert!(!told[0].contains("outcome `finished`"), "{}", told[0]);
 
     factory
         .command(Command::Stop { task: task.clone() }, 10)
@@ -796,8 +796,8 @@ fn a_merge_step_is_nudged_and_resumed_with_the_results_it_reports() {
     let told = prompts(&effects);
     assert_eq!(told.len(), 1, "{effects:?}");
     assert!(told[0].contains("resumed"), "{}", told[0]);
-    assert!(told[0].contains("report outcome merged"), "{}", told[0]);
-    assert!(!told[0].contains("report outcome finished"), "{}", told[0]);
+    reports_by_tool(told[0], "merged");
+    assert!(!told[0].contains("outcome `finished`"), "{}", told[0]);
 }
 
 /// G2: a Task's PR head is read from GitHub when it starts, so it has a

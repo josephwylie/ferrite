@@ -134,8 +134,7 @@ fn talking_starts_the_coordinator_once_with_its_briefing_and_nothing_else() {
     assert_eq!(starts.len(), 1, "{effects:?}");
     let (agent_chosen, prompt) = &starts[0];
     assert_eq!(*agent_chosen, None, "the operator's default");
-    assert!(prompt.contains("Coordinator"), "{prompt}");
-    assert!(prompt.ends_with("What is left?"), "{prompt}");
+    assert_eq!(prompt, "What is left?", "only the operator's words");
 
     factory
         .command(
@@ -217,7 +216,7 @@ fn a_coordinator_that_could_not_start_says_why_and_tries_again() {
         .unwrap();
     say(&mut factory, "Still there?").unwrap();
     let starts = coordinator_starts(&factory.step(7, &BTreeMap::new()));
-    assert!(starts[0].1.ends_with("Still there?"), "{starts:?}");
+    assert_eq!(starts[0].1, "Still there?", "{starts:?}");
 }
 
 /// AC: the Coordinator's Provider, model and effort are the Factory's:
@@ -285,9 +284,7 @@ fn the_coordinators_settings_reach_its_start_and_then_its_session() {
 /// never acts without the operator.
 #[test]
 fn the_briefing_teaches_reading_drafting_proposing_and_never_acting_alone() {
-    let mut factory = Factory::in_memory();
-    say(&mut factory, "Hello").unwrap();
-    let (_, prompt) = coordinator_starts(&factory.step(2, &BTreeMap::new())).remove(0);
+    let prompt = briefing(project());
     for taught in [
         "task list",
         "task get",
@@ -380,6 +377,10 @@ fn each_proposal_changes_nothing_until_accepted_and_nothing_when_dismissed() {
     assert!(
         lines.contains(&("Process".into(), "One-off handoff".into())),
         "{lines:?}"
+    );
+    assert!(
+        lines.contains(&("Instructions".into(), "On narrow windows.".into())),
+        "the title is not said twice: {lines:?}"
     );
     let lines = proposal(&raised, &ids[1]).lines(&raised);
     assert!(

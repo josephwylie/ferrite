@@ -97,6 +97,20 @@ fn notified(effects: &[Effect]) -> Vec<Status> {
         .collect()
 }
 
+/// What an agent relies on in a briefing: report `outcome` with the
+/// `report_outcome` tool, the `ferrite report` command named once, as the
+/// fallback, and never a claim that the command is the only way.
+fn reports_by_tool(prompt: &str, outcome: &str) {
+    assert!(prompt.contains("`report_outcome`"), "{prompt}");
+    assert!(prompt.contains(&format!("outcome `{outcome}`")), "{prompt}");
+    assert!(!prompt.contains("only from that command"), "{prompt}");
+    assert_eq!(
+        prompt.matches("ferrite}\" report").count(),
+        1,
+        "the command is named once, as the fallback: {prompt}"
+    );
+}
+
 fn report(factory: &mut Factory, outcome: Outcome) -> Result<Answer, Refusal> {
     factory.command(
         Command::Report {
@@ -138,7 +152,7 @@ fn a_task_starts_one_worker_with_its_instructions() {
     assert_eq!((started, *in_project, with), (&task, project(), &agent()));
     assert_eq!(branch, &format!("factory/{task}"));
     assert!(prompt.contains("It fails one run in ten."), "{prompt}");
-    assert!(prompt.contains("report outcome finished"), "{prompt}");
+    reports_by_tool(prompt, "finished");
     assert_eq!(status(&factory, &task), Status::Working);
     assert!(factory.step(2, &BTreeMap::new()).is_empty(), "only once");
 }
@@ -258,7 +272,7 @@ fn a_worker_at_rest_without_a_report_is_prompted_once_then_needs_the_operator() 
     let task = working(&mut factory);
     let effects = factory.step(4, &seen(false, 1));
     assert_eq!(prompts(&effects).len(), 1, "{effects:?}");
-    assert!(prompts(&effects)[0].contains("report outcome"));
+    reports_by_tool(prompts(&effects)[0], "finished");
     assert!(factory.step(5, &seen(false, 1)).is_empty(), "prompted once");
     assert_eq!(status(&factory, &task), Status::Working);
 
@@ -454,6 +468,49 @@ fn what_the_operator_says_is_recorded_and_changes_nothing_else() {
         (last.by, last.text.as_str()),
         (Actor::Operator, "Use the staging token")
     );
+}
+
+/// The operator's answer is recorded as a sentence: who answered whom,
+/// then the answer, in the activity and in the evidence.
+#[test]
+fn an_answer_is_recorded_as_who_answered_whom_and_what() {
+    let mut factory = Factory::in_memory();
+    let task = working(&mut factory);
+    factory
+        .command(
+            Command::Ask {
+                worker: WORKER,
+                text: "Which fruit?".into(),
+            },
+            10,
+        )
+        .unwrap();
+    factory
+        .command(
+            Command::AnswerQuestion {
+                task: task.clone(),
+                text: "mango".into(),
+                question: None,
+            },
+            11,
+        )
+        .unwrap();
+    let task = factory.task(&task).unwrap();
+    let answered = task
+        .activity
+        .iter()
+        .find(|entry| entry.by == Actor::Operator)
+        .expect("the answer is on the activity");
+    let evidence = task
+        .delivery
+        .evidence
+        .iter()
+        .find(|each| each.kind == EvidenceKind::Decision)
+        .expect("and in the evidence");
+    for text in [&answered.text, &evidence.text] {
+        assert!(text.starts_with("You answered the agent"), "{text}");
+        assert!(text.ends_with(": mango"), "{text}");
+    }
 }
 
 /// A Worker that could not be started stops its Task with why.

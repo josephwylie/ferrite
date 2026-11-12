@@ -1231,6 +1231,39 @@ fn nothing_is_passed_when_the_config_names_nothing() {
     );
 }
 
+/// What Ferrite tells a Session beyond the operator's words rides the
+/// thread's developer instructions, after the plan guidance every thread
+/// carries, on a start and on a resume.
+#[test]
+fn a_sessions_instructions_ride_the_developer_instructions() {
+    for resume in [None, Some("stub-thread".to_string())] {
+        let log = log_path("argv-instructions.log");
+        let _ = fs::remove_file(&log);
+        let program = stub(
+            "codex-echoes-instructions",
+            &format!("{PRELUDE}\ncat >> '{}'", log.display()),
+        );
+        let session = CodexSession::spawn(CodexConfig {
+            program,
+            resume: resume.clone(),
+            instructions: Some("You are the Coordinator".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        let recorded = read_lines(&log, 3);
+        drop(session);
+        let method = if resume.is_some() { "thread/resume" } else { "thread/start" };
+        let request: Value = recorded
+            .iter()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|frame| frame["method"] == method)
+            .unwrap_or_else(|| panic!("no {method} in {recorded:?}"));
+        let told = request["params"]["developerInstructions"].as_str().unwrap();
+        assert!(told.contains(ferrite_core::update_plan::GUIDANCE), "{told}");
+        assert!(told.ends_with("You are the Coordinator"), "{told}");
+    }
+}
+
 #[test]
 fn effort_changes_and_default_stay_on_the_same_thread() {
     let log = log_path("live-effort.log");

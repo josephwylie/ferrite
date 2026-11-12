@@ -1025,6 +1025,30 @@ fn a_threads_args_reach_the_cli_after_ferrites_flags() {
     );
 }
 
+/// What Ferrite tells a Session beyond the operator's words rides the CLI's
+/// appended system prompt, whole, so none of it is a message to show.
+#[test]
+fn a_sessions_instructions_ride_the_appended_system_prompt() {
+    let log = log_path("argv-instructions.log");
+    let program = stub(
+        "claude-echoes-instructions",
+        &format!("{PRELUDE}\necho \"$@\" > '{}'\nexec cat > /dev/null", log.display()),
+    );
+    let session = ClaudeSession::spawn(ClaudeConfig {
+        program,
+        instructions: Some("You are the Coordinator".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    let recorded = read_lines(&log, 1);
+    drop(session);
+    assert!(
+        recorded[0].contains("--append-system-prompt You are the Coordinator"),
+        "{}",
+        recorded[0]
+    );
+}
+
 #[test]
 fn effort_changes_clear_the_override_without_replacing_the_process() {
     let log = log_path("live-effort.log");

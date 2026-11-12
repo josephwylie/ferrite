@@ -44,7 +44,7 @@ fn a_session_lost_mid_step_revives_the_same_worker_once() {
     };
     assert_eq!(*thread, WORKER, "the same Thread");
     assert!(text.contains("interrupted"), "{text}");
-    assert!(text.contains("report outcome finished"), "{text}");
+    reports_by_tool(text, "finished");
     assert_eq!(status(&factory, &task), Status::Working);
     let said = activity(&factory, &task);
     assert!(

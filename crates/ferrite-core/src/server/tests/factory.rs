@@ -124,7 +124,7 @@ fn a_task_from_the_cli_runs_one_worker_in_its_own_worktree_with_no_window() {
     );
     let told = read(&mut caller, worker);
     assert!(told.contains("It fails one run in ten."), "{told}");
-    assert!(told.contains("report outcome finished"), "{told}");
+    assert!(told.contains("outcome `finished`"), "{told}");
 
     let report = || {
         cli_in(

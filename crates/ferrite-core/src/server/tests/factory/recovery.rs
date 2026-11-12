@@ -84,7 +84,7 @@ fn a_session_that_dies_is_revived_once_then_stops_and_another_project_is_untouch
         .recv_timeout(Duration::from_secs(5))
         .expect("the same Thread on a new Session");
     let read = told(&mut caller, worker, "ended unexpectedly");
-    assert!(read.contains("report outcome finished"), "{read}");
+    assert!(read.contains("outcome `finished`"), "{read}");
     let held = task_until(&mut caller, &task, |task| {
         said(task)
             .iter()

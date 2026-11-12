@@ -325,7 +325,7 @@ fn an_agent_decides_approval_with_its_instructions_and_a_rejection_reworks() {
         reviewer,
         "Approve only when a test covers the flag",
     );
-    assert!(read.contains("report outcome approved"), "{read}");
+    assert!(read.contains("outcome `approved`"), "{read}");
 
     report(&harness, reviewer, "rejected", "No test covers --fast");
     turn_ends(&reviewing);

@@ -181,8 +181,10 @@ fn the_coordinator_starts_on_the_first_word_in_the_main_checkout_on_its_settings
         ))
     );
     let first = told(&mut caller, coordinator, "What is left on the board?");
-    assert!(first.contains("Coordinator of this Project"), "{first}");
-    assert!(first.contains("proposal raise"), "{first}");
+    assert!(
+        !first.contains("Coordinator of this Project"),
+        "the briefing is the Session's instructions, not the operator's message: {first}"
+    );
     turn_ends(&agent);
     ok(
         &harness,
