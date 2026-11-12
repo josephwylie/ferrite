@@ -139,6 +139,7 @@ fn the_board_fits_and_brings_an_open_tasks_column_into_view(cx: &mut TestAppCont
             inside(card, columns),
             "{open}'s card in view beside its panel: {card:?} in {columns:?}"
         );
+        whole_columns(cx, open);
         let board = bounds(cx, "factory-board".into());
         for control in ["factory-clear", "factory-new-task"] {
             let at = bounds(cx, control.into());
@@ -148,6 +149,31 @@ fn the_board_fits_and_brings_an_open_tasks_column_into_view(cx: &mut TestAppCont
             );
         }
     }
+}
+
+/// Beside the open panel the board shows whole columns: each is in view
+/// or out of it, none half under the panel or the sidebar.
+fn whole_columns(cx: &mut gpui::VisualTestContext, open: &str) {
+    let columns = bounds(cx, "factory-columns".into());
+    let mut in_view = 0;
+    for key in [
+        "queued",
+        "working",
+        "needs_human",
+        "approval",
+        "stopped",
+        "completed",
+    ] {
+        let column = bounds(cx, format!("factory-column-{key}"));
+        let out =
+            column.right() <= columns.left() + px(1.) || column.left() >= columns.right() - px(1.);
+        assert!(
+            inside(column, columns) || out,
+            "{key} is whole or gone with {open} open: {column:?} in {columns:?}"
+        );
+        in_view += usize::from(!out);
+    }
+    assert!(in_view >= 2, "{in_view} columns in view with {open} open");
 }
 
 /// V1: a Task that moves column while its panel is open is followed there:
@@ -184,6 +210,7 @@ fn an_open_task_that_moves_column_stays_in_view(cx: &mut TestAppContext) {
         inside(card, columns),
         "t-3's card followed beside its panel: {card:?} in {columns:?}"
     );
+    whole_columns(cx, "t-3");
 }
 
 /// V3: an empty Project gets no nav row of its own, but its Factory is one
@@ -456,6 +483,33 @@ fn a_tasks_toast_is_not_raised_over_its_own_panel(cx: &mut TestAppContext) {
     tick(cx);
     ring(cx);
     assert_eq!(toasts(cx), before + 1, "another Task's toast shows");
+    let card = bounds(cx, "notification-card".into());
+    let panel = bounds(cx, "task-panel".into());
+    assert!(
+        card.right() <= panel.left() + px(1.),
+        "beside the panel, its Close in reach: {card:?} {panel:?}"
+    );
+    assert!(card.size.height <= px(80.), "a title and a line: {card:?}");
+    click(cx, "task-close");
+    assert!(!shows(cx, "task-panel"), "Close takes with the toast up");
+    cx.executor().advance_clock(Duration::from_secs(6));
+    tick(cx);
+    assert!(!shows(cx, "notification-card"), "on its board it passes by");
+
+    view.update(cx, |view, cx| {
+        view.factory_surface(Surface::Workflows, cx);
+        view.cockpit
+            .fixture_task_alert(alert("t-3", Status::NeedsHuman));
+        cx.notify();
+    });
+    tick(cx);
+    ring(cx);
+    cx.executor().advance_clock(Duration::from_secs(6));
+    tick(cx);
+    assert!(
+        shows(cx, "notification-card"),
+        "off the board, it stands until seen"
+    );
 }
 
 /// V8: while the Factory shows, the title bar names it (and the open
@@ -806,4 +860,102 @@ fn the_coordinators_settings_fit_the_window(cx: &mut TestAppContext) {
         let at = bounds(cx, chooser.into());
         assert!(inside(at, board), "{chooser}: {at:?} in {board:?}");
     }
+}
+
+/// #238 round 2: the New task sheet's Process menu opens over the sheet,
+/// its row takes a press, and Start starts the Task on the Workflow picked.
+#[gpui::test]
+fn the_process_menu_opens_over_the_sheet_and_its_pick_starts_the_task(cx: &mut TestAppContext) {
+    let opus = ferrite_core::ModelInfo {
+        value: "claude-opus-4".into(),
+        display: "Opus 4".into(),
+        detail: String::new(),
+        resolved: None,
+        efforts: vec!["high".into()],
+        default_effort: None,
+    };
+    let (view, cx) = template_window(cx, "fit-process", vec![opus]);
+    view.update(cx, |view, cx| {
+        view.cockpit.fixture_record_tasks();
+        view.save_workflow(cx);
+    });
+    tick(cx);
+    let workflow = view.read_with(cx, |view, _| {
+        let shown = view.shown_workflow().unwrap();
+        assert!(!shown.versions.is_empty(), "saved");
+        shown.id.clone()
+    });
+    view.update(cx, |view, cx| {
+        view.factory_surface(Surface::Board, cx);
+        view.open_new_task(cx);
+    });
+    tick(cx);
+    cx.simulate_input("Fix the login flake");
+    tick(cx);
+    click(cx, "new-task-process");
+    let sheet = bounds(cx, "new-task-card".into());
+    let row = bounds(cx, "context-menu-row-1".into());
+    assert!(
+        sheet.intersects(&row),
+        "the menu hangs over the sheet: {row:?} {sheet:?}"
+    );
+    click(cx, "context-menu-row-1");
+    assert!(!shows(cx, "context-menu"), "the pick closes the menu");
+    assert!(shows(cx, "new-task-card"), "and leaves the sheet up");
+    click(cx, "new-task-start");
+    let asks = view.read_with(cx, |view, _| view.cockpit.fixture_task_asks().to_vec());
+    match asks.as_slice() {
+        [ferrite_core::protocol::TaskAction::Start {
+            instructions,
+            workflow: Some(on),
+            ..
+        }] => {
+            assert_eq!(instructions, "Fix the login flake");
+            assert_eq!(*on, workflow);
+        }
+        other => panic!("one start, on the Workflow picked: {other:?}"),
+    }
+}
+
+/// #238 round 2: a menu hung under its trigger opens down, over nothing
+/// above it, and fits the window however many rows it has.
+#[gpui::test]
+fn a_long_model_menu_opens_down_and_fits(cx: &mut TestAppContext) {
+    let models = (0..30)
+        .map(|at| ferrite_core::ModelInfo {
+            value: format!("model-{at}"),
+            display: format!("Model {at}"),
+            detail: String::new(),
+            resolved: None,
+            efforts: vec!["high".into()],
+            default_effort: None,
+        })
+        .collect();
+    let (_view, cx) = template_window(cx, "fit-long-menu", models);
+    let trigger = bounds(cx, "inspector-model".into());
+    click(cx, "inspector-model");
+    let menu = bounds(cx, "context-menu".into());
+    assert!(
+        menu.top() >= trigger.bottom(),
+        "under its trigger: {menu:?} {trigger:?}"
+    );
+    assert!(inside(menu, window_bounds()), "in the window: {menu:?}");
+}
+
+/// #238 round 2: the Archive is left by the Board tab, as by its own
+/// Board button.
+#[gpui::test]
+fn the_board_tab_leaves_the_archive(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("fit-archive-tab", 1);
+    let project = core.project_id(core.threads()[0]).unwrap();
+    core.fixture_factory(every_column(project));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    wide(cx);
+    view.update(cx, |view, cx| view.open_factory(project, cx));
+    tick(cx);
+    click(cx, "factory-archive");
+    assert!(shows(cx, "factory-archive-list"));
+    click(cx, "factory-tab-board");
+    assert!(!shows(cx, "factory-archive-list"), "the Archive closed");
+    assert!(shows(cx, "factory-columns"), "on the board");
 }

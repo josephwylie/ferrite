@@ -164,6 +164,7 @@ fn a_workers_permission_is_answered_from_the_task(cx: &mut TestAppContext) {
         }),
     );
     assert!(shows(cx, "task-permission"));
+    assert!(!shows(cx, "task-why"), "the permission says why, once");
     assert!(!shows(cx, "task-question"));
     click(cx, "task-permission-open");
     view.read_with(cx, |view, _| {

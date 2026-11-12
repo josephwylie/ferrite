@@ -33,10 +33,12 @@ struct ColumnFit {
 }
 
 impl ColumnFit {
-    /// In a scroll area `room` wide past its left pad: each column in view
-    /// and the gap after it fill it, so the next one starts at its edge.
-    fn of(room: f32) -> Self {
+    /// In a scroll area `area` wide: the columns in view and the gap after
+    /// each fill it but for one gap, the gutter its left pad keeps once
+    /// scrolled, so the next column starts at its right edge.
+    fn of(area: f32) -> Self {
         let gap = ferrite_ui::theme::SPACE_3;
+        let room = area - gap;
         let all = Status::ALL.len();
         let shown = ((room / (COLUMN_MIN_W + gap)).floor() as usize).clamp(1, all);
         Self {
@@ -49,6 +51,18 @@ impl ColumnFit {
     fn step(self) -> f32 {
         self.width
             .map_or(0., |width| width + ferrite_ui::theme::SPACE_3)
+    }
+
+    /// The scroll that puts column `first` first: past the left pad, a
+    /// gap's gutter before it and the column before ending at the edge.
+    fn offset(self, first: usize) -> f32 {
+        match first {
+            0 => 0.,
+            _ => {
+                self.step() * first as f32 + ferrite_ui::theme::SPACE_4
+                    - ferrite_ui::theme::SPACE_3
+            }
+        }
     }
 
     /// The first column in view once column `at` is: the one now first
@@ -869,10 +883,9 @@ impl CockpitView {
                 .overflow_x_scroll()
                 .track_scroll(&view.columns);
             let panel = self.task_panel(window, cx);
-            let room = self.board_bounds(window).w
-                - if panel.is_some() { TASK_PANEL_W } else { 0. }
-                - SPACE_4;
-            let fit = ColumnFit::of(room);
+            let fit = ColumnFit::of(
+                self.board_bounds(window).w - if panel.is_some() { TASK_PANEL_W } else { 0. },
+            );
             // The open Task's column comes into view beside its panel, and
             // again when the Task moves column, whole columns either side.
             if let Some(task) = open.and_then(|open| tasks.iter().find(|task| task.id == open)) {
@@ -884,7 +897,7 @@ impl CockpitView {
                 if view.revealed.take().as_ref() != Some(&key) {
                     let first = fit.first_showing(at, view.columns.offset().x);
                     view.columns
-                        .set_offset(gpui::point(px(-fit.step() * first as f32), px(0.)));
+                        .set_offset(gpui::point(px(-fit.offset(first)), px(0.)));
                 }
                 view.revealed.set(Some(key));
             }
@@ -1138,14 +1151,14 @@ impl CockpitView {
                     })),
             );
         }
-        let close = ferrite_ui::components::ghost_button("task-close", "Close", cx).on_click(
-            cx.listener(|view, _: &ClickEvent, _, cx| {
+        let close = ferrite_ui::components::ghost_button("task-close", "Close", cx)
+            .debug_selector(|| "task-close".into())
+            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
                 if let Some(view) = view.factory_view.as_mut() {
                     view.open = None;
                 }
                 cx.notify();
-            }),
-        );
+            }));
         let head = div()
             .flex()
             .flex_col()
@@ -1257,7 +1270,7 @@ impl CockpitView {
                         task.reason
                             .clone()
                             .filter(|_| !why_said)
-                            .map(|reason| line("Why", reason)),
+                            .map(|reason| line("Why", reason).debug_selector(|| "task-why".into())),
                     )
                     .child(line("Status", task.status.word().to_string()))
                     .children(self.task_say(task, window, cx))
@@ -1508,6 +1521,7 @@ impl CockpitView {
             body = body.child(crate::project_editor::error_line(error));
         }
         let start = crate::project_editor::primary_button("new-task-start", "Start", false, cx)
+            .debug_selector(|| "new-task-start".into())
             .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 view.start_new_task(cx);
