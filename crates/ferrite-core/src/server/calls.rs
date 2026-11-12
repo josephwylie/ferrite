@@ -16,6 +16,7 @@ use crate::api::{
     self, thread_info, thread_result, unknown_thread, ApiError, CallerId, Code, Method, Request,
     ThreadInfo, Until, Wait,
 };
+use crate::drive::Action;
 use crate::engine::Launch;
 use crate::protocol::{Done, Op, ProjectAction, ServerMessage};
 use crate::workspace::{self, WorkspaceChoice};
@@ -321,6 +322,11 @@ impl Server {
             Method::ProposalDismiss(params) => self.api_proposal_answer(params.proposal, false),
             Method::CoordinatorSay(params) => self.api_coordinator_say(params),
             Method::CoordinatorSet(params) => self.api_coordinator_set(params),
+            Method::WindowKey(keys) => return self.drive(caller, id, Action::Key(keys)),
+            Method::WindowType(text) => return self.drive(caller, id, Action::Type(text)),
+            Method::WindowClick(click) => return self.drive(caller, id, Action::Click(click)),
+            Method::WindowFind(find) => return self.drive(caller, id, Action::Find(find)),
+            Method::WindowShot(shot) => return self.drive(caller, id, Action::Shot(shot)),
             Method::NotificationShow(params) => {
                 self.say(ServerMessage::Notification {
                     title: params.title,

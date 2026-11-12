@@ -111,36 +111,6 @@ pub fn parse_local(stamp: &str) -> Option<DateTime<Local>> {
         .map(|at| at.with_timezone(&Local))
 }
 
-/// How long ago `at` was, as Claude's message times read: `just now`,
-/// `52 minutes ago`, `3 hours ago` the same day, `yesterday`, `4 days ago`
-/// within the week, then the date (`28 Oct`, `28 Oct 2025` in another
-/// year). It changes at most once a minute.
-pub fn relative_label(at: DateTime<Local>, now: DateTime<Local>) -> String {
-    let ago =
-        |count: i64, unit: &str| format!("{count} {unit}{} ago", if count == 1 { "" } else { "s" });
-    let minutes = now.signed_duration_since(at).num_minutes();
-    let days = (now.date_naive() - at.date_naive()).num_days();
-    match () {
-        _ if minutes < 1 => "just now".into(),
-        _ if minutes < 60 => ago(minutes, "minute"),
-        _ if days == 0 => ago(minutes / 60, "hour"),
-        _ if days == 1 => "yesterday".into(),
-        _ if days < 7 => ago(days, "day"),
-        _ => date_label(at, now),
-    }
-}
-
-/// A day as a date reads beside today: `28 Oct`, with its year when it is
-/// another year's (`28 Oct 2025`).
-pub fn date_label(at: DateTime<Local>, now: DateTime<Local>) -> String {
-    use chrono::Datelike;
-    if at.year() == now.year() {
-        at.format("%-d %b").to_string()
-    } else {
-        at.format("%-d %b %Y").to_string()
-    }
-}
-
 /// A day as a long thread's date divider names it: `Wednesday 4 November`,
 /// with its year when it is another year's.
 pub fn day_heading(at: DateTime<Local>, now: DateTime<Local>) -> String {
@@ -152,10 +122,42 @@ pub fn day_heading(at: DateTime<Local>, now: DateTime<Local>) -> String {
     }
 }
 
-/// A stamp's exact time, for the tooltip over its relative label:
-/// `Wednesday 4 November 2026, 7:18 pm`.
-pub fn exact_label(at: DateTime<Local>) -> String {
-    format!("{}, {}", at.format("%A %-d %B %Y"), label(at))
+/// [`now_stamp`] cut to its minute: what a transcript row's time shows, so
+/// a log keeps one clock line per minute it was busy.
+pub fn minute_stamp() -> String {
+    use chrono::Timelike;
+    let now = now();
+    now.with_second(0)
+        .unwrap_or(now)
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+}
+
+/// A transcript row's time as T3 Code words it (`formatChatTimestamp`):
+/// `8:01 pm` today, `yesterday at 8:01 pm`, `11/9 8:01 pm` before that,
+/// and `11/9/2025 8:01 pm` in another year.
+pub fn day_aware_label(at: DateTime<Local>, now: DateTime<Local>) -> String {
+    use chrono::Datelike;
+    match (now.date_naive() - at.date_naive()).num_days() {
+        0 => label(at),
+        1 => format!("yesterday at {}", label(at)),
+        _ if at.year() == now.year() => format!("{} {}", at.format("%-m/%-d"), label(at)),
+        _ => format!("{} {}", at.format("%-m/%-d/%Y"), label(at)),
+    }
+}
+
+/// The tooltip over [`day_aware_label`] (T3's
+/// `formatChatTimestampTooltip`): `8:01 pm, 9th November 2026`.
+pub fn day_aware_tooltip(at: DateTime<Local>) -> String {
+    use chrono::Datelike;
+    let day = at.day();
+    let suffix = match (day % 10, day % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!("{}, {day}{suffix} {}", label(at), at.format("%B %Y"))
 }
 
 /// The day `at` fell on, for a list grouped by day (the bell's): how many
@@ -274,6 +276,25 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
+    fn a_row_time_names_its_day_once_it_is_not_today() {
+        let at = |year: i32, month: u32, day: u32| {
+            Local
+                .with_ymd_and_hms(year, month, day, 20, 1, 0)
+                .single()
+                .expect("an unambiguous local time")
+        };
+        let now = at(2026, 11, 10) + chrono::Duration::hours(2);
+        assert_eq!(day_aware_label(at(2026, 11, 10), now), "8:01 pm");
+        assert_eq!(day_aware_label(at(2026, 11, 9), now), "yesterday at 8:01 pm");
+        assert_eq!(day_aware_label(at(2026, 11, 2), now), "11/2 8:01 pm");
+        assert_eq!(day_aware_label(at(2025, 11, 9), now), "11/9/2025 8:01 pm");
+        assert_eq!(day_aware_tooltip(at(2026, 11, 9)), "8:01 pm, 9th November 2026");
+        assert_eq!(day_aware_tooltip(at(2026, 11, 1)), "8:01 pm, 1st November 2026");
+        assert_eq!(day_aware_tooltip(at(2026, 11, 12)), "8:01 pm, 12th November 2026");
+        assert_eq!(day_aware_tooltip(at(2026, 11, 23)), "8:01 pm, 23rd November 2026");
+    }
+
+    #[test]
     fn recent_days_are_named_for_six_days_and_no_further() {
         let at = |day: u32| {
             SystemTime::from(Local.with_ymd_and_hms(2026, 11, day, 9, 0, 0).unwrap())
@@ -336,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stamp_reads_how_long_ago_it_was() {
+    fn a_stamp_names_its_day_and_round_trips() {
         let at = |day, hour, minute| {
             Local
                 .with_ymd_and_hms(2026, 11, day, hour, minute, 0)
@@ -344,28 +365,10 @@ mod tests {
                 .expect("an unambiguous local time")
         };
         let now = at(4, 19, 18);
-        assert_eq!(
-            relative_label(at(4, 19, 17) + chrono::Duration::seconds(30), now),
-            "just now"
-        );
-        assert_eq!(relative_label(at(4, 19, 17), now), "1 minute ago");
-        assert_eq!(relative_label(at(4, 18, 26), now), "52 minutes ago");
-        assert_eq!(relative_label(at(4, 16, 10), now), "3 hours ago");
-        assert_eq!(relative_label(at(3, 23, 50), now), "yesterday");
-        assert_eq!(relative_label(at(1, 9, 0), now), "3 days ago");
-        assert_eq!(
-            relative_label(at(1, 9, 0) - chrono::Duration::days(7), now),
-            "25 Oct"
-        );
         let last_year = Local
             .with_ymd_and_hms(2025, 10, 28, 9, 0, 0)
             .single()
             .unwrap();
-        assert_eq!(relative_label(last_year, now), "28 Oct 2025");
-        assert_eq!(
-            exact_label(at(4, 19, 18)),
-            "Wednesday 4 November 2026, 7:18 pm"
-        );
         assert_eq!(day_heading(at(3, 9, 0), now), "Tuesday 3 November");
         assert_eq!(day_heading(last_year, now), "Tuesday 28 October 2025");
         // A stamp round-trips; a label from before stamps does not parse.

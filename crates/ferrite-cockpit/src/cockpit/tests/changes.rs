@@ -2,7 +2,8 @@
 //! files with their hunks, its scope, its ⋯ menu, reviewed marks.
 use super::*;
 use crate::cockpit::context_menu::Submenu;
-use crate::cockpit::tools::{ChangesSub, ChangesVerb, Tool};
+use crate::cockpit::panel::Opener;
+use crate::cockpit::tools::{ChangesSub, ChangesVerb, Diff};
 
 fn git(repo: &std::path::Path, args: &[&str]) {
     let out = std::process::Command::new("git").args(args).current_dir(repo).output().expect("git");
@@ -36,10 +37,10 @@ fn window<'a>(
 
 /// Press the door and wait for the read to land.
 fn opened(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) {
-    view.update(cx, |view, cx| view.press_tool(Tool::Changes, cx));
+    view.update(cx, |view, cx| view.run_opener(thread, Opener::Changes, cx));
     for _ in 0..400 {
         tick(cx);
-        if view.read_with(cx, |view, _| view.changes_read(thread).is_some()) {
+        if view.read_with(cx, |view, _| view.changes_read(Diff::Changes(thread)).is_some()) {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -51,9 +52,9 @@ fn opened(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTes
 fn the_pane_lists_each_changed_file_with_its_hunks_and_stat(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("changes-files", cx);
     opened(&view, thread, cx);
-    assert_eq!(view.read_with(cx, |view, _| view.changes_read(thread)), Some(2));
+    assert_eq!(view.read_with(cx, |view, _| view.changes_read(Diff::Changes(thread))), Some(2));
     assert_eq!(
-        view.read_with(cx, |view, _| view.changes_scope_label(thread)).as_deref(),
+        view.read_with(cx, |view, _| view.changes_scope_label(Diff::Changes(thread))).as_deref(),
         Some("Uncommitted changes")
     );
     assert!(cx.debug_bounds("changes-file-0").is_some());
@@ -93,7 +94,7 @@ fn the_menus_hold_what_the_spec_names_and_a_scope_rereads(cx: &mut TestAppContex
         })
     };
     view.update(cx, |view, cx| {
-        view.open_context_menu(MenuTarget::ChangesMore(thread), gpui::point(px(900.), px(500.)), cx)
+        view.open_context_menu(MenuTarget::ChangesMore(Diff::Changes(thread)), gpui::point(px(900.), px(500.)), cx)
     });
     assert_eq!(
         names(&view, cx),
@@ -102,11 +103,12 @@ fn the_menus_hold_what_the_spec_names_and_a_scope_rereads(cx: &mut TestAppContex
             ("Expand all files".into(), false),
             ("Word wrap".into(), true),
             ("Hide whitespace changes".into(), false),
+            ("Hide test files".into(), false),
             ("Refresh".into(), false),
         ]
     );
     view.update(cx, |view, cx| {
-        view.open_context_menu(MenuTarget::ChangesScope(thread), gpui::point(px(900.), px(500.)), cx)
+        view.open_context_menu(MenuTarget::ChangesScope(Diff::Changes(thread)), gpui::point(px(900.), px(500.)), cx)
     });
     assert_eq!(
         names(&view, cx),
@@ -117,19 +119,62 @@ fn the_menus_hold_what_the_spec_names_and_a_scope_rereads(cx: &mut TestAppContex
         ]
     );
     let branches = view.read_with(cx, |view, _| {
-        view.context_submenu_rows_for_test(MenuTarget::ChangesScope(thread), Submenu::Changes(ChangesSub))
+        view.context_submenu_rows_for_test(MenuTarget::ChangesScope(Diff::Changes(thread)), Submenu::Changes(ChangesSub))
     });
     assert!(!branches.is_empty(), "the checkout's branches");
-    view.update(cx, |view, cx| view.run_changes_verb(thread, ChangesVerb::All, cx));
+    view.update(cx, |view, cx| view.run_changes_verb(Diff::Changes(thread), ChangesVerb::All, cx));
     assert_eq!(
-        view.read_with(cx, |view, _| view.changes_read(thread)),
+        view.read_with(cx, |view, _| view.changes_read(Diff::Changes(thread))),
         None,
         "a new scope reads again"
     );
     assert_eq!(
-        view.read_with(cx, |view, _| view.changes_scope_label(thread)).as_deref(),
+        view.read_with(cx, |view, _| view.changes_scope_label(Diff::Changes(thread))).as_deref(),
         Some("All changes")
     );
+}
+
+/// The toolbar (T3's diff toolbar): 28 tall, the scope at the left and,
+/// against a branch, what it compares; 14px tools at the right, each
+/// doing its verb: Hide test files leaves the tests out of the list.
+#[gpui::test]
+fn the_toolbar_holds_the_scope_and_the_view_tools(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("changes-toolbar", cx);
+    let repo = std::env::temp_dir()
+        .join(format!("ferrite-view-{}-changes-toolbar", std::process::id()))
+        .join("repo");
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(repo.join("tests/c.rs"), "test\n").unwrap();
+    opened(&view, thread, cx);
+    assert_eq!(view.read_with(cx, |view, _| view.changes_read(Diff::Changes(thread))), Some(3));
+    let bar = cx.debug_bounds("changes-toolbar").expect("its toolbar");
+    assert_eq!(bar.size.height, px(ferrite_ui::theme::SURFACE_TOOLBAR_H));
+    let scope = cx.debug_bounds("changes-scope").unwrap();
+    assert!(scope.left() - bar.left() < px(12.), "the scope at the left");
+    assert!(cx.debug_bounds("changes-comparing").is_none(), "uncommitted compares nothing");
+    for tool in ["changes-refresh", "changes-fold-all", "changes-wrap", "changes-whitespace", "changes-hide-tests"] {
+        let at = cx.debug_bounds(tool).unwrap_or_else(|| panic!("{tool}"));
+        assert!(at.left() > scope.right(), "{tool} at the right");
+        assert_eq!(at.size.height, px(ferrite_ui::theme::SURFACE_PLUS));
+    }
+    let shown = |cx: &mut gpui::VisualTestContext| {
+        (0..3)
+            .filter(|at| cx.debug_bounds(Box::leak(format!("changes-file-{at}").into_boxed_str())).is_some())
+            .count()
+    };
+    assert_eq!(shown(cx), 3);
+    let hide = cx.debug_bounds("changes-hide-tests").unwrap();
+    cx.simulate_click(hide.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(shown(cx), 2, "tests/c.rs is left out");
+    let fold = cx.debug_bounds("changes-fold-all").unwrap();
+    cx.simulate_click(fold.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("panel-hunks-0").is_none(), "collapsed");
+    view.update(cx, |view, cx| view.run_changes_verb(Diff::Changes(thread), ChangesVerb::All, cx));
+    tick(cx);
+    assert!(cx.debug_bounds("changes-comparing").is_some(), "against the base, it says so");
+    assert!(cx.debug_bounds("changes-base").is_some(), "the base is a dropdown");
 }
 
 #[gpui::test]
@@ -139,11 +184,11 @@ fn an_empty_uncommitted_scope_offers_the_branch_diff(cx: &mut TestAppContext) {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "all"]);
     opened(&view, thread, cx);
-    assert_eq!(view.read_with(cx, |view, _| view.changes_read(thread)), Some(0));
+    assert_eq!(view.read_with(cx, |view, _| view.changes_read(Diff::Changes(thread))), Some(0));
     let link = cx.debug_bounds("changes-view-branch").expect("the link is drawn");
     cx.simulate_click(link.center(), gpui::Modifiers::none());
     assert_eq!(
-        view.read_with(cx, |view, _| view.changes_scope_label(thread)).as_deref(),
+        view.read_with(cx, |view, _| view.changes_scope_label(Diff::Changes(thread))).as_deref(),
         Some("All changes")
     );
 }
@@ -153,7 +198,7 @@ fn the_filter_narrows_the_files_listed(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("changes-filter", cx);
     opened(&view, thread, cx);
     assert!(cx.debug_bounds("changes-file-0").is_some() && cx.debug_bounds("changes-file-1").is_some());
-    let field = view.read_with(cx, |view, _| view.changes_filter(thread).unwrap());
+    let field = view.read_with(cx, |view, _| view.changes_filter(Diff::Changes(thread)).unwrap());
     view.update(cx, |_, cx| field.update(cx, |field, cx| field.set("b.rs".to_string(), cx)));
     tick(cx);
     let shown = (0..2).filter(|at| cx.debug_bounds(Box::leak(format!("changes-file-{at}").into_boxed_str())).is_some()).count();

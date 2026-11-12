@@ -395,7 +395,7 @@ fn edit_path(decision: &Decision) -> Option<&str> {
 /// A path as the Thread reads it: inside its workspace, relative.
 fn relative<'a>(path: &'a str, workspace: Option<&Path>) -> Cow<'a, str> {
     workspace
-        .and_then(|root| Path::new(path).strip_prefix(root).ok())
+        .and_then(|root| crate::file_links::inside_checkout(Path::new(path), root))
         .map(|inside| Cow::Owned(inside.to_string_lossy().into_owned()))
         .unwrap_or(Cow::Borrowed(path))
 }

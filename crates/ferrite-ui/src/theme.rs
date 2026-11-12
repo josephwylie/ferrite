@@ -45,9 +45,10 @@
 //!    never by a second grey, an inset or a gap that reads. A Solo Pane is
 //!    the plane itself, flush and unringed (`PaneEdge::Flush`); a Group's
 //!    Panes keep a `CARD_RING` hairline round their cells, at `R_CARD`.
-//!    **Three radii**: `R_CONTROL` 6 (controls, rows, chips), `R_CARD` 10
-//!    (bubbles, cards, the Decision box) and `R_FLOAT` 12 (the Composer,
-//!    menus, popovers, sheets); dots, pills and the send circle round.
+//!    **Four radii**: `R_CONTROL` 6 (controls, rows, chips), `R_CARD` 10
+//!    (bubbles, cards, the Decision box), `R_FLOAT` 12 (menus, popovers,
+//!    sheets) and `R_COMPOSER` 16 (the Solo Composer); dots, pills and the
+//!    send circle round.
 //!    **Two line greys**: `LINE` #303030 for seams, dividers and table
 //!    rules, `CARD_RING` #222222 for a card's ring. A raised surface edges
 //!    itself a step over its own fill (`FIELD_RING` the Composer's,
@@ -241,17 +242,11 @@ pub const CARD: u32 = 0x1a1a1a;
 /// bottom bar: the plane itself (rule 2).
 pub const FRAME: u32 = CARD;
 /// `#272727` — the sidebar (the nav column): lighter than the plane, as
-/// Claude's sidebar sits over its transcript (sampled from claude/*.png:
-/// the transcript `#191919`, the sidebar `#292428` under the window's
-/// vibrancy, ~14 levels over it; this is that grey without the wallpaper's
-/// tint), so the column reads as its own region and not by its hairline
-/// alone. The owner asked for it darker than Claude's: `#212121`, 8 levels
-/// over the transcript. Its rows step up from it: `SIDEBAR_HOVER` (+8) under
-/// the pointer, `SIDEBAR_SELECTED` (+32, Claude's step) selected, so a
-/// hovered row never reads as the selected one.
-pub const SIDEBAR: u32 = 0x212121;
-pub const SIDEBAR_HOVER: u32 = 0x292929;
-pub const SIDEBAR_SELECTED: u32 = 0x414141;
+/// The nav column's ground (ADR 0040, T3's `--sidebar`): black, under
+/// T3's 3.5% grain (`NAV_GRAIN_OPACITY`), so the column reads as its own
+/// region below the transcript's plane. Its rows wear alpha fills over it
+/// (`NAV_CARD_HOVER`, `NAV_CARD_ACTIVE`, `NAV_CARD_SELECTED`).
+pub const SIDEBAR: u32 = 0x000000;
 /// The standing choice's `✓` in a menu: Claude's check blue
 /// (claude/model-menu.png x1266–1280, y744–755) — the owner's call, the one
 /// hue in a menu that is not state (rule 6).
@@ -269,8 +264,9 @@ pub const RAISED: u32 = 0x242424;
 /// hover a step up.
 pub const SECONDARY: u32 = 0x3b3b3b;
 pub const SECONDARY_HOVER: u32 = 0x454545;
-/// `#262626` — the prompt's bubble, matching Claude (typecolour.md).
-pub const PROMPT_BUBBLE: u32 = 0x262626;
+/// `#1e1e1e` — the prompt's bubble, T3's `--message-surface` (neutral-950
+/// at 92% over white).
+pub const PROMPT_BUBBLE: u32 = 0x1e1e1e;
 /// `#2a2a2a` — the inline-code chip, matching Claude (typecolour.md).
 pub const INLINE_CODE_CHIP: u32 = 0x2a2a2a;
 /// `#303030` — inline code's chip in a sent prompt, a step over its
@@ -372,8 +368,6 @@ pub mod paint {
     pub const PANEL: Paint = FRAME;
     /// The nav column and its rows (`super::SIDEBAR`).
     pub const SIDEBAR: Paint = Paint::solid(super::SIDEBAR);
-    pub const SIDEBAR_HOVER: Paint = Paint::solid(super::SIDEBAR_HOVER);
-    pub const SIDEBAR_SELECTED: Paint = Paint::solid(super::SIDEBAR_SELECTED);
     pub const CHIP_OPEN: Paint = Paint(super::CHIP_OPEN);
     pub const ENV_STRIP: Paint = Paint::solid(super::ENV_STRIP);
     /// A diff's or a code fence's box, on a reading surface (the card, the
@@ -408,6 +402,8 @@ pub mod paint {
     pub const CARD_RING: Paint = Paint::solid(super::CARD_RING);
     pub const FIELD_RING: Paint = Paint::solid(super::FIELD_RING);
     pub const BLOCK_RING: Paint = Paint::solid(super::BLOCK_RING);
+    /// The rule under a turn's header and fold.
+    pub const TURN_FOLD_RULE: Paint = Paint(super::TURN_FOLD_RULE);
 
     /// The prompt band: a field that occludes what scrolls under it.
     pub const PROMPT_BAND: Paint = FIELD;
@@ -583,6 +579,10 @@ pub mod words {
     pub const BLOCKED: &str = "blocked";
     /// Launched, not yet working.
     pub const STARTING: &str = "starting";
+    /// The nav card's words where T3's differ: a question waits on the
+    /// operator's input, and a run is setting up before its clock starts.
+    pub const INPUT: &str = "input";
+    pub const SETTING_UP: &str = "setting up";
     /// Held by the operator.
     pub const PAUSED: &str = "paused";
     /// Parked: no Session in memory, one keystroke from coming back.
@@ -671,10 +671,15 @@ pub const SYN_PUNCT: u32 = SYN_PLAIN;
 /// Claude's and Codex's plain code.
 pub const SYN_PLAIN: u32 = INK_STRONG;
 /// A link or a path in prose, a file chip's name: the Claude app's link
-/// blue, a link in prose underlined at rest (the owner's spec, superseding
-/// ADR 0033's white links; a link is the one ink here that is not state).
+/// blue, a link in prose underlined under the pointer (T3's; a link is
+/// the one ink here that is not state).
 /// A path in a tool call's arguments is `INK_SUBTLE` with the rest of them.
 pub const LINK_INK: u32 = 0x7aa8ee;
+
+/// Answer prose's ink: `INK_STRONG` at 90%, T3's `text-foreground/90`.
+pub fn prose_ink() -> gpui::Hsla {
+    gpui::Hsla::from(gpui::rgb(INK_STRONG)).opacity(0.9)
+}
 /// The wash over the slot a dragged Pane would take: white at 6%.
 pub const DROP_WASH: u32 = 0xffffff0f;
 /// That slot's edge: the focus ring's white at 22%.
@@ -693,11 +698,10 @@ pub const DIFF_REMOVED_WORD_ALPHA: f32 = 0.2765;
 /// A diff row's sign: the only hued glyph on the row.
 pub const DIFF_ADDED_SIGN: u32 = GREEN;
 pub const DIFF_REMOVED_SIGN: u32 = RED;
-/// How far the working caption's shimmer lifts its colour toward white at
-/// the crest (`components::shimmer`): Claude's clay crests near `#ffe1d3`.
+/// How far a shimmer over an ink other than `INK_SUBTLE` lifts it toward
+/// white at its crest (`components::shimmer_crest`); over `INK_SUBTLE` it
+/// crests at `INK_STRONG`, as T3's does.
 pub const SHIMMER_LIFT: f32 = 0.75;
-/// Claude's shimmer crest: the prototype's gradient's middle stop.
-pub const SHIMMER_CREST_CLAUDE: u32 = 0xffe1d3;
 
 // ------------------------------------------------------------- the float
 //
@@ -748,9 +752,9 @@ pub const FS_NAV: f32 = 13.0;
 /// 14px — the Standard reading size (`ReadingSize::STANDARD`): agent prose
 /// and every Solo transcript row at the default zoom, on `LH_PROSE`.
 pub const FS_PROSE: f32 = 14.0;
-/// 21px — the Standard reading size's line: 1.5×, whole
-/// (`prose_line_height`).
-pub const LH_PROSE: f32 = 21.0;
+/// 23px — the Standard reading size's line: 1.625× (T3's
+/// `leading-relaxed`), whole (`prose_line_height`).
+pub const LH_PROSE: f32 = 23.0;
 /// 14 on 20 — a view title (the Solo and Group heads), at `W_LABEL`.
 pub const FS_TITLE: f32 = 14.0;
 /// 13 — tabs, buttons, Pane titles, panel tabs, at `W_LABEL` on `LH_UI`.
@@ -790,9 +794,9 @@ pub fn answer_text_size(size: ferrite_core::settings::ReadingSize) -> f32 {
     f32::from(size.px())
 }
 
-/// The pixel line height paired with each reading size: 1.5× and whole
-/// (`prose_line_height`): 12/18 · 13/20 · 14/21 · 15/23 · 16/24 · 18/27 ·
-/// 20/30 · 22/33 · 24/36.
+/// The pixel line height paired with each reading size: 1.625× and whole
+/// (`prose_line_height`): 12/20 · 13/21 · 14/23 · 15/24 · 16/26 · 18/29 ·
+/// 20/33 · 22/36 · 24/39.
 pub fn answer_line_height(size: ferrite_core::settings::ReadingSize) -> f32 {
     prose_line_height(answer_text_size(size))
 }
@@ -821,11 +825,11 @@ pub fn heading_scale(_level: u8) -> f32 {
     1.
 }
 
-/// The transcript's line over its size: 1.5 (14/21), Claude's measured
-/// pitch over SF 14; Codex's 14/22 is a hair looser.
-pub const TX_LINE_RATIO: f32 = 1.5;
+/// The transcript's line over its size: 1.625 (14/23), T3's
+/// `leading-relaxed` (22.75 at 14) on a whole pixel.
+pub const TX_LINE_RATIO: f32 = 1.625;
 
-/// A transcript size's pixel line height: `round(size × 1.5)`.
+/// A transcript size's pixel line height: `round(size × 1.625)`.
 pub fn prose_line_height(size: f32) -> f32 {
     (size * TX_LINE_RATIO).round()
 }
@@ -900,9 +904,14 @@ pub const R_CONTROL: f32 = 6.0;
 /// tool or comment card, the failure strip, the panel's file block, a sent
 /// image's thumbnail.
 pub const R_CARD: f32 = 10.0;
-/// 12px — the Composer and every float: menus, popovers, the palette,
-/// sheets. The kit's `radius_lg`.
+/// 12px — every float: menus, popovers, the palette, sheets. The kit's
+/// `radius_lg`.
 pub const R_FLOAT: f32 = 12.0;
+/// 16px — the Solo Composer's box (T3's `rounded-2xl`), its ring and its
+/// top highlight.
+pub const R_COMPOSER: f32 = 16.0;
+/// The Solo box's top highlight (T3's dark `inset-shadow-2xs`): white 3%.
+pub const COMPOSER_TOP_HIGHLIGHT: u32 = 0xffffff08;
 /// 2px — meter segments and other tiny marks.
 pub const R_TIGHT: f32 = 2.0;
 
@@ -935,6 +944,23 @@ pub const TITLEBAR_H: f32 = 44.0;
 /// (13). Off the scale: the mockups' head.
 pub const VIEW_HEAD_PAD_X: f32 = 20.0;
 pub const VIEW_HEAD_GAP: f32 = 10.0;
+/// Solo's breadcrumb (T3's `ChatHeader`): items `HEAD_CRUMB_GAP` apart,
+/// `/` between them. The Project's badge `HEAD_BADGE` (T3's
+/// `size-3.5`), `HEAD_BADGE_GAP` before its name, which stops at
+/// `HEAD_PROJECT_MAX_W` (`max-w-40`); a parent Thread collapses to `...`
+/// while the row overflows, and comes back once the row has its whole
+/// title and `HEAD_PARENT_ROOM_SLACK` to spare; the title keeps
+/// `VIEW_TITLE_MIN_W`, its chevron (`HEAD_CHEVRON`) `HEAD_CHEVRON_GAP`
+/// after it. A machine's badge sits on `HEAD_ENV_GROUND` (`BLUE` at 12%).
+pub const HEAD_CRUMB_GAP: f32 = 12.0;
+pub const HEAD_BADGE: f32 = 14.0;
+pub const HEAD_BADGE_GAP: f32 = 6.0;
+pub const HEAD_PROJECT_MAX_W: f32 = 160.0;
+pub const HEAD_PARENT_ROOM_SLACK: f32 = 8.0;
+pub const VIEW_TITLE_MIN_W: f32 = 40.0;
+pub const HEAD_CHEVRON: f32 = 14.0;
+pub const HEAD_CHEVRON_GAP: f32 = 4.0;
+pub const HEAD_ENV_GROUND: u32 = 0x8cb9f41f;
 /// The history arrows (Claude's `‹ ›`, claude/answer-done.png x 126 and
 /// 153), at `HISTORY_X` in the head row: `ICON_BUTTON` doors edge to edge, a 28pt pitch, the glyph
 /// `NAV_TOGGLE_GLYPH`. At an end the arrow is disabled in `INK_SUBTLE`:
@@ -983,13 +1009,77 @@ pub const PANEL_PAD_B: f32 = SPACE_2;
 /// does: a 16px hit strip, the 6px hovered thumb 5px from either side.
 pub const PANEL_SCROLLBAR_INSET: f32 = 5.0;
 const _: () = assert!(PANEL_PAD_R == 2. * PANEL_SCROLLBAR_INSET + SCROLLBAR_THUMB_W_HOVER);
-/// 28px — a panel tab in the head row (`Overview` and a preview's), 10px
-/// inline padding; 2px between tabs.
+/// 28px — a tab inside a Surface (the Files editor's file tabs, the Changes
+/// scope), 10px inline padding.
 pub const PANEL_TAB_H: f32 = 28.0;
 pub const PANEL_TAB_PAD_X: f32 = 10.0;
-/// The Preview tab's label, the file's name cut from its start, is never
-/// wider than this: the tabs beside it keep their places.
-pub const PANEL_PREVIEW_TAB_MAX_W: f32 = 160.0;
+/// **The Panel's head row** (ADR 0039, T3's right panel,
+/// `t3-reference/panel-composer.md` §4.1): in the title row, 8 in on the
+/// left and 12 on the right (T3's `pl-2 pr-3`), its tabs, `+` and maximize
+/// `SURFACE_HEAD_GAP` apart (`gap-1`).
+pub const SURFACE_HEAD_PAD_L: f32 = SPACE_2;
+pub const SURFACE_HEAD_PAD_R: f32 = SPACE_3;
+pub const SURFACE_HEAD_GAP: f32 = SPACE_1;
+/// **A Surface tab** (T3's `h-6 max-w-36 rounded-md pl-1.5 pr-2 gap-0.5
+/// text-xs`): 24 tall, never wider than 144, its title `FS_BADGE` at
+/// `W_LABEL`; its leading 16px button (`SURFACE_TAB_CLOSE`, radius
+/// `SURFACE_TAB_CLOSE_R`) holds the kind's 12px icon, the tab's × under
+/// the pointer.
+pub const SURFACE_TAB_H: f32 = 24.0;
+pub const SURFACE_TAB_MAX_W: f32 = 144.0;
+pub const SURFACE_TAB_PAD_L: f32 = 6.0;
+pub const SURFACE_TAB_PAD_R: f32 = SPACE_2;
+pub const SURFACE_TAB_GAP: f32 = SPACE_0_5;
+pub const SURFACE_TAB_CLOSE: f32 = 16.0;
+pub const SURFACE_TAB_CLOSE_R: f32 = 4.0;
+pub const SURFACE_TAB_ICON: f32 = 12.0;
+/// A tab's pending dot (T3's `size-1.5 -right-0.5 -bottom-0.5`): 6 round,
+/// in the icon's ink at its bottom right, 2 out.
+pub const SURFACE_TAB_DOT: f32 = 6.0;
+pub const SURFACE_TAB_DOT_INSET: f32 = 2.0;
+/// How far a held tab moves sideways before it drags (T3's dnd-kit
+/// distance): a shorter move is a click.
+pub const SURFACE_TAB_DRAG: f32 = 6.0;
+/// The tab strip's overflow chevrons (T3's `RightPanelTabs`): each scrolls
+/// by `SURFACE_TAB_SCROLL_SHARE` of the visible width, never under
+/// `SURFACE_TAB_SCROLL_MIN`.
+pub const SURFACE_TAB_SCROLL_MIN: f32 = 120.0;
+pub const SURFACE_TAB_SCROLL_SHARE: f32 = 0.75;
+/// The head's `+` (T3's `icon-xs` ghost, `Plus size-3.5`).
+pub const SURFACE_PLUS: f32 = 24.0;
+pub const SURFACE_PLUS_GLYPH: f32 = 14.0;
+/// A Surface's own row under the head (the Files editor's tabs and doors,
+/// the Terminal's `⋯`), T3's side chat head (`h-9`).
+pub const SURFACE_BAR_H: f32 = 36.0;
+/// The Changes Surface's toolbar (T3's diff toolbar, `h-7 px-2 gap-2`).
+pub const SURFACE_TOOLBAR_H: f32 = 28.0;
+/// **The pull request Surface** (T3's `PullRequestDetailPanel`): its
+/// header's rows 28 tall (`h-7`), the `#N`'s link glyph 10; the views'
+/// segmented group at radius 8 on white 4.4% (`bg-input/40 p-0.5
+/// gap-0.5`), each segment 10 in (`px-2.5`), pressed on white 7.9%
+/// (`bg-input/72`); the merged or closed pill 7 in on white 3.5%
+/// (`bg-input/32`).
+pub const PR_ROW_H: f32 = 28.0;
+pub const PR_LINK_GLYPH: f32 = 10.0;
+pub const PR_GROUP_R: f32 = 8.0;
+pub const PR_GROUP_GROUND: u32 = 0xffffff0b;
+pub const PR_SEGMENT_PAD_X: f32 = 10.0;
+pub const PR_SEGMENT_PRESSED: u32 = 0xffffff14;
+pub const PR_PILL_PAD_X: f32 = 7.0;
+pub const PR_PILL_GROUND: u32 = 0xffffff09;
+/// **"Open a surface"** (T3's empty panel, `max-w-xs py-6`): its rows 32
+/// tall at radius 8, 10 in, 10 between icon and label, 2 apart;
+/// each ends in a soft key cap (`KEY_CAP_SOFT`, 20 square, white 7%).
+pub const SURFACE_EMPTY_W: f32 = 320.0;
+pub const SURFACE_EMPTY_ROW_H: f32 = 32.0;
+pub const SURFACE_EMPTY_ROW_R: f32 = 8.0;
+pub const SURFACE_EMPTY_ROW_PAD_X: f32 = 10.0;
+pub const KEY_CAP_SOFT: f32 = 20.0;
+pub const KEY_CAP_SOFT_R: f32 = 4.0;
+pub const KEY_CAP_SOFT_GROUND: u32 = 0xffffff12;
+/// The outline key cap (T3's `Kbd variant="outline"`, `border-foreground/15`):
+/// the Composer's `⇥ Tab` after a predicted follow-up.
+pub const KEY_CAP_OUTLINE_EDGE: u32 = 0xffffff26;
 /// The Panel while its Preview tab shows (SPEC §5.6.3): `PANEL_PREVIEW_SHARE`
 /// of the window, held between `PANEL_PREVIEW_MIN_W` and
 /// `PANEL_PREVIEW_MAX_W` — wide enough to read code at its own size — and
@@ -1076,9 +1166,6 @@ pub const BODY_PAD_B_GROUP: f32 = 14.0;
 /// The working line's down arrow before its token count: Lucide's
 /// `arrow-down` in the line's ink, a step under its text (`pane::working`).
 pub const WORKING_ARROW: f32 = 12.0;
-/// A long thread's date divider: the date's hairlines stand this far from
-/// its words (`transcript::date_divider`).
-pub const DATE_DIVIDER_GAP: f32 = SPACE_3;
 
 /// The Pane body's bottom padding: Solo's `BODY_PAD_B`, a Group Pane's
 /// `BODY_PAD_B_GROUP`.
@@ -1371,7 +1458,7 @@ pub fn init_components(cx: &mut gpui::App) {
 //   carries its `Copy` under it the same way.
 // - **Reading order.** Rows read down from the top of the body, as a new
 //   conversation does; the tail is followed once they overflow, and a
-//   reader scrolled away from it gets `Jump to latest`.
+//   reader scrolled away from it gets `Scroll to end`.
 // - **The pinned prompt.** The prompt of the turn being read stays pinned at
 //   the top of the body while its output scrolls under it: its own bubble,
 //   right-aligned, clamped to `PINNED_PROMPT_LINES`, on a plane in the
@@ -1389,10 +1476,13 @@ pub fn init_components(cx: &mut gpui::App) {
 //   a line and a half off; a row that answers the one above it sits flush.
 //   The space above a row is chosen at reconcile from the row before it
 //   (`rows::gap_before`) and is part of the row's identity.
-// - **The turn's end.** A turn that took `TURN_STAMP_MIN_MS` or more closes
-//   on `Worked for 5m 22s`, `INK_SUBTLE`, a `LINE` running on to the
-//   column's end; a quicker one says nothing. A failed or interrupted turn
-//   says `failed · 0.1s · <message>`, the lead word in its state ink.
+// - **The turn's header and fold** (ADR 0038). A running turn opens under
+//   its prompt with `Working for 11m 24s` over a faint rule (`TURN_FOLD_*`),
+//   its live step at its tail (`Running sed`, `Thinking`). Once it settles
+//   that row is the fold, `Worked for 24m 55s ›`, shut: the turn's work
+//   folds away under it, leaving the answer and what must stay in view
+//   (`transcript::turns`). A failed turn keeps every step and says `failed ·
+//   0.1s · <message>`, the lead word in its state ink.
 // - **Failure** is a word: a failed call's line stays in the work's ink and
 //   its verdict (`· failed`) follows the cut, `failed` in `BLOCKED`; what
 //   it printed reads as output does.
@@ -1442,16 +1532,9 @@ pub const HUNK_MAX_ROWS: usize = 24;
 /// 20px — an invisible hit area, not a drawn thing: a disclosure's gutter
 /// target (the whole row toggles too) and a prompt action's button.
 pub const TOOL_DISCLOSURE_HIT: f32 = GUTTER_W;
-/// **The tool group's card** (`pane::render_tool_group`, Claude's measured
-/// card, geometry.md "Tool group (open)"): each call's row
-/// `TOOL_CARD_ROW_H` for its line, its words `TOOL_CARD_INSET` in from the
-/// card's edges, the card hanging `CARD_OUTSET` past the column's left
-/// edge so its rows' words sit a step inside the prose.
-pub const TOOL_CARD_ROW_H: f32 = 36.0;
-pub const TOOL_CARD_INSET: f32 = SPACE_3;
 /// 4px — **one left edge** (Claude's): text sits on the transcript column
-/// and every card's ring hangs this far outside it — the tool group, the
-/// task list, a fence, a Decision.
+/// and every card's ring hangs this far outside it — the task list, a
+/// fence, a Decision.
 pub const CARD_OUTSET: f32 = SPACE_1;
 /// One cell of the transcript grid at reading size `size`: Geist Mono's
 /// advance (`CODE_ADVANCE`), 7.8px at Standard.
@@ -1465,37 +1548,89 @@ pub fn tx_gutter(size: f32) -> f32 {
     2.0 * tx_cell(size)
 }
 
-/// A drawn transcript mark (`∴`) at reading size `size`: sized like a glyph
-/// of the face, 12px at Standard (`GLYPH_BOX`).
-pub fn tx_mark(size: f32) -> f32 {
-    (size * GLYPH_BOX / FS_PROSE).round()
-}
-
 /// Half a transcript line, whole pixels: the prompt band's padding above
 /// and below its text.
 pub fn tx_half(line: f32) -> f32 {
     (line / 2.0).floor()
 }
 
-/// **The transcript's turn rhythm** at a line of `line` (21 at Standard),
-/// as Claude spaces it, scaling with the
-/// reading size: 40 from a prompt's bubble to whatever answers it, 22
-/// between a turn's prose and its calls (either way), 56 from a turn's last
-/// block to the next prompt.
+/// **The transcript's turn rhythm** at a line of `line` (`LH_PROSE` at
+/// Standard), scaling with the reading size: 40 from a prompt's bubble to
+/// whatever answers it, 22 between a turn's prose and its calls (either
+/// way), 56 from a turn's last block to the next prompt.
 pub fn tx_after_prompt(line: f32) -> f32 {
-    (line * 40. / 21.).round()
+    (line * 40. / LH_PROSE).round()
 }
 pub fn tx_work_prose(line: f32) -> f32 {
-    (line * 22. / 21.).round()
+    (line * 22. / LH_PROSE).round()
 }
 pub fn tx_turn_gap(line: f32) -> f32 {
-    (line * 56. / 21.).round()
+    (line * 56. / LH_PROSE).round()
 }
-/// The space between an answer's paragraphs (and its other blocks): 12 on
-/// the 21 line, Claude's 11 rounded to the grid, so an answer reads as one
+/// The space between an answer's paragraphs (and its other blocks): T3's
+/// 0.65rem (10.4) on the Standard line, whole, so an answer reads as one
 /// piece rather than as terminal output with a blank line between blocks.
 pub fn tx_paragraph_gap(line: f32) -> f32 {
-    (line * 12. / 21.).round()
+    (line * 10. / LH_PROSE).round()
+}
+
+/// **T3's row padding** (`TimelineRowContent`), the space under a message
+/// at the Standard size, scaling with the reading size `reading`: 16 under
+/// a prompt and under an answer with its meta (`pb-4`), 8 under an answer
+/// without (`pb-2`), 4 between two of the operator's prompts (`pb-1`).
+pub const TX_ROW_PAD: f32 = SPACE_4;
+pub const TX_ROW_PAD_BARE: f32 = SPACE_2;
+pub const TX_ROW_PAD_JOINED: f32 = SPACE_1;
+
+/// **A transcript divider** (T3's line / label / line, the date's and a
+/// context compaction's): `FS_BADGE` text `DIVIDER_GAP` from a hairline in
+/// `LINE` either side, `DIVIDER_PAD_Y` above and below; a compaction's
+/// label holds `DIVIDER_ICON` icons `DIVIDER_LABEL_GAP` from its words.
+pub const DIVIDER_GAP: f32 = SPACE_3;
+pub const DIVIDER_PAD_Y: f32 = SPACE_1;
+pub const DIVIDER_ICON: f32 = 12.0;
+pub const DIVIDER_LABEL_GAP: f32 = SPACE_1_5;
+
+/// **A subagent** (T3's `SubagentTimelineLink`): an `AGENT_ROW_PAD_X` ×
+/// `AGENT_ROW_PAD_Y` row at `AGENT_ROW_RADIUS`, `AGENT_ROW_GAP` between its
+/// parts, the `paint::HOVER` ground under the pointer: its `AGENT_AVATAR`
+/// disc (a 1px `LINE` ring at 70% on `AGENT_AVATAR_FILL`, cut
+/// `AGENT_RING` from the ground) holding the `AGENT_AVATAR_ICON` bot, an
+/// `AGENT_DOT` status dot at its foot; its task in `FS_BADGE` at `W_LABEL`
+/// over `AGENT_DETAIL_FS` on `AGENT_DETAIL_LH`; its time; an
+/// `AGENT_CHEVRON` `›`.
+pub const AGENT_ROW_GAP: f32 = 10.0;
+pub const AGENT_ROW_PAD_X: f32 = SPACE_2;
+pub const AGENT_ROW_PAD_Y: f32 = SPACE_1_5;
+pub const AGENT_ROW_RADIUS: f32 = SPACE_1_5;
+pub const AGENT_AVATAR: f32 = SPACE_6;
+pub const AGENT_AVATAR_ICON: f32 = 14.0;
+pub const AGENT_AVATAR_FILL: u32 = 0xffffff08;
+pub const AGENT_RING: f32 = 2.0;
+pub const AGENT_DOT: f32 = SPACE_2;
+pub const AGENT_DETAIL_FS: f32 = 11.0;
+pub const AGENT_DETAIL_LH: f32 = 18.0;
+pub const AGENT_CHEVRON: f32 = 14.0;
+/// **A subagent card** (T3's `V2SubagentGroup`): its trigger
+/// `AGENT_CARD_PAD_Y` above and below and `AGENT_CARD_PAD_R` at its right,
+/// at most `AGENT_AVATARS` avatars overlapping by `AGENT_AVATAR_OVERLAP`
+/// and a `+N` disc in `AGENT_MORE_FS` (the status line's size too);
+/// settled and shut, it recedes to `AGENT_CARD_SETTLED_OPACITY`. Open, its
+/// rows stand in a panel `AGENT_PANEL_MARGIN_Y` off it, `AGENT_PANEL_PAD`
+/// in, at `AGENT_PANEL_RADIUS` in a `LINE` ring at 60% on `CARD` at 30%.
+pub const AGENT_CARD_PAD_Y: f32 = SPACE_2;
+pub const AGENT_CARD_PAD_R: f32 = 13.0;
+pub const AGENT_AVATARS: usize = 3;
+pub const AGENT_AVATAR_OVERLAP: f32 = SPACE_1_5;
+pub const AGENT_MORE_FS: f32 = 10.0;
+pub const AGENT_CARD_SETTLED_OPACITY: f32 = 0.55;
+pub const AGENT_PANEL_MARGIN_Y: f32 = SPACE_1;
+pub const AGENT_PANEL_PAD: f32 = SPACE_1;
+pub const AGENT_PANEL_RADIUS: f32 = SPACE_2;
+
+/// A Standard-size step at reading size `reading`, whole pixels.
+pub fn tx_scaled(step: f32, reading: f32) -> f32 {
+    (step * reading / FS_PROSE).round()
 }
 /// A tight list's items stand this much further apart than their lines
 /// (Claude's 24 pitch on a 21 line).
@@ -1516,27 +1651,74 @@ pub const TX_COLUMN_MAX_W: f32 = 736.0;
 /// The reading column's width in a transcript `width` wide: the width less
 /// the insets, at most `TX_COLUMN_MAX_W`.
 pub fn tx_column(width: f32, solo: bool) -> f32 {
-    (width - 2. * tx_inset(solo)).min(TX_COLUMN_MAX_W)
+    (width - 2. * tx_inset_at(width, solo)).min(TX_COLUMN_MAX_W)
 }
 
-/// The transcript column's inset for a Solo (`solo`) or a Group Pane.
-pub fn tx_inset(solo: bool) -> f32 {
-    if solo {
-        TX_INSET_SOLO
-    } else {
-        TX_INSET_GROUP
+/// A Solo transcript's side padding (T3's chat canvas): `TX_INSET_WIDE`
+/// from `TX_INSET_BREAK` wide up, `TX_INSET_NARROW` under it. Either clears
+/// the minimap rail (`MINIMAP_W`).
+pub const TX_INSET_WIDE: f32 = 48.0;
+pub const TX_INSET_NARROW: f32 = 12.0;
+pub const TX_INSET_BREAK: f32 = 640.0;
+
+/// The transcript column's inset in a transcript `width` wide: a Solo
+/// Pane's by its width, a Group Pane's `TX_INSET_GROUP`.
+pub fn tx_inset_at(width: f32, solo: bool) -> f32 {
+    match solo {
+        true if width >= TX_INSET_BREAK => TX_INSET_WIDE,
+        true => TX_INSET_NARROW,
+        false => TX_INSET_GROUP,
     }
 }
 
-/// **The prompt bubble** (the prototype's `.bubble`): right-aligned,
+/// **The transcript's ground**: T3's timeline is black (`TX_GROUND`); a
+/// Group Pane is a card on the board and keeps `CARD`.
+pub const TX_GROUND: u32 = 0x000000;
+
+pub fn tx_ground(solo: bool) -> u32 {
+    if solo {
+        TX_GROUND
+    } else {
+        CARD
+    }
+}
+
+/// T3's top fade (`topbar-scroll-fade`) over `EDGE_FADE`, as the ground's
+/// alpha from the edge: its mask's stops inverted.
+pub const TX_TOP_FADE_STOPS: [(f32, f32); 7] = [
+    (0.0, 1.0),
+    (0.10, 0.90),
+    (0.24, 0.70),
+    (0.42, 0.42),
+    (0.62, 0.18),
+    (0.82, 0.04),
+    (1.0, 0.0),
+];
+
+/// **The prompt bubble** (T3's `UserMessageRow`): right-aligned,
 /// shrinking to its words, never wider than `PROMPT_BUBBLE_MAX_W` of the
-/// column; `paint::PROMPT_BUBBLE` at `R_CARD`, `PROMPT_BUBBLE_PAD_X` either side
-/// and `PROMPT_BUBBLE_PAD_Y` above and below; `PROMPT_BUBBLE_GAP` between
-/// it, its thumbnails and its send time.
-pub const PROMPT_BUBBLE_MAX_W: f32 = 0.84;
-pub const PROMPT_BUBBLE_PAD_X: f32 = SPACE_4;
-pub const PROMPT_BUBBLE_PAD_Y: f32 = 10.0;
+/// column; `paint::PROMPT_BUBBLE` at `PROMPT_BUBBLE_RADIUS`,
+/// `PROMPT_BUBBLE_PAD_X` either side and `PROMPT_BUBBLE_PAD_Y` above and
+/// below; `PROMPT_BUBBLE_GAP` between it and its thumbnails, and
+/// `PROMPT_ACTIONS_GAP` over its actions. Two prompts in a row join on
+/// `PROMPT_BUBBLE_JOIN_RADIUS` corners (the upper's bottom right, the
+/// lower's top right).
+pub const PROMPT_BUBBLE_MAX_W: f32 = 0.80;
+pub const PROMPT_BUBBLE_PAD_X: f32 = SPACE_3;
+pub const PROMPT_BUBBLE_PAD_Y: f32 = SPACE_3;
 pub const PROMPT_BUBBLE_GAP: f32 = SPACE_1_5;
+pub const PROMPT_BUBBLE_RADIUS: f32 = SPACE_4;
+pub const PROMPT_BUBBLE_JOIN_RADIUS: f32 = SPACE_1_5;
+pub const PROMPT_ACTIONS_GAP: f32 = SPACE_1;
+/// **A long prompt** (over `PROMPT_CLAMP_CHARS` visible characters or
+/// `PROMPT_CLAMP_LINES` lines) clamps to `PROMPT_CLAMP_H` under a
+/// `PROMPT_CLAMP_FADE` fade at its foot, with `Show full message` /
+/// `Show less` `PROMPT_CLAMP_TOGGLE_GAP` under it (T3's `max-h-44`).
+pub const PROMPT_CLAMP_CHARS: usize = 600;
+pub const PROMPT_CLAMP_LINES: usize = 8;
+pub const PROMPT_CLAMP_H: f32 = 176.0;
+pub const PROMPT_CLAMP_FADE: f32 = 28.0;
+pub const PROMPT_CLAMP_TOGGLE_GAP: f32 = SPACE_1_5;
 
 /// **A sent image's thumbnail** (Claude's, over its bubble): the picture
 /// at its own proportions, no larger than `THUMB_MAX_W` × `THUMB_MAX_H`
@@ -1593,8 +1775,8 @@ pub const MINIMAP_BAND_HOVER: u32 = 0xffffff1c;
 
 /// The room over a transcript's first row: a Solo Pane's `TX_PAD_T`, a
 /// board Pane's `TX_PAD_T_BOARD`, so a first prompt's bubble never meets
-/// the head's rule.
-pub const TX_PAD_T: f32 = LH_UI;
+/// the head's rule (T3's `h-4` top spacer in Solo).
+pub const TX_PAD_T: f32 = SPACE_4;
 pub const TX_PAD_T_BOARD: f32 = SPACE_3;
 /// What a prompt band's chip line adds below it: the prototype's chip is an
 /// `inline-flex` box seated on its icon's synthesized baseline, which lifts
@@ -1615,25 +1797,103 @@ pub const TEST_BAR_EASE_MS: u64 = 300;
 pub const PATH_UNDERLINE_W: f32 = 1.0;
 pub const PATH_UNDERLINE_OFFSET: f32 = 3.0;
 // ---- transcript app pass (owner: transcript.rs and its rows)
-/// A completed turn closes with `Worked for 5m 22s` only when it took at
-/// least this long: a quick answer needs no receipt. An interrupted or
-/// failed turn always says so.
-pub const TURN_STAMP_MIN_MS: u64 = 30_000;
-/// The turn stamp's rule runs from its words to the column's end, this far
-/// after them.
-pub const TURN_STAMP_RULE_GAP: f32 = SPACE_3;
-/// **Message actions**: a prompt's (its send time and `Copy`, under its
-/// bubble's right edge) and a turn's answer's (`Copy` and the time it
-/// finished, under its left edge), `MESSAGE_ACTIONS_GAP` under the message,
-/// laid out at rest so the pointer never moves the transcript. They show
+/// **A turn's header and fold** (T3's `WorkingTimelineRow` and turn fold,
+/// MessagesTimeline.tsx:1621-1652; ADR 0038): `Working for 11m 24s` under
+/// the running turn's prompt, the same row `Worked for 24m 55s ›` once it
+/// settles, at any duration. `TURN_FOLD_PAD_T` above the words,
+/// `TURN_FOLD_TEXT_B` under them to a 1px rule of `TURN_FOLD_RULE` (T3's
+/// `--border` at 60%, white 4.8%) the column's width, then the row's own
+/// `TURN_FOLD_PAD_B` (`rows::gap_before`). The words are `TURN_FOLD_TEXT` on
+/// `TURN_FOLD_LINE` in `INK_SUBTLE`, tabular, on a `TURN_FOLD_ROW_H` row
+/// inset `TURN_FOLD_INSET`; the fold's chevron (`TURN_FOLD_CHEVRON`) stands
+/// `TURN_FOLD_GAP` after them, and the row keeps `TURN_FOLD_END` at its
+/// end. Under the pointer the words and chevron go to `INK_STRONG` over
+/// `MOTION_FOLD_HOVER_MS`, and the turn's start time snaps in at the end.
+pub const TURN_FOLD_PAD_T: f32 = SPACE_1;
+pub const TURN_FOLD_TEXT_B: f32 = SPACE_2;
+pub const TURN_FOLD_PAD_B: f32 = 6.0;
+pub const TURN_FOLD_RULE: u32 = 0xffffff0c;
+pub const TURN_FOLD_TEXT: f32 = 14.0;
+pub const TURN_FOLD_LINE: f32 = 22.75;
+pub const TURN_FOLD_ROW_H: f32 = 24.0;
+pub const TURN_FOLD_INSET: f32 = SPACE_1;
+pub const TURN_FOLD_END: f32 = 2.0;
+pub const TURN_FOLD_CHEVRON: f32 = 14.0;
+pub const TURN_FOLD_GAP: f32 = SPACE_1;
+/// The fold's hover time: 12px, `SPACE_1` off the row's end.
+pub const TURN_FOLD_TIME: f32 = 12.0;
+/// The compacting header's icon, `TURN_FOLD_ICON_GAP` before its words.
+pub const TURN_FOLD_ICON: f32 = 12.0;
+pub const TURN_FOLD_ICON_GAP: f32 = SPACE_2;
+/// **Work rows** (T3 Code's `WorkLogLine`): every call, thought and update
+/// is a row at least `WORK_ROW_H` tall, `WORK_ROW_TEXT` on `WORK_ROW_LINE`
+/// in `INK_SUBTLE` (an update's words `INK_STRONG` at `WORK_UPDATE_ALPHA`),
+/// `WORK_ROW_PAD_X` in from the column and `WORK_ROW_PAD_Y` over and under
+/// it alone (none in a group's list). It leads with a `WORK_ICON` glyph
+/// centred in a `WORK_GUTTER` cell, `INK_SUBTLE` at `WORK_ICON_ALPHA` and
+/// stroked `WORK_ICON_STROKE` (Lucide's own), then `WORK_GAP`, the one-line
+/// label cut with `…`, then at the end its time (`WORK_TIME` type,
+/// `WORK_TIME_END` off the chevron slot) shown only under the pointer and
+/// taking no room at rest, and a `WORK_CHEVRON_SLOT` holding a
+/// `WORK_CHEVRON` chevron at `WORK_ICON_ALPHA`, turned a quarter over
+/// `MOTION_WORK_CHEVRON_MS` when open and kept, invisible, on a row that
+/// cannot open. Rows touch; the run stands `WORK_LOG_PAD_B` off what
+/// follows (`rows::gap_before`). A failed call's icon is `TOOL_ERROR_ICON`
+/// at `TOOL_ERROR_ALPHA`, its words no different.
+pub const WORK_ROW_H: f32 = 24.0;
+pub const WORK_ROW_TEXT: f32 = 14.0;
+pub const WORK_ROW_LINE: f32 = 22.75;
+pub const WORK_ROW_PAD_X: f32 = 2.0;
+pub const WORK_ROW_PAD_Y: f32 = 2.0;
+pub const WORK_ROW_RADIUS: f32 = 6.0;
+pub const WORK_ICON: f32 = 16.0;
+pub const WORK_GUTTER: f32 = 24.0;
+pub const WORK_GAP: f32 = 6.0;
+pub const WORK_ICON_STROKE: f32 = 2.0 * WORK_ICON / 24.0;
+pub const WORK_ICON_ALPHA: f32 = 0.7;
+pub const WORK_UPDATE_ALPHA: f32 = 0.8;
+pub const WORK_TIME: f32 = 12.0;
+pub const WORK_TIME_END: f32 = SPACE_1;
+pub const WORK_CHEVRON_SLOT: f32 = 16.0;
+pub const WORK_CHEVRON: f32 = 12.0;
+pub const MOTION_WORK_CHEVRON_MS: u64 = 200;
+pub const WORK_LOG_PAD_B: f32 = SPACE_2;
+pub const TOOL_ERROR_ICON: u32 = 0xfca5a5;
+pub const TOOL_ERROR_ALPHA: f32 = 0.4;
+/// **A work row's detail** (T3's `WorkLogDetails`): a thought's body and an
+/// error's message stand `WORK_DETAIL_INDENT` in, past the icon gutter, a
+/// thought's at most `THOUGHT_BODY_MAX_H` tall and scrolling in itself; a
+/// command's output at most `COMMAND_OUTPUT_MAX_H`, any other call's body
+/// `FALLBACK_BODY_MAX_H`, in `WORK_DETAIL_CODE` mono.
+pub const WORK_DETAIL_INDENT: f32 = 28.0;
+pub const THOUGHT_BODY_MAX_H: f32 = 384.0;
+pub const COMMAND_OUTPUT_MAX_H: f32 = 320.0;
+pub const FALLBACK_BODY_MAX_H: f32 = 256.0;
+pub const WORK_DETAIL_CODE: f32 = 11.0;
+/// **An open group's list** (T3's `ExpandedWorkGroupEntries`): its rows
+/// plainly, no card, no rules, at most `WORK_LIST_MAX_H` (or half the view,
+/// whichever is less) plus what its opened rows add, scrolling in itself;
+/// `WORK_LIST_FADE` fades at whichever edge has rows past it, and
+/// `WORK_LIST_PAD_B` under it.
+pub const WORK_LIST_MAX_H: f32 = 288.0;
+pub const WORK_LIST_FADE: f32 = SPACE_6;
+pub const WORK_LIST_PAD_B: f32 = SPACE_1;
+/// **Message actions**: a prompt's (its send time, `Edit from here` and
+/// `Copy`, `PROMPT_ACTIONS_GAP` under its bubble's right edge) and a turn's
+/// answer's meta (`Copy`, `Fork` and the time it finished,
+/// `MESSAGE_ACTIONS_GAP` under its left edge), laid out at rest so the
+/// pointer never moves the transcript. Times read T3's way (`8:26 pm`,
+/// `yesterday at 8:26 pm`: `clock::day_aware_label`). They show
 /// under the pointer anywhere on the message, and always under the
 /// thread's latest answer (Codex: the last answer is where you act). Each is
 /// a `MESSAGE_ACTION` square at `R_CONTROL`, its `MESSAGE_ACTION_GLYPH` icon
 /// in `INK_SUBTLE`, the raised hover blend; a copy turns to a check for
 /// `COPIED_HOLD_MS`. The time is meta type in `INK_SUBTLE`.
 pub const MESSAGE_ACTION: f32 = SPACE_6;
-pub const MESSAGE_ACTION_GLYPH: f32 = 14.0;
-pub const MESSAGE_ACTIONS_GAP: f32 = SPACE_2;
+/// A worded message action's side padding (T3's xs button, `px-[7px]`).
+pub const MESSAGE_ACTION_PAD_X: f32 = 7.0;
+pub const MESSAGE_ACTION_GLYPH: f32 = 12.0;
+pub const MESSAGE_ACTIONS_GAP: f32 = SPACE_1_5;
 pub const COPIED_HOLD_MS: u64 = 1_500;
 /// **The edge fades**: what scrolls under the top of the transcript (or
 /// under its pinned prompt) fades out over this height into the card, so no
@@ -1645,22 +1905,36 @@ pub const COPIED_HOLD_MS: u64 = 1_500;
 /// (`components::edge_fade`).
 pub const EDGE_FADE: f32 = SPACE_6;
 pub const EDGE_FADE_KNEE: f32 = 0.85;
-/// **A turn's cards** (Claude's file and preview cards): under a finished
-/// turn's answer, one card for each page it wrote or named and each other
-/// file it wrote, `OUTPUT_CARD_GAP` apart, each at most `OUTPUT_CARD_W`
-/// wide and `OUTPUT_CARD_H` tall at `R_CARD` on `paint::RAISED` in a 1px
-/// `paint::LINE` ring, `OUTPUT_CARD_PAD` in. A page's leads with its
-/// thumbnail (`OUTPUT_THUMB_W` by the card's inner height, the globe in
-/// `INK_SUBTLE` on `CARD`), a file's with its mark in an
-/// `OUTPUT_ICON_TILE` square; then the name in `INK_STRONG` at `W_LABEL`
-/// over what it is in `INK_SUBTLE` meta type, and at the right a page's
-/// `Open` and `⋯`, a file's `Open in ›`. Its menu is a context menu's.
+/// **A turn's cards** (Claude's preview cards): under a finished turn's
+/// answer, one card for each page it wrote or named, `OUTPUT_CARD_GAP`
+/// apart, each at most `OUTPUT_CARD_W` wide and `OUTPUT_CARD_H` tall at
+/// `R_CARD` on `paint::RAISED` in a 1px `paint::LINE` ring,
+/// `OUTPUT_CARD_PAD` in. It leads with its thumbnail (`OUTPUT_THUMB_W` by
+/// the card's inner height, the globe in `INK_SUBTLE` on `CARD`); then the
+/// name in `INK_STRONG` at `W_LABEL` over what it is in `INK_SUBTLE` meta
+/// type, and at the right `Open` and `⋯`. Its menu is a context menu's.
 pub const OUTPUT_CARD_W: f32 = 400.0;
 pub const OUTPUT_CARD_H: f32 = 56.0;
 pub const OUTPUT_CARD_PAD: f32 = SPACE_2;
 pub const OUTPUT_CARD_GAP: f32 = SPACE_2;
-pub const OUTPUT_ICON_TILE: f32 = 40.0;
 pub const OUTPUT_THUMB_W: f32 = 64.0;
+/// **The changed-files card** (T3's): above the turn's page cards, at the
+/// message's width at `R_CARD` in a 1px `paint::LINE` ring. Its head,
+/// `CHANGES_HEAD_H` tall and `CHANGES_PAD_X` in, reads `N changed files`
+/// with the lines gained in `DIFF_ADDED_SIGN` and lost in
+/// `DIFF_REMOVED_SIGN`, then `Expand all` and `Open diff` at the right.
+/// Under a rule the tree: `CHANGES_ROW_H` rows, a folder (its one-child
+/// chain read as one, `src/ui`) shut until opened, each level
+/// `CHANGES_INDENT_STEP` further in from `CHANGES_INDENT`, its glyph
+/// `CHANGES_GLYPH`; a file's counts at the row's right. A press on a file
+/// opens the Changes Surface on it.
+pub const CHANGES_HEAD_H: f32 = 36.0;
+pub const CHANGES_PAD_X: f32 = 12.0;
+pub const CHANGES_ROW_H: f32 = 28.0;
+pub const CHANGES_INDENT: f32 = 8.0;
+pub const CHANGES_INDENT_STEP: f32 = 14.0;
+pub const CHANGES_GLYPH: f32 = 14.0;
+pub const CHANGES_TREE_PAD_Y: f32 = 4.0;
 /// **The lightbox** (Claude's): an image over the whole window on
 /// `LIGHTBOX_VEIL`, darkening in over `FADE_QUICK`. A bar
 /// `LIGHTBOX_BAR_H` tall along its top holds the file's name at the left
@@ -1682,45 +1956,54 @@ pub const LINE_FADE: f32 = SPACE_6;
 /// `PINNED_PROMPT_PAD_Y` above and below the bubble.
 pub const PINNED_PROMPT_LINES: usize = 2;
 pub const PINNED_PROMPT_PAD_Y: f32 = SPACE_2;
-/// **Jump to latest**: while the reader is scrolled away from the tail, a
-/// `JUMP_LATEST` circle (the plane's fill in a 1px `LINE` ring, no shadow:
-/// Codex's flat button) with the down arrow floats centred
-/// `JUMP_LATEST_INSET` above the transcript's foot; a click snaps to the
-/// tail and follows it again.
-pub const JUMP_LATEST: f32 = 32.0;
-pub const JUMP_LATEST_INSET: f32 = SPACE_3;
-/// **Reply to a selection** (Claude's `SelectionTooltip`): a drag that
-/// selects a passage ends with a pill centred over its first line, its foot
-/// `SELECTION_REPLY_GAP` above it (under its last when there is no room
-/// above; never on the selected text): `Start a side chat` | `Reply` (`FS_UI`,
-/// body weight, `INK_STRONG`), each `SELECTION_REPLY_PAD_X` either side
-/// and `SELECTION_REPLY_PAD_Y` above and below (Claude's 12 and 6), a
-/// `FLOAT_EDGE` hairline `SELECTION_REPLY_DIVIDER_H` tall between them.
-/// The pill is a float (`paint::FLOAT` inside its `FLOAT_EDGE` ring, the
-/// float shadow), an action lit `FLOAT_HOVER` under the pointer
-/// (claude/selection-pill.png). Its radius is Claude's 8, the one pill off
-/// the three-radius family.
-pub const SELECTION_REPLY_GAP: f32 = SPACE_1_5;
-pub const SELECTION_REPLY_PAD_X: f32 = SPACE_3;
-pub const SELECTION_REPLY_PAD_Y: f32 = SPACE_1_5;
-pub const SELECTION_REPLY_DIVIDER_H: f32 = 14.0;
-pub const SELECTION_REPLY_RADIUS: f32 = 8.0;
-/// **The Reply card** (Claude's, `claude/reply-popover.png`): what `Reply`
-/// opens over the selection. A float `REPLY_CARD_W` wide, `REPLY_CARD_PAD`
-/// inside its ring: the passage in `INK_SUBTLE`, cut at
-/// `REPLY_CARD_QUOTE_LINES` lines with an ellipsis, then a one-line field
-/// (`Reply to Claude`) `REPLY_CARD_GAP` under it and the send button at its
-/// right. Sent, it becomes a tile in the Composer's tray
-/// (`claude/reply-sent-chip.png`), an image card's size, ring and `×`: the
-/// typed words behind a quote bar at its top, cut at `REPLY_TILE_LINES`, a
-/// muted `Reply` at its foot, on the file chip's `RAISED` ground.
-pub const REPLY_CARD_W: f32 = 280.0;
-pub const REPLY_CARD_PAD: f32 = SPACE_3;
-pub const REPLY_CARD_GAP: f32 = SPACE_2;
-pub const REPLY_CARD_QUOTE_LINES: usize = 2;
-/// The field wraps and grows a row at a time (the Composer's own ease) up to
-/// this many, the card growing upward from its foot; past it the field scrolls.
-pub const REPLY_CARD_FIELD_ROWS: usize = 4;
+/// **Scroll to end** (T3 Code's `ScrollToEndButton`): while the reader is
+/// scrolled away from the tail, a pill floats centred over the transcript's
+/// foot, its own foot `SCROLL_END_INSET` above the Composer's top:
+/// `SCROLL_END_H` tall, fully rounded, `SCROLL_END_PAD_X` either side, the
+/// 14px chevron-down and `Scroll to end` (`FS_BADGE`, medium) with
+/// `· N queued` after it while prompts wait. Its ground is the plane's
+/// opaque fill (T3's glass without the blur Ferrite cannot draw), in a 1px
+/// `SCROLL_END_BORDER` ring that strengthens to `SCROLL_END_BORDER_HOVER`
+/// under the pointer, and a small shadow. It shows `SCROLL_END_SHOW_DELAY_MS`
+/// after it is first wanted and goes at once; a click eases to the tail
+/// (`MOTION_SCROLL_MAX_MS`) and follows it again.
+pub const SCROLL_END_H: f32 = 24.0;
+pub const SCROLL_END_PAD_X: f32 = 7.0;
+pub const SCROLL_END_INSET: f32 = 10.0;
+pub const SCROLL_END_GAP: f32 = SPACE_1;
+pub const SCROLL_END_GLYPH: f32 = 14.0;
+/// T3's `border-border/60` and `border-border` (dark `--border` is white 8%).
+pub const SCROLL_END_BORDER: Paint = Paint(0xffffff0c);
+pub const SCROLL_END_BORDER_HOVER: Paint = Paint(0xffffff14);
+/// T3's `shadow-sm` (`0 1px 3px` and `0 1px 2px -1px`, black 10%): the
+/// one cast besides a float's, so the pill reads over the rows it floats on.
+pub const SHADOW_PILL: u32 = 0x0000001a;
+/// **The send anchor**: a sent prompt lands this far below the
+/// transcript's top (T3's `CHAT_LIST_ANCHOR_OFFSET`).
+pub const TX_SEND_ANCHOR_OFFSET: f32 = 16.0;
+/// **Cite a selection** (T3's `AssistantSelectionToolbar`): a drag that
+/// selects a passage ends with a glass button at the pointer, `Cite` (the
+/// Quote icon `SELECTION_CITE_ICON` then its words, 12px medium), beside
+/// `Start a side chat`. `SELECTION_CITE_H` tall, fully rounded inside a 1px
+/// `FLOAT_EDGE` ring, padded `SELECTION_CITE_PAD_X`, the float shadow, on
+/// `paint::FLOAT` (no backdrop blur in GPUI). It stands where the mouse went
+/// up, held `SELECTION_CITE_EDGE` inside the window; with the pointer more
+/// than `SELECTION_CITE_NEAR` from the selection, `SELECTION_CITE_BELOW`
+/// under its last line. A double or triple click shows it after
+/// `SELECTION_CITE_MULTI_CLICK_MS`.
+pub const SELECTION_CITE_H: f32 = 24.0;
+pub const SELECTION_CITE_PAD_X: f32 = 7.0;
+pub const SELECTION_CITE_ICON: f32 = 14.0;
+pub const SELECTION_CITE_ICON_GAP: f32 = SPACE_1_5;
+pub const SELECTION_CITE_GAP: f32 = SPACE_1_5;
+pub const SELECTION_CITE_EDGE: f32 = 8.0;
+pub const SELECTION_CITE_NEAR: f32 = 8.0;
+pub const SELECTION_CITE_BELOW: f32 = 4.0;
+pub const SELECTION_CITE_MULTI_CLICK_MS: u64 = 500;
+/// A sent Reply in the Composer's tray (`claude/reply-sent-chip.png`), an
+/// image card's size, ring and `×`: the typed words behind a quote bar at
+/// its top, cut at `REPLY_TILE_LINES`, a muted `Reply` at its foot, on the
+/// file chip's `RAISED` ground.
 pub const REPLY_TILE_LINES: usize = 3;
 /// **The side chat** (Claude's, `claude/sidechat-open.png`): the right
 /// pane's other body, `SIDE_CHAT_W` wide beside the thread, which reflows
@@ -1731,10 +2014,9 @@ pub const REPLY_TILE_LINES: usize = 3;
 /// `Ask a quick question` for its placeholder and `↵` at its foot. Expanded,
 /// the pane covers the whole content area. Every change is one frame.
 pub const SIDE_CHAT_W: f32 = 420.0;
-pub const SIDE_CHAT_TAB_MAX_W: f32 = 180.0;
 pub const SIDE_CHAT_INSET: f32 = SPACE_2;
-/// The Terminal's column in the dock (Claude's measures the side chat's
-/// width, `terminal-open.png`).
+/// The Panel's least width while a Terminal shows (Claude's measures the
+/// side chat's width, `terminal-open.png`).
 pub const TERMINAL_W: f32 = SIDE_CHAT_W;
 /// **The terminal's grid** (`terminal-open.png`): the code face at
 /// `FS_TERMINAL` on `LH_TERMINAL` rows, in from the column's edge by
@@ -1767,10 +2049,10 @@ pub const TERMINAL_PILL_LIFT: f32 = 28.0;
 /// `FILES_INDENT` in, a git status marked by a `FILES_STATUS_DOT` dot at
 /// the row's end.
 pub const FILES_TREE_W: f32 = 240.0;
-/// How the dock shares the room right of the nav (`files-code.png`: the
-/// dock 1000 of 1666, the thread 666): Files and Changes take
-/// `FILES_SHARE` of it, never under `FILES_MIN_W`, and the thread keeps at
-/// least `DOCK_THREAD_MIN_W`.
+/// The Panel's least width while Files or Changes shows (`files-code.png`:
+/// the column 1000 of 1666, the thread 666): `FILES_SHARE` of the room
+/// right of the nav, never under `FILES_MIN_W`. Wide or maximized, the
+/// thread keeps at least `DOCK_THREAD_MIN_W`.
 pub const FILES_SHARE: f32 = 0.6;
 pub const FILES_MIN_W: f32 = 420.0;
 pub const DOCK_THREAD_MIN_W: f32 = 480.0;
@@ -2025,6 +2307,23 @@ pub const FAILURE_STRIP_PAD_R: f32 = SPACE_1_5;
 pub const FAILURE_STRIP_ICON: f32 = 14.0;
 pub const RETRY_H: f32 = 26.0;
 pub const RETRY_PAD_X: f32 = 10.0;
+
+/// The background-work line at the transcript's foot (T3's
+/// `ThreadNowLine`): 12px muted words, 6px between the 14px icon, the
+/// words and the actions (`BACKGROUND_LINE_ACTIONS_GAP` apart), 4px in at
+/// each side, 8px under it.
+pub const BACKGROUND_LINE_GAP: f32 = SPACE_1_5;
+pub const BACKGROUND_LINE_PAD_X: f32 = SPACE_1;
+pub const BACKGROUND_LINE_PAD_B: f32 = SPACE_2;
+pub const BACKGROUND_LINE_ICON: f32 = 14.0;
+/// The `Background work` dialog (T3's `BackgroundWorkDetails`): a sheet
+/// 512 wide, one section per task 20px apart.
+pub const BACKGROUND_DIALOG_W: f32 = 512.0;
+pub const BACKGROUND_DIALOG_MAX_H: f32 = 560.0;
+pub const BACKGROUND_DIALOG_SECTION_GAP: f32 = 20.0;
+/// What follows the title (`label: activity`) reads at 60% of the muted ink.
+pub const BACKGROUND_LINE_DETAIL_OPACITY: f32 = 0.6;
+pub const BACKGROUND_LINE_ACTIONS_GAP: f32 = 10.0;
 /// The floor a head title keeps however narrow the head (a shorter title
 /// keeps its whole text). There is no cap — a long title takes the width
 /// the head has.
@@ -2129,6 +2428,15 @@ pub const BAR_MARK: f32 = 11.0;
 pub const HERO_MARK: f32 = 48.0;
 pub const HERO_MARK_INK: u32 = TEXT_FAINT;
 pub const HERO_MARK_GAP: f32 = 28.0;
+/// Under this window height the hero's lead words give way and the project
+/// word stands alone (T3's `max-height: 28rem`).
+pub const HERO_SHORT_WINDOW: f32 = 448.0;
+/// The Project switcher's word and rule as alphas of `INK_SUBTLE` (T3's
+/// muted at 60% over a rule at 35%; 80% and 60% under the pointer).
+pub const HERO_SWITCHER_INK: u32 = 0x99;
+pub const HERO_SWITCHER_INK_HOVER: u32 = 0xcc;
+pub const HERO_SWITCHER_RULE: u32 = 0x59;
+pub const HERO_SWITCHER_RULE_HOVER: u32 = 0x99;
 /// **The env strip** over an empty Thread's or a draft's box, Codex's
 /// (codex/home.png): #282828 between the plane #181818 and the box #363636
 /// there — here the step between `CARD` and `FIELD` — `ENV_STRIP_H` tall
@@ -2139,7 +2447,7 @@ pub const ENV_STRIP: u32 = 0x262626;
 pub const ENV_STRIP_H: f32 = 38.0;
 pub const ENV_STRIP_INSET: f32 = SPACE_3;
 pub const ENV_STRIP_PAD_X: f32 = SPACE_2;
-pub const ENV_MARK: f32 = 14.0;
+pub const ENV_MARK: f32 = 12.0;
 pub const ENV_MARK_GAP: f32 = SPACE_1_5;
 pub const ENV_CHIP_GAP: f32 = SPACE_3;
 // (end WP-C) — append above this line only
@@ -2152,7 +2460,7 @@ pub const ENV_CHIP_GAP: f32 = SPACE_3;
 /// under the reading column: at most `TX_COLUMN_MAX_W` wide, centred as
 /// the transcript is, and never nearer the card's sides and foot than
 /// `COMPOSER_INSET` (the shelf keeps the same column):
-/// `paint::FIELD` at `R_FLOAT`, a 1px `FIELD_RING` laid outside it (it takes
+/// `paint::FIELD` at `R_COMPOSER`, a 1px `FIELD_RING` laid outside it (it takes
 /// no layout).
 ///
 /// - **The working line** is not the stack's: it is the transcript's last
@@ -2222,21 +2530,27 @@ pub const PLACEHOLDER_GAP: f32 = CARET_W + SPACE_1;
 /// One selection colour app-wide: the Composer paints the transcript's
 /// native selection wash under its selected runs.
 pub const COMPOSER_SELECTION: u32 = TEXT_SELECTION_WASH;
-/// A chip in the Composer's line — a picked `@` mention, a `/command`
-/// the Session knows: `LINK_INK` (a path, a command: the link blue) on a
-/// `MENTION_CHIP` ground (that blue at 16%) at `R_CONTROL`, the ground
-/// `MENTION_CHIP_INSET_Y` inside the row and reaching `MENTION_CHIP_PAD_X`
-/// past the token either side (at most half into the space beside it).
-pub const MENTION_INK: u32 = LINK_INK;
-pub const MENTION_CHIP: u32 = 0x7aa8ee29;
-pub const MENTION_CHIP_PAD_X: f32 = 3.0;
-pub const MENTION_CHIP_INSET_Y: f32 = 1.0;
-/// A skill (`/name`) in the Composer's line and in a sent prompt (Claude's,
-/// `claude/parity/slash-picked.png`, `skill-sent-bubble.png`): blue ink and
-/// no ground. Under the pointer in a bubble it takes `SKILL_HOVER`, a faint
-/// blue wash behind the token alone (`skill-hover.png`).
-pub const SKILL_INK: u32 = 0x5ea1ea;
-pub const SKILL_HOVER: u32 = 0x5ea1ea26;
+/// A token in the Composer's line and in a sent prompt (T3's context
+/// chips, `contextChipAccents.ts`, all at L 0.62): no ground, `W_LABEL`, the
+/// kind's accent, underlined only under the pointer. A skill (`$name`) is
+/// `SKILL_INK` (`oklch(0.62 0.16 322)`) after Lucide's cube
+/// (`icons::BOX`, stroked `SKILL_ICON_STROKE`); a file (`@path`)
+/// `FILE_INK` (`oklch(0.62 0.136 237)`) after its type icon; a `/command`
+/// the Session knows `MENTION_INK` (`oklch(0.62 0.11 215)`), no icon. The
+/// icon is `TOKEN_ICON` (1em) square, standing where the sigil was.
+pub const SKILL_INK: u32 = 0xb261be;
+pub const FILE_INK: u32 = 0x0090cd;
+pub const MENTION_INK: u32 = 0x0096af;
+/// A Thread linked in prose (`oklch(0.62 0.12 190)`): the same chip as a
+/// file link, a teal accent.
+pub const THREAD_INK: u32 = 0x009c96;
+pub const SKILL_ICON_STROKE: f32 = 1.85;
+pub const TOKEN_ICON: f32 = FS_COMPOSER;
+/// Between a sent token's icon and its name (T3's `gap-[0.2em]`).
+pub const TOKEN_ICON_GAP_EM: f32 = 0.2;
+/// A selected token's wash (T3's node selection): the one selection
+/// colour, at this radius.
+pub const TOKEN_SELECTION_R: f32 = 4.0;
 /// The skill's card above it: the description wraps at this width.
 pub const SKILL_TIP_W: f32 = 260.0;
 /// The panel's Context section (`pane::context_usage`): its stacked bar
@@ -2388,9 +2702,31 @@ pub const TOOL_CHIP_LOGO: f32 = 13.0;
 /// readable; a longer label (a provider's native mode) cuts here
 /// (`pane::composer_toolbar`).
 pub const TOOLBAR_LEAD_MAX_W: f32 = 180.0;
-/// The send circle (28) and its arrow (14).
-pub const COMPOSER_SEND: f32 = 28.0;
+/// The send circle (T3's `sm:h-8 sm:w-8`, 32) and its arrow (14), growing
+/// to `MOTION_SEND_HOVER_SCALE` under the pointer.
+pub const COMPOSER_SEND: f32 = 32.0;
 pub const COMPOSER_SEND_ICON: f32 = 14.0;
+pub const MOTION_SEND_HOVER_SCALE: f32 = 1.05;
+/// T3's send arrow strokes 1.8 at 14.
+pub const SEND_ARROW_STROKE: f32 = 1.8;
+/// The send circle lit (T3's `--message-action`, its dark `--primary`
+/// `oklch(0.571 0.21 264)`), under the pointer that mixed 90% with the
+/// background, its white arrow and its inset top highlight (white 16%).
+/// `PRIMARY` stays the dialogs' neutral primary.
+pub const SEND_LIT: u32 = 0x346bf1;
+pub const SEND_LIT_HOVER: u32 = 0x2f60d9;
+pub const ON_SEND_LIT: u32 = 0xffffff;
+pub const SEND_LIT_HIGHLIGHT: u32 = 0xffffff29;
+/// Stop (T3's interrupt, `sm:size-7`): a 28 circle in its dark destructive
+/// (red-500 mixed 90% with white) at 90%, the full colour under the
+/// pointer, a white 8 square at radius 1.5 (`icons::STOP` drawn at 12).
+/// Not `RED`, which is the text hue.
+pub const COMPOSER_STOP: f32 = 28.0;
+pub const COMPOSER_STOP_ICON: f32 = 12.0;
+pub const STOP: u32 = 0xfb414ae6;
+pub const STOP_HOVER: u32 = 0xfb414aff;
+/// Between stop and send while both stand.
+pub const PRIMARY_ACTIONS_GAP: f32 = SPACE_2;
 /// The Solo box is one row, as Claude's: the `+` (`COMPOSER_ATTACH`), the
 /// line, the send circle, `COMPOSER_ROW_GAP` apart, `COMPOSER_ROW_PAD`
 /// inside the box — 44 high at one row, the `+` glyph 14 in and the line
@@ -2474,15 +2810,73 @@ pub const TOKEN_PAD_X: f32 = SPACE_2;
 /// third of every row empty. A longer description cuts and keeps its
 /// tooltip.
 pub const SLASH_MENU_W: f32 = 480.0;
-/// The Composer's menus at Claude's widths: the model picker (names only,
-/// a model's description in its tooltip), its effort submenu, the
-/// permission-mode menu (a name and its one line), and the `+` menu. The
-/// submenu opens `SUBMENU_GAP` beside its menu.
-pub const MODEL_PICKER_W: f32 = 260.0;
+/// The Workspace menu once it offers a previous worktree, kept
+/// `MENU_WINDOW_MARGIN` inside each window edge (T3's
+/// `min(21rem, 100vw - 2rem)`).
+pub const WORKSPACE_MENU_W: f32 = 336.0;
+pub const MENU_WINDOW_MARGIN: f32 = 16.0;
+/// The `/`, `@` and `$` drawer's cap (T3's `max-h-72`); its rows scroll.
+pub const SLASH_MENU_MAX_H: f32 = 288.0;
+/// The Composer's menus at Claude's widths: an effort ladder, the
+/// permission menu (its segmented modes over the hovered mode's line), and
+/// the `+` menu. A submenu opens `SUBMENU_GAP` beside its menu.
 pub const EFFORT_MENU_W: f32 = 318.0;
 pub const MODE_MENU_W: f32 = 316.0;
 pub const ATTACH_MENU_W: f32 = 228.0;
 pub const SUBMENU_GAP: f32 = 2.0;
+/// The model picker (T3's docked `ProviderModelPicker`): one popover over
+/// the Composer with no padding of its own, its columns a provider rail
+/// (`w-11`, `p-1 gap-1`), the searchable list (rail and list together
+/// `max-w-90`) and the Reasoning column (`w-48`), then a footer. The
+/// columns stand `MODEL_PICKER_H` tall whatever they show (`h-86.5`), so a
+/// tab, a search or a model with more rungs never resizes it.
+pub const MODEL_PICKER_H: f32 = 346.0;
+pub const MODEL_PICKER_LIST_W: f32 = 360.0;
+pub const MODEL_PICKER_RAIL_W: f32 = 44.0;
+pub const MODEL_PICKER_RAIL_PAD: f32 = SPACE_1;
+/// A rail button's provider mark (`size-5` in its `size-6` box).
+pub const MODEL_PICKER_RAIL_ICON: f32 = 20.0;
+/// The rail's selected pill: `right-1 h-5 w-0.75 rounded-full`, sliding
+/// between buttons (`RAIL_SLIDE`).
+pub const MODEL_PICKER_PILL_W: f32 = 3.0;
+pub const MODEL_PICKER_PILL_H: f32 = 20.0;
+/// The search row (`px-3 pt-2.5`, a 26 input over its rule, `pb-1.5`).
+pub const MODEL_PICKER_SEARCH_H: f32 = 26.0;
+pub const MODEL_PICKER_SEARCH_ICON: f32 = 16.0;
+/// A model row (`min-h-7 rounded-sm px-2 py-1 gap-2`), a list padded 4
+/// round its rows, 2 between them.
+pub const MODEL_PICKER_ROW_H: f32 = 28.0;
+pub const MODEL_PICKER_ROW_GAP: f32 = 2.0;
+pub const MODEL_PICKER_ROW_R: f32 = 4.0;
+/// The search row's and the column head's air over them (`pt-2.5`).
+pub const MODEL_PICKER_INSET_T: f32 = 10.0;
+pub const MODEL_PICKER_MARK: f32 = 16.0;
+pub const REASONING_W: f32 = 192.0;
+/// The Reasoning column's head (`h-8.25`, a rule under it, `px-3 pt-2.5`)
+/// and its rungs (`h-8 rounded-sm px-2`).
+pub const REASONING_HEAD_H: f32 = 33.0;
+pub const REASONING_ROW_H: f32 = 32.0;
+/// The picker's grounds over `paint::FLOAT`: the rail white 3% × 30%
+/// (`bg-muted/30`), the list and the column white 3% × 40%, their edges
+/// the border at 70%, a row under the pointer foreground 9%, a rail
+/// button foreground 10%.
+pub const MODEL_PICKER_RAIL_GROUND: u32 = 0xffffff02;
+pub const MODEL_PICKER_LIST_GROUND: u32 = 0xffffff03;
+pub const MODEL_PICKER_EDGE: u32 = 0xffffff0e;
+pub const MODEL_PICKER_ROW_HOVER: u32 = 0xefefef17;
+pub const MODEL_PICKER_RAIL_HOVER: u32 = 0xefefef1a;
+/// A segmented control (T3's `FOOTER_SEGMENT` in `rounded-lg bg-input/40
+/// p-0.5`): its track white 11% × 40%, the checked segment 11% × 72%;
+/// segments 24 high.
+pub const SEGMENT_TRACK: u32 = 0xffffff0b;
+pub const SEGMENT_CHECKED: u32 = 0xffffff14;
+pub const SEGMENT_H: f32 = 24.0;
+pub const SEGMENT_TRACK_PAD: f32 = 2.0;
+pub const SEGMENT_TRACK_R: f32 = 8.0;
+/// The picker footer's permissions button (`h-7 rounded-md px-2`).
+pub const PICKER_FOOT_BUTTON_H: f32 = 28.0;
+/// A permission menu's preview of the hovered mode (`min-h-8 text-xs`).
+pub const MODE_PREVIEW_MIN_H: f32 = 32.0;
 /// A form field or a sheet's text button: one row in a cell of padding,
 /// inside a 1px edge at `R_CONTROL` (a field's the `FIELD_RING` hairline,
 /// `CONTROL_FOCUS` while it holds the caret).
@@ -2936,8 +3330,6 @@ pub const NAV_PR_MARK: f32 = 12.0;
 pub const NAV_PR_DOT: f32 = 6.0;
 /// 36px — the foot: `Ferrite 0.5` and the gear, 8px under the tree.
 pub const NAV_FOOT_PAD_T: f32 = SPACE_2;
-/// The most characters a folded Project's branch takes before it is cut.
-pub const NAV_BRANCH_MAX_CH: usize = 24;
 /// 4px — a drop target that takes no layout of its own ("insert above this
 /// Group", "append after the last member"): an absolute hit band over the
 /// edge of the row it borders.
@@ -2967,6 +3359,234 @@ const _: () = assert!(NAV_SCROLLBAR_GUTTER == 2. * NAV_SCROLLBAR_INSET + SCROLLB
 /// way.
 pub const NAV_AUTO_RAIL_BOARD_W: f32 = 560.0;
 pub const NAV_AUTO_RAIL_HYSTERESIS: f32 = 24.0;
+
+// **The Thread card** (`nav::card`, T3 Code's `SidebarThreadRow`,
+// docs/design/t3-reference/sidebar.md §3). Three lines in a fixed 78px
+// box: line 1 the Project badge, the Project's name and the status slot
+// (12px); line 2 the title (14px); line 3 the checkout — worktree,
+// branch, PR chip, Provider logo (12px). With nothing for line 3 the box
+// hugs lines 1 and 2 (60px) and the logo ends line 2. At rest a card has
+// no fill and no border: it is a fill only under the pointer (8% white),
+// for the shown Thread (11%) or selected (7%), and every fill snaps.
+//
+// **Colour is state, on line 1 alone.** Working is blue (a static dashed
+// ring, `Working 12m`), Done green (`CircleCheck`, `Done`), needs-you
+// amber (approval, plan) or indigo (a question), failed red; idle says
+// its age in the secondary label grey. Project hues live on badges only.
+// Busy cards recede so what needs the operator reads brightest: a
+// working card paints at 70% and comes up over 150ms under the pointer,
+// and every receded card's title is 400 at 75% ink.
+
+/// 78px — the card's inner box: 8 + line 1 20 + 4 + line 2 20 + 2 + line
+/// 3 16 + 8.
+pub const NAV_CARD_H: f32 = 78.0;
+/// 8px — the card's padding above line 1 and below its last line.
+pub const NAV_CARD_PAD_Y: f32 = SPACE_2;
+/// 2px — above and below each card in the list, so cards pitch at 83
+/// with the list's 1px gap.
+pub const NAV_CARD_ITEM_PAD_Y: f32 = 2.0;
+pub const NAV_CARD_LINE1_H: f32 = ROW;
+pub const NAV_CARD_LINE2_GAP: f32 = SPACE_1;
+pub const NAV_CARD_LINE2_H: f32 = ROW;
+pub const NAV_CARD_LINE3_GAP: f32 = 2.0;
+pub const NAV_CARD_LINE3_H: f32 = 16.0;
+/// The box with no checkout line: 8 + 20 + 4 + 20 + 8.
+pub const NAV_CARD_H_SHORT: f32 =
+    2.0 * NAV_CARD_PAD_Y + NAV_CARD_LINE1_H + NAV_CARD_LINE2_GAP + NAV_CARD_LINE2_H;
+const _: () = assert!(
+    NAV_CARD_H
+        == NAV_CARD_H_SHORT + NAV_CARD_LINE3_GAP + NAV_CARD_LINE3_H
+);
+/// 6px — between the items of one line.
+pub const NAV_CARD_GAP: f32 = SPACE_1_5;
+/// 12px — line 1 and line 3 (`text-xs`, 16px leading).
+pub const FS_NAV_META: f32 = 12.0;
+/// 14px — a card's title (`text-sm`, 20px leading).
+pub const FS_NAV_TITLE: f32 = 14.0;
+/// The card's fills, white over the column: under the pointer, for the
+/// Thread the board shows, and for a card in the multi-selection.
+pub const NAV_CARD_HOVER: u32 = 0xffffff14;
+pub const NAV_CARD_ACTIVE: u32 = 0xffffff1c;
+pub const NAV_CARD_SELECTED: u32 = 0xffffff12;
+/// A working card's opacity while it recedes; it comes up to 1 under the
+/// pointer over `MOTION_RECEDE_MS`.
+pub const NAV_CARD_RECEDED_OPACITY: f32 = 0.70;
+/// A receded card's title ink (`INK_STRONG` at 75%), and a failed card's
+/// once seen (95%).
+pub const NAV_CARD_TITLE_RECEDED: u32 = (INK_STRONG << 8) | 0xbf;
+pub const NAV_CARD_TITLE_SEEN_FAILED: u32 = (INK_STRONG << 8) | 0xf2;
+/// The title while the titler rewrites it.
+pub const NAV_CARD_RETITLING_OPACITY: f32 = 0.55;
+/// `#8f8f8f` — the Project's name, line 3 and the idle age (T3's
+/// `--secondary-label`): a step under `INK_SUBTLE`.
+pub const INK_SECONDARY_LABEL: u32 = 0x8f8f8f;
+/// The status slot: at least 32px wide, its icon 16px, 4px before the word.
+pub const NAV_STATUS_MIN_W: f32 = 32.0;
+pub const NAV_STATUS_ICON: f32 = 16.0;
+pub const NAV_STATUS_GAP: f32 = SPACE_1;
+/// The status inks T3 gives the card: working blue-400, done emerald-400,
+/// a question indigo-300 (approvals and failures keep `ATTENTION` and
+/// `BLOCKED`).
+pub const NAV_WORKING_INK: u32 = 0x51a2ff;
+pub const NAV_DONE_INK: u32 = 0x00d492;
+pub const NAV_INPUT_INK: u32 = 0xa3b3ff;
+/// The pin glyph on line 1, in `INK_SUBTLE` at 65%.
+pub const NAV_PIN_INK: u32 = (INK_SUBTLE << 8) | 0xa6;
+/// The hover strip's glyphs: Snooze's clock 12px, Park's check 14px, each
+/// slot padded 6px; Park's word meets the card's padding (`-4px`).
+pub const NAV_SNOOZE_GLYPH: f32 = 12.0;
+pub const NAV_PARK_GLYPH: f32 = 14.0;
+pub const NAV_STRIP_PAD_X: f32 = SPACE_1_5;
+pub const NAV_PARK_PULL: f32 = SPACE_1;
+/// 14px — line 3's glyphs (worktree, terminal) and the current Provider's
+/// logo; an earlier Provider after a Handover is 12px.
+pub const NAV_CHECKOUT_GLYPH: f32 = 14.0;
+pub const NAV_PROVIDER_LOGO: f32 = 14.0;
+pub const NAV_PROVIDER_EARLIER: f32 = 12.0;
+pub const NAV_PROVIDER_OPACITY: f32 = 0.60;
+pub const NAV_PROVIDER_EARLIER_OPACITY: f32 = 0.35;
+/// The PR chip's glyph tints (T3's): open emerald-300 at 90%, draft
+/// zinc-400 at 80%, closed red-300 at 90%, merged violet-300 at 90%.
+pub const NAV_PR_OPEN: u32 = 0x5ee9b5e6;
+pub const NAV_PR_DRAFT: u32 = 0x9f9fa9cc;
+pub const NAV_PR_CLOSED: u32 = 0xffa2a2e6;
+pub const NAV_PR_MERGED: u32 = 0xc4b4ffe6;
+/// 2px — between the PR chip's glyph and its number.
+pub const NAV_PR_GAP: f32 = 2.0;
+/// The PR popover's row: radius 4, and its ground under the pointer
+/// (T3's `--accent`).
+pub const NAV_POPOVER_ROW_R: f32 = 4.0;
+pub const NAV_POPOVER_ROW_HOVER: u32 = 0x191a1d;
+/// A branch's kept tail (`nav::middle_truncate`): the last `/` segment up
+/// to 16 characters, else the last 10 snapped to a word boundary, never
+/// under 4; no cut while the branch is within 4 of its tail.
+pub const NAV_BRANCH_SEGMENT_MAX: usize = 16;
+pub const NAV_BRANCH_TAIL: usize = 10;
+pub const NAV_BRANCH_TAIL_MIN: usize = 4;
+/// A branch is cut only when it runs this many characters past its tail.
+pub const NAV_BRANCH_MIN_CUT: usize = 4;
+
+// --- The nav's one list (ADR 0040; `docs/design/t3-reference/sidebar.md`
+// §0-2, §4-13): cards stacked from the top, the Working, Snoozed and
+// Parked shelves anchored over the foot.
+
+/// 1px — between two items of the list (T3's `gap-px`); a card's own 2px
+/// item padding makes its pitch 83.
+pub const NAV_LIST_GAP: f32 = 1.0;
+/// 12px — the list's edge fade (T3's `--fade-size: .75rem`), not the
+/// transcript's `EDGE_FADE`.
+pub const NAV_EDGE_FADE: f32 = 12.0;
+/// The column's surface grain (T3's `surface-grain`): a fractal-noise tile
+/// this wide, painted at this opacity over the whole column.
+pub const NAV_GRAIN_OPACITY: f32 = 0.035;
+pub const NAV_GRAIN_TILE: f32 = 256.0;
+/// White 8% — the column's borders and rules (T3's `--sidebar-border`).
+pub const NAV_BORDER: u32 = 0xffffff14;
+/// The head's and foot's glyphs: the muted ink at 85% over the column
+/// (T3's `--sidebar-icon-color`).
+pub const NAV_ICON_INK: u32 = (INK_SUBTLE << 8) | 0xd9;
+/// A shelf's header (Working, Snoozed, Parked): 32px tall, 2px in from the
+/// sides, 8px inline padding and gaps, 12/500 in `INK_SUBTLE`, the count
+/// flush right in tabular figures, then a `NAV_CHEVRON` turning over
+/// `MOTION_SHELF_CHEVRON_MS`. No hover ground.
+pub const NAV_SHELF_H: f32 = 32.0;
+pub const NAV_SHELF_INSET: f32 = 2.0;
+pub const NAV_SHELF_PAD_X: f32 = SPACE_2;
+pub const NAV_SHELF_GAP: f32 = SPACE_2;
+/// The first `NAV_PARKED_PAGE_FIRST` parked rows show, then `Show 25 more`
+/// pages `NAV_PARKED_PAGE` at a time (T3's settled tail).
+pub const NAV_PARKED_PAGE_FIRST: usize = 10;
+pub const NAV_PARKED_PAGE: usize = 25;
+/// A slim row (Snoozed and Parked): 36px, 10px inline padding and gaps,
+/// its badge at 40% in greyscale until the pointer or the cursor is on
+/// it, its right slot 24px tall and at least 32px wide.
+pub const NAV_SLIM_H: f32 = 36.0;
+pub const NAV_SLIM_PAD_X: f32 = 10.0;
+pub const NAV_SLIM_GAP: f32 = 10.0;
+pub const NAV_SLIM_BADGE_OPACITY: f32 = 0.40;
+pub const NAV_SLIM_SLOT_H: f32 = 24.0;
+pub const NAV_SLIM_SLOT_MIN_W: f32 = 32.0;
+pub const NAV_SLIM_TITLE_REST: u32 = (INK_SECONDARY_LABEL << 8) | 0xb3;
+pub const NAV_REVIVE_GLYPH: f32 = 14.0;
+pub const NAV_WAKE_GLYPH: f32 = 12.0;
+pub const NAV_ALARM_GLYPH: f32 = 12.0;
+/// The head's search row: a 32px field (8px inline padding and gap, 14/500
+/// `INK_SUBTLE`, a 16px glyph), then 28px square buttons 4px apart.
+pub const NAV_SEARCH_H: f32 = 32.0;
+/// The search field's and its results' text (T3's 14px, weight 500).
+pub const FS_NAV_SEARCH: f32 = 14.0;
+pub const NAV_SEARCH_PAD_X: f32 = SPACE_2;
+pub const NAV_SEARCH_GAP: f32 = SPACE_2;
+pub const NAV_SEARCH_ROW_GAP: f32 = SPACE_1;
+pub const NAV_SEARCH_GLYPH: f32 = 16.0;
+pub const NAV_SEARCH_CLEAR_GLYPH: f32 = 12.0;
+pub const NAV_SEARCH_RING: u32 = (FOCUS_RING & 0xffffff00) | 0x27;
+pub const NAV_HEAD_BUTTON: f32 = 28.0;
+/// The foot: 32px square buttons at radius 8, 8px inline padding, 4px
+/// over and 8px under, and the undo notice at 11px on 24px leading.
+pub const NAV_FOOT_BUTTON: f32 = 32.0;
+pub const NAV_FOOT_BUTTON_R: f32 = 8.0;
+/// A foot button with nothing to open (Pull requests on a Thread with no
+/// PR).
+pub const NAV_FOOT_DISABLED_OPACITY: f32 = 0.5;
+/// How long the undo notice stands before it fades out.
+pub const NAV_UNDO_SHOWN_MS: u64 = 5000;
+pub const NAV_FOOT_PAD_TOP: f32 = SPACE_1;
+pub const NAV_FOOT_PAD_BOTTOM: f32 = SPACE_2;
+pub const FS_NAV_NOTICE: f32 = 11.0;
+pub const NAV_NOTICE_LH: f32 = 24.0;
+/// A search result: at least 36px, 10px × 4px padding, 10px gaps, the age
+/// in a fixed 32px column at 55%.
+pub const NAV_RESULT_H: f32 = 36.0;
+pub const NAV_RESULT_PAD_X: f32 = 10.0;
+pub const NAV_RESULT_GAP: f32 = 10.0;
+pub const NAV_RESULT_AGE_W: f32 = 32.0;
+pub const NAV_RESULT_AGE_OPACITY: f32 = 0.55;
+/// The empty list's words: 12px in the muted ink at 60%, centred, 8px ×
+/// 24px padding, 8px between lines.
+pub const NAV_EMPTY_OPACITY: f32 = 0.60;
+pub const NAV_EMPTY_PAD_X: f32 = SPACE_6;
+pub const NAV_EMPTY_PAD_Y: f32 = SPACE_2;
+pub const NAV_EMPTY_GAP: f32 = SPACE_2;
+/// The row hover card: to the right of the card, top-aligned, 4px away,
+/// at most 320px, its lines 12px with 12px icons 6px apart.
+pub const NAV_HOVER_CARD_GAP: f32 = SPACE_1;
+pub const NAV_HOVER_CARD_MAX_W: f32 = 320.0;
+pub const NAV_HOVER_CARD_PAD_X: f32 = SPACE_2;
+pub const NAV_HOVER_CARD_PAD_Y: f32 = SPACE_1;
+pub const NAV_HOVER_CARD_LINE_GAP: f32 = SPACE_1_5;
+pub const NAV_HOVER_CARD_ICON: f32 = 12.0;
+pub const NAV_HOVER_CARD_INK: u32 = (INK_STRONG << 8) | 0xbf;
+/// The rule over the hover card's pull request (T3's `border-border/60`:
+/// the white 8% border at 60%).
+pub const NAV_HOVER_CARD_RULE: u32 = 0xffffff0f;
+/// The glass face (T3's `dropdown-glass`): the float's ground at 80%, a
+/// border of white 10%. gpui draws no backdrop blur.
+pub const NAV_GLASS: u32 = (FLOAT << 8) | 0xcc;
+pub const NAV_GLASS_BORDER: u32 = 0xffffff1a;
+/// The nav's tooltips: 12px, after 150ms, the next within 400ms at once.
+pub const FS_NAV_TOOLTIP: f32 = 12.0;
+pub const NAV_TOOLTIP_DELAY_MS: u64 = 150;
+pub const NAV_TOOLTIP_HANDOFF_MS: u64 = 400;
+/// A list move travels at most this far (T3's `travel(h) = min(h, 40)`).
+pub const MOTION_NAV_LIST_TRAVEL: f32 = 40.0;
+/// More rows than this fading in one update snap instead.
+pub const NAV_LIST_MAX_FADED: usize = 40;
+
+/// The Project badge (`project_badge`): a 16px tile at radius 4, the hue
+/// at 14% under the monogram, mono 700 at 8.25px in two 6px cells.
+pub const NAV_BADGE: f32 = 16.0;
+pub const FS_PROJECT_BADGE: f32 = 8.25;
+pub const PROJECT_BADGE_GLYPH_W: f32 = 6.0;
+pub const PROJECT_BADGE_GROUND_ALPHA: u32 = 0x24;
+/// The badge's 18 hues (T3's `projectIconColors`, Tailwind v4's -400
+/// shades), in hash order: gray, red, orange, amber, yellow, lime, green,
+/// emerald, teal, cyan, sky, blue, indigo, violet, purple, fuchsia, pink,
+/// rose.
+pub const PROJECT_HUES: [u32; 18] = [
+    0x99a1af, 0xff6467, 0xff8904, 0xffb900, 0xfdc700, 0x9ae600, 0x05df72, 0x00d492, 0x00d5be,
+    0x00d3f2, 0x00bcff, 0x51a2ff, 0x7c86ff, 0xa684ff, 0xc27aff, 0xed6aff, 0xfb64b6, 0xff637e,
+];
 // (end WP-G) — append above this line only
 
 // ======================================== motion
@@ -3135,10 +3755,6 @@ pub const MOTION_LIGHTBOX_FROM_SCALE: f32 = 0.3;
 /// `MOTION_DUR_SNAP_MS` on `MOTION_EASE_SNAP`, after gpui's 300ms delay
 /// (Claude's grouped tooltips; the next one within 200ms shows at once).
 pub const MOTION_TOOLTIP_IN_MS: u64 = MOTION_DUR_SNAP_MS;
-/// A message's actions show under the pointer over `MOTION_DUR_SNAP_MS`
-/// after `MOTION_ACTIONS_DELAY_MS`, and go over `MOTION_DUR_FAST_MS` at
-/// once, both on `MOTION_EASE_SNAP` (Claude's `--cds-message-actions-opacity`).
-pub const MOTION_ACTIONS_DELAY_MS: u64 = 100;
 /// A board slot opening beside its owner (the Review beside its Pane)
 /// slides in over 240ms on `MOTION_EASE_SNAP`, the owner narrowing with
 /// it, and slides out over a shorter 200ms before it is removed.
@@ -3158,13 +3774,29 @@ pub const MOTION_PRESS_SCALE: f32 = 0.975;
 /// A disclosure chevron turns its quarter over `MOTION_DUR_FAST_MS` on
 /// `MOTION_EASE_STANDARD` (Claude's `TurnStatus` caret).
 pub const MOTION_CHEVRON_MS: u64 = MOTION_DUR_FAST_MS;
+/// A turn fold's words and chevron brighten under the pointer over 150ms
+/// on `MOTION_EASE_STANDARD` (T3's default `transition-colors`).
+pub const MOTION_FOLD_HOVER_MS: u64 = 150;
 /// A nav fold (a Project, a Group, Pinned) opens and shuts over 150ms on
 /// the `ease-out` keyword, height and opacity (Claude's
 /// `sidebar-group-expand`).
 pub const MOTION_FOLD_MS: u64 = 150;
-/// Jump to latest fades in and out over `MOTION_DUR_BASE_MS` on
-/// `MOTION_EASE_STANDARD`, answering no pointer while it goes.
-pub const MOTION_JUMP_FADE_MS: u64 = MOTION_DUR_BASE_MS;
+/// The Panel's tab strip easing to where a chevron sent it (T3's smooth
+/// `scrollBy`).
+pub const MOTION_TAB_SCROLL_MS: u64 = 200;
+/// A programmatic transcript scroll (a send's prompt rising to the top,
+/// Scroll to end) eases on `MOTION_EASE_STANDARD` for Chromium's smooth
+/// scroll length, `min(√|Δpx|, 12) / 60` s: at most this, reached from
+/// 144px (T3's `scrollTo({behavior: "smooth"})`).
+pub const MOTION_SCROLL_MAX_MS: u64 = MOTION_DUR_BASE_MS;
+/// Scroll to end shows this long after it is first wanted, so it never
+/// flashes through a thread switch; it hides at once, with no fade.
+pub const SCROLL_END_SHOW_DELAY_MS: u64 = 150;
+/// An attachment added to a draft grows in from `MOTION_CHIP_FROM_SCALE`
+/// about its centre as it fades in, over `MOTION_CHIP_IN_MS` on
+/// `MOTION_EASE_SNAP` (T3's `--ease-drawer`).
+pub const MOTION_CHIP_IN_MS: u64 = 300;
+pub const MOTION_CHIP_FROM_SCALE: f32 = 0.95;
 /// A toast's timing: it comes in over `MOTION_DUR_BASE_MS` on the quart,
 /// sliding its own height out from under the edge it hangs on, and leaves
 /// over the same, shrinking to `MOTION_TOAST_OUT_SCALE` as it fades (the
@@ -3198,16 +3830,39 @@ pub const MOTION_PULSE_TICK_MS: u64 = 33;
 /// Desktop's four-dot glyph does.
 /// Drawn at the display's rate, never stepped.
 pub const MOTION_WORKING_MARK_MS: u64 = 2_500;
-/// 2.4s — one sweep of the shimmer's crest across the working caption,
-/// left to right.
-pub const MOTION_SHIMMER_MS: u64 = 2_400;
-/// The crest's half-width, as a fraction of the caption's width (the
-/// prototype's 35%–50%–65% stops over a 300% gradient).
-pub const SHIMMER_HALF_WIDTH: f32 = 0.45;
+/// 2.2s — one sweep of a live label's shine (T3's `live-tool-shine` and
+/// `ActivityShimmerOverlay`), left to right in `SHIMMER_STEPS` steps, its
+/// window a fixed `SHIMMER_BAND` wide whatever the label's width.
+pub const MOTION_SHIMMER_MS: u64 = 2_200;
+pub const SHIMMER_STEPS: usize = 30;
+pub const SHIMMER_BAND: f32 = 72.0;
 /// 1.0s — the focused Composer's caret: a hard blink, shown for the first
 /// half of the period and hidden for the second (500 on, 500 off), as
 /// both reference apps blink theirs.
 pub const MOTION_CARET_BLINK_MS: u64 = 1_000;
+/// 150ms — a receded working nav card comes up to full opacity under the
+/// pointer on `MOTION_EASE_STANDARD` (T3's `transition-opacity`), the
+/// card's only fade; under reduced motion it snaps.
+pub const MOTION_RECEDE_MS: u64 = 150;
+/// The nav list's FLIP: a row that moves, enters or leaves travels over
+/// 150ms on `MOTION_EASE_OUT` (T3's `Sidebar.motion.ts`).
+pub const MOTION_NAV_LIST_MS: u64 = 150;
+/// A shelf header's chevron turns over 150ms on `MOTION_EASE_STANDARD`
+/// (Tailwind's `transition-transform`); the shelf itself snaps.
+pub const MOTION_SHELF_CHEVRON_MS: u64 = 150;
+/// A slim row's time gives way to its action over 150ms on
+/// `MOTION_EASE_STANDARD`, and its badge comes up to full colour.
+pub const MOTION_SLIM_ACTION_MS: u64 = 150;
+/// The foot's undo notice fades in and out over 200ms on Tailwind's
+/// `ease-out` (`MOTION_EASE_OUT_TW`).
+pub const MOTION_UNDO_NOTICE_MS: u64 = 200;
+/// A line of thread state at the transcript's foot (the background-work
+/// line) fades in over 150ms on Tailwind's `ease-out`.
+pub const MOTION_LINE_IN_MS: u64 = 150;
+pub const MOTION_EASE_OUT_TW: [f32; 4] = [0.0, 0.0, 0.2, 1.0];
+/// The nav's tooltips enter over 150ms on `MOTION_EASE_STANDARD`, from
+/// `MOTION_FLOAT_FROM_SCALE`.
+pub const MOTION_NAV_TOOLTIP_MS: u64 = 150;
 // (end motion) — append above this line only
 
 #[cfg(test)]
@@ -3283,7 +3938,7 @@ mod tests {
         let readable = &[("INK_STRONG", INK_STRONG)];
         floor(readable, GROUNDS, 4.5);
         floor(readable, RAISED_GROUNDS, 4.5);
-        floor(readable, &[("SIDEBAR_SELECTED", SIDEBAR_SELECTED)], 4.5);
+        floor(readable, &[("NAV_CARD_ACTIVE", over(NAV_CARD_ACTIVE, SIDEBAR))], 4.5);
         // The subtle tier is the floor: AA on the plane, the grounds rows
         // sit on and the raised ones.
         floor(&[("INK_SUBTLE", INK_SUBTLE)], GROUNDS, 4.5);
@@ -3450,8 +4105,6 @@ mod tests {
             (paint::CARD, CARD),
             (paint::FRAME, FRAME),
             (paint::SIDEBAR, SIDEBAR),
-            (paint::SIDEBAR_HOVER, SIDEBAR_HOVER),
-            (paint::SIDEBAR_SELECTED, SIDEBAR_SELECTED),
             (paint::BLOCK, BLOCK),
             (paint::FIELD, FIELD),
             (paint::RAISED, RAISED),
@@ -3473,8 +4126,10 @@ mod tests {
         assert_eq!(paint::WINDOW, paint::CARD);
         assert_eq!(paint::PANEL, paint::FRAME);
         assert_eq!(FRAME, CARD, "one plane");
-        // The sidebar sits a step over the plane; its rows step up from it.
-        assert!(CARD < SIDEBAR && SIDEBAR < SIDEBAR_HOVER && SIDEBAR_HOVER < SIDEBAR_SELECTED);
+        // The sidebar sits below the plane, black; its rows step up from
+        // it in alpha fills, the shown one over the hovered.
+        assert!(SIDEBAR < CARD);
+        assert!(over(NAV_CARD_HOVER, SIDEBAR) < over(NAV_CARD_ACTIVE, SIDEBAR));
         assert_eq!(paint::PRESS, paint::SELECTION_HOVER);
         // Hover is one equal step on every ground (rule 3).
         for ground in [CARD, FRAME, BLOCK, FLOAT] {
@@ -3490,7 +4145,7 @@ mod tests {
         assert_eq!(hsla, paint::RAISED.hsla());
     }
 
-    /// Rule 1: every type role on a whole-pixel line, a 1.5× reading line
+    /// Rule 1: every type role on a whole-pixel line, a 1.625× reading line
     /// at every reading size, headings at the body size, a code cell of
     /// 0.6em, and every chrome size on the type scale.
     #[test]
@@ -3503,15 +4158,15 @@ mod tests {
         for reading in ReadingSize::STEPS.map(ReadingSize::nearest) {
             let (size, line) = (answer_text_size(reading), answer_line_height(reading));
             assert_eq!(line, line.round());
-            assert!(line >= size * 1.45, "{reading:?}: {size}/{line}");
-            assert!(line <= size * 1.55, "{reading:?}: {size}/{line}");
+            assert!(line >= size * 1.58, "{reading:?}: {size}/{line}");
+            assert!(line <= size * 1.67, "{reading:?}: {size}/{line}");
         }
-        // At Standard: Solo and a Group Pane 14/21, on the scale.
-        assert_eq!(answer_line_height(ReadingSize::nearest(14)), 21.0);
+        // At Standard: Solo and a Group Pane 14/23, on the scale.
+        assert_eq!(answer_line_height(ReadingSize::nearest(14)), 23.0);
         let group = tx_size(ReadingSize::STANDARD, false);
-        assert_eq!((group, prose_line_height(group)), (14.0, 21.0));
+        assert_eq!((group, prose_line_height(group)), (14.0, 23.0));
         let solo = tx_size(ReadingSize::STANDARD, true);
-        assert_eq!((solo, prose_line_height(solo)), (14.0, 21.0));
+        assert_eq!((solo, prose_line_height(solo)), (14.0, 23.0));
         for size in [group, solo, group - TX_BLOCK_STEP, solo - TX_BLOCK_STEP] {
             assert!(TYPE_SCALE.contains(&size), "{size} is off the scale");
         }

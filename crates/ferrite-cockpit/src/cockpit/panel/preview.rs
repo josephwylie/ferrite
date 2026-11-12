@@ -1,4 +1,4 @@
-//! The Panel's Preview tab (SPEC §5.6.3): a Pane's preview
+//! The Panel's File Surface (SPEC §5.6.3, ADR 0039): a Pane's preview
 //! (`ferrite_pane::preview`) read in the right Panel — a file at a line (numbered
 //! lines, the target marked and centred, in syntax colour), rendered
 //! Markdown, a command's output, or a note for a file it cannot show, its
@@ -8,37 +8,37 @@
 //! Whatever opens a file in a Pane goes through `Preview::open` — the
 //! cockpit's own entry points (a file link, a ⌘-clicked path, a changed
 //! file, a review's line, the empty board) through `open_preview` — and the
-//! cockpit sees it on its next frame (`tend_previews`): the Panel's head
-//! grows a Preview tab, the file's name cut from its start, and selects it;
-//! a line opened at is scrolled to the middle of the list. A Panel that was
-//! hidden shows for it, and hides again when it closes. Another file opening
-//! over it replaces it in place, its body fading in (`motion::swap_in`).
-//! Escape in it (the `Reader` key context, deeper than the Cockpit's
-//! interrupt), its × or ⌘W while it holds the keyboard closes it, and the
-//! Panel goes back to its sections. ⌘F finds in it
-//! (`PreviewFind`, the transcript's bar).
+//! cockpit sees it on its next frame (`tend_previews`): the document goes
+//! through the Panel's one door as a `File` Surface (ADR 0039), one tab
+//! per file, its name for a title. A file already in a tab brings that tab
+//! forward; another file gets a tab of its own, the first kept. Pressing a
+//! File tab shows its document again as it was last read. A line opened at
+//! is scrolled to the middle of the list. Escape in it (the `Reader` key
+//! context, deeper than the Cockpit's interrupt), its tab's × or ⌘W while
+//! it holds the keyboard closes it. ⌘F finds in it (`PreviewFind`, the
+//! transcript's bar).
 //!
-//! While the Preview tab is the one shown the Panel is wide (`preview_w`,
-//! the theme's `PANEL_PREVIEW_*`), snapping there and back with the board.
+//! While a File shows the Panel is at least a reading width (`panel`'s
+//! floor, the theme's `PANEL_PREVIEW_*`).
 //!
 //! A page (`ferrite_pane::page`: an `.html` file or a local address, opened
 //! from its card in the transcript) reads live in the same card: its head
 //! names it by its title, a press there opening its menu (reload, open in
-//! the browser, copy its path or address), then expand — the Panel takes
-//! all the board can give — and ×. Where the engine can't draw it (no
+//! the browser, copy its path or address). Where the engine can't draw it (no
 //! Chromium in this build, or an address) the body is the "can't show"
 //! note, open in browser a click away.
 //!
 //! Each Pane keeps its own preview (`PaneView::preview_tab`), and the Panel
 //! shows the focused Pane's: focus moving to another Thread leaves the
 //! preview where it is, and coming back finds it as it was. A draft, which
-//! has no Panel of its own, shows the Panel for its preview alone (the
-//! Preview tab, no other), and its first send keeps it as it was.
+//! has no Panel of its own, shows the Panel for its preview alone (no
+//! tabs), and its first send keeps it as it was.
 
 use super::*;
 use ferrite_pane::page::Shown;
+pub(crate) use ferrite_pane::preview::BROWSER_PATH;
 use ferrite_pane::preview::{
-    head_door, head_suffix, head_title, reading_head, Body, Text, Unshown,
+    head_door, head_suffix, head_title, reading_head, Body, Document, Text, Unshown,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -49,8 +49,9 @@ gpui::actions!(reader, [Close]);
 pub(crate) struct PreviewTab {
     /// The open last tended (`Preview::opened`).
     seen: Option<u64>,
-    /// The Preview tab is the one the Panel shows for its Pane.
-    selected: bool,
+    /// Each File tab's document as last read, by path, so pressing its tab
+    /// shows it again (a command's output has no file to read).
+    documents: std::collections::HashMap<PathBuf, Document>,
     /// The document shown opened after the first frame: its body fades in
     /// under this key (`Preview::opened`'s).
     fade: Option<u64>,
@@ -76,7 +77,7 @@ impl Default for PreviewTab {
     fn default() -> Self {
         Self {
             seen: None,
-            selected: false,
+            documents: Default::default(),
             fade: None,
             scroll: gpui::UniformListScrollHandle::new(),
             markdown_scroll: ScrollHandle::new(),
@@ -135,50 +136,72 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Whether Pane `index`'s Panel shows its Preview tab: a preview is
-    /// open and selected — always, for a draft, which has no other tab.
+    /// Whether Pane `index`'s Panel shows its preview: a File or the
+    /// Browser is its shown Surface — always, for a draft, which has no
+    /// other.
     pub(in crate::cockpit) fn preview_shown(&self, index: usize) -> bool {
-        self.panes.get(index).is_some_and(|pane| {
-            pane.preview.is_open() && (pane.preview_tab.selected || pane.thread().is_none())
-        })
+        let Some(pane) = self.panes.get(index) else {
+            return false;
+        };
+        pane.preview.is_open()
+            && match pane.thread() {
+                None => true,
+                Some(_) => matches!(
+                    self.shown_surface(index),
+                    Some(SurfaceId::File(_) | SurfaceId::Browser)
+                ),
+            }
     }
 
-    /// The Preview tab selected for `owner`'s Pane.
-    fn select_preview_tab(&mut self, owner: PaneIdentity, cx: &mut Context<Self>) {
-        if let Some(index) = self.index_of(owner) {
-            self.panes[index].preview_tab.selected = true;
+    /// Close Pane `index`'s preview (escape in it, ⌘W while it holds focus):
+    /// its tab closes and the keyboard is the Pane's — or, a draft's Panel
+    /// shown for the preview alone, it hides.
+    pub(in crate::cockpit) fn close_preview(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(pane) = self.panes.get(index) else {
+            return;
+        };
+        match (pane.thread(), pane.preview.document()) {
+            (Some(thread), Some(document)) => {
+                let id = document_surface(&document);
+                self.close_surface(thread, &id, cx);
+            }
+            _ => pane.preview.close(),
         }
+        self.focus_pane(index);
         cx.notify();
     }
 
-    /// `Overview` selected for `thread`'s Pane: its preview stays open,
-    /// its tab still in the head, and coming back to it does not fade.
-    pub(in crate::cockpit) fn deselect_preview_tab(&mut self, thread: ThreadId) {
-        if let Some(index) = self.pane_for(thread) {
-            let tab = &mut self.panes[index].preview_tab;
-            tab.selected = false;
-            tab.fade = None;
-        }
-    }
-
-    /// Close Pane `index`'s preview (escape in it, its ×, ⌘W while it holds
-    /// focus): the keyboard is the Pane's, and the Panel goes back to the
-    /// sections — or, shown for the preview alone, hides.
-    pub(in crate::cockpit) fn close_preview(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(pane) = self.panes.get(index) {
+    /// A File (or the Browser) tab of `thread` closed: the preview puts its
+    /// document away if it shows it, and forgets it.
+    pub(in crate::cockpit) fn close_preview_of(&mut self, thread: ThreadId, path: &Path) {
+        let Some(index) = self.pane_for(thread) else {
+            return;
+        };
+        let pane = &mut self.panes[index];
+        pane.preview_tab.documents.remove(path);
+        if pane.preview.document().is_some_and(|document| document.path == path) {
             pane.preview.close();
-            self.panel.expanded = false;
-            self.focus_pane(index);
-            cx.notify();
         }
     }
 
-    /// Each frame, before the board is measured: a preview that opened selects
-    /// the Preview tab (marked to fade in, after the first frame) and
-    /// scrolls its line to the middle of the list; one that closed hands
-    /// the Panel back to its sections. A find bar closes with
-    /// its document, and a Markdown reveal that is due settles.
-    pub(in crate::cockpit) fn tend_previews(&mut self, window: &mut Window) {
+    /// A File tab's title: the command's or page's own name where it has
+    /// one, else the file's.
+    pub(in crate::cockpit) fn file_surface_title(&self, thread: ThreadId, path: &Path) -> SharedString {
+        let named = self
+            .pane_for(thread)
+            .and_then(|index| self.panes[index].preview_tab.documents.get(path))
+            .and_then(|document| document.name.clone());
+        named
+            .unwrap_or_else(|| path.file_name().unwrap_or_default().to_string_lossy().into_owned())
+            .into()
+    }
+
+    /// Each frame, before the board is measured: a document that opened
+    /// goes through the Panel's door as its Surface (marked to fade in,
+    /// after the first frame) and scrolls its line to the middle of the
+    /// list; the preview follows the File tab the Panel shows. A find bar
+    /// closes with its document, and a Markdown reveal that is due settles.
+    pub(in crate::cockpit) fn tend_previews(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for pane in &mut self.panes {
             for annotation in pane.preview.take_annotation_requests() {
                 let image = pane
@@ -219,13 +242,18 @@ impl CockpitView {
             }
         }
         let first = !std::mem::replace(&mut self.panel.tended, true);
+        let mut opened_surfaces = Vec::new();
         for pane in &mut self.panes {
             let opened = pane.preview.opened();
             let document = pane.preview.document();
+            let thread = pane.thread();
             let tab = &mut pane.preview_tab;
             match opened {
                 Some((open, key)) if tab.seen != Some(open) => {
-                    tab.selected = true;
+                    if let (Some(thread), Some(document)) = (thread, &document) {
+                        tab.documents.insert(document.path.clone(), document.clone());
+                        opened_surfaces.push((thread, document_surface(document)));
+                    }
                     tab.fade = (!first).then_some(key);
                     if let Some(line) = document
                         .as_ref()
@@ -236,13 +264,18 @@ impl CockpitView {
                             .scroll_to_item(line as usize - 1, gpui::ScrollStrategy::Center);
                     }
                 }
-                None if tab.seen.is_some() => {
-                    tab.selected = false;
-                    tab.fade = None;
-                }
+                None if tab.seen.is_some() => tab.fade = None,
                 _ => {}
             }
             tab.seen = opened.map(|(open, _)| open);
+            // A draft's preview, kept through its first send: the new
+            // Thread takes it as its File tab.
+            if let (Some(thread), Some(document)) = (thread, &document) {
+                if !tab.documents.contains_key(&document.path) {
+                    tab.documents.insert(document.path.clone(), document.clone());
+                    opened_surfaces.push((thread, document_surface(document)));
+                }
+            }
             let Some(find) = &mut tab.find else {
                 continue;
             };
@@ -252,72 +285,39 @@ impl CockpitView {
             }
             settle_markdown_found(find, &tab.markdown_scroll, window);
         }
+        for (thread, id) in opened_surfaces {
+            if self.active_surface(thread).as_ref() != Some(&id) || !self.panel_open(thread) {
+                self.surfaces_mut(thread).upsert(id);
+            }
+        }
+        // After the opened ones take their tabs, or the tab shown before
+        // would read its own document back over the one just opened.
+        self.sync_previews(window, cx);
     }
 
-    /// The Preview tab's label for `owner`'s Pane while it has one to show:
-    /// the file's name, or a command's.
-    pub(in crate::cockpit) fn preview_tab_label(
-        &self,
-        owner: PaneIdentity,
-    ) -> Option<SharedString> {
-        let document = self.panes[self.index_of(owner)?].preview.document()?;
-        let name = document.name.clone().unwrap_or_else(|| {
-            document
-                .path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        });
-        Some(name.into())
-    }
-
-    /// The Preview tab in the head: the Panel's tab grammar, its label the
-    /// file's name cut from the start (`PANEL_PREVIEW_TAB_MAX_W`).
-    pub(in crate::cockpit) fn preview_tab_element(
-        &self,
-        owner: PaneIdentity,
-        label: SharedString,
-        active: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        use ferrite_ui::theme::*;
-        let id = gpui::ElementId::from("panel-tab-Preview");
-        let key = ferrite_ui::pointer::hover_key(&id);
-        div()
-            .id(id)
-            .debug_selector(|| "panel-tab-Preview".into())
-            .flex()
-            .flex_shrink_1()
-            .min_w_0()
-            .max_w(px(PANEL_PREVIEW_TAB_MAX_W))
-            .items_center()
-            .h(px(PANEL_TAB_H))
-            .px(px(PANEL_TAB_PAD_X))
-            .rounded(px(R_CONTROL))
-            .text_size(px(FS_LABEL))
-            .font_weight(W_LABEL)
-            .occlude()
-            .map(|face| {
-                if active {
-                    face.hover_carried(key).text_color(rgb(INK_STRONG))
-                } else {
-                    face.text_color(rgb(INK_STRONG))
-                        .hover_raised(key)
-                        .press_raised()
-                }
-            })
-            .child(
-                div()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .text_ellipsis_start()
-                    .child(label),
-            )
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                view.select_preview_tab(owner, cx);
-            }))
-            .into_any_element()
+    /// Keep each Thread's preview showing the document its Panel shows: a
+    /// File tab pressed brings its document back, as last read, or read
+    /// afresh after a restart.
+    fn sync_previews(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for index in 0..self.panes.len() {
+            let Some(thread) = self.panes[index].thread() else {
+                continue;
+            };
+            let wanted = match self.active_surface(thread) {
+                Some(SurfaceId::File(path)) => path,
+                Some(SurfaceId::Browser) => PathBuf::from(BROWSER_PATH),
+                _ => continue,
+            };
+            let pane = &self.panes[index];
+            if pane.preview.document().is_some_and(|document| document.path == wanted) {
+                continue;
+            }
+            match pane.preview_tab.documents.get(&wanted) {
+                Some(document) => pane.preview.restore(document.clone()),
+                None if wanted == Path::new(BROWSER_PATH) => pane.preview.show_browser(),
+                None => pane.preview.open(wanted, None, &[], window, cx),
+            }
+        }
     }
 
     /// The Preview tab's body: the preview as a card on the Panel's frame,
@@ -469,12 +469,6 @@ impl CockpitView {
             _ => (document.name.is_none() && document.page().is_none())
                 .then(|| (document.path.clone(), title.clone())),
         };
-        let expand = (document.page().is_some()
-            || matches!(
-                document.body,
-                Body::Browser | Body::BrowserAnnotation { .. }
-            ))
-        .then(|| self.expand_door(cx));
         let doors = file
             .map(|(original, shown)| {
                 [
@@ -500,27 +494,7 @@ impl CockpitView {
                 ]
             })
             .into_iter()
-            .flatten()
-            .chain(expand)
-            .chain([head_door(
-                "preview-close",
-                "preview-close".into(),
-                ferrite_ui::icons::CLOSE,
-            )
-            .tooltip(ferrite_ui::menu::tooltip_with_key(
-                "Close the preview",
-                ferrite_ui::components::bound_chord_in(
-                    "reader::Close",
-                    Some(ferrite_ui::keymap::READER),
-                ),
-            ))
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                if let Some(index) = view.index_of(owner) {
-                    view.close_preview(index, cx);
-                }
-            }))
-            .into_any_element()]);
+            .flatten();
         div()
             .debug_selector(|| "panel-preview".into())
             .track_focus(pane.preview.focus_handle())
@@ -636,31 +610,6 @@ impl CockpitView {
                     );
                 })),
         )
-    }
-
-    /// Expand the preview to all the board can give, or back.
-    fn expand_door(&self, cx: &mut Context<Self>) -> AnyElement {
-        let expanded = self.panel.expanded;
-        head_door(
-            "preview-expand",
-            "preview-expand".into(),
-            if expanded {
-                ferrite_ui::icons::MINIMIZE
-            } else {
-                ferrite_ui::icons::MAXIMIZE
-            },
-        )
-        .tooltip(ferrite_ui::menu::tooltip(if expanded {
-            "Collapse"
-        } else {
-            "Expand"
-        }))
-        .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
-            cx.stop_propagation();
-            view.panel.expanded = !view.panel.expanded;
-            cx.notify();
-        }))
-        .into_any_element()
     }
 
     /// A page's menu verbs (`MenuTarget::Page`).
@@ -1123,5 +1072,13 @@ mod tests {
         assert_eq!(style.text.line_height, Some(px(LH_UI).into()));
         let mut head = reading_head(div(), []);
         assert_eq!(head.style().text.font_size, Some(px(FS_UI).into()));
+    }
+}
+
+/// The Surface a document is: the live browser, or a File by its path.
+pub(in crate::cockpit) fn document_surface(document: &Document) -> SurfaceId {
+    match document.body {
+        Body::Browser => SurfaceId::Browser,
+        _ => SurfaceId::File(document.path.clone()),
     }
 }

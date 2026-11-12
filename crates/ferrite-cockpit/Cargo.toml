@@ -10,10 +10,15 @@ doctest = false
 
 [features]
 cef = ["ferrite-pane/cef"]
+# The Cockpit window drawn off-screen and driven by keys, clicks and shots
+# (`headless`, ADR 0038): gpui's test support carries its input and
+# capture, so release builds never have it. The app's `headless` feature
+# (`ferrite --headless`) and `visual-reference` turn this on.
+headless = ["gpui/test-support", "dep:gpui-reference-platform"]
 # Opt-in native framebuffer artifacts (`cockpit::visual_reference`);
 # excluded from normal application builds. The app's own
 # `visual-reference` feature turns this on.
-visual-reference = ["gpui/test-support", "dep:gpui-reference-platform", "ferrite-pane/visual-reference"]
+visual-reference = ["headless", "ferrite-pane/visual-reference"]
 
 browser-smoke = ["gpui/test-support", "dep:gpui-reference-platform", "ferrite-pane/browser-smoke"]
 
@@ -38,12 +43,15 @@ gpui = { package = "gpui-kit", version = "=0.6.0" }
 gpui-base = "=0.6.0"
 # The demo script builds real provider events, whose payloads are the vendors'
 # own JSON. Already in the tree via ferrite-core.
+serde = { workspace = true }
 serde_json = { workspace = true }
 # Same platform already used by GPUI Kit; enable its framebuffer test hook only.
 gpui-reference-platform = { package = "gpui-pre-platform", version = "=0.3.3", features = ["test-support"], optional = true }
 url = "2"
 # System notifications' channels. Already in the tree via gpui.
 futures = "0.3"
+# The nav's surface grain (`nav::list::grain`). Already in the tree via gpui.
+image = { version = "0.25.1", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 # The smoke render needs a window; gpui's own test harness provides a headless
@@ -55,5 +63,3 @@ ferrite-ui = { path = "../ferrite-ui", features = ["test-support"] }
 ferrite-pane = { path = "../ferrite-pane", features = ["test-support"] }
 # The window's frame the app installs (ADR 0035): the tests draw it too.
 ferrite-frame = { path = "../ferrite-frame" }
-# The image viewer's tests draw their images. Already in the tree via gpui.
-image = { version = "0.25.1", default-features = false, features = ["png"] }

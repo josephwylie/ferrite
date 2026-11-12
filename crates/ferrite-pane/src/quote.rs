@@ -26,6 +26,11 @@ pub fn passage(selected: &str) -> Option<String> {
         .then(|| text.to_string())
 }
 
+/// Whether a selection is too long to quote (T3's `Shorten selection`).
+pub fn too_long(selected: &str) -> bool {
+    selected.trim().chars().count() > MAX_CHARS
+}
+
 /// `passage` as a block quote: each line behind `> `, a blank one a bare
 /// `>`, as Claude's own Copy as quote writes one.
 fn block(passage: &str) -> String {

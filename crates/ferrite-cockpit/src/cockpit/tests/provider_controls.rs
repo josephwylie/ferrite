@@ -336,12 +336,11 @@ fn the_composer_mode_chip_opens_a_native_mode_menu_while_idle(cx: &mut TestAppCo
     view.read_with(cx, |view, _| {
         assert!(view.mode_picker.is_some(), "the menu survives a redraw");
     });
-    // Anchored BottomLeft, the menu rests above its chip (SPEC §5.5),
-    // clear of it; its one item is the pick.
-    // Row 0 is the menu's `Mode` heading.
+    // The menu rests above its chip (SPEC §5.5), clear of it; its one
+    // segment is the pick.
     let item = cx
-        .debug_bounds("choice-row-1")
-        .expect("the mode menu's item is drawn");
+        .debug_bounds("mode-segment-0")
+        .expect("the mode menu's segment is drawn");
     assert!(item.bottom() <= chip.top(), "{item:?} over {chip:?}");
     cx.simulate_click(item.center(), gpui::Modifiers::none());
     cx.run_until_parked();
@@ -441,7 +440,7 @@ fn background_work_lives_in_its_row_the_rail_and_the_pane(cx: &mut TestAppContex
         cx.debug_bounds("tool-background-live").is_none(),
         "handed back, the row settles to plain text"
     );
-    let close = cx.debug_bounds("background-pane-close").unwrap();
+    let close = cx.debug_bounds("panel-tab-Background-close").expect("its tab's ×");
     cx.simulate_click(close.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds("background-pane").is_none());

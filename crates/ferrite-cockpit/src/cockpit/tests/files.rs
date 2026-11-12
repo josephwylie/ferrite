@@ -2,7 +2,9 @@
 //! tabs and menus, and the paths that open there.
 use super::*;
 use crate::cockpit::context_menu::Submenu;
-use crate::cockpit::tools::{FilesSub, FilesVerb, Tool};
+use crate::cockpit::panel::Opener;
+use crate::cockpit::surfaces::SurfaceId;
+use crate::cockpit::tools::{Diff, FilesSub, FilesVerb};
 
 fn files_window<'a>(
     name: &str,
@@ -30,8 +32,8 @@ fn tab_names(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::Visual
 
 #[gpui::test]
 fn the_door_opens_files_with_its_empty_word_and_the_tree(cx: &mut TestAppContext) {
-    let (view, _thread, _checkout, cx) = files_window("files-door", cx);
-    view.update(cx, |view, cx| view.press_tool(Tool::Files, cx));
+    let (view, thread, _checkout, cx) = files_window("files-door", cx);
+    view.update(cx, |view, cx| view.run_opener(thread, Opener::Files, cx));
     tick(cx);
     assert!(cx.debug_bounds("files-empty").is_some(), "Open files appear here");
     assert!(cx.debug_bounds("files-filter-placeholder").is_some());
@@ -105,13 +107,13 @@ fn a_file_the_preview_opens_opens_here_instead(cx: &mut TestAppContext) {
     tick(cx);
     assert!(view.read_with(cx, |view, _| !view.panes[0].preview.is_open()));
     assert_eq!(tab_names(&view, thread, cx), [("lib.rs".to_string(), true)]);
-    assert!(view.read_with(cx, |view, _| view.tool_pressed(Tool::Files)));
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Files));
 }
 
 #[gpui::test]
 fn the_filter_lists_matches_and_a_row_menu_copies_paths(cx: &mut TestAppContext) {
     let (view, thread, checkout, cx) = files_window("files-menu", cx);
-    view.update(cx, |view, cx| view.press_tool(Tool::Files, cx));
+    view.update(cx, |view, cx| view.run_opener(thread, Opener::Files, cx));
     tick(cx);
     view.update(cx, |view, cx| {
         view.set_files_filter_for_test(thread, "lib", cx);
@@ -156,7 +158,7 @@ fn the_filter_lists_matches_and_a_row_menu_copies_paths(cx: &mut TestAppContext)
 #[gpui::test]
 fn the_more_menu_holds_only_its_five_settings_and_they_take_effect(cx: &mut TestAppContext) {
     let (view, thread, _checkout, cx) = files_window("files-more", cx);
-    view.update(cx, |view, cx| view.press_tool(Tool::Files, cx));
+    view.update(cx, |view, cx| view.run_opener(thread, Opener::Files, cx));
     tick(cx);
     view.update(cx, |view, cx| {
         view.open_context_menu(MenuTarget::FilesMore(thread), gpui::point(px(900.), px(100.)), cx)
@@ -196,10 +198,10 @@ fn a_changed_files_tab_offers_show_changes(cx: &mut TestAppContext) {
         assert!(out.status.success(), "git {args:?}: {out:?}");
     }
     std::fs::write(checkout.join("fresh.rs"), "new\n").unwrap();
-    view.update(cx, |view, cx| view.press_tool(Tool::Changes, cx));
+    view.update(cx, |view, cx| view.run_opener(thread, Opener::Changes, cx));
     for _ in 0..400 {
         tick(cx);
-        if view.read_with(cx, |view, _| view.changes_read(thread).is_some()) {
+        if view.read_with(cx, |view, _| view.changes_read(Diff::Changes(thread)).is_some()) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -209,9 +211,9 @@ fn a_changed_files_tab_offers_show_changes(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("files-show-changes").is_none(), "unchanged");
     open(&view, thread, &checkout.join("fresh.rs"), true, cx);
     let link = cx.debug_bounds("files-show-changes").expect("a changed file");
-    view.update(cx, |view, cx| view.press_tool(Tool::Changes, cx));
+    view.update(cx, |view, cx| view.close_surface(thread, &SurfaceId::Changes, cx));
     tick(cx);
-    assert!(cx.debug_bounds("changes").is_none(), "the column is shut");
+    assert!(cx.debug_bounds("changes").is_none(), "its tab is closed");
     cx.simulate_click(link.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds("changes").is_some(), "Show changes opens it");

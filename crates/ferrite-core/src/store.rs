@@ -570,6 +570,12 @@ enum Record {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prompt_id: Option<String>,
     },
+    /// The wall clock, cut to its minute, before the first event of each
+    /// minute a Thread was busy: what the transcript stamps the work after
+    /// it with. Absent from older logs, whose work draws no time.
+    Clock {
+        at: String,
+    },
     /// Schema 15: the conversation went back to before the prompt whose
     /// observation carries `prompt`. Replay drops that prompt and every
     /// line after it up to here; the log itself stays append-only.
@@ -672,6 +678,7 @@ impl LogRecord {
                 prompt: prompt.clone(),
                 dropped: *dropped,
             },
+            Input::ClockObservation { at } => Record::Clock { at: at.clone() },
             Input::CompletionObservation {
                 elapsed_ms,
                 completed_at,
@@ -971,6 +978,14 @@ enum PersistedProgress {
     BackgroundSnapshot {
         tasks: Vec<StoredBackgroundTask>,
     },
+    Compacted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure: Option<String>,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct StoredBackgroundTask {
@@ -1175,6 +1190,11 @@ impl PersistedProgress {
                     })
                     .collect(),
             },
+            E::Compacted(compacted) => Self::Compacted {
+                before: compacted.before,
+                after: compacted.after,
+                failure: compacted.failure.clone(),
+            },
         }
     }
     fn live(&self) -> crate::progress::ProgressEvent {
@@ -1256,6 +1276,15 @@ impl PersistedProgress {
                     })
                     .collect(),
             },
+            Self::Compacted {
+                before,
+                after,
+                failure,
+            } => E::Compacted(crate::transcript::Compacted {
+                before: *before,
+                after: *after,
+                failure: failure.clone(),
+            }),
         }
     }
 }
@@ -1541,6 +1570,7 @@ impl Record {
                 prompt: prompt.clone(),
                 dropped: *dropped,
             },
+            Record::Clock { at } => Input::ClockObservation { at: at.clone() },
             Record::ReasoningSummary {
                 text,
                 summary_index,
@@ -2032,7 +2062,7 @@ fn log_stamp(path: &Path) -> Option<(u64, u128)> {
 /// Once the rename is done the new file is the answer; a directory that
 /// will not sync is logged, not returned, so a caller never rolls back to
 /// a state the disk no longer holds.
-pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub fn replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let path = if fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
         dunce::canonicalize(path)?
     } else {
@@ -4491,6 +4521,12 @@ impl ThreadWriter {
         prompt_id: Option<&str>,
     ) -> io::Result<()> {
         self.lock().record_prompt_observation(sent_at, prompt_id)
+    }
+
+    /// Buffer the wall clock's minute (`Record::Clock`), ahead of the
+    /// event it heads.
+    pub fn record_clock(&mut self, at: &str) -> io::Result<()> {
+        self.lock().push(Record::Clock { at: at.into() })
     }
 
     /// Record a rewind to before the prompt `prompt` names, which took

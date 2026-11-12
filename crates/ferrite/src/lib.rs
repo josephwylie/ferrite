@@ -114,16 +114,6 @@ pub fn launch() {
         );
         return;
     }
-    // The working line's rolling token count (`visual_reference::token_roll`).
-    #[cfg(feature = "visual-reference")]
-    if std::env::args().nth(1).as_deref() == Some("--token-roll") {
-        cockpit::visual_reference::token_roll(
-            std::env::args()
-                .nth(2)
-                .expect("an output directory is required"),
-        );
-        return;
-    }
     // Visuals' agent screenshots (`visual::shots::snapshots`).
     #[cfg(feature = "visual-reference")]
     if std::env::args().nth(1).as_deref() == Some("--visual-snapshots") {
@@ -143,6 +133,13 @@ pub fn launch() {
                 .nth(2)
                 .expect("an output directory is required"),
         );
+        return;
+    }
+    // The window drawn off-screen and driven through the Server's API
+    // (`ferrite_cockpit::headless`, ADR 0038).
+    #[cfg(feature = "headless")]
+    if std::env::args().nth(1).as_deref() == Some("--headless") {
+        ferrite_cockpit::headless::run();
         return;
     }
     // The operator's settings live beside the store (`~/.ferrite`), and
@@ -287,6 +284,7 @@ pub fn launch() {
                                 version: env!("CARGO_PKG_VERSION").into(),
                             },
                             renderer: Some(renderer),
+                            driven: false,
                             defaults: defaults.clone(),
                             bridge: ferrite_core::machine::Bridge::ssh,
                         },

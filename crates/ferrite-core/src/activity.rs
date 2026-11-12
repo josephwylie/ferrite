@@ -2229,6 +2229,25 @@ impl<'a> ActivityView<'a> {
                 Some((key.native()?, AgentView { agent }))
             })
     }
+    /// Each subagent once, with every provider id that names it: its key's
+    /// and its aliases' (a Claude agent's `Agent` call, its task, its agent
+    /// id). What counts agents reads this, not `invocations`, which yields
+    /// an agent once per name.
+    pub fn named_agents(self) -> impl Iterator<Item = (Vec<String>, AgentView<'a>)> {
+        let activity = self.activity;
+        activity.agents.iter().map(move |(key, agent)| {
+            let names = std::iter::once(key)
+                .chain(
+                    activity
+                        .aliases
+                        .keys()
+                        .filter(|alias| activity.resolve(alias) == *key),
+                )
+                .filter_map(AgentKey::native)
+                .collect();
+            (names, AgentView { agent })
+        })
+    }
     pub fn pending_decisions(self) -> &'a [PendingDecision] {
         &self.activity.pending
     }

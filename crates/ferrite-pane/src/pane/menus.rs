@@ -30,13 +30,11 @@ pub struct MenuRow {
     pub tag: Option<SharedString>,
 }
 
-/// The Composer menus' popover: the float, as wide as its slot (at most
-/// `SLASH_MENU_W`), capped at `MENU_MAX_H` (its row list scrolls past
-/// that).
-pub fn menu_popover() -> Div {
-    ferrite_ui::menu::float()
-        .w_full()
-        .max_h(px(theme::MENU_MAX_H))
+/// The Composer menus' popover: the float, as wide as its slot, capped at
+/// `max_h` (its row list scrolls past that): the `/`, `@` and `$` drawer's
+/// `SLASH_MENU_MAX_H`, a band picker's `MENU_MAX_H`.
+pub fn menu_popover(max_h: f32) -> Div {
+    ferrite_ui::menu::float().w_full().max_h(px(max_h))
 }
 
 /// A `/` or `@` row in the float grammar: the cursor row's fill, the name with

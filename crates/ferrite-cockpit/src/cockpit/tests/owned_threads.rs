@@ -5,10 +5,9 @@ use super::*;
 use crate::palette::Act;
 
 /// A Worker, open and asking, and a parked Coordinator are in none of the
-/// nav's rows (tree, Groups, Parked), the palette's Threads or the
-/// Inbox, and the Worker's request rings nothing, while a request from
-/// the operator's own Thread, off the board as the Worker is, toasts as
-/// ever.
+/// nav's cards and shelves, the palette's Threads or the Inbox, and the
+/// Worker's request rings nothing, while a request from the operator's
+/// own Thread, off the board as the Worker is, toasts as ever.
 #[gpui::test]
 fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("owned-unlisted", 2);
@@ -49,24 +48,21 @@ fn owned_threads_are_out_of_the_lists_and_ring_nothing(cx: &mut TestAppContext) 
     ring(cx);
     assert_eq!(toasts(cx), 0, "a Worker's request rings nothing");
 
-    let listed = |view: &CockpitView, thread: ThreadId| {
+    let listed = |view: &CockpitView, thread: ThreadId, cx: &gpui::App| {
         let state = view.nav_state();
-        let inbox = view.inbox(&state);
         state
-            .pinned
-            .iter()
-            .chain(&state.solos)
-            .chain(state.groups.iter().flat_map(|group| &group.members))
+            .open_rows()
             .chain(&state.parked)
-            .chain(&inbox.inbox)
-            .chain(&inbox.working)
-            .chain(&inbox.snoozed)
             .any(|row| row.thread == thread)
+            || view
+                .inbox_rows(&state, cx)
+                .iter()
+                .any(|row| row.thread == thread)
     };
-    view.read_with(cx, |view, _| {
-        assert!(listed(view, mine), "the operator's own is listed");
-        assert!(!listed(view, worker), "the Worker is not");
-        assert!(!listed(view, coordinator), "nor the parked Coordinator");
+    view.read_with(cx, |view, cx| {
+        assert!(listed(view, mine, cx), "the operator's own is listed");
+        assert!(!listed(view, worker, cx), "the Worker is not");
+        assert!(!listed(view, coordinator, cx), "nor the parked Coordinator");
         assert!(view.cockpit.needs_you().is_empty(), "⌘D has nothing");
     });
     let rows = cx.update(|window, cx| view.read(cx).palette_thread_rows(window));

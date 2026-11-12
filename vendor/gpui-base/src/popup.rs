@@ -99,6 +99,9 @@ impl RenderOnce for Popup {
         let state =
             window.use_keyed_state((self.id, "anchor"), cx, |_, _| PopupAnchorState::default());
         let anchor = self.anchor;
+        // A closed popup has nothing to place: its trigger's bounds are
+        // kept for the open, but no frame is asked for them.
+        let placing = self.content.is_some();
         let position = Rc::new(Cell::new(Self::resolved_corner(
             anchor,
             state.read(cx).bounds,
@@ -118,7 +121,7 @@ impl RenderOnce for Popup {
                         state.captured = true;
                         first
                     });
-                    if first {
+                    if first && placing {
                         window.request_animation_frame();
                     }
                 }

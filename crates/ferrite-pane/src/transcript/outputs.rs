@@ -1,28 +1,32 @@
-//! A finished turn's cards (Claude's): what it left to open
+//! A finished turn's cards: what it left to open
 //! (`ferrite_core::transcript::outputs`), drawn under its answer
-//! (`RowKind::Outputs`, theme `OUTPUT_*`).
+//! (`RowKind::Outputs`, theme `OUTPUT_*`, `CHANGES_*`).
 //!
-//! Each card, and each of its doors, is told apart by its place among
-//! the turn's (`file-card-0`, `page-card-open-1`).
-//!
-//! - A **page card** (an `.html` file, a local address): its thumbnail,
-//!   its title and what it is, `Open` — the page beside the transcript, in
-//!   the Panel (`Preview::open_page`) — and `⋯`: open in the browser, copy
-//!   its path or address.
-//! - A **file card**: its mark, its name and where it lives, and `Open in ›`
-//!   — Finder, or the app the system opens it with. A press on the card
-//!   reads the file in the Panel (`Preview::open`).
+//! - The **changed-files card** (T3's): how many files the turn changed
+//!   and the lines gained and lost, `Expand all` and `Open diff`, over the
+//!   files as a tree of shut folders. `Open diff`, or a press on a file,
+//!   opens the Changes Surface (`TranscriptEvent::OpenChanges`).
+//! - A **page card** (Claude's; an `.html` file, a local address): its
+//!   thumbnail, its title and what it is, `Open` — the page beside the
+//!   transcript, in the Panel (`Preview::open_page`) — and `⋯`: open in
+//!   the browser, copy its path or address. Each, and each of its doors,
+//!   is told apart by its place among the turn's (`page-card-open-1`).
 //!
 //! A path resolves against the Thread's checkout, as every path target
 //! does (`FileLink::resolve`).
 
-use std::path::PathBuf;
+use std::path::Path;
 
-use ferrite_core::transcript::outputs::{Output, Page};
+use ferrite_core::transcript::outputs::{Changed, Output, Page};
+use ferrite_core::transcript::BlockId;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, AnyElement, ClipboardItem, Context, MouseButton, Pixels, Point};
 
-use super::{rows::TranscriptRow, TranscriptView};
+use super::{
+    rows::{RowId, TranscriptRow},
+    TranscriptEvent, TranscriptView,
+};
+use crate::pane::DisclosureId;
 use crate::file_links::FileLink;
 use crate::page::PageSource;
 use ferrite_ui::icons::{self, icon};
@@ -41,7 +45,6 @@ pub(super) struct OutputMenu {
 #[derive(Clone, Debug, PartialEq)]
 enum Opened {
     Page(PageSource),
-    File(PathBuf),
 }
 
 /// One row of a card's menu.
@@ -49,8 +52,6 @@ enum Opened {
 enum Verb {
     Browser,
     Copy,
-    Finder,
-    DefaultApp,
 }
 
 impl Opened {
@@ -64,27 +65,18 @@ impl Opened {
                 ("Open in browser", Verb::Browser),
                 ("Copy address", Verb::Copy),
             ],
-            Opened::File(_) => &[("Finder", Verb::Finder), ("Default app", Verb::DefaultApp)],
         }
     }
 
-    fn run(&self, verb: Verb, window: &mut gpui::Window, cx: &mut gpui::App) {
+    fn run(&self, verb: Verb, cx: &mut gpui::App) {
         match (self, verb) {
             (Opened::Page(page), Verb::Browser) => cx.open_url(&page.url()),
-            (Opened::Page(PageSource::File(path)), Verb::Copy)
-            | (Opened::File(path), Verb::Copy) => {
+            (Opened::Page(PageSource::File(path)), Verb::Copy) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(path.display().to_string()))
             }
             (Opened::Page(PageSource::Address(address)), Verb::Copy) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(address.clone()))
             }
-            (Opened::File(path), Verb::Finder) => cx.reveal_path(path),
-            (Opened::File(path), Verb::DefaultApp) => FileLink {
-                path: path.clone(),
-                location: None,
-            }
-            .open(window, cx),
-            _ => {}
         }
     }
 }
@@ -100,18 +92,32 @@ impl TranscriptView {
             Output::Page(Page::Address(address)) => {
                 Opened::Page(PageSource::Address(address.clone()))
             }
-            Output::File(path) => Opened::File(resolve(path)?),
+            Output::Changes(_) => return None,
         })
     }
 
-    /// An outputs row: its cards, one under another.
+    /// An outputs row: its changed-files card, then its page cards, one
+    /// under another.
     pub(super) fn render_outputs(&self, row: &TranscriptRow, cx: &mut Context<Self>) -> AnyElement {
         let key = format!("{}-{:?}", self.input.namespace, row.id());
+        let end = match row.id() {
+            RowId::Outputs(end) => Some(*end),
+            _ => None,
+        };
+        let changes = row.outputs().iter().find_map(|output| match output {
+            Output::Changes(changes) => Some(changes.as_slice()),
+            _ => None,
+        });
         div()
             .debug_selector(|| "transcript-outputs".into())
             .flex()
             .flex_col()
             .gap(px(theme::OUTPUT_CARD_GAP))
+            .children(
+                changes
+                    .zip(end)
+                    .map(|(changes, end)| self.changes_card(&key, end, changes, cx)),
+            )
             .children(
                 row.outputs()
                     .iter()
@@ -120,6 +126,153 @@ impl TranscriptView {
                     .map(|(index, opened)| card(&key, index, opened, cx)),
             )
             .into_any_element()
+    }
+
+    /// The changed-files card: its head, then the tree as far as its
+    /// folders are open.
+    fn changes_card(
+        &self,
+        key: &str,
+        end: BlockId,
+        changes: &[Changed],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let all = self.input.expanded.contains(&DisclosureId::Changes(end));
+        let nodes = tree(changes, self.input.workspace.as_deref());
+        let mut rows = Vec::new();
+        self.tree_rows(key, end, all, &nodes, 0, &mut rows, cx);
+        let added: usize = changes.iter().map(|change| change.added).sum();
+        let removed: usize = changes.iter().map(|change| change.removed).sum();
+        let files = changes.len();
+        let toggle = DisclosureId::Changes(end);
+        let head = div()
+            .debug_selector(|| "changes-card-head".into())
+            .flex()
+            .items_center()
+            .gap(px(theme::SPACE_2))
+            .h(px(theme::CHANGES_HEAD_H))
+            .px(px(theme::CHANGES_PAD_X))
+            .border_b_1()
+            .border_color(paint::LINE)
+            .child(
+                div()
+                    .debug_selector(|| "changes-card-title".into())
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(theme::SPACE_2))
+                    .text_size(px(theme::FS_META))
+                    .line_height(px(theme::LH_META))
+                    .child(
+                        div()
+                            .font_weight(theme::W_LABEL)
+                            .text_color(rgb(theme::INK_STRONG))
+                            .child(changed_label(files)),
+                    )
+                    .child(counts(added, removed)),
+            )
+            .child(
+                text_door(
+                    &format!("{key}-changes-all"),
+                    "changes-card-expand".into(),
+                    if all { "Collapse all" } else { "Expand all" },
+                    false,
+                )
+                .on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    cx.emit(TranscriptEvent::ToggleDisclosure(toggle.clone()));
+                })),
+            )
+            .child(
+                text_door(
+                    &format!("{key}-changes-open"),
+                    "changes-card-open".into(),
+                    "Open diff",
+                    false,
+                )
+                .on_click(cx.listener(|_, _: &gpui::ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    cx.emit(TranscriptEvent::OpenChanges(None));
+                })),
+            );
+        div()
+            .debug_selector(|| "changes-card".into())
+            .flex()
+            .flex_col()
+            .w_full()
+            .rounded(px(theme::R_CARD))
+            .border_1()
+            .border_color(paint::LINE)
+            .overflow_hidden()
+            .child(head)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .py(px(theme::CHANGES_TREE_PAD_Y))
+                    .children(rows),
+            )
+            .into_any_element()
+    }
+
+    /// The tree's rows from `nodes` down, `depth` levels in, as far as
+    /// its folders are open.
+    #[allow(clippy::too_many_arguments)]
+    fn tree_rows(
+        &self,
+        key: &str,
+        end: BlockId,
+        all: bool,
+        nodes: &[Node<'_>],
+        depth: usize,
+        rows: &mut Vec<AnyElement>,
+        cx: &mut Context<Self>,
+    ) {
+        for node in nodes {
+            match node {
+                Node::Folder {
+                    name,
+                    key: folder,
+                    children,
+                } => {
+                    let id = DisclosureId::Folder(end, folder.clone());
+                    let open = all != self.input.expanded.contains(&id);
+                    let selector = format!("changes-folder-{folder}");
+                    rows.push(
+                        tree_row(&format!("{key}-dir-{folder}"), selector, depth)
+                            .child(icon(
+                                if open { icons::CHEVRON_DOWN } else { icons::CHEVRON_RIGHT },
+                                theme::CHANGES_GLYPH,
+                                theme::TEXT_FAINT,
+                            ))
+                            .child(icon(icons::FOLDER, theme::CHANGES_GLYPH, theme::INK_SUBTLE))
+                            .child(name_cell(name.clone()))
+                            .on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
+                                cx.emit(TranscriptEvent::ToggleDisclosure(id.clone()));
+                            }))
+                            .into_any_element(),
+                    );
+                    if open {
+                        self.tree_rows(key, end, all, children, depth + 1, rows, cx);
+                    }
+                }
+                Node::File { name, change } => {
+                    let path = change.path.clone();
+                    let selector = format!("changes-file-{}", change.path);
+                    rows.push(
+                        tree_row(&format!("{key}-file-{}", change.path), selector, depth)
+                            .child(div().size(px(theme::CHANGES_GLYPH)).flex_shrink_0())
+                            .child(icon(icons::FILE, theme::CHANGES_GLYPH, theme::INK_SUBTLE))
+                            .child(name_cell(name.clone()))
+                            .child(counts(change.added, change.removed))
+                            .on_click(cx.listener(move |_, _: &gpui::ClickEvent, _, cx| {
+                                cx.emit(TranscriptEvent::OpenChanges(Some(path.clone())));
+                            }))
+                            .into_any_element(),
+                    );
+                }
+            }
+        }
     }
 
     fn open_output_menu(&mut self, target: Opened, at: Point<Pixels>, cx: &mut Context<Self>) {
@@ -144,10 +297,10 @@ impl TranscriptView {
                     .debug_selector(move || format!("output-menu-row-{index}"))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |view, _: &gpui::MouseDownEvent, window, cx| {
+                        cx.listener(move |view, _: &gpui::MouseDownEvent, _, cx| {
                             cx.stop_propagation();
                             view.output_menu = None;
-                            target.run(verb, window, cx);
+                            target.run(verb, cx);
                             cx.notify();
                         }),
                     ),
@@ -168,15 +321,6 @@ fn card(row: &str, index: usize, opened: Opened, cx: &mut Context<TranscriptView
             page.title(),
             page.kind().to_owned(),
         ),
-        Opened::File(path) => (
-            "file-card",
-            file_mark(),
-            path.file_name().map_or_else(
-                || path.display().to_string(),
-                |name| name.to_string_lossy().into_owned(),
-            ),
-            ferrite_ui::components::home_relative(path.parent().unwrap_or(path)),
-        ),
     };
     let doors: Vec<AnyElement> = match &opened {
         Opened::Page(page) => {
@@ -196,12 +340,6 @@ fn card(row: &str, index: usize, opened: Opened, cx: &mut Context<TranscriptView
                 more_door(&format!("{key}-more"), index, opened.clone(), cx),
             ]
         }
-        Opened::File(_) => vec![open_in_door(
-            &format!("{key}-open-in"),
-            index,
-            opened.clone(),
-            cx,
-        )],
     };
     let body = opened.clone();
     let hover = ferrite_ui::pointer::hover_key(&gpui::ElementId::from(gpui::SharedString::from(
@@ -250,9 +388,8 @@ fn card(row: &str, index: usize, opened: Opened, cx: &mut Context<TranscriptView
         )
         .children(doors)
         .on_click(
-            cx.listener(move |view, _: &gpui::ClickEvent, window, cx| match &body {
+            cx.listener(move |view, _: &gpui::ClickEvent, window, _| match &body {
                 Opened::Page(page) => view.input.preview.open_page(page.clone(), window),
-                Opened::File(path) => view.input.preview.open(path.clone(), None, &[], window, cx),
             }),
         )
         .into_any_element()
@@ -279,25 +416,131 @@ fn thumbnail() -> AnyElement {
         .into_any_element()
 }
 
-/// A file's mark in its tile.
-fn file_mark() -> AnyElement {
+/// `N changed file(s)`.
+fn changed_label(files: usize) -> String {
+    format!("{files} changed file{}", if files == 1 { "" } else { "s" })
+}
+
+/// Lines gained and lost, `+12 −3`, in the diff's signs.
+fn counts(added: usize, removed: usize) -> gpui::Div {
     div()
         .flex()
         .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .size(px(theme::OUTPUT_ICON_TILE))
-        .rounded(px(theme::R_CONTROL))
-        .bg(paint::CARD)
-        .child(icon(
-            icons::FILE,
-            theme::ICON_BUTTON_GLYPH,
-            theme::INK_SUBTLE,
-        ))
-        .into_any_element()
+        .gap(px(theme::SPACE_1))
+        .text_size(px(theme::FS_META))
+        .line_height(px(theme::LH_META))
+        .child(div().text_color(rgb(theme::DIFF_ADDED_SIGN)).child(format!("+{added}")))
+        .child(div().text_color(rgb(theme::DIFF_REMOVED_SIGN)).child(format!("−{removed}")))
 }
 
-/// A word door at a card's right (`Open`, `Open in ›`), lit under the
+/// One row of the tree, `depth` levels in, lit under the pointer.
+fn tree_row(id: &str, selector: String, depth: usize) -> gpui::Stateful<gpui::Div> {
+    let id = gpui::ElementId::from(gpui::SharedString::from(id.to_owned()));
+    let hover = ferrite_ui::pointer::hover_key(&id);
+    div()
+        .id(id)
+        .debug_selector(move || selector)
+        .flex()
+        .items_center()
+        .gap(px(theme::SPACE_1))
+        .h(px(theme::CHANGES_ROW_H))
+        .pl(px(theme::CHANGES_INDENT + theme::CHANGES_INDENT_STEP * depth as f32))
+        .pr(px(theme::CHANGES_PAD_X))
+        .cursor_pointer()
+        .hover_raised(hover)
+}
+
+fn name_cell(name: String) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .truncate()
+        .text_size(px(theme::FS_META))
+        .line_height(px(theme::LH_META))
+        .text_color(rgb(theme::INK_STRONG))
+        .child(name)
+}
+
+/// One node of a changed-files tree: a folder, a chain of folders that
+/// each hold only the next read as one (T3's `src/ui`), or a file.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Node<'a> {
+    Folder {
+        name: String,
+        /// The folder's whole path under the root: its disclosure's key.
+        key: String,
+        children: Vec<Node<'a>>,
+    },
+    File {
+        name: String,
+        change: &'a Changed,
+    },
+}
+
+/// The files `changes` names as a tree under `root` (a path outside it
+/// as it is), folders before files, each by name.
+pub(crate) fn tree<'a>(changes: &'a [Changed], root: Option<&Path>) -> Vec<Node<'a>> {
+    #[derive(Default)]
+    struct Dir<'a> {
+        dirs: std::collections::BTreeMap<String, Dir<'a>>,
+        files: Vec<(String, &'a Changed)>,
+    }
+    fn nodes<'a>(dir: Dir<'a>, under: &str) -> Vec<Node<'a>> {
+        let mut out = Vec::new();
+        for (mut name, mut child) in dir.dirs {
+            while child.files.is_empty() && child.dirs.len() == 1 {
+                let (next, grand) = child.dirs.into_iter().next().unwrap();
+                name = format!("{name}/{next}");
+                child = grand;
+            }
+            let key = if under.is_empty() {
+                name.clone()
+            } else {
+                format!("{under}/{name}")
+            };
+            let children = nodes(child, &key);
+            out.push(Node::Folder {
+                name,
+                key,
+                children,
+            });
+        }
+        let mut files = dir.files;
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        out.extend(files.into_iter().map(|(name, change)| Node::File { name, change }));
+        out
+    }
+    let mut top = Dir::default();
+    for change in changes {
+        let shown = root
+            .and_then(|root| crate::file_links::inside_checkout(Path::new(&change.path), root))
+            .map_or_else(|| change.path.clone(), |path| path.display().to_string());
+        let mut parts: Vec<&str> = shown.split('/').filter(|part| !part.is_empty()).collect();
+        let Some(name) = parts.pop() else {
+            continue;
+        };
+        let mut dir = &mut top;
+        for part in parts {
+            dir = dir.dirs.entry(part.to_owned()).or_default();
+        }
+        dir.files.push((name.to_owned(), change));
+    }
+    nodes(top, "")
+}
+
+/// Every folder's key in `nodes`, all the way down.
+pub(crate) fn folders(nodes: &[Node<'_>]) -> Vec<String> {
+    let mut keys = Vec::new();
+    for node in nodes {
+        if let Node::Folder { key, children, .. } = node {
+            keys.push(key.clone());
+            keys.extend(folders(children));
+        }
+    }
+    keys
+}
+
+/// A word door at a card's right (`Open`, `Expand all`), lit under the
 /// pointer; a press on it never reaches the card.
 fn text_door(
     id: &str,
@@ -331,21 +574,6 @@ fn text_door(
                 theme::INK_SUBTLE,
             ))
         })
-}
-
-/// A file card's `Open in ›`: its menu hangs from the press.
-fn open_in_door(
-    id: &str,
-    index: usize,
-    opened: Opened,
-    cx: &mut Context<TranscriptView>,
-) -> AnyElement {
-    text_door(id, format!("file-card-open-in-{index}"), "Open in", true)
-        .on_click(cx.listener(move |view, event: &gpui::ClickEvent, _, cx| {
-            cx.stop_propagation();
-            view.open_output_menu(opened.clone(), event.position(), cx);
-        }))
-        .into_any_element()
 }
 
 /// A page card's `⋯`.
@@ -390,18 +618,58 @@ mod tests {
             opened.verbs().iter().map(|(label, _)| *label).collect()
         };
         assert_eq!(
-            labels(Opened::File(PathBuf::from("/w/notes.md"))),
-            ["Finder", "Default app"]
-        );
-        assert_eq!(
             labels(Opened::Page(PageSource::Address(
                 "http://localhost:3000".into()
             ))),
             ["Open in browser", "Copy address"]
         );
         assert_eq!(
-            labels(Opened::Page(PageSource::File(PathBuf::from("/w/a.html")))),
+            labels(Opened::Page(PageSource::File(std::path::PathBuf::from("/w/a.html")))),
             ["Open in browser", "Copy path"]
         );
+    }
+
+    /// The files read as T3's tree: under the checkout, folders first,
+    /// a chain of lone folders as one, each level its own.
+    #[test]
+    fn changed_files_read_as_a_tree() {
+        let change = |path: &str| Changed {
+            path: path.into(),
+            added: 1,
+            removed: 0,
+        };
+        let changes = [
+            change("/w/src/ui/button.rs"),
+            change("/w/README.md"),
+            change("/w/src/ui/card.rs"),
+            change("/w/src/main.rs"),
+        ];
+        let names = |nodes: &[Node<'_>]| -> Vec<String> {
+            nodes
+                .iter()
+                .map(|node| match node {
+                    Node::Folder { name, .. } => format!("{name}/"),
+                    Node::File { name, .. } => name.clone(),
+                })
+                .collect()
+        };
+        let top = tree(&changes, Some(Path::new("/w")));
+        assert_eq!(names(&top), ["src/", "README.md"]);
+        let Node::Folder { children, key, .. } = &top[0] else {
+            panic!("src is a folder");
+        };
+        assert_eq!(key, "src");
+        assert_eq!(names(children), ["ui/", "main.rs"]);
+        assert_eq!(folders(&top), ["src", "src/ui"]);
+        let lone = [change("/w/a/b/c.rs")];
+        let top = tree(&lone, Some(Path::new("/w")));
+        assert_eq!(names(&top), ["a/b/"]);
+        // The agent names the file by its real path; the Thread stands in
+        // the checkout through a symlink: the file is still under it.
+        let (real, link) = crate::file_links::tests::symlinked_checkout("changed-tree");
+        let linked = [change(&real.join("f01.txt").to_string_lossy())];
+        assert_eq!(names(&tree(&linked, Some(&link))), ["f01.txt"]);
+        assert_eq!(changed_label(1), "1 changed file");
+        assert_eq!(changed_label(3), "3 changed files");
     }
 }

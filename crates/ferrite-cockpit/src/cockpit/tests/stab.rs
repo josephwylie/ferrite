@@ -375,9 +375,9 @@ fn the_watchdog_sweeps_on_the_executor_clock(cx: &mut TestAppContext) {
 }
 
 /// The bottom-left toast card is gone (C8): with the nav open, finishes off
-/// the board toast nothing — the tree and the Inbox say it — so the Parked
-/// view's row never moves and there is no `+N` bubble. The Inbox still
-/// lists them.
+/// the board toast nothing — the list says it — so the Parked shelf's
+/// header never moves and there is no `+N` bubble. The Inbox still lists
+/// them.
 #[gpui::test]
 fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("toast-parked", 5);
@@ -392,8 +392,8 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     let resting = cx
-        .debug_bounds("nav-view-parked")
-        .expect("the Parked view's row");
+        .debug_bounds("nav-shelf-parked")
+        .expect("the Parked shelf's header");
 
     for stream in &fake.streams.borrow()[1..4] {
         stream
@@ -417,7 +417,7 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
         assert_eq!(
             window.notifications(cx).len(),
             0,
-            "the nav is open: the tree and the Inbox say it, nothing toasts"
+            "the nav is open: the list says it, nothing toasts"
         );
     });
     assert_eq!(
@@ -431,7 +431,7 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
     }
     assert!(cx.debug_bounds("toast-more").is_none(), "no `+N` bubble");
     assert_eq!(
-        cx.debug_bounds("nav-view-parked"),
+        cx.debug_bounds("nav-shelf-parked"),
         Some(resting),
         "the row never moves"
     );
@@ -727,6 +727,33 @@ fn a_draft_body_says_how_to_start(cx: &mut TestAppContext) {
     );
 }
 
+/// The hero's project word is a medium-weight switcher, and under 448 of
+/// window height the lead words give way and leave it standing alone.
+#[gpui::test]
+fn the_hero_drops_its_lead_words_in_a_short_window(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("hero-short", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
+    tick(cx);
+    let tall = cx.debug_bounds("start-hero").expect("the start hero");
+    let word = cx
+        .debug_bounds("start-hero-project")
+        .expect("the project word");
+    cx.simulate_resize(gpui::size(px(1200.), px(ferrite_ui::theme::HERO_SHORT_WINDOW - 8.)));
+    tick(cx);
+    let short = cx.debug_bounds("start-hero").expect("the hero stays");
+    assert!(
+        short.size.width < tall.size.width,
+        "the lead words are gone: {tall:?} -> {short:?}"
+    );
+    assert!(
+        cx.debug_bounds("start-hero-project").is_some(),
+        "the project word stays ({word:?})"
+    );
+}
+
 /// On the empty board the titlebar says nothing either (ADR 0014): no
 /// name, no build badge (F-10: Settings › About keeps that).
 #[gpui::test]
@@ -952,6 +979,7 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     drop(stream);
     tick(cx);
     tick(cx);
+    open_folds(&view, cx);
 
     let (namespace, blocks, composer) = view.read_with(cx, |view, _| {
         let pane = &view.panes[0];
@@ -1256,15 +1284,13 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
                 .unwrap()
         })
     };
-    // Measured, not just declared: the first turn's answer (its actions
-    // row under it, counted in) to the second prompt is the turn step.
-    let turn = ferrite_ui::theme::tx_turn_gap(
-        ferrite_pane::pane::Grid::pane(Default::default(), true).line,
-    );
+    // Measured, not just declared: the first turn's answer to the second
+    // prompt is its meta row and T3's row padding.
+    use ferrite_ui::theme::{MESSAGE_ACTION, MESSAGE_ACTIONS_GAP, PROMPT_BUBBLE_PAD_Y, TX_ROW_PAD};
     assert_eq!(
         line(prompts[1]).top() - answer.bottom(),
-        px(turn + ferrite_ui::theme::PROMPT_BUBBLE_PAD_Y),
-        "turns sit the turn step and the bubble's padding apart"
+        px(MESSAGE_ACTIONS_GAP + MESSAGE_ACTION + TX_ROW_PAD + PROMPT_BUBBLE_PAD_Y),
+        "turns sit the meta row, the padding and the bubble's padding apart"
     );
 }
 
@@ -1425,6 +1451,7 @@ fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
     let dir = scratch("no-server");
     let core = Cockpit::attach(ferrite_core::cockpit::Attach {
             browser: false,
+            driven: false,
         store: dir.clone(),
         server: ferrite_core::cockpit::Endpoint::Local {
             executable: dir.join("no-such-ferrite"),
@@ -1462,6 +1489,7 @@ fn the_restart_button_answers_its_press(cx: &mut TestAppContext) {
     let dir = scratch("restart-press");
     let core = Cockpit::attach(ferrite_core::cockpit::Attach {
             browser: false,
+            driven: false,
         store: dir.clone(),
         server: ferrite_core::cockpit::Endpoint::Local {
             executable: dir.join("no-such-ferrite"),

@@ -190,8 +190,7 @@ impl CockpitView {
             return;
         };
         let path = std::path::Path::new(&key.1);
-        let relative = path
-            .strip_prefix(&workspace)
+        let relative = ferrite_pane::file_links::inside_checkout(path, &workspace)
             .unwrap_or(path)
             .to_string_lossy()
             .into_owned();

@@ -279,10 +279,11 @@ fn a_frame_the_cockpit_did_not_ask_for_replays_it(cx: &mut TestAppContext) {
 
 // ------------------------------------------------------- the working marks
 
-/// A working Thread's marks — the working line's and its nav row's — draw
-/// in the overlay at the display's rate: each display frame asks once for
-/// the next and redraws the overlay, never the Cockpit. Their halos reach
-/// past their boxes, and nothing around a mark clips them.
+/// A working Thread's mark on its working line draws in the overlay at the
+/// display's rate: each display frame asks once for the next and redraws
+/// the overlay, never the Cockpit. Its halo reaches past its box, and
+/// nothing around it clips it. Its nav card's dashed ring holds still
+/// (ticket #231, as T3's does), so the nav hosts nothing there.
 #[gpui::test]
 fn working_marks_draw_every_frame_in_the_overlay_unclipped(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
@@ -310,9 +311,16 @@ fn working_marks_draw_every_frame_in_the_overlay_unclipped(cx: &mut TestAppConte
         .into_iter()
         .filter(|(mark, _)| mark.size.width == mark.size.height)
         .collect();
+    let live = cx.debug_bounds("progress-mark-live").unwrap();
     assert!(
-        marks.len() >= 2,
-        "the working line's mark and the nav row's: {marks:?}"
+        marks.len() == 1 && live.intersect(&marks[0].0) == marks[0].0,
+        "the working line's mark, and only it: {marks:?} / {live:?}"
+    );
+    let nav = cx.debug_bounds("nav-column").expect("the nav, held open");
+    let hosted = cx.update(|window, _| ferrite_ui::loops_overlay::testing::hosted(window));
+    assert!(
+        hosted.iter().all(|(bounds, _)| !nav.intersects(bounds)),
+        "the nav card's ring does not move: {hosted:?}"
     );
     for (mark, mask) in &marks {
         // Past a quarter of the box the halo is under 1% light.

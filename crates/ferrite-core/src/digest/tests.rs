@@ -347,7 +347,7 @@ fn the_wall_card_prints_calls_trails_results_and_the_decision() {
     assert_eq!(
         texts,
         [
-            "\u{25cf} Bash(cargo test --workspace) 1m01s",
+            "\u{25cf} Bash(cargo test --workspace) 1m 1s",
             "  \u{2514} 357 passed; 2 failed"
         ],
         "the prompt leaves no line"

@@ -34,6 +34,7 @@ mod calls;
 mod coordinator;
 mod factory;
 pub mod github;
+mod drive;
 mod render;
 mod signals;
 
@@ -305,6 +306,8 @@ struct Client {
     welcomed: bool,
     renders_visuals: bool,
     browser_capable: bool,
+    /// A `ferrite --headless` window: the `window.*` actions are its.
+    driven: bool,
     watching: BTreeSet<ThreadId>,
 }
 
@@ -339,6 +342,7 @@ struct Server {
     /// Who answered each of them that an answer was delivered for.
     answered: BTreeMap<(ThreadId, WireHandle), ClientId>,
     renders: render::Renders,
+    drives: drive::Drives,
     browser: crate::browser::Service,
     browser_requests: crate::browser::Requests,
     browser_disk: browser::Disk,
@@ -416,6 +420,7 @@ impl Server {
             told_watched: None,
             answered: BTreeMap::new(),
             renders,
+            drives: Default::default(),
             browser,
             browser_disk,
             browser_write: None,
@@ -519,16 +524,12 @@ impl Server {
                         welcomed: false,
                         renders_visuals: false,
                         browser_capable: false,
+                        driven: false,
                         watching: BTreeSet::new(),
                     },
                 );
             }
-            Heard::Gone(id) => {
-                self.clients.remove(&id);
-                self.engine.window_gone(id);
-                self.renders.client_gone(id);
-                self.browser_owner_gone(id);
-            }
+            Heard::Gone(id) => self.gone(id),
             Heard::Message(id, message) => self.message(id, message),
             Heard::Api(heard) => self.api_heard(heard),
         }
@@ -565,6 +566,7 @@ impl Server {
                     client.renders_visuals = capabilities.contains(&Capability::RenderVisual);
                     client.browser_capable =
                         capabilities.contains(&Capability::ConversationBrowser);
+                    client.driven = capabilities.contains(&Capability::Driven);
                     let mut snapshot = self.engine.snapshot();
                     snapshot.factory = Some(self.factory.board());
                     self.send(id, ServerMessage::Snapshot(snapshot));
@@ -614,6 +616,7 @@ impl Server {
                 png,
                 error,
             } => self.renders.answer(request, png, error),
+            ClientMessage::Driven { request, ok, error } => self.driven(id, request, ok, error),
             ClientMessage::Hello { .. } | ClientMessage::Unknown => {}
         }
     }
@@ -1290,9 +1293,15 @@ impl Server {
 
     fn lagged(&mut self, id: ClientId) {
         crate::log!("server: client {id} fell too far behind");
+        self.gone(id);
+    }
+
+    /// A client's connection ended: what it held or was asked goes too.
+    fn gone(&mut self, id: ClientId) {
         self.clients.remove(&id);
         self.engine.window_gone(id);
         self.renders.client_gone(id);
+        self.undriven(id);
         self.browser_owner_gone(id);
     }
 

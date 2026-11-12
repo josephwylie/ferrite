@@ -2094,6 +2094,7 @@ dependencies = [
  "gpui-kit",
  "gpui-pre-platform",
  "image",
+ "serde",
  "serde_json",
  "url",
 ]

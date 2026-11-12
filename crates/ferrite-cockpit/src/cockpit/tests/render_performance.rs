@@ -45,12 +45,61 @@ fn reasoning_rows(fake: &Fake, from: usize, to: usize) {
                 snapshot: false,
             })
             .unwrap();
+        between(&stream[0], row);
     }
+    end_turn(&stream[0]);
+}
+
+/// A failed call after thought `row`: consecutive thoughts join one group
+/// (`Thought (×N)`) and a failure stands on a row of its own, so each
+/// thought stands as its own row. Thought `row` is list item `2 * row`.
+fn between(stream: &Sender<SessionEvent>, row: usize) {
+    let id = format!("between-{row}");
+    stream
+        .send(SessionEvent::ToolStarted {
+            id: id.clone(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": between_text(row) }),
+        })
+        .unwrap();
+    stream
+        .send(SessionEvent::ToolCompleted {
+            id,
+            output: "failed".into(),
+            is_error: true,
+            result: ferrite_core::ToolResult::Opaque,
+        })
+        .unwrap();
+}
+
+fn between_text(row: usize) -> String {
+    format!("between {row:03}")
+}
+
+/// What a drag from thought `from` to thought `to` copies: those thoughts
+/// and the failed calls between them.
+fn thoughts_copied(rows: &[String], from: usize, to: usize) -> String {
+    (from..=to)
+        .flat_map(|row| [rows[row].clone(), between_text(row)])
+        .take(2 * (to - from) + 1)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// The fixture's turn ends, so its thoughts stand as rows of their own,
+/// not behind the running turn's live row.
+fn end_turn(stream: &Sender<SessionEvent>) {
+    stream
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
 }
 
 fn short_reasoning_rows(fake: &Fake, from: usize, to: usize) -> Vec<String> {
     let stream = fake.streams.borrow();
-    (from..to)
+    let rows = (from..to)
         .map(|row| {
             let text = format!("logical selection row {row:03}");
             stream[0]
@@ -61,9 +110,12 @@ fn short_reasoning_rows(fake: &Fake, from: usize, to: usize) -> Vec<String> {
                     snapshot: false,
                 })
                 .unwrap();
+            between(&stream[0], row);
             text
         })
-        .collect()
+        .collect();
+    end_turn(&stream[0]);
+    rows
 }
 
 fn thinking_id(
@@ -81,8 +133,11 @@ fn thinking_id(
             .subject(&view.panes[0].selected)
             .unwrap()
             .transcript()
-            .blocks()[row];
-        assert!(matches!(&block.body, Body::Thinking(_)));
+            .blocks()
+            .iter()
+            .filter(|block| matches!(&block.body, Body::Thinking(_)))
+            .nth(row)
+            .expect("the fixture's thought");
         format!("thinking-{}-{:?}", view.panes[0].text_namespace(), block.id)
     })
 }
@@ -101,8 +156,8 @@ fn thinking_caret(
     })
 }
 
-/// The text a disclosed reasoning row actually mounts: the continuation of
-/// its cut first line, since the header already shows the summary.
+/// The text a disclosed thought mounts: the whole thought (its header reads
+/// `Thought`).
 fn thinking_details(
     view: &gpui::Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
@@ -110,7 +165,7 @@ fn thinking_details(
 ) -> String {
     view.read_with(cx, |view, _| {
         let thread = view.panes[0].thread().unwrap();
-        let block = &view
+        let thought = view
             .cockpit
             .thread(thread)
             .unwrap()
@@ -118,20 +173,21 @@ fn thinking_details(
             .subject(&view.panes[0].selected)
             .unwrap()
             .transcript()
-            .blocks()[row];
-        let Body::Thinking(text) = &block.body else {
-            unreachable!("fixture has one Thinking Block per virtual row")
-        };
-        ferrite_pane::pane::reasoning_text(text)
-            .1
-            .unwrap_or_else(|| text.trim().to_owned())
+            .blocks()
+            .iter()
+            .filter_map(|block| match &block.body {
+                Body::Thinking(text) => Some(text),
+                _ => None,
+            })
+            .nth(row)
+            .expect("the fixture's thought");
+        thought.trim().to_owned()
     })
 }
 
 /// Aim at a byte of a disclosed Thinking row's body through its native wrap.
-/// The offsets are into the disclosed body (`thinking_details`), so that is
-/// the text the helper shapes; shaping the whole thought would wrap a
-/// different string and aim off the row's own lines.
+/// The offsets are into the disclosed body (`thinking_details`), the text
+/// the helper shapes.
 fn wrapped_thinking_caret(
     view: &gpui::Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
@@ -351,9 +407,15 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     );
     // The preview closes from the keyboard (escape, or cmd-w in it; F-14).
     view.update(cx, |view, cx| view.close_preview(0, cx));
-    // The file opened the Files column, which stays beside the Pane until it
+    // The file opened the Files tab, which stays beside the Pane until it
     // is put away: the measure below is of the Pane with the window to itself.
-    view.update(cx, |view, cx| view.press_tool(crate::cockpit::tools::Tool::Files, cx));
+    view.update(cx, |view, cx| {
+        let thread = view.panes[0].thread().unwrap();
+        view.close_surface(thread, &crate::cockpit::surfaces::SurfaceId::Files, cx);
+        if view.panel_open(thread) {
+            view.toggle_panel_now(cx);
+        }
+    });
     tick(cx);
 
     let id = view.read_with(cx, |view, _| {
@@ -502,8 +564,9 @@ fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut T
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
-    let rows = short_reasoning_rows(&fake, 0, 160);
+    let rows = short_reasoning_rows(&fake, 0, 96);
     tick(cx);
+    expand_reasoning_rows(&view, cx);
 
     // `ListState` owns the scroll. Freeze tail following before jumping into
     // retained history, or the live tail would replace our logical anchor.
@@ -519,7 +582,7 @@ fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut T
                     .scroll()
                     .list_state()
                     .scroll_to(gpui::ListOffset {
-                        item_ix: 25,
+                        item_ix: 2 * 10,
                         offset_in_item: px(0.),
                     });
             });
@@ -527,12 +590,12 @@ fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut T
     });
     cx.run_until_parked();
 
-    let row_75 = thinking_id(&view, cx, 75);
-    let from = thinking_caret(&view, cx, 25, 0);
+    let row_45 = thinking_id(&view, cx, 45);
+    let from = thinking_caret(&view, cx, 10, 0);
     cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::none());
 
     // Replacing the mounted range while the drag is held must retain a
-    // logical endpoint. Rows 26..=129 are never all native TextViews.
+    // logical endpoint. Rows 11..=79 are never all native TextViews.
     view.update(cx, |view, cx| {
         view.panes[0]
             .transcript()
@@ -543,27 +606,27 @@ fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut T
                     .scroll()
                     .list_state()
                     .scroll_to(gpui::ListOffset {
-                        item_ix: 130,
+                        item_ix: 2 * 80,
                         offset_in_item: px(0.),
                     });
             });
         cx.notify();
     });
     cx.run_until_parked();
-    let to = thinking_caret(&view, cx, 130, rows[130].len());
+    let to = thinking_caret(&view, cx, 80, rows[80].len());
     cx.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_keystrokes("cmd-c");
 
     assert_eq!(
         clipboard(cx).as_deref(),
-        Some(rows[25..=130].join("\n\n").as_str()),
+        Some(thoughts_copied(&rows, 10, 80).as_str()),
         "logical selection copies every retained row, including never-mounted intermediates"
     );
     assert_eq!(
-        native_text_renders(&row_75, cx),
+        native_text_renders(&row_45, cx),
         0,
-        "the full copy must not mount row 75 to reconstruct the range"
+        "the full copy must not mount row 45 to reconstruct the range"
     );
 
     // Both endpoints now leave the viewport, while retained membership and
@@ -588,7 +651,7 @@ fn dragging_across_virtualized_thinking_rows_copies_the_logical_range(cx: &mut T
     cx.simulate_keystrokes("cmd-c");
     assert_eq!(
         clipboard(cx).as_deref(),
-        Some(rows[25..=130].join("\n\n").as_str()),
+        Some(thoughts_copied(&rows, 10, 80).as_str()),
         "viewport unmounting must not clear a retained logical selection"
     );
 }
@@ -606,7 +669,7 @@ fn partial_thinking_selection_survives_a_wrapping_resize(cx: &mut TestAppContext
     let text = format!(
         "{} {selected} {}",
         "prefix that forces wrapped native geometry ".repeat(20),
-        "suffix that keeps the same native row long ".repeat(12),
+        "suffix that keeps the same native row long ".repeat(4),
     );
     fake.streams.borrow()[0]
         .send(SessionEvent::ReasoningSummaryPart {
@@ -616,21 +679,15 @@ fn partial_thinking_selection_survives_a_wrapping_resize(cx: &mut TestAppContext
             snapshot: false,
         })
         .unwrap();
+    end_turn(&fake.streams.borrow()[0]);
     tick(cx);
     expand_reasoning_rows(&view, cx);
 
-    // A reasoning row's disclosure opens on the continuation of its cut
-    // first line, so these offsets are into the disclosed body rather than
-    // the whole thought.
+    // The selection runs from the phrase to the body's end: a caret past
+    // the last byte clamps there, where a caret mid-paragraph would ride
+    // the shaping helper's wrap grid rather than the row's own.
     let details = thinking_details(&view, cx, 0);
-    // The disclosure opens on the continuation of the row's cut first line,
-    // so these offsets are into the disclosed body. The selection runs from
-    // the phrase to the row's end: a caret past the last byte clamps there,
-    // where a caret mid-paragraph would ride the shaping helper's wrap grid
-    // rather than the row's own.
-    let start = details
-        .find(selected)
-        .expect("the cut line's tail carries it");
+    let start = details.find(selected).expect("the body carries it");
     let end = details.len();
     let expected = details[start..].to_owned();
     let from = wrapped_thinking_caret(&view, cx, 0, start);
@@ -684,8 +741,9 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
     cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new_thinking(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(600.)));
-    let rows = short_reasoning_rows(&fake, 0, 160);
+    let rows = short_reasoning_rows(&fake, 0, 96);
     tick(cx);
+    expand_reasoning_rows(&view, cx);
 
     view.update(cx, |view, cx| {
         view.panes[0]
@@ -698,7 +756,7 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
                     .scroll()
                     .list_state()
                     .scroll_to(gpui::ListOffset {
-                        item_ix: 25,
+                        item_ix: 2 * 10,
                         offset_in_item: px(0.),
                     });
             });
@@ -706,11 +764,11 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
     });
     cx.run_until_parked();
 
-    let selected = "row 025";
-    let start = rows[25].find(selected).unwrap();
+    let selected = "row 010";
+    let start = rows[10].find(selected).unwrap();
     let end = start + selected.len();
-    let from = thinking_caret(&view, cx, 25, start);
-    let to = thinking_caret(&view, cx, 25, end);
+    let from = thinking_caret(&view, cx, 10, start);
+    let to = thinking_caret(&view, cx, 10, end);
     cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::none());
@@ -728,7 +786,7 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
                     .scroll()
                     .list_state()
                     .scroll_to(gpui::ListOffset {
-                        item_ix: 130,
+                        item_ix: 2 * 80,
                         offset_in_item: px(0.),
                     });
             });
@@ -747,7 +805,7 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
     // Replacing another retained row must not invalidate this endpoint.
     fake.streams.borrow()[0]
         .send(SessionEvent::ReasoningSummaryPart {
-            item_id: "logical-selection-row-140".into(),
+            item_id: "logical-selection-row-90".into(),
             summary_index: 0,
             text: "an unrelated snapshot replacement".into(),
             snapshot: true,
@@ -764,7 +822,7 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
     let replacement = "replacement source invalidates the old endpoint";
     fake.streams.borrow()[0]
         .send(SessionEvent::ReasoningSummaryPart {
-            item_id: "logical-selection-row-25".into(),
+            item_id: "logical-selection-row-10".into(),
             summary_index: 0,
             text: replacement.into(),
             snapshot: true,
@@ -781,7 +839,7 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
             .subject(&view.panes[0].selected)
             .unwrap()
             .transcript()
-            .blocks()[25];
+            .blocks()[2 * 10];
         assert!(matches!(&block.body, Body::Thinking(text) if text == replacement));
     });
     assert!(
@@ -1310,12 +1368,14 @@ fn a_live_appended_row_fades_in_and_then_rests(cx: &mut TestAppContext) {
             input: serde_json::json!({"command": "cargo test"}),
         })
         .unwrap();
-    // Its first output gives it a row of its own (until then the working
-    // line carries it).
+    // Its failure gives it a row of its own (until then the live row
+    // stands for it).
     fake.streams.borrow()[0]
-        .send(SessionEvent::ToolOutputDelta {
+        .send(SessionEvent::ToolCompleted {
             id: "arrival-run".into(),
-            text: "Compiling\n".into(),
+            output: "error: build failed".into(),
+            is_error: true,
+            result: ferrite_core::ToolResult::Opaque,
         })
         .unwrap();
     tick(cx);
@@ -1588,10 +1648,11 @@ fn the_panel_goes_at_once_when_focus_moves_to_a_draft(cx: &mut TestAppContext) {
 }
 
 /// A preview opening in a shown Panel snaps it to its wide width, its card
-/// laid out at that width against the board's edge, and closing snaps it
-/// back to the sections at the Panel's own width.
+/// laid out at that width against the board's edge, and closing its tab
+/// shows the sections at once, the width kept (narrowing is the
+/// operator's).
 #[gpui::test]
-fn a_preview_snaps_the_panel_wide_and_back(cx: &mut TestAppContext) {
+fn a_preview_snaps_the_panel_wide(cx: &mut TestAppContext) {
     use ferrite_ui::theme::{PANEL_PAD_L, PANEL_PAD_R, PANEL_W};
     ferrite_ui::motion::testing::drive();
     let (view, cx) = panel_window("motion-panel-preview", cx);
@@ -1619,22 +1680,22 @@ fn a_preview_snaps_the_panel_wide_and_back(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| view.close_preview(0, cx));
     cx.run_until_parked();
-    assert_eq!(panel_width(cx), Some(PANEL_W), "back to its own width");
+    assert_eq!(panel_width(cx), Some(wide), "the width kept");
     assert!(
         cx.debug_bounds("panel-sections").is_some(),
         "the sections, at once"
     );
     assert!(
-        cx.debug_bounds("panel-tab-Preview").is_none(),
+        cx.debug_bounds("panel-tab-File-notes.md").is_none(),
         "its tab is gone"
     );
 }
 
-/// A preview opened while the Panel is hidden shows it, at its wide width
-/// at once, and closing it hides the Panel again, the preview let go, while
-/// the setting never changes.
+/// A preview opened while the Panel is hidden opens the Thread's Panel, at
+/// its wide width at once, while the setting never changes; closing it
+/// lets the preview go and leaves the Panel on its Overview.
 #[gpui::test]
-fn a_preview_shows_a_hidden_panel_and_hides_it_again(cx: &mut TestAppContext) {
+fn a_preview_opens_a_hidden_panel(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let (view, cx) = panel_window("motion-panel-preview-hidden", cx);
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
@@ -1659,7 +1720,7 @@ fn a_preview_shows_a_hidden_panel_and_hides_it_again(cx: &mut TestAppContext) {
 
     view.update(cx, |view, cx| view.close_preview(0, cx));
     cx.run_until_parked();
-    assert_eq!(panel_width(cx), None, "hidden again");
+    assert!(cx.debug_bounds("panel-sections").is_some(), "on its Overview");
     assert!(
         view.read_with(cx, |view, _| !view.panes[0].preview.is_open()),
         "and the preview closed"
@@ -1966,11 +2027,11 @@ fn a_nav_hover_sweep_redraws_the_cockpit_and_not_the_transcript(cx: &mut TestApp
     assert_eq!(built, 0, "a hover in the nav rebuilt a Pane");
 }
 
-/// The Activity view costs nothing at rest: a row arrives at once, asking
-/// for no frame of its own, and a list with rows in it asks for no frame
-/// and rebuilds no nav however long it sits.
+/// The list costs nothing at rest: a row arrives at once, asking for no
+/// frame of its own, and a list with rows in it asks for no frame and
+/// rebuilds no nav however long it sits.
 #[gpui::test]
-fn the_activity_view_at_rest_asks_for_no_frames(cx: &mut TestAppContext) {
+fn the_nav_list_at_rest_asks_for_no_frames(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
     let _clock = hold_wall_clock();
     let (core, fake) = cockpit("activity-view-rest", 3);
@@ -1993,13 +2054,9 @@ fn the_activity_view_at_rest_asks_for_no_frames(cx: &mut TestAppContext) {
             .unwrap();
     }
     tick(cx);
-    view.update(cx, |view, cx| {
-        view.show_nav_view(nav::NavView::Inbox, None, cx)
-    });
-    tick(cx);
     let listed = view.read_with(cx, |view, _| {
-        let activity = view.inbox(&view.nav_state());
-        activity.inbox.len() + activity.working.len()
+        let state = view.nav_state();
+        state.active.len() + state.working.len()
     });
     // The untouched first Thread was opened today too.
     assert_eq!(listed, 3, "the premise: every Thread is listed");
@@ -2774,11 +2831,10 @@ fn the_palette_comes_in_and_rebuilds_no_pane(cx: &mut TestAppContext) {
     assert_eq!(display_frames(cx), 0, "landed: no more frames");
 }
 
-/// A Composer's choice menu opens in its place on its first frame — no
-/// frame drawn blank while it measures itself — stands still there, and
-/// asks for nothing after.
+/// The model picker opens in its place — no frame drawn blank while it
+/// measures itself — stands still there, and asks for nothing after.
 #[gpui::test]
-fn a_choice_menu_opens_in_place_and_then_rests(cx: &mut TestAppContext) {
+fn the_model_picker_opens_in_place_and_then_rests(cx: &mut TestAppContext) {
     let (view, _fake, threads, cx) = group_board("choice-menu-entrance", &[], cx);
     view.update(cx, |view, cx| {
         view.cockpit.toggle_fullscreen();
@@ -2792,7 +2848,7 @@ fn a_choice_menu_opens_in_place_and_then_rests(cx: &mut TestAppContext) {
         cx.executor().advance_clock(Duration::from_millis(16));
         cx.run_until_parked();
         display_frames(cx);
-        stood.extend(cx.debug_bounds("choice-menu").map(|menu| menu.bottom()));
+        stood.extend(cx.debug_bounds("model-picker").map(|menu| menu.bottom()));
     }
     assert_eq!(display_frames(cx), 0, "placed: no more frames");
     assert!(!stood.is_empty(), "the premise: it was drawn");
@@ -2882,6 +2938,7 @@ fn a_read_rows_path_opens_in_files_and_its_verb_unfolds_the_row(cx: &mut TestApp
         })
         .unwrap();
     tick(cx);
+    open_live(cx);
     let row = cx.debug_bounds("tool-row-read-notes").expect("the Read row");
     let path = cx.debug_bounds("tool-call").expect("its path");
     assert!(path.left() > row.left() + px(8.), "the verb stands before the path");

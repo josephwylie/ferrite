@@ -14,34 +14,70 @@ pub fn model_label(model: &str) -> SharedString {
     SharedString::from(ferrite_core::providers::models::display_name(model))
 }
 
-/// The model and its effort as one footer chip (Claude's `Opus 5.5
-/// Medium`): the model in `INK_STRONG` at `W_LABEL`, a step above the
-/// body, cut first in a narrow Pane, then the effort in `INK_SUBTLE` at
-/// `W_BODY`, `FOOTER_WORD_GAP` after it and never cut. A model that takes
-/// no effort shows its name alone. While the Thread's Session starts
-/// (`loading`) the model's name shimmers, as the working line's does: it is
-/// the provider's default until the Session says which model serves
-/// (Codex's skeleton chip).
-pub fn model_effort_chip(
-    model: SharedString,
-    effort: Option<SharedString>,
-    loading: bool,
-) -> Div {
+/// The model chip's face (T3's model trigger, Claude's `Opus 5.5 Medium`):
+/// what serves the Thread and how hard it thinks.
+pub struct ModelChip {
+    /// The provider's logomark and brand ink (`provider::mark`).
+    pub mark: (&'static str, u32),
+    pub model: SharedString,
+    /// The effort in force; `None` for a model that takes none.
+    pub effort: Option<SharedString>,
+    /// The Session is starting: the name is the provider's default until it
+    /// says which model serves, and shimmers as the working line does
+    /// (Codex's skeleton chip).
+    pub loading: bool,
+    /// The picker the chip opens is open.
+    pub open: bool,
+    /// The chip button's hover group: the effort lifts while it is hovered.
+    pub group: SharedString,
+}
+
+/// The model chip's face: the provider's mark at `MODEL_PICKER_MARK`, then
+/// the model in `INK_STRONG` at `W_LABEL`, cut first in a narrow Pane, then
+/// the effort at `W_BODY`, `FOOTER_WORD_GAP` after it and never cut. The
+/// effort is `INK_SUBTLE`, lifting to `INK_STRONG` while the chip is
+/// hovered or its picker is open (T3's suffix).
+pub fn model_effort_chip(chip: ModelChip) -> Div {
+    let ModelChip {
+        mark: (path, ink),
+        model,
+        effort,
+        loading,
+        open,
+        group,
+    } = chip;
     let model = if loading {
         components::shimmer(model, INK_STRONG)
     } else {
         model.into_any_element()
     };
-    chip_face(model, INK_STRONG)
-        .font_weight(theme::W_LABEL)
-        .gap(px(theme::FOOTER_WORD_GAP))
-        .children(effort.map(|effort| {
+    let mark_selector = format!("{group}-mark");
+    let effort = effort.map(|effort| {
+        div()
+            .flex_shrink_0()
+            .font_weight(theme::W_BODY)
+            .text_color(rgb(if open { INK_STRONG } else { INK_SUBTLE }))
+            .group_hover(group.clone(), |style| style.text_color(rgb(INK_STRONG)))
+            .child(effort)
+    });
+    div()
+        .flex()
+        .flex_shrink(1.)
+        .min_w_0()
+        .items_center()
+        .gap(px(theme::SPACE_1_5))
+        .child(
             div()
+                .debug_selector(move || mark_selector.clone())
                 .flex_shrink_0()
-                .font_weight(theme::W_BODY)
-                .text_color(rgb(INK_SUBTLE))
-                .child(effort)
-        }))
+                .child(icons::icon(path, theme::MODEL_PICKER_MARK, ink)),
+        )
+        .child(
+            chip_face(model, INK_STRONG)
+                .font_weight(theme::W_LABEL)
+                .gap(px(theme::FOOTER_WORD_GAP))
+                .children(effort),
+        )
 }
 
 /// The permission mode's word under the box: `INK_SUBTLE`, or
@@ -103,24 +139,39 @@ pub fn attach_button(cx: &gpui::App) -> gpui::component::button::Button {
         .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, INK_STRONG))
 }
 
-/// Whether the send circle shows stop: Solo's (not `compact`), while the
-/// turn runs, with nothing in the box. The cockpit draws the circle from
-/// it; the working line names no key.
-pub fn send_is_stop(running: bool, empty: bool, compact: bool) -> bool {
-    !compact && running && empty
+/// Which of the Composer's primary actions stand (T3's): Solo's stop while
+/// a turn runs, its send once something is typed, both while a turn runs
+/// with text (stop first). The `compact` Composer's one circle always
+/// stands and always sends, into a running turn too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrimaryActions {
+    pub stop: bool,
+    pub send: bool,
 }
 
-/// The send circle (`COMPOSER_SEND` round; the `compact` Composer's, SPEC
-/// §5.9, `SEND_CIRCLE_SM` with its glyph `SEND_GLYPH_SM`, spaced by its
-/// box's gap). Three faces, as Claude's and Codex's: with something to send,
-/// lit — `PRIMARY` with an `ON_PRIMARY` `arrow-up`; with nothing (`empty`),
-/// at rest — `paint::SEND` with the arrow in `INK_SUBTLE` (still pressable:
-/// an empty ↵ has its own acts); while a turn runs with nothing typed
-/// (`stop`), `paint::SEND` with `stop` in `INK_STRONG`. The ground changes
-/// at once with the keystroke that changes it; the glyph morphs
-/// (`send_glyph`). The tooltip names the key.
+pub fn primary_actions(running: bool, empty: bool, compact: bool) -> PrimaryActions {
+    if compact {
+        return PrimaryActions {
+            stop: false,
+            send: true,
+        };
+    }
+    PrimaryActions {
+        stop: running,
+        send: !empty,
+    }
+}
+
+/// The send circle (`COMPOSER_SEND` round, growing to
+/// `MOTION_SEND_HOVER_SCALE` under the pointer; the `compact` Composer's,
+/// SPEC §5.9, `SEND_CIRCLE_SM` with its glyph `SEND_GLYPH_SM`). With
+/// something to send it is lit, T3's: `SEND_LIT` with an `ON_SEND_LIT`
+/// arrow under a `SEND_LIT_HIGHLIGHT` top edge; with nothing (`empty`, the
+/// compact one's) `paint::SEND` with the arrow in `INK_SUBTLE`, still
+/// pressable. While a turn runs (`steer`) the arrow morphs into the steer
+/// glyph (`send_glyph`). The tooltip names the key.
 pub fn send_button(
-    stop: bool,
+    steer: bool,
     empty: bool,
     compact: bool,
     cx: &gpui::App,
@@ -130,54 +181,82 @@ pub fn send_button(
     } else {
         (theme::COMPOSER_SEND, theme::COMPOSER_SEND_ICON)
     };
-    let lit = !stop && !empty;
+    let lit = !empty;
     let (rest, hover, press, ink): (gpui::Hsla, gpui::Hsla, gpui::Hsla, u32) = if lit {
         (
-            rgb(theme::PRIMARY).into(),
-            rgb(theme::PRIMARY_HOVER).into(),
-            rgb(theme::PRIMARY_HOVER).into(),
-            theme::ON_PRIMARY,
+            rgb(theme::SEND_LIT).into(),
+            rgb(theme::SEND_LIT_HOVER).into(),
+            rgb(theme::SEND_LIT_HOVER).into(),
+            theme::ON_SEND_LIT,
         )
     } else {
         (
             theme::paint::SEND.into(),
             theme::paint::SEND.into(),
             theme::paint::PRESS.into(),
-            if stop { INK_STRONG } else { INK_SUBTLE },
+            INK_SUBTLE,
         )
     };
-    components::faded_button("composer-send", rest, hover, press, rgb(ink).into(), cx)
-        .debug_selector(move || {
-            if stop {
-                "composer-stop"
-            } else {
-                "composer-send"
-            }
-            .into()
-        })
+    let lift = if compact {
+        1.0
+    } else {
+        theme::MOTION_SEND_HOVER_SCALE
+    };
+    components::lifting_button("composer-send", rest, hover, press, rgb(ink).into(), lift, cx)
+        .debug_selector(|| "composer-send".into())
+        .relative()
         .p_0()
         .size(px(size))
         .flex_shrink_0()
         .rounded_full()
         .map(|button| {
-            if stop {
-                button.tip_with_key("Stop", components::bound_chord("cockpit::Interrupt"))
-            } else {
-                button.tip_with_key("Send", Some(components::spell_chord("enter")))
-            }
+            let verb = if steer { "Steer" } else { "Send" };
+            button.tip_with_key(verb, Some(components::spell_chord("enter")))
         })
-        .child(send_glyph(stop, glyph, ink))
+        .when(lit, |button| {
+            button.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .rounded_full()
+                    .border_t_1()
+                    .border_color(rgba(theme::SEND_LIT_HIGHLIGHT)),
+            )
+        })
+        .child(send_glyph(steer, glyph, ink))
 }
 
-/// The send circle's glyph, morphing between `arrow-up` and `stop` when
-/// the state flips under it (`motion::settled`, `FADE_QUICK`): the old
-/// glyph fades and shrinks to `MOTION_SEND_GLYPH_FROM` as the new one fades
-/// and grows into its place, both centred in the circle. First paint lands
-/// on its state.
-fn send_glyph(stop: bool, extent: f32, ink: u32) -> impl IntoElement {
+/// Stop (T3's interrupt): a `COMPOSER_STOP` circle in `STOP`, `STOP_HOVER`
+/// under the pointer, its white rounded square; the tooltip says
+/// `Interrupt` and names the key.
+pub fn stop_button(cx: &gpui::App) -> gpui::component::button::Button {
+    components::faded_button(
+        "composer-stop",
+        rgba(theme::STOP).into(),
+        rgba(theme::STOP_HOVER).into(),
+        rgba(theme::STOP_HOVER).into(),
+        rgb(theme::ON_SEND_LIT).into(),
+        cx,
+    )
+    .debug_selector(|| "composer-stop".into())
+    .p_0()
+    .size(px(theme::COMPOSER_STOP))
+    .flex_shrink_0()
+    .rounded_full()
+    .tip_with_key("Interrupt", components::bound_chord("cockpit::Interrupt"))
+    .child(icon(icons::STOP, theme::COMPOSER_STOP_ICON, theme::ON_SEND_LIT))
+}
+
+/// The send circle's glyph, morphing between `arrow-up` and the steer
+/// glyph when a turn starts or ends under it (`motion::settled`,
+/// `FADE_QUICK`): the old glyph fades and shrinks to
+/// `MOTION_SEND_GLYPH_FROM` as the new one fades and grows into its place,
+/// both centred in the circle. First paint lands on its state. The arrow
+/// is T3's, stroked `SEND_ARROW_STROKE`.
+fn send_glyph(steer: bool, extent: f32, ink: u32) -> impl IntoElement {
     ferrite_ui::motion::settled(
         "send-glyph",
-        stop,
+        steer,
         ferrite_ui::motion::FADE_QUICK,
         move |t| {
             let face =
@@ -191,15 +270,18 @@ fn send_glyph(stop: bool, extent: f32, ink: u32) -> impl IntoElement {
                         .items_center()
                         .justify_center()
                         .opacity(shown)
-                        .child(icon(path, extent, ink).with_transformation(
-                            gpui::Transformation::scale(gpui::size(scale, scale)),
-                        ))
+                        .child(
+                            icons::icon_stroked(path, extent, theme::SEND_ARROW_STROKE, ink)
+                                .with_transformation(gpui::Transformation::scale(gpui::size(
+                                    scale, scale,
+                                ))),
+                        )
                 };
             div()
                 .relative()
                 .size(px(extent))
                 .child(face(icons::ARROW_UP, 1.0 - t))
-                .child(face(icons::STOP, t))
+                .child(face(icons::CORNER_UP_RIGHT, t))
         },
     )
 }
@@ -213,7 +295,9 @@ fn send_glyph(stop: bool, extent: f32, ink: u32) -> impl IntoElement {
 /// listing order.
 pub struct ComposerControls {
     pub attach: Option<AnyElement>,
-    /// The send circle; none while the box has nothing to send or stop.
+    /// Stop, while a turn runs (`primary_actions`), before send.
+    pub stop: Option<AnyElement>,
+    /// The send circle; none while the box has nothing to send.
     pub send: Option<AnyElement>,
     pub footer: Option<AnyElement>,
     pub env: Option<AnyElement>,
@@ -362,9 +446,10 @@ pub(super) struct ComposerStack<'a> {
 /// The Composer stack (theme WP-D): a board cell's compact box
 /// (`compact_composer`), Solo's box (`box_composer`, SPEC §5.5). On a
 /// board the shelf of pending files stands above it (Solo's ride inside
-/// its box, over the text). Running background work has no shelf: it is
-/// in its own rows, the rail and the Background tasks pane, as Claude's. The Pane lays the stack out `flex_shrink_0` below
-/// the body, so the transcript gives way. The Decision row is **not**
+/// its box, over the text). Running background work has no shelf: it is the
+/// transcript's last line (`background_work_line`) and in the rail and the
+/// Background tasks pane. The Pane lays the stack out `flex_shrink_0`
+/// below the body, so the transcript gives way. The Decision row is **not**
 /// here: it is the transcript's tail. While a Decision pends the input
 /// carries the `Decision` key context, so its keys answer with the
 /// keyboard in the Composer (#23).
@@ -381,7 +466,7 @@ pub(super) fn composer_region(
 }
 
 /// The Solo Composer (SPEC §5.5): a box `COMPOSER_OUTSET` past the reading
-/// column at each side — `paint::FIELD` at `R_FLOAT`, its `FIELD_RING`
+/// column at each side — `paint::FIELD` at `R_COMPOSER`, its `FIELD_RING`
 /// laid outside it — holding the pending files, the input (no `❯`) and the
 /// toolbar the cockpit wires; the queue strip stands over it as its own
 /// card, the footer under it. Files dragged over it light its edge and say
@@ -405,7 +490,14 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
     } = stack;
     let geometry = view.geometry.clone();
     let namespace = view.text_namespace();
-    let ring = |ink: u32| components::outer_ring(theme::R_FLOAT, rgba(ink));
+    let ring = |ink: u32| components::outer_ring(theme::R_COMPOSER, rgba(ink));
+    // T3's `inset-shadow-2xs`: a hairline of light along the box's top.
+    let highlight = div()
+        .absolute()
+        .inset_0()
+        .rounded(px(theme::R_COMPOSER))
+        .border_t_1()
+        .border_color(rgba(theme::COMPOSER_TOP_HIGHLIGHT));
     let field = div()
         .debug_selector(|| "composer-block".into())
         .when(drop_target, |field| {
@@ -416,14 +508,15 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         .flex_col()
         .flex_shrink_0()
         .min_w_0()
-        .rounded(px(theme::R_FLOAT))
+        .rounded(px(theme::R_COMPOSER))
         .bg(theme::paint::FIELD)
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
         .text_color(rgb(INK_STRONG))
         .when(decision.is_some(), |field| field.key_context("Decision"))
-        .child(ring(theme::paint::FIELD_RING.rgba()));
+        .child(ring(theme::paint::FIELD_RING.rgba()))
+        .child(highlight);
     let mut field = components::on_bounds(field, move |bounds, _, _| {
         geometry.set(PaneGeometry {
             composer: Some(bounds),
@@ -442,7 +535,7 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
             .items_center()
             .justify_center()
             .gap(px(theme::SPACE_2))
-            .rounded(px(theme::R_FLOAT))
+            .rounded(px(theme::R_COMPOSER))
             .bg(theme::paint::FIELD)
             .text_color(rgb(INK_STRONG))
             .child(icon(icons::PLUS, theme::COMPOSER_ATTACH_ICON, INK_STRONG))
@@ -452,7 +545,8 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         field = field.child(ring(theme::DROP_EDGE));
     }
     if let Some(error) = draft_error {
-        field = field.child(
+        field = field.child(ferrite_ui::motion::fade_in(
+            SharedString::from(format!("composer-notice-{namespace}")),
             div()
                 .flex_shrink_0()
                 .min_w_0()
@@ -461,7 +555,9 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
                 .whitespace_normal()
                 .text_color(rgb(BLOCKED))
                 .child(error),
-        );
+            ferrite_ui::motion::FADE_QUICK,
+            1.0,
+        ));
     }
     // The pending files ride inside the box, over the text they go with
     // (as Claude's and Codex's do), the text `ATTACH_ROW_GAP` under them.
@@ -509,10 +605,10 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
     });
     // One row, as Claude's: the `+`, the line that grows, the send circle,
     // the buttons standing at the row's foot as the line grows over them.
-    let (attach, send, footer, env, actions) = match toolbar {
+    let (attach, primary, footer, env, actions) = match toolbar {
         Some(controls) => (
             controls.attach,
-            controls.send,
+            primary_slot(controls.stop, controls.send),
             controls.footer,
             controls.env,
             controls.queue,
@@ -570,7 +666,7 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
                     .px(px(theme::COMPOSER_TOOLBAR_PAD_X))
                     .children(attach.map(slot))
                     .child(div().flex_1())
-                    .children(send.map(slot)),
+                    .children(primary.map(slot)),
             );
     } else {
         field = field.child(
@@ -584,22 +680,22 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
                 .when(attached, |row| row.pt(px(theme::ATTACH_ROW_GAP)))
                 .children(attach.map(slot))
                 .child(live.py(px(theme::COMPOSER_TEXT_PAD_Y)))
-                .children(send.map(slot)),
+                .children(primary.map(slot)),
         );
     }
     field = field.children(drop_hint);
-    // The `/` or `@` popover paints above the stack — deferred, so it
-    // escapes the Pane's clip and draws over the transcript (#24) — from
-    // the box's left edge, at most `SLASH_MENU_W` wide.
+    // The `/`, `@` or `$` menu is a drawer standing on the box's top edge
+    // (T3's `ComposerBanner`), as wide as the box — deferred, so it
+    // escapes the Pane's clip and draws over the transcript (#24).
     if let Some(menu) = menu {
         field = field.child(deferred(
             div()
+                .debug_selector(|| "composer-menu-drawer".into())
                 .absolute()
                 .bottom(relative(1.))
                 .left_0()
                 .right_0()
-                .mb(px(theme::FLOAT_OFFSET))
-                .child(div().max_w(px(theme::SLASH_MENU_W)).child(menu)),
+                .child(menu),
         ));
     }
     composer_stack(None, true)
@@ -623,6 +719,22 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
                 .px(px(theme::COMPOSER_OUTSET - theme::FOOTER_CHIP_PAD_X))
                 .children(footer),
         ))
+}
+
+/// Stop then send, `PRIMARY_ACTIONS_GAP` apart (T3's `gap-2`), or none.
+fn primary_slot(stop: Option<AnyElement>, send: Option<AnyElement>) -> Option<AnyElement> {
+    if stop.is_none() && send.is_none() {
+        return None;
+    }
+    Some(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(theme::PRIMARY_ACTIONS_GAP))
+            .children(stop)
+            .children(send)
+            .into_any_element(),
+    )
 }
 
 /// What stands over either Composer: `SHELF_GAP` over the box it belongs
@@ -860,7 +972,7 @@ fn chip_button(id: impl Into<gpui::ElementId>, cx: &gpui::App) -> gpui::componen
 ///
 /// A predicted follow-up is already in the operator's voice and already
 /// filtered, so it is shown verbatim — a draft of their next prompt, not a
-/// description of one — with `⇥ accept`, which is always kept whole: an
+/// description of one — with its `⇥ Tab` key cap, always kept whole: an
 /// accept key nobody knows about is the same as no accept key, so the
 /// prediction's own words give way to it.
 #[derive(Clone, Debug, PartialEq)]
@@ -882,26 +994,26 @@ impl Ghost {
     #[cfg(test)]
     pub(super) fn text(&self) -> String {
         if self.accept {
-            format!("{} \u{b7} {ACCEPT_HINT}", self.head)
+            format!("{} {ACCEPT_HINT}", self.head)
         } else {
             self.head.to_string()
         }
     }
 }
 
-/// What follows a verbatim prediction.
-const ACCEPT_HINT: &str = "\u{21e5} accept";
+/// The key cap after a verbatim prediction (T3's outline `Kbd`).
+const ACCEPT_HINT: &str = "\u{21e5} Tab";
 
-/// The resting line's words, and a running turn's.
-const IDLE_PLACEHOLDER: &str = "Type / for commands";
+/// The line's words in every ordinary state (T3's one placeholder): it
+/// names the three triggers.
+const IDLE_PLACEHOLDER: &str = "Ask anything. @ files, $ skills, / commands";
 /// Both Enter and ⌘Enter bind `Submit`, which while a turn runs joins that
 /// turn (Claude folds it in at the next tool round, Codex steers it), so
 /// the hint names the one thing a key does.
 const RUNNING_PLACEHOLDER: &str = "\u{21b5} to steer this turn";
 
-/// The placeholder for this line, Claude's three: the first prompt, a
-/// draft's or an empty Thread's; while a turn runs, that ↵ steers it; else
-/// the way to the commands.
+/// The placeholder for this line: while a turn runs, that ↵ steers it;
+/// else the triggers, a draft's and an empty Thread's alike.
 /// A landed prediction shows verbatim instead. A Decision or a dead
 /// Session changes nothing here: the line still takes typing, and sending
 /// revives.
@@ -912,7 +1024,7 @@ pub(super) fn placeholder(
     suggestion: Option<&str>,
 ) -> Ghost {
     if draft || transcript.is_some_and(|transcript| transcript.blocks().is_empty()) {
-        return Ghost::says("Describe a task or ask a question");
+        return Ghost::says(IDLE_PLACEHOLDER);
     }
     let busy = transcript.is_some_and(|transcript| transcript.status() == Status::Streaming);
     match followup::suggest(pending, transcript, suggestion) {
@@ -1000,22 +1112,39 @@ pub(super) fn ghost_row(ghost: Ghost, left: f32) -> Div {
                 .child(ghost.head),
         )
         .when(ghost.accept, |row| {
-            // The placeholder is one muted run, its `·` too (the
-            // prototype's `.ph-text`).
             row.child(
                 div()
                     .debug_selector(|| "prompt-placeholder-hint".into())
                     .flex()
                     .flex_shrink_0()
+                    .items_center()
                     .h(px(theme::COMPOSER_ROW_H))
-                    .child(
-                        components::cells("\u{b7}")
-                            .px(px(theme::CH))
-                            .w(px(3.0 * theme::CH)),
-                    )
-                    .child(components::cells(ACCEPT_HINT)),
+                    .pl(px(theme::SPACE_2))
+                    .child(outline_key_cap(ACCEPT_HINT)),
             )
         })
+}
+
+/// T3's outline key cap (`Kbd variant="outline"`): a physical key, so the
+/// hint stays distinct beside the prediction's own words. 1px edges with a
+/// 2px foot in `KEY_CAP_OUTLINE_EDGE`, no ground.
+fn outline_key_cap(key: &'static str) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .min_w(px(theme::KEY_CAP_SOFT))
+        .h(px(theme::KEY_CAP_SOFT))
+        .px(px(theme::SPACE_1_5))
+        .border_1()
+        .border_b_2()
+        .border_color(rgba(theme::KEY_CAP_OUTLINE_EDGE))
+        .rounded(px(theme::KEY_CAP_SOFT_R))
+        .text_size(px(theme::FS_BADGE))
+        .font_weight(theme::W_LABEL)
+        .text_color(rgb(INK_SUBTLE))
+        .child(key)
 }
 
 /// #11: whether this Thread still offers adopting a CLI session — no

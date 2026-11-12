@@ -37,7 +37,7 @@ fn shows(cx: &mut gpui::VisualTestContext, selector: &str) -> bool {
     debug_bounds(cx, selector.to_string()).is_some()
 }
 
-/// A Project's Factory entry is under its heading; a fresh one opens an
+/// Each Project has a Factory entry over the nav's cards; a fresh one opens an
 /// empty board that started nothing and says nothing needs the operator.
 #[gpui::test]
 fn each_project_has_a_factory_entry_and_a_fresh_one_is_empty(cx: &mut TestAppContext) {
@@ -243,11 +243,11 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
         })
     };
     let before = toasts(cx);
-    let inbox_len = |view: &CockpitView| {
+    let inbox_len = |view: &CockpitView, cx: &gpui::App| {
         let state = view.nav_state();
-        view.inbox(&state).inbox.len()
+        view.inbox_rows(&state, cx).len()
     };
-    let inbox_before = view.read_with(cx, |view, _| inbox_len(view));
+    let inbox_before = view.read_with(cx, |view, cx| inbox_len(view, cx));
     view.update(cx, |view, cx| {
         let watched = view.cockpit.threads()[0];
         view.focus_thread(watched, cx);
@@ -263,9 +263,9 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
     tick(cx);
     ring(cx);
     assert_eq!(toasts(cx), before + 1, "a toast");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
         assert_eq!(view.chimed, [Sound::NeedsYou], "a chime");
-        assert_eq!(inbox_len(view), inbox_before, "nothing reaches the Inbox");
+        assert_eq!(inbox_len(view, cx), inbox_before, "nothing reaches the Inbox");
         assert!(view.needs_you.toasts().is_empty());
     });
     assert_eq!(

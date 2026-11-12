@@ -12,6 +12,7 @@ pub mod motion;
 pub mod odometer;
 pub mod platform_text;
 pub mod pointer;
+pub mod project_badge;
 pub mod provider;
 mod scrollbar;
 pub mod sheet;

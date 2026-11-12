@@ -101,7 +101,7 @@ and §6) changes three things here.
   removed: the tree still carries no queue, and ⌘D still walks
   `Cockpit::needs_you`.
 
-## Amendment (2026-10-24): the Attention list, herdr's Agents panel
+## Amendment (2026-10-24): the Attention list, herdr's Agents panel (superseded by ADR 0040)
 
 herdr's sidebar has two panels, and both are always on screen. Spaces
 lists the projects with their rolled-up state. Agents lists every agent

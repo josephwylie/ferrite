@@ -9,6 +9,8 @@ mod facts;
 pub mod ferrite_update;
 mod float;
 mod fuzzy;
+#[cfg(feature = "headless")]
+pub mod headless;
 pub mod machines;
 mod nav;
 mod notifications;

@@ -508,6 +508,7 @@ fn a_read_picture_draws_under_its_row_and_opens(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
+    open_live(cx);
     let row = cx.debug_bounds("tool-row-read-icon").expect("the Read row");
     let picture = cx.debug_bounds("sent-image").expect("its picture");
     assert!(picture.top() >= row.bottom(), "under the row, not beside it");

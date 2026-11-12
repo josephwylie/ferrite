@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use super::cli::{self, Context};
 use super::schema::*;
 use super::*;
+use crate::drive;
 use crate::protocol::{WireAnswer, WireSound};
 
 // ------------------------------------------------------------ waiting
@@ -227,6 +228,11 @@ fn the_operations_are_the_ones_declared_and_never_renamed() {
             "coordinator.say",
             "coordinator.set",
             "task.clear",
+            "window.key",
+            "window.type",
+            "window.click",
+            "window.find",
+            "window.shot",
         ]
     );
 }
@@ -579,6 +585,22 @@ fn samples() -> Vec<Request> {
         request(Method::TaskClear(TaskClearParams {
             project: Some("3".into()),
             cwd: None,
+        })),
+        request(Method::WindowKey(drive::Keys {
+            keys: vec!["cmd-,".into()],
+        })),
+        request(Method::WindowType(drive::Text {
+            text: "hello".into(),
+        })),
+        request(Method::WindowClick(drive::Click {
+            at: drive::Target::Selector("settings-close".into()),
+            press: drive::Press::Single,
+        })),
+        request(Method::WindowFind(drive::Find {
+            selector: "settings-close".into(),
+        })),
+        request(Method::WindowShot(drive::Shot {
+            path: PathBuf::from("/tmp/shot.png"),
         })),
     ]
 }
@@ -1404,6 +1426,47 @@ fn a_thread_starts_where_the_cli_runs_unless_told() {
     assert_eq!(reviewer.provider, Some(Provider::Codex));
     assert!(reviewer.worktree);
     assert_eq!(reviewer.title.as_deref(), Some("reviewer"));
+}
+
+/// The headless window's keys come as every word left; a click is at a
+/// selector or a point, single, double or right, and nothing else; a
+/// shot's path is read from where the CLI runs.
+#[test]
+fn window_actions_read_as_the_window_takes_them() {
+    assert_eq!(
+        parse("window.key", &["cmd-k", "cmd-s"]),
+        Ok(Method::WindowKey(drive::Keys {
+            keys: vec!["cmd-k".into(), "cmd-s".into()],
+        }))
+    );
+    assert_eq!(
+        parse("window.click", &["--selector", "settings-close", "--double"]),
+        Ok(Method::WindowClick(drive::Click {
+            at: drive::Target::Selector("settings-close".into()),
+            press: drive::Press::Double,
+        }))
+    );
+    assert_eq!(
+        parse("window.click", &["--x", "40", "--y", "12", "--right"]),
+        Ok(Method::WindowClick(drive::Click {
+            at: drive::Target::Point { x: 40, y: 12 },
+            press: drive::Press::Right,
+        }))
+    );
+    for wrong in [
+        &["--x", "40"][..],
+        &["--selector", "a", "--x", "1", "--y", "2"],
+        &["--selector", "a", "--double", "--right"],
+        &[],
+    ] {
+        assert!(parse("window.click", wrong).is_err(), "{wrong:?}");
+    }
+    assert_eq!(
+        parse("window.shot", &["shots/settings.png"]),
+        Ok(Method::WindowShot(drive::Shot {
+            path: PathBuf::from("/work/app/shots/settings.png"),
+        }))
+    );
 }
 
 /// A worktree is named by its directory, read from where the CLI runs, as

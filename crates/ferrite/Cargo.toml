@@ -19,9 +19,13 @@ path = "src/main.rs"
 test = false
 
 [features]
+# `ferrite --headless` (ADR 0038): the window drawn off-screen and driven
+# through the Server's `window.*` API, for an agent checking the UI.
+# Excluded from release builds: it rests on gpui's test support.
+headless = ["ferrite-cockpit/headless"]
 # Opt-in native framebuffer artifacts; excluded from normal application builds.
 # The captures are the Cockpit's (`cockpit::visual_reference`).
-visual-reference = ["ferrite-cockpit/visual-reference"]
+visual-reference = ["headless", "ferrite-cockpit/visual-reference"]
 # Agent visuals drawn by Chromium (CEF, off-screen; ADR 0013), on macOS and
 # Windows. The release packaging (`scripts/install-app.sh`,
 # `scripts/package-windows.ps1`) turns it on. Off by default so a plain

@@ -20,8 +20,9 @@ use ferrite_reviewr::model::{ChangeKind, ChangedFile, Comment, Rev, Scope as Rev
 use ferrite_reviewr::search::{CodeHit, FileHit, SearchResults};
 use gpui::{AppContext, Focusable};
 
-use super::{conversation, Scene, Setup};
-use crate::cockpit::tools::Tool;
+use super::{conversation, Feed, Scene, Setup};
+use crate::cockpit::panel::Opener;
+use crate::cockpit::surfaces::{SurfaceId, ThreadSurfaces};
 use crate::review::ReviewView;
 
 /// Every state this module draws, at the app size.
@@ -50,6 +51,20 @@ pub(super) const STATES: &[&str] = &[
     "files-empty",
     "changes-split",
     "terminal",
+    "panel-tabs",
+    "panel-plusmenu",
+    "panel-empty",
+    "panel-maximized",
+    "panel-pr",
+    "scroll-to-end",
+    "send-landed",
+    "composer-tokens",
+    "composer-stop",
+    "head-breadcrumb",
+    "background-work",
+    "compaction",
+    "long-prompt",
+    "cite",
     "factory",
     "factory-workflows",
     "factory-start-schedule",
@@ -95,10 +110,24 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         }
         "page-pane" => page_pane(),
         "lightbox" => lightbox(),
-        "files-code" => tools("files-code", &[Tool::Files], Some("crates/ferrite-ui/src/motion.rs")),
-        "files-empty" => tools("files-empty", &[Tool::Files], None),
-        "changes-split" => tools("changes-split", &[Tool::Files, Tool::Changes], Some("crates/ferrite-ui/src/motion.rs")),
-        "terminal" => tools("terminal", &[Tool::Terminal], None),
+        "files-code" => tools("files-code", &[Opener::Files], Some("crates/ferrite-ui/src/motion.rs")),
+        "files-empty" => tools("files-empty", &[Opener::Files], None),
+        "changes-split" => tools("changes-split", &[Opener::Files, Opener::Changes], Some("crates/ferrite-ui/src/motion.rs")),
+        "terminal" => tools("terminal", &[Opener::Terminal], None),
+        "panel-tabs" => panel("panel-tabs", PanelStaged::Tabs),
+        "panel-plusmenu" => panel("panel-plusmenu", PanelStaged::PlusMenu),
+        "panel-empty" => panel("panel-empty", PanelStaged::Empty),
+        "panel-maximized" => panel("panel-maximized", PanelStaged::Maximized),
+        "panel-pr" => panel_pr(),
+        "scroll-to-end" => scroll_to_end(),
+        "send-landed" => send_landed(),
+        "composer-tokens" => composer_tokens(),
+        "composer-stop" => composer_stop(),
+        "head-breadcrumb" => head_breadcrumb(),
+        "background-work" => background_work(),
+        "compaction" => compaction(),
+        "long-prompt" => long_prompt(),
+        "cite" => cite(),
         "factory" => factory(),
         "factory-workflows" => factory_workflows(),
         "factory-start-schedule" => factory_start(ferrite_core::factory::StartKind::Schedule),
@@ -479,10 +508,49 @@ fn find() -> (Scene, Setup) {
     (scene, setup)
 }
 
+// ------------------------------------------------------------ send scroll
+
+/// The conversation scrolled back to its top while a third prompt runs and
+/// a fourth waits: Scroll to end over the transcript's foot, `· 1 queued`
+/// (the capture's frames land its show delay).
+fn scroll_to_end() -> (Scene, Setup) {
+    let mut scene = conversation("scroll-to-end");
+    let thread = scene.core.roster().focused_thread().expect("focus");
+    scene
+        .core
+        .send(thread, "Now check the parked rows by hand.".into());
+    scene.core.pump();
+    scene.core.queue(thread, "Then push the branch.".into());
+    scene.core.pump();
+    let setup: Setup = Box::new(|view, _, cx| {
+        if let Some(transcript) = view.panes[view.focused()].transcript() {
+            transcript.update(cx, |transcript, cx| {
+                transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
+            });
+        }
+    });
+    (scene, setup)
+}
+
+/// A prompt just sent on the finished conversation: it has eased up to
+/// the top of the transcript, `TX_SEND_ANCHOR_OFFSET` under it, with the
+/// room for its answer below (the capture's frames land the ease).
+fn send_landed() -> (Scene, Setup) {
+    let scene = conversation("send-landed");
+    let setup: Setup = Box::new(|view, _, cx| {
+        let Some(thread) = view.focused_thread() else {
+            return;
+        };
+        view.cockpit
+            .send(thread, "Push the branch with the nav fix.".into());
+        view.scroll_transcript_to_new_prompt(view.focused(), cx);
+    });
+    (scene, setup)
+}
+
 // ---------------------------------------------------------------- reply card
 
-/// `Reply` pressed on a passage of the answer (`claude/reply-popover.png`):
-/// the card over the selection, and a sent reply waiting in the tray
+/// A sent reply waiting in the tray beside an image
 /// (`claude/reply-sent-chip.png`).
 fn reply_card() -> (Scene, Setup) {
     let scene = conversation("reply-card");
@@ -502,48 +570,99 @@ fn reply_card() -> (Scene, Setup) {
                 cx,
             );
         });
-        if let Some(transcript) = view.panes[index].transcript() {
-            let line = gpui::Bounds::new(
-                gpui::point(gpui::px(560.), gpui::px(430.)),
-                gpui::size(gpui::px(320.), gpui::px(20.)),
-            );
-            transcript.update(cx, |transcript, cx| {
-                transcript.fixture_reply_card(
-                    "Both commands ran. ls /definitely-missing-dir failed as expected, and sleep 15 && echo done ran in the foreground this time.",
-                    vec![line],
-                    cx,
-                )
-            });
-        }
     });
     (scene, setup)
 }
 
 // ------------------------------------------------------------- title tools
 
-/// The conversation with the dock's `tools` open on its Thread (the
+/// The conversation with the Panel's `tools` open on its Thread (the
 /// checkout is this repository), `file` opened in Files
 /// (`claude/parity/files-code.png`, `files-empty.png`, `changes-split.png`,
 /// `terminal-command.png`). A terminal runs the command Claude's capture ran.
-fn tools(state: &str, tools: &'static [Tool], file: Option<&'static str>) -> (Scene, Setup) {
+fn tools(state: &str, tools: &'static [Opener], file: Option<&'static str>) -> (Scene, Setup) {
     let scene = conversation(state);
     let setup: Setup = Box::new(move |view, _, cx| {
         let Some(thread) = view.focused_thread() else {
             return;
         };
-        // Claude's captures hold the dock alone, the rail put away.
-        if !tools.contains(&Tool::Terminal) {
-            view.toggle_panel_now(cx);
-        }
         for tool in tools {
-            view.press_tool(*tool, cx);
+            view.run_opener(thread, *tool, cx);
         }
         if let (Some(file), Ok(root)) = (file, std::env::current_dir()) {
             view.open_in_files(thread, root.join(file), None, true, cx);
         }
-        if tools.contains(&Tool::Terminal) {
+        if tools.contains(&Opener::Terminal) {
             view.fixture_terminal_command(thread, b"echo hello; ls | head -5\r", cx);
         }
+    });
+    (scene, setup)
+}
+
+// --------------------------------------------------------------------- panel
+
+/// How a `panel-*` scene leaves the Panel.
+#[derive(Clone, Copy)]
+enum PanelStaged {
+    /// Four tabs, Changes shown.
+    Tabs,
+    /// The `+` menu up, Pull request dimmed (no PR on the branch).
+    PlusMenu,
+    /// Every tab closed: "Open a surface".
+    Empty,
+    /// Changes shown, maximized.
+    Maximized,
+}
+
+/// The conversation with its Panel's tabs staged (ADR 0039).
+fn panel(state: &str, staged: PanelStaged) -> (Scene, Setup) {
+    let scene = conversation(state);
+    let setup: Setup = Box::new(move |view, _, cx| {
+        let Some(thread) = view.focused_thread() else {
+            return;
+        };
+        for opener in [Opener::Changes, Opener::Files, Opener::Terminal] {
+            view.run_opener(thread, opener, cx);
+        }
+        view.upsert_surface(thread, SurfaceId::Changes, cx);
+        match staged {
+            PanelStaged::Tabs => {}
+            PanelStaged::PlusMenu => view.open_surface_menu(cx),
+            PanelStaged::Empty => view.close_surfaces(thread, ThreadSurfaces::close_all, cx),
+            PanelStaged::Maximized => view.toggle_panel_maximized(thread, cx),
+        }
+    });
+    (scene, setup)
+}
+
+/// The pull request Surface on Summary, the PR open and ready to merge:
+/// every check green, Merge as the primary action.
+fn panel_pr() -> (Scene, Setup) {
+    let scene = conversation("panel-pr");
+    let setup: Setup = Box::new(|view, _, cx| {
+        let Some(thread) = view.focused_thread() else {
+            return;
+        };
+        let Ok(mut pr) = pull_request().pr else {
+            return;
+        };
+        for check in &mut pr.checks {
+            check.status = WireCheckStatus::Success;
+        }
+        view.facts.pr_answered(
+            thread,
+            Some(PullRequest {
+                number: pr.number,
+                state: PrState::Open,
+                draft: false,
+                url: Some(pr.url.clone()),
+                title: Some(pr.title.clone()),
+                checks: Some(CheckState::Passing),
+                runs: Vec::new(),
+            }),
+        );
+        view.fixture_pr_snapshot(thread, pr);
+        view.open_pr_surface(thread, cx);
     });
     (scene, setup)
 }
@@ -622,6 +741,7 @@ fn nav_states() -> (Scene, Setup) {
                 state,
                 draft: false,
                 url: None,
+                title: None,
                 checks,
                 runs: Vec::new(),
             })
@@ -951,6 +1071,142 @@ fn lightbox() -> (Scene, Setup) {
         view.panes[0]
             .preview
             .open(gallery[1].clone(), None, &gallery, window, cx);
+    });
+    (scene, setup)
+}
+
+// ------------------------------------------------- composer, head, transcript
+
+/// The Composer's line with a skill (`$review`) and a picked file
+/// (`@path`) as tokens: no ground, the kind's accent and icon.
+fn composer_tokens() -> (Scene, Setup) {
+    use ferrite_core::{CommandSource, SessionCommand};
+    let mut scene = conversation("composer-tokens");
+    let feed = Feed(scene.feeds.borrow()[0].clone());
+    feed.ev(SessionEvent::Commands {
+        commands: vec![SessionCommand {
+            name: "review".into(),
+            description: "Review the changes since a fixed point".into(),
+            path: None,
+            source: Some(CommandSource::Skill),
+        }],
+    });
+    scene.core.pump();
+    let setup: Setup = Box::new(|view, _, cx| {
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.set(
+                "Run $review on @crates/ferrite-pane/src/pane.rs and report".into(),
+                cx,
+            );
+            composer.stage_chip("@crates/ferrite-pane/src/pane.rs".into(), cx);
+        });
+    });
+    (scene, setup)
+}
+
+/// A turn running with text typed: stop beside send.
+fn composer_stop() -> (Scene, Setup) {
+    let mut scene = Scene::new("composer-stop");
+    let ferrite = scene.project("ferrite");
+    let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Composer queue polish");
+    scene
+        .core
+        .send(thread, "Tighten the queued prompt rows.".into());
+    feed.boot(Provider::Claude, 64_000)
+        .text("Checking how the stack clips when three or more rows are held");
+    scene.core.pump();
+    let setup: Setup = Box::new(|view, _, cx| {
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.set("Also keep the take-back key".into(), cx));
+    });
+    (scene, setup)
+}
+
+/// Solo's breadcrumb with the Thread's title under the pointer, its chevron
+/// shown.
+fn head_breadcrumb() -> (Scene, Setup) {
+    let scene = conversation("head-breadcrumb");
+    let setup: Setup = Box::new(|view, window, cx| {
+        if let Some(thread) = view.focused_thread() {
+            ferrite_ui::motion::hover_listener(
+                format!("view-title-hover-{}", thread.get()).into(),
+            )(&true, window, cx);
+        }
+    });
+    (scene, setup)
+}
+
+/// The transcript's foot while two commands run in the background: the
+/// line over the Composer.
+fn background_work() -> (Scene, Setup) {
+    use ferrite_core::progress::{BackgroundTask, ProgressEvent, TaskStatus};
+    let mut scene = conversation("background-work");
+    let feed = Feed(scene.feeds.borrow()[0].clone());
+    feed.ev(SessionEvent::Progress {
+        event: ProgressEvent::BackgroundSnapshot {
+            tasks: ["cargo test --workspace", "npm run dev"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, label)| BackgroundTask {
+                    id: format!("task:{index}"),
+                    label: label.into(),
+                    detail: "local_bash".into(),
+                    status: TaskStatus::Working,
+                })
+                .collect(),
+        },
+    });
+    scene.core.pump();
+    (scene, Box::new(|_, _, _| {}))
+}
+
+/// A compaction in the middle of the conversation: `Context compacted 367K
+/// to 27.7K tokens`.
+fn compaction() -> (Scene, Setup) {
+    use ferrite_core::progress::ProgressEvent;
+    use ferrite_core::transcript::Compacted;
+    let mut scene = conversation("compaction");
+    let feed = Feed(scene.feeds.borrow()[0].clone());
+    feed.ev(SessionEvent::Progress {
+        event: ProgressEvent::Compacted(Compacted {
+            before: Some(367_000),
+            after: Some(27_700),
+            failure: None,
+        }),
+    });
+    scene.core.pump();
+    (scene, Box::new(|_, _, _| {}))
+}
+
+/// A prompt past the clamp: over 600 characters.
+fn long_prompt() -> (Scene, Setup) {
+    let mut scene = Scene::new("long-prompt");
+    let ferrite = scene.project("ferrite");
+    let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Audit the pane crate");
+    let paragraph = "Walk every module under the pane crate and list which of them still hold a second owner of the same state, then say what the single owner would be and what it would cost to move. ";
+    scene.core.send(thread, paragraph.repeat(5));
+    feed.boot(Provider::Claude, 64_000)
+        .text("Starting with the transcript module.")
+        .end(0.03);
+    scene.core.pump();
+    (scene, Box::new(|_, _, _| {}))
+}
+
+/// The glass Cite button over a passage of the answer, beside Start a side
+/// chat.
+fn cite() -> (Scene, Setup) {
+    let scene = conversation("cite");
+    let setup: Setup = Box::new(|view, _, cx| {
+        if let Some(transcript) = view.panes[view.focused()].transcript() {
+            transcript.update(cx, |transcript, cx| {
+                transcript.fixture_cite(
+                    "The nav rows jump by a line when a Thread starts streaming.",
+                    gpui::point(gpui::px(520.), gpui::px(380.)),
+                    cx,
+                )
+            });
+        }
     });
     (scene, setup)
 }

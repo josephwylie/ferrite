@@ -163,7 +163,7 @@ impl CockpitView {
         let dir = path
             .parent()
             .map(|dir| {
-                cwd.and_then(|cwd| dir.strip_prefix(cwd).ok())
+                cwd.and_then(|cwd| ferrite_pane::file_links::inside_checkout(dir, cwd))
                     .unwrap_or(dir)
                     .display()
                     .to_string()
@@ -352,8 +352,8 @@ fn review_changes(cx: &mut Context<CockpitView>) -> gpui::Stateful<Div> {
 
 /// The pull request's row: its glyph and `#N` on the content edge, its
 /// state and checks dim after it (`Open · checks failing`, the checks word
-/// in its state ink when it needs the operator); a click opens it on the
-/// forge.
+/// in its state ink when it needs the operator); a click opens it as a
+/// Surface of the Panel.
 fn pr_row(
     thread: ThreadId,
     pr: &PullRequest,
@@ -384,10 +384,7 @@ fn pr_row(
     )
     .mt(px(SPACE_2))
     .cursor_pointer()
-    .tooltip(ferrite_ui::menu::action_tooltip(
-        "Open on GitHub",
-        "cockpit::OpenPrInBrowser",
-    ))
+    .tooltip(ferrite_ui::menu::tooltip("Open pull request"))
     .children(checks.map(|(word, ink)| {
         div()
             .flex_shrink_0()
@@ -396,7 +393,7 @@ fn pr_row(
             .child(word)
     }))
     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-        view.open_pr(thread, cx);
+        view.open_pr_surface(thread, cx);
     }))
 }
 

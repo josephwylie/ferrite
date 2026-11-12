@@ -68,6 +68,9 @@ pub struct Attach {
     pub renderer: Option<Arc<dyn Renderer>>,
     /// This window can realize general website pages.
     pub browser: bool,
+    /// This window takes the API's `window.*` actions: a `ferrite
+    /// --headless` one (ADR 0038).
+    pub driven: bool,
     /// What the window finds on its own: CLI session files to adopt, a
     /// workspace's commands. It spawns no Session.
     pub discovery: Box<dyn crate::engine::Spawner>,
@@ -1136,6 +1139,9 @@ fn hello(attach: &Attach) -> ClientMessage {
         capabilities.push(Capability::ConversationBrowser);
     }
     capabilities.push(Capability::ParkedThreads);
+    if attach.driven {
+        capabilities.push(Capability::Driven);
+    }
     ClientMessage::Hello {
         generation: protocol::GENERATION,
         client: attach.client.clone(),

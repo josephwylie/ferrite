@@ -1,9 +1,10 @@
 //! The `ferrite` CLI (ADR 0027): one API request from the command line,
 //! its answer printed as the JSON line the Server sent. It is built from
 //! the operations' one declaration (`schema`): `ferrite <group> <verb>`,
-//! the declared positional parameters in order, every other one as a
-//! `--flag` typed by its JSON Schema, and after `--` every word is an
-//! argument. `--current` names the calling Thread (`FERRITE_THREAD_ID`); a
+//! the declared positional parameters in order (a list, last, takes
+//! every word left), every other one as a `--flag` typed by its JSON
+//! Schema, and after `--` every word is an argument. `--current` names
+//! the calling Thread (`FERRITE_THREAD_ID`); a
 //! `cwd` not given is the CLI's own, and a relative `cwd` or `path` is read
 //! from it. `--machine <name>` asks a saved
 //! machine's Server instead, over the window's ssh (ADR 0026): there this
@@ -276,11 +277,22 @@ pub fn parse(op: &Operation, args: &[&str], context: &Context) -> Result<Request
         .copied()
         .collect::<Vec<_>>()
         .into_iter();
-    for arg in positional {
+    let mut positional = positional.into_iter();
+    while let Some(arg) = positional.next() {
         let name = unfilled
             .next()
             .ok_or_else(|| format!("`{arg}`: `{}` takes no more arguments", op.name))?;
-        params.insert(name.into(), kind(&properties[name], defs).parse(arg)?);
+        let value = match kind(&properties[name], defs) {
+            // A list takes every word left: `window key cmd-k cmd-s`.
+            Kind::List(item) => Value::Array(
+                std::iter::once(arg)
+                    .chain(positional.by_ref())
+                    .map(|arg| item.parse(arg))
+                    .collect::<Result<_, _>>()?,
+            ),
+            kind => kind.parse(arg)?,
+        };
+        params.insert(name.into(), value);
     }
     // A Worker's report names its own Thread, from where it runs.
     if properties.contains_key("worker") && !params.contains_key("worker") {
@@ -443,7 +455,10 @@ fn synopsis(op: &Operation) -> String {
     let mut out: String = op
         .positional
         .iter()
-        .map(|name| format!(" <{name}>"))
+        .map(|name| match kind(&schema["properties"][*name], defs) {
+            Kind::List(_) => format!(" <{name}>…"),
+            _ => format!(" <{name}>"),
+        })
         .collect();
     for (name, property) in schema["properties"].as_object().into_iter().flatten() {
         if op.positional.contains(&name.as_str()) {

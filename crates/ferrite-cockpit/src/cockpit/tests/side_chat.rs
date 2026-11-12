@@ -1,7 +1,6 @@
-//! The side chat (Claude's): a right-docked, tabbed pane of quick questions
-//! about a Thread — the transcript reflowing narrower beside it, each tab
-//! its own fork, expand and close instant — and nothing in the nav, the
-//! board or the palette.
+//! The side chat (Claude's): quick questions about a Thread, each a Panel
+//! tab (ADR 0039) with its own fork, the transcript reflowing narrower
+//! beside it — and nothing in the nav, the board or the palette.
 #[allow(unused_imports)]
 use super::*;
 
@@ -43,66 +42,57 @@ fn owner(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> ferrit
     view.read_with(cx, |view, _| view.focused_thread().unwrap())
 }
 
-/// Opened, the pane docks at the right at its token width, the thread
-/// reflowing narrower beside it; its head holds the tab, `+`, expand and
-/// close; an empty tab says `No messages yet`; the composer reads `Ask a
-/// quick question` — unless the chat opened over a selection, which it
-/// quotes. The fork is no Pane: nothing of the nav's or the board's.
+/// `owner`'s side chat Surfaces, in tab order.
+fn side_tabs(view: &Entity<CockpitView>, owner: ThreadId, cx: &mut gpui::VisualTestContext) -> Vec<u64> {
+    panel_tabs(view, owner, cx)
+        .0
+        .into_iter()
+        .filter_map(|id| match id {
+            crate::cockpit::surfaces::SurfaceId::SideChat(id) => Some(id),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Opened, a side chat is a Panel tab (ADR 0039) at least its token wide,
+/// the thread reflowing narrower beside it; an empty tab says `No messages
+/// yet`; the composer reads `Ask a quick question` — unless the chat
+/// opened over a selection, which it quotes. The fork is no Pane: nothing
+/// of the nav's or the board's.
 #[gpui::test]
-fn a_side_chat_docks_right_with_tabs_and_an_empty_word(cx: &mut TestAppContext) {
+fn a_side_chat_opens_as_a_panel_tab_with_an_empty_word(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("side-chat-open", cx);
     let before = cx.debug_bounds("board").expect("the board").size.width;
     open_chat(&view, cx, None);
-    assert_eq!(
-        fake.forks.borrow().len(),
-        1,
-        "the agent is asked for a fork"
-    );
+    assert_eq!(fake.forks.borrow().len(), 1, "the agent is asked for a fork");
 
+    let panel = cx.debug_bounds("panel").expect("the Panel shows it");
     let pane = cx.debug_bounds("side-chat").expect("the pane draws");
+    assert!(panel.contains(&pane.center()));
     assert!(
-        (pane.size.width - px(ferrite_ui::theme::SIDE_CHAT_W)).abs() < px(1.),
-        "its token width: {pane:?}"
+        panel.size.width >= px(ferrite_ui::theme::SIDE_CHAT_W) - px(1.),
+        "its floor: {panel:?}"
     );
-    assert!(
-        (pane.right() - px(1600.)).abs() < px(1.),
-        "docked at the window's right: {pane:?}"
-    );
+    assert!((panel.right() - px(1600.)).abs() < px(1.), "at the window's right: {panel:?}");
     let board = cx.debug_bounds("board").expect("the board");
     assert!(
-        board.size.width < before && board.right() <= pane.left() + px(1.),
+        board.size.width < before && board.right() <= panel.left() + px(1.),
         "the thread reflows beside it: {before:?} -> {board:?}"
     );
-    for part in [
-        "side-chat-tab-0",
-        "side-chat-new",
-        "side-chat-expand",
-        "side-chat-close",
-    ] {
-        let part = cx.debug_bounds(part).unwrap_or_else(|| panic!("{part}"));
-        assert!(pane.contains(&part.center()));
-    }
-    let tab = cx.debug_bounds("side-chat-tab-0").unwrap();
-    let new = cx.debug_bounds("side-chat-new").unwrap();
-    let expand = cx.debug_bounds("side-chat-expand").unwrap();
-    let close = cx.debug_bounds("side-chat-close").unwrap();
-    assert!(tab.right() <= new.left() && new.right() <= expand.left());
-    assert!(
-        expand.right() <= close.left(),
-        "expand, then close, at the right"
+    let owner = owner(&view, cx);
+    let ids = side_tabs(&view, owner, cx);
+    assert_eq!(ids.len(), 1);
+    let tab = debug_bounds(cx, format!("panel-tab-SideChat-{}", ids[0]))
+        .expect("its tab in the head row");
+    assert!(panel.contains(&tab.center()));
+    assert_eq!(
+        panel_tabs(&view, owner, cx).1,
+        Some(crate::cockpit::surfaces::SurfaceId::SideChat(ids[0]))
     );
-    assert!(
-        cx.debug_bounds("side-chat-empty").is_some(),
-        "No messages yet"
-    );
+    assert!(cx.debug_bounds("side-chat-empty").is_some(), "No messages yet");
     assert!(cx.debug_bounds("side-chat-placeholder").is_some());
-    assert!(
-        cx.debug_bounds("panel-toggle").is_some(),
-        "the rail's door stands against the pane"
-    );
 
     view.read_with(cx, |view, cx| {
-        let owner = view.focused_thread().unwrap();
         assert_eq!(view.panes.len(), 1, "the fork is no Pane");
         assert_eq!(view.cockpit.threads().len(), 2);
         let fork = view.side_thread(owner).expect("the tab took the fork");
@@ -130,16 +120,14 @@ fn a_side_chat_opened_over_a_selection_quotes_it(cx: &mut TestAppContext) {
     );
 }
 
-/// `+` adds `Side chat 2`, its own fork; a tab switches the conversation
-/// shown; a tab's × takes it and its fork away, the last closing the pane.
+/// A second chat is a second tab, `Side chat 2`, its own fork; a tab
+/// switches the conversation shown; closing a tab takes it and its fork
+/// away, and the last leaves the Panel to its other Surfaces.
 #[gpui::test]
 fn side_chat_tabs_are_separate_conversations(cx: &mut TestAppContext) {
     let (view, fake, cx) = answered("side-chat-tabs", cx);
     open_chat(&view, cx, None);
-    let plus = cx.debug_bounds("side-chat-new").unwrap();
-    cx.simulate_click(plus.center(), gpui::Modifiers::none());
-    tick(cx);
-    tick(cx);
+    open_chat(&view, cx, None);
     let owner = owner(&view, cx);
     view.read_with(cx, |view, _| {
         let (titles, active) = view.side_chats.titles(owner);
@@ -150,18 +138,15 @@ fn side_chat_tabs_are_separate_conversations(cx: &mut TestAppContext) {
         assert_ne!(forks[0], forks[1]);
     });
     assert_eq!(fake.forks.borrow().len(), 2);
-    assert!(cx.debug_bounds("side-chat-tab-1").is_some());
+    let ids = side_tabs(&view, owner, cx);
+    assert_eq!(ids.len(), 2, "two tabs in the head row");
 
     // The first tab is its own conversation: its field is its own.
     view.update(cx, |view, cx| {
-        let field = view
-            .side_chats
-            .field_of(owner, 1)
-            .expect("tab 2's field")
-            .clone();
+        let field = view.side_chats.field_of(owner, 1).expect("tab 2's field").clone();
         field.update(cx, |field, cx| field.insert("second", cx));
     });
-    let first = cx.debug_bounds("side-chat-tab-0").unwrap();
+    let first = debug_bounds(cx, format!("panel-tab-SideChat-{}", ids[0])).unwrap();
     cx.simulate_click(first.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
@@ -171,8 +156,8 @@ fn side_chat_tabs_are_separate_conversations(cx: &mut TestAppContext) {
 
     // Closing the shown tab leaves the other.
     let forks = view.read_with(cx, |view, _| view.side_chats.threads(owner));
-    let close = cx.debug_bounds("side-chat-tab-0-close").unwrap();
-    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    let first = crate::cockpit::surfaces::SurfaceId::SideChat(ids[0]);
+    view.update(cx, |view, cx| view.close_surface(owner, &first, cx));
     tick(cx);
     view.read_with(cx, |view, _| {
         assert_eq!(view.side_chats.titles(owner).0, ["Side chat 2"]);
@@ -180,55 +165,13 @@ fn side_chat_tabs_are_separate_conversations(cx: &mut TestAppContext) {
         assert!(view.side_chats.owns(forks[1]));
     });
 
-    // The last tab's × closes the pane.
-    let close = cx.debug_bounds("side-chat-tab-0-close").unwrap();
-    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    // The last closed, no side chat draws.
+    let last = crate::cockpit::surfaces::SurfaceId::SideChat(ids[1]);
+    view.update(cx, |view, cx| view.close_surface(owner, &last, cx));
     tick(cx);
     assert!(cx.debug_bounds("side-chat").is_none());
-    view.read_with(cx, |view, _| assert!(!view.side_chats.is_open(owner)));
-}
-
-/// Expand covers the content area (the thread under it), the same control
-/// collapses it; close takes the pane away and the thread has its width
-/// back. Each is one frame: no ride.
-#[gpui::test]
-fn a_side_chat_expands_over_the_thread_and_closes(cx: &mut TestAppContext) {
-    let (view, _fake, cx) = answered("side-chat-expand", cx);
-    open_chat(&view, cx, None);
-    let docked = cx.debug_bounds("side-chat").unwrap();
-    let board = cx.debug_bounds("board").unwrap();
-
-    let expand = cx.debug_bounds("side-chat-expand").unwrap();
-    cx.simulate_click(expand.center(), gpui::Modifiers::none());
-    tick(cx);
-    let wide = cx.debug_bounds("side-chat").unwrap();
-    assert!(
-        wide.left() <= board.left() + px(1.) && wide.right() >= docked.right() - px(1.),
-        "it covers the content area: {wide:?} over {board:?}"
-    );
-    assert!(
-        cx.debug_bounds("title-tools").is_none(),
-        "the thread's tools go under it"
-    );
-
-    let collapse = cx.debug_bounds("side-chat-expand").unwrap();
-    cx.simulate_click(collapse.center(), gpui::Modifiers::none());
-    tick(cx);
-    let back = cx.debug_bounds("side-chat").unwrap();
-    assert!(
-        (back.size.width - docked.size.width).abs() < px(1.),
-        "collapsed: {back:?}"
-    );
-
-    let close = cx.debug_bounds("side-chat-close").unwrap();
-    cx.simulate_click(close.center(), gpui::Modifiers::none());
-    tick(cx);
-    assert!(cx.debug_bounds("side-chat").is_none());
-    let after = cx.debug_bounds("board").unwrap();
-    assert!(
-        after.size.width > board.size.width,
-        "the thread has its width back"
-    );
+    assert!(view.read_with(cx, |view, _| view.side_chats.titles(owner).0.is_empty()));
+    assert!(side_tabs(&view, owner, cx).is_empty());
 }
 
 /// A question typed in a tab goes to its fork alone — never the Thread —
@@ -292,4 +235,55 @@ fn block_text(block: &ferrite_core::transcript::Block) -> String {
         ferrite_core::transcript::Body::Prompt(text) => text.clone(),
         _ => String::new(),
     }
+}
+
+/// The side chat's head (T3's): 36 tall under the tab strip, its title,
+/// Bring back and Trash. Bring back waits for a finished reply, then puts
+/// the side chat's run into the main Thread's next message; Trash takes
+/// the chat away, a second press first when deletes are confirmed.
+#[gpui::test]
+fn the_side_chat_head_brings_back_and_trashes(cx: &mut TestAppContext) {
+    let (view, fake, cx) = answered("side-chat-head", cx);
+    open_chat(&view, cx, None);
+    let owner = owner(&view, cx);
+    let id = side_tabs(&view, owner, cx)[0];
+    let head = cx.debug_bounds("side-chat-head").expect("its head");
+    assert_eq!(head.size.height, px(ferrite_ui::theme::SURFACE_BAR_H));
+    let blocked = view.read_with(cx, |view, _| view.bring_back_blocked(owner, id));
+    assert_eq!(blocked, Some("Available after a finished reply."));
+
+    cx.simulate_input("what is alpha?");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    let send = |event: SessionEvent| fake.streams.borrow()[1].send(event).unwrap();
+    send(SessionEvent::TextDelta {
+        text: "Alpha is the first letter.\n\n".into(),
+    });
+    tick(cx);
+    let blocked = view.read_with(cx, |view, _| view.bring_back_blocked(owner, id));
+    assert_eq!(blocked, Some("Available after a finished reply."), "still answering");
+    let dot = format!("panel-tab-SideChat-{id}-pending");
+    assert!(debug_bounds(cx, dot.clone()).is_some(), "its tab's pending dot");
+    send(SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Completed,
+        cost_usd: None,
+    });
+    tick(cx);
+    assert!(debug_bounds(cx, dot).is_none(), "answered: no dot");
+    assert_eq!(view.read_with(cx, |view, _| view.bring_back_blocked(owner, id)), None);
+    let back = cx.debug_bounds("side-chat-bring-back").unwrap();
+    cx.simulate_click(back.center(), gpui::Modifiers::none());
+    tick(cx);
+    let composer = composer_text(&view, cx);
+    assert!(composer.starts_with("> From a side chat:"), "{composer:?}");
+    assert!(composer.contains("Alpha is the first letter."), "{composer:?}");
+
+    view.update(cx, |view, _| view.prefs.settings.confirm_delete = true);
+    let trash = cx.debug_bounds("side-chat-trash").unwrap();
+    cx.simulate_click(trash.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(side_tabs(&view, owner, cx), [id], "armed: still there");
+    cx.simulate_click(trash.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(side_tabs(&view, owner, cx).is_empty(), "the second press deletes it");
 }

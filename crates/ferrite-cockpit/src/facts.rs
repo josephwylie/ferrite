@@ -55,9 +55,13 @@ pub struct ThreadFacts {
     /// directory; else nothing at all. Never a placeholder word.
     pub project_label: Option<SharedString>,
     /// The provider the log declared — a parked Thread's, peeked. An open
-    /// Thread's provider comes live from the Cockpit. (The nav draws no
-    /// logo and no tooltip now; kept for the surfaces that name it.)
+    /// Thread's provider comes live from the Cockpit. The nav card draws
+    /// its logo.
     pub provider: Option<Provider>,
+    /// Where the Thread works when its binding is a worktree, home spelled
+    /// `~` (the nav card's worktree glyph and its tooltip); `None` for a
+    /// main checkout.
+    pub worktree: Option<SharedString>,
     /// When the Thread was last written to (#21) — what the nav orders
     /// rows by and what its "40m / 2h / 3d" line says. `None` when the log
     /// cannot be stat'd; such a row claims nothing and sorts last.
@@ -289,9 +293,11 @@ impl Facts {
                 facts.provider = None;
                 facts.project = None;
                 facts.project_label = None;
+                facts.worktree = None;
                 continue;
             };
             facts.provider = Some(meta.provider);
+            facts.worktree = worktree_label(meta.workspace.as_ref());
             facts.project = meta.project_id;
             let checkout = match meta.workspace.as_ref() {
                 Some(WorkspaceBinding::Worktree { repo, .. }) => Some(repo.as_path()),
@@ -359,12 +365,13 @@ impl Facts {
     /// default branch, read once). This path stays in the pump, so it must
     /// never launch Git. Answers whether any of these facts moved.
     fn refresh_metadata(&mut self, cockpit: &Cockpit, thread: ThreadId) -> bool {
-        let (project, project_label) = match cockpit.peek(thread) {
+        let (project, project_label, worktree) = match cockpit.peek(thread) {
             Ok(meta) => (
                 meta.project_id,
                 project_label(cockpit, meta.project_id, meta.workspace.as_ref()),
+                worktree_label(meta.workspace.as_ref()),
             ),
-            Err(_) => (None, None),
+            Err(_) => (None, None, None),
         };
         let name = display_name(cockpit, thread, self.auto_title);
         let last_used = cockpit.last_activity(thread);
@@ -372,10 +379,12 @@ impl Facts {
         let changed = facts.last_used != last_used
             || facts.project != project
             || facts.project_label != project_label
+            || facts.worktree != worktree
             || facts.name != name;
         facts.last_used = last_used;
         facts.project = project;
         facts.project_label = project_label;
+        facts.worktree = worktree;
         facts.name = name;
         changed
     }
@@ -489,6 +498,17 @@ fn project_label(
         WorkspaceBinding::Worktree { repo, .. } => repo.file_name(),
     }?;
     Some(SharedString::from(leaf.to_string_lossy().to_string()))
+}
+
+/// A worktree binding's path as the nav card's tooltip says it (`~/…`);
+/// nothing for a main checkout.
+fn worktree_label(workspace: Option<&WorkspaceBinding>) -> Option<SharedString> {
+    match workspace? {
+        WorkspaceBinding::Worktree { path, .. } => {
+            Some(ferrite_ui::components::home_relative(path).into())
+        }
+        WorkspaceBinding::Main { .. } => None,
+    }
 }
 
 /// How long ago, in the nav's own shorthand: `1m`, `40m`, `2h`, `3d`, `1w`,

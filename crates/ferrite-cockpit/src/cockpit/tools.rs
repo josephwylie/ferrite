@@ -1,20 +1,10 @@
-//! The title-bar tools (Claude's, `claude-files-changes.md`): the five doors
-//! at the head row's right end — `Show session rail`, `Terminal`, `Changes`
-//! (⇧⌘D), `Files` (⇧⌘F) and `⋯` — which replace the old Finder door. The
-//! one in use wears a pressed ground.
-//!
-//! The rail is the panel's sections (`panel`), so its door is the panel's
-//! toggle. The other three are the **dock**, the right column's other
-//! half: beside the rail (or alone) it holds, each opened on its own door,
-//!
-//! - Files and Changes, one column — Files at the top, Changes under it,
-//!   or either alone (`files`, `changes`);
-//! - the Terminal, a column of its own to the right of that (`terminal`).
-//!
-//! The dock is per Thread: a Thread's tools stay as they were left when
-//! focus moves away and back. Opening a tool gives the column to it — a
-//! side chat, an agent or the Background tasks pane that held the column
-//! closes — and a door pressed again puts its tool away.
+//! The tools behind three of the Panel's Surfaces (ADR 0039): Files
+//! (`files`, the tree and its editor), Changes (`changes`, the diff) and the
+//! Terminal (`terminal`, one shell a Surface). Each is per Thread: a
+//! Thread's tools stay as they were left when focus moves away and back.
+//! Their chords, ⇧⌘F, ⇧⌘D and ⌘J, open their Surface through the Panel's
+//! one door (`upsert_surface`); pressed again they bring the same tab
+//! forward.
 
 use std::collections::HashMap;
 
@@ -24,39 +14,14 @@ mod files;
 mod terminal;
 mod tree;
 
+use super::surfaces::SurfaceId;
 use super::*;
-use ferrite_ui::theme;
 
-/// One of the title bar's tool doors that has a surface behind it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Tool {
-    /// The panel's sections.
-    Rail,
-    Terminal,
-    Changes,
-    Files,
-}
-
-/// What one Thread has open in the dock.
-#[derive(Clone, Copy, Default)]
-struct Dock {
-    files: bool,
-    changes: bool,
-    terminal: bool,
-}
-
-impl Dock {
-    fn is_open(self) -> bool {
-        self.files || self.changes || self.terminal
-    }
-}
-
-/// Every Thread's dock.
+/// Every Thread's tools.
 #[derive(Default)]
 pub(crate) struct Tools {
-    docks: HashMap<ThreadId, Dock>,
     files: HashMap<ThreadId, files::Files>,
-    changes: HashMap<ThreadId, changes::Changes>,
+    changes: HashMap<changes::Diff, changes::Changes>,
     terminals: HashMap<ThreadId, terminal::Terminals>,
     terminal_prefs: terminal::Prefs,
     /// The shown shell is to take the keyboard (`tend_terminal`).
@@ -65,108 +30,59 @@ pub(crate) struct Tools {
     terminal_selected: bool,
 }
 
-impl Tools {
-    fn dock(&self, thread: ThreadId) -> Dock {
-        self.docks.get(&thread).copied().unwrap_or_default()
-    }
-}
-
 gpui::actions!(cockpit, [ToggleTerminal, ToggleChanges, ToggleFiles, ToggleFileTree, GoToFile]);
 
 #[cfg(test)]
 pub(crate) use editor::AUTO_SAVE_AFTER;
-pub(crate) use changes::{Sub as ChangesSub, Verb as ChangesVerb};
+pub(crate) use changes::{Diff, Sub as ChangesSub, Verb as ChangesVerb};
 pub(crate) use files::{Sub as FilesSub, Verb as FilesVerb};
 pub(crate) use terminal::{Sub as TerminalSub, Verb as TerminalVerb};
 
 impl CockpitView {
-    /// Whether the Thread's dock has anything open.
-    pub(super) fn dock_shown(&self, thread: Option<ThreadId>) -> bool {
-        thread.is_some_and(|thread| self.tools.dock(thread).is_open())
-    }
-
-    /// Whether the dock's Files or Changes column is open for `thread`.
-    pub(super) fn files_column_shown(&self, thread: ThreadId) -> bool {
-        let dock = self.tools.dock(thread);
-        dock.files || dock.changes
-    }
-
-    /// Whether the dock's Terminal column is open for `thread`.
-    pub(super) fn terminal_column_shown(&self, thread: ThreadId) -> bool {
-        self.tools.dock(thread).terminal
-    }
-
-    /// Whether `tool`'s surface is up for the focused Thread: the door's
-    /// pressed ground.
-    pub(super) fn tool_pressed(&self, tool: Tool) -> bool {
-        let Some(thread) = self.focused_thread() else {
-            return false;
-        };
-        let dock = self.tools.dock(thread);
-        match tool {
-            Tool::Rail => self.panel_pane().is_some() && self.prefs.settings.panel_shown,
-            Tool::Terminal => dock.terminal,
-            Tool::Changes => dock.changes,
-            Tool::Files => dock.files,
-        }
-    }
-
-    /// A tool's door, its chord, ⇧⌘D or ⇧⌘F: open its surface for the
-    /// focused Thread, or put it away.
-    pub(super) fn press_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
-        let Some(thread) = self.focused_thread() else {
-            return;
-        };
-        if tool == Tool::Rail {
-            self.toggle_panel_now(cx);
-            return;
-        }
-        let dock = self.tools.docks.entry(thread).or_default();
-        let opening = match tool {
-            Tool::Terminal => &mut dock.terminal,
-            Tool::Changes => &mut dock.changes,
-            Tool::Files => &mut dock.files,
-            Tool::Rail => unreachable!("the rail is the panel's"),
-        };
-        *opening = !*opening;
-        let opened = *opening;
-        if tool == Tool::Terminal && !opened {
-            // The column going ends its shells.
-            self.end_terminals(thread);
-        }
-        if !self.tools.dock(thread).is_open() {
-            self.tools.docks.remove(&thread);
-            self.panel.expanded = false;
-        }
-        if opened {
-            self.give_column_to_tools(thread, cx);
-            match tool {
-                Tool::Files => {
-                    self.ensure_files(thread, cx);
-                }
-                Tool::Changes => self.ensure_changes(thread, cx),
-                Tool::Terminal => self.ensure_terminal(thread, cx),
-                Tool::Rail => {}
-            }
-        }
-        cx.notify();
-    }
-
-    /// Close whatever else held the right column over `thread`'s dock.
-    pub(super) fn give_column_to_tools(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        self.close_side_chat(thread, cx);
-        self.close_agent_drill(thread, cx);
-        if self.panel.background == Some(thread) {
-            self.panel.background = None;
-        }
-    }
-
+    /// ⌘J: the focused Thread's last shell brought forward, or its first
+    /// started.
     pub(super) fn toggle_terminal(&mut self, _: &ToggleTerminal, _: &mut Window, cx: &mut Context<Self>) {
-        self.press_tool(Tool::Terminal, cx);
+        let Some(thread) = self.focused_thread() else {
+            return;
+        };
+        if self.opener_unavailable(thread, panel::Opener::Terminal).is_some() {
+            return;
+        }
+        let open = self
+            .panel
+            .surfaces
+            .get(thread)
+            .and_then(|state| {
+                state
+                    .tabs
+                    .iter()
+                    .rev()
+                    .find(|id| matches!(id, SurfaceId::Terminal(_)))
+                    .cloned()
+            });
+        match open {
+            Some(id) => {
+                self.upsert_surface(thread, id, cx);
+                self.tools.terminal_focus_wanted = true;
+            }
+            None => self.new_terminal_surface(thread, cx),
+        }
     }
 
+    /// ⇧⌘D.
     pub(super) fn toggle_changes(&mut self, _: &ToggleChanges, _: &mut Window, cx: &mut Context<Self>) {
-        self.press_tool(Tool::Changes, cx);
+        self.open_tool_surface(panel::Opener::Changes, cx);
+    }
+
+    /// ⇧⌘F.
+    pub(super) fn toggle_files(&mut self, _: &ToggleFiles, _: &mut Window, cx: &mut Context<Self>) {
+        self.open_tool_surface(panel::Opener::Files, cx);
+    }
+
+    fn open_tool_surface(&mut self, opener: panel::Opener, cx: &mut Context<Self>) {
+        if let Some(thread) = self.focused_thread() {
+            self.run_opener(thread, opener, cx);
+        }
     }
 
     pub(super) fn toggle_file_tree_action(&mut self, _: &ToggleFileTree, _: &mut Window, cx: &mut Context<Self>) {
@@ -178,60 +94,19 @@ impl CockpitView {
             self.go_to_file(thread, window, cx);
         }
     }
-
-    pub(super) fn toggle_files(&mut self, _: &ToggleFiles, _: &mut Window, cx: &mut Context<Self>) {
-        self.press_tool(Tool::Files, cx);
-    }
-
-    /// The dock's columns as one row, `width` wide: Files/Changes taking
-    /// what the Terminal leaves.
-    pub(super) fn dock_element(&self, thread: ThreadId, cx: &mut Context<Self>) -> Div {
-        let mut row = div()
-            .debug_selector(|| "dock".into())
-            .flex()
-            .flex_1()
-            .min_w_0()
-            .h_full();
-        if self.files_column_shown(thread) {
-            row = row.child(self.files_column(thread, cx));
-        }
-        if self.terminal_column_shown(thread) {
-            row = row.child(self.terminal_column(thread, cx));
-        }
-        row
-    }
-
-    fn files_column(&self, thread: ThreadId, cx: &mut Context<Self>) -> Div {
-        let dock = self.tools.dock(thread);
-        let mut column = dock_column("dock-files", true);
-        if dock.files {
-            column = column.child(self.files_pane(thread, cx));
-        }
-        if dock.changes {
-            column = column.child(self.changes_pane(thread, cx));
-        }
-        column
-    }
-
-    fn terminal_column(&self, thread: ThreadId, cx: &mut Context<Self>) -> Div {
-        dock_column("dock-terminal", false)
-            .w(px(theme::TERMINAL_W))
-            .max_w_full()
-            .child(self.terminal_pane(thread, cx))
-    }
 }
 
-/// A column of the dock: a vertical seam at its left edge, under the head
-/// row's own, and its pieces stacked.
-fn dock_column(selector: &'static str, grows: bool) -> Div {
+/// A Surface's own row of tools under the Panel's head: `SURFACE_BAR_H`
+/// tall, a hairline under it.
+pub(super) fn surface_bar() -> Div {
+    use ferrite_ui::theme::*;
     div()
-        .debug_selector(move || selector.into())
         .flex()
-        .flex_col()
-        .h_full()
-        .min_w_0()
-        .border_l(px(theme::HAIRLINE_W))
-        .border_color(theme::paint::LINE)
-        .when(grows, |column| column.flex_1())
-        .when(!grows, |column| column.flex_shrink_0())
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(SPACE_1))
+        .h(px(SURFACE_BAR_H))
+        .px(px(SIDE_CHAT_INSET))
+        .border_b(px(HAIRLINE_W))
+        .border_color(paint::LINE)
 }

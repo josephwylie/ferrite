@@ -180,10 +180,10 @@ fn the_branch_chip_offers_the_checkout_its_other_branch_and_both_new_branch_mode
         assert_eq!(
             rows,
             vec![
-                ("feature/checked-out", "checked out", true),
+                ("Current checkout", "feature/checked-out", true),
                 (default.as_str(), "existing branch", false),
                 ("New branch", "in the project checkout", false),
-                ("New branch + worktree", "in an isolated checkout", false),
+                ("New worktree", "in an isolated checkout", false),
             ]
         );
     });
@@ -216,8 +216,6 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
         assert!(out.status.success(), "git {args:?}: {out:?}");
     }
     // Whatever this machine's `git init` called each first branch.
-    let default_one = ferrite_core::workspace::checkout_branch(&repo_one).expect("a branch");
-    let default_two = ferrite_core::workspace::checkout_branch(&repo_two).expect("a branch");
     let fake = Fake::default();
     let store = Store::open(base.join("threads")).unwrap();
     let core = Cockpit::new(store, Box::new(fake));
@@ -298,10 +296,10 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
         assert_eq!(
             labels,
             vec![
-                default_two.as_str(),
-                "ferrite/wt-1",
+                "Current checkout",
+                "Previous worktree (ferrite/wt-1)",
                 "New branch",
-                "New branch + worktree"
+                "New worktree"
             ],
             "the chosen repo's checkout, its worktree, then the fresh starts"
         );
@@ -329,7 +327,7 @@ fn the_workspace_chip_scopes_to_the_chosen_project(cx: &mut TestAppContext) {
         let labels: Vec<&str> = band.rows.iter().map(|row| row.name.as_ref()).collect();
         assert_eq!(
             labels,
-            vec![default_one.as_str(), "New branch", "New branch + worktree"],
+            vec!["Current checkout", "New branch", "New worktree"],
             "the other repo's own checkout, and nothing from the first"
         );
     });
@@ -373,12 +371,12 @@ fn the_workspace_chip_lists_the_repos_other_worktrees_and_local_branches(cx: &mu
         assert_eq!(
             rows,
             vec![
-                ("trunk", "checked out", true),
-                ("feature/wt", "worktree · wt-feature", false),
+                ("Current checkout", "trunk", true),
+                ("Previous worktree (feature/wt)", "wt-feature", false),
                 ("main", "existing branch", false),
                 ("topic/spare", "existing branch", false),
                 ("New branch", "in the project checkout", false),
-                ("New branch + worktree", "in an isolated checkout", false),
+                ("New worktree", "in an isolated checkout", false),
             ]
         );
     });
@@ -493,9 +491,9 @@ fn a_repo_without_a_main_branch_offers_no_main_row(cx: &mut TestAppContext) {
         assert_eq!(
             rows,
             vec![
-                ("trunk", "checked out"),
+                ("Current checkout", "trunk"),
                 ("New branch", "in the project checkout"),
-                ("New branch + worktree", "in an isolated checkout"),
+                ("New worktree", "in an isolated checkout"),
             ]
         );
     });
@@ -777,7 +775,7 @@ fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
     });
     assert_eq!(spawned() - before, 0, "a frame asked git for the chip");
     cx.run_until_parked();
-    // The menu's first row is the checkout exactly as the chip names it.
+    // The menu's first row names the checkout's branch.
     let checkout_row = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, _| {
             let open = view.popover.as_ref().expect("the workspace menu is open");
@@ -796,7 +794,7 @@ fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
     toggle_menu(&view, cx);
     assert_eq!(
         checkout_row(&view, cx),
-        ("feature/drafted".to_string(), "checked out".to_string())
+        ("Current checkout".to_string(), "feature/drafted".to_string())
     );
     cx.run_until_parked();
     toggle_menu(&view, cx);
@@ -808,13 +806,13 @@ fn the_workspace_chip_never_asks_git_on_the_ui_thread(cx: &mut TestAppContext) {
     assert_eq!(spawned() - before, 0, "opening the menu asked git");
     assert_eq!(
         checkout_row(&view, cx),
-        ("feature/drafted".to_string(), "checked out".to_string()),
+        ("Current checkout".to_string(), "feature/drafted".to_string()),
         "the last answer stands until the fresh one lands"
     );
     cx.run_until_parked();
     assert_eq!(
         checkout_row(&view, cx),
-        ("feature/moved".to_string(), "checked out".to_string())
+        ("Current checkout".to_string(), "feature/moved".to_string())
     );
 }
 
@@ -879,4 +877,45 @@ fn a_turn_end_rereads_the_checkout_off_the_ui_thread(cx: &mut TestAppContext) {
     );
     cx.run_until_parked();
     assert_eq!(branch(&view, cx).as_deref(), Some("agent-moved"));
+}
+
+/// T3 widens the workspace menu to `min(336, window − 32)` once it offers
+/// a previous worktree: 336 in a roomy window, the window less its margins
+/// in a narrow one.
+#[gpui::test]
+fn the_workspace_menu_with_a_previous_worktree_is_336_or_the_window_less_32(cx: &mut TestAppContext) {
+    use ferrite_ui::theme::{MENU_WINDOW_MARGIN, WORKSPACE_MENU_W};
+    let base = scratch("workspace-width");
+    let repo = repo_with_worktree_and_branches(&base);
+    let store = Store::open(base.join("threads")).unwrap();
+    let core = Cockpit::new(store, Box::new(Fake::default()));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    view.update(cx, |view, _| view.aim_launch(&repo));
+    view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
+    // The menu, opened from its chip in a window `window` wide.
+    let menu_w = |window: f32, cx: &mut gpui::VisualTestContext| {
+        cx.simulate_resize(gpui::size(px(window), px(800.)));
+        tick(cx);
+        let chip = cx.debug_bounds("band-chip-1").expect("the Workspace chip");
+        cx.simulate_mouse_down(chip.center(), gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_up(chip.center(), gpui::MouseButton::Left, gpui::Modifiers::none());
+        for _ in 0..3 {
+            cx.executor().advance_clock(std::time::Duration::from_millis(300));
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+        }
+        view.read_with(cx, |view, _| {
+            let open = view.popover.as_ref().expect("the workspace popover");
+            assert!(matches!(open.kind, Kind::Band(pane::BandChip::Workspace)));
+            assert!(open.rows.iter().any(|row| row.name.starts_with("Previous worktree")));
+        });
+        let width = cx.debug_bounds("composer-menu").expect("the workspace menu").size.width;
+        view.update(cx, |view, cx| {
+            view.popover = None;
+            cx.notify();
+        });
+        f32::from(width)
+    };
+    assert_eq!(menu_w(1400., cx), WORKSPACE_MENU_W);
+    assert_eq!(menu_w(360., cx), 360. - 2. * MENU_WINDOW_MARGIN);
 }

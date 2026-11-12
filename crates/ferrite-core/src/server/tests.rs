@@ -23,6 +23,7 @@ mod browser_annotations;
 mod browser_providers;
 mod factory;
 mod owned;
+mod drive;
 mod park;
 mod publish;
 mod starts;
@@ -1306,6 +1307,7 @@ fn cockpit(harness: &Harness) -> crate::cockpit::Cockpit {
         },
         renderer: None,
         browser: false,
+        driven: false,
         discovery: Box::new(NoDiscovery),
     })
     .unwrap()
@@ -2689,6 +2691,7 @@ fn a_window_on_a_machine_drives_its_threads_through_the_bridge() {
         client: peer(),
         renderer: None,
         browser: false,
+        driven: false,
         discovery: Box::new(NoDiscovery),
     })
     .unwrap();

@@ -465,14 +465,44 @@ impl CockpitView {
         true
     }
 
+    /// The Factory entries over the nav's cards: one for each Project an
+    /// operator's Thread or a Task is in, the chosen one's alone while the
+    /// list is filtered to a Project.
+    pub(super) fn factory_nav_rows(
+        &self,
+        state: &nav::NavState,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let mut projects: Vec<ProjectId> = state
+            .open_rows()
+            .chain(&state.parked)
+            .filter_map(|row| self.facts.get(row.thread).and_then(|facts| facts.project))
+            .chain(self.cockpit.factory().tasks.iter().map(|task| task.project))
+            .chain(self.nav_filter)
+            .filter(|project| self.nav_filter.is_none_or(|wanted| wanted == *project))
+            .collect();
+        projects.sort();
+        projects.dedup();
+        projects
+            .into_iter()
+            .map(|project| self.factory_nav_row(project, cx))
+            .collect()
+    }
+
     /// A Project's Factory entry in the sidebar.
-    pub(super) fn factory_nav_row(&self, project: ProjectId, cx: &mut Context<Self>) -> AnyElement {
+    fn factory_nav_row(&self, project: ProjectId, cx: &mut Context<Self>) -> AnyElement {
         let count = self.cockpit.factory().needs_you(project);
         let active = self
             .factory_view
             .as_ref()
             .is_some_and(|view| view.project == project);
-        nav::factory_row(project, count, active)
+        let title = self
+            .cockpit
+            .registry()
+            .project(project)
+            .map(|project| SharedString::from(project.title.clone()))
+            .unwrap_or_default();
+        nav::factory_row(project, title, count, active)
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 view.open_factory(project, cx);
             }))

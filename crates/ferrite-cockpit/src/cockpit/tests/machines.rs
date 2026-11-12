@@ -141,6 +141,7 @@ fn machines_through(
                 version: "0".into(),
             },
             renderer: None,
+            driven: false,
             defaults: Default::default(),
             bridge,
         },
@@ -208,6 +209,7 @@ fn background_thread_changes_keep_the_visible_composer_live(cx: &mut TestAppCont
     let attach = |name: &str| {
         let mut core = Cockpit::attach(Attach {
             browser: false,
+            driven: false,
             store: dir.join(name).join("threads"),
             server: Endpoint::Machine(bridge.clone()),
             client: ferrite_core::protocol::Peer {
@@ -318,6 +320,7 @@ fn a_window_with_only_this_computer_lists_no_machines(cx: &mut TestAppContext) {
                     version: "0".into(),
                 },
                 renderer: None,
+                driven: false,
                 defaults: Default::default(),
                 bridge: needs_sign_in,
             },
@@ -452,8 +455,8 @@ fn a_machine_without_ferrited_says_so_and_takes_no_input(cx: &mut TestAppContext
         "the board"
     );
     assert!(
-        debug_bounds(cx, "machine-lost-tree".into()).is_some(),
-        "its tree in the nav"
+        debug_bounds(cx, "machine-lost-list".into()).is_some(),
+        "its list in the nav"
     );
     cx.update(|window, cx| {
         assert!(
@@ -505,6 +508,7 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
             .unwrap();
     let mut core = Cockpit::attach(Attach {
             browser: false,
+            driven: false,
         store: dir.join("window").join("threads"),
         server: Endpoint::Machine(std::sync::Arc::new(Bridge::new(
             "box",
@@ -570,8 +574,8 @@ fn a_machines_parked_threads_show_in_the_nav_and_revive_on_click(cx: &mut TestAp
     );
 
     let door = cx
-        .debug_bounds("nav-view-parked")
-        .expect("the Parked view's row");
+        .debug_bounds("nav-shelf-parked")
+        .expect("the Parked shelf's header");
     cx.simulate_click(door.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     let row_id: &'static str = format!("nav-thread-{}", named.get()).leak();
@@ -941,7 +945,7 @@ fn a_system_notification_outlives_a_move(cx: &mut TestAppContext) {
         assert_eq!(
             view.landing.as_ref().map(|(landing, _)| match landing {
                 Landing::Alert(Alert { away, thread, .. })
-                | Landing::Inbox(Alert { away, thread, .. }) => (away.clone(), *thread),
+=> (away.clone(), *thread),
             }),
             Some((None, here)),
             "on its Thread once it answers"
@@ -1237,12 +1241,12 @@ fn a_draft_on_a_machine_starts_a_thread_in_a_directory_typed_there(cx: &mut Test
     assert_eq!(
         rows(cx),
         [
-            named("trunk", "checked out"),
-            named("feature/wt", "worktree · wt-feature"),
+            named("Current checkout", "trunk"),
+            named("Previous worktree (feature/wt)", "wt-feature"),
             named("main", "existing branch"),
             named("topic/spare", "existing branch"),
             named("New branch", "in the project checkout"),
-            named("New branch + worktree", "in an isolated checkout"),
+            named("New worktree", "in an isolated checkout"),
         ],
         "git on the machine lists the repo, its own worktrees and branches"
     );
@@ -1389,7 +1393,7 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
     let mut core = Cockpit::attach(Attach {
         store: dir.join("window"), server: Endpoint::Machine(bridge),
         client: ferrite_core::protocol::Peer { name: "browser-preview".into(), version: "0".into() },
-        renderer: None, browser: true, discovery: Box::new(Fake::default()),
+        renderer: None, browser: true, driven: false, discovery: Box::new(Fake::default()),
     }).unwrap();
     ferrite_core::doorbell::until("browser window did not attach", || {
         core.pump(); matches!(core.server(), Some(ServerState::Attached { .. }))
@@ -1555,7 +1559,7 @@ fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(c
     let mut core = Cockpit::attach(Attach {
         store: dir.join("window"), server: Endpoint::Machine(bridge),
         client: ferrite_core::protocol::Peer { name: "browser-preview".into(), version: "0".into() },
-        renderer: None, browser: true, discovery: Box::new(Fake::default()),
+        renderer: None, browser: true, driven: false, discovery: Box::new(Fake::default()),
     }).unwrap();
     ferrite_core::doorbell::until("browser window did not attach", || {
         core.pump(); matches!(core.server(), Some(ServerState::Attached { .. }))

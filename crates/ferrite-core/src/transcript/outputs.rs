@@ -1,10 +1,12 @@
-//! What a turn left for the operator to open, as Claude's transcript shows
-//! it under the answer: a card for each page the turn wrote or named — an
-//! `.html` file, a local address — and for each other file it wrote.
+//! What a turn left for the operator to open, under its answer: T3's
+//! changed-files card, every file its calls changed with the lines each
+//! gained and lost, and Claude's card for each page the turn wrote or
+//! named — an `.html` file, a local address.
 //!
-//! Provider-neutral. A file is written by a write call ([`ToolKind::Write`])
-//! or created by any provider's patch (`@@ -0,0 +1,n @@`, the shape both
-//! bridges give a new file: [`Diff::created`]); a call that failed wrote
+//! Provider-neutral. A file is changed by any call that settled well with
+//! a diff; a page is written by a write call ([`ToolKind::Write`]) or
+//! created by any provider's patch (`@@ -0,0 +1,n @@`, the shape both
+//! bridges give a new file: [`Diff::created`]); a call that failed changed
 //! nothing. A page is also one the answer names: a local address
 //! (`http://localhost:5173/`) or an `.html` file. Each is named once, in
 //! the order the turn first named it, as the turn named it (relative to its
@@ -18,8 +20,17 @@ use super::{Block, Body, Diff, ToolBlock, ToolState};
 pub enum Output {
     /// A page to open beside the transcript.
     Page(Page),
-    /// A file the turn wrote that is no page.
-    File(String),
+    /// The files the turn changed, in the order it first changed each.
+    Changes(Vec<Changed>),
+}
+
+/// One file a turn changed, and the lines it gained and lost over the
+/// turn's calls.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Changed {
+    pub path: String,
+    pub added: usize,
+    pub removed: usize,
 }
 
 /// A page, by where it lives.
@@ -40,7 +51,11 @@ impl Diff {
 
 /// What `turn` — its blocks, from its prompt to its end — left to open.
 pub fn of_turn(turn: &[Block]) -> Vec<Output> {
+    let changes = changed(turn);
     let mut outputs: Vec<Output> = Vec::new();
+    if !changes.is_empty() {
+        outputs.push(Output::Changes(changes));
+    }
     let mut add = |output: Output| {
         if !outputs.contains(&output) {
             outputs.push(output);
@@ -49,12 +64,8 @@ pub fn of_turn(turn: &[Block]) -> Vec<Output> {
     for block in turn {
         match &block.body {
             Body::Tool(tool) => {
-                for path in written(tool) {
-                    add(if is_html(path) {
-                        Output::Page(Page::File(path.to_owned()))
-                    } else {
-                        Output::File(path.to_owned())
-                    });
+                for path in written(tool).filter(|path| is_html(path)) {
+                    add(Output::Page(Page::File(path.to_owned())));
                 }
             }
             _ => {
@@ -65,6 +76,29 @@ pub fn of_turn(turn: &[Block]) -> Vec<Output> {
         }
     }
     outputs
+}
+
+/// The files `turn`'s calls changed, each once with its lines summed.
+fn changed(turn: &[Block]) -> Vec<Changed> {
+    let mut changes: Vec<Changed> = Vec::new();
+    let diffs = turn.iter().flat_map(|block| match &block.body {
+        Body::Tool(tool) if tool.state == ToolState::Ok => tool.diffs.as_slice(),
+        _ => &[],
+    });
+    for diff in diffs {
+        match changes.iter_mut().find(|change| change.path == diff.path) {
+            Some(change) => {
+                change.added += diff.added;
+                change.removed += diff.removed;
+            }
+            None => changes.push(Changed {
+                path: diff.path.clone(),
+                added: diff.added,
+                removed: diff.removed,
+            }),
+        }
+    }
+    changes
 }
 
 /// The files a call wrote: a write call's, or the ones its patch created.
@@ -128,7 +162,9 @@ mod tests {
             markdown: markdown.map(str::to_owned),
             markdown_run: None,
             sent_at: None,
+            at: None,
             prompt_id: None,
+            steer: false,
         }
     }
 
@@ -173,10 +209,10 @@ mod tests {
         block(id, Body::Paragraph { spans: Vec::new() }, Some(text))
     }
 
-    /// A write call's files, and any provider's created ones, are the
-    /// turn's; an edit to a file already there and a failed write are not.
+    /// Every file a call changed is the turn's, once, its lines summed
+    /// over the calls; a failed call changed nothing.
     #[test]
-    fn a_turn_names_the_files_it_wrote() {
+    fn a_turn_names_the_files_it_changed() {
         let turn = [
             call(1, "Write", ToolState::Ok, &[("/w/notes.md", hunk(3, 2))]),
             call(
@@ -194,12 +230,18 @@ mod tests {
             ),
             call(5, "Write", ToolState::Ok, &[("/w/notes.md", hunk(0, 0))]),
         ];
+        let changed = |path: &str, added, removed| Changed {
+            path: path.into(),
+            added,
+            removed,
+        };
         assert_eq!(
             of_turn(&turn),
-            [
-                Output::File("/w/notes.md".into()),
-                Output::File("src/new.rs".into()),
-            ]
+            [Output::Changes(vec![
+                changed("/w/notes.md", 2, 0),
+                changed("src/new.rs", 1, 0),
+                changed("src/old.rs", 1, 0),
+            ])]
         );
     }
 
@@ -224,6 +266,11 @@ mod tests {
         assert_eq!(
             of_turn(&turn),
             [
+                Output::Changes(vec![Changed {
+                    path: "site/index.html".into(),
+                    added: 1,
+                    removed: 0,
+                }]),
                 Output::Page(Page::File("site/index.html".into())),
                 Output::Page(Page::File("out/chart.HTML".into())),
                 Output::Page(Page::Address("http://localhost:5173/app".into())),

@@ -66,21 +66,27 @@ _Avoid_: dashboard, workspace (see Workspace binding).
 The default Cockpit view: exactly the focused Thread's Pane.
 
 **Panel**
-The right column, beside the board: the focused Thread's changes, its
-pull request and its context, one tab each, and its **preview** while one
-is open. It follows the focused Thread in every view (Solo, a Group's
-focused Pane, a fullscreen Pane, with a Review open beside it), shown
-while the operator has it on; there is none without a Thread (a draft,
-the empty board), but for a draft's preview.
+The right column, beside the board: the focused Thread's **Surfaces** as
+tabs (ADR 0039). It follows the focused Thread in every view (Solo, a
+Group's focused Pane, a fullscreen Pane, with a Review open beside it),
+shown while the operator has it on; there is none without a Thread (a
+draft, the empty board), but for a draft's preview.
 _Avoid_: sidebar (that is the nav), Beside slot (that opens inside the
-board).
+board), dock (its columns are Surfaces now).
+
+**Surface**
+One tab in the Panel, one per thing it shows: the Overview, Changes,
+Files, a Preview, a Browser tab, a Terminal, a side chat, an agent,
+background work, a pull request. Opening one already open brings its tab
+forward. Each Thread keeps its own.
+_Avoid_: section, pane (that is the board's), view.
 
 **Preview**
 A file, an image or a command's output opened from a Pane — a file link
 in an answer, a ⌘-clicked path, a tool row, a prompt's image, a shelf
-chip, a changed file, a review's line — read in the Panel's Preview tab,
-which widens the Panel while it shows. Each Pane keeps its own; the Panel
-shows the focused Pane's. Another file opening replaces it in place.
+chip, a changed file, a review's line — read as a Surface in the Panel,
+which widens while it shows. Each file gets its own tab; opening one
+already open brings its tab forward.
 _Avoid_: reader (the board's reader slot is the Review's), viewer (that is
 the image's part of it).
 
@@ -189,6 +195,15 @@ A ` ```mermaid ` fence in an answer or the reader, drawn as the picture it
 describes once it is on screen; until then, or when it can't be drawn, it
 reads as code. Not a Visual: nobody asked for it, and it is not live.
 
+**Conversation browser**
+The browser tabs that belong to one Thread, shared by the operator and that
+Thread's agent.
+_Avoid_: agent-private browser.
+
+**Browser annotation**
+Feedback attached to a selected page element or a marked region of a page,
+using comments, drawings, or both.
+
 **Review**
 A diff of a Thread's changes beside its Pane — uncommitted, the branch
 against its base, the last turn, or one of the branch's commits — whose
@@ -217,16 +232,18 @@ background, failed, parked) are faces within these.
 _Avoid_: status (too broad), unread (that is the Notice's).
 
 **Inbox**
-The nav's queue of open Threads awaiting the operator, shown in the tree's
-place through the bell, the Bar or ⌘I. Pending Decisions come first,
-oldest request first. Otherwise, Threads executing Main, Subagent,
-background or queued work appear separately under Working; the remaining
-open Threads stay in Inbox until sent back to work or Parked. Reading or
-dismissing a Notice changes presentation, never queue membership. Inbox
-can be empty while Working remains populated. Inbox counts Threads;
-unread and blocked indicators keep their own meanings.
-_Avoid_: Settled (Parked is the existing finished disposition), Recent
-Notice membership (the former rule), Needs-you view (the former name).
+The nav itself (ADR 0040): one list of thread cards, each carrying its
+Project's badge, for the open Threads awaiting the operator. Pending
+Decisions come first, oldest request first. Threads executing Main,
+Subagent, background or queued work sit on the Working shelf; Snoozed and
+Parked Threads on their own shelves; the shelves fold to a head and count
+at the foot of the list. The rest stay in Inbox until sent back to work or
+Parked. Reading or dismissing a Notice changes presentation, never queue
+membership. Inbox can be empty while Working remains populated. Inbox
+counts Threads; unread and blocked indicators keep their own meanings.
+_Avoid_: Settled (T3's word; Parked is Ferrite's), Projects tree and
+Attention list (the nav's former structure), Needs-you view (the former
+name).
 
 **Snooze**
 A temporary deferral of an open Thread until a chosen local time or duration.
@@ -236,23 +253,6 @@ or reading a Notice does not. Snoozed Threads stay out of Inbox and Working
 until they wake, and remain available under the collapsed Snoozed shelf.
 The Server saves Snooze for every window and restores it after a restart.
 _Avoid_: Park (the separate action for finished handling), stopped agent.
-
-**Attention list**
-The nav's always-on list, over `Projects`, of the Threads in flight by
-their Attention: `Needs you` (blocked, oldest request first), `Done` (a
-Notice not yet seen, newest first) and `Working` (creation order). Each
-row is one line. A section with no rows is not drawn, and each section
-folds to its head and count. The list is herdr's Agents panel without the
-idle Threads; the tree below still lists every Thread. A finish never
-leaves from under the operator: the focused Thread is held under `Done`
-when it was listed there (a done Thread opened from it stays, read) or
-finished while the operator watched it (seen at once, it moves from
-`Working` to `Done`). It leaves when focus moves to another Thread.
-Nothing else is held, so no row stands in a section that no longer says
-what happened. That hold is the nav's; the Notice is read as soon as it
-is seen.
-_Avoid_: smart filtering (the setting it replaced), agents panel
-(herdr's), queue (that is ⌘D's).
 
 **Draft**
 A Pane's pending Provider, Effort, Project, and Workspace choices before its

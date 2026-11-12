@@ -8,18 +8,19 @@
 //! wanted where there is nothing else to do. Where they reach over the
 //! board (folded), the head starts clear of them (`view_head_pad_l`).
 //!
-//! Solo names the focused Thread — its title (a double-click renames it),
+//! Solo names the focused Thread with T3's breadcrumb (`solo_head`): its
+//! Project, a side chat's parent, then its title (a double-click renames it),
 //! taking the row's free width, and its ▾ (the Thread's menu, as Claude's
-//! title carries one); the Project is the nav's and the branch the panel's,
+//! title carries one, shown under the pointer); the branch is the panel's,
 //! so while the panel is hidden the branch follows the ▾ in the quiet ink
 //! (`head_branch`). A Group names itself — its title, `<project> · N
 //! threads`, and `New thread`. There is no layout switch and no PR button.
-//! The title-bar tools (`title_tools_element`, `tools`) stand at the row's
-//! right end, against the right column's left edge (or the window's), so
-//! they ride with the column as Claude's do: Open a thread beside, then
-//! Claude's five — the session rail, Terminal, Changes, Files and `⋯`
-//! (the checkout in Finder, its path). The head leaves them their room.
-//! Claude's browser has nothing behind it here, so it is not drawn.
+//! The title bar keeps one tool (ADR 0039, `title_tools_element`): the
+//! Panel's toggle, at the row's right end at the window's edge, where it
+//! stays whatever the Panel holds. Everything else the old tools opened is
+//! a Surface of the Panel, opened from its `+` menu or its chord; a Thread
+//! beside is the palette's (`open_palette_beside`). The head leaves the
+//! toggle its room.
 //!
 //! The head is an overlay laid after the titlebar's drag strip
 //! (the frame's titlebar), over the frame the board column already paints
@@ -28,7 +29,6 @@
 //! the strip beneath and drags the window (on Windows, the controls take
 //! their region out of the strip's `Drag` hit test the same way).
 
-use super::tools::Tool;
 use super::*;
 use ferrite_ui::{components, icons, theme};
 
@@ -47,8 +47,21 @@ impl CockpitView {
         // The head runs to the column's edge (or the window's), clear of
         // the tools that stand against it.
         let right = self.view_head_end();
+        let menu_thread = matches!(self.cockpit.roster().view(), View::Solo)
+            .then(|| self.focused_thread())
+            .flatten()
+            .filter(|_| !self.empty_board_shown());
         div()
             .debug_selector(|| "view-head".into())
+            .when_some(menu_thread, |head, thread| {
+                head.on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
+                    }),
+                )
+            })
             .absolute()
             .top_0()
             .left(px(self.board_left()))
@@ -85,33 +98,13 @@ impl CockpitView {
         super::panel::tools_inset()
     }
 
-    /// How far a column's head row stands below the window's top. The title
-    /// tools stand over the window's right edge whatever column is there, so
-    /// the head row of the rightmost column (`Column`) stands under them,
-    /// not beside them where they would crowd its tabs and doors.
-    pub(super) fn head_drop(&self, column: Column) -> f32 {
-        let tools = self.title_tools().len();
-        let shown = tools > 0 && self.panel_candidate().is_some() && !self.docked_pane_covers();
-        let rightmost = match column {
-            Column::Terminal => true,
-            Column::Files => !self.tool_pressed(Tool::Terminal),
-            Column::Rail => !self.dock_shown(self.focused_thread()),
-        };
-        if rightmost && shown {
-            theme::WIN_CHROME_H
-        } else {
-            0.
-        }
-    }
-
     /// The head's padding at its end, which keeps its content clear of
     /// the tools (`right` is where the head ends).
     fn view_head_pad_r(&self, right: f32) -> f32 {
-        let tools = self.title_tools().len();
-        if tools == 0 {
+        if !self.panel_toggle_shown() {
             return theme::VIEW_HEAD_PAD_X;
         }
-        (self.title_tools_right() + tools_width(tools) + theme::VIEW_HEAD_PAD_X - right)
+        (self.title_tools_right() + theme::ICON_BUTTON + theme::VIEW_HEAD_PAD_X - right)
             .max(theme::VIEW_HEAD_PAD_X)
     }
 
@@ -176,26 +169,33 @@ impl CockpitView {
             .into_any_element()
     }
 
-    /// The tools the focused Thread has something behind, left to right.
-    /// A draft and the empty board have none.
-    fn title_tools(&self) -> Vec<TitleTool> {
-        if self.empty_board_shown() {
-            return Vec::new();
-        }
-        let Some(thread) = self.focused_thread() else {
-            return Vec::new();
-        };
-        let checkout = self.thread_path(thread).is_some();
-        title_tools(checkout, self.on_machine(), self.grid_board())
+    /// Whether the title bar shows the Panel's toggle: for a Thread, not a
+    /// draft or the empty board.
+    fn panel_toggle_shown(&self) -> bool {
+        !self.empty_board_shown() && self.focused_thread().is_some()
     }
 
-    /// The title-bar tools, laid by the frame at the row's right end
-    /// at the window's edge (`title_tools_right`).
+    /// The title bar's one tool (ADR 0039), laid by the frame at the row's
+    /// right end at the window's edge (`title_tools_right`): the Panel's
+    /// toggle (T3's "Toggle right panel"), pressed while the Panel shows.
     pub(super) fn title_tools_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let tools = self.title_tools();
-        if tools.is_empty() || self.panel_candidate().is_none() || self.docked_pane_covers() {
+        if !self.panel_toggle_shown() {
             return None;
         }
+        let door = crate::nav::icon_button(
+            "panel-toggle",
+            icons::PANEL_RIGHT,
+            theme::NAV_TOGGLE_GLYPH,
+            theme::ICON_BUTTON,
+            theme::R_CONTROL,
+        )
+        .occlude()
+        .when(self.panel_pane().is_some(), |door| door.bg(theme::paint::SELECTED))
+        .tooltip(ferrite_ui::menu::action_tooltip("Toggle panel", "cockpit::TogglePanel"))
+        .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+            cx.stop_propagation();
+            view.toggle_panel_now(cx);
+        }));
         Some(
             div()
                 .debug_selector(|| "title-tools".into())
@@ -205,94 +205,163 @@ impl CockpitView {
                 .h(px(theme::WIN_CHROME_H))
                 .flex()
                 .items_center()
-                .gap(px(theme::TITLE_TOOLS_GAP))
-                .children(tools.into_iter().map(|tool| self.title_tool(tool, cx)))
+                .child(door)
                 .into_any_element(),
         )
     }
 
-    fn title_tool(&self, tool: TitleTool, cx: &mut Context<Self>) -> AnyElement {
-        let (key, glyph, tip, chord) = match tool {
-            TitleTool::Split => ("title-split", icons::SPLIT_RIGHT, "Open a thread beside", None),
-            TitleTool::Tool(Tool::Rail) => (
-                "panel-toggle",
-                icons::PANEL_RIGHT,
-                "Show session rail",
-                Some("cockpit::TogglePanel"),
-            ),
-            TitleTool::Tool(Tool::Terminal) => (
-                "title-terminal",
-                icons::TERMINAL,
-                "Terminal",
-                Some("cockpit::ToggleTerminal"),
-            ),
-            TitleTool::Tool(Tool::Changes) => (
-                "title-changes",
-                icons::DIFF,
-                "Changes",
-                Some("cockpit::ToggleChanges"),
-            ),
-            TitleTool::Tool(Tool::Files) => (
-                "title-files",
-                icons::FOLDER,
-                "Files",
-                Some("cockpit::ToggleFiles"),
-            ),
-            TitleTool::Browser => ("open-browser", icons::GLOBE, "Open browser", None),
-            TitleTool::More => ("title-more", icons::ELLIPSIS, "More", None),
-        };
-        let pressed = matches!(tool, TitleTool::Tool(tool) if self.tool_pressed(tool));
-        let door = crate::nav::icon_button(
-            key,
-            glyph,
-            theme::NAV_TOGGLE_GLYPH,
-            theme::ICON_BUTTON,
-            theme::R_CONTROL,
-        )
-        .occlude()
-        .when(pressed, |door| door.bg(theme::paint::SELECTED));
-        let door = match chord {
-            Some(action) => door.tooltip(ferrite_ui::menu::action_tooltip(tip, action)),
-            None => door.tooltip(ferrite_ui::menu::tooltip(tip)),
-        };
-        door.on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            match tool {
-                TitleTool::Tool(tool) => view.press_tool(tool, cx),
-                TitleTool::Split => view.open_palette_beside(window, cx),
-                TitleTool::Browser => {
-                    if let Some(thread) = view.focused_thread() {
-                        view.open_browser(thread, cx);
-                    }
-                }
-                TitleTool::More => {
-                    if let Some(thread) = view.focused_thread() {
-                        view.open_context_menu(
-                            MenuTarget::Tools(thread),
-                            event.position(),
-                            cx,
-                        );
-                    }
-                }
-            }
-        }))
-        .into_any_element()
-    }
-
-    /// Solo: the focused Thread's title and its ▾, as Claude's, then the
-    /// branch while the panel that says it is hidden, then a spacer. The
-    /// Project is the nav's.
+    /// Solo: T3's breadcrumb, `/` between its items — the Project (its
+    /// badge and name, a click starts a new Thread in it), a side chat's
+    /// parent Thread, then the Thread's title with its chevron — then
+    /// where a machine runs it (`From` the machine), the branch while the
+    /// panel that says it is hidden, and a spacer.
     fn solo_head(&self, cx: &mut Context<Self>) -> Option<Vec<AnyElement>> {
         let thread = self.focused_thread()?;
+        let mut crumbs = Vec::new();
+        if let Some(project) = self.head_project(thread, cx) {
+            crumbs.extend([project, separator()]);
+        }
+        let parent = self.side_chats.owner_of(thread);
+        if let Some(parent) = parent {
+            crumbs.extend([self.head_parent(parent, cx), separator()]);
+        }
+        crumbs.push(self.view_title(thread, cx));
+        let mut parts = vec![div()
+            .debug_selector(|| "view-breadcrumb".into())
+            .flex()
+            .flex_shrink(1.)
+            .min_w_0()
+            .items_center()
+            .gap(px(theme::HEAD_CRUMB_GAP))
+            .children(crumbs)
+            .into_any_element()];
+        if let Some(machine) = self.cockpit.machine() {
+            parts.push(environment_badge(machine.name()));
+        }
         let branch = self
             .panel_pane()
             .is_none()
             .then(|| self.head_branch(thread))
             .flatten();
-        let mut parts = vec![self.view_title(thread, cx), title_menu(thread, cx)];
         parts.extend(branch);
-        parts.push(div().flex_1().into_any_element());
+        let spare = div().flex_1().h_full();
+        parts.push(match parent {
+            Some(parent) => spare.child(self.parent_room_probe(parent, cx)).into_any_element(),
+            None => spare.into_any_element(),
+        });
         Some(parts)
+    }
+
+    /// The breadcrumb's Project: its badge at `HEAD_BADGE` then its name,
+    /// at most `HEAD_PROJECT_MAX_W`, in `INK_SUBTLE` lifting to
+    /// `INK_STRONG` under the pointer. A click starts a new Thread there.
+    fn head_project(&self, thread: ThreadId, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let facts = self.facts.get(thread)?;
+        let (project, name) = (facts.project?, facts.project_label.clone()?);
+        let badge = ferrite_ui::project_badge::project_badge(&name)
+            .size(px(theme::HEAD_BADGE))
+            .rounded(px(theme::HEAD_BADGE / 4.0));
+        Some(
+            div()
+                .id(("view-head-project", thread.get() as usize))
+                .debug_selector(|| "view-head-project".into())
+                .occlude()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(px(theme::HEAD_BADGE_GAP))
+                .max_w(px(theme::HEAD_PROJECT_MAX_W))
+                .cursor_pointer()
+                .text_size(px(theme::FS_TITLE))
+                .font_weight(theme::W_LABEL)
+                .text_color(rgb(theme::INK_SUBTLE))
+                .hover(|style| style.text_color(rgb(theme::INK_STRONG)))
+                .child(badge)
+                .child(div().min_w_0().truncate().child(name.clone()))
+                .tooltip(ferrite_ui::menu::tooltip(format!("New thread in {name}")))
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.open_draft_in_project(project, cx);
+                }))
+                .into_any_element(),
+        )
+    }
+
+    /// A side chat's parent Thread, muted: a click opens it. While the row
+    /// overflows it collapses to a literal `...` (T3's), its room measured
+    /// as the row's width changes (`ParentRoom`); its tooltip keeps the
+    /// whole title.
+    fn head_parent(&self, parent: ThreadId, cx: &mut Context<Self>) -> AnyElement {
+        let title = self.facts.name(parent).clone();
+        let mut room = self.head_parent_room.get();
+        room.collapsed = room.collapses(self.parent_title_w(parent, cx));
+        self.head_parent_room.set(room);
+        let shown = if room.collapsed {
+            div()
+                .debug_selector(|| "view-head-parent-collapsed".into())
+                .child("...")
+        } else {
+            div().min_w_0().truncate().child(title.clone())
+        };
+        let probe = self.head_parent_room.clone();
+        div()
+            .id(("view-head-parent", parent.get() as usize))
+            .debug_selector(|| "view-head-parent".into())
+            .relative()
+            .occlude()
+            .flex()
+            .flex_shrink(1.)
+            .min_w_0()
+            .cursor_pointer()
+            .text_size(px(theme::FS_TITLE))
+            .font_weight(theme::W_LABEL)
+            .text_color(rgb(theme::INK_SUBTLE))
+            .hover(|style| style.text_color(rgb(theme::INK_STRONG)))
+            .aria_label(format!("Open parent thread: {title}"))
+            .child(shown)
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| {
+                        let mut room = probe.get();
+                        room.parent = f32::from(bounds.size.width);
+                        probe.set(room);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .tooltip(ferrite_ui::menu::tooltip(title))
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.focus_thread(parent, cx);
+            }))
+            .into_any_element()
+    }
+
+    /// The parent's title drawn whole, as wide as the head would draw it.
+    fn parent_title_w(&self, parent: ThreadId, cx: &gpui::App) -> f32 {
+        crate::nav::Measure::Text(cx).ui(self.facts.name(parent).as_ref(), theme::FS_TITLE, theme::W_LABEL)
+    }
+
+    /// The head's spare width after the breadcrumb, laid out: once it says
+    /// the parent should show otherwise than it does, the frame is drawn
+    /// again.
+    fn parent_room_probe(&self, parent: ThreadId, cx: &gpui::App) -> impl IntoElement {
+        let need = self.parent_title_w(parent, cx);
+        let probe = self.head_parent_room.clone();
+        gpui::canvas(
+            move |bounds, window, _| {
+                let mut room = probe.get();
+                room.spare = Some(f32::from(bounds.size.width));
+                probe.set(room);
+                if room.collapses(need) != room.collapsed {
+                    window.refresh();
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .size_full()
     }
 
     /// The Thread's branch in the quiet ink, for a head whose panel is
@@ -312,8 +381,10 @@ impl CockpitView {
         )
     }
 
-    /// The Thread's title at the view's weight: double-click renames it,
-    /// in place, as a Pane head's title does (`pane_title`).
+    /// The Thread's title at the view's weight, the breadcrumb's current
+    /// item, at least `VIEW_TITLE_MIN_W`, its chevron shown only under the
+    /// pointer (T3's). A click opens the Thread's menu; a double-click
+    /// renames it in place, as a Pane head's title does (`pane_title`).
     fn view_title(&self, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
         if let Some((RenameTarget::ViewTitle(editing), editor)) = &self.rename {
             if *editing == thread {
@@ -326,26 +397,49 @@ impl CockpitView {
                     .into_any_element();
             }
         }
-        div()
+        let name = self.facts.name(thread).clone();
+        let hover = SharedString::from(format!("view-title-hover-{}", thread.get()));
+        let shown = ferrite_ui::motion::hover_t(&hover) > 0.0;
+        let title = div()
             .id(("view-title", thread.get() as usize))
             .debug_selector(|| "view-title".into())
-            .occlude()
-            .min_w_0()
+            .min_w(px(theme::VIEW_TITLE_MIN_W))
             .truncate()
             .text_size(px(theme::FS_TITLE))
             .font_weight(theme::W_LABEL)
             .text_color(rgb(theme::INK_STRONG))
-            .child(self.facts.name(thread).clone())
-            .tooltip(ferrite_ui::menu::tooltip("Rename \u{b7} double-click"))
+            .child(name.clone())
+            .tooltip(ferrite_ui::menu::tooltip(name))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
                     if event.click_count >= 2 {
+                        view.context_menu = None;
                         view.start_rename(RenameTarget::ViewTitle(thread), cx);
+                    } else {
+                        view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
                     }
                 }),
+            );
+        div()
+            .id(("view-title-item", thread.get() as usize))
+            .occlude()
+            .flex()
+            .flex_shrink(1.)
+            .min_w_0()
+            .items_center()
+            .gap(px(theme::HEAD_CHEVRON_GAP))
+            .on_hover(ferrite_ui::motion::hover_snap(hover))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
+                }),
             )
+            .child(title)
+            .child(title_menu(thread, shown, cx))
             .into_any_element()
     }
 
@@ -405,58 +499,6 @@ impl CockpitView {
     }
 }
 
-/// A title-bar tool (Claude's, where Ferrite has the surface).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TitleTool {
-    /// A Thread beside this one (the old tab strip's split-right button).
-    Split,
-    /// One of Claude's: the rail, Terminal, Changes or Files.
-    Tool(Tool),
-    /// The Thread's Conversation browser.
-    Browser,
-    /// Claude's `⋯`: the checkout in Finder, its path.
-    More,
-}
-
-/// Which tools show: the rail and the browser for any Thread; Terminal,
-/// Changes, Files and `⋯` need a checkout on this computer (a machine's is
-/// not on this disk); a board of Panes already has them side by side, so
-/// it offers no split.
-fn title_tools(checkout: bool, on_machine: bool, grid_board: bool) -> Vec<TitleTool> {
-    let mut tools = Vec::new();
-    if !grid_board {
-        tools.push(TitleTool::Split);
-    }
-    tools.push(TitleTool::Tool(Tool::Rail));
-    let local = checkout && !on_machine;
-    if local {
-        tools.extend([
-            TitleTool::Tool(Tool::Terminal),
-            TitleTool::Tool(Tool::Changes),
-            TitleTool::Tool(Tool::Files),
-        ]);
-    }
-    tools.push(TitleTool::Browser);
-    if local {
-        tools.push(TitleTool::More);
-    }
-    tools
-}
-
-/// A column of the right side, in the order they stand: the rail, then the
-/// dock's Files or Changes, then its terminal at the window's edge.
-#[derive(Clone, Copy)]
-pub(super) enum Column {
-    Rail,
-    Files,
-    Terminal,
-}
-
-/// `count` tools' doors, `TITLE_TOOLS_GAP` apart.
-fn tools_width(count: usize) -> f32 {
-    count as f32 * theme::ICON_BUTTON + count.saturating_sub(1) as f32 * theme::TITLE_TOOLS_GAP
-}
-
 /// One history arrow: the sidebar toggle's door while there is somewhere
 /// to go, else its glyph in `HISTORY_ARROW_DISABLED_INK` with no hover.
 /// The tooltip shows either way, so the chord is learnt at the ends too.
@@ -493,18 +535,28 @@ fn history_arrow(
     door.tooltip(ferrite_ui::menu::action_tooltip(label, action))
 }
 
-/// The title's ▾ (Claude's): the Thread's menu (`MenuTarget::Thread`:
-/// rename, park, copy its path…) from the head, where the pointer is.
-fn title_menu(thread: ThreadId, cx: &mut Context<CockpitView>) -> AnyElement {
+/// The title's chevron (T3's, `CHEVRON_DOWN` at 14 in `INK_SUBTLE`):
+/// the Thread's menu (`MenuTarget::Thread`: rename, park, copy its
+/// path…) from the head, where the pointer is. It keeps its place, seen
+/// only while the title is under the pointer (`shown`).
+fn title_menu(thread: ThreadId, shown: bool, cx: &mut Context<CockpitView>) -> AnyElement {
     control(
         crate::nav::icon_button(
             "view-title-menu",
             icons::CHEVRON_DOWN,
-            theme::NAV_HEADING_GLYPH,
+            theme::HEAD_CHEVRON,
             theme::NAV_HEADING_BUTTON,
             theme::R_CONTROL,
         )
-        .debug_selector(|| "view-title-menu".into())
+        .debug_selector(move || {
+            if shown {
+                "view-title-chevron-shown"
+            } else {
+                "view-title-menu"
+            }
+            .into()
+        })
+        .opacity(if shown { 1.0 } else { 0.0 })
         .tooltip(ferrite_ui::menu::tooltip("Thread actions"))
         .on_mouse_down(
             MouseButton::Left,
@@ -514,6 +566,60 @@ fn title_menu(thread: ThreadId, cx: &mut Context<CockpitView>) -> AnyElement {
             }),
         ),
     )
+}
+
+/// The breadcrumb parent's room as the last frame laid it out.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ParentRoom {
+    /// The parent's width, and the head's spare width after the row (none
+    /// before the row is first laid out).
+    parent: f32,
+    spare: Option<f32>,
+    /// The parent shows as `...`.
+    collapsed: bool,
+}
+
+impl ParentRoom {
+    /// Whether a parent whose whole title is `need` wide shows as `...`:
+    /// once the row has no spare width (it overflows), and until the spare
+    /// width would hold the whole title with `HEAD_PARENT_ROOM_SLACK` to
+    /// spare, so a measure a hair off never sets it flickering.
+    fn collapses(self, need: f32) -> bool {
+        let Some(spare) = self.spare else {
+            return false;
+        };
+        if self.collapsed {
+            self.parent + spare < need + theme::HEAD_PARENT_ROOM_SLACK
+        } else {
+            spare <= 0.
+        }
+    }
+}
+
+/// The breadcrumb's `/`, in the muted icon ink.
+fn separator() -> AnyElement {
+    div()
+        .debug_selector(|| "view-head-separator".into())
+        .flex_shrink_0()
+        .text_size(px(theme::FS_TITLE))
+        .text_color(rgb(theme::INK_SUBTLE))
+        .child("/")
+        .into_any_element()
+}
+
+/// T3's environment badge after the title: `From` the machine while the
+/// window runs a machine's Threads.
+fn environment_badge(machine: &str) -> AnyElement {
+    div()
+        .debug_selector(|| "view-head-environment".into())
+        .flex_shrink_0()
+        .px(px(theme::SPACE_1_5))
+        .rounded(px(theme::R_CONTROL))
+        .bg(rgba(theme::HEAD_ENV_GROUND))
+        .text_size(px(theme::FS_META))
+        .text_color(rgb(theme::BLUE))
+        .child(SharedString::from(format!("From {machine}")))
+        .into_any_element()
 }
 
 /// The head's second word, `INK_SUBTLE`: where the Thread works, or a
@@ -538,33 +644,28 @@ fn control(button: impl IntoElement) -> AnyElement {
 
 #[cfg(test)]
 mod tests {
-    use super::{title_tools, TitleTool};
-    use crate::cockpit::tools::Tool as T;
+    use super::ParentRoom;
+    use ferrite_ui::theme::HEAD_PARENT_ROOM_SLACK;
 
-    /// Each tool shows only with something behind it.
+    /// T3's breadcrumb parent: whole while the row has room, a literal
+    /// `...` once it overflows, whole again only when the row would hold
+    /// the whole title (and its slack), so it never flickers at the edge.
     #[test]
-    fn a_title_tool_shows_only_with_its_surface() {
-        use TitleTool::{Browser, Split, More, Tool};
-        let all = [
-            Split,
-            Tool(T::Rail),
-            Tool(T::Terminal),
-            Tool(T::Changes),
-            Tool(T::Files),
-            Browser,
-            More,
-        ];
-        assert_eq!(title_tools(true, false, false), all);
-        assert_eq!(
-            title_tools(true, true, false),
-            [Split, Tool(T::Rail), Browser],
-            "a machine's checkout is not on this disk"
-        );
-        assert_eq!(title_tools(false, false, false), [Split, Tool(T::Rail), Browser]);
-        assert_eq!(
-            title_tools(true, false, true),
-            all[1..],
-            "a board already has Panes side by side"
+    fn the_breadcrumb_parent_collapses_while_the_row_overflows() {
+        let need = 120.;
+        let room = |parent: f32, spare: f32, collapsed: bool| ParentRoom {
+            parent,
+            spare: Some(spare),
+            collapsed,
+        };
+        assert!(!ParentRoom::default().collapses(need), "before any layout: whole");
+        assert!(!room(need, 40., false).collapses(need), "room: whole");
+        assert!(room(60., 0., false).collapses(need), "overflowing: `...`");
+        assert!(room(14., 100., true).collapses(need), "not yet room for it all");
+        assert!(
+            !room(14., need - 14. + HEAD_PARENT_ROOM_SLACK, true).collapses(need),
+            "room again: whole"
         );
     }
 }
+

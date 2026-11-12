@@ -1,30 +1,81 @@
-//! The working line under a running turn, and the task list over it.
+//! A running turn's header and live row, and the task list over it.
 
 use super::*;
 use crate::transcript::LineDisclosure;
+use std::rc::Rc;
 
-/// What a Thread's working row reads besides its transcript (`working_tail`),
-/// gathered by the Cockpit when it syncs the transcript.
+/// What a Thread's running turn draws besides its transcript
+/// (`working_tail`), gathered by the Cockpit when it syncs the transcript.
 pub struct WorkingFacts<'a> {
     pub transcript: &'a Transcript,
     pub thread: ThreadId,
     /// The Session is starting, nothing streaming yet.
     pub starting: bool,
     pub solo: bool,
-    /// The Pane holds the keyboard: only its line animates.
+    /// The Pane holds the keyboard: only its live row shimmers.
     pub focused: bool,
     pub reduce_motion: bool,
-    /// The live reasoning caption's own row is in view.
-    pub reasoning_visible: bool,
-    /// The Thread's effort in force (`medium`), for the line's `thinking
-    /// with medium effort` while the model thinks.
-    pub effort: Option<SharedString>,
 }
 
-/// The working row's shape: the live line, or the starting shape.
+/// What the running turn's rows draw besides its blocks: the header under
+/// its prompt (`Working for 11m 24s`) and the live row at its tail
+/// (`working_tail`). Its `key` changes when what either draws does, never
+/// per frame: the header's clock counts on its own (`LiveClock`).
+#[derive(Clone, Debug)]
+pub struct WorkingTail {
+    pub key: u64,
+    state: Rc<Working>,
+}
+
+impl WorkingTail {
+    /// The header's key while a turn runs; `None` with no turn running (a
+    /// Session starting, a plan left by a turn cut short).
+    pub(crate) fn header_key(&self) -> Option<u64> {
+        match &*self.state {
+            Working::Turn { header, .. } => Some(hash_of(header)),
+            _ => None,
+        }
+    }
+
+    /// The running turn's header (`turn_header`).
+    pub(crate) fn header(&self) -> AnyElement {
+        match &*self.state {
+            Working::Turn { header, .. } => turn_header(header).into_any_element(),
+            _ => div().into_any_element(),
+        }
+    }
+
+    /// The live row at the tail, for the running turn's trailing `work`
+    /// (`rows::live_start`); `disclosure` opens that work's rows above it.
+    pub(crate) fn live(&self, work: &[Block], disclosure: Option<LineDisclosure>) -> AnyElement {
+        let row = match &*self.state {
+            Working::Turn { live, .. } => live_row(live, work, disclosure),
+            Working::Starting { still, solo } => starting_line(*still, *solo),
+            Working::Plan { plan, solo } => div()
+                .pt(px(theme::TASK_CARD_GAP))
+                .child(task_list(plan, Grid::pane(Default::default(), *solo))),
+        };
+        div()
+            .debug_selector(|| "transcript-progress".into())
+            .w_full()
+            .min_w_0()
+            .flex_shrink_0()
+            .child(row)
+            .into_any_element()
+    }
+}
+
+fn hash_of(value: &impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// What the running turn draws, or what stands at the tail with none.
 #[derive(Clone, Debug, Hash, PartialEq)]
 enum Working {
-    Line(WorkingLine),
+    Turn { header: Header, live: Live },
     Starting { still: bool, solo: bool },
     /// No turn runs, but the last one was cut short: its plan stays under
     /// its rows, where the turn left it, the step it stopped on blocked.
@@ -34,40 +85,77 @@ enum Working {
     },
 }
 
-/// WP-A · the working row (the prototype's `.comp > .r`): the transcript's
-/// last row while a turn runs, so it reads as the next line of the
-/// conversation under its newest row. While the transcript streams, the
-/// line; while a Session starts with nothing streaming yet, its starting
-/// shape; otherwise nothing. Only the Pane holding the keyboard (`focused`)
-/// animates it. It names no key: the stop button and the placeholder say
-/// how to stop. Its key changes with its words and whole seconds, never per
-/// frame; the mark and the shimmer are loops (the loops overlay), so they
-/// redraw nothing of the transcript.
-pub fn working_tail(facts: WorkingFacts) -> Option<crate::transcript::WorkingTail> {
-    // The line stays over a Decision that waits: the turn goes on being a
-    // turn, its clock counting, while the operator decides. Alone in its
-    // window only: a Group Pane's Decision is an island over a small body,
-    // which keeps all its room.
-    let working = if facts.transcript.status() == Status::Streaming
-        || (facts.transcript.status() == Status::Blocked && facts.solo)
+/// The running turn's header facts.
+#[derive(Clone, Debug, Hash, PartialEq)]
+struct Header {
+    /// When the turn began: its clock counts on its own (`LiveClock`), so
+    /// the seconds never change this key while the clock is hosted. `None`
+    /// before it is known: `Working...`.
+    started: Option<std::time::Instant>,
+    /// The seconds as words, kept only under reduced motion, where no loop
+    /// counts them and the header is drawn again as they turn.
+    seconds: Option<String>,
+    /// The provider compacts the context: `Compacting for …`.
+    compacting: bool,
+}
+
+/// The live row's facts besides the turn's trailing work.
+#[derive(Clone, Debug, Hash, PartialEq)]
+struct Live {
+    /// Motion is on: the words shine, in any Pane (T3's).
+    shimmer: bool,
+    /// Motion is on: the running glyph in the row's gutter turns.
+    spinning: bool,
+    /// A phase that is not the model's own work (`Retrying · Server
+    /// busy`, `Waiting`), which the row says in place of `Thinking`.
+    phase: Option<String>,
+    /// The plan the turn works to, drawn as the task list over the row.
+    plan: Vec<(String, TaskState)>,
+}
+
+/// What stands at the transcript's tail and under the running turn's
+/// prompt (WP-A): while the transcript streams, the turn's header and live
+/// row; while a Session starts with nothing streaming yet, its starting
+/// line; a cut-short turn's plan; otherwise nothing. Only the Pane holding
+/// the keyboard (`focused`) shimmers. It names no key: the stop button and
+/// the placeholder say how to stop.
+pub fn working_tail(facts: WorkingFacts) -> Option<WorkingTail> {
+    let transcript = facts.transcript;
+    // The turn goes on over a Decision that waits, its clock counting,
+    // while the operator decides. Alone in its window only: a Group
+    // Pane's Decision is an island over a small body, which keeps all its
+    // room.
+    let working = if transcript.status() == Status::Streaming
+        || (transcript.status() == Status::Blocked && facts.solo)
     {
-        Working::Line(WorkingLine::of(
-            facts.transcript,
-            false,
-            facts.solo,
-            facts.focused,
-            facts.reasoning_visible,
-            facts.reduce_motion,
-            facts.thread.get(),
-            facts.effort.as_deref(),
-        ))
+        let progress = transcript.progress();
+        let phase = progress
+            .phase
+            .filter(|phase| matches!(phase, Phase::Retrying | Phase::Waiting))
+            .and_then(|_| progress.caption());
+        Working::Turn {
+            header: Header {
+                started: transcript.turn_started(),
+                seconds: transcript
+                    .turn_elapsed()
+                    .filter(|_| facts.reduce_motion)
+                    .map(ferrite_core::progress::live_seconds),
+                compacting: progress.phase == Some(Phase::Compacting),
+            },
+            live: Live {
+                shimmer: !facts.reduce_motion,
+                spinning: !facts.reduce_motion,
+                phase,
+                plan: plan_of(transcript),
+            },
+        }
     } else if facts.starting {
         Working::Starting {
             still: facts.reduce_motion || !facts.focused,
             solo: facts.solo,
         }
     } else {
-        let plan = plan_of(facts.transcript);
+        let plan = plan_of(transcript);
         if plan.is_empty() {
             return None;
         }
@@ -76,39 +164,351 @@ pub fn working_tail(facts: WorkingFacts) -> Option<crate::transcript::WorkingTai
             solo: facts.solo,
         }
     };
-    let key = {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        working.hash(&mut hasher);
-        hasher.finish()
-    };
-    Some(crate::transcript::WorkingTail {
-        key,
-        render: std::rc::Rc::new(move |disclosure, _, _| {
-            let line = match &working {
-                Working::Line(line) => line.render(disclosure),
-                Working::Starting { still, solo } => starting_line(*still, *solo),
-                Working::Plan { plan, solo } => div()
-                    .pt(px(theme::TASK_CARD_GAP))
-                    .child(task_list(plan, Grid::pane(Default::default(), *solo))),
-            };
-            div()
-                .debug_selector(|| "transcript-progress".into())
-                .w_full()
-                .min_w_0()
-                .flex_shrink_0()
-                .child(line)
-                .into_any_element()
-        }),
+    Some(WorkingTail {
+        key: hash_of(&working),
+        state: Rc::new(working),
     })
 }
 
-/// The working line's shape while a Session starts: nothing the provider
-/// says yet, so Ferrite's own mark holds the gutter — the working mark on
-/// the focused Pane, assembled and still elsewhere and under reduced motion
-/// — and `Starting` in `INK_SUBTLE`, on the working line's own line (Solo's
-/// or a Group Pane's), so the line never shifts when the turn's words
-/// replace it.
+/// The words a header or live row wears: `TURN_FOLD_TEXT` on
+/// `TURN_FOLD_LINE`, `INK_SUBTLE`, tabular, on a `TURN_FOLD_ROW_H` line.
+fn row_words() -> Div {
+    components::tabular(
+        div()
+            .flex()
+            .items_center()
+            .min_w_0()
+            .min_h(px(theme::TURN_FOLD_ROW_H))
+            .font_family(theme::FONT_UI)
+            .text_size(px(theme::TURN_FOLD_TEXT))
+            .line_height(px(theme::TURN_FOLD_LINE))
+            .text_color(rgb(INK_SUBTLE)),
+    )
+}
+
+/// The running turn's header (T3's `WorkingTimelineRow`): `Working for
+/// 11m 24s` under its prompt, over the fold's rule (`turn_rule`), its
+/// clock ticking once a second on its own. It does not shimmer, and has no
+/// mark, count or chevron. Before the turn's start is known it reads
+/// `Working...`; while the provider compacts, `Compacting for …` after the
+/// minimize mark.
+fn turn_header(header: &Header) -> Div {
+    let clock = || match (&header.seconds, header.started) {
+        (Some(seconds), _) => Some(div().child(SharedString::from(seconds.clone())).into_any_element()),
+        (None, Some(started)) => Some(live_clock(started)),
+        (None, None) => None,
+    };
+    let words = match (header.compacting, clock()) {
+        (true, Some(clock)) => div()
+            .flex()
+            .items_center()
+            .gap(px(theme::TURN_FOLD_ICON_GAP))
+            .child(icon(icons::MINIMIZE, theme::TURN_FOLD_ICON, INK_SUBTLE))
+            .child(
+                div()
+                    .flex()
+                    .child(components::shine(
+                        "Compacting for\u{a0}",
+                        INK_SUBTLE,
+                        components::Shine::Activity,
+                    ))
+                    .child(clock),
+            ),
+        (true, None) => div()
+            .flex()
+            .items_center()
+            .gap(px(theme::TURN_FOLD_ICON_GAP))
+            .child(icon(icons::MINIMIZE, theme::TURN_FOLD_ICON, INK_SUBTLE))
+            .child("Compacting\u{2026}"),
+        (false, Some(clock)) => div().flex().child("Working for\u{a0}").child(clock),
+        (false, None) => div().child("Working..."),
+    };
+    turn_rule(
+        row_words()
+            .debug_selector(|| "turn-working".into())
+            .h(px(theme::TURN_FOLD_ROW_H))
+            .px(px(theme::TURN_FOLD_INSET))
+            .whitespace_nowrap()
+            .child(words),
+    )
+}
+
+/// The frame a turn's header and its fold share: `TURN_FOLD_PAD_T` over
+/// the row, `TURN_FOLD_TEXT_B` under it to a 1px rule of `TURN_FOLD_RULE`
+/// the column's width.
+pub(crate) fn turn_rule(row: impl IntoElement) -> Div {
+    div()
+        .w_full()
+        .min_w_0()
+        .pt(px(theme::TURN_FOLD_PAD_T))
+        .pb(px(theme::TURN_FOLD_TEXT_B))
+        .border_b_1()
+        .border_color(theme::paint::TURN_FOLD_RULE)
+        .child(row)
+}
+
+/// What a settled turn's fold row draws (`turn_fold`).
+pub(crate) struct FoldFace<'a> {
+    /// Names its hover blends: unique in the window.
+    pub key: SharedString,
+    pub label: &'a str,
+    /// The turn's start (its prompt's `sent_at`), its hover time.
+    pub started: Option<&'a str>,
+    pub open: bool,
+    /// The keyboard's target, holding its focus (↵ toggles it): its time
+    /// shows, its words brighten.
+    pub targeted: Option<&'a gpui::FocusHandle>,
+}
+
+/// A settled turn's fold (T3's turn fold, MessagesTimeline.tsx:1621-1652),
+/// on the header's frame (`turn_rule`): `Worked for 24m 55s` and its
+/// chevron, right while shut and down while open (the glyphs cross-fading,
+/// never turning), the whole row a press target with no ground, the words not
+/// selectable. Under the pointer they go `INK_SUBTLE` → `INK_STRONG` over
+/// `motion::FOLD_HOVER`, and the turn's start time (`8:01 pm`) snaps in at
+/// the row's end, taking no room until it shows.
+pub(crate) fn turn_fold(
+    face: FoldFace,
+    toggle: Option<Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)>>,
+) -> AnyElement {
+    use ferrite_ui::motion;
+    let row_key = SharedString::from(format!("{}-row", face.key));
+    let button_key = SharedString::from(format!("{}-words", face.key));
+    let hovered = motion::hover_t(&row_key) > 0.;
+    let t = if face.targeted.is_some() {
+        1.
+    } else {
+        motion::hover_t(&button_key)
+    };
+    let ink = motion::mix(rgb(INK_SUBTLE).into(), rgb(INK_STRONG).into(), t);
+    let open = face.open;
+    let chevron = motion::settled(
+        SharedString::from(format!("{}-chevron", face.key)),
+        open,
+        motion::CHEVRON,
+        move |down| {
+            let glyph = |path, opacity: f32| {
+                div()
+                    .absolute()
+                    .inset_0()
+                    .opacity(opacity)
+                    .child(icon(path, theme::TURN_FOLD_CHEVRON, INK_SUBTLE).text_color(ink))
+            };
+            div()
+                .debug_selector(move || {
+                    if open {
+                        "turn-fold-open".into()
+                    } else {
+                        "turn-fold-shut".into()
+                    }
+                })
+                .relative()
+                .flex_shrink_0()
+                .size(px(theme::TURN_FOLD_CHEVRON))
+                .child(glyph(icons::CHEVRON_RIGHT, 1. - down))
+                .child(glyph(icons::CHEVRON_DOWN, down))
+        },
+    );
+    let words = div()
+        .id(button_key.clone())
+        .debug_selector(|| "turn-fold-words".into())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::TURN_FOLD_GAP))
+        .px(px(theme::TURN_FOLD_INSET))
+        .rounded(px(theme::R_CONTROL))
+        .whitespace_nowrap()
+        .text_color(ink)
+        .child(SharedString::from(face.label.to_owned()))
+        .child(chevron)
+        .on_hover(motion::hover_listener_with(
+            button_key,
+            motion::FOLD_HOVER,
+            motion::FOLD_HOVER,
+        ));
+    let time = face
+        .started
+        .filter(|_| hovered || face.targeted.is_some())
+        .map(|stamp| {
+            let time = div()
+                .id(SharedString::from(format!("{}-time", face.key)))
+                .debug_selector(|| "turn-fold-time".into())
+                .ml_auto()
+                .mr(px(theme::SPACE_1))
+                .flex_shrink_0()
+                .rounded(px(theme::R_CONTROL))
+                .text_size(px(theme::TURN_FOLD_TIME))
+                .text_color(rgb(INK_SUBTLE));
+            match ferrite_core::clock::parse_local(stamp) {
+                Some(at) => time
+                    .child(SharedString::from(ferrite_core::clock::day_aware_label(
+                        at,
+                        ferrite_core::clock::now(),
+                    )))
+                    .tooltip(ferrite_ui::menu::tooltip(ferrite_core::clock::day_aware_tooltip(at))),
+                // A log from before stamps were kept: the time it printed.
+                None => time.child(SharedString::from(stamp.to_owned())),
+            }
+        });
+    let mut row = row_words()
+        .id(row_key.clone())
+        .debug_selector(|| "turn-fold".into())
+        .h(px(theme::TURN_FOLD_ROW_H))
+        .pr(px(theme::TURN_FOLD_END))
+        .gap(px(theme::TURN_FOLD_GAP))
+        .on_hover(motion::hover_snap(row_key))
+        .child(words)
+        .children(time);
+    // The whole row is the press, as its hover time is the whole row's.
+    if let Some(toggle) = toggle {
+        row = row
+            .cursor_pointer()
+            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                cx.stop_propagation();
+                gpui::base::TextSelection::clear(window, cx);
+                toggle(window, cx);
+            });
+    }
+    if let Some(focus) = face.targeted {
+        row = row
+            .bg(theme::paint::RAISED)
+            .rounded(px(theme::R_CONTROL))
+            .relative()
+            .child(
+                div()
+                    .debug_selector(|| "tool-disclosure-keyboard-target".into())
+                    .absolute()
+                    .inset_0(),
+            )
+            .track_focus(focus)
+            .key_context("ToolDisclosure");
+    }
+    turn_rule(row).into_any_element()
+}
+
+/// The live row at a running turn's tail (T3's `work-live` and `Thinking`
+/// rows): the newest step of its trailing `work` — `Running sed`, the
+/// program alone (`text::live_words`), or once it finished `Ran sed` — or,
+/// with no call there, `Thinking` (a phase that is not the model's own
+/// work, by name). Its width hugs its words, which shimmer on the Pane
+/// holding the keyboard. A thought in that work stands over it, its first
+/// heading or line, four lines at most, until the work is opened; pressed,
+/// it opens the work's rows above it (`disclosure`).
+fn live_row(live: &Live, work: &[Block], disclosure: Option<LineDisclosure>) -> Div {
+    let open = disclosure.as_ref().is_some_and(|disclosure| disclosure.open);
+    let tool = work
+        .iter()
+        .rev()
+        .filter_map(|block| match &block.body {
+            Body::Tool(tool) => Some(tool),
+            _ => None,
+        })
+        .min_by_key(|tool| tool.state != ToolState::Running);
+    let (selector, words) = match (&live.phase, tool) {
+        (Some(phase), _) => ("live-phase", phase.clone()),
+        (None, Some(tool)) => ("live-call", text::live_words(tool)),
+        (None, None) => ("live-thinking", "Thinking".to_owned()),
+    };
+    let thought = (!open)
+        .then(|| {
+            work.iter().rev().find_map(|block| match &block.body {
+                Body::Thinking(text) if !text.trim().is_empty() => {
+                    Some(ferrite_core::progress::headline(text))
+                }
+                _ => None,
+            })
+        })
+        .flatten()
+        .filter(|thought| !thought.is_empty());
+    let face = if live.shimmer {
+        let shine = if selector == "live-call" {
+            components::Shine::Tool
+        } else {
+            components::Shine::Activity
+        };
+        components::shine(SharedString::from(words), INK_SUBTLE, shine)
+    } else {
+        div().min_w_0().truncate().child(words).into_any_element()
+    };
+    let mut row = row_words()
+        .debug_selector(move || selector.into())
+        .max_w_full()
+        .child(working_mark(live.spinning))
+        .child(face);
+    if let Some(disclosure) = disclosure {
+        let toggle = disclosure.toggle;
+        row = row
+            .cursor_pointer()
+            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                cx.stop_propagation();
+                toggle(window, cx);
+            });
+    }
+    let planned = !live.plan.is_empty();
+    div()
+        .flex()
+        .flex_col()
+        .items_start()
+        .w_full()
+        .min_w_0()
+        .flex_shrink_0()
+        .when(planned, |tail| tail.pt(px(theme::TASK_CARD_GAP)).gap(px(theme::TASK_CARD_GAP)))
+        .children(planned.then(|| {
+            div()
+                .w_full()
+                .child(task_list(&live.plan, Grid::pane(Default::default(), true)))
+        }))
+        .children(thought.map(|thought| {
+            row_words()
+                .debug_selector(|| "live-thought".into())
+                .items_start()
+                .gap(px(theme::SPACE_2))
+                .child(
+                    div()
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .h(px(theme::TURN_FOLD_LINE))
+                        .child(icon(icons::BRAIN, theme::ICON_CHEVRON, INK_SUBTLE)),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .line_clamp(4)
+                        .child(SharedString::from(thought)),
+                )
+        }))
+        .child(row)
+}
+
+/// The live row's gutter: the app's one running glyph
+/// (`components::working_mark`), its orbs white, in a `TURN_FOLD_ROW_H`
+/// box; under reduced motion it holds still. Its selector says which. (The
+/// row's step icons, T3's, take this gutter later.)
+fn working_mark(live: bool) -> AnyElement {
+    div()
+        .debug_selector(move || {
+            if live {
+                "progress-mark-live".into()
+            } else {
+                "progress-mark-still".into()
+            }
+        })
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .size(px(theme::TURN_FOLD_ROW_H))
+        .child(components::working_mark(theme::GLYPH_BOX, INK_STRONG))
+        .into_any_element()
+}
+
+/// The tail's shape while a Session starts: nothing the provider says yet,
+/// so Ferrite's own mark holds the gutter — the working mark on the
+/// focused Pane, assembled and still elsewhere and under reduced motion —
+/// and `Starting` in `INK_SUBTLE`, on the live row's own line, so the row
+/// never shifts when the turn's live step replaces it.
 pub(super) fn starting_line(still: bool, solo: bool) -> Div {
     let mark = if still {
         div()
@@ -122,17 +522,9 @@ pub(super) fn starting_line(still: bool, solo: bool) -> Div {
             .into_any_element()
     };
     let grid = Grid::pane(Default::default(), solo);
-    div()
+    row_words()
         .debug_selector(|| "transcript-starting".into())
-        .flex()
-        .items_center()
         .w_full()
-        .min_w_0()
-        .h(px(grid.line))
-        .font_family(theme::FONT_UI)
-        .text_size(px(grid.activity().size))
-        .line_height(px(grid.line))
-        .text_color(rgb(INK_SUBTLE))
         .child(
             div()
                 .flex()
@@ -144,29 +536,27 @@ pub(super) fn starting_line(still: bool, solo: bool) -> Div {
         .child(div().min_w_0().truncate().child("Starting"))
 }
 
-/// The working line's mark: the app's one running glyph
-/// (`components::working_mark`), its orbs white; under reduced motion it
-/// holds still. Its selector says which.
-fn working_mark(live: bool) -> AnyElement {
-    div()
-        .debug_selector(move || {
-            if live {
-                "progress-mark-live".into()
-            } else {
-                "progress-mark-still".into()
-            }
-        })
-        .child(components::working_mark(theme::GLYPH_BOX, INK_STRONG))
-        .into_any_element()
+/// The turn's clock (`1m 4s`), counting from `started` on its own: a loop
+/// the overlay draws (`loops_overlay::hosted`), woken each whole second by
+/// the pulse clock, so the seconds turning redraw nothing of the transcript
+/// around it. Under reduced motion the header draws its seconds in place
+/// and is drawn again as they turn (`Header::seconds`).
+fn live_clock(started: std::time::Instant) -> AnyElement {
+    counting_clock(started, "progress-clock", ferrite_core::progress::live_seconds)
 }
 
-/// The turn's clock (`1m04s`), counting from `started` on its own: a
-/// loop the overlay draws (`loops_overlay::hosted`), woken each whole second
-/// by the pulse clock, so the seconds turning redraw nothing of the
-/// transcript around it. Under reduced motion it is drawn in place and the
-/// line is drawn again as the seconds turn (`WorkingLine::seconds`).
-fn live_clock(started: std::time::Instant) -> AnyElement {
-    let clock = LiveClock { started };
+/// A clock counting from `started` on its own as `live_clock` does, its
+/// time read by `format` (an agent's `2m 05s`).
+pub(crate) fn counting_clock(
+    started: std::time::Instant,
+    selector: &'static str,
+    format: fn(Duration) -> String,
+) -> AnyElement {
+    let clock = LiveClock {
+        started,
+        selector,
+        format,
+    };
     ferrite_ui::loops_overlay::hosted(move || clock.into_any_element()).into_any_element()
 }
 
@@ -202,6 +592,8 @@ pub fn background_clock(launched: std::time::Instant) -> Div {
 #[derive(IntoElement, Clone, Copy)]
 struct LiveClock {
     started: std::time::Instant,
+    selector: &'static str,
+    format: fn(Duration) -> String,
 }
 
 impl RenderOnce for LiveClock {
@@ -215,97 +607,11 @@ impl RenderOnce for LiveClock {
             cx,
         );
         let elapsed = ferrite_core::clock::instant().saturating_duration_since(self.started);
+        let selector = self.selector;
         div()
-            .debug_selector(|| "progress-clock".into())
-            .child(SharedString::from(ferrite_core::progress::live_seconds(
-                elapsed,
-            )))
+            .debug_selector(move || selector.into())
+            .child(SharedString::from((self.format)(elapsed)))
     }
-}
-
-/// The working line with no provider known: the spinner and caption in
-/// `INK_SUBTLE` (the L2 cell's, retired with it; kept for the tests).
-#[cfg(test)]
-pub(super) fn working_row(
-    transcript: &Transcript,
-    compact: bool,
-    focused: bool,
-    received_reasoning_is_visible: bool,
-    reduce_motion: bool,
-) -> Div {
-    working_line_for(
-        transcript,
-        compact,
-        true,
-        focused,
-        received_reasoning_is_visible,
-        reduce_motion,
-        0,
-        None,
-    )
-}
-
-/// The working line (SPEC §5.4), the Claude app's one line, all in
-/// `INK_SUBTLE` but its white orbs: the working mark, then what the turn
-/// is doing, read off its execution state (`caption_of`), then `1m04s ·
-/// ↓ 639 tokens` (the arrow an icon, the count live and rolling:
-/// `odometer::rolling_count`) and, while the model thinks, `· thinking with
-/// medium effort`. Every line's spinner turns on the one shared clock;
-/// only the focused Pane's caption shimmers. The seconds are whole
-/// (`progress::live_seconds`), tabular, so the text changes once a second.
-/// The caption is what truncates; the facts keep their room. L2
-/// (`compact`) draws the same row without the token count.
-#[cfg(test)]
-pub(super) fn working_line_for(
-    transcript: &Transcript,
-    compact: bool,
-    solo: bool,
-    focused: bool,
-    received_reasoning_is_visible: bool,
-    reduce_motion: bool,
-    thread: u64,
-    effort: Option<&str>,
-) -> Div {
-    WorkingLine::of(
-        transcript,
-        compact,
-        solo,
-        focused,
-        received_reasoning_is_visible,
-        reduce_motion,
-        thread,
-        effort,
-    )
-    .render(None)
-}
-
-/// What a working line draws, read off its transcript once
-/// (`working_line_for`): the transcript's tail row renders it later, from
-/// this alone, and its hash is the row's key — it changes when the words or
-/// the whole seconds do, never per frame.
-#[derive(Clone, Debug, Hash, PartialEq)]
-pub(crate) struct WorkingLine {
-    live: bool,
-    spinning: bool,
-    solo: bool,
-    /// When the turn began: its clock counts on its own (`LiveClock`), so
-    /// the seconds never change this line's key while the clock is hosted.
-    started: Option<std::time::Instant>,
-    /// The seconds as words, kept only under reduced motion, where no loop
-    /// counts them and the line is drawn again as they turn.
-    seconds: Option<String>,
-    /// The turn's output tokens as counted live
-    /// (`Transcript::turn_output_live`), when it has any.
-    tokens: Option<u64>,
-    /// While the model thinks: `thinking with medium effort`.
-    thinking: Option<String>,
-    /// The caption's selector and its words.
-    caption: Option<(String, String)>,
-    /// The Thread whose line this is: the key its words roll under.
-    thread: u64,
-    /// The plan the turn works to, its steps' words and states, drawn as
-    /// the task list over the line (`task_list`).
-    plan: Vec<(String, TaskState)>,
 }
 
 /// A plan step's state, as the task list marks it.
@@ -352,259 +658,6 @@ fn plan_of(transcript: &Transcript) -> Vec<(String, TaskState)> {
         .collect()
 }
 
-impl WorkingLine {
-    #[allow(clippy::too_many_arguments)]
-    fn of(
-        transcript: &Transcript,
-        compact: bool,
-        solo: bool,
-        focused: bool,
-        received_reasoning_is_visible: bool,
-        reduce_motion: bool,
-        thread: u64,
-        effort: Option<&str>,
-    ) -> Self {
-        let live = focused && !reduce_motion;
-        let spinning = !reduce_motion;
-        let started = transcript.turn_started();
-        let seconds = transcript
-            .turn_elapsed()
-            .filter(|_| reduce_motion)
-            .map(ferrite_core::progress::live_seconds);
-        let tokens = transcript.turn_output_live();
-        let tokens = (tokens > 0 && !compact).then_some(tokens);
-        let progress = transcript.progress();
-        let thinking =
-            (progress.phase == Some(Phase::Thinking) && !compact).then(|| match effort {
-                Some(effort) => format!("thinking with {effort} effort"),
-                None => "thinking".to_owned(),
-            });
-        let plan = plan_of(transcript);
-        let caption = caption_of(
-            transcript,
-            !compact && received_reasoning_is_visible,
-            thread,
-        );
-        Self {
-            live,
-            spinning,
-            solo,
-            started,
-            seconds,
-            tokens,
-            thinking,
-            caption,
-            plan,
-            thread,
-        }
-    }
-
-    /// `disclosure`: the chevron that opens the call the line carries.
-    fn render(&self, disclosure: Option<LineDisclosure>) -> Div {
-        let Self {
-            live,
-            spinning,
-            solo,
-            started,
-            seconds: _,
-            tokens,
-            thinking,
-            caption,
-            plan,
-            thread,
-        } = self.clone();
-        // The line stands at the Standard size: the reading keys scale the
-        // transcript only.
-        let grid = Grid::pane(Default::default(), solo);
-        let mut row = div()
-            .flex()
-            .items_center()
-            .flex_shrink_0()
-            .w_full()
-            .min_w_0()
-            .h(px(grid.line))
-            .font_family(theme::FONT_UI)
-            .text_size(px(grid.activity().size))
-            .line_height(px(grid.line))
-            .text_color(rgb(INK_SUBTLE));
-        if let Some((selector, caption)) = caption {
-            // The caption reads in the muted ink, as Claude's does. New
-            // words roll in over the old (Claude's `cds-morph`,
-            // `motion::morph`).
-            let face = move |caption: SharedString| {
-                if live {
-                    components::shimmer(caption, INK_SUBTLE)
-                } else {
-                    div().min_w_0().truncate().child(caption).into_any_element()
-                }
-            };
-            let text = ferrite_ui::motion::morph(
-                ("working-caption", thread as usize),
-                SharedString::from(caption),
-                face,
-            );
-            // The facts after the caption: the turn's clock, counting on its
-            // own, then its tokens, rolling as they climb, then whether it
-            // thinks.
-            let seam = |words: &str| {
-                let text = SharedString::from(format!(" \u{b7} {words}"));
-                let highlights = separators(&text);
-                StyledText::new(text).with_highlights(highlights)
-            };
-            let count = tokens.map(|tokens| {
-                div()
-                    .debug_selector(|| "progress-tokens".into())
-                    .flex()
-                    .items_center()
-                    .child(seam(""))
-                    .child(icon(icons::ARROW_DOWN, theme::WORKING_ARROW, INK_SUBTLE))
-                    .child(div().ml(px(theme::SPACE_0_5)).child(
-                        ferrite_ui::odometer::rolling_count(
-                            format!("working-tokens-{thread}"),
-                            tokens,
-                        ),
-                    ))
-                    .child(" tokens")
-            });
-            let thinking = thinking.map(|thinking| {
-                div()
-                    .debug_selector(|| "progress-thinking".into())
-                    .child(seam(&thinking))
-            });
-            let has_facts = started.is_some() || count.is_some() || thinking.is_some();
-            row = row
-                .debug_selector(move || selector.clone())
-                .child(
-                    div()
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .mr(px(theme::SPACE_2))
-                        .h(px(grid.line))
-                        .child(working_mark(spinning)),
-                )
-                .child(
-                    div()
-                        .debug_selector(|| "progress-reasoning".into())
-                        .flex()
-                        .min_w_0()
-                        .flex_shrink(1.)
-                        .child(text),
-                )
-                .when(has_facts, |row| {
-                    row.child(components::tabular(
-                        div()
-                            .debug_selector(|| "progress-metadata".into())
-                            .flex()
-                            .flex_shrink_0()
-                            .whitespace_nowrap()
-                            .items_center()
-                            .child("\u{a0}")
-                            .children(started.map(live_clock))
-                            .children(count)
-                            .children(thinking),
-                    ))
-                })
-                .when_some(disclosure, |row, disclosure| {
-                    let toggle = disclosure.toggle;
-                    row.child(
-                        div()
-                            .debug_selector(|| "progress-disclosure".into())
-                            .flex_shrink_0()
-                            .ml(px(theme::SPACE_1))
-                            .child(ferrite_ui::motion::settled(
-                                ("working-chevron", thread as usize),
-                                disclosure.open,
-                                ferrite_ui::motion::CHEVRON,
-                                |turn| components::chevron_at(turn, theme::ICON_CHEVRON, INK_SUBTLE),
-                            )),
-                    )
-                    .cursor_pointer()
-                    .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-                        cx.stop_propagation();
-                        toggle(window, cx);
-                    })
-                });
-        }
-        let planned = !plan.is_empty();
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(theme::TASK_CARD_GAP))
-            .when(planned, |tail| tail.pt(px(theme::TASK_CARD_GAP)))
-            .w_full()
-            .min_w_0()
-            .flex_shrink_0()
-            .children(planned.then(|| task_list(&plan, grid)))
-            .child(row)
-    }
-}
-
-/// What the working line says, from what the turn is executing (the
-/// handoff's §10: derive the line from execution state), as its selector
-/// and its words:
-///
-/// - a phase that is not the model's own work — retrying, compacting,
-///   waiting — by name (`Retrying · Server busy`);
-/// - else the call running now (its row waits until it finishes: the line
-///   carries it), in the provider's description of it where it wrote one
-///   (`Waiting 15 seconds then printing done`), else a verb and a short
-///   target (`Running cargo test`, `text::working_words`);
-/// - else, while the model thinks or writes, the provider's own heading
-///   (`Checking build progress`), unless its reasoning row is in view
-///   (`heading_shown`);
-/// - else the turn's verb (`Reticulating`, `progress::spinner_verb`, held
-///   for the whole turn): only when nothing more specific is known.
-///
-/// None trails off: the running glyph says the work goes on, as the Claude
-/// app's line does.
-fn caption_of(
-    transcript: &Transcript,
-    heading_shown: bool,
-    thread: u64,
-) -> Option<(String, String)> {
-    let progress = transcript.progress();
-    let generic = Phase::Working.label();
-    let working = progress.phase.is_none_or(|phase| phase.label() == generic);
-    if working {
-        if let Some(call) = running_call(transcript.blocks()) {
-            return Some(("progress-call".into(), text::working_words(call)));
-        }
-    }
-    let caption = progress.caption()?;
-    let caption = if heading_shown && working {
-        generic.to_owned()
-    } else {
-        caption
-    };
-    // The selector names what the line means (`Working`); for the generic
-    // word, its words are the turn's verb.
-    let words = if caption == generic {
-        ferrite_core::progress::spinner_verb(thread, transcript.turn_count())
-    } else {
-        caption.as_str()
-    };
-    let words = words.trim_end_matches(['\u{2026}', '.']).to_owned();
-    Some((format!("progress-caption-{caption}"), words))
-}
-
-/// The call the turn runs now: its newest running call, looked for in the
-/// current turn only (back to its prompt). Not an agent: its own row in
-/// the agents' card runs with it, and the line never says a row twice.
-/// The call the working line names: the turn's latest still running,
-/// its agents aside (they have their own rows).
-pub(crate) fn running_call(blocks: &[Block]) -> Option<&ToolBlock> {
-    blocks
-        .iter()
-        .rev()
-        .take_while(|block| !matches!(block.body, Body::Prompt(_)))
-        .find_map(|block| match &block.body {
-            Body::Tool(tool) if tool.state == ToolState::Running && !super::is_agent(tool) => {
-                Some(tool)
-            }
-            _ => None,
-        })
-}
 
 /// The task list (`TASK_*`): the plan the turn works to, a card on a
 /// hairline ring, one row a step — done `check-circle` and its words
@@ -676,125 +729,52 @@ mod tests {
     use ferrite_core::SessionEvent;
     use std::sync::Arc;
 
-    /// With no call running, the line keeps the thinking heading, and with
-    /// nothing better known, the turn's verb.
+    fn tail(transcript: &Transcript) -> Working {
+        let tail = working_tail(WorkingFacts {
+            transcript,
+            thread: ThreadId::new(1),
+            starting: false,
+            solo: true,
+            focused: true,
+            reduce_motion: false,
+        })
+        .expect("a running turn");
+        (*tail.state).clone()
+    }
+
+    /// The header counts from the turn's start and says when the provider
+    /// compacts; the live row names a phase that is not the model's own
+    /// work in place of `Thinking`. Neither counts tokens or names effort.
     #[test]
-    fn the_verb_holds_the_line_only_while_nothing_runs() {
+    fn the_header_counts_and_says_it_compacts() {
         let (lexer, _) = Lexer::new();
         let mut transcript = Transcript::new(Arc::new(lexer));
         transcript.apply(Input::Prompt("Build".into()));
-        transcript.apply(Input::Event(SessionEvent::ReasoningSummaryDelta {
-            text: "**Checking build progress**".into(),
-            summary_index: 0,
-        }));
-        let line = |transcript: &Transcript, heading_shown| {
-            WorkingLine::of(transcript, false, true, false, heading_shown, true, 7, None)
-                .caption
-                .map(|(selector, _)| selector)
-        };
-        assert_eq!(
-            line(&transcript, false).as_deref(),
-            Some("progress-caption-Checking build progress")
-        );
-        // The heading's own row in view: the line says the verb.
-        assert_eq!(
-            line(&transcript, true).as_deref(),
-            Some("progress-caption-Working")
-        );
-        transcript.apply(Input::Event(SessionEvent::ToolStarted {
-            id: "build".into(),
-            name: "commandExecution".into(),
-            input: serde_json::json!({"command": "cargo build --release"}),
-        }));
-        assert_eq!(line(&transcript, true).as_deref(), Some("progress-call"));
-    }
-
-    /// The count climbs with the thinking estimate, snaps up to the usage,
-    /// counts on from there as the next message thinks, and never falls
-    /// back when the turn's own (smaller) figure lands; while the model
-    /// thinks, the line says so, with the Thread's effort.
-    #[test]
-    fn the_token_count_climbs_and_says_the_model_thinks() {
-        let (lexer, _) = Lexer::new();
-        let mut transcript = Transcript::new(Arc::new(lexer));
-        transcript.apply(Input::Prompt("Plan it".into()));
-        let line = |transcript: &Transcript| {
-            WorkingLine::of(
-                transcript,
-                false,
-                true,
-                true,
-                false,
-                false,
-                7,
-                Some("medium"),
-            )
-        };
-        assert_eq!(line(&transcript).tokens, None);
-        let think = |transcript: &mut Transcript, estimated| {
-            transcript.apply(Input::Event(SessionEvent::ThinkingTokens { estimated }));
+        let phase = |transcript: &mut Transcript, phase| {
             transcript.apply(Input::Event(SessionEvent::Progress {
                 event: ferrite_core::progress::ProgressEvent::Phase {
-                    phase: Phase::Thinking,
+                    phase,
                     detail: String::new(),
                 },
             }));
         };
-        think(&mut transcript, 5);
-        assert_eq!(line(&transcript).tokens, Some(5));
-        assert_eq!(
-            line(&transcript).thinking.as_deref(),
-            Some("thinking with medium effort")
-        );
-        think(&mut transcript, 1400);
-        assert_eq!(line(&transcript).tokens, Some(1400));
-        transcript.apply(Input::Event(SessionEvent::TokenUsage {
-            total_tokens: 2000,
-            input_tokens: 0,
-            cached_input_tokens: 0,
-            output_tokens: 1500,
-            reasoning_output_tokens: 0,
-            context_window: None,
-        }));
-        assert_eq!(line(&transcript).tokens, Some(1500));
-        // The next message thinks on top of the first's report.
-        think(&mut transcript, 600);
-        assert_eq!(line(&transcript).tokens, Some(2100));
-        transcript.apply(Input::Event(SessionEvent::UsageDetails {
-            details: ferrite_core::UsageDetails {
-                scope: ferrite_core::UsageScope::Turn,
-                input_tokens: 10,
-                cached_input_tokens: 0,
-                output_tokens: 1800,
-                reasoning_output_tokens: 0,
-            },
-        }));
-        assert_eq!(line(&transcript).tokens, Some(2100));
-        // Writing, the model no longer thinks.
-        transcript.apply(Input::Event(SessionEvent::TextDelta {
-            text: "Done.".into(),
-        }));
-        assert_eq!(line(&transcript).thinking, None);
-    }
-
-    /// While a call runs the line carries it in its description.
-    #[test]
-    fn the_line_carries_the_running_call_in_its_own_words() {
-        let mut transcript = Transcript::default();
-        transcript.apply(Input::Prompt("Wait".into()));
-        transcript.apply(Input::Event(SessionEvent::ToolStarted {
-            id: "sleep".into(),
-            name: "Bash".into(),
-            input: serde_json::json!({"command": "sleep 15 && echo done", "description": "Waiting 15 seconds then printing done"}),
-        }));
-        let line = WorkingLine::of(&transcript, false, true, false, false, true, 7, None);
-        assert_eq!(
-            line.caption,
-            Some((
-                "progress-call".to_owned(),
-                "Waiting 15 seconds then printing done".to_owned()
-            ))
-        );
+        let Working::Turn { header, live } = tail(&transcript) else {
+            panic!("a turn runs");
+        };
+        assert!(header.started.is_some());
+        assert!(!header.compacting);
+        assert_eq!(live.phase, None);
+        phase(&mut transcript, Phase::Compacting);
+        let Working::Turn { header, .. } = tail(&transcript) else {
+            panic!("a turn runs");
+        };
+        assert!(header.compacting);
+        phase(&mut transcript, Phase::Retrying);
+        let Working::Turn { header, live } = tail(&transcript) else {
+            panic!("a turn runs");
+        };
+        assert!(!header.compacting);
+        assert_eq!(live.phase.as_deref(), Some("Retrying"));
     }
 
     fn planned(transcript: &mut Transcript) {
@@ -857,8 +837,6 @@ mod tests {
                 solo: true,
                 focused: true,
                 reduce_motion: false,
-                reasoning_visible: false,
-                effort: None,
             };
             assert!(
                 working_tail(facts).is_some(),
@@ -886,8 +864,6 @@ mod tests {
             solo: true,
             focused: true,
             reduce_motion: false,
-            reasoning_visible: false,
-            effort: None,
         };
         assert!(working_tail(facts).is_none(), "nothing under the answer");
     }

@@ -435,34 +435,41 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // Composer's own arrows, so they win on the palette's line.
         ("left".into(), "palette::PreviousType", Some("Palette")),
         ("right".into(), "palette::NextType", Some("Palette")),
-        (
-            "up".into(),
-            "notifications::SelectPrevious",
-            Some("Notifications"),
-        ),
-        (
-            "down".into(),
-            "notifications::SelectNext",
-            Some("Notifications"),
-        ),
-        ("enter".into(), "notifications::Open", Some("Notifications")),
-        (
-            "backspace".into(),
-            "notifications::Dismiss",
-            Some("Notifications"),
-        ),
-        (
-            "escape".into(),
-            "notifications::Close",
-            Some("Notifications"),
-        ),
-        ("escape".into(), "nav::CloseView", Some("NavView")),
+        // The model picker's own keys on its search line, after the
+        // Composer's so they win there: ↑↓ walk the list or the Reasoning
+        // column, ⏎ picks in it, ← → cross between them, ⌘1–⌘9 pick the
+        // listed models (T3's `modelPicker.jump.N`), esc shuts it.
+        ("up".into(), "model_picker::Up", Some("ModelPicker")),
+        ("down".into(), "model_picker::Down", Some("ModelPicker")),
+        ("enter".into(), "model_picker::Confirm", Some("ModelPicker")),
+        ("escape".into(), "model_picker::Dismiss", Some("ModelPicker")),
+        ("left".into(), "model_picker::Left", Some("ModelPicker")),
+        ("right".into(), "model_picker::Right", Some("ModelPicker")),
+        (with_primary("1"), "model_picker::Jump1", Some("ModelPicker")),
+        (with_primary("2"), "model_picker::Jump2", Some("ModelPicker")),
+        (with_primary("3"), "model_picker::Jump3", Some("ModelPicker")),
+        (with_primary("4"), "model_picker::Jump4", Some("ModelPicker")),
+        (with_primary("5"), "model_picker::Jump5", Some("ModelPicker")),
+        (with_primary("6"), "model_picker::Jump6", Some("ModelPicker")),
+        (with_primary("7"), "model_picker::Jump7", Some("ModelPicker")),
+        (with_primary("8"), "model_picker::Jump8", Some("ModelPicker")),
+        (with_primary("9"), "model_picker::Jump9", Some("ModelPicker")),
         ("up".into(), "nav::SelectPrevious", Some("NavTree")),
         ("down".into(), "nav::SelectNext", Some("NavTree")),
         ("enter".into(), "nav::Open", Some("NavTree")),
         ("left".into(), "nav::Fold", Some("NavTree")),
         ("right".into(), "nav::Unfold", Some("NavTree")),
         ("escape".into(), "nav::CloseView", Some("NavTree")),
+        ("f2".into(), "nav::Rename", Some("NavTree")),
+        ("up".into(), "nav::SearchPrevious", Some("NavSearch")),
+        ("down".into(), "nav::SearchNext", Some("NavSearch")),
+        ("enter".into(), "nav::Open", Some("NavSearch")),
+        ("escape".into(), "nav::CloseView", Some("NavSearch")),
+        ("home".into(), "nav::SelectFirst", Some("NavTree")),
+        ("end".into(), "nav::SelectLast", Some("NavTree")),
+        ("menu".into(), "nav::OpenMenu", Some("NavTree")),
+        ("shift-f10".into(), "nav::OpenMenu", Some("NavTree")),
+        (with_primary("z"), "nav::Undo", Some("NavTree")),
         ("up".into(), "shortcuts::ScrollUp", Some("Shortcuts")),
         ("down".into(), "shortcuts::ScrollDown", Some("Shortcuts")),
         ("escape".into(), "shortcuts::Dismiss", Some("Shortcuts")),
@@ -480,6 +487,12 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("enter".into(), "cockpit::MenuPick", Some("ComposerMenu")),
         (
             "enter".into(),
+            "cockpit::ToggleTool",
+            Some("ToolDisclosure"),
+        ),
+        // Space too, as on any button (a turn's fold, T3's).
+        (
+            "space".into(),
             "cockpit::ToggleTool",
             Some("ToolDisclosure"),
         ),
@@ -568,9 +581,6 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("shift-enter".into(), "find::Previous", Some("Find")),
         (with_primary("shift-g"), "find::Previous", Some("Find")),
         ("escape".into(), "find::Close", Some("Find")),
-        // The Reply card's line: ⏎ sends the reply, esc closes the card.
-        ("enter".into(), "reply::Send", Some("ReplyCard")),
-        ("escape".into(), "reply::Close", Some("ReplyCard")),
         // The side chat's line: ⏎ sends the question to its tab.
         ("enter".into(), "side_chat::Ask", Some("SideChat")),
     ];
@@ -1051,12 +1061,16 @@ mod tests {
                 ("escape", "palette::Dismiss", "Palette"),
                 ("left", "palette::PreviousType", "Palette"),
                 ("right", "palette::NextType", "Palette"),
-                ("up", "notifications::SelectPrevious", "Notifications"),
-                ("down", "notifications::SelectNext", "Notifications"),
-                ("enter", "notifications::Open", "Notifications"),
-                ("backspace", "notifications::Dismiss", "Notifications"),
-                ("escape", "notifications::Close", "Notifications"),
-                ("escape", "nav::CloseView", "NavView"),
+                ("home", "nav::SelectFirst", "NavTree"),
+                ("end", "nav::SelectLast", "NavTree"),
+                ("menu", "nav::OpenMenu", "NavTree"),
+                ("shift-f10", "nav::OpenMenu", "NavTree"),
+                ("up", "model_picker::Up", "ModelPicker"),
+                ("down", "model_picker::Down", "ModelPicker"),
+                ("enter", "model_picker::Confirm", "ModelPicker"),
+                ("escape", "model_picker::Dismiss", "ModelPicker"),
+                ("left", "model_picker::Left", "ModelPicker"),
+                ("right", "model_picker::Right", "ModelPicker"),
                 ("up", "shortcuts::ScrollUp", "Shortcuts"),
                 ("down", "shortcuts::ScrollDown", "Shortcuts"),
                 ("escape", "shortcuts::Dismiss", "Shortcuts"),
@@ -1072,10 +1086,6 @@ mod tests {
                     "{platform:?} is missing {key} for {action} in {context}"
                 );
             }
-            assert!(
-                at(&table, "backspace", "composer::Backspace")
-                    < at(&table, "backspace", "notifications::Dismiss")
-            );
             assert!(
                 table.iter().all(|(key, action, _)| {
                     *action != "cockpit::CloseThread" || !key.contains("backspace")
@@ -1105,6 +1115,11 @@ mod tests {
             }
             assert!(table.contains(&(
                 "enter".into(),
+                "cockpit::ToggleTool",
+                Some("ToolDisclosure")
+            )));
+            assert!(table.contains(&(
+                "space".into(),
                 "cockpit::ToggleTool",
                 Some("ToolDisclosure")
             )));

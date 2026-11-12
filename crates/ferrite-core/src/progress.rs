@@ -113,6 +113,9 @@ pub enum ProgressEvent {
     BackgroundSnapshot {
         tasks: Vec<BackgroundTask>,
     },
+    /// The provider compacted the context: the token counts it reported
+    /// before and after, or why it failed (`transcript::Compaction`).
+    Compacted(crate::transcript::Compacted),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -323,6 +326,8 @@ impl Progress {
                     })
                     .collect();
             }
+            // History, not live state: the transcript keeps it.
+            ProgressEvent::Compacted(_) => {}
         }
     }
 
@@ -507,19 +512,47 @@ pub fn spinner_verb(thread: u64, turn: usize) -> &'static str {
 /// noise on every row.
 pub const DURATION_MIN_MS: u128 = 2_000;
 
-/// A live counter's reading, ticked at 1Hz: whole seconds, floored, so it
-/// never runs ahead of the clock — `0s` … `59s`, then `1m04s`, and from an
-/// hour `3h11m` (never `191m16s`). A frozen fact keeps its tenths
+/// A live counter's reading, ticked at 1Hz (T3's `Working for` timer):
+/// whole seconds, floored, so it never runs ahead of the clock — `0s` …
+/// `59s`, then its parts spaced with the zero ones dropped (`1m 4s`, `5m`,
+/// `1h 5s`, `3h 11m 16s`). A frozen fact keeps its tenths
 /// (`duration_label`).
 pub fn live_seconds(elapsed: std::time::Duration) -> String {
-    let whole = elapsed.as_secs();
+    clock_parts(elapsed.as_secs())
+}
+
+/// Whole seconds as `Xh Ym Zs`, zero parts dropped, single spaces between.
+fn clock_parts(whole: u64) -> String {
     if whole < 60 {
-        format!("{whole}s")
-    } else if whole < 3600 {
-        format!("{}m{:02}s", whole / 60, whole % 60)
-    } else {
-        format!("{}h{:02}m", whole / 3600, whole % 3600 / 60)
+        return format!("{whole}s");
     }
+    let parts = [(whole / 3600, 'h'), (whole % 3600 / 60, 'm'), (whole % 60, 's')];
+    parts
+        .iter()
+        .filter(|(count, _)| *count > 0)
+        .map(|(count, unit)| format!("{count}{unit}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A settled span as T3 prints a turn's (`formatDuration`,
+/// orchestrationTiming.ts): `340ms` under a second (never `0ms` for a real
+/// one), tenths under ten seconds (`4.1s`, `2s`), then whole seconds —
+/// rounded before the unit is chosen, so 59.5s reads `1m`, never `60s` —
+/// as `24m 55s`, `5m`, `1h 2m`. Nonsense (negative, not finite) reads
+/// `0ms`.
+pub fn format_duration(ms: f64) -> String {
+    if !ms.is_finite() || ms < 0. {
+        return "0ms".into();
+    }
+    if ms < 1_000. {
+        return format!("{}ms", ms.round().max(1.));
+    }
+    if ms < 10_000. {
+        let tenths = (ms / 100.).round() / 10.;
+        return format!("{tenths}s");
+    }
+    clock_parts((ms / 1_000.).round() as u64)
 }
 
 /// A settled span, printed once the work is over: `<1s` for anything under
@@ -700,6 +733,7 @@ impl ProgressEvent {
                 .iter()
                 .map(|task| task.id.len() + task.label.len() + task.detail.len() + 16)
                 .sum(),
+            Self::Compacted(report) => report.failure.as_ref().map_or(16, |f| f.len() + 16),
         }
         .saturating_add(64)
     }
@@ -759,8 +793,37 @@ mod duration_tests {
         assert_eq!(live_seconds(Duration::from_millis(8_200)), "8s");
         assert_eq!(live_seconds(Duration::from_millis(9_900)), "9s");
         assert_eq!(live_seconds(Duration::from_millis(59_999)), "59s");
-        assert_eq!(live_seconds(Duration::from_secs(64)), "1m04s");
-        assert_eq!(live_seconds(Duration::from_secs(134)), "2m14s");
+        assert_eq!(live_seconds(Duration::from_secs(64)), "1m 4s");
+        assert_eq!(live_seconds(Duration::from_secs(134)), "2m 14s");
+        assert_eq!(live_seconds(Duration::from_secs(684)), "11m 24s");
+        assert_eq!(live_seconds(Duration::from_secs(300)), "5m");
+        assert_eq!(live_seconds(Duration::from_secs(3_720)), "1h 2m");
+        assert_eq!(live_seconds(Duration::from_secs(3_605)), "1h 5s");
+        assert_eq!(live_seconds(Duration::from_secs(11_476)), "3h 11m 16s");
+    }
+
+    /// T3's `formatDuration` (orchestrationTiming.ts): ms under a second,
+    /// tenths under ten, then whole seconds rounded before the unit is
+    /// chosen, zero parts dropped.
+    #[test]
+    fn a_settled_turn_reads_as_t3_formats_it() {
+        for (ms, label) in [
+            (-5., "0ms"),
+            (f64::NAN, "0ms"),
+            (0.2, "1ms"),
+            (340., "340ms"),
+            (2_000., "2s"),
+            (4_100., "4.1s"),
+            (9_960., "10s"),
+            (59_000., "59s"),
+            (59_500., "1m"),
+            (60_000., "1m"),
+            (1_495_000., "24m 55s"),
+            (3_720_000., "1h 2m"),
+            (3_605_000., "1h 5s"),
+        ] {
+            assert_eq!(format_duration(ms), label, "{ms}");
+        }
     }
 
     #[test]
@@ -779,7 +842,7 @@ mod duration_tests {
     fn an_unfocused_counter_coarsens_past_a_minute() {
         assert_eq!(coarse_seconds(Duration::from_secs(8)), "8s");
         assert_eq!(coarse_seconds(Duration::from_secs(75)), "1m");
-        assert_eq!(live_seconds(Duration::from_secs(75)), "1m15s");
+        assert_eq!(live_seconds(Duration::from_secs(75)), "1m 15s");
     }
 
     #[test]

@@ -25,6 +25,11 @@ pub struct Line {
     redo: Vec<Snapshot>,
     /// The last edit was a plain typed character: the next one joins it.
     typing: bool,
+    /// The tokens (a skill, a file) that edit as one unit: the caret steps
+    /// over each, never into it, and a delete beside one takes it whole.
+    /// The Composer sets them after every edit (`set_atoms`); an edit
+    /// drops them until it does.
+    atoms: Vec<Range<usize>>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -46,6 +51,7 @@ impl Default for Line {
             undo: Vec::new(),
             redo: Vec::new(),
             typing: false,
+            atoms: Vec::new(),
         }
     }
 }
@@ -96,6 +102,19 @@ impl Line {
         self.selection.clone()
     }
 
+    /// The tokens in the current text, as byte ranges (`atoms`).
+    pub fn set_atoms(&mut self, atoms: Vec<Range<usize>>) {
+        self.atoms = atoms;
+    }
+
+    /// The token strictly containing `offset`, if any.
+    fn atom_around(&self, offset: usize) -> Option<Range<usize>> {
+        self.atoms
+            .iter()
+            .find(|atom| atom.start < offset && offset < atom.end)
+            .cloned()
+    }
+
     /// The selected text, if any.
     pub fn selected_text(&self) -> Option<&str> {
         (!self.selection.is_empty()).then(|| &self.content[self.selection.clone()])
@@ -105,6 +124,7 @@ impl Line {
     /// queue, or history.
     pub fn set(&mut self, text: String) {
         self.remember(false);
+        self.atoms.clear();
         let at = text.len();
         self.content = text;
         self.place(at);
@@ -115,6 +135,7 @@ impl Line {
     /// history's, not undo's.
     pub fn take(&mut self) -> String {
         self.place(0);
+        self.atoms.clear();
         self.undo.clear();
         self.redo.clear();
         self.typing = false;
@@ -155,6 +176,7 @@ impl Line {
     }
 
     fn restore(&mut self, snapshot: Snapshot) {
+        self.atoms.clear();
         self.content = snapshot.content;
         self.selection = snapshot.selection;
         self.reversed = false;
@@ -301,7 +323,8 @@ impl Line {
         self.reversed = false;
     }
 
-    /// Select the word under `offset` — a double-click.
+    /// Select the word under `offset` — a double-click; on a token, the
+    /// token whole.
     pub fn select_word_at(&mut self, offset: usize) {
         let offset = offset.min(self.content.len());
         let at = self.char_boundary_at_or_before(offset);
@@ -312,6 +335,11 @@ impl Line {
             self.reversed = false;
             return;
         };
+        if let Some(atom) = self.atoms.iter().find(|atom| atom.contains(&at)) {
+            self.selection = atom.clone();
+            self.reversed = false;
+            return;
+        }
         let here = kind(c);
         let start = self.run_start(at, here);
         let end = self.run_end(at, here);
@@ -327,15 +355,25 @@ impl Line {
 
     /// A click: the caret lands at `offset`, snapped onto a character.
     pub fn place_caret(&mut self, offset: usize) {
-        let at = self.char_boundary_at_or_before(offset);
+        let at = self.snapped(offset);
         self.place(at);
     }
 
     /// A shift-click or a drag: the selection grows from its anchor to
-    /// `offset`, snapped onto a character.
+    /// `offset`, snapped onto a character, never inside a token.
     pub fn select_to(&mut self, offset: usize) {
-        let at = self.char_boundary_at_or_before(offset);
+        let at = self.snapped(offset);
         self.extend(at);
+    }
+
+    /// `offset` on a character, and off a token onto its nearer edge.
+    fn snapped(&self, offset: usize) -> usize {
+        let at = self.char_boundary_at_or_before(offset);
+        match self.atom_around(at) {
+            Some(atom) if at - atom.start <= atom.end - at => atom.start,
+            Some(atom) => atom.end,
+            None => at,
+        }
     }
 
     /// Collapse the selection to a caret at `at`.
@@ -387,6 +425,9 @@ impl Line {
     }
 
     fn next_boundary(&self, offset: usize) -> usize {
+        if let Some(atom) = self.atoms.iter().find(|atom| atom.start <= offset && offset < atom.end) {
+            return atom.end;
+        }
         self.content[offset..]
             .chars()
             .next()
@@ -395,6 +436,9 @@ impl Line {
     }
 
     fn previous_boundary(&self, offset: usize) -> usize {
+        if let Some(atom) = self.atoms.iter().find(|atom| atom.start < offset && offset <= atom.end) {
+            return atom.start;
+        }
         self.content[..offset]
             .chars()
             .next_back()
@@ -411,7 +455,7 @@ impl Line {
     }
 
     /// The start of the word before `offset`: back over whitespace, then
-    /// back over one run of the kind found there.
+    /// back over one run of the kind found there, or over a token whole.
     fn word_start(&self, offset: usize) -> usize {
         let mut at = offset;
         while let Some(c) = self.content[..at].chars().next_back() {
@@ -420,6 +464,9 @@ impl Line {
             }
             at -= c.len_utf8();
         }
+        if let Some(atom) = self.atoms.iter().find(|atom| atom.start < at && at <= atom.end) {
+            return atom.start;
+        }
         let Some(c) = self.content[..at].chars().next_back() else {
             return at;
         };
@@ -427,7 +474,7 @@ impl Line {
     }
 
     /// The end of the word after `offset`: over whitespace, then over one
-    /// run of the kind found there.
+    /// run of the kind found there, or over a token whole.
     fn word_end(&self, offset: usize) -> usize {
         let mut at = offset;
         while let Some(c) = self.content[at..].chars().next() {
@@ -435,6 +482,9 @@ impl Line {
                 break;
             }
             at += c.len_utf8();
+        }
+        if let Some(atom) = self.atoms.iter().find(|atom| atom.start <= at && at < atom.end) {
+            return atom.end;
         }
         let Some(c) = self.content[at..].chars().next() else {
             return at;
@@ -475,6 +525,7 @@ impl Line {
             && text.chars().count() == 1
             && !text.chars().all(char::is_whitespace);
         self.remember(typed);
+        self.atoms.clear();
         self.content.replace_range(range.clone(), text);
         self.place(range.start + text.len());
         self.marked = None;
@@ -524,6 +575,98 @@ mod tests {
         let mut line = Line::default();
         line.replace(None, text);
         line
+    }
+
+    /// "fix $tdd now": the skill token `$tdd` is one atom, 4..8.
+    fn with_token() -> Line {
+        let mut line = of("fix $tdd now");
+        line.set_atoms(vec![4..8]);
+        line
+    }
+
+    /// ⌥←, ⌥⌫, a drag and a double-click take a token whole: none lands
+    /// inside one.
+    #[test]
+    fn word_left_never_lands_inside_a_token() {
+        let mut line = of("fix /to-spec now");
+        line.set_atoms(vec![4..12]);
+        line.place_caret(12);
+        line.move_word_left();
+        assert_eq!(line.cursor(), 4, "alt-left from a token's end lands inside it");
+    }
+
+    #[test]
+    fn word_delete_takes_a_token_whole() {
+        let mut line = of("fix /to-spec now");
+        line.set_atoms(vec![4..12]);
+        line.place_caret(12);
+        line.delete_word_left();
+        assert_eq!(line.text(), "fix  now", "alt-backspace leaves half a token");
+    }
+
+    #[test]
+    fn a_drag_never_ends_inside_a_token() {
+        let mut line = with_token();
+        line.place_caret(0);
+        line.select_to(6);
+        let end = line.selection().end;
+        assert!(end == 4 || end == 8, "the selection ends inside the token at {end}");
+    }
+
+    #[test]
+    fn a_double_click_selects_a_token_whole() {
+        let mut line = of("fix /to-spec now");
+        line.set_atoms(vec![4..12]);
+        line.select_word_at(9);
+        assert_eq!(line.selection(), 4..12, "a double-click selects part of the token");
+    }
+
+    #[test]
+    fn backspace_after_a_token_removes_all_of_it() {
+        let mut line = with_token();
+        line.place_caret(8);
+        line.backspace();
+        assert_eq!(line.text(), "fix  now");
+        assert_eq!(line.cursor(), 4);
+    }
+
+    #[test]
+    fn delete_before_a_token_removes_all_of_it() {
+        let mut line = with_token();
+        line.place_caret(4);
+        line.delete();
+        assert_eq!(line.text(), "fix  now");
+        assert_eq!(line.cursor(), 4);
+    }
+
+    #[test]
+    fn arrows_step_over_a_token_in_one_press() {
+        let mut line = with_token();
+        line.place_caret(4);
+        line.move_right();
+        assert_eq!(line.cursor(), 8, "→ jumps the token");
+        line.move_left();
+        assert_eq!(line.cursor(), 4, "← jumps it back");
+        line.select_right();
+        assert_eq!(line.selection(), 4..8, "shift-→ selects it as a unit");
+    }
+
+    #[test]
+    fn the_caret_never_lands_inside_a_token() {
+        let mut line = with_token();
+        line.place_caret(5);
+        assert_eq!(line.cursor(), 4, "nearer its start");
+        line.place_caret(7);
+        assert_eq!(line.cursor(), 8, "nearer its end");
+    }
+
+    #[test]
+    fn undo_restores_a_deleted_token_whole() {
+        let mut line = with_token();
+        line.place_caret(8);
+        line.backspace();
+        assert!(line.undo());
+        assert_eq!(line.text(), "fix $tdd now");
     }
 
     #[test]
