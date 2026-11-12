@@ -175,6 +175,7 @@ impl Server {
                 worktree,
                 prompt,
             } => {
+                self.adopt_strays(&task);
                 let command =
                     match self.start_worker(&task, project, agent, branch, worktree, prompt) {
                         Ok((thread, worktree)) => Command::WorkerStarted {
@@ -269,6 +270,43 @@ impl Server {
         None
     }
 
+    /// An open Thread `task` owns but never heard of was a Worker whose
+    /// start was not written (a failed save, then a restart): it is told
+    /// to the Factory as one, so the next start replaces it and keeps it
+    /// in the Task's history, parked.
+    fn adopt_strays(&mut self, task: &str) {
+        let Some(known) = self.factory.task(task) else {
+            return;
+        };
+        let owner = ThreadOwner::Task(task.to_string());
+        let strays: Vec<(ThreadId, Option<std::path::PathBuf>)> = self
+            .engine
+            .open_threads()
+            .iter()
+            .filter(|thread| !known.had_worker(**thread))
+            .filter_map(|thread| {
+                let view = self.engine.thread(*thread)?;
+                (view.owner() == Some(&owner)).then(|| {
+                    let worktree = match view.workspace() {
+                        Some(WorkspaceBinding::Worktree { path, .. }) => Some(path.clone()),
+                        _ => None,
+                    };
+                    (*thread, worktree)
+                })
+            })
+            .collect();
+        for (thread, worktree) in strays {
+            let found = Command::WorkerStarted {
+                task: task.to_string(),
+                thread,
+                worktree,
+            };
+            if let Err(refusal) = self.factory.command(found, self.now_ms()) {
+                crate::log!("server: the Factory did not take a stray Worker: {refusal}");
+            }
+        }
+    }
+
     /// Open the Task's Worker in its worktree (a new one of its Project on
     /// its branch, when it has none yet), owned by it, titled as it and
     /// its Step, and give it its first prompt.
@@ -293,6 +331,17 @@ impl Server {
             .map(|task| match task.current_step() {
                 Some(step) => format!("{} \u{b7} {}", task.title, step.name),
                 None => task.title.clone(),
+            });
+        // A start whose record was lost may have made the Task's worktree
+        // already: its branch is reused, never made twice.
+        let worktree = worktree
+            .or_else(|| self.factory.task(task)?.worktree.clone())
+            .or_else(|| {
+                workspace::worktrees(&repo)
+                    .ok()?
+                    .into_iter()
+                    .find(|listed| listed.branch.as_deref() == Some(branch.as_str()))
+                    .map(|listed| listed.path)
             });
         let workspace = match worktree.filter(|path| path.exists()) {
             Some(path) => WorkspaceChoice::ExistingWorktree { repo, path },

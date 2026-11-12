@@ -648,6 +648,11 @@ impl Factory {
     }
 }
 
+/// What makes a script's repeated submission the Task it already started.
+pub(super) fn script_request(workflow: &str, identity: &str) -> String {
+    format!("script:{workflow}:{}", identity.trim())
+}
+
 fn unknown_workflow() -> Refusal {
     Refusal::new(RefusalCode::UnknownWorkflow, "no Workflow has that id")
 }
@@ -913,7 +918,7 @@ impl State {
             .iter()
             .find(|made| made.id == workflow)
             .ok_or_else(unknown_workflow)?;
-        let request = format!("script:{workflow}:{identity}");
+        let request = script_request(&workflow, &identity);
         if let Some(task) = self
             .tasks
             .iter()

@@ -166,17 +166,26 @@ impl Task {
         let Some(old) = self.worker.take() else {
             return;
         };
-        self.workers.retain(|each| each.thread != old);
-        if !self.oversight.superseded.contains(&old) {
-            self.oversight.superseded.push(old);
-        }
+        self.retire(old, effects);
         let name = self.asker();
         self.note(
             now_ms,
             Actor::Ferrite,
             format!("{name}'s run was superseded; a late result from it is ignored"),
         );
-        effects.push(Effect::Park { thread: old });
+    }
+
+    /// `thread` is no longer one of its Workers: parked, kept in its
+    /// history (so it goes with the Task), and what it reports dropped.
+    pub(super) fn retire(&mut self, thread: ThreadId, effects: &mut Vec<Effect>) {
+        if self.worker == Some(thread) {
+            self.worker = None;
+        }
+        self.workers.retain(|each| each.thread != thread);
+        if !self.oversight.superseded.contains(&thread) {
+            self.oversight.superseded.push(thread);
+        }
+        effects.push(Effect::Park { thread });
     }
 
     fn label(&self, to: &Destination) -> String {

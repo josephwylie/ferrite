@@ -627,6 +627,23 @@ pub enum Command {
     },
 }
 
+impl Command {
+    /// It reports what the Server already did: a failed write cannot
+    /// refuse it, so it is taken and written later (Persist, then act).
+    fn reports_effect(&self) -> bool {
+        matches!(
+            self,
+            Command::WorkerStarted { .. }
+                | Command::WorkerFailed { .. }
+                | Command::WorktreeTidied { .. }
+                | Command::GitHubRead { .. }
+                | Command::GitHubHead { .. }
+                | Command::CoordinatorStarted { .. }
+                | Command::CoordinatorFailed { .. }
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
     Task(TaskId),
@@ -799,13 +816,7 @@ fn one() -> u64 {
 /// A deleted Task's Workers go with it, and only with it (#226); its
 /// worktree is removed if its checkout is clean.
 fn deleted(task: Task, effects: &mut Vec<Effect>) {
-    let mut gone = task.every_worker();
-    for thread in &task.oversight.superseded {
-        if !gone.contains(thread) {
-            gone.push(*thread);
-        }
-    }
-    for thread in gone {
+    for thread in task.every_worker() {
         effects.push(Effect::DeleteThread { thread });
     }
     if let Some(path) = task.worktree {
@@ -831,9 +842,7 @@ fn not_a_worker() -> Refusal {
 impl Task {
     /// `thread` is one of its Workers, current or not.
     pub fn had_worker(&self, thread: ThreadId) -> bool {
-        self.worker == Some(thread)
-            || self.workers.iter().any(|each| each.thread == thread)
-            || self.oversight.superseded.contains(&thread)
+        self.every_worker().contains(&thread)
     }
 
     /// The Step it is at, in the version it keeps.
@@ -1201,12 +1210,26 @@ impl State {
                 if task.worker == Some(thread) {
                     return Ok(Answer::Changed(false));
                 }
+                // A Worker this one replaces stays in the Task's history.
+                let step = task.step.clone();
+                let replaced: Vec<ThreadId> = task
+                    .worker
+                    .into_iter()
+                    .chain(
+                        task.workers
+                            .iter()
+                            .filter(|each| Some(&each.step) == step.as_ref())
+                            .map(|each| each.thread),
+                    )
+                    .collect();
+                for old in replaced {
+                    task.retire(old, effects);
+                }
                 task.worker = Some(thread);
                 if task.worktree.is_none() {
                     task.worktree = worktree;
                 }
-                if let Some(step) = task.step.clone() {
-                    task.workers.retain(|each| each.step != step);
+                if let Some(step) = step {
                     task.workers.push(StepWorker { step, thread });
                 }
                 Ok(Answer::Changed(true))
@@ -1560,8 +1583,7 @@ fn enter_step(
             task.watch.prompt = Some(return_prompt(task, step));
         }
         Some(old) => {
-            effects.push(Effect::Park { thread: old });
-            task.workers.retain(|each| each.step != step.id);
+            task.retire(old, effects);
             begin_step(task, step, now_ms, effects);
         }
         None => begin_step(task, step, now_ms, effects),

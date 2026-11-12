@@ -28,13 +28,14 @@ impl Task {
             || self.instructions.to_lowercase().contains(&query)
     }
 
-    /// Every Worker it had, current and earlier, each once.
+    /// Every Worker it had, current, earlier and replaced, each once.
     pub fn every_worker(&self) -> Vec<ThreadId> {
         let mut threads = Vec::new();
         for thread in self
             .worker
             .into_iter()
             .chain(self.workers.iter().map(|each| each.thread))
+            .chain(self.oversight.superseded.iter().copied())
         {
             if !threads.contains(&thread) {
                 threads.push(thread);
