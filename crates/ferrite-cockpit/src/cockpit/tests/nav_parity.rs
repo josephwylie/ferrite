@@ -81,7 +81,7 @@ fn the_board_starts_past_the_card(cx: &mut TestAppContext) {
     use ferrite_ui::theme::NAV_INSET;
     let (core, _fake) = cockpit("nav-one-seam", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    cx.simulate_resize(gpui::size(px(1400.), px(700.)));
     tick(cx);
     let column = cx.debug_bounds("nav-column").expect("the column");
     let card = cx.debug_bounds("nav-card").expect("the card");

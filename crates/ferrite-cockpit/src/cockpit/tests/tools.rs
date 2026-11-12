@@ -229,7 +229,7 @@ fn maximize_covers_all_but_the_boards_least_and_restores(cx: &mut TestAppContext
     cx.simulate_click(door.center(), gpui::Modifiers::none());
     tick(cx);
     let wide = cx.debug_bounds("panel").unwrap().size.width;
-    assert_eq!(wide, px(1900. - NAV_WIDTH - DOCK_THREAD_MIN_W));
+    assert_eq!(wide, px(1900. - NAV_COLUMN_W - DOCK_THREAD_MIN_W));
     assert!(view.read_with(cx, |view, _| view.panel.surfaces.get(thread).unwrap().maximized));
     let door = cx.debug_bounds("panel-restore").unwrap();
     cx.simulate_click(door.center(), gpui::Modifiers::none());

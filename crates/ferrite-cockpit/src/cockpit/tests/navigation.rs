@@ -81,8 +81,8 @@ fn the_arrows_lead_the_head_and_step_on_a_click(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(
         cx.debug_bounds("history-back").map(|bounds| bounds.left()),
-        Some(back.left()),
-        "folded, the same spot"
+        Some(px(ferrite_ui::theme::HISTORY_X)),
+        "folded, beside the traffic lights"
     );
     let title = cx.debug_bounds("view-title").expect("the title");
     let forward = cx.debug_bounds("history-forward").unwrap();
