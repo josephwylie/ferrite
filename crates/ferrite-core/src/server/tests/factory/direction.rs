@@ -314,7 +314,11 @@ fn an_agent_decides_approval_with_its_instructions_and_a_rejection_reworks() {
         .unwrap();
     let builder = worker_of(&mut caller, &task);
     report(&harness, builder, "finished", "Added --fast");
+    // Its turn over as the Server sees it, so the rework back to it is a
+    // turn of its own: a prompt to an agent still mid-turn waits in the
+    // provider's queue, which this one never runs.
     turn_ends(&building);
+    caller.answer("w", "agent.wait", serde_json::json!({ "thread": builder }));
     let reviewing = harness
         .sessions
         .recv_timeout(Duration::from_secs(5))
@@ -329,6 +333,7 @@ fn an_agent_decides_approval_with_its_instructions_and_a_rejection_reworks() {
 
     report(&harness, reviewer, "rejected", "No test covers --fast");
     turn_ends(&reviewing);
+    caller.answer("w", "agent.wait", serde_json::json!({ "thread": reviewer }));
     let back = task_until(&mut caller, &task, |task| {
         task["worker"] == serde_json::json!(builder)
     });
