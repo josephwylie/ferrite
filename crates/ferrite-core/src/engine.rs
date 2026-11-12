@@ -122,6 +122,10 @@ pub struct SpawnRequest<'a> {
     /// What the Thread was started with beyond Ferrite's own
     /// (`thread.start`).
     pub launch: AgentLaunch<'a>,
+    /// Whose the Thread is when not the operator's: a Worker's and a
+    /// Coordinator's Session are offered their Factory tools
+    /// (`api::tools`).
+    pub owner: Option<&'a crate::ThreadOwner>,
 }
 
 /// What a Session starts with beyond Ferrite's own (`thread.start --args
@@ -1473,6 +1477,7 @@ impl Engine {
                     cwd.as_deref(),
                 ),
                 launch: thread.agent_launch(thread.provider),
+                owner: thread.owner.as_ref(),
             },
         );
         Some(spawned.map(|session| thread.begin_session(session)))
@@ -1687,6 +1692,7 @@ impl Engine {
                 Some(binding.cwd()),
             ),
             launch: launch_args::for_provider(first_args.as_ref(), provider),
+            owner: owner.as_ref(),
         }) {
             Ok(session) => session,
             // The bootstrap's failure contract: no Thread. The worktree, if
@@ -2036,6 +2042,7 @@ impl Engine {
                         cwd,
                     ),
                     launch: state.agent_launch(provider),
+                    owner: state.owner.as_ref(),
                 },
             );
             Some(started.map_err(ProvisionError::Spawn)?)
@@ -2642,6 +2649,7 @@ impl Engine {
                     Some(args) => launch_args::for_provider(Some(args), state.provider),
                     None => state.agent_launch(state.provider),
                 },
+                owner: state.owner.as_ref(),
             },
         )?;
         state.begin_session(session);

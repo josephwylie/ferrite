@@ -493,3 +493,78 @@ fn restart_with(harness: Harness, change: impl FnOnce(&Path)) -> Harness {
     change(&harness.dir);
     serve_in(harness.dir.clone(), None)
 }
+
+// ------------------------------- reports as the Thread's own tools (app #1)
+
+/// What a Factory tool call bound to `thread` answers, through the real
+/// Server.
+fn tool_call(
+    harness: &Harness,
+    thread: ThreadId,
+    owner: &crate::ThreadOwner,
+    tool: &str,
+    arguments: serde_json::Value,
+) -> (String, bool) {
+    let (told, said) = mpsc::channel();
+    harness
+        .tools
+        .for_thread(thread, owner)
+        .call(tool, &arguments, move |answer| {
+            told.send((answer.text, answer.is_error)).unwrap()
+        });
+    said.recv_timeout(Duration::from_secs(10)).unwrap()
+}
+
+/// A Worker reports through its own tool: the Task completes, and the
+/// report is the Worker's own whatever Worker it names.
+#[test]
+fn a_worker_reports_through_its_own_tool() {
+    let (harness, _project, repo) = factory_project("ix-report-tool");
+    let mut caller = call(&harness);
+    let (task, worker, _agent) = one_off(&harness, &mut caller, &repo, "Fix the login bug");
+    let owner = crate::ThreadOwner::Task(task.clone());
+    let (text, is_error) = tool_call(
+        &harness,
+        worker,
+        &owner,
+        "report_outcome",
+        serde_json::json!({ "outcome": "finished", "summary": "Fixed it", "worker": 999 }),
+    );
+    assert!(!is_error, "{text}");
+    assert_eq!(text, format!("Task {task} is completed."));
+    let done = task_until(&mut caller, &task, |task| task["status"] == "completed");
+    assert_eq!(done["result"], "Fixed it");
+}
+
+/// The Coordinator raises a proposal through its own tool, and a tool
+/// bound to a Thread that is no Coordinator is refused.
+#[test]
+fn a_coordinator_proposes_through_its_own_tool() {
+    let (harness, project, _repo) = factory_project("ix-propose-tool");
+    let (coordinator, _coordinating) = coordinator_of(&harness, &project);
+    let owner = crate::ThreadOwner::Factory(
+        serde_json::from_value(serde_json::json!(project.parse::<u64>().unwrap())).unwrap(),
+    );
+    let (text, is_error) = tool_call(
+        &harness,
+        coordinator,
+        &owner,
+        "proposal_raise",
+        serde_json::json!({ "act": "start", "instructions": "Fix the toolbar overflow" }),
+    );
+    assert!(!is_error, "{text}");
+    assert!(text.starts_with("Proposed."), "{text}");
+    let proposals = ok_call(&harness, "proposal.list", serde_json::json!({}));
+    assert_eq!(
+        proposals["proposals"][0]["status"], "pending",
+        "{proposals}"
+    );
+    let (text, is_error) = tool_call(
+        &harness,
+        ThreadId::new(999),
+        &owner,
+        "proposal_raise",
+        serde_json::json!({ "act": "start", "instructions": "x" }),
+    );
+    assert!(is_error && text.contains("not_a_coordinator"), "{text}");
+}

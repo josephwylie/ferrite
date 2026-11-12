@@ -135,6 +135,8 @@ pub struct CodexConfig {
     pub visuals: Option<crate::visual::Visuals>,
     /// Trusted browser capability bound to this Session's Thread.
     pub browser: Option<crate::browser::ThreadClient>,
+    /// A Worker's or Coordinator's Factory tools, bound to its Thread.
+    pub api_tools: Option<crate::api::tools::ThreadTools>,
     /// Ferrite's caller context for the agent (`api::caller_environment`):
     /// set over whatever the CLI inherited, after the Thread's own
     /// (`thread.start --env`).
@@ -164,6 +166,7 @@ impl Default for CodexConfig {
             resume: None,
             visuals: None,
             browser: None,
+            api_tools: None,
             env: Vec::new(),
             launcher: Vec::new(),
             args: Vec::new(),
@@ -378,6 +381,7 @@ impl CodexSession {
             config.resume.is_some(),
             config.visuals.clone(),
             config.browser.clone(),
+            config.api_tools.clone(),
         );
 
         let mut session = Self {
@@ -521,6 +525,11 @@ impl CodexSession {
         wire::offer_browser(
             &mut params,
             config.browser.as_ref(),
+            config.resume.is_none(),
+        );
+        wire::offer_api_tools(
+            &mut params,
+            config.api_tools.as_ref(),
             config.resume.is_none(),
         );
         // Capture the CLI's default independently of Ferrite's override;
@@ -981,6 +990,7 @@ fn read_stdout(
     resumed: bool,
     visuals: Option<crate::visual::Visuals>,
     browser: Option<crate::browser::ThreadClient>,
+    api_tools: Option<crate::api::tools::ThreadTools>,
 ) -> Receiver<Result<HandshakeStep, String>> {
     let (step_sender, steps) = sync_channel(2);
     thread::spawn(move || {
@@ -1110,6 +1120,7 @@ fn read_stdout(
             if let Ok(frame) = serde_json::from_str::<serde_json::Value>(text) {
                 if let Some(stdin) = stdin.upgrade() {
                     if wire::answer_browser(&frame, browser.as_ref(), Arc::clone(&stdin))
+                        || wire::answer_api_tool(&frame, api_tools.as_ref(), Arc::clone(&stdin))
                         || wire::answer_visual(&frame, visuals.as_ref(), stdin)
                     {
                         continue;

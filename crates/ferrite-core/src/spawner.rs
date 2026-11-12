@@ -75,6 +75,9 @@ pub struct Spawn {
     /// The Server's API socket, told to each agent (`FERRITE_SOCKET`) so it
     /// can drive other Threads (ADR 0027). `None` where there is no API.
     pub api: Option<PathBuf>,
+    /// Where an owned Thread's Factory tools are answered (`api::tools`).
+    /// `None`: they are not offered, and its agent reports by the CLI.
+    pub api_tools: Option<crate::api::tools::Tools>,
 }
 
 impl Spawn {
@@ -87,6 +90,7 @@ impl Spawn {
             renderer,
             browser: None,
             api: None,
+            api_tools: None,
         }
     }
 
@@ -387,8 +391,8 @@ impl Spawn {
             .map(|(name, value)| (name.clone(), value.into()))
             .chain(
                 crate::api::caller_environment(request.thread, self.api.as_deref())
-                .into_iter()
-                .map(|(name, value)| (name.to_string(), value)),
+                    .into_iter()
+                    .map(|(name, value)| (name.to_string(), value)),
             )
             .collect();
         let defaults = self
@@ -404,6 +408,11 @@ impl Spawn {
         // The newest installed copy of the CLI, wherever it is — not
         // whichever a bare name happens to hit on this launch's PATH.
         let program = crate::providers::discover::program(request.provider);
+        let api_tools = self
+            .api_tools
+            .as_ref()
+            .zip(request.owner)
+            .map(|(tools, owner)| tools.for_thread(request.thread, owner));
         match request.provider {
             Provider::Claude => SessionConfig::Claude(ClaudeConfig {
                 program: program.clone(),
@@ -426,6 +435,7 @@ impl Spawn {
                     .browser
                     .as_ref()
                     .map(|browser| browser.for_thread(request.thread)),
+                api_tools,
                 env,
                 launcher,
                 args,
@@ -454,6 +464,7 @@ impl Spawn {
                         .browser
                         .as_ref()
                         .map(|browser| browser.for_thread(request.thread)),
+                    api_tools,
                     env,
                     launcher,
                     args: launch.args,
@@ -557,6 +568,48 @@ mod tests {
     use super::*;
     use crate::providers::applied;
 
+    /// A Worker's and a Coordinator's Session are bound to their Factory
+    /// tools; an ordinary Thread's is offered none.
+    #[test]
+    fn an_owned_threads_session_gets_its_factory_tools() {
+        let (heard, _hear) = mpsc::channel();
+        let served = Spawn {
+            api_tools: Some(crate::api::tools::Tools::new(heard)),
+            ..Spawn::new(Arc::default(), None)
+        };
+        let worker = crate::ThreadOwner::Task("t-1".into());
+        let request = |provider, owner| SpawnRequest {
+            thread: ThreadId::new(12),
+            provider,
+            model: None,
+            effort: None,
+            resume: None,
+            resume_at: None,
+            permission_mode: None,
+            name: None,
+            cwd: None,
+            additional_directories: Vec::new(),
+            launch: Default::default(),
+            owner,
+        };
+        let SessionConfig::Claude(claude) = served.config(request(Provider::Claude, Some(&worker)))
+        else {
+            panic!("a Claude config");
+        };
+        assert!(claude
+            .api_tools
+            .is_some_and(|tools| tools.offers("report_outcome")));
+        let SessionConfig::Codex(codex) = served.config(request(Provider::Codex, Some(&worker)))
+        else {
+            panic!("a Codex config");
+        };
+        assert!(codex.api_tools.is_some());
+        let SessionConfig::Claude(ordinary) = served.config(request(Provider::Claude, None)) else {
+            panic!("a Claude config");
+        };
+        assert!(ordinary.api_tools.is_none());
+    }
+
     /// Every agent knows its own Thread; one the Server runs also knows
     /// how to reach the API, and with which binary (ADR 0027).
     #[test]
@@ -573,6 +626,7 @@ mod tests {
             cwd: None,
             additional_directories: Vec::new(),
             launch: Default::default(),
+            owner: None,
         };
         let served = Spawn {
             api: Some(PathBuf::from("/store/api.sock")),
@@ -621,6 +675,7 @@ mod tests {
                 env: &env,
                 launcher: &launcher,
             },
+            owner: None,
         };
         let SessionConfig::Claude(claude) = Spawn::new(Arc::default(), None).config(request) else {
             panic!("a Claude request makes a Claude config");

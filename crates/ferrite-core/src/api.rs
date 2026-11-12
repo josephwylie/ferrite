@@ -35,6 +35,7 @@ use crate::{Attention, ThreadId};
 
 pub mod cli;
 pub mod schema;
+pub mod tools;
 
 pub use schema::Method;
 

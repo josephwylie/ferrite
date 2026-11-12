@@ -60,6 +60,7 @@ pub struct Operation {
     /// The parameters the CLI takes without a flag, in order.
     pub positional: &'static [&'static str],
     pub summary: &'static str,
+    pub callers: Callers,
     /// The JSON Schema of its parameters.
     pub params: fn() -> schemars::Schema,
 }
@@ -88,6 +89,7 @@ macro_rules! operations {
                     name: $name,
                     positional: &[$($positional),*],
                     summary: $summary,
+                    callers: Callers::$callers,
                     params: || schemars::schema_for!($params),
                 },)*
             ];

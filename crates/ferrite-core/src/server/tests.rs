@@ -209,6 +209,8 @@ struct Harness {
     browser: crate::browser::Client,
     browser_disk: browser::DiskControl,
     installed: Installed,
+    /// The Factory tools a Session is bound to, on this Server's pump.
+    tools: crate::api::tools::Tools,
 }
 
 fn start(name: &str) -> Harness {
@@ -284,6 +286,8 @@ fn serve_configured(
     let (relaunches, relaunched) = mpsc::channel();
     let (browser, browser_requests) = crate::browser::channel();
     let (disk_ready, disk) = mpsc::channel();
+    let (heard, hear) = mpsc::channel();
+    let tools = crate::api::tools::Tools::new(heard.clone());
     let server = std::thread::spawn(move || {
         let store = Store::open(&store).unwrap();
         let reopen = launch_threads(&store);
@@ -303,7 +307,6 @@ fn serve_configured(
             Ok(())
         });
         configure(&mut server);
-        let (heard, hear) = mpsc::channel();
         crate::api::accept_all(api_listener, heard.clone()).unwrap();
         link::accept_all(listener, heard, tuning.lag_bytes).unwrap();
         server.serve(hear)
@@ -321,6 +324,7 @@ fn serve_configured(
         browser,
         browser_disk: disk.recv_timeout(Duration::from_secs(5)).unwrap(),
         installed,
+        tools,
     }
 }
 

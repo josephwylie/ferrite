@@ -1794,10 +1794,17 @@ const EVIDENCE: &str = "\"${FERRITE_BIN:-ferrite}\" report evidence";
 /// How a Worker asks the operator.
 const QUESTION: &str = "\"${FERRITE_BIN:-ferrite}\" report question";
 
+/// Reports go by the Worker's own tools (`api::tools`), which need no
+/// permission; the commands stay for a Session not offered them.
+const TOOLS: &str = "Report with Ferrite's own tools, which need no permission: \
+     `report_outcome` (`outcome`, `summary`), `report_question` (`text`), `report_revision` \
+     (`head`, `pr`) and `report_evidence` (`text`). Each command below is the same report; \
+     run the command only if those tools are not offered to you.";
+
 fn first_prompt(task: &Task) -> String {
     format!(
         "You are working on Ferrite Factory task {id}, in the task's own worktree on branch \
-         `{branch}`.\n\n{instructions}\n{pr}\nWhen you are done, report the outcome with one \
+         `{branch}`.\n\n{instructions}\n{pr}\n{TOOLS}\n\nWhen you are done, report the outcome with one \
          command:\n\n    {REPORT} finished \"<one line: what you did>\"\n\nIf you cannot \
          finish, report what you tried:\n\n    {REPORT} unable \"<what you tried and what \
          stopped you>\"\n\n{ASKING}\n\nThe outcome is read only from that command, never \
@@ -1826,6 +1833,10 @@ const ASKING: &str = "If you need the operator to decide something before you ca
 /// How the current run is to report: its outcome, or (deciding an
 /// approval) its decision.
 fn reporting(task: &Task, step: &Step) -> String {
+    format!("{TOOLS}\n\n{}", reporting_commands(task, step))
+}
+
+fn reporting_commands(task: &Task, step: &Step) -> String {
     if task.oversight.deciding {
         format!(
             "{}\nIf you cannot decide, report what stopped you and the operator decides:\n\n    \
@@ -1937,7 +1948,7 @@ fn answer_prompt(task: &Task, question: &str, answer: &str) -> String {
 fn reporting_now(task: &Task) -> String {
     match task.current_step() {
         Some(step) => reporting(task, step),
-        None => format!("{REPORTING}\n\n{ASKING}"),
+        None => format!("{TOOLS}\n\n{REPORTING}\n\n{ASKING}"),
     }
 }
 
