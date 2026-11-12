@@ -317,7 +317,11 @@ pub struct Board {
     pub trouble: Option<String>,
     /// Why one Project's part of the store could not be read or written:
     /// that Project's Factory waits, every other one runs.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        with = "troubles_as_list"
+    )]
     pub troubles: BTreeMap<ProjectId, String>,
     /// Every Project's archived Tasks, most recently archived last; none
     /// when a window is told only what changed and the Archive did not
@@ -385,6 +389,43 @@ impl Board {
 
     pub fn workflow(&self, id: &str) -> Option<&Workflow> {
         self.workflows.iter().find(|workflow| workflow.id == id)
+    }
+}
+
+/// `troubles` on the wire: `[{"project": 1, "trouble": "…"}]`. As a map
+/// its keys would go out as strings, which a Board inside a tagged
+/// `ServerMessage` cannot read back as Project ids.
+mod troubles_as_list {
+    use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use crate::workspace::registry::ProjectId;
+
+    #[derive(Serialize, Deserialize)]
+    struct Trouble<T> {
+        project: ProjectId,
+        trouble: T,
+    }
+
+    pub fn serialize<S: Serializer>(
+        troubles: &BTreeMap<ProjectId, String>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(troubles.iter().map(|(project, trouble)| Trouble {
+            project: *project,
+            trouble,
+        }))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<ProjectId, String>, D::Error> {
+        let troubles = Vec::<Trouble<String>>::deserialize(deserializer)?;
+        Ok(troubles
+            .into_iter()
+            .map(|each| (each.project, each.trouble))
+            .collect())
     }
 }
 
