@@ -362,26 +362,23 @@ fn two_decisions_head_the_list_and_no_toast(cx: &mut TestAppContext) {
 /// plus its hysteresis. cmd-B overrides it.
 #[gpui::test]
 fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
-    use ferrite_ui::theme::{NAV_AUTO_RAIL_BOARD_W, NAV_AUTO_RAIL_HYSTERESIS, NAV_WIDTH};
-    let (core, _fake) = cockpit("nav-auto-rail", 1);
+    use ferrite_ui::theme::{NAV_AUTO_FOLD_BOARD_W, NAV_AUTO_FOLD_HYSTERESIS, NAV_COLUMN_W};
+    let (core, _fake) = cockpit("nav-auto-fold", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hide_panel(&view, cx);
     let saved = view.read_with(cx, |view, _| view.prefs.settings.nav_collapsed);
     // A Solo Pane leaves no gutter at the window's edge (theme rule 2).
-    let threshold = NAV_WIDTH + NAV_AUTO_RAIL_BOARD_W;
+    let threshold = NAV_COLUMN_W + NAV_AUTO_FOLD_BOARD_W;
     cx.simulate_resize(gpui::size(px(720.), px(900.)));
     tick(cx);
     assert!(
-        view.read_with(cx, |view, _| view.nav_railed()),
+        view.read_with(cx, |view, _| view.nav_folded()),
         "720px folds"
     );
+    assert!(cx.debug_bounds("nav-column").is_none(), "the column is folded away");
     assert!(
-        (cx.debug_bounds("nav-column").unwrap().size.width - px(nav::FOLDED_WIDTH)).abs() < px(0.5),
-        "the column is folded to the rail"
-    );
-    assert!(
-        cx.debug_bounds("nav-rail-collapse").is_some(),
-        "the rail keeps the sidebar toggle at its top"
+        cx.debug_bounds("nav-edge-tab").is_some(),
+        "the edge tab stays to bring it back"
     );
     assert_eq!(
         view.read_with(cx, |view, _| (
@@ -391,24 +388,23 @@ fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
         (false, saved),
         "nothing is saved"
     );
-    // Just past the threshold, the hysteresis holds the rail.
     cx.simulate_resize(gpui::size(px(threshold + 1.), px(900.)));
     tick(cx);
-    assert!(view.read_with(cx, |view, _| view.nav_railed()), "held");
+    assert!(view.read_with(cx, |view, _| view.nav_folded()), "held");
     cx.simulate_resize(gpui::size(
-        px(threshold + NAV_AUTO_RAIL_HYSTERESIS + 1.),
+        px(threshold + NAV_AUTO_FOLD_HYSTERESIS + 1.),
         px(900.),
     ));
     tick(cx);
-    assert!(!view.read_with(cx, |view, _| view.nav_railed()), "restored");
+    assert!(!view.read_with(cx, |view, _| view.nav_folded()), "restored");
     // Narrow again; cmd-B holds the column open.
     cx.simulate_resize(gpui::size(px(720.), px(900.)));
     tick(cx);
-    assert!(view.read_with(cx, |view, _| view.nav_railed()));
+    assert!(view.read_with(cx, |view, _| view.nav_folded()));
     view.update(cx, |view, cx| view.toggle_nav_now(cx));
     tick(cx);
     assert!(
-        !view.read_with(cx, |view, _| view.nav_railed()),
+        !view.read_with(cx, |view, _| view.nav_folded()),
         "cmd-B wins"
     );
     assert_eq!(

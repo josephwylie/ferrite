@@ -20,11 +20,9 @@ pub mod settings;
 
 /// What the app draws and binds around the Cockpit.
 pub trait Frame: Send + Sync {
-    /// The titlebar strip over the board, from `board_left`. `draggable`
-    /// is false while an overlay may reach into the band.
-    fn titlebar(&self, board_left: f32, draggable: bool, maximized: bool) -> AnyElement;
-    /// The stretch the nav head drags the window by.
-    fn head_drag(&self, draggable: bool, maximized: bool) -> AnyElement;
+    /// The titlebar strip across the window's head row. `draggable` is
+    /// false while an overlay may reach into the band.
+    fn titlebar(&self, draggable: bool, maximized: bool) -> AnyElement;
     /// The Settings sheet over the Cockpit.
     fn settings(&self, sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> AnyElement;
     /// Bind `table` in place of the key table bound before (ADR 0024), and

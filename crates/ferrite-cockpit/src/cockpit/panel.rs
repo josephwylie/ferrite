@@ -161,9 +161,6 @@ fn floor_w(active: Option<&SurfaceId>, window: f32, nav: f32) -> f32 {
     }
 }
 
-/// The most the Panel takes in a window `window` wide beside a nav drawn
-/// `nav` wide (the column or the rail): all but the nav and the board's
-/// least, and never under `PANEL_W`.
 fn most_w(window: f32, nav: f32) -> f32 {
     use ferrite_ui::theme::*;
     (window - nav - DOCK_THREAD_MIN_W).max(PANEL_W)
@@ -787,20 +784,18 @@ mod tests {
         );
         let files = panel_w(&showing(SurfaceId::Files, 0.), window, nav);
         assert!((files - 0.6 * (window - NAV_WIDTH)).abs() < 1., "{files}");
-        let railed = panel_w(&showing(SurfaceId::Files, 0.), window, NAV_FOLDED_W);
-        assert!((railed - 0.6 * (window - NAV_FOLDED_W)).abs() < 1., "{railed}");
+        let folded = panel_w(&showing(SurfaceId::Files, 0.), window, 0.);
+        assert!((folded - 0.6 * window).abs() < 1., "{folded}");
         assert_eq!(panel_w(&showing(SurfaceId::Overview, 600.), window, nav), 600.);
     }
 
-    /// Maximized, or dragged past it, the board keeps its least beside the
-    /// nav as drawn: the column, or the rail.
     #[test]
     fn maximized_leaves_the_board_its_least() {
         let window = 1900.;
         let mut state = showing(SurfaceId::Overview, 0.);
         state.maximized = true;
         assert_eq!(panel_w(&state, window, NAV_WIDTH), window - NAV_WIDTH - DOCK_THREAD_MIN_W);
-        assert_eq!(panel_w(&state, 1440., NAV_FOLDED_W), 1440. - NAV_FOLDED_W - DOCK_THREAD_MIN_W);
+        assert_eq!(panel_w(&state, 1440., 0.), 1440. - DOCK_THREAD_MIN_W);
         state.maximized = false;
         state.width = 5000.;
         assert_eq!(panel_w(&state, window, NAV_WIDTH), window - NAV_WIDTH - DOCK_THREAD_MIN_W);

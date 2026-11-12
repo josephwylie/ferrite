@@ -39,25 +39,18 @@ use ferrite_ui::icons::{self, icon};
 use ferrite_ui::pointer::{Pointer, PointerPressed};
 use ferrite_ui::theme::*;
 
-/// The head row's drag strip over the board, as an overlay: the cards
-/// start at `board_top`, so this adds no layout and paints nothing — it
-/// claims what the window already left empty, from `board_left`, whose
-/// plane the board column lies on. Over the
-/// nav, the nav's own head drags the window (`nav::head`, its stretch
-/// `head_drag`) around its sidebar toggle.
-///
 /// It is the window's titlebar and no more: the strip the window drags by
 /// and, on Windows, the caption buttons at its right end.
 ///
 /// `draggable` is false while a menu, popover or the settings panel is
 /// open. Such an overlay can reach into the band, and the drag would take
 /// the press meant for the row under the pointer.
-pub fn strip(board_left: f32, draggable: bool, maximized: bool) -> Div {
+pub fn strip(draggable: bool, maximized: bool) -> Div {
     let stretch = head_drag(draggable, maximized);
     div()
         .absolute()
         .top_0()
-        .left(px(board_left))
+        .left_0()
         .right_0()
         .h(px(WIN_CHROME_H))
         .flex()
@@ -66,10 +59,7 @@ pub fn strip(board_left: f32, draggable: bool, maximized: bool) -> Div {
         .children(CUSTOM.then(|| caption_buttons(maximized)))
 }
 
-/// The nav head's empty stretch (SPEC §5.1.1): what the window drags by
-/// over the nav, the traffic lights over it on macOS — the platform's
-/// stretch, as `strip` lays it over the board. `draggable` is `strip`'s.
-pub fn head_drag(draggable: bool, maximized: bool) -> Div {
+fn head_drag(draggable: bool, maximized: bool) -> Div {
     if !draggable {
         div().flex_1().h_full()
     } else if CUSTOM {
@@ -249,7 +239,7 @@ mod tests {
     fn the_strip_is_an_overlay_of_the_band(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             ferrite_pane::pane::init_components(cx);
-            let mut strip = strip(ferrite_ui::theme::NAV_WIDTH, true, false);
+            let mut strip = strip(true, false);
             assert_eq!(strip.style().size.height, Some(px(WIN_CHROME_H).into()));
             assert_eq!(strip.style().position, Some(gpui::Position::Absolute));
         });

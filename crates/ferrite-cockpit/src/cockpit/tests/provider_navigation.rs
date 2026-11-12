@@ -167,11 +167,8 @@ fn contract_native_discovery_dismissal_does_not_reopen_picker(cx: &mut TestAppCo
     });
 }
 
-/// Folded (cmd-B), the column is the rail and the board takes the width;
-/// the rail keeps the sidebar toggle at its top, under the head row
-/// (§5.1.7), and ⌘B opens the column again.
 #[gpui::test]
-fn a_folded_nav_keeps_its_toggle_at_the_rails_top(cx: &mut TestAppContext) {
+fn a_folded_nav_leaves_only_its_edge_tab(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("folded-nav-doors", 3);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -182,25 +179,15 @@ fn a_folded_nav_keeps_its_toggle_at_the_rails_top(cx: &mut TestAppContext) {
 
     let first = view.read_with(cx, |view, _| view.nav_state().open_rows().next().unwrap().thread);
     let row: &'static str = format!("nav-thread-{}", first.get()).leak();
-    assert!(
-        cx.debug_bounds(row).is_none(),
-        "folded, the column draws no tree rows: it is the rail"
-    );
-    assert!(
-        (cx.debug_bounds("nav-column").unwrap().size.width - px(nav::FOLDED_WIDTH)).abs() < px(0.5)
-    );
-    let toggle = bounds(cx, "nav-rail-collapse".to_string());
-    assert!(toggle.top() >= px(ferrite_ui::theme::WIN_CHROME_H) - px(0.5));
-    assert!(toggle.right() <= px(nav::FOLDED_WIDTH));
-    assert_eq!(toggle.size.width, px(ferrite_ui::theme::ICON_BUTTON));
-    assert!(
-        cx.debug_bounds("nav-collapse").is_none(),
-        "the bar no longer carries it"
-    );
+    assert!(cx.debug_bounds(row).is_none(), "folded, no rows");
+    assert!(cx.debug_bounds("nav-column").is_none(), "no column");
+    let tab = bounds(cx, "nav-edge-tab".to_string());
+    assert_eq!(tab.left(), px(0.), "at the window's edge");
+    assert!(tab.top() >= px(ferrite_ui::theme::WIN_CHROME_H), "under the head row");
 
     cx.simulate_keystrokes("cmd-b");
     tick(cx);
-    assert!(!view.read_with(cx, |view, _| view.nav_railed()));
+    assert!(!view.read_with(cx, |view, _| view.nav_folded()));
     assert!(
         cx.debug_bounds(row).is_some(),
         "open again, the rows are back"

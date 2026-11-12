@@ -511,7 +511,7 @@ fn the_solo_card_sits_on_the_frame(cx: &mut TestAppContext) {
     tick(cx);
     let rects = cx.update(|window, cx| view.read(cx).pane_rects(window));
     let card = rects[0].1;
-    assert_eq!((card.x, card.y), (nav::WIDTH, WIN_CHROME_H));
+    assert_eq!((card.x, card.y), (nav::COLUMN_WIDTH, WIN_CHROME_H));
     assert_eq!(card.x + card.w, 1600. - PANEL_W);
     assert_eq!(card.y + card.h, 960., "no gutter under it");
     let panel = cx.debug_bounds("panel").expect("the panel");
@@ -547,7 +547,7 @@ fn a_group_is_cards_an_eight_pixel_gutter_apart(cx: &mut TestAppContext) {
     let [tl, tr, bl, br] = rects[..] else {
         panic!("four cards: {rects:?}")
     };
-    assert!(near(tl.x, nav::WIDTH) && near(tl.y, WIN_CHROME_H), "{tl:?}");
+    assert!(near(tl.x, nav::COLUMN_WIDTH) && near(tl.y, WIN_CHROME_H), "{tl:?}");
     assert!(near(tr.x - (tl.x + tl.w), GRID_GAP), "{tl:?} {tr:?}");
     assert!(near(bl.y - (tl.y + tl.h), GRID_GAP), "{tl:?} {bl:?}");
     // The focused Pane's panel stands right of the board (SPEC §5.6).

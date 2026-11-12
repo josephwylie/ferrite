@@ -135,20 +135,10 @@ impl CockpitView {
         self.mount_part(Part::Pane(identity), frame, cx)
     }
 
-    /// The nav's rows at the column's content width: their cached part, or
-    /// the rows themselves without parts, drawn from `state` (built once,
-    /// shared with the rail).
-    pub(super) fn nav_rows(
-        &self,
-        state: &std::cell::OnceCell<nav::NavState>,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    pub(super) fn nav_rows(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         if !self.parts.borrow().on {
-            let state = state.get_or_init(|| self.nav_state());
-            return self.nav_content(state, window, cx);
+            return self.nav_content(&self.nav_state(), window, cx);
         }
-        // The box `nav::content` has in the column.
         let frame = div().flex_shrink_0().h_full().w(px(nav::WIDTH));
         self.mount_part(Part::Nav, frame, cx)
     }

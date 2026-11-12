@@ -27,9 +27,6 @@ pub(crate) enum NavFace {
 pub(crate) type NavMotion = flip::Motion<NavKey, NavFace>;
 
 impl CockpitView {
-    /// The nav's content at its own width (`nav::content`): the head in the
-    /// head row, the search row, the list — or, while the field holds
-    /// text, its results — with its fades and scrollbar, and the foot.
     pub(super) fn nav_content(
         &self,
         state: &nav::NavState,
@@ -46,10 +43,7 @@ impl CockpitView {
         };
         let list = self.sweep_release(list, cx);
         nav::content()
-            .child(nav::head(
-                crate::frame().head_drag(!self.overlay_open(), self.maximized),
-                self.nav_toggle(false, cx),
-            ))
+            .child(nav::head(self.history_arrows(cx)))
             .child(self.search_row(window, cx))
             // Over the list, outside its keys: the field's ⏎ and Esc are its own.
             .children(self.snooze_field())

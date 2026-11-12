@@ -417,14 +417,15 @@ fn grain_tile() -> Arc<RenderImage> {
     Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]))
 }
 
-/// The grain over the whole column, tiled from its top left; it does not
-/// move with the list.
-pub fn grain() -> impl IntoElement {
+/// Rounds its own corners to `radius`: gpui's content mask is a plain
+/// rectangle, so an image paints past a rounded clip's corners.
+pub fn grain(radius: f32) -> impl IntoElement {
     gpui::canvas(
         |_, _, _| {},
-        |bounds, _, window, _| {
+        move |bounds, _, window, _| {
             let tile = GRAIN.with(Arc::clone);
             let side = px(NAV_GRAIN_TILE);
+            let r = px(radius);
             let mut y = bounds.top();
             while y < bounds.bottom() {
                 let mut x = bounds.left();
@@ -433,7 +434,17 @@ pub fn grain() -> impl IntoElement {
                         origin: gpui::point(x, y),
                         size: gpui::size(side, side),
                     };
-                    let _ = window.paint_image(at, at, Default::default(), tile.clone(), 0, false);
+                    let shown = at.intersect(&bounds);
+                    let (left, right) = (shown.left() == bounds.left(), shown.right() == bounds.right());
+                    let (top, bottom) = (shown.top() == bounds.top(), shown.bottom() == bounds.bottom());
+                    let corner = |on: bool| if on { r } else { px(0.) };
+                    let radii = gpui::Corners {
+                        top_left: corner(top && left),
+                        top_right: corner(top && right),
+                        bottom_right: corner(bottom && right),
+                        bottom_left: corner(bottom && left),
+                    };
+                    let _ = window.paint_image(shown, at, radii, tile.clone(), 0, false);
                     x += side;
                 }
                 y += side;

@@ -63,16 +63,13 @@ fn the_arrows_lead_the_head_and_step_on_a_click(cx: &mut TestAppContext) {
         .debug_bounds("history-forward")
         .expect("the forward arrow");
     let title = cx.debug_bounds("view-title").expect("the title");
-    let toggle = cx
-        .debug_bounds("nav-collapse")
-        .expect("the sidebar's toggle");
-    assert_eq!(back.left(), px(ferrite_ui::theme::HISTORY_X));
+    let card = cx.debug_bounds("nav-card").expect("the nav's card");
     assert!(
-        forward.right() < toggle.left(),
-        "in the sidebar head, before its toggle"
+        card.contains(&back.center()) && card.contains(&forward.center()),
+        "open, the arrows head the nav's card"
     );
+    assert!(back.top() >= px(ferrite_ui::theme::WIN_CHROME_H));
     assert!(back.right() < title.left(), "the arrows come first");
-    assert!(back.bottom() <= px(ferrite_ui::theme::WIN_CHROME_H));
     cx.simulate_click(back.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(shown(&view, cx), Some(first));
@@ -84,8 +81,8 @@ fn the_arrows_lead_the_head_and_step_on_a_click(cx: &mut TestAppContext) {
     tick(cx);
     assert_eq!(
         cx.debug_bounds("history-back").map(|bounds| bounds.left()),
-        Some(back.left()),
-        "folded, the same spot"
+        Some(px(ferrite_ui::theme::HISTORY_X)),
+        "folded, beside the traffic lights"
     );
     let title = cx.debug_bounds("view-title").expect("the title");
     let forward = cx.debug_bounds("history-forward").unwrap();

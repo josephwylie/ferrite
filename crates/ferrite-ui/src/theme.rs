@@ -238,15 +238,8 @@ impl From<Paint> for gpui::Fill {
 /// transcript's ground, and the chrome around it (`FRAME`) alike. Regions
 /// are divided by `LINE` hairlines, never by a second grey.
 pub const CARD: u32 = 0x1a1a1a;
-/// The frame — the nav, the heads, the right panel, a Group's gutter, the
-/// bottom bar: the plane itself (rule 2).
 pub const FRAME: u32 = CARD;
-/// `#272727` — the sidebar (the nav column): lighter than the plane, as
-/// The nav column's ground (ADR 0040, T3's `--sidebar`): black, under
-/// T3's 3.5% grain (`NAV_GRAIN_OPACITY`), so the column reads as its own
-/// region below the transcript's plane. Its rows wear alpha fills over it
-/// (`NAV_CARD_HOVER`, `NAV_CARD_ACTIVE`, `NAV_CARD_SELECTED`).
-pub const SIDEBAR: u32 = 0x000000;
+pub const SIDEBAR: u32 = FRAME;
 /// The standing choice's `✓` in a menu: Claude's check blue
 /// (claude/model-menu.png x1266–1280, y744–755) — the owner's call, the one
 /// hue in a menu that is not state (rule 6).
@@ -366,8 +359,7 @@ pub mod paint {
     pub const FRAME: Paint = Paint::solid(super::FRAME);
     /// The right panel: the frame's grey.
     pub const PANEL: Paint = FRAME;
-    /// The nav column and its rows (`super::SIDEBAR`).
-    pub const SIDEBAR: Paint = Paint::solid(super::SIDEBAR);
+    pub const SIDEBAR: Paint = PANEL;
     pub const CHIP_OPEN: Paint = Paint(super::CHIP_OPEN);
     pub const ENV_STRIP: Paint = Paint::solid(super::ENV_STRIP);
     /// A diff's or a code fence's box, on a reading surface (the card, the
@@ -917,11 +909,8 @@ pub const R_TIGHT: f32 = 2.0;
 
 // --------------------------------------------------------- shell and board
 
-/// 256px — the navigation column (SPEC §5.1); folded it is the rail.
-/// `CockpitView::cell()` subtracts whichever is live, so the nav stays part
-/// of the semantic-zoom input. Off the space scale: Claude's sidebar
-/// (geometry.md "Sidebar width").
 pub const NAV_WIDTH: f32 = 256.0;
+pub const NAV_COLUMN_W: f32 = NAV_WIDTH + 2.0 * NAV_INSET;
 /// 44px — the head row (SPEC §4), ADR 0014's titlebar grown into the row
 /// that holds the traffic lights over the nav, the view head over the board
 /// and the panel's tabs over the panel. The host traffic lights centre here
@@ -963,7 +952,7 @@ pub const HEAD_CHEVRON_GAP: f32 = 4.0;
 pub const HEAD_ENV_GROUND: u32 = 0x8cb9f41f;
 /// The history arrows (Claude's `‹ ›`, claude/answer-done.png x 126 and
 /// 153), at `HISTORY_X` in the head row: `ICON_BUTTON` doors edge to edge, a 28pt pitch, the glyph
-/// `NAV_TOGGLE_GLYPH`. At an end the arrow is disabled in `INK_SUBTLE`:
+/// `ICON_BUTTON_GLYPH`. At an end the arrow is disabled in `INK_SUBTLE`:
 /// Claude's disabled arrow is 0.6 of its live one (#7a777a by #ccc9cb), as
 /// `INK_SUBTLE` is of the doors' `INK_STRONG`.
 pub const HISTORY_ARROW_DISABLED_INK: u32 = INK_SUBTLE;
@@ -980,9 +969,6 @@ pub const TRAFFIC_X: f32 = 13.0;
 pub const TRAFFIC_Y: f32 = (WIN_CHROME_H - 14.0) / 2.0;
 /// The traffic-light group's width: three 14px buttons 6 apart.
 pub const TRAFFIC_W: f32 = 3.0 * 14.0 + 2.0 * 6.0;
-/// The history arrows' left edge, from the window's: `SPACE_2` past the
-/// traffic lights, where Claude and Codex keep theirs — the sidebar head's
-/// empty left slot while it is open, the same spot over the rail folded.
 pub const HISTORY_X: f32 = TRAFFIC_X + TRAFFIC_W + SPACE_2;
 /// The Pane board: 8px gap on both axes, 10px padding on all four sides.
 /// (The prototype's own render reserves 58px at the bottom for its
@@ -1080,18 +1066,10 @@ pub const KEY_CAP_SOFT_GROUND: u32 = 0xffffff12;
 /// The outline key cap (T3's `Kbd variant="outline"`, `border-foreground/15`):
 /// the Composer's `⇥ Tab` after a predicted follow-up.
 pub const KEY_CAP_OUTLINE_EDGE: u32 = 0xffffff26;
-/// The Panel while its Preview tab shows (SPEC §5.6.3): `PANEL_PREVIEW_SHARE`
-/// of the window, held between `PANEL_PREVIEW_MIN_W` and
-/// `PANEL_PREVIEW_MAX_W` — wide enough to read code at its own size — and
-/// never so wide that the board beside it and the full nav column is
-/// narrower than `PANEL_PREVIEW_BOARD_MIN`: what the nav's auto-rail asks
-/// of the board (rule 2.7.7), so opening a preview never folds the nav and
-/// the Pane beside it stays a readable Pane. Never narrower than the Panel
-/// itself (`PANEL_W`): a narrow window previews at the Panel's width.
 pub const PANEL_PREVIEW_SHARE: f32 = 0.42;
 pub const PANEL_PREVIEW_MIN_W: f32 = 420.0;
 pub const PANEL_PREVIEW_MAX_W: f32 = 820.0;
-pub const PANEL_PREVIEW_BOARD_MIN: f32 = NAV_AUTO_RAIL_BOARD_W + NAV_AUTO_RAIL_HYSTERESIS;
+pub const PANEL_PREVIEW_BOARD_MIN: f32 = NAV_AUTO_FOLD_BOARD_W + NAV_AUTO_FOLD_HYSTERESIS;
 /// A panel row's 14px icon on the content edge (x 0), its text at x 30,
 /// Claude's (`geometry.md`: icon x1619, text x1647 off a 1617 edge). A file
 /// block's head is a two-line row (48), its icon at y 9, the whole row
@@ -1380,13 +1358,6 @@ pub fn init_components(cx: &mut gpui::App) {
     // (Button::primary, menu rows, tooltips, checkboxes) would paint the
     // kit's neutrals. Rebuild them from the colours above.
     theme.tokens = gpui::component::ThemeTokens::from(&theme.colors);
-    // A toast is the rail's voice only (C8): with the nav open its rows'
-    // marks are the queue, so the Needs-you toast draws only while the nav
-    // is railed (`cockpit::toast_float`) and its Thread is off the board
-    // (the ring's `in_view`); its sound and system notification ring either
-    // way. Every toast, the kit's and the Needs-you one, stands TopRight
-    // (`TOAST_*`), clear of the Composer the operator types in, one at a
-    // time; the Inbox holds the rest.
     theme.notification.placement = gpui::Anchor::TopRight;
     theme.notification.margins = gpui::base::Edges {
         top: px(WIN_CHROME_H + PANE_HEAD_H + TOAST_TOP),
@@ -3200,45 +3171,19 @@ pub const SUBAGENT_NAME_GAP: f32 = SPACE_2;
 // Owner: WP-G (nav.rs and its cockpit wiring.)
 // Edit values and append tokens only inside this section.
 //
-// **The nav is a list on the frame** (SPEC §5.1, `mockups/solo.png`). The
-// column is `paint::FRAME` from the window's top, `NAV_COL_PAD` in on its
-// sides and foot, with no seam: the card beside it does the separating.
-// Top to bottom:
-//
-//   head      ● ● ●                       [▯]      46, in the head row
-//   views     ⌕  Search                    ⌘K      30 each, then 14
-//             ⊡  Needs you                 (3)
-//             ▤  Parked                     3
-//   heading   Projects                      +      26
-//   project   ▭  agenticos                ↑715     30
-//   thread    ⠹  Ferrite idle memory   +4 −1      44, two lines
-//                scheduled-work-crash · 5m22s
-//   group        › WORK              1 failed · 4  30
-//   foot      Ferrite 0.5                   ⚙      36
-//
-// Chrome is SF Pro; numbers from the terminal world (diffstats, spinners)
-// are Geist Mono. Rows are rounded (`R_CONTROL`), wear `paint::RAISED`
-// under the pointer (at once, as Claude's rows do) and `paint::SELECTED` with an
-// inset `LINE` ring when they stand for what the board shows. Colour is
-// state only: the mark (§6), a blocked or failed row's line 2, a Group's
-// roll-up word, the needs-you pill.
-//
 // **Titles truncate against a definite width.** gpui only measures an
 // ellipsis against a width it knows on the line's first measure, so every
 // truncating box is pinned to what its row leaves it, measured from the
 // face's own advances (`nav::Measure`).
-//
-// **Folding (cmd-B).** The column snaps between `NAV_WIDTH` and the rail
-// (`NAV_FOLDED_W`), as Claude's sidebar does: no ride, no fade, no
-// per-frame relayout of the board. The rail is one `NAV_RAIL_CELL` per
-// open Thread, its mark and its ⌘ digit.
 
-/// 8px — the column's padding at its sides and foot (`padding: 0 8 8`).
+pub const NAV_INSET: f32 = SPACE_3;
+pub const NAV_INSET_Y: f32 = 40.0;
+pub const NAV_R: f32 = 18.0;
 pub const NAV_COL_PAD: f32 = SPACE_2;
-/// 10px · 4px — the head row's padding inside the column, left and right:
-/// the traffic lights' spacer, then the sidebar toggle.
-pub const NAV_HEAD_PAD_L: f32 = 10.0;
-pub const NAV_HEAD_PAD_R: f32 = SPACE_1;
+pub const NAV_EDGE_TAB_W: f32 = 14.0;
+pub const NAV_EDGE_TAB_H: f32 = 44.0;
+pub const NAV_EDGE_TAB_R: f32 = 8.0;
+pub const NAV_EDGE_TAB_GLYPH: f32 = 12.0;
 /// 10px — every row's inline padding inside the column; the icons and the
 /// labels of views, headings and Projects start here.
 pub const NAV_ROW_PAD_X: f32 = 10.0;
@@ -3265,9 +3210,6 @@ pub const NAV_HEADING_H: f32 = 26.0;
 pub const NAV_HEADING_PAD_R: f32 = SPACE_1_5;
 pub const NAV_HEADING_BUTTON: f32 = 22.0;
 pub const NAV_HEADING_GLYPH: f32 = 14.0;
-/// 16px — the sidebar toggle's and the gear's glyph, in an `ICON_BUTTON`;
-/// the panel toggle, the sidebar toggle's twin, shares it.
-pub const NAV_TOGGLE_GLYPH: f32 = 16.0;
 /// 35px — where an Inbox Notice's title starts, past its mark column
 /// (`NAV_ROW_PAD_X` + `NAV_ICON` + `NAV_ICON_GAP`, on the view rows'
 /// labels); a Notice's mark sits in the 10–24 column before it. Rows under
@@ -3334,31 +3276,13 @@ pub const NAV_FOOT_PAD_T: f32 = SPACE_2;
 /// Group", "append after the last member"): an absolute hit band over the
 /// edge of the row it borders.
 pub const NAV_DROP_BAND: f32 = SPACE_1;
-/// 52px — the column folded by cmd-B: the rail. One `NAV_RAIL_CELL` per
-/// open Thread, holding its mark and, under it, its ⌘ digit in 11
-/// `INK_SUBTLE`.
-pub const NAV_FOLDED_W: f32 = 52.0;
-pub const NAV_RAIL_CELL: f32 = 32.0;
-pub const NAV_RAIL_KEY_FS: f32 = 12.0;
-/// The nav's scrollbar is the overlay every scroller has, laid in the
-/// column's right padding (`NAV_COL_PAD`) rather than over the rows, so it
-/// never covers a row's count or cuts its fill: an 8px hit strip with the
-/// thumb `NAV_SCROLLBAR_INSET` from the column's edge. It shows while
-/// scrolling and while the pointer is over the nav, then lingers and fades
-/// as every thumb does (`MOTION_SCROLLBAR_LINGER_MS`).
 pub const NAV_SCROLLBAR_GUTTER: f32 = NAV_COL_PAD;
 /// 1px — off the space scale because the 6px hovered thumb must fit the
 /// 8px padding with even air on both sides: 1 + 6 + 1.
 pub const NAV_SCROLLBAR_INSET: f32 = 1.0;
 const _: () = assert!(NAV_SCROLLBAR_GUTTER == 2. * NAV_SCROLLBAR_INSET + SCROLLBAR_THUMB_W_HOVER);
-/// Narrow windows fold the nav (rule 2.7.7) — shown, never saved — once the
-/// board beside the full column would be narrower than this, or a board
-/// cell narrower than the L2 floor (`INSTRUMENTS_WIDTH`). It unfolds only
-/// once the window clears the threshold by `NAV_AUTO_RAIL_HYSTERESIS`, so a
-/// resize at the edge never flickers it. cmd-B still overrides it either
-/// way.
-pub const NAV_AUTO_RAIL_BOARD_W: f32 = 560.0;
-pub const NAV_AUTO_RAIL_HYSTERESIS: f32 = 24.0;
+pub const NAV_AUTO_FOLD_BOARD_W: f32 = 560.0;
+pub const NAV_AUTO_FOLD_HYSTERESIS: f32 = 24.0;
 
 // **The Thread card** (`nav::card`, T3 Code's `SidebarThreadRow`,
 // docs/design/t3-reference/sidebar.md §3). Three lines in a fixed 78px
@@ -4126,9 +4050,7 @@ mod tests {
         assert_eq!(paint::WINDOW, paint::CARD);
         assert_eq!(paint::PANEL, paint::FRAME);
         assert_eq!(FRAME, CARD, "one plane");
-        // The sidebar sits below the plane, black; its rows step up from
-        // it in alpha fills, the shown one over the hovered.
-        assert!(SIDEBAR < CARD);
+        assert_eq!(paint::SIDEBAR, paint::PANEL);
         assert!(over(NAV_CARD_HOVER, SIDEBAR) < over(NAV_CARD_ACTIVE, SIDEBAR));
         assert_eq!(paint::PRESS, paint::SELECTION_HOVER);
         // Hover is one equal step on every ground (rule 3).
@@ -4188,7 +4110,6 @@ mod tests {
             FS_PANEL_DIFF,
             FS_CHROME_CODE,
             FS_HOME_TITLE,
-            NAV_RAIL_KEY_FS,
         ] {
             assert!(TYPE_SCALE.contains(&size), "{size} is off the scale");
         }

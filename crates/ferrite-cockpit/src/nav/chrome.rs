@@ -104,7 +104,7 @@ pub fn search_clear() -> Stateful<Div> {
 
 /// A head button: 28px, radius 6, a 16px glyph.
 pub fn head_button(key: &'static str, glyph: &'static str) -> Stateful<Div> {
-    icon_button(key, glyph, NAV_TOGGLE_GLYPH, NAV_HEAD_BUTTON, R_CONTROL)
+    icon_button(key, glyph, ICON_BUTTON_GLYPH, NAV_HEAD_BUTTON, R_CONTROL)
 }
 
 /// The Filter button: the scoped Project's badge, else the filter glyph.
@@ -216,7 +216,7 @@ pub fn foot(buttons: Vec<AnyElement>, notice: Option<AnyElement>, end: Vec<AnyEl
 
 /// A foot button: 32px, radius 8, a 16px glyph.
 pub fn foot_button(key: &'static str, glyph: &'static str) -> Stateful<Div> {
-    icon_button(key, glyph, NAV_TOGGLE_GLYPH, NAV_FOOT_BUTTON, NAV_FOOT_BUTTON_R)
+    icon_button(key, glyph, ICON_BUTTON_GLYPH, NAV_FOOT_BUTTON, NAV_FOOT_BUTTON_R)
 }
 
 /// The undo notice (T3's `SidebarThreadUndoNotice`): `Parked, Undo ⌘Z` at

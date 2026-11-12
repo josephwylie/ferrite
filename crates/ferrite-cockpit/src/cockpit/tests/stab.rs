@@ -791,21 +791,14 @@ fn the_titlebar_remains_draggable_across_the_window(cx: &mut TestAppContext) {
             "the cards start under the head row"
         );
         if ferrite_ui::frame::CUSTOM || cfg!(target_os = "macos") {
-            // Open, the nav's head drags the window over the nav; folded,
-            // the rail's head row is the traffic lights'.
-            if !view.read_with(cx, |view, _| view.nav_railed()) {
-                let head = cx
-                    .debug_bounds("nav-head-drag")
-                    .expect("the nav head's stretch");
-                assert!(
-                    head.top() == px(0.) && head.right() > px(ferrite_ui::theme::NAV_HEAD_PAD_L),
-                    "the band over the nav drags: {head:?}"
-                );
-            }
             let drag = cx.debug_bounds("titlebar-drag").expect("the drag region");
             assert!(
                 drag.contains(&gpui::point(px(600.), px(16.))),
                 "the middle of the window's top must drag: {drag:?}"
+            );
+            assert!(
+                drag.contains(&gpui::point(px(120.), px(16.))),
+                "the band over the nav drags: {drag:?}"
             );
             if cfg!(target_os = "macos") {
                 let moves = cx.window_move_requests();
@@ -1062,7 +1055,7 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
     // The surfaces chrome inherits its face from.
     let ui = |mut div: gpui::Div| div.style().text.font_family.clone();
     for (what, family) in [
-        ("nav", ui(crate::nav::shell(crate::nav::WIDTH))),
+        ("nav", ui(crate::nav::card(gpui::div()))),
         (
             "menu row",
             ui(ferrite_ui::components::menu_row_content(

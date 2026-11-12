@@ -229,7 +229,7 @@ fn maximize_covers_all_but_the_boards_least_and_restores(cx: &mut TestAppContext
     cx.simulate_click(door.center(), gpui::Modifiers::none());
     tick(cx);
     let wide = cx.debug_bounds("panel").unwrap().size.width;
-    assert_eq!(wide, px(1900. - NAV_WIDTH - DOCK_THREAD_MIN_W));
+    assert_eq!(wide, px(1900. - NAV_COLUMN_W - DOCK_THREAD_MIN_W));
     assert!(view.read_with(cx, |view, _| view.panel.surfaces.get(thread).unwrap().maximized));
     let door = cx.debug_bounds("panel-restore").unwrap();
     cx.simulate_click(door.center(), gpui::Modifiers::none());
@@ -237,24 +237,21 @@ fn maximize_covers_all_but_the_boards_least_and_restores(cx: &mut TestAppContext
     assert_eq!(cx.debug_bounds("panel").unwrap().size.width, rest, "restored");
 }
 
-/// At a laptop's 1440, with the nav drawn as the rail, maximize takes all
-/// but the board's least of the content area beside the rail, not beside
-/// the full column the rail no longer draws.
 #[gpui::test]
-fn maximize_beside_the_rail_takes_the_rails_room(cx: &mut TestAppContext) {
+fn maximize_with_the_nav_folded_takes_its_room(cx: &mut TestAppContext) {
     let (core, _fake, _checkout) = bound_cockpit("surfaces-maximize-rail", Provider::Claude);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     view.update(cx, |view, _| view.nav_collapsed = true);
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
-    assert!(cx.debug_bounds("nav-rail").is_some(), "the nav draws as the rail");
+    assert!(cx.debug_bounds("nav-card").is_none(), "the nav is folded");
     let rest = cx.debug_bounds("panel").unwrap().size.width;
     let door = cx.debug_bounds("panel-maximize").expect("in the head row");
     cx.simulate_click(door.center(), gpui::Modifiers::none());
     tick(cx);
     let wide = cx.debug_bounds("panel").unwrap().size.width;
     assert!(wide > rest, "maximize widens the Panel: {wide:?} vs {rest:?}");
-    assert_eq!(wide, px(1440. - NAV_FOLDED_W - DOCK_THREAD_MIN_W));
+    assert_eq!(wide, px(1440. - DOCK_THREAD_MIN_W));
     assert!(cx.debug_bounds("panel-maximize").is_none(), "the door now restores");
     assert!(cx.debug_bounds("panel-restore").is_some());
 }
@@ -315,11 +312,9 @@ fn the_tabs_survive_a_restart(cx: &mut TestAppContext) {
     assert_eq!(tabs, [SurfaceId::Overview, SurfaceId::Changes, SurfaceId::Background]);
     assert_eq!(active, Some(SurfaceId::Changes));
     assert!(cx.debug_bounds("changes").is_some(), "its body, read again");
-    // Maximized, the board beside the full column falls under its least:
-    // the nav rails, and the Panel takes the rail's room.
-    assert!(cx.debug_bounds("nav-rail").is_some());
+    assert!(cx.debug_bounds("nav-card").is_none());
     let width = cx.debug_bounds("panel").unwrap().size.width;
-    assert_eq!(width, px(1900. - NAV_FOLDED_W - DOCK_THREAD_MIN_W), "maximized");
+    assert_eq!(width, px(1900. - DOCK_THREAD_MIN_W), "maximized");
 }
 
 /// On overflow a chevron stands at the end with more to show, and scrolls

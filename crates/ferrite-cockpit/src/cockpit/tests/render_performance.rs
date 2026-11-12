@@ -1523,18 +1523,10 @@ fn working_and_unread_panes_cost_at_most_one_pulse_tick_rate(cx: &mut TestAppCon
     );
 }
 
-fn nav_column_width(cx: &mut gpui::VisualTestContext) -> f32 {
-    f32::from(
-        cx.debug_bounds("nav-column")
-            .expect("the nav column")
-            .size
-            .width,
-    )
+fn board_left(cx: &mut gpui::VisualTestContext) -> f32 {
+    f32::from(cx.debug_bounds("board").expect("the board").left())
 }
 
-/// cmd-b snaps the column between its width and the rail, as Claude's
-/// sidebar does: the new width is there on the next frame, and nothing asks
-/// for a frame after it (no ride lays the board out again every frame).
 #[gpui::test]
 fn the_nav_collapse_snaps_without_frames(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
@@ -1543,20 +1535,18 @@ fn the_nav_collapse_snaps_without_frames(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     tick(cx);
     settle(cx);
-    // Layout snaps to whole pixels: 36 cells (280.8) lays out at 281.
-    assert!((nav_column_width(cx) - nav::WIDTH).abs() <= 0.5, "open");
-    for (collapsed, width) in [(true, nav::FOLDED_WIDTH), (false, nav::WIDTH)] {
+    assert!((board_left(cx) - nav::COLUMN_WIDTH).abs() <= 0.5, "open");
+    for (collapsed, left) in [(true, 0.0), (false, nav::COLUMN_WIDTH)] {
         view.update(cx, |view, cx| view.set_nav_collapsed(collapsed, cx));
         cx.run_until_parked();
         assert!(
-            (nav_column_width(cx) - width).abs() <= 0.5,
-            "collapsed {collapsed}: at its width at once"
+            (board_left(cx) - left).abs() <= 0.5,
+            "collapsed {collapsed}: at its edge at once"
         );
         assert_eq!(display_frames(cx), 0, "and asks for nothing");
     }
 }
 
-/// Reduced motion: the column lands at its new width at once.
 #[gpui::test]
 fn reduced_motion_snaps_the_nav_collapse(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
@@ -1568,7 +1558,7 @@ fn reduced_motion_snaps_the_nav_collapse(cx: &mut TestAppContext) {
     settle(cx);
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     cx.run_until_parked();
-    assert!((nav_column_width(cx) - nav::FOLDED_WIDTH).abs() <= 0.5);
+    assert!(board_left(cx).abs() <= 0.5);
     assert_eq!(display_frames(cx), 0);
 }
 
@@ -2641,7 +2631,6 @@ fn needs_you_toast_comes_and_goes(
     core.enter_group(group).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    // A toast is the rail's voice (C8): the nav folded.
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);
     settle(cx);

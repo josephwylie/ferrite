@@ -1,11 +1,6 @@
 //! The left navigation column (ADR 0040, `docs/design/t3-reference/
 //! sidebar.md`): the nav is the Inbox, one list of Thread cards.
 //!
-//! - **The head**: the traffic lights' spacer and the sidebar toggle in
-//!   the window's head row, then the search row: an inline field that
-//!   filters the list into search results, and three 28px doors — the
-//!   Project filter (the way to a Project, and to the Groups), Add project
-//!   and New thread.
 //! - **The list**: Pinned cards, then the Active cards in the Inbox's
 //!   order (pending Decisions first, oldest request first), then, anchored
 //!   over the foot whatever the list's length, the **Working**,
@@ -27,18 +22,6 @@
 //! `Store::load` and `Instruments::of` are banned here, which is what keeps
 //! the 24-Pane wall smooth with the nav open. Click wiring stays in
 //! `cockpit.rs` and `cockpit/nav_list.rs`, the same split `pane_cell` uses.
-//!
-//! **The column** is `SIDEBAR` black under T3's grain (`list::grain`). A
-//! card is bare at rest, white 8% under the pointer, 11% for the Thread the
-//! board shows and 7% when picked; under the pointer its status gives way
-//! to `Snooze` and `Park`, and right click opens its menu. Busy cards
-//! recede (a working card at 70%, every receded title at 75% ink) so what
-//! needs the operator reads brightest. Colour is state (ADR 0033); Project
-//! hues live on badges alone.
-//!
-//! **Folding** (cmd-B) snaps the column to the 52px **rail**: one cell per
-//! open Thread in the list's order, its mark and, where ⌘1–9 reaches it,
-//! that digit.
 //!
 //! Every colour and metric is a `theme` token; this file holds no literal
 //! of its own.
@@ -77,10 +60,7 @@ pub use card::{
     CardDoors, NavPr,
 };
 
-/// The nav's two widths — 264 open, and the 52px rail folded (cmd-B).
-/// `CockpitView::cell()` subtracts whichever is live, so the nav stays part
-/// of the semantic-zoom input rather than a special case.
-pub use ferrite_ui::theme::{NAV_FOLDED_W as FOLDED_WIDTH, NAV_WIDTH as WIDTH};
+pub use ferrite_ui::theme::{NAV_COLUMN_W as COLUMN_WIDTH, NAV_WIDTH as WIDTH};
 
 gpui::actions!(
     nav,
@@ -166,10 +146,7 @@ impl NavCursor {
     }
 }
 
-/// The column's inner width: its rows reach this far.
 const INNER_W: f32 = WIDTH - 2.0 * NAV_COL_PAD;
-
-const COLLAPSE_KEY: &str = "nav-collapse";
 
 /// A shelf at the foot of the list (ADR 0040), in drawing order.
 pub use ferrite_core::settings::NavShelf as Shelf;
@@ -206,7 +183,6 @@ impl NavState {
         }
     }
 
-    /// Every open Thread in the list's order: what the rail lists.
     pub fn open_rows(&self) -> impl Iterator<Item = &ThreadRow> {
         self.pinned
             .iter()
@@ -507,41 +483,57 @@ fn mark_at(status: RowStatus, x: f32, seat: MarkSeat) -> Div {
 
 // ------------------------------------------------------------- the column
 
-/// The nav column itself: full height, `width` wide (the caller rides it
-/// on cmd-B), clipped, so its content keeps `WIDTH` (`content`) and nothing
-/// reflows while it moves. It paints no ground of its own: `body` does.
-pub fn shell(width: f32) -> Div {
+pub fn column(ground: Paint) -> Div {
     div()
         .debug_selector(|| "nav-column".into())
         .relative()
-        .flex()
-        .flex_col()
         .flex_shrink_0()
         .h_full()
-        .w(px(width))
+        .w(px(COLUMN_WIDTH))
+        .child(
+            div()
+                .absolute()
+                .top(px(WIN_CHROME_H))
+                .bottom_0()
+                .left_0()
+                .right_0()
+                .bg(ground),
+        )
+}
+
+pub const CARD_TOP: f32 = WIN_CHROME_H + NAV_INSET_Y;
+pub const EDGE_TAB_OPEN_X_OVER_RING: f32 = NAV_INSET + WIDTH - HAIRLINE_W;
+
+pub fn card(content: impl IntoElement) -> Div {
+    div()
+        .debug_selector(|| "nav-card".into())
+        .absolute()
+        .top(px(CARD_TOP))
+        .bottom(px(NAV_INSET_Y))
+        .left(px(NAV_INSET))
+        .w(px(WIDTH))
+        .flex()
+        .flex_col()
         .overflow_hidden()
+        .rounded(px(NAV_R))
+        .bg(paint::SIDEBAR)
+        .shadow(components::float_shadow())
         .font_family(FONT_UI)
         .text_size(px(FS_NAV))
         .line_height(px(NAV_LINE))
         .text_color(rgb(INK_STRONG))
+        .child(content)
+        .child(list::grain(NAV_R))
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .rounded(px(NAV_R))
+                .border_1()
+                .border_color(rgba(NAV_BORDER)),
+        )
 }
 
-/// The column's ground: `paint::SIDEBAR`, top to bottom — what the host's
-/// traffic lights sit on.
-pub fn body() -> Div {
-    div()
-        .debug_selector(|| "nav-body".into())
-        .absolute()
-        .top_0()
-        .bottom_0()
-        .left_0()
-        .right_0()
-        .bg(paint::SIDEBAR)
-        .child(list::grain())
-}
-
-/// The column's content at its own width: `NAV_COL_PAD` in at its sides
-/// and foot, its head in the window's head row.
 pub fn content() -> Div {
     div()
         .flex()
@@ -549,38 +541,21 @@ pub fn content() -> Div {
         .flex_shrink_0()
         .h_full()
         .w(px(WIDTH))
-        .px(px(NAV_COL_PAD))
-        .pb(px(NAV_COL_PAD))
+        .p(px(NAV_COL_PAD))
 }
 
-/// The head (ADR 0040), in the head row: `drag` (the window-drag stretch
-/// the traffic lights and the cockpit's history arrows sit over), then the
-/// sidebar toggle. The search row sits under it (`search::row`).
-pub fn head(drag: impl IntoElement, toggle: impl IntoElement) -> Div {
+pub fn head(arrows: impl IntoElement) -> Div {
     div()
         .debug_selector(|| "nav-head".into())
         .flex()
         .flex_row()
         .flex_shrink_0()
         .items_center()
-        .h(px(WIN_CHROME_H))
-        .pl(px(NAV_HEAD_PAD_L))
-        .pr(px(NAV_HEAD_PAD_R))
-        .child(
-            div()
-                .debug_selector(|| "nav-head-drag".into())
-                .flex()
-                .flex_1()
-                .h_full()
-                .child(drag),
-        )
-        .child(toggle)
+        .h(px(ICON_BUTTON))
+        .mb(px(NAV_SEARCH_ROW_GAP))
+        .child(arrows)
 }
 
-/// An icon button of the column (the toggle, the head's and the foot's
-/// doors): `size` square, its glyph in the icon ink (`NAV_ICON_INK`, T3's
-/// `--sidebar-icon-color`), under the pointer white 8% and the glyph
-/// strong, at once (T3's sidebar buttons snap); `on`, white 11%.
 pub fn icon_button(
     key: impl Into<SharedString>,
     glyph: &'static str,
@@ -608,32 +583,51 @@ pub fn icon_button(
             ))
         })
         .on_hover(motion::hover_snap(blend))
-        .child(icon(glyph, glyph_size, INK_STRONG).text_color(motion::mix(
-            rgba(NAV_ICON_INK).into(),
-            rgb(INK_STRONG).into(),
-            t,
-        )))
+        .child(icon_ink(glyph, glyph_size, t))
 }
 
-/// The sidebar toggle (§5.1.1): the sidebar glyph in a 28px door, its
-/// tooltip `Toggle sidebar` and the chord the keymap binds. `rail` is the
-/// rail's own, at its top.
-pub fn collapse_button(rail: bool) -> Stateful<Div> {
-    icon_button(
-        if rail {
-            "nav-rail-collapse"
-        } else {
-            COLLAPSE_KEY
-        },
-        icons::SIDEBAR,
-        NAV_TOGGLE_GLYPH,
-        ICON_BUTTON,
-        R_CONTROL,
-    )
-    .tooltip(ferrite_ui::menu::action_tooltip(
-        "Toggle sidebar",
-        "cockpit::ToggleNav",
+fn icon_ink(glyph: &'static str, size: f32, t: f32) -> gpui::Svg {
+    icon(glyph, size, INK_STRONG).text_color(motion::mix(
+        rgba(NAV_ICON_INK).into(),
+        rgb(INK_STRONG).into(),
+        t,
     ))
+}
+
+const EDGE_TAB_KEY: &str = "nav-edge-tab";
+
+pub fn edge_tab(open: bool) -> Stateful<Div> {
+    let t = motion::hover_t(&SharedString::from(EDGE_TAB_KEY));
+    let r = px(NAV_EDGE_TAB_R);
+    div()
+        .id(EDGE_TAB_KEY)
+        .debug_selector(|| EDGE_TAB_KEY.into())
+        .flex()
+        .items_center()
+        .justify_center()
+        .w(px(NAV_EDGE_TAB_W))
+        .h(px(NAV_EDGE_TAB_H))
+        .rounded_tr(r)
+        .rounded_br(r)
+        .bg(paint::SIDEBAR)
+        .border_t_1()
+        .border_r_1()
+        .border_b_1()
+        .border_color(rgba(NAV_BORDER))
+        .occlude()
+        .on_hover(motion::hover_snap(EDGE_TAB_KEY.into()))
+        .child(
+            icon_ink(icons::CHEVRON_RIGHT, NAV_EDGE_TAB_GLYPH, t)
+                .when(open, |glyph| {
+                    glyph.with_transformation(gpui::Transformation::rotate(gpui::radians(
+                        std::f32::consts::PI,
+                    )))
+                }),
+        )
+        .tooltip(ferrite_ui::menu::action_tooltip(
+            "Toggle sidebar",
+            "cockpit::ToggleNav",
+        ))
 }
 
 fn factory_key(project: ProjectId) -> SharedString {
@@ -734,10 +728,6 @@ pub fn scrollbar(scroll: &ScrollHandle, revealed: bool) -> Div {
         )
 }
 
-/// The list's edge fades (`NAV_EDGE_FADE`, T3's 12px), in `SIDEBAR`: at
-/// the top once it has scrolled, at the foot while rows remain below, so
-/// no row is cut mid-glyph against the head or the foot. Siblings of the
-/// list, laid before the scrollbar so they never cover its thumb.
 pub fn edge_fades(scroll: &ScrollHandle) -> Vec<Div> {
     let y = scroll.offset().y;
     let below = scroll.max_offset().y + y > px(0.);
@@ -980,76 +970,6 @@ pub fn machine_thread_row(machine: usize, row: &StatusRow, lost: bool) -> Statef
         .children(word.map(|(word, ink)| trailing(word, FS_META, ink)))
 }
 
-// ------------------------------------------------------------- the rail
-
-/// One open Thread on the rail: its mark, and the digit of the ⌘1–9 that
-/// focuses it, if one does.
-#[derive(Clone)]
-pub struct RailRow {
-    pub key: Option<usize>,
-    pub thread: ThreadId,
-    pub status: RowStatus,
-    /// The board shows this Thread (Solo) or it is the shown Group's
-    /// focused member: the rail's one selection, as the tree's.
-    pub selected: bool,
-}
-
-/// The rail's content (cmd-B folded, §5.1.7): under the head row, its
-/// toggle (`toggle`), then one cell per open Thread. It scrolls like the
-/// tree.
-pub fn rail(scroll: &ScrollHandle, toggle: impl IntoElement) -> Stateful<Div> {
-    div()
-        .id(("nav-rail", 0usize))
-        .debug_selector(|| "nav-rail".into())
-        .absolute()
-        .top_0()
-        .bottom_0()
-        .left_0()
-        .w(px(FOLDED_WIDTH))
-        .flex()
-        .flex_col()
-        .items_center()
-        .px(px(NAV_COL_PAD))
-        .pt(px(WIN_CHROME_H))
-        .pb(px(NAV_COL_PAD))
-        .overflow_y_scroll()
-        .track_scroll(scroll)
-        .child(div().flex_shrink_0().mb(px(SPACE_1)).child(toggle))
-}
-
-/// One rail cell, 32 high: the Thread's mark (the tree row's own, spinner
-/// included), and under it its ⌘ digit in 11 `INK_SUBTLE` where a ⌘ key
-/// reaches it. It washes and selects as a tree row does.
-pub fn rail_row(row: &RailRow) -> Stateful<Div> {
-    let thread = row.thread;
-    let key = SharedString::from(format!("nav-rail-{}", thread.get()));
-    row_frame(("nav-rail-row", thread.get() as usize), key, row.selected)
-        .debug_selector(move || format!("nav-rail-{}", thread.get()))
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .w_full()
-        .h(px(NAV_RAIL_CELL))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .h(px(NAV_MARK_ICON))
-                .child(mark(row.status, true)),
-        )
-        .children(row.key.map(|key| {
-            components::tabular(
-                div()
-                    .debug_selector(move || format!("nav-rail-key-{key}"))
-                    .text_size(px(NAV_RAIL_KEY_FS))
-                    .line_height(px(NAV_RAIL_KEY_FS + 2.0))
-                    .text_color(rgb(if row.selected { INK_STRONG } else { INK_SUBTLE }))
-                    .child(key.to_string()),
-            )
-        }))
-}
-
 // ------------------------------------------------------------- rename and drag
 
 /// A Thread title that can be renamed: the row's own title text, and
@@ -1277,21 +1197,6 @@ mod tests {
         assert_eq!(cursor(thread_row(&thread())), None);
     }
 
-    /// The rail keeps its 32px cell.
-    #[test]
-    fn the_rail_keeps_its_cell() {
-        let rail = RailRow {
-            key: Some(9),
-            thread: ThreadId::new(9),
-            status: RowStatus::Done,
-            selected: false,
-        };
-        assert_eq!(
-            rail_row(&rail).style().size.height,
-            Some(px(NAV_RAIL_CELL).into())
-        );
-    }
-
     /// The word says one thing, in priority order, and the Pane's head slot
     /// decides it.
     #[test]
@@ -1420,58 +1325,49 @@ mod tests {
         }
     }
 
-    /// The column is the frame from the window's top, and its content is
-    /// 8px in at its sides and foot.
     #[test]
-    fn the_column_is_the_frame_from_the_top() {
-        let mut column = shell(WIDTH);
-        let style = column.style();
-        assert_eq!(style.background, None, "the body paints the ground");
-        assert_eq!(style.size.width, Some(px(WIDTH).into()));
-        assert_eq!(FOLDED_WIDTH, 52.0, "folded, the rail");
-        let mut ground = body();
+    fn the_nav_is_a_card_floating_under_the_head_row() {
+        let mut column = column(Paint::solid(TX_GROUND));
         assert_eq!(
-            ground.style().background,
-            Some(gpui::Hsla::from(paint::SIDEBAR).into())
+            column.style().size.width,
+            Some(px(280.).into()),
+            "the card and a 12px gap either side"
         );
+        let mut drawn = card(div());
+        let style = drawn.style();
+        assert_eq!(style.inset.top, Some(px(WIN_CHROME_H + 40.).into()), "under the head row");
+        assert_eq!(style.inset.left, Some(px(12.).into()));
+        assert_eq!(style.inset.bottom, Some(px(40.).into()), "short of the window's foot");
+        assert_eq!(style.size.width, Some(px(256.).into()));
+        assert_eq!(style.corner_radii.top_left, Some(px(18.).into()));
+        assert_eq!(style.corner_radii.bottom_right, Some(px(18.).into()));
+        assert_eq!(style.background, Some(paint::SIDEBAR.into()));
+        assert_eq!(style.box_shadow, Some(components::float_shadow()), "it floats");
         let mut inner = content();
         let style = inner.style();
+        assert_eq!(style.size.width, Some(px(WIDTH).into()));
         assert_eq!(style.padding.left, Some(px(NAV_COL_PAD).into()));
-        assert_eq!(style.padding.bottom, Some(px(NAV_COL_PAD).into()));
-        assert_eq!(style.padding.top, None, "the head is in the head row");
-        assert_eq!(
-            head(div(), div()).style().size.height,
-            Some(px(WIN_CHROME_H).into())
-        );
+        assert_eq!(style.padding.top, Some(px(NAV_COL_PAD).into()));
     }
 
-    /// The rail keeps every open Thread's cell: its mark and its ⌘ digit;
-    /// the selected cell is the tree's selection.
     #[test]
-    fn the_rail_keys_its_threads_and_keeps_their_marks() {
-        let row = |selected| RailRow {
-            key: Some(3),
-            thread: ThreadId::new(4),
-            status: RowStatus::NeedsYou,
-            selected,
-        };
-        assert_eq!(rail_row(&row(false)).style().background, None);
-        assert_eq!(
-            rail_row(&row(true)).style().background,
-            Some(gpui::Hsla::from(rgba(NAV_CARD_ACTIVE)).into())
-        );
-        let scroll = ScrollHandle::new();
-        assert_eq!(
-            rail(&scroll, div()).style().size.width,
-            Some(px(FOLDED_WIDTH).into())
-        );
+    fn the_edge_tab_wears_the_card_and_points_the_way() {
+        for open in [true, false] {
+            let mut tab = edge_tab(open);
+            let style = tab.style();
+            assert_eq!(style.background, Some(paint::SIDEBAR.into()));
+            assert_eq!(style.border_color, Some(gpui::Hsla::from(rgba(NAV_BORDER))));
+            assert_eq!(style.border_widths.left, None, "no edge on the card's side");
+            assert_eq!(style.corner_radii.top_right, Some(px(8.).into()));
+            assert_eq!(style.corner_radii.top_left, None);
+        }
     }
 
     /// The ⌘ digits are bound: each names the action its key is bound to.
     #[test]
     fn the_command_digits_are_bound() {
         for ordinal in 1..=9 {
-            let action = crate::cockpit::focus_rail_action(ordinal).expect("one action per digit");
+            let action = crate::cockpit::focus_thread_action(ordinal).expect("one action per digit");
             assert_eq!(
                 ferrite_ui::components::bound_chord(action),
                 Some(format!(
@@ -1485,18 +1381,15 @@ mod tests {
                 "⌘{ordinal}"
             );
         }
-        assert_eq!(crate::cockpit::focus_rail_action(10), None);
+        assert_eq!(crate::cockpit::focus_thread_action(10), None);
     }
 
-    /// A long title fades into the ground its card lays under it — the
-    /// active fill over the black column, or the column at rest — rather
-    /// than ending in "…".
     #[test]
     fn a_title_fades_into_its_cards_ground() {
         let key = SharedString::from("nav-thread-0-fade");
         assert_ne!(card::card_ground(&key, true, false), paint::SIDEBAR.hsla());
         assert_eq!(card::card_ground(&key, false, false), paint::SIDEBAR.hsla());
-        assert_eq!(paint::SIDEBAR.hsla(), gpui::Hsla::from(rgb(0x000000)));
+        assert_eq!(paint::SIDEBAR, paint::PANEL);
     }
 
     /// CP7 regression 1: the fade is drawn only over a line that runs

@@ -1,13 +1,5 @@
 //! The view head (SPEC §5.2): the head row's slot over the board.
 //!
-//! The history arrows (Claude's and Codex's `‹ ›`, `history`) are not the
-//! head's: they stand in the head row right of the traffic lights
-//! (`history_arrows_element`), in the sidebar head's empty left slot while
-//! the sidebar is open and in the same screen spot over the rail while it
-//! is folded, on every board, the empty one and a draft's too: back is most
-//! wanted where there is nothing else to do. Where they reach over the
-//! board (folded), the head starts clear of them (`view_head_pad_l`).
-//!
 //! Solo names the focused Thread with T3's breadcrumb (`solo_head`): its
 //! Project, a side chat's parent, then its title (a double-click renames it),
 //! taking the row's free width, and its ▾ (the Thread's menu, as Claude's
@@ -66,7 +58,7 @@ impl CockpitView {
             })
             .absolute()
             .top_0()
-            .left(px(self.board_left()))
+            .left(px(self.nav_width()))
             .right(px(right))
             .h(px(theme::WIN_CHROME_H))
             .flex()
@@ -110,22 +102,16 @@ impl CockpitView {
             .max(theme::VIEW_HEAD_PAD_X)
     }
 
-    /// Where the view head's content starts, from the board's left edge:
-    /// `VIEW_HEAD_PAD_X`, or past the history arrows where they reach over
-    /// the board (the rail folded, or riding to it).
     fn view_head_pad_l(&self) -> f32 {
         let arrows_end = theme::HISTORY_X + 2.0 * theme::ICON_BUTTON;
-        theme::VIEW_HEAD_PAD_X.max(arrows_end + theme::VIEW_HEAD_GAP - self.board_left())
+        theme::VIEW_HEAD_PAD_X.max(arrows_end + theme::VIEW_HEAD_GAP - self.nav_width())
     }
 
-    /// The history arrows in the head row (Claude's and Codex's place),
-    /// `HISTORY_X` from the window's left whatever the sidebar does: in the
-    /// sidebar head's empty slot between the traffic lights and its bell,
-    /// and where the sidebar is folded to its rail, in the same spot over
-    /// the title strip. Only the arrows occlude: the row around them still
-    /// drags the window.
-    pub(super) fn history_arrows_element(&self, cx: &mut Context<Self>) -> AnyElement {
-        div()
+    pub(super) fn history_arrows_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.nav_folded() {
+            return None;
+        }
+        let arrows = div()
             .absolute()
             .top_0()
             .left(px(theme::HISTORY_X))
@@ -133,12 +119,13 @@ impl CockpitView {
             .flex()
             .items_center()
             .child(self.history_arrows(cx))
-            .into_any_element()
+            .into_any_element();
+        Some(arrows)
     }
 
     /// Back and forward (`history`), each disabled at its end. Its tooltip
     /// names the chord, as Claude's `Back ⌘[` does.
-    fn history_arrows(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn history_arrows(&self, cx: &mut Context<Self>) -> AnyElement {
         let back = history_arrow(
             "history-back",
             icons::BACK,
@@ -243,7 +230,7 @@ impl CockpitView {
         let door = crate::nav::icon_button(
             "panel-toggle",
             icons::PANEL_RIGHT,
-            theme::NAV_TOGGLE_GLYPH,
+            theme::ICON_BUTTON_GLYPH,
             theme::ICON_BUTTON,
             theme::R_CONTROL,
         )
@@ -571,7 +558,7 @@ fn history_arrow(
         crate::nav::icon_button(
             key,
             glyph,
-            theme::NAV_TOGGLE_GLYPH,
+            theme::ICON_BUTTON_GLYPH,
             theme::ICON_BUTTON,
             theme::R_CONTROL,
         )
@@ -586,7 +573,7 @@ fn history_arrow(
             .size(px(theme::ICON_BUTTON))
             .child(ferrite_ui::icons::icon(
                 glyph,
-                theme::NAV_TOGGLE_GLYPH,
+                theme::ICON_BUTTON_GLYPH,
                 theme::HISTORY_ARROW_DISABLED_INK,
             ))
     };
