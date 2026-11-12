@@ -506,6 +506,43 @@ fn a_worker_whose_start_was_never_written_is_kept_and_its_worktree_reused() {
     );
 }
 
+/// The same lost start, then Delete before any Resume: the stray Worker
+/// the Task owns but never recorded goes with the Task, and so does its
+/// worktree.
+#[test]
+fn deleting_a_task_whose_worker_start_was_never_written_deletes_that_worker() {
+    let (harness, _project, repo) = factory_project("ix-stray-delete");
+    let mut caller = call(&harness);
+    let (task, stray, _agent) = one_off(&harness, &mut caller, &repo, "Fix the login bug");
+    let tree = PathBuf::from(
+        task_until(&mut caller, &task, |task| task["worktree"].is_string())["worktree"]
+            .as_str()
+            .unwrap(),
+    );
+    drop(caller);
+    let harness = restart_with(harness, |dir| {
+        let part = dir
+            .join("threads")
+            .join(crate::factory::DIR_NAME)
+            .join("1.json");
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&part).unwrap()).unwrap();
+        let written = &mut state["tasks"][0];
+        written.as_object_mut().unwrap().remove("worker");
+        written.as_object_mut().unwrap().remove("worktree");
+        std::fs::write(&part, serde_json::to_vec(&state).unwrap()).unwrap();
+    });
+    let mut caller = call(&harness);
+    task_until(&mut caller, &task, |task| task["status"] == "stopped");
+    ok_call(&harness, "task.delete", serde_json::json!({ "task": task }));
+    let gone = caller.answer("g", "thread.get", serde_json::json!({ "thread": stray }));
+    assert_eq!(
+        gone["error"]["code"], "unknown_thread",
+        "the stray Worker is deleted: {gone}"
+    );
+    assert!(!tree.exists(), "its worktree is removed");
+}
+
 /// Stop the Server, change its Store with `change`, and serve it again.
 fn restart_with(harness: Harness, change: impl FnOnce(&Path)) -> Harness {
     let mut control = attach(&harness.address);
