@@ -675,6 +675,69 @@ fn seen_at(thread: ThreadId, busy: bool, turns: u64) -> BTreeMap<ThreadId, Seen>
     )])
 }
 
+/// A merge Workflow with a way to Completed that no reported merge is on
+/// is caught when it is saved, not when a Task runs into it: a Step
+/// finishing straight to Completed, or approval that completes before the
+/// merge Step runs. A way that merges first stays fine.
+#[test]
+fn a_merge_workflow_whose_route_completes_unmerged_is_a_problem() {
+    let mut factory = Factory::in_memory();
+    let (id, steps) = merging(&mut factory);
+    edit(
+        &mut factory,
+        &id,
+        &steps[0],
+        StepChange {
+            on_finished: Some(Destination::Complete),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        problems(&factory, &id),
+        ["Build \u{b7} When finished reaches Completed with nothing merged: route it through Merge."]
+    );
+    assert_eq!(
+        save(&mut factory, &id).unwrap_err().code,
+        RefusalCode::Invalid
+    );
+
+    edit(
+        &mut factory,
+        &id,
+        &steps[0],
+        StepChange {
+            on_finished: Some(Destination::Approval),
+            ..Default::default()
+        },
+    );
+    let draft = &workflow(&factory, &id).draft;
+    let found = draft.problems(&Catalog::default());
+    assert_eq!(
+        found
+            .iter()
+            .map(|problem| (problem.message.as_str(), problem.approval))
+            .collect::<Vec<_>>(),
+        [(
+            "After approval reaches Completed with nothing merged: choose Merge to run after approval.",
+            true
+        )]
+    );
+
+    factory
+        .command(
+            Command::EditApproval {
+                workflow: id.clone(),
+                change: ApprovalChange {
+                    after: Some(Destination::Step(steps[1].clone())),
+                    ..Default::default()
+                },
+            },
+            2,
+        )
+        .unwrap();
+    assert_eq!(problems(&factory, &id), Vec::<String>::new());
+}
+
 /// Spec: only a confirmed merge completes. A redirect that skips the
 /// merge Step leaves nothing merged, so the Task comes back to the
 /// operator instead of completing.
