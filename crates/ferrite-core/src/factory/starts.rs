@@ -450,6 +450,11 @@ pub struct Automation {
     /// A scheduled run waits for the last one to finish.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub waiting: bool,
+    /// The tag of the last GitHub read taken, which the next read is
+    /// conditional on: kept with what that read added to `seen`, so a read
+    /// dropped or not written leaves the tag before it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
 }
 
 impl Automation {
@@ -568,7 +573,6 @@ pub(super) struct Poll {
     reading: bool,
     /// When the last read was asked for.
     asked_ms: Option<i64>,
-    etag: Option<String>,
 }
 
 impl Factory {
@@ -576,16 +580,11 @@ impl Factory {
     pub(super) fn heard(&mut self, command: &Command) {
         match command {
             Command::GitHubRead {
-                workflow,
-                version,
-                result,
+                workflow, version, ..
             } => {
                 if let Some(poll) = self.polls.get_mut(workflow) {
                     if poll.version == *version {
                         poll.reading = false;
-                        if let Ok(GitHubRead::Matches { etag, .. }) = result {
-                            poll.etag = etag.clone();
-                        }
                     }
                 }
             }
@@ -593,9 +592,9 @@ impl Factory {
                 workflow,
                 turn: Turn::On | Turn::Off,
             } => {
-                // A start turned on is read afresh, in full.
+                // A start turned on is read afresh (its tag goes with the
+                // rest of its Automation).
                 if let Some(poll) = self.polls.get_mut(workflow) {
-                    poll.etag = None;
                     poll.asked_ms = None;
                 }
             }
@@ -607,7 +606,7 @@ impl Factory {
     /// once a minute, one at a time, and none while a backlog waits for
     /// the operator.
     pub(super) fn poll(&mut self, now_ms: i64) {
-        let live: Vec<(WorkflowId, u32, Start)> = self
+        let live: Vec<(WorkflowId, u32, Start, Option<String>)> = self
             .workflows()
             .filter(|workflow| {
                 workflow.automation.switch == Switch::On && workflow.automation.backlog.is_empty()
@@ -615,13 +614,17 @@ impl Factory {
             .filter_map(|workflow| {
                 let latest = workflow.latest()?;
                 let start = &latest.definition.start;
-                start
-                    .kind
-                    .is_github()
-                    .then(|| (workflow.id.clone(), latest.version, start.clone()))
+                start.kind.is_github().then(|| {
+                    (
+                        workflow.id.clone(),
+                        latest.version,
+                        start.clone(),
+                        workflow.automation.etag.clone(),
+                    )
+                })
             })
             .collect();
-        for (workflow, version, start) in live {
+        for (workflow, version, start, etag) in live {
             let poll = self.polls.entry(workflow.clone()).or_default();
             if poll.version != version {
                 *poll = Poll {
@@ -634,7 +637,6 @@ impl Factory {
             }
             poll.reading = true;
             poll.asked_ms = Some(now_ms);
-            let etag = poll.etag.clone();
             self.pending.push(Effect::ReadGitHub {
                 workflow,
                 version,
@@ -874,7 +876,10 @@ impl State {
                 return Ok(Answer::Changed(changed));
             }
             Ok(GitHubRead::Unchanged) => Vec::new(),
-            Ok(GitHubRead::Matches { items, .. }) => items,
+            Ok(GitHubRead::Matches { items, etag }) => {
+                automation.etag = etag;
+                items
+            }
         };
         let mut changed = automation.error.take().is_some();
         let new: Vec<GitHubItem> = items
@@ -990,8 +995,13 @@ impl State {
                 running = true;
                 runs.push(now_ms);
             }
-            if automation.due_ms.is_none() {
-                automation.due_ms = schedule.next_after_ms(now_ms);
+            // Never later than the next run after now: a due time made on
+            // a clock that ran ahead and was put back is made again.
+            let next = schedule.next_after_ms(now_ms);
+            if automation.due_ms.is_none()
+                || next.is_some_and(|next| automation.due_ms.is_some_and(|due| next < due))
+            {
+                automation.due_ms = next;
             }
             if let Some(due) = automation.due_ms.filter(|due| now_ms >= *due) {
                 automation.due_ms = schedule.next_after_ms(now_ms);

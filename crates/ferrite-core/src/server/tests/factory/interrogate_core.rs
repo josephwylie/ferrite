@@ -263,16 +263,27 @@ fn interrogate_a_clock_corrected_back_silences_a_schedule() {
         )["workflow"]["automation"]["due_ms"]
             .as_i64()
     };
-    eprintln!("due after turning on: {:?} (now {t0})", due(&harness));
+    let first = due(&harness).expect("a due time");
+    eprintln!("due after turning on: {first} (now {t0})");
     // The clock jumps a week ahead for a moment ...
     clock.store(t0 + 7 * 24 * HOUR, Ordering::SeqCst);
     std::thread::sleep(Duration::from_millis(300));
     eprintln!("due during the jump: {:?}", due(&harness));
-    // ... and is corrected; three hours pass.
-    for hours in 1..=3 {
-        clock.store(t0 + hours * HOUR + 1_000, Ordering::SeqCst);
+    // ... and is corrected; three hours pass, each run seen on time (a
+    // run seen late is missed, and this schedule skips a missed run).
+    for hours in 0..3 {
+        clock.store(first + hours * HOUR + 1_000, Ordering::SeqCst);
         std::thread::sleep(Duration::from_millis(300));
     }
+    wait_for("a run after the correction", || {
+        ok_call(
+            &harness,
+            "task.list",
+            serde_json::json!({ "project": project }),
+        )["tasks"]
+            .as_array()
+            .is_some_and(|tasks| !tasks.is_empty())
+    });
     let tasks = ok_call(
         &harness,
         "task.list",
