@@ -18,12 +18,8 @@ pub struct Frame {
 }
 
 impl ferrite_ui::frame::Frame for Frame {
-    fn titlebar(&self, board_left: f32, draggable: bool, maximized: bool) -> AnyElement {
-        titlebar::strip(board_left, draggable, maximized).into_any_element()
-    }
-
-    fn head_drag(&self, draggable: bool, maximized: bool) -> AnyElement {
-        titlebar::head_drag(draggable, maximized).into_any_element()
+    fn titlebar(&self, draggable: bool, maximized: bool) -> AnyElement {
+        titlebar::strip(draggable, maximized).into_any_element()
     }
 
     fn settings(&self, sheet: SettingsSheet, window: &mut Window, cx: &mut App) -> AnyElement {
