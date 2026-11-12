@@ -456,3 +456,63 @@ fn interrogate_an_unreadable_part_lets_another_project_reuse_its_ids() {
     let _ = &mut caller;
     assert_ne!(a_task, b_task, "an id is never given twice");
 }
+
+/// Convergence after a start whose record was lost: the Worker's Thread
+/// was opened, but the Task never wrote it (a failed save, then a
+/// restart). The restart stops the Task; Resume keeps the stray Worker in
+/// the Task's history and starts the next one in the same worktree,
+/// never making the Task's branch again.
+#[test]
+fn a_worker_whose_start_was_never_written_is_kept_and_its_worktree_reused() {
+    let (harness, _project, repo) = factory_project("ix-stray-worker");
+    let mut caller = call(&harness);
+    let (task, stray, _agent) = one_off(&harness, &mut caller, &repo, "Fix the login bug");
+    let tree =
+        task_until(&mut caller, &task, |task| task["worktree"].is_string())["worktree"].clone();
+    drop(caller);
+    let harness = restart_with(harness, |dir| {
+        let part = dir
+            .join("threads")
+            .join(crate::factory::DIR_NAME)
+            .join("1.json");
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&part).unwrap()).unwrap();
+        let written = &mut state["tasks"][0];
+        written.as_object_mut().unwrap().remove("worker");
+        written.as_object_mut().unwrap().remove("worktree");
+        std::fs::write(&part, serde_json::to_vec(&state).unwrap()).unwrap();
+    });
+    let mut caller = call(&harness);
+    let stopped = task_until(&mut caller, &task, |task| task["status"] == "stopped");
+    eprintln!("after the restart: {}", stopped["reason"]);
+    ok_call(&harness, "task.resume", serde_json::json!({ "task": task }));
+    let next = task_until(&mut caller, &task, |task| {
+        task["worker"].is_u64() && task["worker"] != serde_json::json!(stray)
+    });
+    eprintln!(
+        "resumed: worker {} superseded {}",
+        next["worker"], next["superseded"]
+    );
+    assert_eq!(next["status"], "working", "{next}");
+    assert_eq!(
+        next["worktree"], tree,
+        "the Task's worktree is reused: {next}"
+    );
+    assert!(
+        next["superseded"]
+            .as_array()
+            .is_some_and(|kept| kept.contains(&serde_json::json!(stray))),
+        "the stray Worker is kept in the Task's history: {next}"
+    );
+}
+
+/// Stop the Server, change its Store with `change`, and serve it again.
+fn restart_with(harness: Harness, change: impl FnOnce(&Path)) -> Harness {
+    let mut control = attach(&harness.address);
+    control.command(226, Op::Stop { when: When::Now });
+    assert_eq!(harness.server.join().unwrap(), 0);
+    gone(&harness.address);
+    gone(&harness.api);
+    change(&harness.dir);
+    serve_in(harness.dir.clone(), None)
+}
