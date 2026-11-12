@@ -809,6 +809,7 @@ pub enum Effect {
         project: ProjectId,
         status: Status,
         title: String,
+        detail: Option<String>,
     },
     /// Read a GitHub start's matches with the operator's `gh`, off the
     /// pump; answered with [`Command::GitHubRead`].
@@ -889,6 +890,16 @@ impl Task {
         self.every_worker().contains(&thread)
     }
 
+    /// What the state it is in says: a result to approve or completed,
+    /// or why it needs the operator or stopped.
+    pub fn outcome(&self) -> Option<&str> {
+        match self.status {
+            Status::Completed | Status::Approval => self.result.as_deref(),
+            Status::NeedsHuman | Status::Stopped => self.reason.as_deref(),
+            Status::Queued | Status::Working => None,
+        }
+    }
+
     /// The Step it is at, in the version it keeps.
     pub fn current_step(&self) -> Option<&Step> {
         self.workflow
@@ -957,6 +968,7 @@ impl Task {
             project: self.project,
             status,
             title: format!("{title}: {}", self.title),
+            detail: self.outcome().map(str::to_string),
         });
         pr::tidy(self, effects);
     }

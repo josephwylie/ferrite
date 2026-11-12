@@ -225,7 +225,7 @@ fn a_worker_that_never_reports_is_prompted_once_then_needs_the_operator() {
 #[test]
 fn a_task_alert_follows_its_board_and_says_its_event() {
     let (harness, project, repo) = factory_project("factory-alert-order");
-    let mut window = attach(&harness.address);
+    let window = attach(&harness.address);
     let mut caller = call(&harness);
     let task = caller.answer(
         "1",

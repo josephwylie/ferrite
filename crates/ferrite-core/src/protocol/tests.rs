@@ -1208,6 +1208,17 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 task: "t-1".into(),
                 status: crate::factory::Status::Completed,
                 title: "Task completed: Fix the flaky login test".into(),
+                detail: None,
+            }),
+        ),
+        (
+            "task_alert_detail",
+            Sample::Server(ServerMessage::TaskAlert {
+                project,
+                task: "t-1".into(),
+                status: crate::factory::Status::NeedsHuman,
+                title: "Task needs you: Fix the flaky login test".into(),
+                detail: Some("No access to the staging data".into()),
             }),
         ),
         (

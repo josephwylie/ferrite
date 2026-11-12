@@ -113,15 +113,6 @@ fn status_ink(status: Status) -> u32 {
     }
 }
 
-/// What a card says under its title: the result, the stop reason.
-fn outcome_line(task: &Task) -> Option<String> {
-    match task.status {
-        Status::Completed | Status::Approval => task.result.clone(),
-        Status::NeedsHuman | Status::Stopped => task.reason.clone(),
-        _ => None,
-    }
-}
-
 static REQUESTS: AtomicU64 = AtomicU64::new(1);
 
 impl CockpitView {
@@ -401,23 +392,16 @@ impl CockpitView {
         task: String,
         status: Status,
         title: String,
+        detail: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         use gpui::component::notification::{Notification, NotificationType};
         use gpui::component::WindowExt as _;
-        // The Task has since left the state this announced: that event is
-        // over, and what it says now is some other state's.
-        let Some(found) = self
-            .cockpit
-            .factory()
-            .task(&task)
-            .filter(|found| found.status == status)
-            .cloned()
-        else {
-            return;
-        };
-        let detail = outcome_line(&found).unwrap_or_else(|| title.clone());
+        let found = self.cockpit.factory().task(&task);
+        let provider = found.map(|found| found.agent.provider);
+        let cwd = found.and_then(|found| found.worktree.clone());
+        let detail = detail.unwrap_or_else(|| title.clone());
         let project_title = self
             .cockpit
             .registry()
@@ -441,8 +425,11 @@ impl CockpitView {
         if status.needs_you() {
             self.task_toasts.insert(task.clone(), status);
         }
-        let provider = found.agent.provider;
-        if self.prefs.settings.sounds_for(provider) {
+        let sounds = match provider {
+            Some(provider) => self.prefs.settings.sounds_for(provider),
+            None => self.prefs.settings.sounds,
+        };
+        if sounds {
             self.chime(if status.needs_you() {
                 Sound::NeedsYou
             } else {
@@ -459,8 +446,8 @@ impl CockpitView {
                     word: status.word(),
                     title,
                     detail,
-                    agent: Some(provider.to_string()),
-                    cwd: found.worktree,
+                    agent: provider.map(|provider| provider.to_string()),
+                    cwd,
                 },
                 cx,
             );
@@ -876,7 +863,7 @@ impl CockpitView {
                         None => core_factory::agent_label(&task.agent),
                     })),
             )
-            .children(outcome_line(task).map(|line| {
+            .children(task.outcome().map(|line| {
                 div()
                     .debug_selector(move || outcome_key.clone())
                     .text_size(px(FS_META))

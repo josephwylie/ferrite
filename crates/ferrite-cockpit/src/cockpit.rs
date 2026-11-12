@@ -4307,7 +4307,8 @@ impl CockpitView {
                 task,
                 status,
                 title,
-            } => self.present_task_alert(project, task, status, title, window, cx),
+                detail,
+            } => self.present_task_alert(project, task, status, title, detail, window, cx),
         }
     }
 

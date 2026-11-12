@@ -944,7 +944,10 @@ pub enum WorkflowAction {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CoordinatorAction {
     /// The operator's words; the Coordinator starts on the first.
-    Say { project: ProjectId, text: String },
+    Say {
+        project: ProjectId,
+        text: String,
+    },
     /// Its Provider, model and effort, from its next turn.
     Agent {
         project: ProjectId,
@@ -956,7 +959,9 @@ pub enum CoordinatorAction {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         skills: Vec<(Provider, Vec<String>)>,
     },
-    Dismiss { proposal: String },
+    Dismiss {
+        proposal: String,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -1178,12 +1183,16 @@ pub enum ServerMessage {
         board: crate::factory::Board,
     },
     /// A Task needs the operator, stopped or completed: a toast, a chime
-    /// and a system notification.
+    /// and a system notification. It follows the board that shows the
+    /// Task in `status`.
     TaskAlert {
         project: ProjectId,
         task: String,
         status: crate::factory::Status,
         title: String,
+        /// What the event said: the result, or why.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
     },
     /// The Server is about to restart: reconnect.
     Restarting {

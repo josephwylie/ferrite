@@ -36,8 +36,8 @@ pub use mirror::ThreadView;
 pub use remote::{Attach, Endpoint, ServerRestart, ServerState};
 pub use status::{ServerStatus, StatusRow};
 
-pub(crate) mod mirror;
 mod factory_fixture;
+pub(crate) mod mirror;
 mod parked;
 mod remote;
 mod shared;
@@ -897,11 +897,13 @@ impl Cockpit {
                 task,
                 status,
                 title,
+                detail,
             } => self.asked.push(Asked::TaskAlert {
                 project: *project,
                 task: task.clone(),
                 status: *status,
                 title: title.clone(),
+                detail: detail.clone(),
             }),
             _ => {}
         }
@@ -2900,6 +2902,7 @@ pub enum Asked {
         task: String,
         status: crate::factory::Status,
         title: String,
+        detail: Option<String>,
     },
 }
 

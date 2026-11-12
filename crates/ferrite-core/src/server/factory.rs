@@ -276,11 +276,13 @@ impl Server {
                 project,
                 status,
                 title,
-            } => self.say(ServerMessage::TaskAlert {
+                detail,
+            } => self.task_alerts.push(ServerMessage::TaskAlert {
                 project,
                 task,
                 status,
                 title,
+                detail,
             }),
         }
         None

@@ -380,6 +380,9 @@ struct Server {
     factory: crate::factory::Factory,
     /// The board revision the windows were last told.
     told_factory: Option<u64>,
+    /// Task alerts held until the board that shows them goes, so a window
+    /// never hears one before its Task is in that state.
+    task_alerts: Vec<ServerMessage>,
     /// The Archive's revision the windows were last sent.
     told_archive: Option<u64>,
     /// What a one-off Task's Worker runs on: the operator's defaults.
@@ -447,6 +450,7 @@ impl Server {
             forge: Default::default(),
             factory,
             told_factory: None,
+            task_alerts: Vec::new(),
             told_archive: None,
             factory_agent: factory::default_agent(&Settings::default()),
             coordinators_tuned: Default::default(),
@@ -1182,6 +1186,7 @@ impl Server {
         let mut messages = self.engine.take_messages();
         messages.extend(self.decision_changes());
         messages.extend(self.factory_changes());
+        messages.append(&mut self.task_alerts);
         for message in messages {
             self.api.relay(&message);
             match &message {

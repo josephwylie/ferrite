@@ -257,6 +257,7 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
                 task: "t-1".into(),
                 status: Status::NeedsHuman,
                 title: "Task t-1".into(),
+                detail: Some("No access".into()),
             });
         cx.notify();
     });
@@ -281,9 +282,9 @@ fn a_task_alert_toasts_chimes_and_posts_but_not_to_the_inbox(cx: &mut TestAppCon
     );
 }
 
-/// A Task's toast says the event it announced and goes when the Task
-/// leaves that state, as a Thread's goes once answered; an alert for a
-/// state the Task is already out of says nothing.
+/// A Task's toast says the event it announced, from the alert itself,
+/// and goes when the Task leaves that state, as a Thread's goes once
+/// answered.
 #[gpui::test]
 fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("factory-alert-leaves", 2);
@@ -318,6 +319,7 @@ fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAp
                 task: "t-1".into(),
                 status: Status::NeedsHuman,
                 title: "Task needs you: Task t-1".into(),
+                detail: Some("No access".into()),
             });
         cx.notify();
     };
@@ -342,18 +344,43 @@ fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAp
     assert_eq!(toasts(cx), before, "answered: the toast goes");
 
     view.update(cx, |view, cx| {
-        view.cockpit
-            .fixture_factory(needs_human(Status::Completed, Some("Created hello.txt")));
+        view.cockpit.fixture_factory(Board {
+            workflows: Vec::new(),
+            tasks: vec![task(
+                "t-1",
+                project,
+                Status::NeedsHuman,
+                None,
+                None,
+                Some("Out of disk"),
+            )],
+            ..Default::default()
+        });
         alert(view, cx);
     });
     tick(cx);
     ring(cx);
+    assert_eq!(toasts(cx), before + 1, "needed again: a toast");
     assert_eq!(
-        toasts(cx),
-        before,
-        "a state the Task has left is not announced"
+        cx.delivered_system_notifications()
+            .last()
+            .map(|notification| notification.body.to_string()),
+        Some("No access".into()),
+        "it says the event, not what the board reads later"
     );
-    view.read_with(cx, |view, _| assert_eq!(view.chimed, [Sound::NeedsYou]));
+
+    view.update(cx, |view, cx| {
+        view.cockpit
+            .fixture_factory(needs_human(Status::Completed, Some("Created hello.txt")));
+        cx.notify();
+    });
+    tick(cx);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    tick(cx);
+    assert_eq!(toasts(cx), before, "completed: the toast goes");
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.chimed, [Sound::NeedsYou, Sound::NeedsYou])
+    });
 }
 
 /// An empty Project's Factory opens from the nav: the Filter menu names
