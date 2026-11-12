@@ -1,10 +1,6 @@
 //! The left navigation column (ADR 0040, `docs/design/t3-reference/
 //! sidebar.md`): the nav is the Inbox, one list of Thread cards.
 //!
-//! - **The head**: the history arrows' row, then the search row: an
-//!   inline field that filters the list into search results, and three
-//!   28px doors — the Project filter (the way to a Project, and to the
-//!   Groups), Add project and New thread.
 //! - **The list**: Pinned cards, then the Active cards in the Inbox's
 //!   order (pending Decisions first, oldest request first), then, anchored
 //!   over the foot whatever the list's length, the **Working**,
@@ -26,20 +22,6 @@
 //! `Store::load` and `Instruments::of` are banned here, which is what keeps
 //! the 24-Pane wall smooth with the nav open. Click wiring stays in
 //! `cockpit.rs` and `cockpit/nav_list.rs`, the same split `pane_cell` uses.
-//!
-//! **The card** (`card`) floats under the head row, in from the window's
-//! left edge and foot (`NAV_INSET`): `SIDEBAR` under T3's grain
-//! (`list::grain`), its ring and the float shadow, on the board's own
-//! ground (`column`). A Thread's card is bare at rest, white 8% under the pointer, 11% for the Thread the
-//! board shows and 7% when picked; under the pointer its status gives way
-//! to `Snooze` and `Park`, and right click opens its menu. Busy cards
-//! recede (a working card at 70%, every receded title at 75% ink) so what
-//! needs the operator reads brightest. Colour is state (ADR 0033); Project
-//! hues live on badges alone.
-//!
-//! **Folding** (cmd-B, or the **edge tab** on the card's right edge,
-//! `edge_tab`) takes the card away: the board has the window's left edge,
-//! the tab stays at the window's edge to bring it back.
 //!
 //! Every colour and metric is a `theme` token; this file holds no literal
 //! of its own.
@@ -78,8 +60,6 @@ pub use card::{
     CardDoors, NavPr,
 };
 
-/// The card's width, and the window's left edge the open nav holds (the
-/// card and its gap either side).
 pub use ferrite_ui::theme::{NAV_COLUMN_W as COLUMN_WIDTH, NAV_WIDTH as WIDTH};
 
 gpui::actions!(
@@ -166,7 +146,6 @@ impl NavCursor {
     }
 }
 
-/// The card's inner width: its rows reach this far.
 const INNER_W: f32 = WIDTH - 2.0 * NAV_COL_PAD;
 
 /// A shelf at the foot of the list (ADR 0040), in drawing order.
@@ -204,7 +183,6 @@ impl NavState {
         }
     }
 
-    /// Every open Thread in the list's order.
     pub fn open_rows(&self) -> impl Iterator<Item = &ThreadRow> {
         self.pinned
             .iter()
@@ -505,9 +483,6 @@ fn mark_at(status: RowStatus, x: f32, seat: MarkSeat) -> Div {
 
 // ------------------------------------------------------------- the column
 
-/// The open nav's column: `COLUMN_WIDTH` of the window's left edge under
-/// the head row, painted `ground` — the board's own, so the card floats
-/// on what lies beside it and no seam shows.
 pub fn column(ground: Paint) -> Div {
     div()
         .debug_selector(|| "nav-column".into())
@@ -526,17 +501,9 @@ pub fn column(ground: Paint) -> Div {
         )
 }
 
-/// Where the card's top stands: `NAV_INSET` under the head row's foot, the
-/// same gap it keeps from the window's left edge and foot.
 pub const CARD_TOP: f32 = WIN_CHROME_H + NAV_INSET;
+pub const EDGE_TAB_OPEN_X_OVER_RING: f32 = NAV_INSET + WIDTH - HAIRLINE_W;
 
-/// The floating card (Routemate's Fleet panel): `WIDTH` wide, from
-/// `CARD_TOP` to `NAV_INSET` over the window's foot, `NAV_INSET` in from
-/// its left edge, in
-/// `paint::SIDEBAR` under the grain at radius `R_FLOAT`, the `NAV_BORDER`
-/// ring over its edge and the float shadow under it. Clipped, so its
-/// content keeps `WIDTH` (`content`); the ring is laid over the content
-/// rather than as a border, so it takes no layout.
 pub fn card(content: impl IntoElement) -> Div {
     div()
         .debug_selector(|| "nav-card".into())
@@ -567,7 +534,6 @@ pub fn card(content: impl IntoElement) -> Div {
         )
 }
 
-/// The card's content at its own width: `NAV_COL_PAD` in on every side.
 pub fn content() -> Div {
     div()
         .flex()
@@ -578,8 +544,6 @@ pub fn content() -> Div {
         .p(px(NAV_COL_PAD))
 }
 
-/// The card's top row (Routemate's `Fleet` header row): the history
-/// arrows (`arrows`), at its left. The search row sits under it.
 pub fn head(arrows: impl IntoElement) -> Div {
     div()
         .debug_selector(|| "nav-head".into())
@@ -592,10 +556,6 @@ pub fn head(arrows: impl IntoElement) -> Div {
         .child(arrows)
 }
 
-/// An icon button of the card (the head's and the foot's doors): `size`
-/// square, its glyph in the icon ink (`NAV_ICON_INK`, T3's
-/// `--sidebar-icon-color`), under the pointer white 8% and the glyph
-/// strong, at once (T3's sidebar buttons snap); `on`, white 11%.
 pub fn icon_button(
     key: impl Into<SharedString>,
     glyph: &'static str,
@@ -626,8 +586,6 @@ pub fn icon_button(
         .child(icon_ink(glyph, glyph_size, t))
 }
 
-/// A glyph in the icon ink, lifted to `INK_STRONG` as the pointer brings
-/// `t` up.
 fn icon_ink(glyph: &'static str, size: f32, t: f32) -> gpui::Svg {
     icon(glyph, size, INK_STRONG).text_color(motion::mix(
         rgba(NAV_ICON_INK).into(),
@@ -638,13 +596,6 @@ fn icon_ink(glyph: &'static str, size: f32, t: f32) -> gpui::Svg {
 
 const EDGE_TAB_KEY: &str = "nav-edge-tab";
 
-/// The edge tab (Routemate's chevron tab), the one control that folds
-/// and opens the nav: `NAV_EDGE_TAB_W` by `NAV_EDGE_TAB_H` in the card's
-/// fill and ring, rounded on its outer (right) side, its chevron pointing
-/// where the card will go — left while `open`, right while folded. It has
-/// no left edge: open, it stands over the card's ring and reads as part of
-/// the card; folded, the window's edge closes it. Its tooltip names
-/// cmd-B. The caller places it.
 pub fn edge_tab(open: bool) -> Stateful<Div> {
     let t = motion::hover_t(&SharedString::from(EDGE_TAB_KEY));
     let r = px(NAV_EDGE_TAB_R);
@@ -777,11 +728,6 @@ pub fn scrollbar(scroll: &ScrollHandle, revealed: bool) -> Div {
         )
 }
 
-/// The list's edge fades (`NAV_EDGE_FADE`, T3's 12px), in the card's
-/// `SIDEBAR`: at
-/// the top once it has scrolled, at the foot while rows remain below, so
-/// no row is cut mid-glyph against the head or the foot. Siblings of the
-/// list, laid before the scrollbar so they never cover its thumb.
 pub fn edge_fades(scroll: &ScrollHandle) -> Vec<Div> {
     let y = scroll.offset().y;
     let below = scroll.max_offset().y + y > px(0.);
@@ -1379,10 +1325,6 @@ mod tests {
         }
     }
 
-    /// The open nav is a card floating on the board's ground: `NAV_INSET`
-    /// in from the head row's foot, the window's left edge and its foot, the
-    /// board starting the same gap past it; its content keeps the card's
-    /// width, `NAV_COL_PAD` in.
     #[test]
     fn the_nav_is_a_card_floating_under_the_head_row() {
         let mut column = column(Paint::solid(TX_GROUND));
@@ -1404,8 +1346,6 @@ mod tests {
         assert_eq!(style.padding.top, Some(px(NAV_COL_PAD).into()));
     }
 
-    /// The edge tab wears the card's fill and ring, rounded on its outer
-    /// side only, its chevron turned toward where the card will go.
     #[test]
     fn the_edge_tab_wears_the_card_and_points_the_way() {
         for open in [true, false] {
@@ -1440,9 +1380,6 @@ mod tests {
         assert_eq!(crate::cockpit::focus_thread_action(10), None);
     }
 
-    /// A long title fades into the ground its card lays under it — the
-    /// active fill over the nav's card, or the card at rest — rather than
-    /// ending in "…". The nav's card is the right panel's fill.
     #[test]
     fn a_title_fades_into_its_cards_ground() {
         let key = SharedString::from("nav-thread-0-fade");

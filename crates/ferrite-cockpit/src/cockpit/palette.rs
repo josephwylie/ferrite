@@ -1507,10 +1507,6 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let machines = self.machines.as_ref().map(|machines| machines.read(cx));
-        // C8: a toast speaks for a folded nav. With the nav open its rows are
-        // the queue, so the toast stands down (fading as one that goes on
-        // its own) and stands again if the nav folds while it still waits.
-        // Sounds and system notifications ring either way.
         let standing = self
             .needs_you
             .toasts()
@@ -1531,7 +1527,7 @@ impl CockpitView {
         // head and a Pane's head row, `TOAST_BOX_RIGHT` in from the board's
         // right edge (the panel's left while it shows).
         let right = self.panel_column_w() + self.task_panel_w() + TOAST_BOX_RIGHT;
-        let room = f32::from(viewport.width) - self.board_left() - right - TOAST_BOX_RIGHT;
+        let room = f32::from(viewport.width) - self.nav_width() - right - TOAST_BOX_RIGHT;
         let width = TOAST_W.min(room.max(0.));
         let over = WIN_CHROME_H + PANE_HEAD_H;
         let anchor = gpui::Bounds::new(

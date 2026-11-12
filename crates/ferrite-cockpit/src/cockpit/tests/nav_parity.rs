@@ -46,9 +46,6 @@ fn the_selection_follows_what_the_board_shows(cx: &mut TestAppContext) {
     });
 }
 
-/// The nav's scrollbar sits in the card's right padding, beside the rows
-/// and never over them: its strip is the `NAV_SCROLLBAR_GUTTER` at the
-/// card's edge, and every row ends before it.
 #[gpui::test]
 fn the_nav_scrollbar_sits_beside_the_rows(cx: &mut TestAppContext) {
     use ferrite_ui::theme::NAV_SCROLLBAR_GUTTER;
@@ -61,8 +58,6 @@ fn the_nav_scrollbar_sits_beside_the_rows(cx: &mut TestAppContext) {
     tick(cx);
     let card = cx.debug_bounds("nav-card").expect("the card");
     let bar = cx.debug_bounds("nav-scrollbar").expect("the scrollbar");
-    // The bar's strip is its layer's right `NAV_SCROLLBAR_GUTTER`: the
-    // layer reaches the card's edge, past the rows' padding.
     assert_eq!(bar.right(), card.right(), "at the card's edge");
     let strip = bar.right() - px(NAV_SCROLLBAR_GUTTER);
     for thread in threads {
@@ -73,9 +68,6 @@ fn the_nav_scrollbar_sits_beside_the_rows(cx: &mut TestAppContext) {
     }
 }
 
-/// N-8 (SPEC §5.1): no seam beside the nav — the card floats on the
-/// board's ground — so the board starts `NAV_INSET` past the card, at the
-/// column's edge; folded, at the window's.
 #[gpui::test]
 fn the_board_starts_past_the_card(cx: &mut TestAppContext) {
     use ferrite_ui::theme::NAV_INSET;
@@ -91,11 +83,11 @@ fn the_board_starts_past_the_card(cx: &mut TestAppContext) {
     assert_eq!(card.bottom(), px(700. - NAV_INSET), "over the window's foot");
     view.read_with(cx, |view, _| {
         assert!(
-            (view.board_left() - f32::from(column.right())).abs() < 0.5,
+            (view.nav_width() - f32::from(column.right())).abs() < 0.5,
             "the board starts at the column's edge"
         );
         assert!(
-            (view.board_left() - f32::from(card.right()) - NAV_INSET).abs() < 0.5,
+            (view.nav_width() - f32::from(card.right()) - NAV_INSET).abs() < 0.5,
             "the gap past the card"
         );
     });
@@ -103,14 +95,10 @@ fn the_board_starts_past_the_card(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("nav-card").is_none(), "folded, no card");
     view.read_with(cx, |view, _| {
-        assert_eq!(view.board_left(), 0.0, "folded, the board has the window's edge");
+        assert_eq!(view.nav_width(), 0.0, "folded, the board has the window's edge");
     });
 }
 
-/// The edge tab is the one control that folds and opens the nav: open it
-/// stands on the card's right edge at its mid-height, folded at the
-/// window's left edge. The history arrows head the card while it is open
-/// and stand beside the traffic lights while it is folded.
 #[gpui::test]
 fn the_edge_tab_folds_and_opens_the_nav(cx: &mut TestAppContext) {
     use ferrite_ui::theme::{HISTORY_X, NAV_EDGE_TAB_W};

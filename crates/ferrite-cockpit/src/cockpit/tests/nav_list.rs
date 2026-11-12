@@ -388,7 +388,6 @@ fn a_narrow_window_folds_the_nav_without_saving_it(cx: &mut TestAppContext) {
         (false, saved),
         "nothing is saved"
     );
-    // Just past the threshold, the hysteresis holds it folded.
     cx.simulate_resize(gpui::size(px(threshold + 1.), px(900.)));
     tick(cx);
     assert!(view.read_with(cx, |view, _| view.nav_folded()), "held");

@@ -417,9 +417,8 @@ fn grain_tile() -> Arc<RenderImage> {
     Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]))
 }
 
-/// The grain over the whole card, tiled from its top left and rounded to
-/// its `radius` at the card's corners (an image paints past a clip's
-/// corners); it does not move with the list.
+/// Rounds its own corners to `radius`: gpui's content mask is a plain
+/// rectangle, so an image paints past a rounded clip's corners.
 pub fn grain(radius: f32) -> impl IntoElement {
     gpui::canvas(
         |_, _, _| {},

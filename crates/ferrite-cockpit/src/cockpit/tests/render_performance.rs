@@ -1527,10 +1527,6 @@ fn board_left(cx: &mut gpui::VisualTestContext) -> f32 {
     f32::from(cx.debug_bounds("board").expect("the board").left())
 }
 
-/// cmd-b snaps the board's left edge between the nav's column and the
-/// window's edge, as Claude's sidebar does: the new edge is there on the
-/// next frame, and nothing asks for a frame after it (no ride lays the
-/// board out again every frame).
 #[gpui::test]
 fn the_nav_collapse_snaps_without_frames(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
@@ -1551,7 +1547,6 @@ fn the_nav_collapse_snaps_without_frames(cx: &mut TestAppContext) {
     }
 }
 
-/// Reduced motion: the board lands at its new edge at once.
 #[gpui::test]
 fn reduced_motion_snaps_the_nav_collapse(cx: &mut TestAppContext) {
     ferrite_ui::motion::testing::drive();
@@ -2636,7 +2631,6 @@ fn needs_you_toast_comes_and_goes(
     core.enter_group(group).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    // A toast speaks for a folded nav (C8).
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);
     settle(cx);

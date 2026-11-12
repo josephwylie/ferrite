@@ -791,8 +791,6 @@ fn the_titlebar_remains_draggable_across_the_window(cx: &mut TestAppContext) {
             "the cards start under the head row"
         );
         if ferrite_ui::frame::CUSTOM || cfg!(target_os = "macos") {
-            // The strip runs from the window's left edge, open or folded:
-            // the band round the traffic lights drags too.
             let drag = cx.debug_bounds("titlebar-drag").expect("the drag region");
             assert!(
                 drag.contains(&gpui::point(px(600.), px(16.))),

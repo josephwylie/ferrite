@@ -395,19 +395,9 @@ pub struct CockpitView {
     tools: tools::Tools,
     agent_drills: agent_pane::AgentDrills,
     native_copy: Option<String>,
-    /// cmd-b (#21): the nav folded away by the operator. In memory
-    /// only; the Settings preference is where a launch starts from.
     nav_collapsed: bool,
-    /// The window is too narrow for the open nav beside the board
-    /// (rule 2.7.7, `update_auto_fold`): the nav is folded away, and
-    /// nothing is saved. Held with `NAV_AUTO_FOLD_HYSTERESIS`.
     nav_auto_fold: std::cell::Cell<bool>,
-    /// cmd-B while the window holds the nav folded: the operator's override
-    /// of the narrow-window fold, kept for the session (another cmd-B while
-    /// narrow folds it again). Never saved.
     nav_forced_open: bool,
-    /// Measuring what the board would be beside the open nav
-    /// (`update_auto_fold`): `nav_width` answers the full width meanwhile.
     nav_measure_full: std::cell::Cell<bool>,
     /// The pointer is inside the nav column: its scrollbar shows.
     nav_hovered: bool,
@@ -2836,9 +2826,6 @@ impl CockpitView {
             || self.sheet_float_open()
     }
 
-    /// How much of the window's left edge the nav holds right now: its
-    /// column open, nothing folded — by cmd-b, or by a window too narrow
-    /// for it (`nav_folded`).
     fn nav_width(&self) -> f32 {
         if !self.nav_measure_full.get() && self.nav_folded() {
             0.0
@@ -2847,21 +2834,10 @@ impl CockpitView {
         }
     }
 
-    /// Whether the nav is folded away: the operator folded it, or the
-    /// window is too narrow for it and cmd-B has not overridden that.
     fn nav_folded(&self) -> bool {
         self.nav_collapsed || (self.nav_auto_fold.get() && !self.nav_forced_open)
     }
 
-    /// Rule 2.7.7, once per frame: fold the nav away — shown, never saved —
-    /// while the board beside the open nav would be narrower than
-    /// `NAV_AUTO_FOLD_BOARD_W`, or a board cell narrower than the tile
-    /// floor (`TILE_FLOOR_WIDTH`) that folding would lift it over. It opens
-    /// only once both clear their threshold by `NAV_AUTO_FOLD_HYSTERESIS`.
-    /// The operator's cmd-B override (`nav_forced_open`) outranks it either
-    /// way. The board beside the open nav is the window less its column and
-    /// what the board leaves at its right (`board_right`: the panel, or the
-    /// board's gutter).
     fn update_auto_fold(&mut self, window: &Window) {
         use ferrite_core::docview::TILE_FLOOR_WIDTH;
         use ferrite_ui::theme::{NAV_AUTO_FOLD_BOARD_W, NAV_AUTO_FOLD_HYSTERESIS};
@@ -2879,8 +2855,6 @@ impl CockpitView {
         self.nav_measure_full.set(true);
         let full = narrowest(self);
         self.nav_measure_full.set(false);
-        // What the narrowest cell would be with the nav folded: the same
-        // tree, every column widened by the board's gain.
         let gain = (width - right) / board.max(1.0);
         let folded = full * gain;
         let cramped = full < TILE_FLOOR_WIDTH + slack && folded >= TILE_FLOOR_WIDTH;
@@ -2946,7 +2920,7 @@ impl CockpitView {
     fn board_bounds(&self, window: &Window) -> layout::Rect {
         let viewport = window.viewport_size();
         let top = ferrite_ui::frame::board_top();
-        let left = self.board_left();
+        let left = self.nav_width();
         let bounds = layout::Rect {
             x: left,
             y: top,
@@ -2967,12 +2941,6 @@ impl CockpitView {
         } else {
             0.0
         }
-    }
-
-    /// Where the board's left edge sits: past the nav's column, or the
-    /// window's edge with the nav folded. cmd-B moves it at once.
-    fn board_left(&self) -> f32 {
-        self.nav_width()
     }
 
     /// A Group's tree in the board as the last frame laid it out: the
@@ -3592,7 +3560,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Div {
         let bounds = self.board_bounds(window);
-        let origin_x = self.board_left();
+        let origin_x = self.nav_width();
         let local = |rect: layout::Rect| layout::Rect {
             x: rect.x - origin_x,
             ..rect
@@ -6202,9 +6170,6 @@ impl CockpitView {
         self.toggle_nav_now(cx);
     }
 
-    /// cmd-B, the edge tab: flip what is drawn. While the window
-    /// holds the nav folded (`nav_auto_fold`), the flip is an override that
-    /// is shown and never saved; otherwise it folds or opens the column.
     fn toggle_nav_now(&mut self, cx: &mut Context<Self>) {
         if !self.nav_collapsed && self.nav_auto_fold.get() {
             self.nav_forced_open = !self.nav_forced_open;
@@ -6217,9 +6182,6 @@ impl CockpitView {
         self.set_nav_collapsed(!self.nav_collapsed, cx);
     }
 
-    /// cmd-B folds the nav away or opens it, at once: Claude's
-    /// sidebar snaps, and a ride would lay the whole board out again every
-    /// frame.
     fn set_nav_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
         if self.nav_collapsed == collapsed {
             return;
@@ -9013,11 +8975,6 @@ impl CockpitView {
             .or_else(|| facts.branch.clone())
     }
 
-    /// Land on a Thread from the nav's other doors — an Activity
-    /// row: the Group on screen when it holds the Thread, else its
-    /// home Group's view, else its Pane if open, else revived — exactly as
-    /// a press on its own row does. A Worker or a Coordinator is reached
-    /// through its owner instead (`land_on_owned`).
     fn land_on_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         if let Some(owner) = self.cockpit.owner(thread) {
             self.land_on_owned(thread, owner, cx);
@@ -10676,7 +10633,7 @@ impl CockpitView {
                             .top_0()
                             .bottom_0()
                             .right(px(panel_w))
-                            .left(px(self.board_left()))
+                            .left(px(self.nav_width()))
                             .flex()
                             .child(grid),
                     ),
@@ -12884,8 +12841,6 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The open nav: its column on the board's ground, holding the card
-    /// and its rows. Nothing while it is folded.
     fn nav(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.nav_folded() {
             return None;
@@ -12897,25 +12852,16 @@ impl CockpitView {
         )
     }
 
-    /// What the board paints at its left edge, which the nav's column
-    /// continues: the transcript's black while one Pane fills the board on
-    /// the plane, else the plane's grey (a Group's cells, the Factory, the
-    /// empty board).
     fn board_ground(&self) -> ferrite_ui::theme::Paint {
         let lone = !self.grid_board() && self.factory_view.is_none() && !self.empty_board_shown();
         ferrite_ui::theme::Paint::solid(ferrite_ui::theme::tx_ground(lone))
     }
 
-    /// The edge tab (`nav::edge_tab`), the one control that folds and
-    /// opens the nav: on the card's right edge at the card's mid-height, or
-    /// at the window's left edge while folded. Over the board, so it is
-    /// never under a Pane.
     fn nav_edge_tab(&self, cx: &mut Context<Self>) -> AnyElement {
-        use ferrite_ui::theme::{HAIRLINE_W, NAV_INSET};
+        use ferrite_ui::theme::NAV_INSET;
         let open = !self.nav_folded();
-        // Open, it overlaps the card's ring so the two read as one edge.
         let left = if open {
-            NAV_INSET + nav::WIDTH - HAIRLINE_W
+            nav::EDGE_TAB_OPEN_X_OVER_RING
         } else {
             0.0
         };

@@ -135,13 +135,10 @@ impl CockpitView {
         self.mount_part(Part::Pane(identity), frame, cx)
     }
 
-    /// The nav's rows at the card's content width: their cached part, or
-    /// the rows themselves without parts.
     pub(super) fn nav_rows(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         if !self.parts.borrow().on {
             return self.nav_content(&self.nav_state(), window, cx);
         }
-        // The box `nav::content` has in the card.
         let frame = div().flex_shrink_0().h_full().w(px(nav::WIDTH));
         self.mount_part(Part::Nav, frame, cx)
     }

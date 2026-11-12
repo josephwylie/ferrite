@@ -206,8 +206,6 @@ fn a_page_card_opens_the_page_beside_the_transcript(cx: &mut TestAppContext) {
     cx.simulate_click(expand.center(), gpui::Modifiers::none());
     tick(cx);
     let expanded = f32::from(cx.debug_bounds("panel").unwrap().size.width);
-    // Beside the full column the board would fall under its least, so the
-    // nav folds away and the Panel takes its room too.
     use ferrite_ui::theme::DOCK_THREAD_MIN_W;
     assert!(cx.debug_bounds("nav-card").is_none(), "the nav folds");
     let most = 1600. - DOCK_THREAD_MIN_W;

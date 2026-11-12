@@ -1249,7 +1249,6 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             (scene, setup)
         }
         // The notifications scene with the panel up: toasts only.
-        // The Needs-you toast speaks for a folded nav (C8).
         "toasts" => {
             let (scene, _) = notifications();
             let setup: Setup = Box::new(|view, _, cx| view.set_nav_collapsed(true, cx));
@@ -1343,7 +1342,6 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             });
             (scene, setup)
         }
-        // The nav folded away: the edge tab and the arrows by the lights.
         "navfolded" => {
             let (scene, _) = nav();
             let setup: Setup = Box::new(|view, _, cx| {

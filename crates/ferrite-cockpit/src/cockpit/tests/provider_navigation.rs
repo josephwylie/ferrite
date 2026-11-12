@@ -167,9 +167,6 @@ fn contract_native_discovery_dismissal_does_not_reopen_picker(cx: &mut TestAppCo
     });
 }
 
-/// Folded (cmd-B), the card goes away and the board takes the window's
-/// left edge; the edge tab stays at the window's edge, and ⌘B opens the
-/// card again.
 #[gpui::test]
 fn a_folded_nav_leaves_only_its_edge_tab(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("folded-nav-doors", 3);

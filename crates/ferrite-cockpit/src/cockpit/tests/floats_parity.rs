@@ -604,7 +604,6 @@ fn a_toasts_quick_answers_answer_the_request_and_leave(cx: &mut TestAppContext) 
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
-    // A toast speaks for a folded nav (C8).
     view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
     tick(cx);
     let (off, at) = view.read_with(cx, |view, _| {

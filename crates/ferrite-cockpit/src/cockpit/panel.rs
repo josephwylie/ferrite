@@ -161,9 +161,6 @@ fn floor_w(active: Option<&SurfaceId>, window: f32, nav: f32) -> f32 {
     }
 }
 
-/// The most the Panel takes in a window `window` wide beside a nav drawn
-/// `nav` wide (its column, or none folded): all but the nav and the board's
-/// least, and never under `PANEL_W`.
 fn most_w(window: f32, nav: f32) -> f32 {
     use ferrite_ui::theme::*;
     (window - nav - DOCK_THREAD_MIN_W).max(PANEL_W)
@@ -792,8 +789,6 @@ mod tests {
         assert_eq!(panel_w(&showing(SurfaceId::Overview, 600.), window, nav), 600.);
     }
 
-    /// Maximized, or dragged past it, the board keeps its least beside the
-    /// nav as drawn: its column, or none folded.
     #[test]
     fn maximized_leaves_the_board_its_least() {
         let window = 1900.;

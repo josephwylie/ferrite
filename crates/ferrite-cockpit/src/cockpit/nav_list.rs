@@ -27,9 +27,6 @@ pub(crate) enum NavFace {
 pub(crate) type NavMotion = flip::Motion<NavKey, NavFace>;
 
 impl CockpitView {
-    /// The card's content at its own width (`nav::content`): the history
-    /// arrows' row, the search row, the list — or, while the field holds
-    /// text, its results — with its fades and scrollbar, and the foot.
     pub(super) fn nav_content(
         &self,
         state: &nav::NavState,

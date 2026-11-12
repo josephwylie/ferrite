@@ -237,9 +237,6 @@ fn maximize_covers_all_but_the_boards_least_and_restores(cx: &mut TestAppContext
     assert_eq!(cx.debug_bounds("panel").unwrap().size.width, rest, "restored");
 }
 
-/// At a laptop's 1440, with the nav folded, maximize takes all but the
-/// board's least of the whole window, not of the room beside the nav's
-/// column that is no longer drawn.
 #[gpui::test]
 fn maximize_with_the_nav_folded_takes_its_room(cx: &mut TestAppContext) {
     let (core, _fake, _checkout) = bound_cockpit("surfaces-maximize-rail", Provider::Claude);
@@ -315,8 +312,6 @@ fn the_tabs_survive_a_restart(cx: &mut TestAppContext) {
     assert_eq!(tabs, [SurfaceId::Overview, SurfaceId::Changes, SurfaceId::Background]);
     assert_eq!(active, Some(SurfaceId::Changes));
     assert!(cx.debug_bounds("changes").is_some(), "its body, read again");
-    // Maximized, the board beside the full column falls under its least:
-    // the nav folds, and the Panel takes its room.
     assert!(cx.debug_bounds("nav-card").is_none());
     let width = cx.debug_bounds("panel").unwrap().size.width;
     assert_eq!(width, px(1900. - DOCK_THREAD_MIN_W), "maximized");

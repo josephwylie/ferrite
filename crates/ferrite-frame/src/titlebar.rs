@@ -39,11 +39,6 @@ use ferrite_ui::icons::{self, icon};
 use ferrite_ui::pointer::{Pointer, PointerPressed};
 use ferrite_ui::theme::*;
 
-/// The head row's drag strip across the whole window, as an overlay: the
-/// cards and the nav's card start under it (`board_top`), so this adds no
-/// layout and paints nothing — it claims what the window already left
-/// empty, the traffic lights' strip included.
-///
 /// It is the window's titlebar and no more: the strip the window drags by
 /// and, on Windows, the caption buttons at its right end.
 ///
@@ -64,8 +59,6 @@ pub fn strip(draggable: bool, maximized: bool) -> Div {
         .children(CUSTOM.then(|| caption_buttons(maximized)))
 }
 
-/// The strip's empty stretch: what the window drags by, the traffic
-/// lights over it on macOS. `draggable` is `strip`'s.
 fn head_drag(draggable: bool, maximized: bool) -> Div {
     if !draggable {
         div().flex_1().h_full()
