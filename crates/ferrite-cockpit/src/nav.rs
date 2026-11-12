@@ -522,8 +522,8 @@ pub fn card(content: impl IntoElement) -> Div {
         .text_size(px(FS_NAV))
         .line_height(px(NAV_LINE))
         .text_color(rgb(INK_STRONG))
-        .child(list::grain(NAV_R))
         .child(content)
+        .child(list::grain(NAV_R))
         .child(
             div()
                 .absolute()
