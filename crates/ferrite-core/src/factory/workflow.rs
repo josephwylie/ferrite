@@ -623,6 +623,11 @@ impl Definition {
         self.steps.iter_mut().find(|step| step.id == id)
     }
 
+    /// It has a merge Step: only a confirmed merge completes it.
+    pub fn merges(&self) -> bool {
+        self.steps.iter().any(|step| step.outcome_routes.is_some())
+    }
+
     /// The Step after `id` in the outline.
     pub fn after(&self, id: &str) -> Option<&Step> {
         let at = self.steps.iter().position(|step| step.id == id)?;
@@ -785,7 +790,7 @@ impl Definition {
                 }
                 let merge = |outcome| kind == RouteKind::Merge(outcome);
                 if *route == Destination::Complete
-                    && matches!(kind, RouteKind::Merge(_))
+                    && step.outcome_routes.is_some()
                     && !merge(MergeOutcome::Merged)
                 {
                     add(

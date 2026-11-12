@@ -607,6 +607,7 @@ fn a_returning_task_continues_or_starts_fresh() {
                 turns: 1,
                 decision: None,
                 lost: false,
+                closed: false,
             },
         )]),
     );
@@ -728,4 +729,5 @@ fn workflows_survive_a_reload() {
 
 mod coordinator;
 mod direction;
+mod interrogate;
 mod merging;

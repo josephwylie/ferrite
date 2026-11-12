@@ -366,7 +366,6 @@ pub(super) fn given(pr: Option<String>) -> Result<Option<PullRequest>, Refusal> 
 /// PR): a new head is the next revision.
 pub(super) fn reported_revision(
     task: &mut Task,
-    worker: crate::ThreadId,
     head: String,
     pr: Option<String>,
     now_ms: i64,
@@ -397,9 +396,6 @@ pub(super) fn reported_revision(
         (None, Some(named)) => task.delivery.pr = Some(named),
         (Some(_), _) => {}
     }
-    if !task.running() || task.worker != Some(worker) {
-        return Ok(Answer::Changed(false));
-    }
     let by = task.asker();
     let pr = task.delivery.pr.as_mut().expect("named above");
     if pr.current().is_some_and(|each| each.head == head) {
@@ -428,16 +424,12 @@ pub(super) fn reported_revision(
 /// tool result, about the current revision.
 pub(super) fn reported_evidence(
     task: &mut Task,
-    worker: crate::ThreadId,
     text: String,
     now_ms: i64,
 ) -> Result<Answer, Refusal> {
     let text = text.trim().to_string();
     if text.is_empty() {
         return Err(invalid("say what the command or tool showed"));
-    }
-    if !task.running() || task.worker != Some(worker) {
-        return Ok(Answer::Changed(false));
     }
     let by = task.asker();
     task.note(now_ms, Actor::Tool, format!("{by} reported: {text}"));

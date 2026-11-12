@@ -166,17 +166,26 @@ impl Task {
         let Some(old) = self.worker.take() else {
             return;
         };
-        self.workers.retain(|each| each.thread != old);
-        if !self.oversight.superseded.contains(&old) {
-            self.oversight.superseded.push(old);
-        }
+        self.retire(old, effects);
         let name = self.asker();
         self.note(
             now_ms,
             Actor::Ferrite,
             format!("{name}'s run was superseded; a late result from it is ignored"),
         );
-        effects.push(Effect::Park { thread: old });
+    }
+
+    /// `thread` is no longer one of its Workers: parked, kept in its
+    /// history (so it goes with the Task), and what it reports dropped.
+    pub(super) fn retire(&mut self, thread: ThreadId, effects: &mut Vec<Effect>) {
+        if self.worker == Some(thread) {
+            self.worker = None;
+        }
+        self.workers.retain(|each| each.thread != thread);
+        if !self.oversight.superseded.contains(&thread) {
+            self.oversight.superseded.push(thread);
+        }
+        effects.push(Effect::Park { thread });
     }
 
     fn label(&self, to: &Destination) -> String {
@@ -214,7 +223,7 @@ impl Task {
 
 // ------------------------------------------------------------ commands
 
-/// A Worker asks the operator: its Task needs them, and nothing after it
+/// The current Worker asks the operator: its Task needs them, and nothing after it
 /// starts until they answer.
 pub(super) fn ask(
     task: &mut Task,
@@ -226,9 +235,6 @@ pub(super) fn ask(
     let text = text.trim().to_string();
     if text.is_empty() {
         return Err(invalid("say the question"));
-    }
-    if !task.running() || task.worker != Some(worker) {
-        return Ok(Answer::Changed(false));
     }
     let asker = task.asker();
     task.oversight.asked += 1;
@@ -633,8 +639,7 @@ pub(super) fn follow(
             Resolved::Complete => {
                 task.oversight.direction = None;
                 task.result = Some(text);
-                task.reason = None;
-                task.enter(Status::Completed, effects);
+                task.complete(effects);
             }
             Resolved::Human => {
                 task.reason = Some(text);
@@ -751,9 +756,8 @@ fn approved(task: &mut Task, now_ms: i64, effects: &mut Vec<Effect>) {
     match after {
         Destination::Step(_) => follow(task, None, after, result, now_ms, effects),
         _ => {
-            task.reason = None;
             task.result = Some(result).filter(|result| !result.is_empty());
-            task.enter(Status::Completed, effects);
+            task.complete(effects);
         }
     }
 }
@@ -777,20 +781,25 @@ pub(super) fn permission(
                 format!("{asker} asks permission: {what}"),
             );
             task.reason = Some(format!("{asker} asks permission: {what}"));
+            let nudged_ms = task.watch.nudged_ms;
             task.enter(Status::NeedsHuman, effects);
+            task.watch.nudged_ms = nudged_ms;
             true
         }
         (None, true) if task.status == Status::NeedsHuman => {
-            task.oversight.permission = None;
             task.reason = None;
             task.note(
                 now_ms,
                 Actor::Ferrite,
                 "Permission answered; the agent continues",
             );
-            task.enter(Status::Working, effects);
+            // The same run goes on: a nudge it had stays had.
+            let nudged_ms = task.watch.nudged_ms;
+            task.to_work(effects);
+            task.oversight.permission = None;
             task.watch = Watch {
                 baseline: turns,
+                nudged_ms,
                 ..Watch::default()
             };
             true

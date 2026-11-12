@@ -15,6 +15,7 @@ fn lost(turns: u64) -> BTreeMap<ThreadId, Seen> {
             turns,
             decision: None,
             lost: true,
+            closed: false,
         },
     )])
 }
@@ -134,6 +135,7 @@ fn each_lost(threads: &[ThreadId]) -> BTreeMap<ThreadId, Seen> {
                     turns: 0,
                     decision: None,
                     lost: true,
+                    closed: false,
                 },
             )
         })
@@ -602,6 +604,7 @@ fn an_idle_pass_writes_nothing_and_the_archive_is_sent_only_when_it_changes() {
             turns: 0,
             decision: None,
             lost: false,
+            closed: false,
         },
     )]);
     for at in 300..310 {

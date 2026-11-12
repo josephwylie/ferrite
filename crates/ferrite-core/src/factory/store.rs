@@ -9,7 +9,14 @@
 //! not made. The step changes the parts in place and says whether it did;
 //! its effects are held until that change is written, and a write that
 //! fails is tried again on the next pass, so nothing it decided is lost.
+//! What the Server reports it did (a Worker started, a read come back) is
+//! taken the same way: it already happened, so a failed write cannot
+//! refuse it. A part is marked written only by a write that succeeded.
 //! An idle pass writes nothing and copies nothing.
+//!
+//! The next ids are kept in a file of their own, written before any part
+//! that holds an id they gave: one Project's unreadable part cannot make
+//! another give its ids again.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -37,26 +44,36 @@ struct Archived {
 /// One Project's part of the Factory.
 #[derive(Default)]
 struct Part {
-    /// Its board: the Tasks not archived, its Workflows, its Coordinator
-    /// and proposals.
+    /// Its board: its Workflows, its Coordinator and proposals, and the
+    /// Tasks not in its Archive's file. An archived Task stays here until
+    /// that file holds it, so no failed write loses one.
     state: State,
-    /// Its archived Tasks, in the order they were archived.
+    /// Its archived Tasks as its Archive's file holds them, in the order
+    /// they were archived.
     archive: Vec<Task>,
     /// Why its files could not be read: it refuses every command, steps
     /// nothing and is never written.
     unreadable: Option<String>,
     /// Why its last write failed; cleared by the next that succeeds.
     failing: Option<String>,
-    /// The step changed its board, or its Archive, and it is not written.
+    /// Its board changed and is not written.
     unwritten: bool,
-    archive_unwritten: bool,
     /// What the step decided, held until what it changed is written.
     held: Vec<Effect>,
 }
 
+/// What a part's write did.
+struct Written {
+    /// Archived Tasks moved off the board into the Archive.
+    moved: bool,
+    /// Why the Archive could not be written, if it could not: its Tasks
+    /// stay on the board, and the next write tries again.
+    archive: Option<String>,
+}
+
 /// The next Task's, Workflow's and proposal's numbers, across every
 /// Project: an id is never given twice by one Server.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 struct Ids {
     task: u64,
     workflow: u64,
@@ -79,6 +96,14 @@ impl Ids {
             proposal: state.next_proposal,
         }
     }
+
+    fn max(self, other: Self) -> Self {
+        Self {
+            task: self.task.max(other.task),
+            workflow: self.workflow.max(other.workflow),
+            proposal: self.proposal.max(other.proposal),
+        }
+    }
 }
 
 /// Where a command's subject is.
@@ -92,6 +117,8 @@ pub struct Factory {
     /// Where the parts are written; `None` keeps them in memory (tests).
     dir: Option<PathBuf>,
     ids: Ids,
+    /// What the ids file holds.
+    ids_written: Ids,
     revision: u64,
     /// Moves only when an Archive changes.
     archive_revision: u64,
@@ -171,6 +198,41 @@ fn archive_path(dir: &Path, project: ProjectId) -> PathBuf {
     dir.join(format!("{}.archive.json", project.get()))
 }
 
+fn ids_path(dir: &Path) -> PathBuf {
+    dir.join("ids.json")
+}
+
+fn write_file(dir: &Path, path: &Path, bytes: serde_json::Result<Vec<u8>>) -> Result<(), String> {
+    let bytes = bytes.map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    crate::store::replace_file(path, &bytes).map_err(|error| error.to_string())
+}
+
+/// The next ids, written when they moved: before any part that holds one.
+fn write_ids(dir: Option<&Path>, written: &mut Ids, ids: Ids) -> Result<(), String> {
+    let Some(dir) = dir.filter(|_| ids != *written) else {
+        return Ok(());
+    };
+    write_file(dir, &ids_path(dir), serde_json::to_vec_pretty(&ids))?;
+    *written = ids;
+    Ok(())
+}
+
+/// The archived Task a script's repeated submission already started.
+fn archived_submission(command: &Command, archive: &[Task]) -> Option<TaskId> {
+    let Command::Submit {
+        workflow, identity, ..
+    } = command
+    else {
+        return None;
+    };
+    let request = starts::script_request(workflow, identity);
+    archive
+        .iter()
+        .find(|task| task.request.as_deref() == Some(request.as_str()))
+        .map(|task| task.id.clone())
+}
+
 /// Take the Tasks that have just been archived off the board.
 fn sweep(state: &mut State) -> Vec<Task> {
     if !state.tasks.iter().any(Task::archived) {
@@ -184,39 +246,64 @@ fn sweep(state: &mut State) -> Vec<Task> {
 }
 
 impl Part {
+    /// Its archived Tasks into the Archive's file, then (when `board`, or
+    /// when a Task left it) its board into its own: a Task leaves the
+    /// board's file only once the Archive's holds it. A failed Archive
+    /// write leaves them on the board and is not the board's failure.
     fn write(
-        &self,
+        &mut self,
         dir: Option<&Path>,
         project: ProjectId,
         board: bool,
-        archive: bool,
-    ) -> Result<(), String> {
-        let Some(dir) = dir else {
-            return Ok(());
+    ) -> Result<Written, String> {
+        let mut written = Written {
+            moved: false,
+            archive: None,
         };
-        let write = |path: PathBuf, bytes: serde_json::Result<Vec<u8>>| -> Result<(), String> {
-            let bytes = bytes.map_err(|error| error.to_string())?;
-            std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
-            crate::store::replace_file(&path, &bytes).map_err(|error| error.to_string())
-        };
-        // The Archive first: a Task written to both is the Archive's.
-        if archive {
-            let archived = Archived {
-                version: SCHEMA_VERSION,
-                tasks: self.archive.clone(),
+        if self.state.tasks.iter().any(Task::archived) {
+            let moving: Vec<&Task> = self.state.tasks.iter().filter(|t| t.archived()).collect();
+            // One the Archive's file already holds (a board write failed
+            // after it) is replaced, not held twice.
+            let mut archive: Vec<Task> = self
+                .archive
+                .iter()
+                .filter(|kept| !moving.iter().any(|task| task.id == kept.id))
+                .cloned()
+                .collect();
+            archive.extend(moving.into_iter().cloned());
+            let saved = match dir {
+                None => Ok(()),
+                Some(dir) => write_file(
+                    dir,
+                    &archive_path(dir, project),
+                    serde_json::to_vec_pretty(&Archived {
+                        version: SCHEMA_VERSION,
+                        tasks: archive.clone(),
+                    }),
+                ),
             };
-            write(
-                archive_path(dir, project),
-                serde_json::to_vec_pretty(&archived),
-            )?;
+            match saved {
+                Ok(()) => {
+                    sweep(&mut self.state);
+                    self.archive = archive;
+                    written.moved = true;
+                }
+                Err(error) => written.archive = Some(error),
+            }
         }
-        if board {
-            write(
-                part_path(dir, project),
+        if let Some(dir) = dir.filter(|_| board || written.moved) {
+            write_file(
+                dir,
+                &part_path(dir, project),
                 serde_json::to_vec_pretty(&self.state),
             )?;
         }
-        Ok(())
+        Ok(written)
+    }
+
+    /// Its Archive's file is behind: archived Tasks wait on the board.
+    fn archive_behind(&self) -> bool {
+        self.state.tasks.iter().any(Task::archived)
     }
 
     fn trouble(&self) -> Option<&String> {
@@ -233,6 +320,11 @@ impl Factory {
                 task: 1,
                 workflow: 1,
                 proposal: 1,
+            },
+            ids_written: Ids {
+                task: 0,
+                workflow: 0,
+                proposal: 0,
             },
             revision: 0,
             archive_revision: 0,
@@ -270,6 +362,18 @@ impl Factory {
             }
             Err(error) => {
                 factory.trouble = Some(unreadable(&legacy, error));
+                return factory;
+            }
+        }
+        let ids = ids_path(&dir);
+        match read_json::<Ids>(&ids) {
+            Ok(None) => {}
+            Ok(Some(written)) => {
+                factory.ids = factory.ids.max(written);
+                factory.ids_written = written;
+            }
+            Err(error) => {
+                factory.trouble = Some(unreadable(&ids, error));
                 return factory;
             }
         }
@@ -380,9 +484,12 @@ impl Factory {
         }
         let dir = self.dir.clone();
         for (project, part) in &mut parts {
-            part.archive = sweep(&mut part.state);
-            part.write(dir.as_deref(), *project, true, true)
+            let written = part
+                .write(dir.as_deref(), *project, true)
                 .map_err(io::Error::other)?;
+            if let Some(error) = written.archive {
+                return Err(io::Error::other(error));
+            }
         }
         let mut aside = legacy.as_os_str().to_owned();
         aside.push(".migrated");
@@ -390,17 +497,11 @@ impl Factory {
         Ok(())
     }
 
-    /// After loading: ids continue past every part's, Tasks archived by
-    /// an older Ferrite leave the board, and what the restart caught is
-    /// remembered for the first step.
+    /// After loading: ids continue past every part's, and what the
+    /// restart caught is remembered for the first step. An archived Task
+    /// still on the board goes to the Archive at the first write.
     fn loaded(&mut self) {
         for part in self.parts.values_mut() {
-            let gone = sweep(&mut part.state);
-            for task in gone {
-                if !part.archive.iter().any(|kept| kept.id == task.id) {
-                    part.archive.push(task);
-                }
-            }
             // A Task written to both is the Archive's.
             let archived: BTreeSet<TaskId> = part.archive.iter().map(|t| t.id.clone()).collect();
             part.state.tasks.retain(|task| !archived.contains(&task.id));
@@ -533,37 +634,60 @@ impl Factory {
         if let Some(trouble) = &part.unreadable {
             return Err(failed(trouble.clone()));
         }
+        if let Some(task) = archived_submission(&command, &part.archive) {
+            return Ok(Answer::Duplicate(task));
+        }
+        let fact = command.reports_effect();
         ids.lend(&mut part.state);
         let mut next = part.state.clone();
         let mut effects = Vec::new();
         let answer = next.command(command, now_ms, &mut effects)?;
-        let gone = sweep(&mut next);
-        if next != part.state || !gone.is_empty() {
-            let mut written = Part {
-                state: next,
-                archive: part.archive.clone(),
-                ..Part::default()
-            };
-            written.archive.extend(gone.iter().cloned());
-            if let Err(error) = written.write(self.dir.as_deref(), project, true, !gone.is_empty())
-            {
-                part.failing = Some(format!("The Factory could not be saved: {error}"));
-                return Err(failed(format!("the Factory could not be saved: {error}")));
-            }
-            part.state = written.state;
-            if !gone.is_empty() {
-                part.archive = written.archive;
-                self.archive_revision += 1;
-            }
-            part.failing = None;
-            // What the step held is written now too.
-            part.unwritten = false;
-            part.archive_unwritten = false;
-            self.pending.append(&mut part.held);
+        if next == part.state {
+            self.pending.extend(effects);
+            return Ok(answer);
+        }
+        let made = Ids::of(&next);
+        let mut written = Part {
+            state: next,
+            archive: std::mem::take(&mut part.archive),
+            ..Part::default()
+        };
+        let dir = self.dir.as_deref();
+        let result = write_ids(dir, &mut self.ids_written, made)
+            .and_then(|()| written.write(dir, project, true));
+        part.archive = std::mem::take(&mut written.archive);
+        let failing = match &result {
+            Err(error) => Some(error),
+            Ok(done) => done.archive.as_ref(),
+        }
+        .map(|error| format!("The Factory could not be saved: {error}"));
+        if part.failing != failing {
+            part.failing = failing;
             self.revision += 1;
         }
-        self.ids = Ids::of(&part.state);
-        self.pending.extend(effects);
+        match &result {
+            Err(error) if !fact => {
+                return Err(failed(format!("the Factory could not be saved: {error}")))
+            }
+            Ok(done) => {
+                if done.moved {
+                    self.archive_revision += 1;
+                }
+                // What the step held is written now too.
+                part.unwritten = false;
+                self.pending.append(&mut part.held);
+                self.pending.extend(effects);
+            }
+            // A fact is taken as the step's changes are: in place, its
+            // effects held until a later write succeeds.
+            Err(_) => {
+                part.unwritten = true;
+                part.held.extend(effects);
+            }
+        }
+        part.state = written.state;
+        self.revision += 1;
+        self.ids = made;
         Ok(answer)
     }
 
@@ -573,20 +697,26 @@ impl Factory {
         let part = self.parts.get_mut(&project).expect("routed to it");
         match command {
             Command::Delete { task } => {
-                let mut written = Part {
-                    archive: part.archive.clone(),
-                    ..Part::default()
-                };
-                let at = written
-                    .archive
+                let mut archive = part.archive.clone();
+                let at = archive
                     .iter()
                     .position(|each| each.id == task)
                     .ok_or_else(super::unknown_task)?;
-                let gone = written.archive.remove(at);
-                written
-                    .write(self.dir.as_deref(), project, false, true)
+                let gone = archive.remove(at);
+                if let Some(dir) = self.dir.as_deref() {
+                    let archived = Archived {
+                        version: SCHEMA_VERSION,
+                        tasks: archive,
+                    };
+                    write_file(
+                        dir,
+                        &archive_path(dir, project),
+                        serde_json::to_vec_pretty(&archived),
+                    )
                     .map_err(|error| failed(format!("the Factory could not be saved: {error}")))?;
-                part.archive = written.archive;
+                    archive = archived.tasks;
+                }
+                part.archive = archive;
                 super::deleted(gone, &mut self.pending);
                 self.revision += 1;
                 self.archive_revision += 1;
@@ -613,8 +743,8 @@ impl Factory {
     }
 
     /// One pass: what to do now, given the time and what each Worker's
-    /// Thread is doing. A Worker the Server does not see (no open Thread)
-    /// is left as it is.
+    /// Thread is doing. A Worker the Server says nothing of is left as it
+    /// is.
     pub fn step(&mut self, now_ms: i64, workers: &BTreeMap<ThreadId, Seen>) -> Vec<Effect> {
         if self.trouble.is_some() {
             return Vec::new();
@@ -635,6 +765,8 @@ impl Factory {
             }
             self.ids = Ids::of(&part.state);
         }
+        // A part holding an id the ids file has not given waits for it.
+        let ids = write_ids(self.dir.as_deref(), &mut self.ids_written, self.ids);
         let admit = self.admissions();
         let none = BTreeSet::new();
         for (project, part) in &mut self.parts {
@@ -653,28 +785,30 @@ impl Factory {
             if changed.contains(project) {
                 self.revision += 1;
                 part.unwritten = true;
-                let gone = sweep(&mut part.state);
-                if !gone.is_empty() {
-                    part.archive.extend(gone);
-                    part.archive_unwritten = true;
-                    self.archive_revision += 1;
-                }
             }
-            if part.unwritten || part.archive_unwritten {
-                match part.write(
-                    self.dir.as_deref(),
-                    *project,
-                    part.unwritten,
-                    part.archive_unwritten,
-                ) {
-                    Ok(()) => {
-                        part.unwritten = false;
-                        part.archive_unwritten = false;
+            if part.unwritten || part.archive_behind() {
+                let board = part.unwritten;
+                let result = ids
+                    .clone()
+                    .and_then(|()| part.write(self.dir.as_deref(), *project, board));
+                if let Ok(done) = &result {
+                    part.unwritten = false;
+                    if done.moved {
+                        self.revision += 1;
+                        self.archive_revision += 1;
+                    }
+                }
+                let failing = match &result {
+                    Err(error) => Some(error),
+                    Ok(done) => done.archive.as_ref(),
+                };
+                match failing {
+                    None => {
                         if part.failing.take().is_some() {
                             self.revision += 1;
                         }
                     }
-                    Err(error) => {
+                    Some(error) => {
                         if part.failing.is_none() {
                             crate::log!("factory: a Project's Factory could not be saved: {error}");
                             self.revision += 1;
@@ -686,7 +820,7 @@ impl Factory {
                     }
                 }
             }
-            if !part.unwritten && !part.archive_unwritten {
+            if !part.unwritten {
                 self.pending.append(&mut part.held);
             }
         }
@@ -699,7 +833,9 @@ impl Factory {
     }
 
     /// Which Queued Tasks may start working now, oldest first, while
-    /// fewer than the limit work across every Project.
+    /// fewer than the limit hold a place across every Project: a Task
+    /// waiting on a Provider permission keeps its own, since answering
+    /// it lets its Worker go on at once.
     fn admissions(&self) -> BTreeMap<ProjectId, BTreeSet<TaskId>> {
         let readable = || {
             self.parts
@@ -708,7 +844,7 @@ impl Factory {
         };
         let working = readable()
             .flat_map(|(_, part)| &part.state.tasks)
-            .filter(|task| task.status == Status::Working)
+            .filter(|task| task.running())
             .count();
         let room = self.limit.saturating_sub(working);
         let mut queued: Vec<(u64, ProjectId, &TaskId)> = readable()

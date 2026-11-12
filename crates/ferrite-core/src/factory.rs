@@ -627,6 +627,23 @@ pub enum Command {
     },
 }
 
+impl Command {
+    /// It reports what the Server already did: a failed write cannot
+    /// refuse it, so it is taken and written later (Persist, then act).
+    fn reports_effect(&self) -> bool {
+        matches!(
+            self,
+            Command::WorkerStarted { .. }
+                | Command::WorkerFailed { .. }
+                | Command::WorktreeTidied { .. }
+                | Command::GitHubRead { .. }
+                | Command::GitHubHead { .. }
+                | Command::CoordinatorStarted { .. }
+                | Command::CoordinatorFailed { .. }
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
     Task(TaskId),
@@ -694,6 +711,9 @@ pub struct Seen {
     /// No Session serves it and none ended at rest: its Session closed on
     /// its own, or the Server restarted, and nothing starts one (#226).
     pub lost: bool,
+    /// Its Thread is not open: someone parked it (`project.close`,
+    /// `thread.close`) or it is gone.
+    pub closed: bool,
 }
 
 /// What the Server carries out, in order.
@@ -799,13 +819,7 @@ fn one() -> u64 {
 /// A deleted Task's Workers go with it, and only with it (#226); its
 /// worktree is removed if its checkout is clean.
 fn deleted(task: Task, effects: &mut Vec<Effect>) {
-    let mut gone = task.every_worker();
-    for thread in &task.oversight.superseded {
-        if !gone.contains(thread) {
-            gone.push(*thread);
-        }
-    }
-    for thread in gone {
+    for thread in task.every_worker() {
         effects.push(Effect::DeleteThread { thread });
     }
     if let Some(path) = task.worktree {
@@ -831,9 +845,7 @@ fn not_a_worker() -> Refusal {
 impl Task {
     /// `thread` is one of its Workers, current or not.
     pub fn had_worker(&self, thread: ThreadId) -> bool {
-        self.worker == Some(thread)
-            || self.workers.iter().any(|each| each.thread == thread)
-            || self.oversight.superseded.contains(&thread)
+        self.every_worker().contains(&thread)
     }
 
     /// The Step it is at, in the version it keeps.
@@ -854,15 +866,38 @@ impl Task {
         });
     }
 
-    /// Back to work: a Task already Working keeps its place; any other
-    /// waits its turn in Queued, its Worker and what it is to be told
-    /// kept, until the limit has room (the step lets it in).
+    /// Back to work, the one way into Working besides the step letting a
+    /// Queued Task in. A Task whose Worker's run still goes holds its
+    /// place in the limit ([`Task::running`]: Working, or waiting on a
+    /// Provider permission) and keeps it; any other waits its turn in
+    /// Queued, its Worker and what it is to be told kept.
     fn to_work(&mut self, effects: &mut Vec<Effect>) {
-        let status = match self.status {
-            Status::Working => Status::Working,
-            _ => Status::Queued,
+        let status = match self.running() {
+            true => Status::Working,
+            false => Status::Queued,
         };
         self.enter(status, effects);
+    }
+
+    /// The one way into Completed. A Workflow that merges completes only
+    /// on a merge its merge Step reported; otherwise the operator is
+    /// wanted.
+    fn complete(&mut self, effects: &mut Vec<Effect>) {
+        let merges = self
+            .workflow
+            .as_ref()
+            .is_some_and(|run| run.definition.merges());
+        if merges && !self.delivery.pr.as_ref().is_some_and(|pr| pr.merged) {
+            self.reason = Some(
+                "Only a confirmed merge completes this workflow, and none was reported: merge it \
+                 yourself, or redirect the task to its merge agent."
+                    .into(),
+            );
+            self.enter(Status::NeedsHuman, effects);
+            return;
+        }
+        self.reason = None;
+        self.enter(Status::Completed, effects);
     }
 
     /// Move to `status`, telling the operator when it is one they hear of.
@@ -899,6 +934,15 @@ impl State {
             .iter_mut()
             .find(|task| task.had_worker(worker))
             .ok_or_else(not_a_worker)
+    }
+
+    /// The Task `worker`'s report is for, when it counts: it is the
+    /// Task's current Worker and its run still goes. Any other Worker's
+    /// (superseded, replaced, at another Step, or after the Task stopped)
+    /// is dropped before anything is touched.
+    fn reporting(&mut self, worker: ThreadId) -> Result<Option<&mut Task>, Refusal> {
+        let task = self.worker_task(worker)?;
+        Ok((task.running() && task.worker == Some(worker)).then_some(task))
     }
 
     fn workflow_mut(&mut self, id: &str) -> Result<&mut Workflow, Refusal> {
@@ -1201,12 +1245,26 @@ impl State {
                 if task.worker == Some(thread) {
                     return Ok(Answer::Changed(false));
                 }
+                // A Worker this one replaces stays in the Task's history.
+                let step = task.step.clone();
+                let replaced: Vec<ThreadId> = task
+                    .worker
+                    .into_iter()
+                    .chain(
+                        task.workers
+                            .iter()
+                            .filter(|each| Some(&each.step) == step.as_ref())
+                            .map(|each| each.thread),
+                    )
+                    .collect();
+                for old in replaced {
+                    task.retire(old, effects);
+                }
                 task.worker = Some(thread);
                 if task.worktree.is_none() {
                     task.worktree = worktree;
                 }
-                if let Some(step) = task.step.clone() {
-                    task.workers.retain(|each| each.step != step);
+                if let Some(step) = step {
                     task.workers.push(StepWorker { step, thread });
                 }
                 Ok(Answer::Changed(true))
@@ -1226,12 +1284,9 @@ impl State {
                 Ok(Answer::Changed(true))
             }
             Command::Report { worker, outcome } => {
-                let task = self.worker_task(worker)?;
-                // A Worker no longer at its Task's Step (one Step runs at
-                // a time) reports into the past.
-                if !task.running() || task.worker != Some(worker) {
+                let Some(task) = self.reporting(worker)? else {
                     return Ok(Answer::Changed(false));
-                }
+                };
                 if task.workflow.is_some() {
                     direct::reported(task, outcome, now_ms, effects)?;
                     return Ok(Answer::Changed(true));
@@ -1247,8 +1302,7 @@ impl State {
                             now_ms,
                         );
                         task.result = Some(summary);
-                        task.reason = None;
-                        task.enter(Status::Completed, effects);
+                        task.complete(effects);
                     }
                     Outcome::Unable { tried } => {
                         task.note(now_ms, Actor::Agent, format!("Unable to finish: {tried}"));
@@ -1325,10 +1379,10 @@ impl State {
                 deleted(self.tasks.remove(at), effects);
                 Ok(Answer::Changed(true))
             }
-            Command::Ask { worker, text } => {
-                let task = self.worker_task(worker)?;
-                direct::ask(task, worker, text, now_ms, effects)
-            }
+            Command::Ask { worker, text } => match self.reporting(worker)? {
+                Some(task) => direct::ask(task, worker, text, now_ms, effects),
+                None => Ok(Answer::Changed(false)),
+            },
             Command::AnswerQuestion {
                 task,
                 text,
@@ -1343,12 +1397,14 @@ impl State {
             Command::Redirect { task, direction } => {
                 direct::redirect(self.task_mut(&task)?, direction, now_ms, effects)
             }
-            Command::ReportRevision { worker, head, pr } => {
-                pr::reported_revision(self.worker_task(worker)?, worker, head, pr, now_ms)
-            }
-            Command::ReportEvidence { worker, text } => {
-                pr::reported_evidence(self.worker_task(worker)?, worker, text, now_ms)
-            }
+            Command::ReportRevision { worker, head, pr } => match self.reporting(worker)? {
+                Some(task) => pr::reported_revision(task, head, pr, now_ms),
+                None => Ok(Answer::Changed(false)),
+            },
+            Command::ReportEvidence { worker, text } => match self.reporting(worker)? {
+                Some(task) => pr::reported_evidence(task, text, now_ms),
+                None => Ok(Answer::Changed(false)),
+            },
             Command::WorktreeTidied { task, kept } => {
                 pr::tidied(self.task_mut(&task)?, kept, now_ms)
             }
@@ -1514,7 +1570,8 @@ impl State {
                 true => recovery::Cause::Restart,
                 false => recovery::Cause::Ended,
             };
-            if recovery::lost(task, seen, cause, now_ms, effects)
+            if recovery::closed(task, seen, now_ms, effects)
+                || recovery::lost(task, seen, cause, now_ms, effects)
                 || direct::permission(task, seen.decision.as_deref(), seen.turns, now_ms, effects)
             {
                 changed = true;
@@ -1560,8 +1617,7 @@ fn enter_step(
             task.watch.prompt = Some(return_prompt(task, step));
         }
         Some(old) => {
-            effects.push(Effect::Park { thread: old });
-            task.workers.retain(|each| each.step != step.id);
+            task.retire(old, effects);
             begin_step(task, step, now_ms, effects);
         }
         None => begin_step(task, step, now_ms, effects),
