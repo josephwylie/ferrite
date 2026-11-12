@@ -440,12 +440,11 @@ pub(super) fn reported_evidence(
 /// What every Step is told of the PR: which it is, its current revision
 /// and the approved one, and how to report a new head.
 pub(super) fn context(task: &Task) -> String {
-    let report = super::REVISION;
     let Some(pr) = &task.delivery.pr else {
-        return format!(
-            "\n## Pull request\n\nThe task has no pull request yet. If you open one, report it \
-             and its head commit:\n\n    {report} <head commit> --pr owner/repository#number\n"
-        );
+        return "\n## Pull request\n\nThe task has no pull request yet. If you open one, report it \
+                and its head commit with `report_revision` (`head`, and `pr` as \
+                `owner/repository#number`).\n"
+            .into();
     };
     let mut out = format!("\n## Pull request\n\n{} ({})\n", pr.label(), pr.url());
     match pr.current() {
@@ -468,10 +467,9 @@ pub(super) fn context(task: &Task) -> String {
         ));
     }
     out.push_str(&format!(
-        "\nWhen you push commits to it, report its new head:\n\n    {report} <head commit>\n\n\
-         Keep what a check or tool showed as evidence, one result at a time:\n\n    {evidence} \
-         \"<the command>: <what it showed>\"\n",
-        evidence = super::EVIDENCE,
+        "\nWhen you push commits to it, report its new head with `report_revision` (`head`).\n\n\
+         Keep what a check or tool showed as evidence with `report_evidence`, one result at a \
+         time: `<the command>: <what it showed>`.\n",
     ));
     out
 }
@@ -599,16 +597,9 @@ pub(super) fn tidied(
 /// unless it confirmed the merge, and `head_changed` without merging
 /// when the PR is not at the approved revision.
 pub(super) fn merge_reporting(task: &Task) -> String {
-    let report = super::REPORT;
     let results: Vec<String> = MergeOutcome::ALL
         .into_iter()
-        .map(|outcome| {
-            format!(
-                "    {report} {} \"<what showed it>\"   when {}",
-                outcome.word(),
-                outcome.help()
-            )
-        })
+        .map(|outcome| format!("- outcome `{}`, when {}", outcome.word(), outcome.help()))
         .collect();
     let approved = match task.delivery.pr.as_ref() {
         Some(pr) => match pr.approved.and_then(|at| pr.revision(at)) {
@@ -623,9 +614,9 @@ pub(super) fn merge_reporting(task: &Task) -> String {
     };
     format!(
         "## Reporting the merge\n\n{approved}Confirm the PR actually merged before reporting \
-         merged. Report the result with one command:\n\n{}\n\nIf you cannot do the step at \
-         all, report what you tried:\n\n    {report} unable \"<what you tried>\"\n\nThe result \
-         is read only from that command, never from your messages.\n",
+         merged. Report the result with `report_outcome`, the summary being what showed it:\n\n\
+         {}\n\nIf you cannot do the step at all, call it with outcome `unable` and what you \
+         tried.\n",
         results.join("\n")
     )
 }

@@ -526,6 +526,7 @@ impl CodexSession {
             config.resume.is_none(),
         );
         wire::offer_plan(&mut params);
+        wire::offer_instructions(&mut params, config.instructions.as_deref());
         wire::offer_browser(
             &mut params,
             config.browser.as_ref(),

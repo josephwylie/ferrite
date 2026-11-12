@@ -118,7 +118,11 @@ impl Proposal {
                 instructions,
                 workflow,
             } => {
-                let title = instructions.lines().next().unwrap_or_default().trim();
+                let (title, rest) = instructions
+                    .trim()
+                    .split_once('\n')
+                    .unwrap_or((instructions.trim(), ""));
+                let title = title.trim();
                 let process = match workflow {
                     None => "One-off handoff".to_string(),
                     Some(id) => match board.workflow(id) {
@@ -133,8 +137,8 @@ impl Proposal {
                     },
                 };
                 let mut lines = vec![line("Task", title.to_string()), line("Process", process)];
-                if instructions.trim() != title {
-                    lines.push(line("Instructions", instructions.trim().to_string()));
+                if !rest.trim().is_empty() {
+                    lines.push(line("Instructions", rest.trim().to_string()));
                 }
                 lines
             }
@@ -223,7 +227,8 @@ pub(super) fn unknown_proposal() -> Refusal {
 const PROPOSE: &str = "\"${FERRITE_BIN:-ferrite}\" proposal raise";
 const F: &str = "\"${FERRITE_BIN:-ferrite}\"";
 
-/// What the Coordinator is told first, before the operator's words.
+/// What the Coordinator is told: the instructions of its Session, never a
+/// message it shows as the operator's.
 pub fn briefing(project: ProjectId) -> String {
     let project = project.get();
     format!(
@@ -254,8 +259,7 @@ pub fn briefing(project: ProjectId) -> String {
          A one-off handoff (`start` without `--workflow`) needs no Workflow. Never run \
          `task start`, `workflow save`, `workflow automation`, `task redirect`, or answer, \
          approve, rework, stop or delete a Task yourself. Talking starts nothing: propose \
-         only what the operator wants, say what the card will do, and let them decide.\n\n\
-         The operator says:\n\n"
+         only what the operator wants, say what the card will do, and let them decide."
     )
 }
 
@@ -318,8 +322,8 @@ impl State {
         self.coordinators.last_mut().expect("just pushed")
     }
 
-    /// Tell `project`'s Coordinator `text`, starting it (with its
-    /// briefing) when it has no Thread.
+    /// Tell `project`'s Coordinator `text`, starting it when it has no
+    /// Thread (its Session carries its briefing).
     pub(super) fn tell_coordinator(
         &mut self,
         project: ProjectId,
@@ -337,7 +341,7 @@ impl State {
             effects.push(Effect::StartCoordinator {
                 project,
                 agent: coordinator.agent.clone(),
-                prompt: format!("{}{text}", briefing(project)),
+                prompt: text,
             });
         }
     }

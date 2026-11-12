@@ -1032,7 +1032,10 @@ fn a_sessions_instructions_ride_the_appended_system_prompt() {
     let log = log_path("argv-instructions.log");
     let program = stub(
         "claude-echoes-instructions",
-        &format!("{PRELUDE}\necho \"$@\" > '{}'\nexec cat > /dev/null", log.display()),
+        &format!(
+            "{PRELUDE}\necho \"$@\" > '{}'\nexec cat > /dev/null",
+            log.display()
+        ),
     );
     let session = ClaudeSession::spawn(ClaudeConfig {
         program,

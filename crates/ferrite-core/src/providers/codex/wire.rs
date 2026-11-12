@@ -172,6 +172,17 @@ pub(super) fn offer_plan(params: &mut Value) {
     params["developerInstructions"] = Value::String(crate::update_plan::GUIDANCE.into());
 }
 
+/// Tell the thread `instructions` after the plan guidance: its developer
+/// instructions, so none of it shows as a message of the operator's. Every
+/// start and resume carries them again.
+pub(super) fn offer_instructions(params: &mut Value, instructions: Option<&str>) {
+    let Some(instructions) = instructions else {
+        return;
+    };
+    let guidance = params["developerInstructions"].as_str().unwrap_or_default();
+    params["developerInstructions"] = format!("{guidance}\n\n{instructions}").into();
+}
+
 /// Answer the server's `item/tool/call` for `show_visual`, off this thread:
 /// the render's text and screenshot as the call's content items. Returns
 /// whether `frame` was that call. Any other dynamic call is not Ferrite's.

@@ -413,6 +413,10 @@ impl Spawn {
             .as_ref()
             .zip(request.owner)
             .map(|(tools, owner)| tools.for_thread(request.thread, owner));
+        let instructions = match request.owner {
+            Some(crate::ThreadOwner::Factory(project)) => Some(crate::factory::briefing(*project)),
+            _ => None,
+        };
         match request.provider {
             Provider::Claude => SessionConfig::Claude(ClaudeConfig {
                 program: program.clone(),
@@ -436,6 +440,7 @@ impl Spawn {
                     .as_ref()
                     .map(|browser| browser.for_thread(request.thread)),
                 api_tools,
+                instructions,
                 env,
                 launcher,
                 args,
@@ -465,6 +470,7 @@ impl Spawn {
                         .as_ref()
                         .map(|browser| browser.for_thread(request.thread)),
                     api_tools,
+                    instructions,
                     env,
                     launcher,
                     args: launch.args,

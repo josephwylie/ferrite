@@ -1252,7 +1252,11 @@ fn a_sessions_instructions_ride_the_developer_instructions() {
         .unwrap();
         let recorded = read_lines(&log, 3);
         drop(session);
-        let method = if resume.is_some() { "thread/resume" } else { "thread/start" };
+        let method = if resume.is_some() {
+            "thread/resume"
+        } else {
+            "thread/start"
+        };
         let request: Value = recorded
             .iter()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())

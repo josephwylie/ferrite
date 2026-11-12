@@ -1853,30 +1853,27 @@ pub fn agent_label(agent: &Agent) -> String {
     }
 }
 
-/// How a Worker reports: the `ferrite` its Session was given.
-const REPORT: &str = "\"${FERRITE_BIN:-ferrite}\" report outcome";
-/// How a Worker reports its PR's head.
-const REVISION: &str = "\"${FERRITE_BIN:-ferrite}\" report revision";
-/// How a Worker reports what a command or tool showed.
-const EVIDENCE: &str = "\"${FERRITE_BIN:-ferrite}\" report evidence";
-/// How a Worker asks the operator.
-const QUESTION: &str = "\"${FERRITE_BIN:-ferrite}\" report question";
-
-/// Reports go by the Worker's own tools (`api::tools`), which need no
-/// permission; the commands stay for a Session not offered them.
+/// How a Worker is told to report, once: with its own tools, which need no
+/// permission, and by the command only when they are not offered. Every
+/// other text names a report by its tool and its outcome, never by command.
 const TOOLS: &str = "Report with Ferrite's own tools, which need no permission: \
      `report_outcome` (`outcome`, `summary`), `report_question` (`text`), `report_revision` \
-     (`head`, `pr`) and `report_evidence` (`text`). Each command below is the same report; \
-     run the command only if those tools are not offered to you.";
+     (`head`, `pr`) and `report_evidence` (`text`). Only these reports count, never your \
+     messages. Run the same report as a command only if the tools are not offered to you: \
+     `\"${FERRITE_BIN:-ferrite}\" report outcome <outcome> \"<summary>\"`, and likewise \
+     `report question`, `report revision` and `report evidence`.";
+
+const REPORTING: &str = "When you are done, call `report_outcome` with outcome `finished` and one \
+     line: what you did. If you cannot finish, call it with outcome `unable` and what you tried \
+     and what stopped you.";
+
+const ASKING: &str = "If you need the operator to decide something before you can go on, ask \
+     them with `report_question` and end your turn; the task waits for their answer.";
 
 fn first_prompt(task: &Task) -> String {
     format!(
         "You are working on Ferrite Factory task {id}, in the task's own worktree on branch \
-         `{branch}`.\n\n{instructions}\n{pr}\n{TOOLS}\n\nWhen you are done, report the outcome with one \
-         command:\n\n    {REPORT} finished \"<one line: what you did>\"\n\nIf you cannot \
-         finish, report what you tried:\n\n    {REPORT} unable \"<what you tried and what \
-         stopped you>\"\n\n{ASKING}\n\nThe outcome is read only from that command, never \
-         from your messages.",
+         `{branch}`.\n\n{instructions}\n{pr}\n{reporting}",
         id = task.id,
         branch = task.branch,
         instructions = task.instructions,
@@ -1885,36 +1882,31 @@ fn first_prompt(task: &Task) -> String {
         } else {
             String::new()
         },
+        reporting = one_off_reporting(),
     )
 }
 
-const REPORTING: &str = "When you are done, report the outcome with one command:\n\n    \
-     \"${FERRITE_BIN:-ferrite}\" report outcome finished \"<one line: what you did>\"\n\nIf you \
-     cannot finish, report what you tried:\n\n    \"${FERRITE_BIN:-ferrite}\" report outcome \
-     unable \"<what you tried and what stopped you>\"\n\nThe outcome is read only from that \
-     command, never from your messages.";
-
-const ASKING: &str = "If you need the operator to decide something before you can go on, ask \
-     them and end your turn; the task waits for their answer:\n\n    \
-     \"${FERRITE_BIN:-ferrite}\" report question \"<your question>\"";
+fn one_off_reporting() -> String {
+    format!("{TOOLS}\n\n{REPORTING}\n\n{ASKING}")
+}
 
 /// How the current run is to report: its outcome, or (deciding an
 /// approval) its decision.
 fn reporting(task: &Task, step: &Step) -> String {
-    format!("{TOOLS}\n\n{}", reporting_commands(task, step))
+    format!("{TOOLS}\n\n{}", reporting_sections(task, step))
 }
 
-fn reporting_commands(task: &Task, step: &Step) -> String {
+fn reporting_sections(task: &Task, step: &Step) -> String {
     if task.oversight.deciding {
         format!(
-            "{}\nIf you cannot decide, report what stopped you and the operator decides:\n\n    \
-             {REPORT} unable \"<what stopped you>\"",
+            "{}\nIf you cannot decide, call `report_outcome` with outcome `unable` and what \
+             stopped you, and the operator decides.",
             direct::decision_section(task)
         )
     } else if task.decides_in_own_run(step) {
         format!(
             "When your work is done, you also decide its approval.\n\n{}\nIf you cannot \
-             finish, report what you tried:\n\n    {REPORT} unable \"<what you tried>\"",
+             finish, call `report_outcome` with outcome `unable` and what you tried.",
             direct::decision_section(task)
         )
     } else if step.outcome_routes.is_some() {
@@ -2016,7 +2008,7 @@ fn answer_prompt(task: &Task, question: &str, answer: &str) -> String {
 fn reporting_now(task: &Task) -> String {
     match task.current_step() {
         Some(step) => reporting(task, step),
-        None => format!("{TOOLS}\n\n{REPORTING}\n\n{ASKING}"),
+        None => one_off_reporting(),
     }
 }
 

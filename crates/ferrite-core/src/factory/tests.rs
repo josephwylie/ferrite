@@ -499,6 +499,7 @@ fn an_answer_is_recorded_as_who_answered_whom_and_what() {
     let answered = task
         .activity
         .iter()
+        .rev()
         .find(|entry| entry.by == Actor::Operator)
         .expect("the answer is on the activity");
     let evidence = task

@@ -380,6 +380,9 @@ impl ClaudeSession {
         {
             command.args(["--allowedTools", &mcp::claude_name(&definition.name)]);
         }
+        if let Some(instructions) = &config.instructions {
+            command.args(["--append-system-prompt", instructions]);
+        }
         command.args(&config.args);
         let mut child = command
             .stdin(Stdio::piped())

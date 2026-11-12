@@ -151,7 +151,7 @@ impl Task {
     pub(super) fn asker(&self) -> String {
         self.current_step()
             .map(|step| step.name.clone())
-            .unwrap_or_else(|| "The agent".into())
+            .unwrap_or_else(|| ONE_OFF_ASKER.into())
     }
 
     /// Its Worker's run may still be going: a report from it counts.
@@ -251,6 +251,18 @@ pub(super) fn ask(
     Ok(Answer::Changed(true))
 }
 
+/// What a one-off Task's Worker is called, as it asks.
+const ONE_OFF_ASKER: &str = "The agent";
+
+/// An asker as the operator's sentence names it: the agent, or the Step's.
+fn whom(asker: &str) -> String {
+    if asker == ONE_OFF_ASKER {
+        "the agent".into()
+    } else {
+        format!("the {asker} agent")
+    }
+}
+
 /// The operator answers the question waiting: the asker continues with
 /// the question and the answer. A second answer finds none waiting.
 pub(super) fn answer(
@@ -276,17 +288,9 @@ pub(super) fn answer(
         question: asked.text.clone(),
         answer: text.clone(),
     });
-    task.note(
-        now_ms,
-        Actor::Operator,
-        format!("Answered {}: {text}", asked.asker),
-    );
-    task.evidence(
-        EvidenceKind::Decision,
-        "You",
-        format!("Answered {}: {text}", asked.asker),
-        now_ms,
-    );
+    let said = format!("You answered {}: {text}", whom(&asked.asker));
+    task.note(now_ms, Actor::Operator, said.clone());
+    task.evidence(EvidenceKind::Decision, "You", said, now_ms);
     task.reason = None;
     task.to_work(effects);
     task.worker = Some(asked.worker);
@@ -832,12 +836,10 @@ pub(super) fn decision_section(task: &Task) -> String {
     format!(
         "## Approval decision\n\nYou decide whether this task's result is approved, as the \
          operator would.\n\n{instructions}\n\nWhat is being approved: {what}\n\nReport your \
-         decision with one command:\n\n    {report} approved \"<what you verified>\"\n\nor, if \
-         it should not be approved:\n\n    {report} rejected \"<your reasons>\"\n\nIf only the \
-         operator can decide, ask them:\n\n    {question} \"<your question>\"\n{evidence}",
+         decision with `report_outcome`: outcome `approved` and what you verified, or, if it \
+         should not be approved, outcome `rejected` and your reasons. If only the operator can \
+         decide, ask them with `report_question`.\n{evidence}",
         evidence = super::pr::evidence_section(task),
-        report = super::REPORT,
-        question = super::QUESTION,
     )
 }
 
