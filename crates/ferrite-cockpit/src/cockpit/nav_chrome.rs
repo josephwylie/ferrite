@@ -123,24 +123,24 @@ impl CockpitView {
             .nav_filter
             .and_then(|project| self.cockpit.registry().project(project))
             .map(|project| project.title.clone());
-        let drawn = std::rc::Rc::new(std::cell::Cell::new(None::<gpui::Bounds<Pixels>>));
-        let filter = chrome::filter_button(filtered.as_deref())
-            .child({
-                let drawn = drawn.clone();
-                gpui::canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
-                    .absolute()
-                    .size_full()
-            })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    match drawn.get() {
-                        Some(button) => view.open_context_menu_under(MenuTarget::NavFilter, button, cx),
-                        None => view.open_context_menu(MenuTarget::NavFilter, event.position, cx),
-                    }
-                }),
-            );
+        let filter = chrome::filter_button(filtered.as_deref());
+        let filter = self.menu_button(filter, MenuTarget::NavFilter, gpui::Anchor::TopRight, cx);
+        let projects = self.factory_nav_projects(&self.nav_state());
+        let factory = (!projects.is_empty()).then(|| {
+            let needs_you = projects
+                .iter()
+                .any(|project| self.cockpit.factory().needs_you(*project) > 0);
+            let open = self
+                .context_menu
+                .as_ref()
+                .is_some_and(|menu| menu.target == MenuTarget::NavFactory);
+            self.menu_button(
+                chrome::factory_button(needs_you, open),
+                MenuTarget::NavFactory,
+                gpui::Anchor::TopLeft,
+                cx,
+            )
+        });
         let add = chrome::head_button("nav-add-project", ferrite_ui::icons::FOLDER_PLUS)
             .nav_tooltip("Add project")
             .on_mouse_down(
@@ -161,12 +161,41 @@ impl CockpitView {
             );
         chrome::search_row(
             field,
-            vec![
-                filter.into_any_element(),
-                add.into_any_element(),
-                new.into_any_element(),
-            ],
+            factory
+                .into_iter()
+                .chain([filter, add.into_any_element(), new.into_any_element()])
+                .collect(),
         )
+    }
+
+    /// A head button that opens `target`'s menu under itself, the menu's
+    /// `corner` on the button's matching edge.
+    fn menu_button(
+        &self,
+        button: Stateful<Div>,
+        target: MenuTarget,
+        corner: gpui::Anchor,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let drawn = std::rc::Rc::new(std::cell::Cell::new(None::<gpui::Bounds<Pixels>>));
+        button
+            .child({
+                let drawn = drawn.clone();
+                gpui::canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                    .absolute()
+                    .size_full()
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    match drawn.get() {
+                        Some(button) => view.open_context_menu_below(target, button, corner, cx),
+                        None => view.open_context_menu(target, event.position, cx),
+                    }
+                }),
+            )
+            .into_any_element()
     }
 
     /// The results in the list's place: a row per match, the highlighted

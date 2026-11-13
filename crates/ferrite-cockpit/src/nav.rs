@@ -29,7 +29,6 @@
 use std::time::{Instant, SystemTime};
 
 use ferrite_core::store::Provider;
-use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
 
 use gpui::prelude::*;
@@ -105,11 +104,9 @@ pub(crate) trait NavTooltip: gpui::StatefulInteractiveElement + Sized {
 impl<E: gpui::StatefulInteractiveElement> NavTooltip for E {}
 
 /// A row the nav's keyboard can stand on (`cockpit/nav_keys.rs`): a
-/// Project's Factory entry, a shelf's header, or a Thread's card or slim
-/// row, wherever it is listed.
+/// shelf's header, or a Thread's card or slim row, wherever it is listed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NavItem {
-    Factory(ProjectId),
     Shelf(Shelf),
     Thread(ThreadId),
 }
@@ -123,13 +120,6 @@ pub(crate) struct NavCursor {
 }
 
 impl NavCursor {
-    pub fn factory(project: ProjectId) -> Self {
-        NavCursor {
-            item: NavItem::Factory(project),
-            key: factory_key(project),
-        }
-    }
-
     pub fn shelf(shelf: Shelf) -> Self {
         NavCursor {
             item: NavItem::Shelf(shelf),
@@ -628,61 +618,6 @@ pub fn edge_tab(open: bool) -> Stateful<Div> {
             "Toggle sidebar",
             "cockpit::ToggleNav",
         ))
-}
-
-fn factory_key(project: ProjectId) -> SharedString {
-    format!("nav-factory-{}", project.get()).into()
-}
-
-/// A Project's Factory entry (ADR 0037), over the list's cards: the
-/// board's icon, `Factory` and the Project's name, and how many of its
-/// Tasks need the operator. Selected while its board shows.
-pub fn factory_row(
-    project: ProjectId,
-    title: SharedString,
-    count: usize,
-    active: bool,
-) -> Stateful<Div> {
-    let key = factory_key(project).to_string();
-    let label = key.clone();
-    let tally = key.clone();
-    line_frame(
-        SharedString::from(key.clone()),
-        SharedString::from(key.clone()),
-        active,
-    )
-    .debug_selector(move || key.clone())
-    .gap(px(NAV_ICON_GAP))
-    .text_color(rgb(INK_STRONG))
-    .child(
-        div()
-            .flex()
-            .flex_shrink_0()
-            .size(px(NAV_ICON))
-            .child(icon(icons::BOARD, NAV_ICON, INK_STRONG)),
-    )
-    .child(
-        div()
-            .debug_selector(move || format!("{label}-label"))
-            .flex()
-            .flex_1()
-            .min_w_0()
-            .child("Factory")
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .pl(px(NAV_WORD_GAP))
-                    .text_color(rgb(INK_SUBTLE))
-                    .child(title),
-            ),
-    )
-    .when(count > 0, |row| {
-        row.child(
-            components::tabular(trailing(count.to_string(), FS_META, INK_SUBTLE))
-                .debug_selector(move || format!("{tally}-count")),
-        )
-    })
 }
 
 /// A chord as it is drawn, its key a capital: `cmd-k` → `⌘K`.

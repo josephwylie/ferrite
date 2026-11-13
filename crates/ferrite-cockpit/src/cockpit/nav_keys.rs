@@ -1,9 +1,8 @@
 //! The nav list's keyboard: ⌘I (on the first card) or ⌘⇧E (on the shown
 //! Thread's) hands the list the keys. ↑↓ walk the rows the list draws, in
-//! its order — the Factory entries, Pinned and Active cards, then each
-//! shelf's header and the rows it draws — and Home/End go to its ends. ⏎
-//! opens what the row stands for (a Factory entry's opens its board, a
-//! header's folds or opens its shelf), ← folds the shelf
+//! its order — Pinned and Active cards, then each shelf's header and the
+//! rows it draws — and Home/End go to its ends. ⏎ opens what the row
+//! stands for (a header's folds or opens its shelf), ← folds the shelf
 //! the cursor heads or sits in (from a row, onto its header), → opens it.
 //! F2 renames, the ContextMenu key or ⇧F10 opens the row's menu, ⌘W parks
 //! the cursor's Thread and ⌘Z takes back the last Park or Snooze. Esc
@@ -27,8 +26,8 @@ use gpui::{App, Bounds};
 
 impl CockpitView {
     /// Every row the keyboard can stand on, in the list's drawing order:
-    /// the Factory entries, the local cards (a connected machine's rows
-    /// are the pointer's), then each shelf's header and the rows it draws.
+    /// the local cards (a connected machine's rows are the pointer's),
+    /// then each shelf's header and the rows it draws.
     pub(super) fn nav_items(&self, cx: &App) -> Vec<NavCursor> {
         let state = self.nav_state();
         let mut items = Vec::new();
@@ -39,11 +38,6 @@ impl CockpitView {
         if machine_folded {
             return items;
         }
-        items.extend(
-            self.factory_nav_projects(&state)
-                .into_iter()
-                .map(NavCursor::factory),
-        );
         items.extend(
             state
                 .pinned
@@ -65,8 +59,7 @@ impl CockpitView {
         items
     }
 
-    /// The first card the keyboard can stand on, else the first row: the
-    /// Factory entries above the cards are not where it starts.
+    /// The first card the keyboard can stand on, else the first row.
     pub(super) fn first_nav_card(&self, cx: &App) -> Option<NavCursor> {
         let items = self.nav_items(cx);
         items
@@ -170,17 +163,13 @@ impl CockpitView {
         self.move_nav_cursor(next, window, cx);
     }
 
-    /// ⏎: what a press on the row does — a Thread's opens it, a Factory
-    /// entry's opens its board, a header's folds or opens its shelf.
+    /// ⏎: what a press on the row does — a Thread's opens it, a header's
+    /// folds or opens its shelf.
     fn open_nav_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = self.nav_cursor.as_ref().map(|cursor| cursor.item) else {
             return;
         };
         match item {
-            NavItem::Factory(project) => {
-                self.open_factory(project, cx);
-                self.leave_nav(window, cx);
-            }
             NavItem::Shelf(shelf) => {
                 let open = self.shelf_open(shelf);
                 self.set_shelf_open(shelf, !open, cx);
@@ -223,7 +212,7 @@ impl CockpitView {
                 self.move_nav_cursor(Some(NavCursor::shelf(shelf)), window, cx);
                 shelf
             }
-            NavItem::Thread(_) | NavItem::Factory(_) => return,
+            NavItem::Thread(_) => return,
         };
         self.set_shelf_open(shelf, !fold, cx);
     }
@@ -240,7 +229,7 @@ impl CockpitView {
                 MenuTarget::Thread(thread)
             }
             NavItem::Shelf(Shelf::Parked) => MenuTarget::Parked,
-            NavItem::Shelf(_) | NavItem::Factory(_) => return,
+            NavItem::Shelf(_) => return,
         };
         match self.nav_cursor_bounds.get() {
             Some(row) => self.open_context_menu_under(target, row, cx),

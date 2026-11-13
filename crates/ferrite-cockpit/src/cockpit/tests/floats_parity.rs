@@ -576,17 +576,12 @@ fn cmd_i_walks_the_list_requests_first(cx: &mut TestAppContext) {
     assert_eq!(cursor(cx), Some(nav::NavItem::Thread(rows[0].thread)));
     cx.simulate_keystrokes("up");
     tick(cx);
-    assert!(
-        matches!(cursor(cx), Some(nav::NavItem::Factory(_))),
-        "↑ goes on to the Factory entry"
-    );
-    cx.simulate_keystrokes("up");
-    tick(cx);
-    assert!(
-        matches!(cursor(cx), Some(nav::NavItem::Factory(_))),
+    assert_eq!(
+        cursor(cx),
+        Some(nav::NavItem::Thread(rows[0].thread)),
         "↑ stops at the top"
     );
-    cx.simulate_keystrokes("down down");
+    cx.simulate_keystrokes("down");
     tick(cx);
     assert_eq!(cursor(cx), Some(nav::NavItem::Thread(rows[1].thread)));
     cx.simulate_keystrokes("escape");

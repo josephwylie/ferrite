@@ -213,7 +213,7 @@ fn an_open_task_that_moves_column_stays_in_view(cx: &mut TestAppContext) {
     whole_columns(cx, "t-3");
 }
 
-/// V3: an empty Project gets no nav row of its own, but its Factory is one
+/// V3: an empty Project is not in the Factory menu, but its Factory is one
 /// palette search away.
 #[gpui::test]
 fn an_empty_projects_factory_is_one_palette_search_away(cx: &mut TestAppContext) {
@@ -223,10 +223,9 @@ fn an_empty_projects_factory_is_one_palette_search_away(cx: &mut TestAppContext)
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     wide(cx);
-    assert!(
-        !shows(cx, &format!("nav-factory-{}", empty.get())),
-        "no row for every Project"
-    );
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.factory_rows().len(), 1, "no row for every Project");
+    });
     let title = view.read_with(cx, |view, _| {
         view.cockpit
             .registry()
