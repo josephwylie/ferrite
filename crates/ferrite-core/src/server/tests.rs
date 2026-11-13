@@ -1325,6 +1325,24 @@ fn pump_until(
     pump_until_within(window, Duration::from_secs(5), done);
 }
 
+/// Pump a window until what it was asked holds `done`, for at most five
+/// seconds, answering all it was asked. A Task's alert follows the board
+/// that shows it, so a wait on the board alone can end before the alert.
+fn pump_until_asked(
+    window: &mut crate::cockpit::Cockpit,
+    done: impl Fn(&[crate::cockpit::Asked]) -> bool,
+) -> Vec<crate::cockpit::Asked> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut asked = window.take_asked();
+    while !done(&asked) {
+        assert!(Instant::now() < deadline, "timed out: {asked:?}");
+        window.pump();
+        asked.extend(window.take_asked());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    asked
+}
+
 fn pump_until_within(
     window: &mut crate::cockpit::Cockpit,
     limit: Duration,
