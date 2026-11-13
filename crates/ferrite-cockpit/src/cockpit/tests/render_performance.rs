@@ -2952,3 +2952,30 @@ fn a_read_rows_path_opens_in_files_and_its_verb_unfolds_the_row(cx: &mut TestApp
         "the path opened in Files"
     );
 }
+
+/// A move in the nav rebuilds it without laying out a character again:
+/// each character's width is laid out once (`nav::Measure`), not once per
+/// title per build.
+#[gpui::test]
+fn a_nav_rebuild_lays_out_no_character_again(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, _fake) = cockpit("nav-measure-once", 4);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    tick(cx);
+    cx.simulate_keystrokes("cmd-shift-e down");
+    tick(cx);
+    let (nav, shaped) = (crate::cockpit::drawn::nav_renders(), crate::nav::testing::shaped());
+    assert!(shaped > 0, "the premise: the nav measured its titles");
+    cx.simulate_keystrokes("down up down");
+    tick(cx);
+    assert!(
+        crate::cockpit::drawn::nav_renders() > nav,
+        "the premise: the moves rebuilt the nav"
+    );
+    assert_eq!(
+        crate::nav::testing::shaped(),
+        shaped,
+        "a nav rebuild laid out a character again"
+    );
+}
