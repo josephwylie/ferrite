@@ -136,39 +136,9 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
-      - name: Probe gh (temporary)
-        shell: pwsh
-        run: |
-          $repo = Join-Path $env:RUNNER_TEMP gh-probe
-          git init -q -b main $repo
-          Set-Location $repo
-          git -c user.email=t@example.invalid -c user.name=t commit -q --allow-empty -m base
-          foreach ($i in 1..3) { "gh pr view ${i}: " + (Measure-Command { gh pr view --json number 2>&1 | Out-Null }).TotalMilliseconds }
-          foreach ($i in 1..3) { "gh --version ${i}: " + (Measure-Command { gh --version | Out-Null }).TotalMilliseconds }
-          foreach ($i in 1..3) { "git remote ${i}: " + (Measure-Command { git remote -v | Out-Null }).TotalMilliseconds }
-          (Get-Command gh).Source
-          $said = gh pr view --json number 2>&1 | Select-Object -First 1
-          "gh pr view exit ${LASTEXITCODE}: $said"
-          $loop = {
-            param($repo, $log)
-            Set-Location $repo
-            while ($true) {
-              $s = Get-Date
-              gh pr view --json number 2>&1 | Out-Null
-              "{0:HH:mm:ss} {1}" -f $s, ((Get-Date) - $s).TotalMilliseconds | Add-Content $log
-              Start-Sleep -Seconds 5
-            }
-          }
-          $log = Join-Path $env:RUNNER_TEMP gh-probe.log
-          $cmd = "& {$loop} '$repo' '$log'"
-          Start-Process pwsh -ArgumentList '-NoProfile', '-Command', $cmd -WindowStyle Hidden
       - name: Test core
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: cargo nextest run -p ferrite-core --locked --no-fail-fast
-      - name: Print gh probe under load (temporary)
-        if: always()
-        shell: pwsh
-        run: Get-Content (Join-Path $env:RUNNER_TEMP gh-probe.log)
       - name: Test the vendored review core
         if: needs.scope.outputs.reviewr != 'false'
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
