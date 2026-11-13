@@ -150,7 +150,7 @@ pub const SHELVES: [Shelf; 3] = [Shelf::Working, Shelf::Snoozed, Shelf::Parked];
 /// in drawing order. A Thread is in one section, by priority: snoozed,
 /// parked, pinned, working, active. Nothing here is a store read — the
 /// cockpit assembles it from O(1) reads plus its caches.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct NavState {
     /// Pinned cards (`Settings::pinned_threads`), in pin order.
     pub pinned: Vec<ThreadRow>,
@@ -193,7 +193,7 @@ pub fn roll_up<'a>(rows: impl IntoIterator<Item = &'a ThreadRow>) -> Option<RowS
 /// One Thread's row — its card (`card::thread_card`), identical whether
 /// it is a loose Thread, a Group member or a parked one; only the
 /// container differs. Every field is a cache read (`CockpitView::thread_row`).
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct ThreadRow {
     pub thread: ThreadId,
     pub name: SharedString,

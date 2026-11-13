@@ -3001,3 +3001,35 @@ fn a_nav_cursor_move_builds_no_pane(cx: &mut TestAppContext) {
     );
     assert_eq!(pane_builds(&threads), panes, "a nav cursor move built a Pane");
 }
+
+/// A stream that leaves every nav row as it was (more text in a turn
+/// already working) redraws its Pane and builds no nav.
+#[gpui::test]
+fn a_stream_that_moves_no_row_builds_no_nav(cx: &mut TestAppContext) {
+    let _clock = hold_wall_clock();
+    let (core, fake) = cockpit("stream-no-row", 2);
+    let threads = core.threads().to_vec();
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let delta = |text: &str| {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta { text: text.into() })
+            .unwrap();
+    };
+    delta("the turn starts");
+    tick(cx);
+    let (nav, panes) = (crate::cockpit::drawn::nav_renders(), pane_builds(&threads));
+    for line in 0..5 {
+        delta(&format!(" and goes on {line}"));
+        tick(cx);
+    }
+    assert!(
+        pane_builds(&threads)[0] > panes[0],
+        "the premise: the stream redrew its Pane"
+    );
+    assert_eq!(
+        crate::cockpit::drawn::nav_renders(),
+        nav,
+        "a stream that moved no row built the nav"
+    );
+}
