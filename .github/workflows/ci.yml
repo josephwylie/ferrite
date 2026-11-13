@@ -84,15 +84,11 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-      # nextest prints each test's time; neither crate has doctests.
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
       - name: Test core
-        run: cargo nextest run -p ferrite-core --locked
+        run: cargo test -p ferrite-core --locked
       - name: Test the vendored review core
         if: needs.scope.outputs.reviewr != 'false'
-        run: cargo nextest run -p ferrite-reviewr --locked
+        run: cargo test -p ferrite-reviewr --locked
       - name: Build app
         run: cargo build -p ferrite --locked
 
@@ -133,16 +129,13 @@ jobs:
           workspaces: ${{ env.DEV_DRIVE_WORKSPACE }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
       - name: Test core
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
-        run: cargo nextest run -p ferrite-core --locked
+        run: cargo test -p ferrite-core --locked -- --nocapture
       - name: Test the vendored review core
         if: needs.scope.outputs.reviewr != 'false'
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
-        run: cargo nextest run -p ferrite-reviewr --locked
+        run: cargo test -p ferrite-reviewr --locked
       - name: Build app
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: cargo build -p ferrite --locked
