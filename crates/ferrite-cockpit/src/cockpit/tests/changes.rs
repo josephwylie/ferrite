@@ -226,3 +226,83 @@ fn the_stage_button_moves_a_file_into_and_out_of_the_index(cx: &mut TestAppConte
     }
     assert_eq!(staged(&repo), ["a.rs"]);
 }
+
+/// A Thread whose checkout has `files` new files of 30 lines beside
+/// `window`'s two, its Changes open.
+fn many_files<'a>(
+    name: &str,
+    files: usize,
+    cx: &'a mut TestAppContext,
+) -> (Entity<CockpitView>, ThreadId, &'a mut gpui::VisualTestContext) {
+    let (view, thread, cx) = window(name, cx);
+    let repo = std::env::temp_dir().join(format!("ferrite-view-{}-{name}", std::process::id())).join("repo");
+    let body: String = (0..30).map(|n| format!("line {n}\n")).collect();
+    for at in 0..files {
+        std::fs::write(repo.join(format!("f{at:03}.rs")), &body).unwrap();
+    }
+    opened(&view, thread, cx);
+    (view, thread, cx)
+}
+
+/// The file heads and hunk lines the last frame laid out.
+fn drawn_rows(files: usize, cx: &mut gpui::VisualTestContext) -> (usize, usize) {
+    cx.update(|window, _| {
+        let heads = (0..files).filter(|at| window.debug_bounds(&format!("changes-file-{at}")).is_some()).count();
+        let lines = (0..files)
+            .flat_map(|at| (0..30).map(move |n| format!("panel-hunk-{at}-{n}")))
+            .filter(|line| window.debug_bounds(line).is_some())
+            .count();
+        (heads, lines)
+    })
+}
+
+/// Only the rows in view are laid out: a diff of 120 files draws as many
+/// rows as one of 20, both a screenful.
+#[gpui::test]
+fn the_list_lays_out_as_many_rows_whatever_the_size_of_the_diff(cx: &mut TestAppContext) {
+    let small = {
+        let (_, _, cx) = many_files("changes-rows-small", 20, cx);
+        drawn_rows(22, cx)
+    };
+    let (_, _, cx) = many_files("changes-rows-large", 120, cx);
+    let large = drawn_rows(122, cx);
+    assert!(small.1 > 0, "lines are drawn: {small:?}");
+    assert!(small.1 + small.0 < 22 * 31, "the small diff is past a screenful: {small:?}");
+    assert_eq!(large, small, "the large diff draws no more than the small");
+}
+
+/// A fold mid-list keeps the list in place, the folded head where it was
+/// drawn, and scrolling on reaches the last file.
+#[gpui::test]
+fn the_list_holds_its_place_through_a_fold_and_scrolls_to_the_end(cx: &mut TestAppContext) {
+    let (_, _, cx) = many_files("changes-rows-scroll", 40, cx);
+    let list = cx.debug_bounds("changes-scroll").expect("the list");
+    let wheel = |cx: &mut gpui::VisualTestContext| {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: list.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-150.))),
+            modifiers: gpui::Modifiers::none(),
+            touch_phase: gpui::TouchPhase::default(),
+        });
+        tick(cx);
+    };
+    for _ in 0..400 {
+        if cx.debug_bounds("changes-file-21").is_some_and(|head| head.top() < list.center().y) {
+            break;
+        }
+        wheel(cx);
+    }
+    let head = cx.debug_bounds("changes-file-21").expect("a file mid-list");
+    assert!(cx.debug_bounds("changes-file-0").is_none(), "the first is scrolled away");
+    cx.simulate_click(head.origin + gpui::point(px(40.), px(8.)), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("panel-hunk-21-0").is_none(), "a press folds it");
+    assert_eq!(cx.debug_bounds("changes-file-21"), Some(head), "the list holds its place");
+    for _ in 0..400 {
+        if cx.debug_bounds("changes-file-41").is_some() {
+            break;
+        }
+        wheel(cx);
+    }
+    assert!(cx.debug_bounds("changes-file-41").is_some(), "the last file is reached");
+}

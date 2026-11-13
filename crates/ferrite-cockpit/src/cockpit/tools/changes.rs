@@ -25,13 +25,14 @@ use std::collections::HashSet;
 use ferrite_reviewr::ferrite::{review_against, Read};
 use ferrite_ui::icons;
 use ferrite_ui::theme::{self, paint};
+use gpui::{list, ListAlignment, ListOffset, ListState};
 
 use ferrite_pane::composer::{Composer, Role};
 
 use super::*;
 use crate::cockpit::surfaces::SurfaceId;
 use crate::cockpit::context_menu::Submenu;
-use crate::cockpit::panel::hunks::{hunks_element, shown, Line, Shown, Sign};
+use crate::cockpit::panel::hunks::{hunks_face, piece_element, pieces, shown, Line, Piece, Shown, Sign};
 
 /// What the Changes diff is against.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,13 +109,27 @@ pub(crate) struct Sub;
 /// How many branches `Compare against ›` lists.
 const BRANCHES_LISTED: usize = 20;
 
+/// How far past the viewport the list lays out rows.
+const OVERDRAW: Pixels = px(200.);
+
 struct File {
     path: String,
     added: u32,
     removed: u32,
     hunks: Shown,
+    /// `hunks` without the changes that are only whitespace.
+    trimmed: Shown,
     /// The file's change is in git's index (`git add`).
     staged: bool,
+}
+
+/// One row of the list, the unit `list` lays out only while it is in view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Row {
+    /// A file's head, by its place in the read.
+    Head(usize),
+    /// A row of an unfolded file's hunks, by the file's place in the read.
+    Hunk(usize, Piece),
 }
 
 enum Load {
@@ -133,7 +148,10 @@ pub(crate) struct Changes {
     hide_whitespace: bool,
     /// Test files left out of the list (`is_test_path`).
     hide_tests: bool,
-    scroll: ScrollHandle,
+    /// What the list draws, as of the last change to the read, the folds,
+    /// the filter or the view tools.
+    rows: Vec<Row>,
+    list: ListState,
     /// The branches `Compare against ›` lists, as of the last read.
     branches: Vec<String>,
     /// Bumped by every read, so a late answer for an old scope is dropped.
@@ -152,11 +170,49 @@ impl Changes {
             wrap: true,
             hide_whitespace: false,
             hide_tests: false,
-            scroll: ScrollHandle::new(),
+            rows: Vec::new(),
+            list: ListState::new(0, ListAlignment::Top, OVERDRAW),
             branches: Vec::new(),
             generation: 0,
             filter,
         }
+    }
+
+    /// Each listed file's head, then, unless it is folded, its hunk rows.
+    fn rows(&self, wanted: &str) -> Vec<Row> {
+        let Load::Read(files) = &self.load else {
+            return Vec::new();
+        };
+        let mut rows = Vec::new();
+        for (at, file) in files.iter().enumerate() {
+            if !wanted.is_empty() && !file.path.to_lowercase().contains(wanted) {
+                continue;
+            }
+            if self.hide_tests && is_test_path(&file.path) {
+                continue;
+            }
+            rows.push(Row::Head(at));
+            if !self.folded.contains(&file.path) {
+                let hunks = if self.hide_whitespace { &file.trimmed } else { &file.hunks };
+                rows.extend(pieces(hunks).into_iter().map(|piece| Row::Hunk(at, piece)));
+            }
+        }
+        rows
+    }
+
+    /// Lay out `rows` in place of the last: only the run between what they
+    /// share at either end is measured again, so the rows above it keep
+    /// their place on screen.
+    fn relist(&mut self, rows: Vec<Row>) {
+        let start = self.rows.iter().zip(&rows).take_while(|(old, new)| old == new).count();
+        let end = self.rows[start..]
+            .iter()
+            .rev()
+            .zip(rows[start..].iter().rev())
+            .take_while(|(old, new)| old == new)
+            .count();
+        self.list.splice(start..self.rows.len() - end, rows.len() - start - end);
+        self.rows = rows;
     }
 }
 
@@ -225,8 +281,11 @@ impl CockpitView {
                 field.set_role(Role::Field(None), cx);
                 field
             });
-            cx.subscribe(&filter, |_, _, _: &ferrite_pane::composer::Edited, cx| cx.notify())
-                .detach();
+            cx.subscribe(&filter, move |view, _, _: &ferrite_pane::composer::Edited, cx| {
+                view.relist_changes(diff, cx);
+                cx.notify();
+            })
+            .detach();
             self.tools.changes.insert(diff, Changes::new(diff.scope(), filter));
             self.refresh_changes(diff, cx);
         }
@@ -249,12 +308,32 @@ impl CockpitView {
             return;
         };
         changes.folded.remove(path);
-        if let Load::Read(files) = &changes.load {
-            if let Some(at) = files.iter().position(|file| file.path == path) {
-                changes.scroll.scroll_to_item(at);
+        let head = match &changes.load {
+            Load::Read(files) => files.iter().position(|file| file.path == path).map(Row::Head),
+            _ => None,
+        };
+        self.relist_changes(Diff::Changes(thread), cx);
+        if let (Some(changes), Some(head)) = (self.changes_of(Diff::Changes(thread)), head) {
+            if let Some(item_ix) = changes.rows.iter().position(|row| *row == head) {
+                changes.list.scroll_to(ListOffset { item_ix, offset_in_item: px(0.) });
             }
         }
         cx.notify();
+    }
+
+    /// Recount the list's rows after the read, a fold, the filter or a view
+    /// tool changed them. A read still out keeps the last rows in place, so
+    /// the scroll holds through a refresh.
+    fn relist_changes(&mut self, diff: Diff, cx: &mut Context<Self>) {
+        let Some(changes) = self.tools.changes.get_mut(&diff) else {
+            return;
+        };
+        if !matches!(changes.load, Load::Read(_)) {
+            return;
+        }
+        let wanted = changes.filter.read(cx).text().trim().to_lowercase();
+        let rows = changes.rows(&wanted);
+        changes.relist(rows);
     }
 
     /// A file's stage button: its change goes into git's index, or comes
@@ -307,12 +386,20 @@ impl CockpitView {
                     review_against(&root, &read, base.as_deref()).map(|files| {
                         files
                             .iter()
-                            .map(|sides| File {
-                                path: sides.file.path.clone(),
-                                added: sides.file.additions,
-                                removed: sides.file.deletions,
-                                hunks: shown(Some(sides)),
-                                staged: staged.contains(&sides.file.path),
+                            .map(|sides| {
+                                let hunks = shown(Some(sides));
+                                let trimmed = match &hunks {
+                                    Shown::Hunks(hunks) => Shown::Hunks(without_whitespace(hunks.clone())),
+                                    note => note.clone(),
+                                };
+                                File {
+                                    path: sides.file.path.clone(),
+                                    added: sides.file.additions,
+                                    removed: sides.file.deletions,
+                                    hunks,
+                                    trimmed,
+                                    staged: staged.contains(&sides.file.path),
+                                }
                             })
                             .collect::<Vec<_>>()
                     })
@@ -324,6 +411,7 @@ impl CockpitView {
                         Ok(files) => Load::Read(files),
                         Err(why) => Load::Failed(why.into()),
                     };
+                    view.relist_changes(diff, cx);
                     cx.notify();
                 }
             })
@@ -362,7 +450,10 @@ impl CockpitView {
                 }
             }
             Verb::ExpandAll => changes.folded.clear(),
-            Verb::ToggleWrap => changes.wrap = !changes.wrap,
+            Verb::ToggleWrap => {
+                changes.wrap = !changes.wrap;
+                changes.list.remeasure();
+            }
             Verb::ToggleWhitespace => changes.hide_whitespace = !changes.hide_whitespace,
             Verb::ToggleTests => changes.hide_tests = !changes.hide_tests,
             Verb::Refresh => {
@@ -370,6 +461,7 @@ impl CockpitView {
                 return;
             }
         }
+        self.relist_changes(diff, cx);
         cx.notify();
     }
 
@@ -378,6 +470,7 @@ impl CockpitView {
             if !changes.folded.remove(path) {
                 changes.folded.insert(path.to_string());
             }
+            self.relist_changes(diff, cx);
             cx.notify();
         }
     }
@@ -390,6 +483,7 @@ impl CockpitView {
                 changes.reviewed.insert(path.to_string());
                 changes.folded.insert(path.to_string());
             }
+            self.relist_changes(diff, cx);
             cx.notify();
         }
     }
@@ -465,30 +559,26 @@ impl CockpitView {
             Load::Read(files) if files.is_empty() => {
                 self.changes_empty(diff, &changes.scope, cx).into_any_element()
             }
-            Load::Read(files) => {
-                let wanted = changes.filter.read(cx).text().trim().to_lowercase();
-                let listed: Vec<_> = files
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, file)| wanted.is_empty() || file.path.to_lowercase().contains(&wanted))
-                    .filter(|(_, file)| !changes.hide_tests || !is_test_path(&file.path))
-                    .collect();
-                let list = if listed.is_empty() {
+            Load::Read(_) => {
+                let list = if changes.rows.is_empty() {
                     self.changes_note("No files match").into_any_element()
                 } else {
+                    let view = cx.entity();
                     div()
-                        .id("changes-scroll")
                         .debug_selector(|| "changes-scroll".into())
                         .flex()
                         .flex_col()
                         .flex_1()
                         .min_h_0()
-                        .overflow_y_scroll()
-                        .track_scroll(&changes.scroll)
-                        .children(listed.into_iter().map(|(at, file)| self.changes_file(diff, changes, at, file, cx)))
+                        .child(
+                            list(changes.list.clone(), move |ix, _, cx| {
+                                view.update(cx, |view, cx| view.changes_row(diff, ix, cx))
+                            })
+                            .size_full(),
+                        )
                         .into_any_element()
                 };
-                let empty = wanted.is_empty();
+                let empty = changes.filter.read(cx).text().trim().is_empty();
                 div()
                     .flex()
                     .flex_col()
@@ -723,14 +813,41 @@ impl CockpitView {
             )
     }
 
-    fn changes_file(
+    /// Row `ix` of `diff`'s list: a file's head, or a row of its hunks on
+    /// the diff face, padded where the file's hunks begin and end.
+    fn changes_row(&self, diff: Diff, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        use theme::*;
+        let Some(changes) = self.tools.changes.get(&diff) else {
+            return div().into_any_element();
+        };
+        let (Load::Read(files), Some(row)) = (&changes.load, changes.rows.get(ix)) else {
+            return div().into_any_element();
+        };
+        match row {
+            Row::Head(at) => self.changes_head_row(diff, changes, *at, &files[*at], cx).into_any_element(),
+            Row::Hunk(at, piece) => {
+                let at = *at;
+                let first = matches!(ix.checked_sub(1).map(|before| &changes.rows[before]), Some(Row::Head(_)));
+                let last = !matches!(changes.rows.get(ix + 1), Some(Row::Hunk(..)));
+                hunks_face(changes.wrap)
+                    .when(first, |face| {
+                        face.debug_selector(move || format!("panel-hunks-{at}")).pt(px(PANEL_HUNK_PAD_T))
+                    })
+                    .when(last, |face| face.pb(px(PANEL_HUNK_PAD_B)))
+                    .child(piece_element(at, piece, changes.wrap))
+                    .into_any_element()
+            }
+        }
+    }
+
+    fn changes_head_row(
         &self,
         diff: Diff,
         changes: &Changes,
         at: usize,
         file: &File,
         cx: &mut Context<Self>,
-    ) -> Div {
+    ) -> Stateful<Div> {
         use theme::*;
         let folded = changes.folded.contains(&file.path);
         let reviewed = changes.reviewed.contains(&file.path);
@@ -768,7 +885,7 @@ impl CockpitView {
                 .child(icons::icon(glyph, ICON_BUTTON_GLYPH, ink))
                 .tooltip(ferrite_ui::menu::tooltip(tip))
         };
-        let head = div()
+        div()
             .id(SharedString::from(format!("changes-file-{at}")))
             .debug_selector(move || format!("changes-file-{at}"))
             .flex()
@@ -836,15 +953,7 @@ impl CockpitView {
                         }
                     }),
                 ),
-            );
-        let hunks = (!folded).then(|| {
-            let hunks = match (&file.hunks, changes.hide_whitespace) {
-                (Shown::Hunks(hunks), true) => Shown::Hunks(without_whitespace(hunks.clone())),
-                (other, _) => other.clone(),
-            };
-            hunks_element(at, &hunks, changes.wrap)
-        });
-        div().flex().flex_col().flex_shrink_0().child(head).children(hunks)
+            )
     }
 }
 
