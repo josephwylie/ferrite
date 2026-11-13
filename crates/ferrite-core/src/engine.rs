@@ -799,8 +799,26 @@ struct Published {
 }
 
 /// How long a Thread read back from its log is held before it may be let
-/// go again, so a Thread read often reads its log at most once a minute.
+/// go again, so a Thread read often reads its log at most once a minute. A
+/// revive counts as a read back: the window that revived a Thread watches
+/// it next, and finds it still held.
 const HOLD_AT_LEAST: Duration = Duration::from_secs(60);
+
+/// What a read back applies to a Thread's Activity: its log's `inputs`,
+/// then what the last Session announced still stands (ADR 0032).
+fn read_back_inputs(
+    inputs: Vec<ActivityInput>,
+    servers: Vec<crate::McpServer>,
+    at: Instant,
+) -> impl Iterator<Item = ActivityInput> {
+    let main = move |input| ActivityInput::Main { input, at };
+    let announced = (!servers.is_empty())
+        .then(|| main(Input::Event(SessionEvent::McpServers { servers })));
+    std::iter::once(ActivityInput::Disconnect)
+        .chain(inputs)
+        .chain(std::iter::once(main(Input::Revived)))
+        .chain(announced)
+}
 
 /// How often a streaming Thread's digest may refold: four times a second.
 /// The fold walks every Block the Thread holds (and its Subagents', for the
@@ -1028,15 +1046,11 @@ impl Thread {
     /// Its Activity as its log says it, with no Session running: what the
     /// last one announced still stands (ADR 0032).
     fn read_back(&mut self, inputs: Vec<ActivityInput>) {
-        self.activity.apply(ActivityInput::Disconnect);
-        for input in inputs {
+        let servers = self.announced.mcp_servers().to_vec();
+        for input in read_back_inputs(inputs, servers, crate::clock::instant()) {
             self.activity.apply(input);
         }
-        self.apply(Input::Revived);
-        let servers = self.announced.mcp_servers().to_vec();
-        if !servers.is_empty() {
-            self.apply(Input::Event(SessionEvent::McpServers { servers }));
-        }
+        self.read_back_at = Some(crate::clock::instant());
     }
 
     /// `session` serves it from now on. A fresh Session knows nothing:
@@ -2338,6 +2352,17 @@ impl Engine {
     /// starts when the Thread is used, told where to resume.
     pub fn revive(&mut self, thread: ThreadId) -> Result<(), LoadError> {
         self.reopen(thread, None).map(drop)
+    }
+
+    /// Revive a parked Thread with no window attached to watch it, as a
+    /// Server's start does: it is let go to its digest as soon as that is
+    /// published, so a start holds one Thread's history at a time.
+    pub fn revive_unwatched(&mut self, thread: ThreadId) -> Result<(), LoadError> {
+        self.revive(thread)?;
+        if let Some(state) = self.threads.get_mut(&thread) {
+            state.read_back_at = None;
+        }
+        Ok(())
     }
 
     /// Reopen a parked Thread as `launch` says (`thread.revive`, ADR 0031):
@@ -4776,6 +4801,12 @@ impl Engine {
         self.states_built
     }
 
+    /// How many bytes of Thread logs this Engine has read.
+    #[cfg(test)]
+    pub(crate) fn log_bytes_read(&self) -> u64 {
+        self.store.bytes_read()
+    }
+
     /// The open Threads, in the order they opened.
     pub fn open_threads(&self) -> &[ThreadId] {
         &self.open
@@ -5025,6 +5056,43 @@ impl Engine {
         });
         state.activity.settle();
         state.held = true;
+    }
+
+    /// A let-go Thread's log, to read back off the pump thread for
+    /// `agent.read`. `None` when the Thread is held, or not open: its
+    /// Activity is read where it is.
+    pub(crate) fn read_back_later(&mut self, thread: ThreadId) -> Option<io::Result<ReadBack>> {
+        let state = self.threads.get_mut_if(&thread, |state| !state.held)?;
+        let read = state.writer.checkpoint().and_then(|through| {
+            let log = self.store.log_at(thread, &state.writer, through)?;
+            Ok(ReadBack {
+                thread,
+                log,
+                through,
+                activity: Journaled::new(state.activity.boot, state.activity.limits),
+                servers: state.announced.mcp_servers().to_vec(),
+                at: crate::clock::instant(),
+            })
+        });
+        Some(read)
+    }
+
+    /// Hold what a read off the pump read back (`read_back_later`), as
+    /// `hold` would have read it, so the next read reads none of the log.
+    /// Dropped when the Thread was held meanwhile or its log has grown.
+    pub(crate) fn adopt(&mut self, read: ReadThread) {
+        let Some(state) = self.threads.get_mut_if(&read.thread, |state| !state.held) else {
+            return;
+        };
+        if state.writer.checkpoint().ok() != Some(read.through) {
+            return;
+        }
+        state.activity.activity = read.activity.activity;
+        state.activity.apply(ActivityInput::Connect {
+            generation: state.generation,
+        });
+        state.activity.settle();
+        state.held = true;
         state.read_back_at = Some(crate::clock::instant());
     }
 
@@ -5266,6 +5334,46 @@ impl History {
             seq: self.seq,
             live: self.live,
         })
+    }
+}
+
+/// A let-go Thread's log, read back on another thread as `Engine::hold`
+/// would read it (`Engine::read_back_later`).
+pub struct ReadBack {
+    thread: ThreadId,
+    log: crate::store::LogAt,
+    through: u64,
+    activity: Journaled,
+    servers: Vec<crate::McpServer>,
+    at: Instant,
+}
+
+impl ReadBack {
+    pub fn read(mut self) -> Result<ReadThread, LoadError> {
+        let inputs = self.log.load()?.activity_inputs();
+        for input in read_back_inputs(inputs, self.servers, self.at) {
+            self.activity.apply(input);
+        }
+        self.activity.settle();
+        Ok(ReadThread {
+            thread: self.thread,
+            through: self.through,
+            activity: self.activity,
+        })
+    }
+}
+
+/// A Thread's Activity read back off the pump, for the Engine to hold
+/// (`Engine::adopt`).
+pub struct ReadThread {
+    thread: ThreadId,
+    through: u64,
+    activity: Journaled,
+}
+
+impl ReadThread {
+    pub fn view(&self) -> ActivityView<'_> {
+        self.activity.view()
     }
 }
 

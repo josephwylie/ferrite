@@ -293,7 +293,7 @@ fn launch_threads(store: &Store) -> Vec<ThreadId> {
 fn revive_launch(engine: &mut Engine, threads: Vec<ThreadId>) {
     engine.set_watched(BTreeSet::new());
     for thread in threads {
-        if let Err(error) = engine.revive(thread) {
+        if let Err(error) = engine.revive_unwatched(thread) {
             crate::log!("thread {thread} could not be revived: {error:?}");
         }
         // Nobody to tell: a window attaching reads the snapshot.
@@ -328,6 +328,17 @@ type Search = (
 /// `list_dir`: who asked, in which command, and the reply it makes.
 type Read = (ClientId, u64, Receiver<Result<Option<Done>, WireError>>);
 
+/// An API request answered off the pump: who asked, under which id, and
+/// the reply with the Activity it read back, for the Engine to hold.
+type ApiRead = (
+    crate::api::CallerId,
+    String,
+    Receiver<(
+        Result<serde_json::Value, crate::api::ApiError>,
+        Option<crate::engine::ReadThread>,
+    )>,
+);
+
 struct Server {
     engine: Engine,
     info: ServerInfo,
@@ -357,6 +368,7 @@ struct Server {
         BTreeMap<ThreadId, (crate::browser::Document, u64, crate::browser::Observation)>,
     searches: Vec<Search>,
     reads: Vec<Read>,
+    api_reads: Vec<ApiRead>,
     /// First sends still starting, by the tag the Engine knows them by:
     /// who asked, in which command.
     starting: HashMap<DraftId, (ClientId, u64)>,
@@ -437,6 +449,7 @@ impl Server {
             browser_observed: BTreeMap::new(),
             searches: Vec::new(),
             reads: Vec::new(),
+            api_reads: Vec::new(),
             starting: HashMap::new(),
             next_start: 0,
             swept: Instant::now(),
@@ -492,6 +505,7 @@ impl Server {
             self.answer_bootstraps();
             self.answer_searches();
             self.answer_reads();
+            self.answer_api_reads();
             self.answer_browser_disk();
             self.forward_renders();
             self.forward_browser_requests();
