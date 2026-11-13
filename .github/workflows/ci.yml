@@ -115,7 +115,15 @@ jobs:
             CARGO_HOME,{{ DEV_DRIVE }}/.cargo
             RUSTUP_HOME,{{ DEV_DRIVE }}/.rustup
       - uses: dtolnay/rust-toolchain@stable
+      # Cargo 1.100's build-dir layout gives a big crate's rustc command more
+      # than Windows' 32,767 characters, so Cargo passes it as an @argfile.
+      # sccache 0.17 to 0.19 expand that file and spawn rustc with the full
+      # command, which Windows rejects (os error 206); 0.16 passes it through.
+      # Unpin once sccache spawns long commands via an argfile
+      # (mozilla/sccache#2787).
       - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.16.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ${{ env.DEV_DRIVE_WORKSPACE }}
