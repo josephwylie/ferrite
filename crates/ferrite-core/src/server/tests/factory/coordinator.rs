@@ -581,6 +581,8 @@ fn the_coordinator_cannot_act_only_propose() {
 /// G5: across a restart a pending proposal is still there to accept, and
 /// accepted it runs; the Coordinator's own Thread is revived on the next
 /// word, the same Thread, told it.
+// A successor takes the store as `exec` hands it over (Unix).
+#[cfg(unix)]
 #[test]
 fn a_proposal_and_the_coordinator_survive_a_restart() {
     let (harness, project, _repo) = factory_project("coordinator-restart");
