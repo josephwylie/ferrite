@@ -35,6 +35,14 @@ HERE="$(git rev-parse --show-toplevel)"
 MAIN="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
 [ "$HERE" != "$MAIN" ] || exit 0
 
+# The clone is only reusable by the compiler that built it, and a rustup
+# directory override on the main checkout does not reach a worktree beside
+# it. So the worktree gets the main checkout's toolchain as its own override.
+if command -v rustup >/dev/null; then
+  toolchain="$(cd "$MAIN" && rustup show active-toolchain | cut -d' ' -f1)"
+  rustup override set "$toolchain" --path "$HERE" >/dev/null
+fi
+
 # Asked of cargo, not assumed: a `target-dir` in a cargo config moves it.
 build_dir() {
   (cd "$1" && cargo metadata --no-deps --format-version 1) |
