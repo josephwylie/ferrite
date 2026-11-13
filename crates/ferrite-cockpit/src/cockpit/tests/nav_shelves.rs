@@ -288,10 +288,6 @@ fn the_keyboard_walks_the_list_and_follows_a_parked_thread(cx: &mut TestAppConte
     assert!(view.read_with(cx, |view, _| view.shelf_open(nav::Shelf::Parked)));
     cx.simulate_keystrokes("home");
     tick(cx);
-    let top = cursor(&view, cx);
-    assert!(matches!(top, Some(nav::NavItem::Factory(_))), "Home: {top:?}");
-    cx.simulate_keystrokes("down");
-    tick(cx);
     let first = cursor(&view, cx);
     assert!(matches!(first, Some(nav::NavItem::Thread(_))), "{first:?}");
     let Some(nav::NavItem::Thread(thread)) = first else {

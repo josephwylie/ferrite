@@ -701,36 +701,32 @@ impl CockpitView {
         projects
     }
 
-    pub(super) fn factory_nav_rows(
-        &self,
-        state: &nav::NavState,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        self.factory_nav_projects(state)
+    /// The Factory menu's rows: a Project's board each, checked while it
+    /// shows, with how many of its Tasks need the operator.
+    pub(super) fn factory_rows(&self) -> Vec<Option<(menu::Item, MenuVerb)>> {
+        let state = self.nav_state();
+        let board = self.cockpit.factory();
+        self.factory_nav_projects(&state)
             .into_iter()
-            .map(|project| self.factory_nav_row(project, cx))
+            .map(|project| {
+                let title = self
+                    .cockpit
+                    .registry()
+                    .project(project)
+                    .map(|project| project.title.clone())
+                    .unwrap_or_default();
+                let shown = self
+                    .factory_view
+                    .as_ref()
+                    .is_some_and(|view| view.project == project);
+                let item = menu::Item::new(title).checked(shown);
+                let item = match board.needs_you(project) {
+                    0 => item,
+                    count => item.detail(count.to_string()),
+                };
+                Some((item, MenuVerb::OpenFactory(project)))
+            })
             .collect()
-    }
-
-    /// A Project's Factory entry in the sidebar.
-    fn factory_nav_row(&self, project: ProjectId, cx: &mut Context<Self>) -> AnyElement {
-        let count = self.cockpit.factory().needs_you(project);
-        let active = self
-            .factory_view
-            .as_ref()
-            .is_some_and(|view| view.project == project);
-        let title = self
-            .cockpit
-            .registry()
-            .project(project)
-            .map(|project| SharedString::from(project.title.clone()))
-            .unwrap_or_default();
-        nav::factory_row(project, title, count, active)
-            .children(self.cursor_reveal(nav::NavItem::Factory(project)))
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                view.open_factory(project, cx);
-            }))
-            .into_any_element()
     }
 
     /// The Factory board: its head, its six columns, and the open Task's

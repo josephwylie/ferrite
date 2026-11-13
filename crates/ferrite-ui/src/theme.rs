@@ -3446,6 +3446,10 @@ pub const NAV_SEARCH_GLYPH: f32 = 16.0;
 pub const NAV_SEARCH_CLEAR_GLYPH: f32 = 12.0;
 pub const NAV_SEARCH_RING: u32 = (FOCUS_RING & 0xffffff00) | 0x27;
 pub const NAV_HEAD_BUTTON: f32 = 28.0;
+/// The Factory button's attention dot: its size and its inset from the
+/// button's top-right corner.
+pub const NAV_FACTORY_DOT: f32 = 8.0;
+pub const NAV_FACTORY_DOT_INSET: f32 = 3.0;
 /// The foot: 32px square buttons at radius 8, 8px inline padding, 4px
 /// over and 8px under, and the undo notice at 11px on 24px leading.
 pub const NAV_FOOT_BUTTON: f32 = 32.0;

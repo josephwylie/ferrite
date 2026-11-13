@@ -3497,6 +3497,7 @@ impl CockpitView {
             | MenuTarget::PrMore(_) => None,
             MenuTarget::Parked
             | MenuTarget::NavFilter
+            | MenuTarget::NavFactory
             | MenuTarget::Review { .. }
             | MenuTarget::Prompt { .. }
             | MenuTarget::Factory

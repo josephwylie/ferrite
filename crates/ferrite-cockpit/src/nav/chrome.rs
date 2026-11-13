@@ -129,6 +129,24 @@ pub fn filter_button(project: Option<&str>) -> Stateful<Div> {
     }
 }
 
+/// The Factory button: the board's glyph, with an attention dot at its
+/// corner while a Task needs the operator.
+pub fn factory_button(needs_you: bool) -> Stateful<Div> {
+    let button = head_button("nav-factory", icons::FACTORY).nav_tooltip("Factory");
+    if !needs_you {
+        return button;
+    }
+    button.relative().child(
+        components::status_dot(ATTENTION)
+            .debug_selector(|| "nav-factory-attention".into())
+            .text_size(px(NAV_FACTORY_DOT))
+            .line_height(px(NAV_FACTORY_DOT))
+            .absolute()
+            .top(px(NAV_FACTORY_DOT_INSET))
+            .right(px(NAV_FACTORY_DOT_INSET)),
+    )
+}
+
 // --------------------------------------------------------- the results
 
 /// The results that replace the list while the field holds text: 36px

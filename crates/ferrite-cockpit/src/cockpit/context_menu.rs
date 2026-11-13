@@ -21,6 +21,8 @@ pub(super) enum MenuTarget {
     /// The search row's Filter button: a Project to filter by, a Group to
     /// open.
     NavFilter,
+    /// The search row's Factory button: a Project's board to open.
+    NavFactory,
     /// A diff line in the Review beside the Thread's Pane (ADR 0021).
     Review {
         thread: ThreadId,
@@ -125,6 +127,7 @@ pub(super) enum MenuVerb {
     CloseAllSurfaces,
     FilterProject(Option<ProjectId>),
     OpenGroup(GroupId),
+    OpenFactory(ProjectId),
     /// A pull request Surface's row.
     Pr(panel::PrAction),
     /// The Factory picker's row at this index.
@@ -276,6 +279,7 @@ impl CockpitView {
             // The Parked shelf's header: the shelf, and the one bulk act it
             // exists for — clearing the parked history it holds.
             MenuTarget::NavFilter => rows.extend(self.filter_rows()),
+            MenuTarget::NavFactory => rows.extend(self.factory_rows()),
             MenuTarget::Parked => {
                 rows.push(Some((
                     menu::Item::new(if self.shelf_open(nav::Shelf::Parked) {
@@ -761,6 +765,9 @@ impl CockpitView {
                 self.choose_nav_filter(project, cx)
             }
             (MenuTarget::NavFilter, MenuVerb::OpenGroup(group)) => self.enter_group(group, cx),
+            (MenuTarget::NavFactory, MenuVerb::OpenFactory(project)) => {
+                self.open_factory(project, cx)
+            }
             (MenuTarget::Parked, MenuVerb::DeleteAllParked) => {
                 self.delete_parked_threads(cx);
             }
@@ -771,6 +778,7 @@ impl CockpitView {
                     | MenuTarget::Snooze(thread) => self.cockpit.project_id(thread),
                     MenuTarget::Parked
                     | MenuTarget::NavFilter
+                    | MenuTarget::NavFactory
                     | MenuTarget::Review { .. }
                     | MenuTarget::Prompt { .. }
                     | MenuTarget::File(_)

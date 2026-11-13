@@ -160,6 +160,7 @@ icons![
     "alarm-clock-off",
     "folder-plus",
     "list-filter",
+    "factory",
     "chart-no-axes-column",
     // A transcript work row's gutter (T3 Code's `TimelineToolActivityIcon`).
     "square-pen",
@@ -365,12 +366,13 @@ pub const FOLDER_GIT: &str = "icons/folder-git-2.svg";
 pub const PIN_OFF: &str = "icons/pin-off.svg";
 /// The nav's shelves and chrome (T3's lucide glyphs): a parked row's
 /// Revive, a snoozed row's wake time and Wake, the head's Add project, New
-/// thread and Project filter, the foot's Usage.
+/// thread, Project filter and Factory, the foot's Usage.
 pub const UNDO_2: &str = "icons/undo-2.svg";
 pub const ALARM_CLOCK: &str = "icons/alarm-clock.svg";
 pub const ALARM_CLOCK_OFF: &str = "icons/alarm-clock-off.svg";
 pub const FOLDER_PLUS: &str = "icons/folder-plus.svg";
 pub const LIST_FILTER: &str = "icons/list-filter.svg";
+pub const FACTORY: &str = "icons/factory.svg";
 pub const CHART_NO_AXES_COLUMN: &str = "icons/chart-no-axes-column.svg";
 /// A transcript work row's glyphs (`tools::ToolIcon`), Lucide's.
 pub const SQUARE_PEN: &str = "icons/square-pen.svg";
@@ -686,7 +688,7 @@ mod tests {
     }
 
     /// The UI refresh's line icons (SPEC §3.7), all in the family.
-    const REFRESH_ICONS: [&str; 44] = [
+    const REFRESH_ICONS: [&str; 45] = [
         PANEL_RIGHT,
         SEARCH,
         INBOX,
@@ -730,6 +732,7 @@ mod tests {
         FOLDER_PLUS,
         SQUARE_PEN,
         LIST_FILTER,
+        FACTORY,
         CHART_NO_AXES_COLUMN,
     ];
 

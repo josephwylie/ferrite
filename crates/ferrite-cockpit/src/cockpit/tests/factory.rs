@@ -37,20 +37,39 @@ fn shows(cx: &mut gpui::VisualTestContext, selector: &str) -> bool {
     debug_bounds(cx, selector.to_string()).is_some()
 }
 
-/// Each Project has a Factory entry over the nav's cards; a fresh one opens an
-/// empty board that started nothing and says nothing needs the operator.
+fn click(cx: &mut gpui::VisualTestContext, selector: &str) {
+    let at = bounds(cx, selector.to_string());
+    cx.simulate_click(at.center(), gpui::Modifiers::none());
+    tick(cx);
+}
+
+/// The Factory button in the search row opens a menu with a row per Project,
+/// not a row per Project in the list; a fresh Project's row opens an empty
+/// board that started nothing, and nothing needs the operator.
 #[gpui::test]
-fn each_project_has_a_factory_entry_and_a_fresh_one_is_empty(cx: &mut TestAppContext) {
+fn the_factory_button_lists_each_project_and_a_fresh_one_is_empty(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("factory-entry", 1);
     let project = core.project_id(core.threads()[0]).unwrap();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
-    let entry = format!("nav-factory-{}", project.get());
-    let row = bounds(cx, entry.clone());
-    assert!(!shows(cx, &format!("{entry}-count")), "nothing needs you");
+    assert!(
+        !shows(cx, &format!("nav-factory-{}", project.get())),
+        "no row in the list"
+    );
+    assert!(!shows(cx, "nav-factory-attention"), "nothing needs you");
+    click(cx, "nav-factory");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.context_menu.as_ref().map(|menu| menu.target),
+            Some(MenuTarget::NavFactory)
+        );
+    });
+    assert!(shows(cx, "context-menu-row-0"));
+    assert!(!shows(cx, "context-menu-row-1"), "one row per Project");
     let streams = fake.streams.borrow().len();
-    cx.simulate_click(row.center(), gpui::Modifiers::none());
+    click(cx, "context-menu-row-0");
     tick(cx);
     assert!(shows(cx, "factory-board"));
     assert!(shows(cx, "factory-empty"), "no invented Tasks");
@@ -64,7 +83,7 @@ fn each_project_has_a_factory_entry_and_a_fresh_one_is_empty(cx: &mut TestAppCon
 
 /// The board's six columns, each card in its status's column with its
 /// Worker's Provider and model and its result or stop reason; the entry
-/// counts what needs the operator.
+/// button wears a dot while one needs the operator.
 #[gpui::test]
 fn the_board_lays_cards_in_their_columns(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("factory-columns", 1);
@@ -103,8 +122,7 @@ fn the_board_lays_cards_in_their_columns(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
-    let entry = format!("nav-factory-{}", project.get());
-    assert!(shows(cx, &format!("{entry}-count")), "one needs you");
+    assert!(shows(cx, "nav-factory-attention"), "one needs you");
     view.update(cx, |view, cx| {
         assert_eq!(view.cockpit.factory().needs_you(project), 1);
         view.open_factory(project, cx);
@@ -383,15 +401,13 @@ fn a_task_toast_goes_when_the_task_leaves_the_state_it_announced(cx: &mut TestAp
     });
 }
 
-/// An empty Project's Factory opens from the nav: the Filter menu names
-/// the Project, its Factory row stands, and the list's keyboard walks to
-/// it and opens it.
+/// An empty Project's Factory opens from the nav: filtered to the Project,
+/// the Factory menu names it and its row opens the board.
 #[gpui::test]
-fn an_empty_projects_factory_opens_from_the_nav_and_its_keys(cx: &mut TestAppContext) {
+fn an_empty_projects_factory_opens_from_the_nav(cx: &mut TestAppContext) {
     let (mut core, _fake) = cockpit("factory-empty-project", 1);
     let repo = repo_in(&scratch("factory-empty-project-repo"));
     let empty = core.register_project(&repo).unwrap();
-    bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     tick(cx);
@@ -404,20 +420,9 @@ fn an_empty_projects_factory_opens_from_the_nav_and_its_keys(cx: &mut TestAppCon
         )
     });
     tick(cx);
-    assert!(
-        shows(cx, &format!("nav-factory-{}", empty.get())),
-        "its row"
-    );
-    view.update_in(cx, |view, window, cx| view.focus_nav(window, cx));
+    click(cx, "nav-factory");
     tick(cx);
-    view.read_with(cx, |view, _| {
-        assert_eq!(
-            view.nav_cursor.clone().map(|cursor| cursor.item),
-            Some(nav::NavItem::Factory(empty)),
-            "the keyboard starts on the Factory row"
-        );
-    });
-    cx.simulate_keystrokes("enter");
+    click(cx, "context-menu-row-0");
     tick(cx);
     assert!(shows(cx, "factory-board"));
     view.read_with(cx, |view, _| {
