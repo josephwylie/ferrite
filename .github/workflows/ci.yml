@@ -89,10 +89,10 @@ jobs:
         with:
           tool: cargo-nextest
       - name: Test core
-        run: cargo nextest run -p ferrite-core --locked
+        run: cargo nextest run -p ferrite-core --locked --no-fail-fast
       - name: Test the vendored review core
         if: needs.scope.outputs.reviewr != 'false'
-        run: cargo nextest run -p ferrite-reviewr --locked
+        run: cargo nextest run -p ferrite-reviewr --locked --no-fail-fast
       - name: Build app
         run: cargo build -p ferrite --locked
 
@@ -138,11 +138,11 @@ jobs:
           tool: cargo-nextest
       - name: Test core
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
-        run: cargo nextest run -p ferrite-core --locked
+        run: cargo nextest run -p ferrite-core --locked --no-fail-fast
       - name: Test the vendored review core
         if: needs.scope.outputs.reviewr != 'false'
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
-        run: cargo nextest run -p ferrite-reviewr --locked
+        run: cargo nextest run -p ferrite-reviewr --locked --no-fail-fast
       - name: Build app
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE }}
         run: cargo build -p ferrite --locked
