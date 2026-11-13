@@ -370,20 +370,20 @@ impl CockpitView {
         };
         changes.generation += 1;
         changes.load = Load::Reading;
-        changes.branches = ferrite_reviewr::git::list_branches(&root)
-            .unwrap_or_default()
-            .into_iter()
-            .take(BRANCHES_LISTED)
-            .map(|branch| branch.name)
-            .collect();
         let generation = changes.generation;
         let (read, base) = changes.scope.read();
         cx.spawn(async move |view, cx| {
-            let files = cx
+            let (branches, files) = cx
                 .background_executor()
                 .spawn(async move {
+                    let branches = ferrite_reviewr::git::list_branches(&root)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .take(BRANCHES_LISTED)
+                        .map(|branch| branch.name)
+                        .collect();
                     let staged = staged_paths(&root);
-                    review_against(&root, &read, base.as_deref()).map(|files| {
+                    let files = review_against(&root, &read, base.as_deref()).map(|files| {
                         files
                             .iter()
                             .map(|sides| {
@@ -402,11 +402,13 @@ impl CockpitView {
                                 }
                             })
                             .collect::<Vec<_>>()
-                    })
+                    });
+                    (branches, files)
                 })
                 .await;
             view.update(cx, |view, cx| {
                 if let Some(changes) = view.changes_of(diff).filter(|c| c.generation == generation) {
+                    changes.branches = branches;
                     changes.load = match files {
                         Ok(files) => Load::Read(files),
                         Err(why) => Load::Failed(why.into()),
