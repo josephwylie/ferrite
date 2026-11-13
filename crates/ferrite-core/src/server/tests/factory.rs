@@ -19,8 +19,6 @@ fn factory_project(name: &str) -> (Harness, String, PathBuf) {
     (harness, project, repo)
 }
 
-/// Stop the Server as `ferrite server stop` does and serve its Store
-/// again: a restart.
 /// A call from inside `thread` that succeeds: its result.
 fn ok_in(
     harness: &Harness,
@@ -33,6 +31,10 @@ fn ok_in(
     said[0]["result"].clone()
 }
 
+/// Stop the Server as `ferrite server stop` does and serve its Store
+/// again: a restart.
+// A successor takes the store as `exec` hands it over (Unix).
+#[cfg(unix)]
 fn restart(harness: Harness) -> Harness {
     let mut control = attach(&harness.address);
     control.command(226, Op::Stop { when: When::Now });

@@ -542,6 +542,8 @@ impl World {
     /// Stop the Server; while it is down, move the clock to `at_ms` and
     /// script GitHub's next answers with `will`; then serve its Store
     /// again on the same clock and GitHub: a restart.
+    // A successor takes the store as `exec` hands it over (Unix).
+    #[cfg(unix)]
     fn restart(self, at_ms: i64, will: Vec<Result<GitHubRead, String>>) -> World {
         let mut control = attach(&self.harness.address);
         drop(control.command(226, Op::Stop { when: When::Now }));
