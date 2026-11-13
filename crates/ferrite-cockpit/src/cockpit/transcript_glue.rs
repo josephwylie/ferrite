@@ -56,14 +56,7 @@ pub(super) fn agent_faces(activity: ActivityView<'_>) -> AgentFaces {
     for (call, agent) in activity.invocations() {
         let run = match agent.status() {
             AgentStatus::Failed | AgentStatus::NotFound => AgentRun::Failed,
-            AgentStatus::Working
-            | AgentStatus::Pending
-            | AgentStatus::Waiting
-            | AgentStatus::Unknown
-                if agent.fresh() =>
-            {
-                AgentRun::Running
-            }
+            _ if agent.running() => AgentRun::Running,
             _ => AgentRun::Done,
         };
         let summary = (run == AgentRun::Running)

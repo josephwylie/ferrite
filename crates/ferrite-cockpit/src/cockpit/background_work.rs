@@ -26,7 +26,6 @@ struct Work {
 }
 
 fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
-    use ferrite_core::activity::AgentStatus;
     use ferrite_core::progress::TaskStatus;
     let transcript = open.transcript();
     let mut work: Vec<Work> = transcript
@@ -61,17 +60,7 @@ fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<Work> {
     // While Main's turn runs its agents are rows of the transcript; once it
     // has ended, the ones still working are what the Thread waits on.
     if !open.busy() {
-        for (names, agent) in open.activity().named_agents() {
-            let working = matches!(
-                agent.status(),
-                AgentStatus::Working
-                    | AgentStatus::Pending
-                    | AgentStatus::Waiting
-                    | AgentStatus::Unknown
-            ) && agent.fresh();
-            if !working {
-                continue;
-            }
+        for (names, agent) in open.activity().running_agents() {
             // The name the transcript holds a call by, for the label and
             // the drill-in.
             let call = names
