@@ -124,15 +124,20 @@ impl CockpitView {
             .and_then(|project| self.cockpit.registry().project(project))
             .map(|project| project.title.clone());
         let filter = chrome::filter_button(filtered.as_deref());
-        let filter = self.menu_button(filter, MenuTarget::NavFilter, cx);
+        let filter = self.menu_button(filter, MenuTarget::NavFilter, gpui::Anchor::TopRight, cx);
         let projects = self.factory_nav_projects(&self.nav_state());
         let factory = (!projects.is_empty()).then(|| {
             let needs_you = projects
                 .iter()
                 .any(|project| self.cockpit.factory().needs_you(*project) > 0);
+            let open = self
+                .context_menu
+                .as_ref()
+                .is_some_and(|menu| menu.target == MenuTarget::NavFactory);
             self.menu_button(
-                chrome::factory_button(needs_you),
+                chrome::factory_button(needs_you, open),
                 MenuTarget::NavFactory,
+                gpui::Anchor::TopLeft,
                 cx,
             )
         });
@@ -163,11 +168,13 @@ impl CockpitView {
         )
     }
 
-    /// A head button that opens `target`'s menu under itself.
+    /// A head button that opens `target`'s menu under itself, the menu's
+    /// `corner` on the button's matching edge.
     fn menu_button(
         &self,
         button: Stateful<Div>,
         target: MenuTarget,
+        corner: gpui::Anchor,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let drawn = std::rc::Rc::new(std::cell::Cell::new(None::<gpui::Bounds<Pixels>>));
@@ -183,7 +190,7 @@ impl CockpitView {
                 cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
                     match drawn.get() {
-                        Some(button) => view.open_context_menu_under(target, button, cx),
+                        Some(button) => view.open_context_menu_below(target, button, corner, cx),
                         None => view.open_context_menu(target, event.position, cx),
                     }
                 }),

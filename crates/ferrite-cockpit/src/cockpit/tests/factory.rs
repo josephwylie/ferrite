@@ -68,6 +68,12 @@ fn the_factory_button_lists_each_project_and_a_fresh_one_is_empty(cx: &mut TestA
     });
     assert!(shows(cx, "context-menu-row-0"));
     assert!(!shows(cx, "context-menu-row-1"), "one row per Project");
+    let button = bounds(cx, "nav-factory".to_string());
+    let menu = bounds(cx, "context-menu".to_string());
+    assert!(
+        menu.top() > button.bottom() && (menu.left() - button.left()).abs() < px(1.),
+        "the menu hangs under the button from its left edge: {menu:?} {button:?}"
+    );
     let streams = fake.streams.borrow().len();
     click(cx, "context-menu-row-0");
     tick(cx);

@@ -192,10 +192,27 @@ impl CockpitView {
         button: gpui::Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) {
+        self.open_context_menu_below(target, button, gpui::Anchor::TopRight, cx);
+    }
+
+    /// The same drop under `button`, the menu's `corner` (`TopLeft` or
+    /// `TopRight`) on the button's matching edge: a button at the start
+    /// of a row hangs its menu from its left edge.
+    pub(super) fn open_context_menu_below(
+        &mut self,
+        target: MenuTarget,
+        button: gpui::Bounds<Pixels>,
+        corner: gpui::Anchor,
+        cx: &mut Context<Self>,
+    ) {
         let gap = px(ferrite_ui::theme::MENU_UNDER_GAP);
-        let at = gpui::point(button.right(), button.top() - gap);
+        let x = match corner {
+            gpui::Anchor::TopLeft => button.left(),
+            _ => button.right(),
+        };
+        let at = gpui::point(x, button.top() - gap);
         let drop = button.size.height + gap * 2.;
-        self.open_context_menu_at(target, at, gpui::Anchor::TopRight, Some(drop), cx);
+        self.open_context_menu_at(target, at, corner, Some(drop), cx);
     }
 
     pub(super) fn open_context_menu_at(
