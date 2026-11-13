@@ -129,7 +129,7 @@ pub fn filter_button(project: Option<&str>) -> Stateful<Div> {
     }
 }
 
-/// The Factory button: the board's glyph, with an attention dot at its
+/// The Factory button: the factory glyph, with an attention dot at its
 /// corner while a Task needs the operator.
 pub fn factory_button(needs_you: bool) -> Stateful<Div> {
     let button = head_button("nav-factory", icons::FACTORY).nav_tooltip("Factory");
