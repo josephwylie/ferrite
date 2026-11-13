@@ -2239,7 +2239,11 @@ impl TranscriptView {
                 self.scroll_end_wanted = Some((self.input.namespace.clone(), now));
                 cx.spawn(async move |view, cx| {
                     cx.background_executor().timer(delay).await;
-                    let _ = view.update(cx, |_, cx| cx.notify());
+                    let _ = view.update(cx, |view, cx| {
+                        if matches!(&view.scroll_end_wanted, Some((_, wanted)) if *wanted == now) {
+                            cx.notify();
+                        }
+                    });
                 })
                 .detach();
                 now

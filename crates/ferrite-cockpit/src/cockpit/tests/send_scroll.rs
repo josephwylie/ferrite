@@ -352,6 +352,28 @@ fn scroll_to_end_shows_after_its_delay_and_hides_at_once(cx: &mut TestAppContext
 }
 
 #[gpui::test]
+fn scroll_to_end_no_longer_wanted_asks_for_no_frame(cx: &mut TestAppContext) {
+    let (view, _fake, cx) = answered("scroll-end-unwanted", false, cx);
+    scrolled_away(&view, cx);
+    let transcript = transcript(&view, cx);
+    transcript.update(cx, |transcript, cx| {
+        transcript.page(ferrite_pane::transcript::Page::Bottom, cx)
+    });
+    cx.run_until_parked();
+    let notified = std::rc::Rc::new(std::cell::Cell::new(0));
+    let _count = cx.update({
+        let notified = notified.clone();
+        |_, cx| cx.observe(&transcript, move |_, _| notified.set(notified.get() + 1))
+    });
+    at(SCROLL_END_SHOW_DELAY_MS + 10, cx);
+    assert!(
+        cx.debug_bounds("scroll-to-end").is_none(),
+        "back at the tail"
+    );
+    assert_eq!(notified.get(), 0, "the delay's timer draws nothing");
+}
+
+#[gpui::test]
 fn scroll_to_end_eases_to_the_tail_keeping_the_composers_focus(cx: &mut TestAppContext) {
     let (view, _fake, cx) = answered("scroll-end-click", true, cx);
     scrolled_away(&view, cx);
