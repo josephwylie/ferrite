@@ -126,16 +126,17 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let painter = self.parts.borrow().view_id(parts::Part::Nav);
         if let Some(old) = self.nav_cursor.take() {
-            crate::nav::card_hover(old.key, true)(&false, window, cx);
+            crate::nav::card_hover(old.key, true, painter)(&false, window, cx);
         }
         self.nav_cursor_bounds.set(None);
         if let Some(next) = &next {
-            crate::nav::card_hover(next.key.clone(), true)(&true, window, cx);
+            crate::nav::card_hover(next.key.clone(), true, painter)(&true, window, cx);
             self.nav_reveal.set(true);
         }
         self.nav_cursor = next;
-        cx.notify();
+        self.notify_part(parts::Part::Nav, cx);
     }
 
     /// ↑ / ↓: the row before or after the cursor's, stopping at the ends.

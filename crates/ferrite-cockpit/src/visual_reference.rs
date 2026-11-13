@@ -1436,7 +1436,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                 let harness = named_thread(view, "Screenshot harness");
                 view.facts
                     .pr_answered(harness, Some(fixture_pr(415, PrState::Open, false)));
-                crate::nav::card_hover(crate::nav::card_key(harness), false)(&true, window, cx);
+                crate::nav::card_hover(crate::nav::card_key(harness), false, None)(&true, window, cx);
                 cx.notify();
             });
             (scene, setup)
@@ -1470,7 +1470,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
                     view.facts.pr_answered(thread, Some(reading));
                 }
                 let running = named_thread(view, "Retained transcript rendering");
-                crate::nav::card_hover(crate::nav::card_key(running), true)(&true, window, cx);
+                crate::nav::card_hover(crate::nav::card_key(running), true, None)(&true, window, cx);
                 cx.notify();
             });
             (scene, setup)

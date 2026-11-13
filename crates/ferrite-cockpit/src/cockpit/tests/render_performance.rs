@@ -2979,3 +2979,25 @@ fn a_nav_rebuild_lays_out_no_character_again(cx: &mut TestAppContext) {
         "a nav rebuild laid out a character again"
     );
 }
+
+/// An arrow key in the nav moves its cursor and rebuilds the nav alone:
+/// no Pane is built again for it.
+#[gpui::test]
+fn a_nav_cursor_move_builds_no_pane(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, _fake) = cockpit("nav-cursor-move", 4);
+    let threads = core.threads().to_vec();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    tick(cx);
+    cx.simulate_keystrokes("cmd-shift-e");
+    tick(cx);
+    let (nav, panes) = (crate::cockpit::drawn::nav_renders(), pane_builds(&threads));
+    cx.simulate_keystrokes("down down up");
+    tick(cx);
+    assert!(
+        crate::cockpit::drawn::nav_renders() > nav,
+        "the premise: the moves rebuilt the nav"
+    );
+    assert_eq!(pane_builds(&threads), panes, "a nav cursor move built a Pane");
+}
