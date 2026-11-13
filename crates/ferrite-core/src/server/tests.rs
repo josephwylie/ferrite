@@ -1614,6 +1614,24 @@ fn restored_after(
     (next, thread)
 }
 
+/// A Thread the operator spoke in, left open, after the next Server's
+/// start, with no window attached.
+fn restored_unwatched(name: &str) -> (Engine, ThreadId) {
+    let dir = scratch(name);
+    let store = dir.join("threads");
+    let (spawner, providers) = spawn();
+    let mut first = engine(&store, spawner);
+    let thread = open_in(&mut first, &dir);
+    let agent = providers.recv().unwrap();
+    spoken(&mut first, thread, &agent);
+    first.halt_sessions();
+    drop(first);
+    let (spawner, _providers) = spawn();
+    let mut next = engine(&store, spawner);
+    revive_launch(&mut next, launch_threads(&Store::open(&store).unwrap()));
+    (next, thread)
+}
+
 /// The operator spoke to the agent, which named its conversation `claude-1`.
 fn spoken(engine: &mut Engine, thread: ThreadId, agent: &Sender<SessionEvent>) {
     agent
@@ -4867,6 +4885,47 @@ fn a_thread_read_back_stays_held_a_minute() {
     engine.pump();
     engine.take_messages();
     assert!(said_in(&engine, thread).is_empty(), "let go again");
+}
+
+/// A window that revives a Thread watches it next. The watch finds it
+/// still held, so the revive is the only read of its log on the pump.
+#[test]
+fn a_revived_thread_is_still_held_when_its_window_watches_it() {
+    let (mut engine, thread, _, clock, _providers) = let_go("revive-then-watch");
+    engine.park(thread).unwrap();
+    engine.take_messages();
+
+    let start = engine.log_bytes_read();
+    engine.revive(thread).unwrap();
+    engine.take_messages();
+    let revived = engine.log_bytes_read() - start;
+    assert!(revived > 0, "the revive reads the log");
+    clock.advance(Duration::from_secs(59));
+    engine.pump();
+    engine.take_messages();
+    assert!(!said_in(&engine, thread).is_empty(), "held until its window watches it");
+    let history = engine.history(thread).expect("its history");
+    assert_eq!(
+        engine.log_bytes_read() - start,
+        revived,
+        "the watch reads none of the log on the pump"
+    );
+    history.send(&mut |_| Ok(())).unwrap();
+    assert!(
+        engine.log_bytes_read() - start <= 2 * revived,
+        "its history is the second and last read"
+    );
+}
+
+/// The API's read of a let-go Thread takes its log to read on another
+/// thread: the pump reads none of it, and the Thread stays let go.
+#[test]
+fn a_boot_lets_each_thread_go_once_it_is_read() {
+    let (mut engine, thread) = restored_unwatched("boot-lets-go");
+    engine.take_messages();
+    assert!(said_in(&engine, thread).is_empty(), "let go to its digest");
+    engine.set_watched([thread].into());
+    assert!(!said_in(&engine, thread).is_empty(), "read back when watched");
 }
 
 /// An act that writes to a let-go Thread reads it back first, so what it

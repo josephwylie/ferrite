@@ -799,8 +799,26 @@ struct Published {
 }
 
 /// How long a Thread read back from its log is held before it may be let
-/// go again, so a Thread read often reads its log at most once a minute.
+/// go again, so a Thread read often reads its log at most once a minute. A
+/// revive counts as a read back: the window that revived a Thread watches
+/// it next, and finds it still held.
 const HOLD_AT_LEAST: Duration = Duration::from_secs(60);
+
+/// What a read back applies to a Thread's Activity: its log's `inputs`,
+/// then what the last Session announced still stands (ADR 0032).
+fn read_back_inputs(
+    inputs: Vec<ActivityInput>,
+    servers: Vec<crate::McpServer>,
+    at: Instant,
+) -> impl Iterator<Item = ActivityInput> {
+    let main = move |input| ActivityInput::Main { input, at };
+    let announced = (!servers.is_empty())
+        .then(|| main(Input::Event(SessionEvent::McpServers { servers })));
+    std::iter::once(ActivityInput::Disconnect)
+        .chain(inputs)
+        .chain(std::iter::once(main(Input::Revived)))
+        .chain(announced)
+}
 
 /// How often a streaming Thread's digest may refold: four times a second.
 /// The fold walks every Block the Thread holds (and its Subagents', for the
@@ -1028,15 +1046,11 @@ impl Thread {
     /// Its Activity as its log says it, with no Session running: what the
     /// last one announced still stands (ADR 0032).
     fn read_back(&mut self, inputs: Vec<ActivityInput>) {
-        self.activity.apply(ActivityInput::Disconnect);
-        for input in inputs {
+        let servers = self.announced.mcp_servers().to_vec();
+        for input in read_back_inputs(inputs, servers, crate::clock::instant()) {
             self.activity.apply(input);
         }
-        self.apply(Input::Revived);
-        let servers = self.announced.mcp_servers().to_vec();
-        if !servers.is_empty() {
-            self.apply(Input::Event(SessionEvent::McpServers { servers }));
-        }
+        self.read_back_at = Some(crate::clock::instant());
     }
 
     /// `session` serves it from now on. A fresh Session knows nothing:
@@ -2338,6 +2352,17 @@ impl Engine {
     /// starts when the Thread is used, told where to resume.
     pub fn revive(&mut self, thread: ThreadId) -> Result<(), LoadError> {
         self.reopen(thread, None).map(drop)
+    }
+
+    /// Revive a parked Thread with no window attached to watch it, as a
+    /// Server's start does: it is let go to its digest as soon as that is
+    /// published, so a start holds one Thread's history at a time.
+    pub fn revive_unwatched(&mut self, thread: ThreadId) -> Result<(), LoadError> {
+        self.revive(thread)?;
+        if let Some(state) = self.threads.get_mut(&thread) {
+            state.read_back_at = None;
+        }
+        Ok(())
     }
 
     /// Reopen a parked Thread as `launch` says (`thread.revive`, ADR 0031):
@@ -4776,6 +4801,12 @@ impl Engine {
         self.states_built
     }
 
+    /// How many bytes of Thread logs this Engine has read.
+    #[cfg(test)]
+    pub(crate) fn log_bytes_read(&self) -> u64 {
+        self.store.bytes_read()
+    }
+
     /// The open Threads, in the order they opened.
     pub fn open_threads(&self) -> &[ThreadId] {
         &self.open
@@ -5025,7 +5056,6 @@ impl Engine {
         });
         state.activity.settle();
         state.held = true;
-        state.read_back_at = Some(crate::clock::instant());
     }
 
     /// Refold each digest its Thread's inputs left owing: at once when Main

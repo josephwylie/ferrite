@@ -293,7 +293,7 @@ fn launch_threads(store: &Store) -> Vec<ThreadId> {
 fn revive_launch(engine: &mut Engine, threads: Vec<ThreadId>) {
     engine.set_watched(BTreeSet::new());
     for thread in threads {
-        if let Err(error) = engine.revive(thread) {
+        if let Err(error) = engine.revive_unwatched(thread) {
             crate::log!("thread {thread} could not be revived: {error:?}");
         }
         // Nobody to tell: a window attaching reads the snapshot.
