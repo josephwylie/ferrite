@@ -4931,8 +4931,8 @@ fn a_read_of_a_let_go_thread_reads_nothing_on_the_pump() {
     assert!(said_in(&engine, thread).is_empty(), "still let go");
 
     let said = std::thread::spawn(move || {
-        let activity = read_back.activity().unwrap();
-        let blocks = activity.view().main().transcript().blocks();
+        let read = read_back.read().unwrap();
+        let blocks = read.view().main().transcript().blocks();
         blocks.iter().map(|block| format!("{:?}", block.body)).collect::<Vec<_>>()
     })
     .join()
@@ -4942,6 +4942,34 @@ fn a_read_of_a_let_go_thread_reads_nothing_on_the_pump() {
 
     engine.set_watched([thread].into());
     assert!(engine.read_back_later(thread).is_none(), "a held Thread is read where it is");
+}
+
+/// What a read off the pump read back is held, so the next read reads
+/// none of the log, as a read on the pump held it before.
+#[test]
+fn a_thread_read_off_the_pump_is_held_for_the_next_read() {
+    let (mut engine, thread, before, _clock, _providers) = let_go("read-then-read");
+
+    let read_back = engine.read_back_later(thread).expect("let go").unwrap();
+    let read = std::thread::spawn(move || read_back.read().unwrap()).join().unwrap();
+    let start = engine.log_bytes_read();
+    engine.adopt(read);
+    assert_eq!(said_in(&engine, thread), before, "held as a hold reads it");
+    assert!(engine.read_back_later(thread).is_none(), "the next read is read where it is");
+    engine.set_watched([thread].into());
+    assert_eq!(engine.log_bytes_read(), start, "and reads none of the log");
+}
+
+/// A read off the pump that a hold overtook is dropped: the Thread holds
+/// what the hold read.
+#[test]
+fn a_read_off_the_pump_is_dropped_once_the_thread_is_held() {
+    let (mut engine, thread, before, _clock, _providers) = let_go("read-overtaken");
+
+    let read_back = engine.read_back_later(thread).expect("let go").unwrap();
+    engine.set_watched([thread].into());
+    engine.adopt(read_back.read().unwrap());
+    assert_eq!(said_in(&engine, thread), before);
 }
 
 /// A Server's start reopens each open Thread and lets it go at once, so it

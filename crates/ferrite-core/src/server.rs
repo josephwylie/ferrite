@@ -328,11 +328,15 @@ type Search = (
 /// `list_dir`: who asked, in which command, and the reply it makes.
 type Read = (ClientId, u64, Receiver<Result<Option<Done>, WireError>>);
 
-/// An API request answered off the pump: who asked, under which id.
+/// An API request answered off the pump: who asked, under which id, and
+/// the reply with the Activity it read back, for the Engine to hold.
 type ApiRead = (
     crate::api::CallerId,
     String,
-    Receiver<Result<serde_json::Value, crate::api::ApiError>>,
+    Receiver<(
+        Result<serde_json::Value, crate::api::ApiError>,
+        Option<crate::engine::ReadThread>,
+    )>,
 );
 
 struct Server {

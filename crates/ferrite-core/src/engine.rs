@@ -5058,21 +5058,42 @@ impl Engine {
         state.held = true;
     }
 
-    /// A let-go Thread's log, to read back off the pump thread for a read
-    /// that holds nothing (`agent.read`). `None` when the Thread is held, or
-    /// not open: its Activity is read where it is.
+    /// A let-go Thread's log, to read back off the pump thread for
+    /// `agent.read`. `None` when the Thread is held, or not open: its
+    /// Activity is read where it is.
     pub(crate) fn read_back_later(&mut self, thread: ThreadId) -> Option<io::Result<ReadBack>> {
         let state = self.threads.get_mut_if(&thread, |state| !state.held)?;
-        let log = state
-            .writer
-            .checkpoint()
-            .and_then(|through| self.store.log_at(thread, &state.writer, through));
-        Some(log.map(|log| ReadBack {
-            log,
-            limits: self.store.activity_limits(),
-            servers: state.announced.mcp_servers().to_vec(),
-            at: crate::clock::instant(),
-        }))
+        let read = state.writer.checkpoint().and_then(|through| {
+            let log = self.store.log_at(thread, &state.writer, through)?;
+            Ok(ReadBack {
+                thread,
+                log,
+                through,
+                activity: Journaled::new(state.activity.boot, state.activity.limits),
+                servers: state.announced.mcp_servers().to_vec(),
+                at: crate::clock::instant(),
+            })
+        });
+        Some(read)
+    }
+
+    /// Hold what a read off the pump read back (`read_back_later`), as
+    /// `hold` would have read it, so the next read reads none of the log.
+    /// Dropped when the Thread was held meanwhile or its log has grown.
+    pub(crate) fn adopt(&mut self, read: ReadThread) {
+        let Some(state) = self.threads.get_mut_if(&read.thread, |state| !state.held) else {
+            return;
+        };
+        if state.writer.checkpoint().ok() != Some(read.through) {
+            return;
+        }
+        state.activity.activity = read.activity.activity;
+        state.activity.apply(ActivityInput::Connect {
+            generation: state.generation,
+        });
+        state.activity.settle();
+        state.held = true;
+        state.read_back_at = Some(crate::clock::instant());
     }
 
     /// Refold each digest its Thread's inputs left owing: at once when Main
@@ -5316,23 +5337,43 @@ impl History {
     }
 }
 
-/// A let-go Thread's Activity as `Engine::hold` would read it back, built
-/// on another thread and held by nobody (`Engine::read_back_later`).
+/// A let-go Thread's log, read back on another thread as `Engine::hold`
+/// would read it (`Engine::read_back_later`).
 pub struct ReadBack {
+    thread: ThreadId,
     log: crate::store::LogAt,
-    limits: ActivityLimits,
+    through: u64,
+    activity: Journaled,
     servers: Vec<crate::McpServer>,
     at: Instant,
 }
 
 impl ReadBack {
-    pub fn activity(self) -> Result<Activity, LoadError> {
-        let mut activity = Activity::new(self.limits);
+    pub fn read(mut self) -> Result<ReadThread, LoadError> {
         let inputs = self.log.load()?.activity_inputs();
         for input in read_back_inputs(inputs, self.servers, self.at) {
-            activity.apply(input);
+            self.activity.apply(input);
         }
-        Ok(activity)
+        self.activity.settle();
+        Ok(ReadThread {
+            thread: self.thread,
+            through: self.through,
+            activity: self.activity,
+        })
+    }
+}
+
+/// A Thread's Activity read back off the pump, for the Engine to hold
+/// (`Engine::adopt`).
+pub struct ReadThread {
+    thread: ThreadId,
+    through: u64,
+    activity: Journaled,
+}
+
+impl ReadThread {
+    pub fn view(&self) -> ActivityView<'_> {
+        self.activity.view()
     }
 }
 

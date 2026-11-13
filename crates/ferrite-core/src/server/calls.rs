@@ -520,8 +520,7 @@ impl Server {
     }
 
     /// A let-go Thread's transcript, read back from its log on a thread of
-    /// its own: the pump goes on serving every window and Session, and the
-    /// Thread stays let go.
+    /// its own while the pump goes on serving every window and Session.
     fn read_back_off_pump(
         &mut self,
         caller: CallerId,
@@ -532,39 +531,40 @@ impl Server {
         let (answer, answered) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             crate::spawn::serve_the_operator();
-            let read = read_back
-                .map_err(LoadError::Io)
-                .and_then(ReadBack::activity)
-                .map(|activity| read_answer(&params, activity.view().main().transcript()))
-                .map_err(|error| {
-                    ApiError::new(
-                        Code::Failed,
-                        format!("the Thread's log could not be read back: {error}"),
-                    )
-                });
-            let _ = answer.send(read);
+            let read = read_back.map_err(LoadError::Io).and_then(ReadBack::read);
+            let reply = match &read {
+                Ok(read) => Ok(read_answer(&params, read.view().main().transcript())),
+                Err(error) => Err(ApiError::new(
+                    Code::Failed,
+                    format!("the Thread's log could not be read back: {error}"),
+                )),
+            };
+            let _ = answer.send((reply, read.ok()));
         });
         self.api_reads.push((caller, request, answered));
     }
 
-    /// Reply to each read off the pump that finished.
+    /// Reply to each read off the pump that finished, and hold what it read.
     pub(super) fn answer_api_reads(&mut self) {
         let mut answered = Vec::new();
         self.api_reads
             .retain(|(caller, request, answer)| match answer.try_recv() {
-                Ok(read) => {
-                    answered.push((*caller, request.clone(), read));
+                Ok((reply, read)) => {
+                    answered.push((*caller, request.clone(), reply, read));
                     false
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => true,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     let ended = ApiError::new(Code::Failed, "the read ended");
-                    answered.push((*caller, request.clone(), Err(ended)));
+                    answered.push((*caller, request.clone(), Err(ended), None));
                     false
                 }
             });
-        for (caller, request, read) in answered {
-            self.api.reply(caller, request, read);
+        for (caller, request, reply, read) in answered {
+            if let Some(read) = read {
+                self.engine.adopt(read);
+            }
+            self.api.reply(caller, request, reply);
         }
     }
 
