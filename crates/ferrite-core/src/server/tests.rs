@@ -4920,6 +4920,33 @@ fn a_revived_thread_is_still_held_when_its_window_watches_it() {
 /// The API's read of a let-go Thread takes its log to read on another
 /// thread: the pump reads none of it, and the Thread stays let go.
 #[test]
+fn a_read_of_a_let_go_thread_reads_nothing_on_the_pump() {
+    let (mut engine, thread, before, _clock, _providers) = let_go("read-off-pump");
+
+    let start = engine.log_bytes_read();
+    let read_back = engine.read_back_later(thread).expect("let go").unwrap();
+    engine.pump();
+    engine.take_messages();
+    assert_eq!(engine.log_bytes_read(), start, "the pump read none of the log");
+    assert!(said_in(&engine, thread).is_empty(), "still let go");
+
+    let said = std::thread::spawn(move || {
+        let activity = read_back.activity().unwrap();
+        let blocks = activity.view().main().transcript().blocks();
+        blocks.iter().map(|block| format!("{:?}", block.body)).collect::<Vec<_>>()
+    })
+    .join()
+    .unwrap();
+    assert_eq!(said, before, "it reads as a hold would read it");
+    assert!(engine.log_bytes_read() > start);
+
+    engine.set_watched([thread].into());
+    assert!(engine.read_back_later(thread).is_none(), "a held Thread is read where it is");
+}
+
+/// A Server's start reopens each open Thread and lets it go at once, so it
+/// holds one Thread's history at a time, however many are open (ADR 0032).
+#[test]
 fn a_boot_lets_each_thread_go_once_it_is_read() {
     let (mut engine, thread) = restored_unwatched("boot-lets-go");
     engine.take_messages();
