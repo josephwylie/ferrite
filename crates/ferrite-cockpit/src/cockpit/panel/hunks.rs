@@ -328,10 +328,65 @@ fn flatten(rows: &[Row], out: &mut Vec<Line>) {
     }
 }
 
-/// The hunk area (`BLOCK`, the panel's diff face): each line on a 2.5ch sign
-/// column inset 1ch, changed lines on their wash in body ink, context in
-/// `INK_SUBTLE`; a hairline between hunks.
-pub(crate) fn hunks_element(index: usize, shown: &Shown, wrap: bool) -> Div {
+/// One drawn row of a file's hunk area, in the order `pieces` lists them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Piece {
+    /// Why the file has no hunks.
+    Note(SharedString),
+    /// A line, the `n`th the area draws.
+    Line { line: Line, n: usize },
+    /// The hairline between two hunks.
+    Gap,
+    /// `… +N lines`: the lines past `MAX_LINES`.
+    More(usize),
+}
+
+/// The rows a file's hunk area draws: its lines up to `MAX_LINES`, a gap
+/// between hunks, then what was left out.
+pub(crate) fn pieces(shown: &Shown) -> Vec<Piece> {
+    let hunks = match shown {
+        Shown::Hunks(hunks) => hunks,
+        Shown::Note(note) => return vec![Piece::Note(note.clone())],
+    };
+    let total: usize = hunks.iter().map(Vec::len).sum();
+    let mut pieces = Vec::new();
+    let mut drawn = 0;
+    for (at, hunk) in hunks.iter().enumerate() {
+        if drawn == MAX_LINES {
+            break;
+        }
+        if at > 0 {
+            pieces.push(Piece::Gap);
+        }
+        for line in hunk.iter().take(MAX_LINES - drawn) {
+            pieces.push(Piece::Line { line: line.clone(), n: drawn });
+            drawn += 1;
+        }
+    }
+    if total > drawn {
+        pieces.push(Piece::More(total - drawn));
+    }
+    pieces
+}
+
+/// The panel's diff face (`BLOCK`, code type) that every hunk row sits on,
+/// without the area's padding.
+pub(crate) fn hunks_face(wrap: bool) -> Div {
+    use ferrite_ui::theme::*;
+    div()
+        .flex()
+        .flex_col()
+        .bg(paint::BLOCK)
+        .font_family(FONT_CODE)
+        .text_size(px(FS_PANEL_DIFF))
+        .line_height(px(LH_PANEL_DIFF))
+        .when(!wrap, |face| face.whitespace_nowrap())
+}
+
+/// One row of file `index`'s hunk area: a line on a 2.5ch sign column inset
+/// 1ch, changed lines on their wash in body ink, context in `INK_SUBTLE`;
+/// a hairline between hunks.
+pub(crate) fn piece_element(index: usize, piece: &Piece, wrap: bool) -> Div {
     use ferrite_ui::theme::*;
     let cell = FS_PANEL_DIFF * CODE_ADVANCE;
     // A wrapped line grows by rows; an unwrapped one is cut at the edge.
@@ -344,41 +399,18 @@ pub(crate) fn hunks_element(index: usize, shown: &Shown, wrap: bool) -> Div {
             .pl(px(PANEL_HUNK_INSET_CELLS * cell))
             .overflow_hidden()
     };
-    let area = div()
-        .debug_selector(move || format!("panel-hunks-{index}"))
-        .flex()
-        .flex_col()
-        .pt(px(PANEL_HUNK_PAD_T))
-        .pb(px(PANEL_HUNK_PAD_B))
-        .bg(paint::BLOCK)
-        .font_family(FONT_CODE)
-        .text_size(px(FS_PANEL_DIFF))
-        .line_height(px(LH_PANEL_DIFF))
-        .when(!wrap, |area| area.whitespace_nowrap());
-    let hunks = match shown {
-        Shown::Hunks(hunks) => hunks,
-        Shown::Note(note) => {
-            return area.child(row().text_color(rgb(INK_SUBTLE)).child(note.clone()));
-        }
-    };
-    let total: usize = hunks.iter().map(Vec::len).sum();
-    let mut left = MAX_LINES;
-    let mut drawn = 0;
-    let mut area = area;
-    for (at, hunk) in hunks.iter().enumerate() {
-        if left == 0 {
-            break;
-        }
-        if at > 0 {
-            area = area.child(
-                div()
-                    .flex_shrink_0()
-                    .h(px(1.))
-                    .my(px(PANEL_HUNK_PAD_T))
-                    .bg(paint::LINE),
-            );
-        }
-        for line in hunk.iter().take(left) {
+    match piece {
+        Piece::Note(note) => row().text_color(rgb(INK_SUBTLE)).child(note.clone()),
+        Piece::Gap => div()
+            .flex_shrink_0()
+            .h(px(1.))
+            .my(px(PANEL_HUNK_PAD_T))
+            .bg(paint::LINE),
+        Piece::More(left) => row()
+            .pl(px((PANEL_HUNK_INSET_CELLS + PANEL_HUNK_SIGN_CELLS) * cell))
+            .text_color(rgb(INK_SUBTLE))
+            .child(SharedString::from(format!("\u{2026} +{left} lines"))),
+        Piece::Line { line, n } => {
             let (glyph, sign_ink, ink, wash) = match line.sign {
                 Sign::Context => ("", INK_SUBTLE, INK_SUBTLE, None),
                 Sign::Added => ("+", DIFF_ADDED_SIGN, SYN_PLAIN, Some(DIFF_ADDED_WASH)),
@@ -389,43 +421,37 @@ pub(crate) fn hunks_element(index: usize, shown: &Shown, wrap: bool) -> Div {
                     Some(DIFF_REMOVED_WASH),
                 ),
             };
-            let n = drawn;
-            area = area.child(
-                row()
-                    .debug_selector(move || format!("panel-hunk-{index}-{n}"))
-                    .when_some(wash, |row, wash| row.bg(rgba(wash)))
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .w(px(PANEL_HUNK_SIGN_CELLS * cell))
-                            .text_color(rgb(sign_ink))
-                            .child(glyph),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_color(rgb(ink))
-                            .child(line.text.clone()),
-                    ),
-            );
-            drawn += 1;
-        }
-        left = MAX_LINES - drawn;
-    }
-    if total > drawn {
-        area = area.child(
+            let n = *n;
             row()
-                .pl(px((PANEL_HUNK_INSET_CELLS + PANEL_HUNK_SIGN_CELLS) * cell))
-                .text_color(rgb(INK_SUBTLE))
-                .child(SharedString::from(format!(
-                    "\u{2026} +{} lines",
-                    total - drawn
-                ))),
-        );
+                .debug_selector(move || format!("panel-hunk-{index}-{n}"))
+                .when_some(wash, |row, wash| row.bg(rgba(wash)))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .w(px(PANEL_HUNK_SIGN_CELLS * cell))
+                        .text_color(rgb(sign_ink))
+                        .child(glyph),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_color(rgb(ink))
+                        .child(line.text.clone()),
+                )
+        }
     }
-    area
+}
+
+/// The hunk area: every piece of file `index`, on the panel's diff face.
+pub(crate) fn hunks_element(index: usize, shown: &Shown, wrap: bool) -> Div {
+    use ferrite_ui::theme::*;
+    hunks_face(wrap)
+        .debug_selector(move || format!("panel-hunks-{index}"))
+        .pt(px(PANEL_HUNK_PAD_T))
+        .pb(px(PANEL_HUNK_PAD_B))
+        .children(pieces(shown).iter().map(|piece| piece_element(index, piece, wrap)))
 }
 
 #[cfg(test)]
