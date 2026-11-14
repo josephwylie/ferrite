@@ -306,10 +306,10 @@ impl CockpitView {
         let scroll = self.nav_scroll.clone();
         (self.nav_cursor.as_ref().map(|cursor| cursor.item) == Some(item)).then(move || {
             gpui::canvas(
-                move |row: Bounds<Pixels>, window, _| {
+                move |row: Bounds<Pixels>, window, cx| {
                     drawn.set(Some(row));
                     if reveal.replace(false) {
-                        scroll_into_view(&scroll, row, window);
+                        scroll_into_view(&scroll, row, window, cx);
                     }
                 },
                 |_, _, _, _| {},
@@ -328,9 +328,9 @@ impl CockpitView {
         let scroll = self.nav_scroll.clone();
         (row.selected && shown.get() != Some(thread)).then(move || {
             gpui::canvas(
-                move |row: Bounds<Pixels>, window, _| {
+                move |row: Bounds<Pixels>, window, cx| {
                     if shown.replace(Some(thread)) != Some(thread) {
-                        scroll_into_view(&scroll, row, window);
+                        scroll_into_view(&scroll, row, window, cx);
                     }
                 },
                 |_, _, _, _| {},
@@ -353,8 +353,15 @@ impl CockpitView {
 }
 
 /// Scroll the list so `row` shows whole, by as little as it takes (none
-/// when it already does).
-fn scroll_into_view(scroll: &ScrollHandle, row: Bounds<Pixels>, window: &mut Window) {
+/// when it already does). Called while the list is drawn, too late for this
+/// draw (a refresh mid-draw is dropped), so the view drawing the list draws
+/// again once this one is done.
+fn scroll_into_view(
+    scroll: &ScrollHandle,
+    row: Bounds<Pixels>,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) {
     let view = scroll.bounds();
     let mut offset = scroll.offset();
     if row.top() < view.top() {
@@ -365,5 +372,6 @@ fn scroll_into_view(scroll: &ScrollHandle, row: Bounds<Pixels>, window: &mut Win
         return;
     }
     scroll.set_offset(offset);
-    window.refresh();
+    let view = window.current_view();
+    window.defer(cx, move |_, cx| cx.notify(view));
 }
