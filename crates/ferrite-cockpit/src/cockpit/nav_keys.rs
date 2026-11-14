@@ -126,16 +126,17 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let painter = self.parts.borrow().view_id(parts::Part::Nav);
         if let Some(old) = self.nav_cursor.take() {
-            crate::nav::card_hover(old.key, true)(&false, window, cx);
+            crate::nav::card_hover(old.key, true, painter)(&false, window, cx);
         }
         self.nav_cursor_bounds.set(None);
         if let Some(next) = &next {
-            crate::nav::card_hover(next.key.clone(), true)(&true, window, cx);
+            crate::nav::card_hover(next.key.clone(), true, painter)(&true, window, cx);
             self.nav_reveal.set(true);
         }
         self.nav_cursor = next;
-        cx.notify();
+        self.notify_part(parts::Part::Nav, cx);
     }
 
     /// ↑ / ↓: the row before or after the cursor's, stopping at the ends.
@@ -305,10 +306,10 @@ impl CockpitView {
         let scroll = self.nav_scroll.clone();
         (self.nav_cursor.as_ref().map(|cursor| cursor.item) == Some(item)).then(move || {
             gpui::canvas(
-                move |row: Bounds<Pixels>, window, _| {
+                move |row: Bounds<Pixels>, window, cx| {
                     drawn.set(Some(row));
                     if reveal.replace(false) {
-                        scroll_into_view(&scroll, row, window);
+                        scroll_into_view(&scroll, row, window, cx);
                     }
                 },
                 |_, _, _, _| {},
@@ -327,9 +328,9 @@ impl CockpitView {
         let scroll = self.nav_scroll.clone();
         (row.selected && shown.get() != Some(thread)).then(move || {
             gpui::canvas(
-                move |row: Bounds<Pixels>, window, _| {
+                move |row: Bounds<Pixels>, window, cx| {
                     if shown.replace(Some(thread)) != Some(thread) {
-                        scroll_into_view(&scroll, row, window);
+                        scroll_into_view(&scroll, row, window, cx);
                     }
                 },
                 |_, _, _, _| {},
@@ -352,8 +353,15 @@ impl CockpitView {
 }
 
 /// Scroll the list so `row` shows whole, by as little as it takes (none
-/// when it already does).
-fn scroll_into_view(scroll: &ScrollHandle, row: Bounds<Pixels>, window: &mut Window) {
+/// when it already does). Called while the list is drawn, too late for this
+/// draw (a refresh mid-draw is dropped), so the view drawing the list draws
+/// again once this one is done.
+fn scroll_into_view(
+    scroll: &ScrollHandle,
+    row: Bounds<Pixels>,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) {
     let view = scroll.bounds();
     let mut offset = scroll.offset();
     if row.top() < view.top() {
@@ -364,5 +372,6 @@ fn scroll_into_view(scroll: &ScrollHandle, row: Bounds<Pixels>, window: &mut Win
         return;
     }
     scroll.set_offset(offset);
-    window.refresh();
+    let view = window.current_view();
+    window.defer(cx, move |_, cx| cx.notify(view));
 }

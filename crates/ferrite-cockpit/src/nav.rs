@@ -26,6 +26,8 @@
 //! Every colour and metric is a `theme` token; this file holds no literal
 //! of its own.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::time::{Instant, SystemTime};
 
 use ferrite_core::store::Provider;
@@ -148,7 +150,7 @@ pub const SHELVES: [Shelf; 3] = [Shelf::Working, Shelf::Snoozed, Shelf::Parked];
 /// in drawing order. A Thread is in one section, by priority: snoozed,
 /// parked, pinned, working, active. Nothing here is a store read — the
 /// cockpit assembles it from O(1) reads plus its caches.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct NavState {
     /// Pinned cards (`Settings::pinned_threads`), in pin order.
     pub pinned: Vec<ThreadRow>,
@@ -191,7 +193,7 @@ pub fn roll_up<'a>(rows: impl IntoIterator<Item = &'a ThreadRow>) -> Option<RowS
 /// One Thread's row — its card (`card::thread_card`), identical whether
 /// it is a loose Thread, a Group member or a parked one; only the
 /// container differs. Every field is a cache read (`CockpitView::thread_row`).
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct ThreadRow {
     pub thread: ThreadId,
     pub name: SharedString,
@@ -264,6 +266,10 @@ const TEXT_W: f32 = INNER_W - 2.0 * NAV_ROW_PAD_X;
 /// optical size and tracking), so a box sized from them cut a name that
 /// fits (`ferri…` for `ferrite`). A sum without kerning errs wide, which
 /// keeps a name whole.
+///
+/// Each character's width is laid out once per face and size and kept
+/// (`ADVANCES`): a CoreText line per character on every nav build was most
+/// of the nav's draw time.
 #[derive(Clone, Copy)]
 pub enum Measure<'a> {
     Text(&'a App),
@@ -287,14 +293,27 @@ impl Measure<'_> {
                     ..gpui::font(family)
                 };
                 let id = system.resolve_font(&font);
-                text.chars()
-                    .map(|ch| f32::from(system.layout_width(id, px(size), ch)))
-                    .sum()
+                ADVANCES.with_borrow_mut(|advances| {
+                    text.chars()
+                        .map(|ch| {
+                            *advances.entry((id, size.to_bits(), ch)).or_insert_with(|| {
+                                #[cfg(test)]
+                                testing::SHAPED.with(|shaped| shaped.set(shaped.get() + 1));
+                                f32::from(system.layout_width(id, px(size), ch))
+                            })
+                        })
+                        .sum()
+                })
             }
             #[cfg(test)]
             Measure::Cells(advance) => text.chars().count() as f32 * advance,
         }
     }
+}
+
+thread_local! {
+    /// `Measure::Text`'s width of each character, by face, size and character.
+    static ADVANCES: RefCell<HashMap<(gpui::FontId, u32, char), f32>> = RefCell::default();
 }
 
 /// A line pinned to `width` that fades out at its right edge, as Claude's
@@ -1374,7 +1393,7 @@ mod tests {
 /// what is on screen, not the blend.
 #[cfg(test)]
 pub(crate) mod testing {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
 
     use ferrite_core::ThreadId;
@@ -1386,7 +1405,13 @@ pub(crate) mod testing {
         DRAWN_SLIM.with(|drawn| drawn.borrow().get(&thread).copied())
     }
 
+    /// How many characters `Measure::Text` has laid out on this thread.
+    pub(crate) fn shaped() -> usize {
+        SHAPED.with(Cell::get)
+    }
+
     thread_local! {
+        pub(super) static SHAPED: Cell<usize> = const { Cell::new(0) };
         pub(super) static DRAWN_SLIM: RefCell<HashMap<ThreadId, f32>> = RefCell::default();
         pub(super) static DRAWN_HOVER: RefCell<HashMap<SharedString, f32>> =
             RefCell::new(HashMap::new());

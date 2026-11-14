@@ -1911,7 +1911,16 @@ pub fn hover_listener(key: SharedString) -> impl Fn(&bool, &mut Window, &mut App
 /// (`HOVER_SNAP`), as Claude's rows do. It still notifies only the view
 /// that painted it.
 pub fn hover_snap(key: SharedString) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
-    hover_listener_with(key, HOVER_SNAP, HOVER_SNAP)
+    hover_snap_in(key, None)
+}
+
+/// [`hover_snap`], painted by `view` when called from outside a painted
+/// listener (a key moving a cursor).
+pub fn hover_snap_in(
+    key: SharedString,
+    view: Option<EntityId>,
+) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
+    hover_listener_in(key, HOVER_SNAP, HOVER_SNAP, view)
 }
 
 /// [`hover_listener`] blending in over `enter` and out over `leave` (a
@@ -1921,10 +1930,22 @@ pub fn hover_listener_with(
     enter: MotionSpec,
     leave: MotionSpec,
 ) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
+    hover_listener_in(key, enter, leave, None)
+}
+
+/// [`hover_listener_with`], painted by `painter` when called from outside a
+/// painted listener (a key moving a cursor): it redraws that view, not the
+/// window.
+pub fn hover_listener_in(
+    key: SharedString,
+    enter: MotionSpec,
+    leave: MotionSpec,
+    painter: Option<EntityId>,
+) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
     move |hovered, window, cx| {
         let reduced = reduced_motion(cx);
         let now = cx.background_executor().now();
-        let view = window.hover_listener_view();
+        let view = window.hover_listener_view().or(painter);
         let spec = if *hovered { enter } else { leave };
         HOVER_FADES.with(|fades| {
             fades
@@ -1935,8 +1956,8 @@ pub fn hover_listener_with(
         // view (through the one that redraws it most cheaply) redraws it
         // and its ancestors, and reuses every other cached view (the
         // transcripts, the Cockpit's parts). Called from outside a painted
-        // listener, refresh, as a gpui `.hover()` style does on the same
-        // event.
+        // listener with no painter, refresh, as a gpui `.hover()` style
+        // does on the same event.
         match view {
             Some(view) => cx.notify(frames_through(view)),
             None => window.refresh(),

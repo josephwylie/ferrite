@@ -347,13 +347,17 @@ fn recede_key(key: &str) -> SharedString {
 /// A card's hover, for the pointer and the nav keyboard's cursor alike:
 /// the fill and the strip snap; a card that dims whole (`dims`) also
 /// fades up (`motion::RECEDE`). Every other card asks for no frames.
+/// `painter` is the view drawing the card, for a call from outside its
+/// listener (`motion::hover_listener_in`).
 pub(crate) fn card_hover(
     key: SharedString,
     dims: bool,
+    painter: Option<gpui::EntityId>,
 ) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
-    let snap = motion::hover_snap(key.clone());
-    let fade =
-        dims.then(|| motion::hover_listener_with(recede_key(&key), motion::RECEDE, motion::RECEDE));
+    let snap = motion::hover_snap_in(key.clone(), painter);
+    let fade = dims.then(|| {
+        motion::hover_listener_in(recede_key(&key), motion::RECEDE, motion::RECEDE, painter)
+    });
     move |hovered, window, cx| {
         snap(hovered, window, cx);
         if let Some(fade) = &fade {
@@ -620,7 +624,7 @@ fn card(
         div()
             .id(("nav-thread", thread.get() as usize))
             .debug_selector(move || format!("nav-thread-{}", thread.get()))
-            .on_hover(card_hover(key, row.dims_whole()))
+            .on_hover(card_hover(key, row.dims_whole(), None))
     } else {
         div().id(("nav-ghost", thread.get() as usize))
     };

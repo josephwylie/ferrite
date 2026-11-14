@@ -2952,3 +2952,84 @@ fn a_read_rows_path_opens_in_files_and_its_verb_unfolds_the_row(cx: &mut TestApp
         "the path opened in Files"
     );
 }
+
+/// A move in the nav rebuilds it without laying out a character again:
+/// each character's width is laid out once (`nav::Measure`), not once per
+/// title per build.
+#[gpui::test]
+fn a_nav_rebuild_lays_out_no_character_again(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, _fake) = cockpit("nav-measure-once", 4);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    tick(cx);
+    cx.simulate_keystrokes("cmd-shift-e down");
+    tick(cx);
+    let (nav, shaped) = (crate::cockpit::drawn::nav_renders(), crate::nav::testing::shaped());
+    assert!(shaped > 0, "the premise: the nav measured its titles");
+    cx.simulate_keystrokes("down up down");
+    tick(cx);
+    assert!(
+        crate::cockpit::drawn::nav_renders() > nav,
+        "the premise: the moves rebuilt the nav"
+    );
+    assert_eq!(
+        crate::nav::testing::shaped(),
+        shaped,
+        "a nav rebuild laid out a character again"
+    );
+}
+
+/// An arrow key in the nav moves its cursor and rebuilds the nav alone:
+/// no Pane is built again for it.
+#[gpui::test]
+fn a_nav_cursor_move_builds_no_pane(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, _fake) = cockpit("nav-cursor-move", 4);
+    let threads = core.threads().to_vec();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    tick(cx);
+    cx.simulate_keystrokes("cmd-shift-e");
+    tick(cx);
+    let (nav, panes) = (crate::cockpit::drawn::nav_renders(), pane_builds(&threads));
+    cx.simulate_keystrokes("down down up");
+    tick(cx);
+    assert!(
+        crate::cockpit::drawn::nav_renders() > nav,
+        "the premise: the moves rebuilt the nav"
+    );
+    assert_eq!(pane_builds(&threads), panes, "a nav cursor move built a Pane");
+}
+
+/// A stream that leaves every nav row as it was (more text in a turn
+/// already working) redraws its Pane and builds no nav.
+#[gpui::test]
+fn a_stream_that_moves_no_row_builds_no_nav(cx: &mut TestAppContext) {
+    let _clock = hold_wall_clock();
+    let (core, fake) = cockpit("stream-no-row", 2);
+    let threads = core.threads().to_vec();
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let delta = |text: &str| {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta { text: text.into() })
+            .unwrap();
+    };
+    delta("the turn starts");
+    tick(cx);
+    let (nav, panes) = (crate::cockpit::drawn::nav_renders(), pane_builds(&threads));
+    for line in 0..5 {
+        delta(&format!(" and goes on {line}"));
+        tick(cx);
+    }
+    assert!(
+        pane_builds(&threads)[0] > panes[0],
+        "the premise: the stream redrew its Pane"
+    );
+    assert_eq!(
+        crate::cockpit::drawn::nav_renders(),
+        nav,
+        "a stream that moved no row built the nav"
+    );
+}

@@ -36,6 +36,7 @@ impl CockpitView {
         #[cfg(test)]
         drawn::built_nav();
         self.nav_drawn.borrow_mut().clear();
+        self.nav_built.replace(Some(state.clone()));
         let list = if self.nav_searching(cx) {
             self.search_results(state, cx)
         } else {

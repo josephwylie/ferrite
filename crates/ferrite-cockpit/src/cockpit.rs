@@ -527,6 +527,9 @@ pub struct CockpitView {
     /// The Thread cards in the order the nav last drew them: what a ⇧-click
     /// and a sweep span.
     nav_drawn: std::cell::RefCell<Vec<ThreadId>>,
+    /// The rows the nav last drew: a stream that leaves them as they are
+    /// rebuilds no nav.
+    nav_built: std::cell::RefCell<Option<nav::NavState>>,
     /// Each bar card trigger's bounds as last laid out (a draft's band
     /// chips), recorded in prepaint: what a bar card hangs from.
     float_triggers: FloatTriggers,
@@ -1543,6 +1546,7 @@ impl CockpitView {
             nav_picked: Vec::new(),
             park_sweep: None,
             nav_drawn: Default::default(),
+            nav_built: Default::default(),
             float_triggers: FloatTriggers::default(),
             band_from_hero: false,
             card_waits: Default::default(),
@@ -2547,7 +2551,7 @@ impl CockpitView {
         // new inputs first, as the Cockpit's own notify has them do
         // (`observe_self`), so they draw in this same frame.
         self.sync_visible_transcripts(cx);
-        let rows = !frame.is_empty() || !swept_busy.is_empty();
+        let rows = !swept_busy.is_empty() || (!frame.is_empty() && self.nav_rows_moved());
         for thread in frame.iter().map(|update| update.thread).chain(swept_busy) {
             self.notify_thread_pane(thread, cx);
         }
@@ -2555,6 +2559,11 @@ impl CockpitView {
             self.notify_part(parts::Part::Nav, cx);
         }
         self.notify_frame(cx);
+    }
+
+    /// Whether the nav's rows differ from the ones it last drew.
+    fn nav_rows_moved(&self) -> bool {
+        self.nav_built.borrow().as_ref() != Some(&self.nav_state())
     }
 
     /// What a stream can change that more than its own Pane and nav row
