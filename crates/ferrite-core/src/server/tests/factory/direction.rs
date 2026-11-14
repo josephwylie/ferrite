@@ -239,8 +239,7 @@ fn the_windows_are_alerted_on_the_four_task_events_and_not_between_steps() {
         status(window, &shipped) == Some(Status::Completed)
             && status(window, &asked) == Some(Status::Stopped)
     });
-    let alerts = window.take_asked();
-    let of = |task: &str| -> Vec<Status> {
+    let of = |alerts: &[crate::cockpit::Asked], task: &str| -> Vec<Status> {
         alerts
             .iter()
             .filter_map(|alert| match alert {
@@ -253,8 +252,12 @@ fn the_windows_are_alerted_on_the_four_task_events_and_not_between_steps() {
             })
             .collect()
     };
-    assert_eq!(of(&shipped), [Status::Approval, Status::Completed]);
-    assert_eq!(of(&asked), [Status::NeedsHuman, Status::Stopped]);
+    // The alerts arrive in order, so the last one brings all before it.
+    let alerts = pump_until_asked(&mut window, |alerts| {
+        of(alerts, &asked).last() == Some(&Status::Stopped)
+    });
+    assert_eq!(of(&alerts, &shipped), [Status::Approval, Status::Completed]);
+    assert_eq!(of(&alerts, &asked), [Status::NeedsHuman, Status::Stopped]);
 }
 
 /// AC (cases 8, 3): agent approval without a deciding Step or
@@ -467,13 +470,17 @@ fn a_workers_provider_decision_needs_the_operator_in_the_task_not_the_inbox() {
         window.factory().needs_you(project_id) == 1 && window.blocked().len() == 1
     });
     assert!(window.needs_you().is_empty(), "never in the Inbox");
-    assert!(window.take_asked().iter().any(|asked| matches!(
-        asked,
-        crate::cockpit::Asked::TaskAlert {
-            status: crate::factory::Status::NeedsHuman,
-            ..
-        }
-    )));
+    pump_until_asked(&mut window, |asked| {
+        asked.iter().any(|asked| {
+            matches!(
+                asked,
+                crate::cockpit::Asked::TaskAlert {
+                    status: crate::factory::Status::NeedsHuman,
+                    ..
+                }
+            )
+        })
+    });
 
     let answered = caller.answer(
         "a",

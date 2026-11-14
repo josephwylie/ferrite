@@ -816,20 +816,18 @@ fn a_review_is_read_by_git_where_the_server_runs() {
     );
 }
 
-/// A Thread row's PR is read by `gh` where the Server runs: a window asks
-/// for a checkout's PR and hears the Server's reading. A checkout with no
-/// GitHub remote has none to say, and that silence is an answer, not an
-/// error.
+/// A Thread row's PR is read where the Server runs: a window asks for a
+/// checkout's PR and hears the Server's reading. A checkout `gh` cannot
+/// read has none to say, and that silence is an answer, not an error.
 #[test]
 fn a_pull_request_is_read_by_gh_where_the_server_runs() {
     let harness = start("pull-request");
-    let repo = repository(&harness.dir);
     let mut window = cockpit(&harness);
-    let answer = window.pull_request(&repo).unwrap();
+    let answer = window
+        .pull_request(&harness.dir.join("no-such-checkout"))
+        .unwrap();
     let landed = std::cell::RefCell::new(None);
-    // This request starts the runner's installed gh (and its git subprocesses),
-    // unlike in-process fixture replies. Allow cold CLI startup under CI load.
-    pump_until_within(&mut window, Duration::from_secs(30), |_| {
+    pump_until(&mut window, |_| {
         if let Ok(read) = answer.try_recv() {
             *landed.borrow_mut() = Some(read);
         }
@@ -1323,6 +1321,24 @@ fn pump_until(
     done: impl Fn(&crate::cockpit::Cockpit) -> bool,
 ) {
     pump_until_within(window, Duration::from_secs(5), done);
+}
+
+/// Pump a window until what it was asked holds `done`, for at most five
+/// seconds, answering all it was asked. A Task's alert follows the board
+/// that shows it, so a wait on the board alone can end before the alert.
+fn pump_until_asked(
+    window: &mut crate::cockpit::Cockpit,
+    done: impl Fn(&[crate::cockpit::Asked]) -> bool,
+) -> Vec<crate::cockpit::Asked> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut asked = window.take_asked();
+    while !done(&asked) {
+        assert!(Instant::now() < deadline, "timed out: {asked:?}");
+        window.pump();
+        asked.extend(window.take_asked());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    asked
 }
 
 fn pump_until_within(
