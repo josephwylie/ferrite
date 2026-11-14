@@ -27,10 +27,17 @@ impl AgentKey {
     /// The provider's own id this key was made from (`new`'s `native`):
     /// for a Claude agent, the tool call that started it.
     fn native(&self) -> Option<String> {
+        #[cfg(test)]
+        KEY_READS.set(KEY_READS.get() + 1);
         serde_json::from_str::<(serde_json::Value, String, String)>(&self.0)
             .ok()
             .map(|(_, _, native)| native)
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static KEY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1035,6 +1042,9 @@ pub struct Activity {
     main: SubjectState,
     agents: BTreeMap<AgentKey, AgentState>,
     aliases: BTreeMap<AgentKey, AgentKey>,
+    /// `aliases` inverted: each key the aliases resolve to, with every key
+    /// that resolves to it.
+    aliased_by: BTreeMap<AgentKey, Vec<AgentKey>>,
     /// Main's subagents, working first, each group in discovery order.
     order: Vec<AgentKey>,
     /// An agent arrived, a parent or alias moved, or a reset emptied the tree
@@ -1062,6 +1072,7 @@ impl Activity {
             main: SubjectState::new(limits),
             agents: BTreeMap::new(),
             aliases: BTreeMap::new(),
+            aliased_by: BTreeMap::new(),
             order: Vec::new(),
             tree_changed: false,
             pending: Vec::new(),
@@ -1400,6 +1411,7 @@ impl Activity {
         evicted.extend(blocks.evicted);
         self.agents.clear();
         self.aliases.clear();
+        self.aliased_by.clear();
         self.tree_changed = true;
         self.pending.clear();
         self.limited = false;
@@ -1973,6 +1985,8 @@ impl Activity {
     }
 
     fn resolve(&self, key: &AgentKey) -> AgentKey {
+        #[cfg(test)]
+        KEY_READS.set(KEY_READS.get() + 1);
         let mut key = key.clone();
         for _ in 0..=self.aliases.len() {
             let Some(next) = self.aliases.get(&key) else {
@@ -2135,6 +2149,12 @@ impl Activity {
             }
         }
         self.aliases.insert(from.clone(), to.clone());
+        let mut joined = self.aliased_by.remove(&from).unwrap_or_default();
+        joined.push(from.clone());
+        self.aliased_by
+            .entry(to.clone())
+            .or_default()
+            .append(&mut joined);
         for agent in self.agents.values_mut() {
             if agent.info.parent.as_ref() == Some(&Subject::Subagent(from.clone())) {
                 agent.info.parent = Some(Subject::Subagent(to.clone()));
@@ -2220,33 +2240,29 @@ impl<'a> ActivityView<'a> {
     /// A Codex agent is keyed by its own thread, which no call names.
     pub fn invocations(self) -> impl Iterator<Item = (String, AgentView<'a>)> {
         let activity = self.activity;
+        activity.agents.iter().flat_map(move |(key, agent)| {
+            std::iter::once(key)
+                .chain(activity.aliased_by.get(key).into_iter().flatten())
+                .filter_map(move |name| Some((name.native()?, AgentView { agent })))
+        })
+    }
+    /// Each subagent still running (`AgentView::running`), with every
+    /// provider id that names it: its key's and its aliases' (a Claude
+    /// agent's `Agent` call, its task, its agent id).
+    pub fn running_agents(self) -> impl Iterator<Item = (Vec<String>, AgentView<'a>)> {
+        let activity = self.activity;
         activity
             .agents
-            .keys()
-            .chain(activity.aliases.keys())
-            .filter_map(move |key| {
-                let agent = activity.agents.get(&activity.resolve(key))?;
-                Some((key.native()?, AgentView { agent }))
+            .iter()
+            .map(|(key, agent)| (key, AgentView { agent }))
+            .filter(|(_, agent)| agent.running())
+            .map(move |(key, agent)| {
+                let names = std::iter::once(key)
+                    .chain(activity.aliased_by.get(key).into_iter().flatten())
+                    .filter_map(AgentKey::native)
+                    .collect();
+                (names, agent)
             })
-    }
-    /// Each subagent once, with every provider id that names it: its key's
-    /// and its aliases' (a Claude agent's `Agent` call, its task, its agent
-    /// id). What counts agents reads this, not `invocations`, which yields
-    /// an agent once per name.
-    pub fn named_agents(self) -> impl Iterator<Item = (Vec<String>, AgentView<'a>)> {
-        let activity = self.activity;
-        activity.agents.iter().map(move |(key, agent)| {
-            let names = std::iter::once(key)
-                .chain(
-                    activity
-                        .aliases
-                        .keys()
-                        .filter(|alias| activity.resolve(alias) == *key),
-                )
-                .filter_map(AgentKey::native)
-                .collect();
-            (names, AgentView { agent })
-        })
     }
     pub fn pending_decisions(self) -> &'a [PendingDecision] {
         &self.activity.pending
@@ -2360,6 +2376,18 @@ impl<'a> AgentView<'a> {
     }
     pub fn fresh(self) -> bool {
         self.agent.state.fresh
+    }
+    /// Live and not settled: working, or held on a Decision, or not yet
+    /// heard from.
+    pub fn running(self) -> bool {
+        self.fresh()
+            && matches!(
+                self.status(),
+                AgentStatus::Working
+                    | AgentStatus::Pending
+                    | AgentStatus::Waiting
+                    | AgentStatus::Unknown
+            )
     }
     pub fn coverage(self) -> TranscriptCoverage {
         self.agent.state.coverage()
@@ -2839,4 +2867,6 @@ fn merge_updates(mut first: transcript::Update, second: transcript::Update) -> t
 
 #[cfg(test)]
 mod retention_tests;
+#[cfg(test)]
+mod running_tests;
 
