@@ -296,7 +296,7 @@ fn working_agent(fake: &Fake, native: &str, name: &str) -> ferrite_core::activit
 #[gpui::test]
 fn stop_on_a_line_of_agents_says_agents_and_stops_them(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("background-stop-agents", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let first = working_agent(&fake, "toolu_a", "Read the docs");
     let second = working_agent(&fake, "toolu_b", "Run the audit");
     tick(cx);
@@ -312,7 +312,7 @@ fn stop_on_a_line_of_agents_says_agents_and_stops_them(cx: &mut TestAppContext) 
 fn stop_on_commands_and_agents_says_all_and_stops_both(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("background-stop-all-work", 1);
     *fake.native_controls.borrow_mut() = true;
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     running(&fake, &[("task:1", "cargo test")]);
     let agent = working_agent(&fake, "toolu_a", "Read the docs");
     tick(cx);
@@ -330,7 +330,7 @@ fn stop_on_commands_and_agents_says_all_and_stops_both(cx: &mut TestAppContext) 
 #[gpui::test]
 fn stop_that_cannot_reach_commands_says_agents(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("background-stop-agents-only-of-both", 1);
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     running(&fake, &[("task:1", "cargo test")]);
     working_agent(&fake, "toolu_a", "Read the docs");
     tick(cx);
