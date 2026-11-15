@@ -682,6 +682,8 @@ impl Composer {
     /// `take`, keeping everything it cleared: the sender holds it until the
     /// send is admitted, and `restore`s it if it is not.
     pub fn take_draft(&mut self, cx: &mut Context<Self>) -> SentDraft {
+        // A comment still open in its field goes with its quote.
+        self.commit_comment(cx);
         let draft = SentDraft {
             prompt: self.prompt(),
             content: self.content(),
@@ -1930,13 +1932,12 @@ impl Element for LineElement {
         let focused =
             self.composer.read(cx).focus_handle.is_focused(window) && window.is_window_active();
         let now = cx.background_executor().now();
-        let (blink_from, lit, under_float) = self.composer.update(cx, |composer, _| {
+        let (blink_from, lit, under_float) = self.composer.update(cx, |composer, cx| {
             composer.sync_focus(focused, now);
-            (
-                composer.blink_from,
-                composer.caret_lit,
-                composer.caret_under_float,
-            )
+            // One caret at a time: the comment field that holds the keyboard
+            // has it, so the main line's lit one goes dark.
+            let lit = composer.caret_lit && composer.comment_focus(window, cx).is_none();
+            (composer.blink_from, lit, composer.caret_under_float)
         });
         // A lit line (Solo's, the focused board Pane's) draws its block
         // whoever holds the keyboard — solid and still, but blinking under

@@ -108,13 +108,22 @@ impl Composer {
         focus.contains_focused(window, cx).then_some(focus)
     }
 
-    pub fn save_comment(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+    /// The comment field's words onto its reply, and the field closed.
+    /// Whether one was open.
+    pub(super) fn commit_comment(&mut self, cx: &App) -> bool {
         let Some(Editing { index, field }) = self.citations.editing.take() else {
-            return;
+            return false;
         };
         let words = field.read(cx).text().trim().to_string();
         if let Some(reply) = self.replies.get_mut(index) {
             reply.text = words;
+        }
+        true
+    }
+
+    pub fn save_comment(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        if !self.commit_comment(cx) {
+            return;
         }
         self.focus_handle.focus(window, cx);
         self.edited(cx);
@@ -274,6 +283,7 @@ fn chip(entity: &Entity<Composer>, index: usize, reply: &Reply, open: bool) -> A
         )
         .child(
             crate::attachments::remove_button(("remove-reply", index))
+                .tab_stop(!open)
                 .debug_selector(move || format!("cite-chip-{index}-remove"))
                 .accessibility_label("Remove quote")
                 .tooltip_builder(ferrite_ui::menu::tooltip("Remove quote"))
@@ -441,12 +451,22 @@ fn panel(entity: &Entity<Composer>, index: usize, reply: &Reply, cx: &App) -> An
                 .text_color(rgb(theme::INK_STRONG))
                 .child(SharedString::from(reply.quote.clone())),
         )
-        .child(source)
         .child(comment)
+        .child(source)
         .child(
             div()
                 .flex()
                 .gap(px(theme::SPACE_2))
+                .child(
+                    components::form_button(("cite-close", index), cx)
+                        .debug_selector(|| "cite-close".into())
+                        .key_context("PromptAttachment")
+                        .child("Close")
+                        .on_click(move |_, _, cx| {
+                            let _ = close
+                                .update(cx, |composer, cx| composer.toggle_citation(index, cx));
+                        }),
+                )
                 .child(
                     components::form_button(("cite-remove", index), cx)
                         .debug_selector(|| "cite-remove".into())
@@ -456,16 +476,6 @@ fn panel(entity: &Entity<Composer>, index: usize, reply: &Reply, cx: &App) -> An
                             let _ = remove.update(cx, |composer, cx| {
                                 composer.remove_reply(index, window, cx)
                             });
-                        }),
-                )
-                .child(
-                    components::form_button(("cite-close", index), cx)
-                        .debug_selector(|| "cite-close".into())
-                        .key_context("PromptAttachment")
-                        .child("Close")
-                        .on_click(move |_, _, cx| {
-                            let _ = close
-                                .update(cx, |composer, cx| composer.toggle_citation(index, cx));
                         }),
                 ),
         )

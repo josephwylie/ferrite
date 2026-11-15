@@ -6,6 +6,7 @@ use super::transcript_pointer::{drag, offered};
 use super::*;
 use ferrite_core::drafts::Drafts;
 use ferrite_core::replies::Source;
+use ferrite_pane::composer::Caret;
 
 const PARAGRAPHS: &str = "zero\n\none\n\ntwo\n\nalpha\n\nbravo\n\ncharlie\n\n";
 
@@ -14,6 +15,20 @@ fn conversation<'a>(
     cx: &'a mut TestAppContext,
     text: &str,
 ) -> (gpui::Entity<CockpitView>, &'a mut gpui::VisualTestContext) {
+    let (view, _sent, cx) = conversation_sent(name, cx, text);
+    (view, cx)
+}
+
+/// `conversation`, and the prompts the provider is sent.
+fn conversation_sent<'a>(
+    name: &str,
+    cx: &'a mut TestAppContext,
+    text: &str,
+) -> (
+    gpui::Entity<CockpitView>,
+    Rc<RefCell<Vec<String>>>,
+    &'a mut gpui::VisualTestContext,
+) {
     let (core, fake) = cockpit(name, 1);
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -28,7 +43,7 @@ fn conversation<'a>(
         })
         .unwrap();
     tick(cx);
-    (view, cx)
+    (view, fake.sent.clone(), cx)
 }
 
 fn replies(
@@ -332,4 +347,92 @@ fn the_tray_stays_bounded_in_a_narrow_pane(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("cite-chip-0").is_none());
     click(cx, "tray-toggle");
     assert!(cx.debug_bounds("cite-chip-0").is_some());
+}
+
+/// A comment still open in its field when Send is pressed goes with its
+/// quote: the operator wrote it, so Send keeps it.
+#[gpui::test]
+fn send_keeps_a_comment_still_open_in_its_field(cx: &mut TestAppContext) {
+    let (view, sent, cx) = conversation_sent("cite-send-open", cx, PARAGRAPHS);
+    cite_alpha(&view, cx);
+    open_chip(cx, 0);
+    click(cx, "cite-edit");
+    cx.simulate_input("note to keep");
+    let line = cx
+        .debug_bounds("focused-prompt-editor")
+        .expect("the main line is drawn");
+    cx.simulate_click(line.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_input("go");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(
+        sent.borrow().last().map(String::as_str),
+        Some("> alph\n\n\u{21a9} note to keep\n\ngo")
+    );
+    assert!(replies(&view, cx).is_empty(), "the draft is sent");
+}
+
+/// An open chip's controls stand in the order Tab walks them (paint
+/// order): the comment action, then where it came from, then Close, and
+/// Remove, which deletes the quote, last.
+#[gpui::test]
+fn an_open_chips_controls_end_with_remove(cx: &mut TestAppContext) {
+    let (view, cx) = conversation("cite-tab-order", cx, PARAGRAPHS);
+    cite_alpha(&view, cx);
+    open_chip(cx, 0);
+    let at = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is drawn"))
+    };
+    let (edit, source) = (at(cx, "cite-edit"), at(cx, "cite-source"));
+    let (close, remove) = (at(cx, "cite-close"), at(cx, "cite-remove"));
+    assert!(edit.top() < source.top(), "comment before source");
+    assert!(source.top() < close.top(), "source before Close");
+    assert!(close.left() < remove.left(), "Remove after Close");
+}
+
+/// Only the field that holds the keyboard shows a caret: the main line's
+/// lit one goes dark while the comment field is open and focused, and comes
+/// back when the keyboard does.
+#[gpui::test]
+fn only_the_field_holding_the_keyboard_shows_a_caret(cx: &mut TestAppContext) {
+    let (view, cx) = conversation("cite-one-caret", cx, PARAGRAPHS);
+    let main = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    let carets = |cx: &mut gpui::VisualTestContext| {
+        main.update(cx, |composer, _| composer.clear_caret_log());
+        for _ in 0..40 {
+            cx.executor().advance_clock(Duration::from_millis(16));
+            cx.run_until_parked();
+            cx.update(|window, cx| window.simulate_next_frame(cx));
+            cx.run_until_parked();
+        }
+        main.read_with(cx, |composer, _| {
+            composer
+                .caret_log()
+                .1
+                .iter()
+                .filter(|(_, caret)| matches!(caret, Some(Caret::Bar(_))))
+                .count()
+        })
+    };
+    ferrite_ui::motion::testing::drive();
+    cx.update(|window, _| window.activate_window());
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        cx.notify();
+    });
+    tick(cx);
+    assert!(carets(cx) > 0, "the premise: the main line draws a caret");
+    cite_alpha(&view, cx);
+    open_chip(cx, 0);
+    click(cx, "cite-edit");
+    assert_eq!(
+        carets(cx),
+        0,
+        "a comment field holds the keyboard, the main line draws no caret"
+    );
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(carets(cx) > 0, "the main line has it back");
 }
