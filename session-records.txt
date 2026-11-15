@@ -1,0 +1,44 @@
+== quoted (thread 1)
+user content block: text "Use no tools. Reply with exactly one line and nothing else: the text 'see #README.md and #logo.png' but with each # replaced by the at-sign character."
+attachment type=environment
+attachment type=model
+attachment type=output_style_instructions
+attachment type=deferred_tools_delta
+attachment type=agent_listing_delta
+attachment type=mcp_instructions_delta
+attachment type=skill_listing
+attachment type=total_tokens_reminder
+attachment type=output_style
+attachment type=instructions
+attachment type=session_context
+attachment type=date
+attachment type=credential_org
+attachment type=prompt_snapshot
+attachment type=prompt_snapshot
+user content block: text "> @\u2060README.md and @\u2060logo.png\n\nUse no tools. Say YES if you received an image or file attachment, else NO, and name it."
+attachment type=deferred_tools_delta
+attachment type=mcp_instructions_delta
+attachment type=total_tokens_reminder
+attachment type=output_style
+== control (thread 2)
+user content block: text "Use no tools. Say YES if you received an image, else NO. @logo.png"
+user content block: image
+attachment type=environment
+attachment type=model
+attachment type=output_style_instructions
+attachment type=deferred_tools_delta
+attachment type=agent_listing_delta
+attachment type=mcp_instructions_delta
+attachment type=skill_listing
+attachment type=total_tokens_reminder
+attachment type=output_style
+user content block: text "[Image: source: /private/tmp/claude-501/-private-tmp-fv-u04w-repo/d2b46c87-0e5c-4258-a3b7-b7c62214fd0a/images/1.png]"
+attachment type=instructions
+attachment type=session_context
+attachment type=date
+attachment type=credential_org
+attachment type=prompt_snapshot
+attachment type=prompt_snapshot
+== before the fix (predecessor build, same quote)
+"type":"file","filename":"/private/tmp/fv-u04v/repo/README.md"
+"type":"file","filename":"/private/tmp/fv-u04v/repo/logo.png"
