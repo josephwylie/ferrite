@@ -15,6 +15,8 @@ pub mod pointer;
 pub mod project_badge;
 pub mod provider;
 mod scrollbar;
+#[cfg(any(test, feature = "test-support"))]
+pub use scrollbar::painted_thumb_in;
 pub mod sheet;
 pub mod theme;
 mod working_mark;
