@@ -322,10 +322,9 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             Some("ToolDisclosure"),
         ),
         // `?`: the shortcuts sheet, read from this table. Only on an empty
-        // Composer line or with no text field holding the keyboard; a `?`
-        // typed into text is just a character.
+        // Composer line; anywhere else a `?` is a character, and with the
+        // keyboard off the Composer it types into it like any other.
         ("?".into(), "shortcuts::Toggle", Some("ComposerEmpty")),
-        ("?".into(), "shortcuts::Toggle", Some(NO_TEXT_FIELD)),
         // A page of the transcript up and down, and its ends, wherever no
         // text needs the keys: an empty Composer line (bound after its
         // own home and end, so the empty line's context wins the tie) or
@@ -1174,7 +1173,6 @@ mod tests {
                 ("down", "empty_board::Next", "EmptyBoard"),
                 ("enter", "empty_board::Run", "EmptyBoard"),
                 ("?", "shortcuts::Toggle", "ComposerEmpty"),
-                ("?", "shortcuts::Toggle", NO_TEXT_FIELD),
             ] {
                 assert!(
                     table.contains(&(key.into(), action, Some(context))),

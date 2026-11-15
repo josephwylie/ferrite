@@ -10773,6 +10773,9 @@ impl CockpitView {
                     view.press_menu_row(index, window, cx);
                 }
             }))
+            .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, window, cx| {
+                view.typing_leaves_panel(&event.keystroke, window, cx);
+            }))
             .on_action(cx.listener(Self::open_settings))
             .map(|root| self.register_board_actions(root, cx))
             .map(|root| self.register_prs_actions(root, cx))

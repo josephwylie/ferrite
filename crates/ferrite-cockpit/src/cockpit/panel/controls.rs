@@ -242,6 +242,36 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// A character no stop bound, typed with the keyboard on a stop, is
+    /// text for the conversation: the Composer takes the keyboard and the
+    /// character with it.
+    pub(in crate::cockpit) fn typing_leaves_panel(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let modifiers = keystroke.modifiers;
+        // Space and ⏎ press the stop.
+        let Some(text) = keystroke.key_char.as_deref().filter(|text| {
+            !text.trim().is_empty()
+                && !(modifiers.control || modifiers.alt || modifiers.platform || modifiers.function)
+        }) else {
+            return;
+        };
+        if !self.panel_control_focused(window) {
+            return;
+        }
+        let Some(pane) = self.panes.get(self.focused()) else {
+            return;
+        };
+        // The Composer is not the focus yet, so the platform would hand
+        // this character to the stop, which takes none.
+        pane.composer.update(cx, |composer, cx| composer.insert(text, cx));
+        self.leave_panel(window, cx);
+        cx.stop_propagation();
+    }
+
     /// F6 and ⇧F6: the next or previous area, round the conversation and the
     /// Panel.
     pub(in crate::cockpit) fn step_area(&mut self, window: &mut Window, cx: &mut Context<Self>) {

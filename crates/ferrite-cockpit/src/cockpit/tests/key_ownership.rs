@@ -246,3 +246,30 @@ fn a_subagent_questions_own_answer_types_its_letters(cx: &mut TestAppContext) {
     assert_eq!(id, "child_q");
     assert_eq!(answers[0].other.as_deref(), Some("nay"));
 }
+
+#[gpui::test]
+fn a_question_mark_typed_on_the_panel_is_text_for_the_composer(cx: &mut TestAppContext) {
+    let (core, _fake, _checkout) = bound_cockpit("key-question-panel", Provider::Claude);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.update(cx, |view, cx| view.upsert_surface(thread, SurfaceId::Files, cx));
+    tick(cx);
+    cx.simulate_keystrokes("f6");
+    tick(cx);
+    assert!(
+        super::panel_focus::focused_control(&view, cx).is_some(),
+        "the keyboard is on the panel"
+    );
+    cx.simulate_keystrokes("?");
+    cx.simulate_input("why");
+    tick(cx);
+    assert!(
+        view.read_with(cx, |view, _| view.floats.shortcuts.is_none()),
+        "no sheet took the keyboard"
+    );
+    assert_eq!(composer_text(&view, cx), "?why");
+}
