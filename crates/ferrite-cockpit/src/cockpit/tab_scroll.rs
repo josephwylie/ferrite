@@ -60,10 +60,21 @@ pub(crate) struct TabScroll {
     tween: Cell<Option<Tween>>,
     /// Whether the chevron slots are in the layout, settled once a frame.
     slotted: Cell<bool>,
-    /// The tab `reveal` asked for, and whether a frame has laid it out. The
-    /// next frame aims at it again, since slots that frame brought in may
-    /// have pushed it part way out.
-    revealing: Cell<Option<(usize, bool)>>,
+    /// The tab `reveal` asked for, until the frame after the one that drew
+    /// it aims at it again: slots the first frame brought in may have pushed
+    /// it part way out.
+    revealing: Cell<Option<Reveal>>,
+}
+
+#[derive(Clone, Copy)]
+enum Reveal {
+    /// No frame has drawn the row since `reveal`.
+    Asked(usize),
+    /// A frame drew it; the next must aim again.
+    Drawn(usize),
+    /// That next frame is asked for. A row hidden before it comes stays
+    /// here, asking for nothing, until it is drawn again.
+    Due(usize),
 }
 
 impl Deref for TabScroll {
@@ -97,8 +108,8 @@ impl TabScroll {
         let slots = if self.slotted.get() { 2. * SURFACE_PLUS } else { 0. };
         self.slotted.set(self.most() > slots + 0.5);
         match self.revealing.take() {
-            Some((ix, false)) => self.revealing.set(Some((ix, true))),
-            Some((ix, true)) => self.handle.scroll_to_item(ix),
+            Some(Reveal::Asked(ix)) => self.revealing.set(Some(Reveal::Drawn(ix))),
+            Some(Reveal::Drawn(ix) | Reveal::Due(ix)) => self.handle.scroll_to_item(ix),
             None => {}
         }
         let Some(tween) = self.tween.get() else {
@@ -112,11 +123,18 @@ impl TabScroll {
         }
     }
 
-    /// Whether the row is mid-ease or mid-reveal: the frame must be drawn
-    /// again.
+    /// Whether the row is mid-ease or owes a reveal its second frame: the
+    /// frame must be drawn again. Read once a frame, it asks for that second
+    /// frame once.
     pub(crate) fn running(&self, cx: &gpui::App) -> bool {
-        self.revealing.get().is_some()
-            || self.tween.get().is_some_and(|tween| {
+        let due = match self.revealing.get() {
+            Some(Reveal::Drawn(ix)) => {
+                self.revealing.set(Some(Reveal::Due(ix)));
+                true
+            }
+            _ => false,
+        };
+        due || self.tween.get().is_some_and(|tween| {
             tween.running(cx.background_executor().now(), motion::reduced_motion(cx))
         })
     }
@@ -154,7 +172,7 @@ impl TabScroll {
     /// Bring child `ix` of the row into view when it is next drawn.
     pub(crate) fn reveal(&self, ix: usize) {
         self.tween.set(None);
-        self.revealing.set(Some((ix, false)));
+        self.revealing.set(Some(Reveal::Asked(ix)));
         self.handle.scroll_to_item(ix);
     }
 

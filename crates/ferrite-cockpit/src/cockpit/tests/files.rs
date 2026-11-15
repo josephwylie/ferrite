@@ -280,6 +280,26 @@ fn the_tab_that_first_overflows_the_row_sits_whole_in_it(cx: &mut TestAppContext
     panic!("twenty tabs never overflowed the row");
 }
 
+/// A reveal in a row that is not drawn asks for no frames.
+#[gpui::test]
+fn a_reveal_in_a_hidden_row_asks_for_no_frames(cx: &mut TestAppContext) {
+    let (view, thread, _checkout, cx) = twenty_tabs("files-hidden-reveal", cx);
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    tick(cx);
+    assert!(cx.debug_bounds("files-tabs").is_none(), "the row is hidden");
+    view.update(cx, |view, cx| {
+        view.reveal_files_tab(thread, 3);
+        cx.notify();
+    });
+    tick(cx);
+    for _ in 0..4 {
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
+    let frames = cx.update(|window, cx| window.simulate_next_frame(cx));
+    assert_eq!(frames, 0, "the hidden row asks for nothing");
+}
+
 /// A tab revealed from the far end lands whole inside the row, and the
 /// chevron that appears beside it takes none of the row's width.
 #[gpui::test]
