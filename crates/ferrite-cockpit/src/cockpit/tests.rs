@@ -17,6 +17,7 @@ mod decision_cards;
 mod decisions_parity;
 mod diagnostics;
 mod delivery;
+mod details;
 mod direction;
 mod drafts;
 mod factory;

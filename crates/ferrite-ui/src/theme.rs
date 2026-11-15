@@ -960,6 +960,8 @@ pub const HISTORY_ARROW_DISABLED_INK: u32 = INK_SUBTLE;
 /// diff, preview, files, `⋯`): `ICON_BUTTON` doors 4 apart, Claude's 32pt
 /// pitch (claude/answer-done.png x 1738–1898), the panel toggle the last.
 pub const TITLE_TOOLS_GAP: f32 = SPACE_1;
+/// The title bar's two tools, the details card's toggle and the panel's.
+pub const TITLE_TOOLS_W: f32 = 2.0 * ICON_BUTTON + TITLE_TOOLS_GAP;
 pub const CONTROL_CHIP_PAD_X: f32 = 10.0;
 pub const CONTROL_CHIP_GAP: f32 = SPACE_1_5;
 pub const CONTROL_CHIP_ICON: f32 = 14.0;
@@ -1205,6 +1207,10 @@ pub const FLOAT_PAD: f32 = SPACE_1;
 pub const FLOAT_PAD_X: f32 = MENU_ROW_INSET_X + MENU_ROW_PAD_X;
 /// The gap a float keeps from the control that opened it.
 pub const FLOAT_OFFSET: f32 = 6.0;
+/// The Thread details card: T3's 280 wide, 12 off the edges it hangs from
+/// (`threadDetailsCardLayout`).
+pub const DETAILS_W: f32 = 280.0;
+pub const DETAILS_GAP: f32 = 12.0;
 /// The context menu's least width (it grows to its longest verb beside
 /// its key: Claude's row menu is 165, claude/row-menu.png), and any
 /// floating list's height cap before it scrolls.

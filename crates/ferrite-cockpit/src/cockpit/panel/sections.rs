@@ -22,7 +22,7 @@ use ferrite_core::{McpServer, McpStatus};
 
 impl CockpitView {
     /// The sections (see the module doc).
-    pub(super) fn panel_sections(
+    pub(in crate::cockpit) fn panel_sections(
         &self,
         thread: ThreadId,
         window: &mut Window,

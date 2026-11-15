@@ -361,8 +361,8 @@ impl CockpitView {
                     }))
             })
         };
-        // The title bar's Panel toggle keeps the row's right end.
-        let toggle = ICON_BUTTON + TITLE_TOOLS_GAP;
+        // The title bar's tools keep the row's right end.
+        let toggle = TITLE_TOOLS_W + TITLE_TOOLS_GAP;
         div()
             .debug_selector(|| "panel-head".into())
             .flex()

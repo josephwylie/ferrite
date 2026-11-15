@@ -457,7 +457,7 @@ impl CockpitView {
     }
 
     /// Ask `thread`'s Session to report its context afresh, when it can.
-    fn refresh_context(&mut self, thread: ThreadId) {
+    pub(super) fn refresh_context(&mut self, thread: ThreadId) {
         let Some(open) = self.cockpit.thread(thread) else {
             return;
         };

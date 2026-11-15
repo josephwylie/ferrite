@@ -65,6 +65,11 @@ impl TranscriptView {
         }
     }
 
+    /// Whether the bar is open over the transcript's top right.
+    pub fn find_open(&self) -> bool {
+        self.find.is_some()
+    }
+
     /// Whether the bar's line holds the keyboard.
     pub fn find_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         self.find

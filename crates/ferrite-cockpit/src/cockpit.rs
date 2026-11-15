@@ -15,6 +15,7 @@ mod context_menu;
 pub(crate) mod coordinator;
 pub(crate) mod decisions;
 mod delivery;
+mod details;
 pub(crate) mod direction;
 mod drafts;
 pub(crate) mod empty_board;
@@ -159,6 +160,8 @@ actions!(
         ToggleFullscreen,
         ToggleNav,
         TogglePanel,
+        ToggleDetails,
+        CloseDetails,
         ToggleNotifications,
         MenuNext,
         MenuPrevious,
@@ -10262,6 +10265,7 @@ impl CockpitView {
             || self.floats_hold_focus()
             || nav_list_focused
             || panel_keys_held
+            || self.details_hold_focus(window, cx)
             || native_text_focused
             || reader_text_focused
             || find_focused
@@ -10460,6 +10464,8 @@ impl CockpitView {
             .on_action(cx.listener(Self::open_find))
             .on_action(cx.listener(Self::toggle_nav))
             .on_action(cx.listener(Self::toggle_panel))
+            .on_action(cx.listener(Self::toggle_details))
+            .on_action(cx.listener(Self::dismiss_details))
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::go_forward))
             .on_action(
@@ -10942,6 +10948,7 @@ impl CockpitView {
             question_measurement: l1
                 .then(|| self.activity_question_measurement(index, cx))
                 .flatten(),
+            details: l1.then(|| self.details_card(index, window, cx)).flatten(),
             head_drag: self
                 .board_is_movable()
                 .then(|| head_drag(pane_leaf(pane.identity), self.pane_ghost(index))),

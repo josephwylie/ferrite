@@ -14,7 +14,7 @@ pub fn app_menus() -> Vec<Menu> {
         CloseThread, GoBack, GoForward, NewGroup, NewThread, NewWorktreeThread, NextPane,
         OpenPrInBrowser, OpenSettings, PreviousPane, RefreshPrStatus, ReopenThread, TextLarger,
         TextReset, TextSmaller, ToggleChanges, ToggleFiles, ToggleFullscreen, ToggleNav,
-        ToggleNotifications, TogglePanel, ToggleTerminal,
+        ToggleDetails, ToggleNotifications, TogglePanel, ToggleTerminal,
     };
     use ferrite_pane::pane::NextDecision;
     vec![
@@ -83,6 +83,7 @@ pub fn app_menus() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleNav),
                 MenuItem::action("Toggle Panel", TogglePanel),
+                MenuItem::action("Toggle Thread Details", ToggleDetails),
                 MenuItem::action("Inbox", ToggleNotifications),
                 MenuItem::action("Toggle Pane Fullscreen", ToggleFullscreen),
                 MenuItem::separator(),

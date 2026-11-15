@@ -7,8 +7,8 @@
 //! so while the panel is hidden the branch follows the ▾ in the quiet ink
 //! (`head_branch`). A Group names itself — its title, `<project> · N
 //! threads`, and `New thread`. There is no layout switch and no PR button.
-//! The title bar keeps one tool (ADR 0039, `title_tools_element`): the
-//! Panel's toggle, at the row's right end at the window's edge, where it
+//! The title bar keeps two tools (ADR 0039, `title_tools_element`): the
+//! details card's toggle and the Panel's, at the row's right end at the window's edge, where it
 //! stays whatever the Panel holds. Everything else the old tools opened is
 //! a Surface of the Panel, opened from its `+` menu or its chord; a Thread
 //! beside is the palette's (`open_palette_beside`). The head leaves the
@@ -98,7 +98,7 @@ impl CockpitView {
         if !self.panel_toggle_shown() {
             return theme::VIEW_HEAD_PAD_X;
         }
-        (self.title_tools_right() + theme::ICON_BUTTON + theme::VIEW_HEAD_PAD_X - right)
+        (self.title_tools_right() + theme::TITLE_TOOLS_W + theme::VIEW_HEAD_PAD_X - right)
             .max(theme::VIEW_HEAD_PAD_X)
     }
 
@@ -227,7 +227,7 @@ impl CockpitView {
         if !self.panel_toggle_shown() {
             return None;
         }
-        let door = crate::nav::icon_button(
+        let panel = crate::nav::icon_button(
             "panel-toggle",
             icons::PANEL_RIGHT,
             theme::ICON_BUTTON_GLYPH,
@@ -250,7 +250,9 @@ impl CockpitView {
                 .h(px(theme::WIN_CHROME_H))
                 .flex()
                 .items_center()
-                .child(door)
+                .gap(px(theme::TITLE_TOOLS_GAP))
+                .child(self.details_toggle(cx))
+                .child(panel)
                 .into_any_element(),
         )
     }

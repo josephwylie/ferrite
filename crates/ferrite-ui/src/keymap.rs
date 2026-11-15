@@ -270,6 +270,7 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // The right panel (SPEC §5.6) beside it: ⌥⌘B, the sidebar's chord
         // with the option key, as the editors pair their two sidebars.
         (with_primary("alt-b"), "cockpit::TogglePanel", None),
+        (with_primary("shift-b"), "cockpit::ToggleDetails", None),
         // The platform's own Settings chord.
         (with_primary(","), "cockpit::OpenSettings", None),
         // The Inbox: what finished while the operator looked elsewhere.
@@ -582,6 +583,7 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("shift-enter".into(), "find::Previous", Some("Find")),
         (with_primary("shift-g"), "find::Previous", Some("Find")),
         ("escape".into(), "find::Close", Some("Find")),
+        ("escape".into(), "cockpit::CloseDetails", Some("ThreadDetails")),
         // The side chat's line: ⏎ sends the question to its tab.
         ("enter".into(), "side_chat::Ask", Some("SideChat")),
     ];
@@ -883,6 +885,7 @@ mod tests {
             // #21: the nav collapses to its rail on both platforms.
             ("cockpit::ToggleNav", "b"),
             ("cockpit::TogglePanel", "alt-b"),
+            ("cockpit::ToggleDetails", "shift-b"),
             ("cockpit::OpenSettings", ","),
             ("cockpit::NewWorktreeThread", "shift-n"),
             // ⌘G opens a Group; New Group moves to ⌘⇧G.
