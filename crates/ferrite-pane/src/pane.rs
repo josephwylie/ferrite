@@ -3146,9 +3146,10 @@ pub(crate) fn render_block(
         // `WORK_UPDATE_ALPHA`, cut at the column's edge with the whole of
         // it one hover away. A Decision never leaves one (it is its own row,
         // at the tail).
-        Body::Notice(text) => {
-            let highlights = separators(text);
-            let text = SharedString::from(text.clone());
+        Body::Notice(whole) => {
+            let text = notice_line(whole);
+            let highlights = separators(&text);
+            let text = SharedString::from(text);
             let label = div()
                 .id(SharedString::from(format!("notice-{:?}", block.id)))
                 .debug_selector({
@@ -3157,7 +3158,7 @@ pub(crate) fn render_block(
                 })
                 .flex_shrink(1.)
                 .min_w_0()
-                .tooltip(ferrite_ui::menu::tooltip(text.clone()))
+                .tooltip(ferrite_ui::menu::tooltip(whole.clone()))
                 .child(edge_cut(
                     theme::WORK_ROW_LINE,
                     INK_STRONG,
@@ -4056,6 +4057,18 @@ fn turn_end(block: BlockId, end: &ferrite_core::transcript::TurnEnd, row_cx: &Ro
     components::tabular(activity_line(row_cx.grid(), None, words))
         .debug_selector(|| "turn-stamp".into())
         .into_any_element()
+}
+
+/// A notice's words on the one line its row has: a provider's failure
+/// arrives as a reason and its stderr on lines of their own, which a
+/// `WORK_ROW_LINE` box would clip through. The lines read as `a · b`, the
+/// row's own seam; the tooltip keeps the whole.
+fn notice_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ")
 }
 
 /// The `·` seams in a transcript line: `INK_SUBTLE`, at body weight
@@ -5057,6 +5070,39 @@ mod tests {
         );
     }
 
+    /// A provider that fails to start leaves its reason and its stderr on
+    /// separate lines. The notice is one work row, so its words must sit
+    /// whole inside it rather than centred and clipped through top and bottom.
+    #[gpui::test]
+    fn a_multi_line_notice_draws_whole_inside_its_row(cx: &mut TestAppContext) {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Notice(
+            "could not start: claude CLI exited: exit status: 1\nstderr: No conversation found".into(),
+        ));
+        let blocks: Vec<Block> = transcript.blocks().to_vec();
+        let id = blocks[0].id;
+        let (_view, cx) = cx.add_window_view(|_, cx| {
+            gpui::component::init(cx);
+            shows_blocks(blocks.clone(), cx)
+        });
+        cx.simulate_resize(size(px(520.), px(400.)));
+        cx.run_until_parked();
+        let row = cx
+            .debug_bounds(Box::leak(format!("notice-{id:?}").into_boxed_str()))
+            .expect("the notice's row");
+        // A glyph run is a hair taller than its box, so the bound is a line
+        // of slack, not a second line's worth.
+        let words = cx
+            .update(|_, cx| {
+                crate::rich::testing::bounds(&format!("literal-pane-block-test-{id:?}-0"), 0, cx)
+            })
+            .expect("the notice's run");
+        assert!(
+            words.top() >= row.top() - px(2.) && words.bottom() <= row.bottom() + px(2.),
+            "the words {words:?} lie inside the row {row:?}"
+        );
+    }
+
     /// `Starting` holds the working line's own row, Solo's and a Group
     /// Pane's, so the line never moves when the turn's words replace it.
     #[gpui::test]
@@ -5745,7 +5791,7 @@ mod tests {
                 .into_iter()
                 .map(|(_, _, _, text)| text)
                 .collect::<Vec<_>>()
-                .join("\n")
+                .join(" \u{b7} ")
         };
         let shut = copied(&view, cx);
         assert!(shut.contains("Ran 2 commands and read 1 file"), "{shut}");
@@ -6684,7 +6730,7 @@ mod tests {
             (0..n)
                 .map(|i| format!("line {i}"))
                 .collect::<Vec<_>>()
-                .join("\n")
+                .join(" \u{b7} ")
         };
         // Line count alone keeps output inline, where a transcript copy
         // sweep reaches it; only the byte cap moves it to the viewport.

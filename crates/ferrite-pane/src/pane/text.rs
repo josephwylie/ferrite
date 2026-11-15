@@ -631,7 +631,10 @@ pub(crate) fn collect_block_text(
                 });
             }
         }
-        Body::Notice(text) | Body::Meta(text) => {
+        Body::Notice(text) => {
+            let _ = selection.line(block.id, super::notice_line(text), Vec::new());
+        }
+        Body::Meta(text) => {
             let _ = selection.line(block.id, text.clone(), Vec::new());
         }
         Body::TurnEnd(end) => {
