@@ -142,8 +142,62 @@ impl Files {
 }
 
 impl CockpitView {
+    /// The code tab ⌘F finds in: the shown Files surface's, when the
+    /// keyboard is anywhere in that surface (its tree, tab strip or file) or
+    /// on the Panel's controls over it. A Panel showing another surface, or
+    /// the keyboard in the conversation, is not Files' to answer.
+    fn files_find_target(
+        &self,
+        thread: ThreadId,
+        on_controls: bool,
+        window: &Window,
+        cx: &gpui::App,
+    ) -> Option<Entity<Editor>> {
+        if self.active_surface(thread) != Some(SurfaceId::Files) {
+            return None;
+        }
+        let files = self.files_ref(thread)?;
+        let TabBody::Code(editor) = &files.tabs[files.active?].body else {
+            return None;
+        };
+        let held = on_controls
+            || self.panel_keys_held(window, cx)
+            || editor.read(cx).holds_keyboard(window, cx);
+        held.then(|| editor.clone())
+    }
+
+    /// ⌘F with the keyboard in the shown Files surface: the find bar opens
+    /// over its file. Whether it did.
+    pub(in crate::cockpit) fn open_files_find(
+        &self,
+        thread: ThreadId,
+        on_controls: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(editor) = self.files_find_target(thread, on_controls, window, cx) else {
+            return false;
+        };
+        editor.update(cx, |editor, cx| editor.open_find(window, cx));
+        true
+    }
+
     fn files_of(&mut self, thread: ThreadId) -> Option<&mut Files> {
         self.tools.files.get_mut(&thread)
+    }
+
+    /// Whether the find bar over the Panel's shown file holds the keyboard.
+    pub(in crate::cockpit) fn files_find_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
+        let Some(thread) = self.panel_thread() else {
+            return false;
+        };
+        self.active_surface(thread) == Some(SurfaceId::Files)
+            && self.files_ref(thread).is_some_and(|files| {
+                matches!(
+                    files.active.map(|active| &files.tabs[active].body),
+                    Some(TabBody::Code(editor)) if editor.read(cx).find_holds_focus(window, cx)
+                )
+            })
     }
 
     pub(in crate::cockpit) fn files_ref(&self, thread: ThreadId) -> Option<&Files> {

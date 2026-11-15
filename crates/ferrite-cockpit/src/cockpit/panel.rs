@@ -38,11 +38,13 @@ pub(in crate::cockpit) mod pull_request;
 mod sections;
 pub(in crate::cockpit) use sections::Depth;
 mod strip;
+mod controls;
 
 use super::surfaces::{Close, Restart, SurfaceId, Surfaces, ThreadSurfaces};
 use ferrite_ui::icons::{self, icon};
 use super::*;
 
+pub(crate) use controls::{PanelControl, PanelFocus, Semantics};
 pub(crate) use pull_request::PrAction;
 pub(crate) use strip::Opener;
 #[cfg(test)]
@@ -86,6 +88,8 @@ pub(crate) struct Panel {
     pub(crate) pr_rich: ferrite_pane::rich::TextCache,
     /// The Thread whose PR's Merge waits for its second press.
     pr_armed: Option<ThreadId>,
+    /// The keyboard stops of the head and a pull request's header.
+    pub(crate) focus: PanelFocus,
 }
 
 impl Panel {
@@ -116,6 +120,7 @@ impl Panel {
             pr_reads: Default::default(),
             pr_rich: Default::default(),
             pr_armed: None,
+            focus: Default::default(),
         }
     }
 }
@@ -178,7 +183,6 @@ impl CockpitView {
     }
 
     /// The Thread whose panel shows this frame, if it shows for one.
-    #[cfg(test)]
     pub(super) fn panel_thread(&self) -> Option<ThreadId> {
         self.panes[self.panel_pane()?].thread()
     }
@@ -356,6 +360,7 @@ impl CockpitView {
         let known = self.known_threads();
         if !known.is_empty() {
             self.panel.surfaces.retain(|thread| known.contains(&thread));
+            self.panel.focus.retain_threads(|thread| known.contains(&thread));
         }
         if let Err(error) = self.panel.surfaces.save(&self.prefs.dir) {
             eprintln!("ferrite: the panel's tabs were not saved: {error}");
@@ -552,6 +557,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         use ferrite_ui::theme::*;
+        self.begin_panel_controls();
         let index = self.panel_drawn_pane()?;
         let owner = self.panes[index].identity;
         let sliding_out = self.panel_pane().is_none();
@@ -567,9 +573,10 @@ impl CockpitView {
         let column = match owner.thread() {
             Some(thread) => {
                 let active = self.active_surface(thread);
-                column
-                    .child(self.surface_head(thread, cx))
-                    .child(self.surface_body(owner, thread, active, window, cx))
+                let head = self.surface_head(thread, cx);
+                let body = self.surface_body(owner, thread, active, window, cx);
+                self.end_panel_controls(thread, window);
+                column.child(head).child(body)
             }
             // A draft's preview, alone: no Thread, no tabs.
             None => column.child(div().h(px(WIN_CHROME_H)).flex_shrink_0()).child(
@@ -674,7 +681,7 @@ impl CockpitView {
                 .flex_1()
                 .min_h_0()
                 .min_w_0()
-                .track_focus(&self.panel_focus)
+                .track_focus(&self.panel_keys)
                 .child(body)
                 .into_any_element()
         };

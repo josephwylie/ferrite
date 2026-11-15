@@ -48,6 +48,28 @@ fn the_door_opens_a_shell_in_a_panel_tab_and_closing_it_ends_it(cx: &mut TestApp
     assert!(numbers(&view, thread, cx).is_empty(), "its shell ended with it");
 }
 
+/// ⌘W with the keyboard in the shell closes that tab, as it does from the
+/// Panel's controls, and never parks the Thread.
+#[gpui::test]
+fn cmd_w_in_the_shell_closes_its_tab_not_the_thread(cx: &mut TestAppContext) {
+    let (view, thread, cx) = window("terminal-cmd-w", cx);
+    opened(&view, cx);
+    let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
+    cx.update(|window, cx| window.focus(&shell.focus_handle(cx), cx));
+    tick(cx);
+    assert!(
+        cx.update(|window, cx| view.read(cx).terminal_holds_focus(window, cx)),
+        "the shell has the keyboard"
+    );
+    cx.simulate_keystrokes("cmd-w");
+    tick(cx);
+    assert!(numbers(&view, thread, cx).is_empty(), "⌘W ended the shell's tab");
+    assert!(
+        view.read_with(cx, |view, _| view.cockpit.thread(thread).is_some() && view.panes.len() == 1),
+        "the Thread stays open"
+    );
+}
+
 /// Each new terminal is its own tab and shell; ⌘J shows the last one, not
 /// another.
 #[gpui::test]

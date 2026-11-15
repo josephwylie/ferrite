@@ -299,6 +299,19 @@ fn a_right_click_on_a_link_offers_the_links_actions(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn escape_closes_the_links_menu(cx: &mut TestAppContext) {
+    let (view, cx) = linked_answer("link-menu-escape", cx);
+    bind_production_keys(cx);
+    let at = on_link(&view, cx);
+    right_click(at, cx);
+    assert!(cx.debug_bounds("answer-menu").is_some(), "a menu opens");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(cx.debug_bounds("answer-menu").is_none(), "esc closes it");
+    assert_eq!(cx.opened_url(), None, "and opens nothing");
+}
+
+#[gpui::test]
 fn the_links_menu_chooses_the_browser(cx: &mut TestAppContext) {
     let (view, cx) = linked_answer("link-menu-doors", cx);
     let at = on_link(&view, cx);

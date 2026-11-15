@@ -29,15 +29,15 @@ use std::time::Duration;
 
 use ferrite_pane::composer as keys;
 use ferrite_pane::line::Line;
+use ferrite_ui::pointer::Pointer;
 use ferrite_ui::theme;
 use gpui::prelude::*;
-use ferrite_ui::pointer::Pointer;
 use gpui::{
-    actions, div, fill, list, point, px, rgb, rgba, size, AnyElement, App, Bounds, ClickEvent, ClipboardItem, Div,
-    Context, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter,
-    FocusHandle, Focusable, GlobalElementId, HighlightStyle, IntoElement, LayoutId, ListAlignment,
-    ListState, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Render, SharedString,
-    StyledText, TextLayout, UTF16Selection, Window,
+    actions, div, fill, list, point, px, rgb, rgba, size, AnyElement, App, Bounds, ClickEvent,
+    ClipboardItem, Context, Div, Element, ElementId, ElementInputHandler, Entity,
+    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, HighlightStyle,
+    IntoElement, LayoutId, ListAlignment, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
+    Pixels, Render, SharedString, StyledText, TextLayout, UTF16Selection, Window,
 };
 
 use super::save::{self, Outcome, SaveState};
@@ -102,12 +102,18 @@ pub(crate) struct Editor {
     caret_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
     pause: Option<gpui::Task<()>>,
     writing: Option<gpui::Task<()>>,
+    find: Option<ferrite_pane::find::Find>,
 }
 
 impl EventEmitter<Event> for Editor {}
 
 impl Editor {
-    pub(crate) fn new(path: &Path, source: String, settings: Settings, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        path: &Path,
+        source: String,
+        settings: Settings,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut text = Line::default();
         let on_disk = save::fingerprint(source.as_bytes());
         text.set(source);
@@ -132,6 +138,7 @@ impl Editor {
             caret_bounds: Rc::default(),
             pause: None,
             writing: None,
+            find: None,
         };
         editor.reindex();
         editor.list.reset(editor.starts.len());
@@ -161,6 +168,64 @@ impl Editor {
         cx.notify();
     }
 
+    pub(crate) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find.is_none() {
+            self.find = Some(ferrite_pane::find::Find::new(
+                cx,
+                |editor: &mut Self, cx| editor.refind(cx),
+            ));
+        }
+        if let Some(find) = &self.find {
+            find.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn refind(&mut self, cx: &mut Context<Self>) {
+        let from = self.cursor_line();
+        let ranges: Vec<Range<usize>> = (0..self.starts.len())
+            .map(|line| self.line_range(line))
+            .collect();
+        let text = self.text.text();
+        let Some(find) = self.find.as_mut() else {
+            return;
+        };
+        find.search(ranges.into_iter().map(|range| &text[range]), from, cx);
+        if let Some(hit) = find.active().copied() {
+            self.list.scroll_to_reveal_item(hit.unit);
+        }
+        cx.notify();
+    }
+
+    fn step_find(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let hit = self
+            .find
+            .as_mut()
+            .and_then(|find| find.step(forward).copied());
+        if let Some(hit) = hit {
+            self.list.scroll_to_reveal_item(hit.unit);
+            cx.notify();
+        }
+    }
+
+    fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.find = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// Whether the bar, or the file under it, holds the keyboard.
+    pub(crate) fn holds_keyboard(&self, window: &Window, cx: &App) -> bool {
+        self.focus.contains_focused(window, cx) || self.find_holds_focus(window, cx)
+    }
+
+    /// Whether the bar's line holds the keyboard.
+    pub(crate) fn find_holds_focus(&self, window: &Window, cx: &App) -> bool {
+        self.find
+            .as_ref()
+            .is_some_and(|find| find.holds_focus(window, cx))
+    }
+
     /// Write the file now, unless the disk changed since it was read.
     pub(crate) fn save(&mut self, cx: &mut Context<Self>) {
         self.begin_save(false, cx);
@@ -187,7 +252,8 @@ impl Editor {
     fn begin_save(&mut self, overwrite: bool, cx: &mut Context<Self>) {
         self.pause = None;
         let blocked = matches!(self.save, SaveState::Saving(_))
-            || (matches!(self.save, SaveState::Conflict | SaveState::ReloadFailed(_)) && !overwrite);
+            || (matches!(self.save, SaveState::Conflict | SaveState::ReloadFailed(_))
+                && !overwrite);
         if !self.is_dirty() || blocked {
             return;
         }
@@ -199,7 +265,8 @@ impl Editor {
             let outcome = cx
                 .background_spawn(async move { save::write(&path, &text, expected, writer) })
                 .await;
-            this.update(cx, |editor, cx| editor.finished(revision, outcome, cx)).ok();
+            this.update(cx, |editor, cx| editor.finished(revision, outcome, cx))
+                .ok();
         }));
         cx.notify();
     }
@@ -273,7 +340,10 @@ impl Editor {
     fn line_range(&self, line: usize) -> Range<usize> {
         let text = self.text.text();
         let start = self.starts[line];
-        let end = self.starts.get(line + 1).map_or(text.len(), |next| next - 1);
+        let end = self
+            .starts
+            .get(line + 1)
+            .map_or(text.len(), |next| next - 1);
         start..end
     }
 
@@ -422,14 +492,24 @@ impl Editor {
         true
     }
 
-    fn press(&mut self, line: usize, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn press(
+        &mut self,
+        line: usize,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         window.focus(&self.focus, cx);
         let range = self.line_range(line);
         let column = self
             .layouts
             .borrow()
             .get(&line)
-            .map(|layout| layout.index_for_position(event.position).unwrap_or_else(|nearest| nearest))
+            .map(|layout| {
+                layout
+                    .index_for_position(event.position)
+                    .unwrap_or_else(|nearest| nearest)
+            })
             .unwrap_or(0);
         let at = range.start + column.min(range.len());
         self.dragging = true;
@@ -468,6 +548,37 @@ impl Editor {
 
     // ------------------------------------------------------------- draw
 
+    /// `line`'s highlights, with the find's occurrences washed in.
+    fn with_find_washes(
+        &self,
+        line: usize,
+        source: &str,
+        runs: Vec<(Range<usize>, HighlightStyle)>,
+    ) -> Vec<(Range<usize>, HighlightStyle)> {
+        let Some(find) = &self.find else {
+            return runs;
+        };
+        let active = find.active().filter(|hit| hit.unit == line);
+        let washes: Vec<(Range<usize>, u32)> = find
+            .query()
+            .matches(source)
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, range)| {
+                let strong = active.is_some_and(|hit| hit.ordinal == ordinal);
+                (
+                    range,
+                    if strong {
+                        theme::FIND_ACTIVE_WASH
+                    } else {
+                        theme::FIND_WASH
+                    },
+                )
+            })
+            .collect();
+        ferrite_pane::find::washed(runs, &washes)
+    }
+
     fn render_line(&self, line: usize, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let range = self.line_range(line);
         let source = &self.text.text()[range.clone()];
@@ -475,6 +586,7 @@ impl Editor {
         let tokens = ferrite_core::transcript::highlight_tokens(self.language, source);
         let highlights: Vec<(Range<usize>, HighlightStyle)> =
             ferrite_pane::pane::code(source, Some(tokens.as_slice()));
+        let highlights = self.with_find_washes(line, source, highlights);
         let selection = self.text.selection();
         let within = (selection.start < range.end + 1 && selection.end > range.start)
             .then(|| {
@@ -483,10 +595,11 @@ impl Editor {
             })
             .filter(|within| !within.is_empty());
         let focused = self.focus.is_focused(window);
-        let caret = (current && selection.is_empty() && focused)
-            .then(|| self.text.cursor() - range.start);
+        let caret =
+            (current && selection.is_empty() && focused).then(|| self.text.cursor() - range.start);
         let code = CodeLine {
-            text: StyledText::new(SharedString::from(source.to_string())).with_highlights(highlights),
+            text: StyledText::new(SharedString::from(source.to_string()))
+                .with_highlights(highlights),
             selection: within,
             len: source.len(),
             caret,
@@ -526,7 +639,9 @@ impl Editor {
                     .flex_1()
                     .min_w_0()
                     .pr(px(theme::READER_NUMBER_GAP))
-                    .when(!self.settings.wrap, |cell| cell.whitespace_nowrap().overflow_hidden())
+                    .when(!self.settings.wrap, |cell| {
+                        cell.whitespace_nowrap().overflow_hidden()
+                    })
                     .child(code),
             )
             .into_any_element()
@@ -586,9 +701,10 @@ impl Editor {
                 (format!("Could not save: {error}").into(), [Retry, Discard])
             }
             SaveState::Conflict => ("This file changed on disk".into(), [Reload, Overwrite]),
-            SaveState::ReloadFailed(error) => {
-                (format!("Could not reload: {error}").into(), [Reload, Overwrite])
-            }
+            SaveState::ReloadFailed(error) => (
+                format!("Could not reload: {error}").into(),
+                [Reload, Overwrite],
+            ),
         };
         let buttons = actions.into_iter().map(|action| {
             let key = action.key();
@@ -601,12 +717,14 @@ impl Editor {
                 .hover_control(key)
                 .text_color(rgb(theme::INK_STRONG))
                 .child(action.label())
-                .on_click(cx.listener(move |editor, _: &ClickEvent, _, cx| match action {
-                    Retry => editor.save(cx),
-                    Reload => editor.reload(cx),
-                    Overwrite => editor.overwrite(cx),
-                    Discard => cx.emit(Event::Discard),
-                }))
+                .on_click(
+                    cx.listener(move |editor, _: &ClickEvent, _, cx| match action {
+                        Retry => editor.save(cx),
+                        Reload => editor.reload(cx),
+                        Overwrite => editor.overwrite(cx),
+                        Discard => cx.emit(Event::Discard),
+                    }),
+                )
         });
         Some(
             div()
@@ -641,6 +759,7 @@ impl Render for Editor {
             .debug_selector(|| "editor".into())
             .key_context(ferrite_ui::keymap::FILE_EDITOR)
             .track_focus(&self.focus)
+            .relative()
             .flex()
             .flex_col()
             .size_full()
@@ -648,9 +767,17 @@ impl Render for Editor {
             .text_size(px(theme::FS_READER_CODE))
             .line_height(px(theme::LH_UI))
             .text_color(rgb(theme::SYN_PLAIN))
-            .on_mouse_move(cx.listener(|editor, event: &MouseMoveEvent, _, cx| editor.drag(event, cx)))
-            .on_mouse_up(MouseButton::Left, cx.listener(|editor, _, _, _| editor.dragging = false))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(|editor, _, _, _| editor.dragging = false));
+            .on_mouse_move(
+                cx.listener(|editor, event: &MouseMoveEvent, _, cx| editor.drag(event, cx)),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|editor, _, _, _| editor.dragging = false),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|editor, _, _, _| editor.dragging = false),
+            );
         let root = on!(root, cx,
             keys::Backspace => |e, cx| e.edit(cx, Line::backspace),
             keys::Delete => |e, cx| e.edit(cx, Line::delete),
@@ -688,35 +815,54 @@ impl Render for Editor {
             PageDown => |e, cx| e.step_lines(e.page(), false, cx),
             Save => |e, cx| e.save(cx),
         );
-        root.on_action(cx.listener(|editor, _: &Enter, _, cx| editor.enter(cx)))
-            .on_action(cx.listener(|editor, _: &Tab, _, cx| editor.tab(cx)))
-            .on_action(cx.listener(|editor, _: &keys::Copy, _, cx| {
-                if !editor.copy(cx) {
-                    cx.propagate();
-                }
-            }))
-            .on_action(cx.listener(|editor, _: &keys::Cut, _, cx| {
-                if editor.copy(cx) {
-                    editor.edit(cx, Line::backspace);
-                } else {
-                    cx.propagate();
-                }
-            }))
-            .on_action(cx.listener(|editor, _: &keys::Paste, _, cx| {
-                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                    editor.edit(cx, |line| line.replace(None, &text));
-                }
-            }))
-            .child(
-                list(self.list.clone(), move |line, window, cx| {
-                    this.update(cx, |editor, cx| editor.render_line(line, window, cx))
-                })
-                .w_full()
-                .flex_1()
-                .min_h_0()
-                .py(px(theme::HALF_ROW)),
-            )
-            .children(self.status_bar(cx))
+        root.on_action(
+            cx.listener(|editor, _: &ferrite_pane::find::Open, window, cx| {
+                editor.open_find(window, cx)
+            }),
+        )
+        .on_action(
+            cx.listener(|editor, _: &ferrite_pane::find::Next, _, cx| editor.step_find(true, cx)),
+        )
+        .on_action(
+            cx.listener(|editor, _: &ferrite_pane::find::Previous, _, cx| {
+                editor.step_find(false, cx)
+            }),
+        )
+        .on_action(
+            cx.listener(|editor, _: &ferrite_pane::find::Close, window, cx| {
+                editor.close_find(window, cx)
+            }),
+        )
+        .on_action(cx.listener(|editor, _: &Enter, _, cx| editor.enter(cx)))
+        .on_action(cx.listener(|editor, _: &Tab, _, cx| editor.tab(cx)))
+        .on_action(cx.listener(|editor, _: &keys::Copy, _, cx| {
+            if !editor.copy(cx) {
+                cx.propagate();
+            }
+        }))
+        .on_action(cx.listener(|editor, _: &keys::Cut, _, cx| {
+            if editor.copy(cx) {
+                editor.edit(cx, Line::backspace);
+            } else {
+                cx.propagate();
+            }
+        }))
+        .on_action(cx.listener(|editor, _: &keys::Paste, _, cx| {
+            if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                editor.edit(cx, |line| line.replace(None, &text));
+            }
+        }))
+        .child(
+            list(self.list.clone(), move |line, window, cx| {
+                this.update(cx, |editor, cx| editor.render_line(line, window, cx))
+            })
+            .w_full()
+            .flex_1()
+            .min_h_0()
+            .py(px(theme::HALF_ROW)),
+        )
+        .children(self.status_bar(cx))
+        .children(self.find.as_ref().map(|find| find.bar()))
     }
 }
 
@@ -863,7 +1009,8 @@ impl Element for CodeLine {
         window: &mut Window,
         cx: &mut App,
     ) {
-        self.text.prepaint(id, inspector, bounds, &mut (), window, cx)
+        self.text
+            .prepaint(id, inspector, bounds, &mut (), window, cx)
     }
 
     fn paint(
@@ -895,7 +1042,11 @@ impl Element for CodeLine {
             let mut top = from.y;
             while top <= to.y {
                 let left = if top == from.y { from.x } else { bounds.left() };
-                let right = if top == to.y { to.x + end_pad } else { bounds.right() };
+                let right = if top == to.y {
+                    to.x + end_pad
+                } else {
+                    bounds.right()
+                };
                 window.paint_quad(fill(
                     Bounds::from_corners(point(left, top), point(right, top + line_height)),
                     rgba(theme::COMPOSER_SELECTION),
@@ -925,13 +1076,22 @@ impl Editor {
 
 #[cfg(test)]
 impl Editor {
+    pub(crate) fn find_count_for_test(&self) -> Option<String> {
+        self.find.as_ref()?.count().map(|count| count.to_string())
+    }
+
     pub(crate) fn text_for_test(&self) -> &str {
         self.text.text()
     }
 
     /// Writes fail as a read-only disk would.
     pub(crate) fn refuse_writes(&mut self) {
-        self.writer = |_, _| Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "refused"));
+        self.writer = |_, _| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "refused",
+            ))
+        };
     }
 
     pub(crate) fn allow_writes(&mut self) {
