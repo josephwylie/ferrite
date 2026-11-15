@@ -386,9 +386,9 @@ fn a_tray_image_is_a_thumbnail_card(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1400.), px(800.)));
     let files = [
-        std::path::PathBuf::from("/tmp/tray-a.png"),
-        std::path::PathBuf::from("/tmp/notes.md"),
-        std::path::PathBuf::from("/tmp/tray-b.jpg"),
+        real_file("tray-thumbnail-a", "tray-a.png"),
+        real_file("tray-thumbnail-notes", "notes.md"),
+        real_file("tray-thumbnail-b", "tray-b.jpg"),
     ];
     view.update(cx, |view, cx| {
         view.panes[0]

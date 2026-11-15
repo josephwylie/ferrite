@@ -18,9 +18,10 @@
 //! (`Role::Field`) never does, and may name its float's own context.
 
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use ferrite_core::attachment::{Destination, Source};
 use ferrite_core::browser_annotations::{self, Annotation};
 use ferrite_reviewr::model::{Comment as ReviewComment, CommentStore};
 
@@ -170,7 +171,7 @@ pub struct Composer {
     focus_handle: FocusHandle,
     files_focus: FocusHandle,
     line: Line,
-    files: Vec<PathBuf>,
+    files: crate::draft_files::DraftFiles,
     /// When each file was added to the draft, while it may still be growing
     /// in (`attachments`).
     files_added: std::collections::HashMap<PathBuf, std::time::Instant>,
@@ -263,7 +264,7 @@ impl Composer {
             focus_handle: cx.focus_handle(),
             files_focus: cx.focus_handle(),
             line: Line::default(),
-            files: Vec::new(),
+            files: crate::draft_files::DraftFiles::new(),
             files_added: Default::default(),
             replies: Vec::new(),
             citations: citations::Citations::default(),
@@ -360,14 +361,40 @@ impl Composer {
     /// How many attachments the draft holds: its files, and its review
     /// comments as one.
     pub fn attachment_count(&self) -> usize {
-        self.files.len()
+        self.files.paths().len()
             + self.replies.len()
             + self.browser_annotations.len()
             + usize::from(!self.review.is_empty())
     }
 
     pub fn files(&self) -> &[PathBuf] {
-        &self.files
+        self.files.paths()
+    }
+
+    /// Where this Composer's agent is, and where the bytes of what it
+    /// sends are kept.
+    pub fn aim_files(&mut self, destination: Destination, store: PathBuf, cx: &mut Context<Self>) {
+        self.files.aim(destination, store);
+        cx.notify();
+    }
+
+    /// Whether an attached file is one a send cannot take, each looked at
+    /// again now: one repaired since it failed no longer is. The tray says
+    /// which, and why.
+    pub fn has_blocked_file(&mut self, cx: &mut Context<Self>) -> bool {
+        self.files.inspect_all();
+        cx.notify();
+        self.files.blocked().is_some()
+    }
+
+    /// Swap the files of this computer for retained copies of their bytes:
+    /// a send's attachments are what its history keeps. False when one could
+    /// not be copied, which the tray then says. A file inside `workspace`
+    /// stays the live path the agent edits.
+    pub fn retain_files(&mut self, workspace: Option<&Path>, cx: &mut Context<Self>) -> bool {
+        let kept = self.files.retain(workspace);
+        cx.notify();
+        kept
     }
 
     pub fn browser_annotations(&self) -> &[Annotation] {
@@ -423,7 +450,8 @@ impl Composer {
         if count == 0 {
             return None;
         }
-        let files = composer.files.clone();
+        let files = composer.files.paths().to_vec();
+        let readiness = composer.files.readiness().clone();
         let added = composer.files_growing(cx);
         let comments = composer.review.len();
         let annotations = composer.browser_annotations.clone();
@@ -431,11 +459,19 @@ impl Composer {
         let focus = composer.files_focus.clone();
         let shut = composer.tray_shut && count > 1;
         let remove_file = entity.downgrade();
+        let retry_file = entity.downgrade();
         let drop_review = entity.downgrade();
         let remove_annotation = entity.downgrade();
         let shelf = has_shelf.then(|| {
             crate::attachments::Attachments::new("prompt-attachments", files, preview)
                 .added(added)
+                .readiness(readiness)
+                .on_retry(move |path, _, cx| {
+                    let _ = retry_file.update(cx, |composer, cx| {
+                        composer.files.inspect(path);
+                        cx.notify();
+                    });
+                })
                 .review(comments)
                 .annotations(annotations)
                 .on_remove_annotation(move |id, window, cx| {
@@ -447,7 +483,7 @@ impl Composer {
                 .in_island()
                 .on_remove(move |remove, window, cx| {
                     let _ = remove_file.update(cx, |composer, cx| {
-                        composer.files.retain(|path| path != remove);
+                        composer.files.remove(remove);
                         composer.focus_handle.focus(window, cx);
                         composer.edited(cx);
                     });
@@ -618,7 +654,7 @@ impl Composer {
     pub fn put(&mut self, content: DraftContent, cx: &mut Context<Self>) {
         self.files_added.clear();
         self.line.set(content.text);
-        self.files = content.files;
+        self.files.replace(content.files, content.local);
         self.replies = content.replies;
         self.reset_citations();
         self.browser_annotations = content.annotations;
@@ -629,7 +665,8 @@ impl Composer {
     pub fn content(&self) -> DraftContent {
         DraftContent {
             text: self.line.text().to_string(),
-            files: self.files.clone(),
+            files: self.files.paths().to_vec(),
+            local: self.files.local().to_vec(),
             replies: self.replies.clone(),
             review: self.review.iter().map(ReviewNote::from).collect(),
             annotations: self.browser_annotations.clone(),
@@ -685,7 +722,7 @@ impl Composer {
             (false, false, false) => format!("{typed}\n\n{}", content.text),
         };
         self.line.set(line);
-        merge(&mut self.files, content.files, prepend);
+        self.files.merge(content.files, content.local, prepend);
         merge(&mut self.replies, content.replies, prepend);
         self.reset_citations();
         merge(&mut self.browser_annotations, content.annotations, prepend);
@@ -713,7 +750,7 @@ impl Composer {
     pub fn prompt(&self) -> String {
         browser_annotations::compose(
             &ferrite_reviewr::ferrite::attach(&self.quoted_line(), &self.review),
-            &self.files,
+            self.files.paths(),
             &self.browser_annotations,
         )
     }
@@ -722,7 +759,11 @@ impl Composer {
     /// takes back, so a round trip through history or a merged held
     /// prompt neither repeats the comments nor writes them into the line.
     pub fn editable(&self) -> String {
-        browser_annotations::compose(&self.quoted_line(), &self.files, &self.browser_annotations)
+        browser_annotations::compose(
+            &self.quoted_line(),
+            self.files.paths(),
+            &self.browser_annotations,
+        )
     }
 
     /// The line with its quotes ahead of it, as the wire reads it.
@@ -746,18 +787,44 @@ impl Composer {
             .collect()
     }
 
+    /// Attach files of the Thread's workspace.
     pub fn add_files(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        self.attach(paths, Source::Workspace, cx);
+    }
+
+    /// Attach files of this computer: a picker's, a drop's, a paste's.
+    pub fn add_local_files(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        self.attach(paths, Source::Local, cx);
+    }
+
+    fn attach(&mut self, paths: &[PathBuf], source: Source, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
         self.files_added.retain(|_, at| {
             now.saturating_duration_since(*at) < ferrite_ui::motion::CHIP_IN.duration()
         });
         for path in paths {
-            if !self.files.contains(path) {
-                self.files.push(path.clone());
+            if self.files.add(path, source) {
                 self.files_added.insert(path.clone(), now);
             }
         }
         self.edited(cx);
+    }
+
+    /// A pasted screenshot's bytes, kept in the app's own store so the
+    /// draft and its history outlive the process.
+    fn keep_pasted_image(&self, image: &gpui::Image) -> Option<PathBuf> {
+        let name = format!("pasted-{:016x}.{}", image.id, image.format.extension());
+        match ferrite_core::attachment::retain_bytes(
+            image.bytes(),
+            name.as_ref(),
+            self.files.store(),
+        ) {
+            Ok(path) => Some(path),
+            Err(error) => {
+                ferrite_core::log!("the pasted image could not be saved: {error}");
+                None
+            }
+        }
     }
 
     /// Paste native file clipboard entries as attachments, falling back to
@@ -782,12 +849,12 @@ impl Composer {
             .collect();
         if paths.is_empty() {
             paths.extend(item.entries().iter().filter_map(|entry| match entry {
-                ClipboardEntry::Image(image) => spill_pasted_image(image),
+                ClipboardEntry::Image(image) => self.keep_pasted_image(image),
                 _ => None,
             }));
         }
         if !paths.is_empty() {
-            self.add_files(&paths, cx);
+            self.add_local_files(&paths, cx);
         } else if let Some(text) = item.text() {
             // The draft holds hard newlines now, so pasted ones stay — only
             // carriage returns are normalized.
@@ -2293,32 +2360,6 @@ impl Element for CaretOverlay {
             );
         }
     }
-}
-
-/// Write clipboard image bytes to a per-process scratch file and return its
-/// path. The name carries the pasted image's own id, so pasting the same
-/// screenshot twice reuses one file instead of growing the directory.
-fn spill_pasted_image(image: &gpui::Image) -> Option<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("ferrite-pastes-{}", std::process::id()));
-    let path = dir.join(format!(
-        "pasted-{:016x}.{}",
-        image.id,
-        image.format.extension()
-    ));
-    if path.exists() {
-        return Some(path);
-    }
-    if let Err(error) = std::fs::create_dir_all(&dir).and_then(|()| {
-        // A partly written file would attach as a corrupt image, so publish
-        // the name only once every byte is on disk.
-        let scratch = path.with_extension("part");
-        std::fs::write(&scratch, image.bytes())?;
-        std::fs::rename(&scratch, &path)
-    }) {
-        ferrite_core::log!("the pasted image could not be saved: {error}");
-        return None;
-    }
-    Some(path)
 }
 
 /// The face each Composer's line was last laid out in, for the font-role

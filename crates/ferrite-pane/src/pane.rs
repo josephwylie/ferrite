@@ -3822,12 +3822,8 @@ fn inline_image(
     preview: &crate::preview::Preview,
 ) -> AnyElement {
     // Whole pixels, so the ring sits on the pixel grid.
-    let size = match image_facts(path) {
-        Some(ImageFacts {
-            width: w,
-            height: h,
-            ..
-        }) if w > 0 && h > 0 => {
+    let size = match image_facts(path).and_then(|facts| facts.size) {
+        Some((w, h)) if w > 0 && h > 0 => {
             let scale = (theme::THUMB_MAX_W / w as f32)
                 .min(theme::THUMB_MAX_H / h as f32)
                 .min(1.0);
@@ -3860,55 +3856,63 @@ fn inline_image(
 pub(crate) fn image_caption(name: &str, facts: Option<ImageFacts>) -> String {
     let mut caption = vec![name.to_string()];
     if let Some(facts) = facts {
-        caption.push(format!("{}\u{d7}{}", facts.width, facts.height));
+        if let Some((width, height)) = facts.size {
+            caption.push(format!("{width}\u{d7}{height}"));
+        }
         caption.push(text::byte_size(facts.bytes as usize));
     }
     caption.join(" \u{b7} ")
 }
 
-/// What an image caption says about the file: its pixel size, read from
-/// its header, and its size on disk.
+/// What an image caption says about the file: its size on disk and, when
+/// its header is one the reader knows, its pixel size. Without a pixel size
+/// the image is still drawn: the decoder, not this reader, decides whether
+/// it can be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ImageFacts {
-    pub width: u32,
-    pub height: u32,
+    pub size: Option<(u32, u32)>,
     pub bytes: u64,
 }
 
+/// A file as it stood when its facts were read: a changed file reads again.
+type Stamp = (u64, Option<std::time::SystemTime>);
+
 thread_local! {
-    /// Image headers are read once per path: a caption is drawn every frame
-    /// its row is on screen.
-    static IMAGE_FACTS: std::cell::RefCell<HashMap<std::path::PathBuf, Option<ImageFacts>>> =
+    /// Image headers are read once per version of a file: a caption is
+    /// drawn every frame its row is on screen.
+    static IMAGE_FACTS: std::cell::RefCell<HashMap<std::path::PathBuf, (Stamp, ImageFacts)>> =
         std::cell::RefCell::new(HashMap::new());
 }
 
-/// An image's pixel size and byte size, or `None` when the file cannot be
-/// read or its format is not one the header reader knows (PNG, GIF, JPEG,
-/// WebP, BMP).
+/// An image file's facts, or `None` when it cannot be read: missing, or not
+/// a file.
 pub(crate) fn image_facts(path: &std::path::Path) -> Option<ImageFacts> {
+    let meta = std::fs::metadata(path).ok().filter(|meta| meta.is_file())?;
+    let stamp = (meta.len(), meta.modified().ok());
     IMAGE_FACTS.with(|cache| {
-        if let Some(facts) = cache.borrow().get(path) {
-            return *facts;
+        if let Some((seen, facts)) = cache.borrow().get(path) {
+            if *seen == stamp {
+                return Some(*facts);
+            }
         }
-        let facts = read_image_facts(path);
-        cache.borrow_mut().insert(path.to_path_buf(), facts);
-        facts
+        let facts = read_image_facts(path, meta.len())?;
+        cache
+            .borrow_mut()
+            .insert(path.to_path_buf(), (stamp, facts));
+        Some(facts)
     })
 }
 
-fn read_image_facts(path: &std::path::Path) -> Option<ImageFacts> {
+fn read_image_facts(path: &std::path::Path, bytes: u64) -> Option<ImageFacts> {
     use std::io::Read as _;
-    let bytes = std::fs::metadata(path).ok()?.len();
     let mut head = Vec::with_capacity(64 * 1024);
     std::fs::File::open(path)
         .ok()?
         .take(64 * 1024)
         .read_to_end(&mut head)
         .ok()?;
-    let (width, height) = image_size(&head)?;
     Some(ImageFacts {
-        width,
-        height,
+        size: image_size(&head),
         bytes,
     })
 }

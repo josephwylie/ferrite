@@ -852,7 +852,10 @@ fn an_unfocused_cell_counts_its_attachments_on_the_flat_line(cx: &mut TestAppCon
         cx.update(|window, cx| view.read(cx).level_now(window)),
         Level::Transcript
     );
-    let file = std::path::PathBuf::from("/tmp/CleanShot 2026-09-24 at 10.12.03.png");
+    let file = real_file(
+        "flat-attachments-file",
+        "CleanShot 2026-09-24 at 10.12.03.png",
+    );
     let focus_composer =
         |view: &Entity<CockpitView>, index: usize, cx: &mut gpui::VisualTestContext| {
             view.update_in(cx, |view, window, cx| {

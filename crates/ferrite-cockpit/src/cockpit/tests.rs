@@ -1,4 +1,5 @@
 mod archive;
+mod attachments;
 mod attention_alerts;
 mod background_work;
 mod boards;
@@ -357,6 +358,16 @@ impl Spawner for Fake {
             effort_answers: self.effort_answers.clone(),
         }))
     }
+}
+
+/// A file on disk named `file` in a scratch directory of its own: an
+/// attachment must exist to be sent.
+fn real_file(dir: &str, file: &str) -> std::path::PathBuf {
+    let dir = scratch(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(file);
+    std::fs::write(&path, b"x").unwrap();
+    path
 }
 
 fn scratch(name: &str) -> std::path::PathBuf {

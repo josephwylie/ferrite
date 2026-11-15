@@ -87,3 +87,37 @@ non-image chip, a sent file and a binary file open there too: a file the
 preview cannot show says so, with its original a click away. The image
 viewer is unchanged; its inset is the preview card's.
 
+
+## Amendment (2026-11-15): readiness and retained bytes
+
+A draft's files are still paths, but a path is no longer taken on faith.
+`ferrite_core::attachment` inspects each one where it was added and again
+when a send is attempted: `Ready`, `Reference` (an image or PDF over 5 MiB, or
+an image format the providers do not take natively: it goes as a path) or
+`Failed` (missing, unreadable, or a file of this computer bound for a
+machine). A failed file stays in the draft and is marked in its own place in
+the tray, with a retry when looking again could change the answer; Send is
+refused while any file has failed, so the draft is never lost and a file
+repaired at the same path sends without being re-added.
+
+Ferrite does not upload a local file to a machine. A picker, drop or paste
+bound for a machine is `Failed`; files picked from the Thread's own
+workspace are the machine's paths and go as they are. `DraftContent.local`
+records which files are of this computer, so the refusal survives a restart.
+(An older draft has no `local`, and reads as workspace files.)
+
+On send, each file of this computer (a picker, drop or paste) is copied into
+`<store>/attachments/<hash>/<name>` and the prompt names the copy, so history,
+retry and a restored draft keep the bytes that went out. A file of the
+Thread's workspace is not copied: it is a live reference, and the agent that
+edits it edits the workspace's file. Its readiness is read again at send, so
+one that has gone missing refuses the send like any failed file. A file that
+cannot be copied refuses the send too. A pasted screenshot is kept in the
+store at paste time, not in a per-process temp directory. A local file over
+64 MiB is not copied and stays a live reference. Prompts sent before this
+change name live paths and keep doing so; nothing is migrated.
+
+Image previews no longer depend on the header reader that supplies pixel
+sizes: a readable image is drawn, and only an unreadable file is a failed
+tile. Facts are cached per file version (size and modified time), so a
+file repaired at the same path recovers.

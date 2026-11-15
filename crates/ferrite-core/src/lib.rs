@@ -6,6 +6,7 @@
 
 pub mod activity;
 pub mod api;
+pub mod attachment;
 mod attention;
 pub mod cadence;
 pub mod clock;

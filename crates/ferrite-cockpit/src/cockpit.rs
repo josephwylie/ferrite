@@ -5,6 +5,7 @@
 
 mod agent_pane;
 pub(crate) mod archive;
+mod attachments;
 mod background_work;
 pub(crate) mod beside;
 mod browser;
@@ -1758,6 +1759,7 @@ impl CockpitView {
                 continue;
             };
             let pane = CockpitPane::new(PaneView::new(thread, cx), cx);
+            self.aim_attachments(&pane.composer, cx);
             cx.subscribe(&pane.composer, Self::composer_edited).detach();
             cx.subscribe(&pane.composer, Self::composer_opens_source).detach();
             self.restore_draft(thread, &pane.composer.clone(), cx);
@@ -5703,6 +5705,9 @@ impl CockpitView {
             return;
         }
         let composer = self.panes[self.focused()].composer.clone();
+        if !self.admit_files(self.focused(), cx) {
+            return;
+        }
         let draft = composer.update(cx, |composer, cx| composer.take_draft(cx));
         let text = draft.prompt().trim().to_string();
         // `/effort max` and `/model sonnet` typed out are Ferrite's own
@@ -6628,21 +6633,7 @@ impl CockpitView {
         }
         let (token_start, filter) = mention?;
         // No binding → nothing to walk → no popover.
-        let root = match (thread, pane.draft()) {
-            (Some(thread), _) => self
-                .cockpit
-                .thread(thread)?
-                .workspace()?
-                .cwd()
-                .to_path_buf(),
-            (None, Some(draft)) => draft
-                .binding
-                .resolve(self.cockpit.registry(), !self.on_machine())
-                .ok()?
-                .source_root()
-                .to_path_buf(),
-            _ => return None,
-        };
+        let root = self.pane_root(self.focused())?;
         if let Some(thread) = thread {
             if let Ok(receiver) = self.cockpit.search_files(thread, filter) {
                 let request_id = NEXT_FILE_SEARCH.fetch_add(1, Ordering::Relaxed);
@@ -7509,6 +7500,7 @@ impl CockpitView {
             DraftPlacement::NewGroupWith(thread) => self.cockpit.open_draft_for_new_group(thread),
         };
         let pane = CockpitPane::new(PaneView::new_draft(draft, binding, cx), cx);
+        self.aim_attachments(&pane.composer, cx);
         cx.subscribe(&pane.composer, Self::composer_edited).detach();
         cx.subscribe(&pane.composer, Self::composer_opens_source).detach();
         self.panes.push(pane);
@@ -8013,6 +8005,9 @@ impl CockpitView {
             return;
         };
         let composer = pane.composer.clone();
+        if !self.admit_files(self.focused(), cx) {
+            return;
+        }
         let text = composer.read(cx).prompt().trim().to_string();
         if text.is_empty() {
             return;
@@ -8691,7 +8686,7 @@ impl CockpitView {
             let Ok(Ok(Some(paths))) = receiver.await else {
                 return;
             };
-            composer.update(cx, |composer, cx| composer.add_files(&paths, cx));
+            composer.update(cx, |composer, cx| composer.add_local_files(&paths, cx));
         })
         .detach();
     }

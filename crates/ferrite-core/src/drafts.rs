@@ -181,6 +181,7 @@ mod tests {
             review: vec![(&crate::draft_content::tests::comment()).into()],
             annotations: Vec::new(),
             chips: vec!["@src/lib.rs".into(), "/review".into()],
+            local: Vec::new(),
         }
     }
 
