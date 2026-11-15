@@ -665,9 +665,9 @@ pub fn pull_request(repo: &Path, config: &PluginConfig) -> (PrView, &'static str
 }
 
 /// What a PR read with no snapshot says, `noun` naming the forge's: the remedy for a
-/// retryable failure, `refresh` naming the key that retries. Upstream's `ui::pr_empty_msg`.
-pub fn pr_note(view: &PrView, noun: &str, refresh: crate::keymap::Key) -> String {
-    if let Some(message) = view.retry_remedy(refresh) {
+/// retryable failure. Upstream's `ui::pr_empty_msg`.
+pub fn pr_note(view: &PrView, noun: &str) -> String {
+    if let Some(message) = view.retry_remedy() {
         return message;
     }
     match view {
@@ -680,6 +680,7 @@ pub fn pr_note(view: &PrView, noun: &str, refresh: crate::keymap::Key) -> String
         | PrView::NoExtension(_)
         | PrView::NotAuthed(..)
         | PrView::GitError(_)
+        | PrView::TimedOut(_)
         | PrView::Error(..) => String::new(),
         PrView::Detached => format!("No {noun} for a detached HEAD."),
         PrView::NoPr => format!("No {noun} yet. Ready to ship?"),
@@ -888,9 +889,9 @@ mod tests {
         git(&["commit", "-q", "-m", "root"]);
         let (view, noun) = pull_request(dir.path(), &PluginConfig::default());
         assert_eq!(view, PrView::NeedsForgeRemote);
-        assert!(pr_note(&view, noun, crate::keymap::Key::plain('r')).contains("remote named"));
+        assert!(pr_note(&view, noun).contains("remote named"));
         assert_eq!(
-            pr_note(&PrView::NoPr, "PR", crate::keymap::Key::plain('r')),
+            pr_note(&PrView::NoPr, "PR"),
             "No PR yet. Ready to ship?"
         );
     }

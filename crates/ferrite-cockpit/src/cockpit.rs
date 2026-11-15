@@ -1782,8 +1782,12 @@ impl CockpitView {
     /// Ask `gh` for the Thread's PR where its checkout is
     /// (`Cockpit::pull_request`, on a machine its Server): at once when
     /// `manual`, else at most once per `pr::AUTO_EVERY`. The row's symbol
-    /// turns until the answer lands.
+    /// turns until the answer lands. A manual ask reads the open PR tab
+    /// again too: its checks and conversation move without the reading.
     pub(crate) fn check_pr(&mut self, thread: ThreadId, manual: bool, cx: &mut Context<Self>) {
+        if manual {
+            self.refresh_pr_tab(thread, cx);
+        }
         let Some(path) = self.thread_path(thread) else {
             return;
         };

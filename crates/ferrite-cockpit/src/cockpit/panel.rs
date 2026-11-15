@@ -33,6 +33,7 @@ pub(in crate::cockpit) mod background;
 mod changes;
 pub(crate) mod hunks;
 pub(crate) mod preview;
+mod pr_read;
 mod pull_request;
 mod sections;
 pub(in crate::cockpit) use sections::Depth;
@@ -79,7 +80,7 @@ pub(crate) struct Panel {
     /// finished closed), by call.
     pub(crate) background_turned: std::collections::HashSet<String>,
     /// Each Thread's pull request, read whole for its Surface.
-    pr_reads: std::collections::HashMap<ThreadId, pull_request::PrRead>,
+    pr_reads: pr_read::PrReads,
     /// The Thread whose PR's Merge waits for its second press.
     pr_armed: Option<ThreadId>,
 }
@@ -263,7 +264,9 @@ impl CockpitView {
             }
             SurfaceId::Changes => self.ensure_changes(thread, cx),
             SurfaceId::Overview => self.refresh_context(thread),
-            SurfaceId::PullRequest(_) => self.read_pr_snapshot(thread, true, cx),
+            SurfaceId::PullRequest(number) => {
+                self.read_pr_snapshot(pr_read::PrTarget { thread, number: *number }, true, cx)
+            }
             _ => {}
         }
         self.surfaces_mut(thread).upsert(id);
@@ -387,7 +390,9 @@ impl CockpitView {
                     self.ensure_files(thread, cx);
                 }
                 Some(SurfaceId::Changes) => self.ensure_changes(thread, cx),
-                Some(SurfaceId::PullRequest(_)) => self.read_pr_snapshot(thread, false, cx),
+                Some(SurfaceId::PullRequest(number)) => {
+                    self.read_pr_snapshot(pr_read::PrTarget { thread, number }, false, cx)
+                }
                 _ => {}
             }
         }

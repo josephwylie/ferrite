@@ -22,18 +22,13 @@
 //! (`facts.pr`); its whole snapshot (body, checks, conversation) is read
 //! when the Surface opens (`Cockpit::review_pull_request`).
 
+use super::pr_read::{Answer, PrFailure, PrRead, PrTarget};
 use super::*;
 use crate::cockpit::surfaces::PrTab;
 use ferrite_core::protocol::{
-    WireCheckStatus, WirePr, WirePrCommentKind, WirePrState,
+    WireCheckStatus, WirePr, WirePrCommentKind, WirePrState, WirePrUnread,
 };
 use ferrite_core::workspace::PrState;
-
-/// The PR's snapshot, as the Surface last asked for it.
-pub(crate) enum PrRead {
-    Reading,
-    Read(Result<WirePr, String>),
-}
 
 /// A pull request's state, as its pill and its tab's icon show it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -277,62 +272,126 @@ impl CockpitView {
         }
     }
 
-    /// Read the branch's PR whole for its Surface, unless a read is out or
-    /// in. Tests and captures never run the forge's CLI: only a fixture
-    /// world's forge answers them.
-    pub(super) fn read_pr_snapshot(&mut self, thread: ThreadId, again: bool, cx: &mut Context<Self>) {
-        if !again && self.panel.pr_reads.contains_key(&thread) {
-            return;
-        }
-        let Some(path) = self.thread_path(thread) else {
+    /// The Thread's PR tab: the PR it shows, else the one its branch has.
+    fn pr_tab_target(&self, thread: ThreadId) -> Option<PrTarget> {
+        let tab = self.panel.surfaces.get(thread).and_then(|state| {
+            state.tabs.iter().find_map(|id| match id {
+                SurfaceId::PullRequest(number) => Some(*number),
+                _ => None,
+            })
+        });
+        let number = tab.or_else(|| self.facts.pr(thread).map(|pr| pr.number))?;
+        Some(PrTarget { thread, number })
+    }
+
+    /// Read `target`'s PR whole for its Surface, unless a read is out, or
+    /// (without `again`) it has been read. Tests and captures never run the
+    /// forge's CLI: only a fixture world's forge answers them.
+    pub(super) fn read_pr_snapshot(&mut self, target: PrTarget, again: bool, cx: &mut Context<Self>) {
+        let Some(path) = self.thread_path(target.thread) else {
             return;
         };
         if cfg!(any(test, feature = "visual-reference")) && !self.cockpit.has_forge_fixture(&path) {
             return;
         }
-        self.panel.pr_reads.insert(thread, PrRead::Reading);
+        let Some(request) = self.panel.pr_reads.begin(target, again) else {
+            return;
+        };
         let answer = self.cockpit.review_pull_request(&path);
         cx.spawn(async move |this, cx| {
-            let read = match crate::cockpit::beside::answered(answer, cx).await {
-                Ok(read) => read.pr,
-                Err(error) => Err(error.to_string()),
-            };
-            this.update(cx, |view, cx| {
-                if let Ok(pr) = &read {
-                    view.retire_other_prs(thread, pr.number);
-                }
-                view.panel.pr_reads.insert(thread, PrRead::Read(read));
-                cx.notify();
-            })
-            .ok();
+            let read = crate::cockpit::beside::answered(answer, cx).await;
+            this.update(cx, |view, cx| view.pr_read_landed(target, request, read, cx))
+                .ok();
         })
         .detach();
+        cx.notify();
+    }
+
+    /// The forge answered `request` for `target`. Only the request the
+    /// target still waits on, for a tab still open, changes anything: a
+    /// tab closed or a read asked again meanwhile leaves the answer unheard.
+    fn pr_read_landed(
+        &mut self,
+        target: PrTarget,
+        request: u64,
+        read: std::io::Result<ferrite_core::protocol::ReviewPullRequest>,
+        cx: &mut Context<Self>,
+    ) {
+        let shown = self
+            .panel
+            .surfaces
+            .get(target.thread)
+            .is_some_and(|state| state.tabs.contains(&SurfaceId::PullRequest(target.number)));
+        if !shown {
+            self.panel.pr_reads.forget(target);
+            return;
+        }
+        let answer = match read {
+            Ok(read) => match read.pr {
+                Ok(pr) if pr.number == target.number => Answer::Read(Box::new(pr)),
+                Ok(pr) => Answer::Moved(pr.number),
+                Err(note) => match read.unread {
+                    Some(kind) => Answer::Failed(PrFailure { kind, note }),
+                    None => Answer::Gone(PrFailure { kind: WirePrUnread::Failed, note }),
+                },
+            },
+            Err(error) => Answer::Failed(PrFailure {
+                kind: WirePrUnread::Failed,
+                note: error.to_string(),
+            }),
+        };
+        let moved = match &answer {
+            Answer::Moved(number) => Some(*number),
+            _ => None,
+        };
+        if self.panel.pr_reads.finish(target, request, answer) {
+            if let Some(number) = moved {
+                self.retire_other_prs(target.thread, number);
+            }
+            cx.notify();
+        }
     }
 
     /// A fixture world's snapshot of `thread`'s PR, as if read.
     #[cfg(any(test, feature = "visual-reference"))]
     pub(crate) fn fixture_pr_snapshot(&mut self, thread: ThreadId, pr: WirePr) {
         self.retire_other_prs(thread, pr.number);
-        self.panel.pr_reads.insert(thread, PrRead::Read(Ok(pr)));
+        let target = PrTarget { thread, number: pr.number };
+        self.panel.pr_reads.install(target, pr);
+    }
+
+    /// Ask the forge again for `thread`'s open PR tab: its checks and
+    /// conversation move without the PR's number or state moving.
+    pub(crate) fn refresh_pr_tab(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let open = self.panel.surfaces.get(thread).is_some_and(|state| {
+            state.tabs.iter().any(|id| matches!(id, SurfaceId::PullRequest(_)))
+        });
+        if let Some(target) = self.pr_tab_target(thread).filter(|_| open) {
+            self.read_pr_snapshot(target, true, cx);
+        }
     }
 
     /// The nav's reading of `thread`'s PR changed. A tab for another PR
     /// than the branch's goes, and a snapshot the reading has overtaken (a
-    /// merge the agent ran, a new PR on the branch) is let go, to be read
-    /// again as the Surface next shows: until then the reading speaks.
+    /// merge the agent ran) is let go, until its read lands: the reading
+    /// speaks. Any other change asks the forge again, as checks do.
     pub(crate) fn pr_reading_changed(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         let Some(reading) = self.facts.pr(thread) else {
             return;
         };
         let (number, tone) = (reading.number, PrTone::of_reading(reading.state, reading.draft));
         self.retire_other_prs(thread, number);
-        let overtaken = self
-            .pr_snapshot(thread)
-            .is_some_and(|pr| pr.number != number || PrTone::of_snapshot(pr) != tone);
-        if overtaken {
-            self.panel.pr_reads.remove(&thread);
+        let target = PrTarget { thread, number };
+        if self
+            .panel
+            .pr_reads
+            .snapshot(target)
+            .is_some_and(|pr| PrTone::of_snapshot(pr) != tone)
+        {
+            self.panel.pr_reads.forget(target);
             cx.notify();
         }
+        self.refresh_pr_tab(thread, cx);
     }
 
     /// The branch's PR is `number`: a tab for another (one restored from
@@ -348,6 +407,9 @@ impl CockpitView {
                 .collect()
         });
         for id in others {
+            if let SurfaceId::PullRequest(other) = id {
+                self.panel.pr_reads.forget(PrTarget { thread, number: other });
+            }
             self.forget_surface(thread, &id);
         }
     }
@@ -367,12 +429,9 @@ impl CockpitView {
         }
     }
 
-    /// The PR's snapshot, once read.
-    fn pr_snapshot(&self, thread: ThreadId) -> Option<&WirePr> {
-        match self.panel.pr_reads.get(&thread) {
-            Some(PrRead::Read(Ok(pr))) => Some(pr),
-            _ => None,
-        }
+    /// The snapshot of `thread`'s PR, once read.
+    pub(crate) fn pr_snapshot(&self, thread: ThreadId) -> Option<&WirePr> {
+        self.panel.pr_reads.snapshot(self.pr_tab_target(thread)?)
     }
 
     /// The PR's state: its snapshot's, else the nav's reading's.
@@ -457,17 +516,24 @@ impl CockpitView {
             .surfaces
             .get(thread)
             .map_or(PrTab::Summary, |state| state.pr_tab(number));
-        let snapshot = self.pr_snapshot(thread);
-        let body = match (self.panel.pr_reads.get(&thread), snapshot) {
-            (_, Some(pr)) => match tab {
+        let target = PrTarget { thread, number };
+        let read = self.panel.pr_reads.get(target);
+        let snapshot = read.and_then(|read| read.snapshot.as_ref());
+        let body = match (snapshot, read.and_then(PrRead::failure)) {
+            (Some(pr), _) => match tab {
                 PrTab::Summary => self.pr_summary(pr),
                 PrTab::Guide => self.pr_guide(thread, pr, cx),
                 PrTab::Timeline => self.pr_timeline(pr),
                 PrTab::Code => self.changes_pane(tools::Diff::PullRequest(thread), cx).into_any_element(),
             },
-            (Some(PrRead::Read(Err(note))), _) => pr_note(note.clone().into()),
-            _ => pr_note("Reading\u{2026}".into()),
+            (None, Some(failure)) => pr_note(failure.note.clone().into()),
+            (None, None) => pr_note("Reading\u{2026}".into()),
         };
+        let notice = read.and_then(|read| match (read.reading(), read.failure()) {
+            (true, _) if snapshot.is_some() => Some(pr_refreshing()),
+            (_, Some(failure)) => Some(self.pr_failed(target, failure, snapshot.is_some(), cx)),
+            _ => None,
+        });
         div()
             .debug_selector(|| "pr".into())
             .flex()
@@ -477,6 +543,7 @@ impl CockpitView {
             .text_size(px(FS_BADGE))
             .child(self.pr_header(thread, number, cx))
             .child(self.pr_views(thread, number, tab, cx))
+            .children(notice)
             .child(
                 div()
                     .flex()
@@ -488,12 +555,59 @@ impl CockpitView {
             .into_any_element()
     }
 
+    /// A read that failed: what went wrong and its way back, over the last
+    /// good content when there is any.
+    fn pr_failed(&self, target: PrTarget, failure: &PrFailure, stale: bool, cx: &mut Context<Self>) -> AnyElement {
+        use ferrite_ui::theme::*;
+        let (thread, number) = (target.thread, target.number);
+        let said = if stale {
+            format!("{}. Showing the last read. {}", failure.headline(), failure.note)
+        } else {
+            failure.note.clone()
+        };
+        let retry = div()
+            .id("pr-retry")
+            .debug_selector(|| "pr-retry".into())
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .h(px(SURFACE_TAB_H))
+            .px(px(PR_SEGMENT_PAD_X))
+            .rounded(px(R_CONTROL))
+            .bg(paint::RAISED)
+            .font_weight(W_LABEL)
+            .text_color(rgb(INK_STRONG))
+            .hover_control(ferrite_ui::pointer::hover_key(&gpui::ElementId::from("pr-retry")))
+            .press_control()
+            .child("Retry")
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.read_pr_snapshot(PrTarget { thread, number }, true, cx);
+            }));
+        div()
+            .debug_selector(|| "pr-failed".into())
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(SPACE_2))
+            .px(px(SPACE_4))
+            .py(px(SPACE_2))
+            .border_b(px(HAIRLINE_W))
+            .border_color(soft_line())
+            .text_color(rgb(RED))
+            .child(div().flex_1().min_w_0().child(SharedString::from(said)))
+            .child(retry)
+            .into_any_element()
+    }
+
     /// T3's header grid: the crumbs, then the actions.
     fn pr_header(&self, thread: ThreadId, number: u64, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
         let tone = self.pr_tone(thread).unwrap_or(PrTone::Open);
         let repo = self
-            .pr_snapshot(thread)
+            .panel
+            .pr_reads
+            .snapshot(PrTarget { thread, number })
             .map(|pr| pr.url.clone())
             .or_else(|| self.facts.pr(thread).and_then(|pr| pr.url.clone()))
             .and_then(|url| repo_of(&url));
@@ -646,7 +760,7 @@ impl CockpitView {
                 .child(segment)
                 .into_any_element()
         });
-        let snapshot = self.pr_snapshot(thread);
+        let snapshot = self.panel.pr_reads.snapshot(PrTarget { thread, number });
         let checks = snapshot.and_then(checks_line).map(|(line, ink)| {
             div()
                 .debug_selector(|| "pr-checks".into())
@@ -862,6 +976,25 @@ fn pr_pill(tone: PrTone) -> Div {
         .text_color(rgb(tone.ink()))
         .child(icon(tone.glyph(), SURFACE_PLUS_GLYPH, tone.ink()))
         .child(tone.label())
+}
+
+/// A refresh over the last good content: it stays, a mark turns above it.
+fn pr_refreshing() -> AnyElement {
+    use ferrite_ui::theme::*;
+    div()
+        .debug_selector(|| "pr-refreshing".into())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(SPACE_2))
+        .px(px(SPACE_4))
+        .py(px(SPACE_2))
+        .border_b(px(HAIRLINE_W))
+        .border_color(soft_line())
+        .text_color(rgb(INK_SUBTLE))
+        .child(ferrite_ui::components::working_mark(PR_LINK_GLYPH, INK_SUBTLE))
+        .child("Refreshing\u{2026}")
+        .into_any_element()
 }
 
 fn pr_note(note: SharedString) -> AnyElement {
