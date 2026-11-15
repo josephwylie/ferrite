@@ -92,7 +92,7 @@ impl Default for PreviewTab {
 /// the keyboard; the bar is the transcript's, `ferrite_pane::find`): a file's
 /// lines, or a rendered Markdown document's text.
 pub(crate) struct PreviewFind {
-    bar: ferrite_pane::find::Find,
+    pub(in crate::cockpit) bar: ferrite_pane::find::Find,
     /// The document it searches: the bar closes with it, and another one
     /// opening closes it too (`tend_previews`).
     path: PathBuf,
@@ -104,6 +104,25 @@ pub(crate) struct PreviewFind {
 }
 
 impl PreviewFind {
+    pub(in crate::cockpit) fn new(bar: ferrite_pane::find::Find, path: PathBuf) -> Self {
+        Self {
+            bar,
+            path,
+            reveal: 0,
+            start_in_view: false,
+        }
+    }
+
+    /// Have the active occurrence scrolled into view once it paints; a new
+    /// query (`start_in_view`) starts on the first occurrence in view.
+    pub(in crate::cockpit) fn reveal_when_painted(&mut self, start_in_view: bool) {
+        let report = self.bar.report();
+        report.revealed.set(None);
+        report.ahead.set(None);
+        self.reveal = ferrite_pane::find::REVEAL_FRAMES;
+        self.start_in_view = start_in_view;
+    }
+
     /// Whether the bar's line holds the keyboard.
     pub(crate) fn holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         self.bar.holds_focus(window, cx)
@@ -708,14 +727,12 @@ impl CockpitView {
             .as_ref()
             .is_none_or(|find| find.path != document.path)
         {
-            tab.find = Some(PreviewFind {
-                bar: ferrite_pane::find::Find::new(cx, move |view: &mut Self, cx| {
+            tab.find = Some(PreviewFind::new(
+                ferrite_pane::find::Find::new(cx, move |view: &mut Self, cx| {
                     view.refind_preview(owner, cx)
                 }),
-                path: document.path,
-                reveal: 0,
-                start_in_view: false,
-            });
+                document.path,
+            ));
             cx.notify();
         }
         if let Some(find) = &tab.find {
@@ -983,11 +1000,7 @@ fn reveal_found(tab: &mut PreviewTab, text: &Text, markdown: bool, start_in_view
         return;
     };
     if markdown {
-        let report = find.bar.report();
-        report.revealed.set(None);
-        report.ahead.set(None);
-        find.reveal = ferrite_pane::find::REVEAL_FRAMES;
-        find.start_in_view = start_in_view;
+        find.reveal_when_painted(start_in_view);
         return;
     }
     tab.scroll
@@ -1023,7 +1036,7 @@ fn slide_to(line: &str, found: &std::ops::Range<usize>, slid: f32, view: f32) ->
 /// has painted, a new query moves to the first occurrence in view (or the
 /// first below it) and paints again; then an occurrence outside the
 /// preview's view scrolls a third of the way down.
-fn settle_markdown_found(find: &mut PreviewFind, scroll: &ScrollHandle, window: &mut Window) {
+pub(in crate::cockpit) fn settle_markdown_found(find: &mut PreviewFind, scroll: &ScrollHandle, window: &mut Window) {
     if find.reveal == 0 {
         return;
     }

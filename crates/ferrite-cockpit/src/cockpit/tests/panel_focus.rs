@@ -358,6 +358,42 @@ fn find_in_files_searches_the_file_not_the_transcript(cx: &mut TestAppContext) {
     );
 }
 
+/// ⌘F over a prose file (a README) searches that document: the bar opens
+/// over it, the conversation's stays shut, and the first hit is in view.
+#[gpui::test]
+fn find_in_a_prose_file_searches_the_document_and_shows_the_hit(cx: &mut TestAppContext) {
+    let (view, thread, _file, cx) = with_marked_file("focus-prose-find", cx);
+    let readme = view.read_with(cx, |view, _| view.thread_path(thread).unwrap()).join("README.md");
+    let pad = "A paragraph that only pads the document.\n\n".repeat(80);
+    std::fs::write(&readme, format!("# Notes\n\n{pad}The {ONLY_IN_THE_FILE} is here.\n")).unwrap();
+    view.update(cx, |view, cx| view.open_in_files(thread, readme, None, true, cx));
+    tick(cx);
+    assert!(cx.debug_bounds("files-prose").is_some(), "the README reads as prose");
+
+    press("f6", cx);
+    press("cmd-f", cx);
+    assert!(cx.debug_bounds("find-bar").is_some(), "⌘F opens the bar over the document");
+    assert!(!transcript_find_open(&view, cx), "the conversation's bar stays shut");
+    cx.simulate_input(ONLY_IN_THE_FILE);
+    for _ in 0..6 {
+        view.update(cx, |_, cx| cx.notify());
+        tick(cx);
+    }
+    let (count, painted) = view
+        .update(cx, |view, _| view.prose_find_for_test(thread))
+        .expect("the bar is open");
+    assert_eq!(count.as_deref(), Some("1/1"));
+    let painted = painted.expect("the hit painted");
+    let shown = cx.debug_bounds("files-prose").unwrap();
+    assert!(
+        painted.top() >= shown.top() && painted.bottom() <= shown.bottom(),
+        "the hit is in view: {painted:?} in {shown:?}"
+    );
+
+    press("escape", cx);
+    assert!(cx.debug_bounds("find-bar").is_none(), "esc closes the bar");
+}
+
 /// A file opened by a press in the tree: the press leaves the keyboard in
 /// the Files surface, so ⌘F finds in that file.
 #[gpui::test]

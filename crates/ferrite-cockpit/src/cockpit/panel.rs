@@ -409,6 +409,7 @@ impl CockpitView {
     /// changed.
     pub(super) fn tend_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.tend_previews(window, cx);
+        self.tend_prose_find(window);
         self.disarm_unseen_merge();
         self.panel.window_w = f32::from(window.viewport_size().width);
         self.tend_tab_pick(cx);

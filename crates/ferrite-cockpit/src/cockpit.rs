@@ -6223,16 +6223,16 @@ impl CockpitView {
         if self.level_now(window) == Level::Wall {
             return;
         }
-        let index = self.focused();
-        let Some(pane) = self.panes.get(index) else {
-            return;
-        };
         if let Some(thread) = self.panel_thread() {
             let on_controls = self.panel_control_focused(window);
             if self.open_files_find(thread, on_controls, window, cx) {
                 return;
             }
         }
+        let index = self.focused();
+        let Some(pane) = self.panes.get(index) else {
+            return;
+        };
         let reading =
             self.preview_pressed == Some(pane.identity) || pane.preview.focused(window, cx);
         if reading && self.preview_shown(index) && self.open_preview_find(index, window, cx) {

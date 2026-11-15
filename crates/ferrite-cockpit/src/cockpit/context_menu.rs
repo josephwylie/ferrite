@@ -774,7 +774,7 @@ impl CockpitView {
                 return true;
             }
             ("escape", _) => self.context_menu = None,
-            ("up" | "down" | "left" | "right" | "enter", _) => return true,
+            ("left" | "right" | "enter", _) => return true,
             _ => return false,
         }
         cx.notify();
