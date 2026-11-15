@@ -323,7 +323,7 @@ pub enum Admission {
 /// A provider and the model to serve it with — what the #25 picker picks,
 /// whole. `None` is the provider's own default, which is also what every
 /// Thread starts on.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ProviderChoice {
     pub provider: Provider,
     pub model: Option<String>,
@@ -829,8 +829,8 @@ fn read_back_inputs(
     at: Instant,
 ) -> impl Iterator<Item = ActivityInput> {
     let main = move |input| ActivityInput::Main { input, at };
-    let announced = (!servers.is_empty())
-        .then(|| main(Input::Event(SessionEvent::McpServers { servers })));
+    let announced =
+        (!servers.is_empty()).then(|| main(Input::Event(SessionEvent::McpServers { servers })));
     std::iter::once(ActivityInput::Disconnect)
         .chain(inputs)
         .chain(std::iter::once(main(Input::Revived)))

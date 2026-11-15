@@ -9,6 +9,7 @@
 
 use super::*;
 use ferrite_core::cockpit::Admission;
+use ferrite_core::draft_content::DraftContent;
 use ferrite_pane::composer::SentDraft;
 use std::collections::HashMap;
 
@@ -95,9 +96,29 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// Keep `draft` under `thread` while its prompt waits in the Thread's
+    /// queue, so taking the prompt back to edit gives the draft back whole.
+    pub(super) fn hold_queued(&mut self, thread: ThreadId, draft: SentDraft) {
+        self.held_sends.0.entry(thread).or_default().push(Held {
+            draft,
+            listed: true,
+            lost: false,
+        });
+    }
+
+    /// `prompt`, handed back to edit, as typed parts: the draft it was sent
+    /// from while this window still holds it, else its text split into
+    /// parts.
+    pub(super) fn recovered_content(&mut self, thread: ThreadId, prompt: String) -> DraftContent {
+        match self.held_draft(thread, &prompt) {
+            Some(draft) => draft.content().clone(),
+            None => DraftContent::from_prompt(prompt),
+        }
+    }
+
     /// The draft `thread` held, when `prompt` is that prompt handed back by
     /// a Session that never started.
-    pub(super) fn held_draft(&mut self, thread: ThreadId, prompt: &str) -> Option<SentDraft> {
+    fn held_draft(&mut self, thread: ThreadId, prompt: &str) -> Option<SentDraft> {
         let held = self.held_sends.0.get_mut(&thread)?;
         let at = held
             .iter()
