@@ -935,7 +935,12 @@ impl CockpitView {
             Command::CloseSurface,
         );
         add(
-            focused.is_some(),
+            focused.is_some_and(|thread| {
+                self.panel
+                    .surfaces
+                    .get(thread)
+                    .is_some_and(|state| state.can_reopen())
+            }),
             "Reopen closed surface".into(),
             "",
             None,

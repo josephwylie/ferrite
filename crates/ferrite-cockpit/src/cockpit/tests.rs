@@ -58,6 +58,7 @@ mod provider_picker;
 mod queued_prompts;
 mod reader_motion;
 mod render_performance;
+mod reopen;
 mod retention;
 mod review;
 mod row_menu;

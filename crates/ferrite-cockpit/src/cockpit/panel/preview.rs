@@ -184,6 +184,22 @@ impl CockpitView {
         }
     }
 
+    fn retry_preview(
+        &mut self,
+        thread: ThreadId,
+        path: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.pane_for(thread) {
+            self.panes[index].preview_tab.documents.remove(path);
+            self.panes[index]
+                .preview
+                .open(path.to_path_buf(), None, &[], window, cx);
+        }
+        cx.notify();
+    }
+
     /// A File tab's title: the command's or page's own name where it has
     /// one, else the file's.
     pub(in crate::cockpit) fn file_surface_title(&self, thread: ThreadId, path: &Path) -> SharedString {
@@ -408,7 +424,7 @@ impl CockpitView {
                     None => div().child("Loading capture…").into_any_element(),
                 })
                 .into_any_element(),
-            Body::Unshown(why) => unshown(why, &document.path, cx),
+            Body::Unshown(why) => unshown(why, &document.path, pane.thread(), cx),
             Body::Page(page) => match page.shown(cx) {
                 Shown::Live(web) => div()
                     .id("preview-page")
@@ -424,8 +440,7 @@ impl CockpitView {
                     cant_show(
                         "This page can't show here",
                         Some(why),
-                        "open in browser",
-                        move |_, cx| cx.open_url(&url),
+                        vec![("open in browser", Box::new(move |_, cx| cx.open_url(&url)))],
                         cx,
                     )
                 }
@@ -878,31 +893,59 @@ fn numbered_lines(
 
 /// A file the preview cannot show: why, quietly, centred on the card, and
 /// its original a click away — the image viewer's own note's twin.
-fn unshown(why: &Unshown, path: &Path, cx: &mut Context<CockpitView>) -> AnyElement {
+fn unshown(
+    why: &Unshown,
+    path: &Path,
+    thread: Option<ThreadId>,
+    cx: &mut Context<CockpitView>,
+) -> AnyElement {
     let (note, detail) = match why {
         Unshown::Binary => ("This is not a text file", None),
         Unshown::Unreadable(error) => ("Could not read this file", Some(error.clone())),
     };
     let original = path.to_path_buf();
-    cant_show(
-        note,
-        detail,
+    let mut doors: Vec<Door> = vec![(
         "open original",
-        move |window, cx| ferrite_pane::preview::open_original(&original, window, cx),
-        cx,
-    )
+        Box::new(move |window, cx| ferrite_pane::preview::open_original(&original, window, cx)),
+    )];
+    if let (Unshown::Unreadable(_), Some(thread)) = (why, thread) {
+        let view = cx.entity();
+        let path = path.to_path_buf();
+        doors.insert(
+            0,
+            (
+                "try again",
+                Box::new(move |window, cx| {
+                    view.update(cx, |view, cx| view.retry_preview(thread, &path, window, cx))
+                }),
+            ),
+        );
+    }
+    cant_show(note, detail, doors, cx)
 }
 
-/// The "can't show" note: what, why under it, and the one door that shows
-/// it elsewhere.
+type Door = (&'static str, Box<dyn Fn(&mut Window, &mut gpui::App)>);
+
 fn cant_show(
     note: &'static str,
     detail: Option<SharedString>,
-    door: &'static str,
-    open: impl Fn(&mut Window, &mut gpui::App) + 'static,
+    doors: Vec<Door>,
     cx: &mut Context<CockpitView>,
 ) -> AnyElement {
     use ferrite_ui::theme::*;
+    let doors = doors.into_iter().map(|(label, open)| {
+        let id = SharedString::from(format!("preview-{}", label.replace(' ', "-")));
+        let selector = id.clone();
+        ferrite_ui::components::form_button(id, cx)
+            .debug_selector(move || selector.to_string())
+            .h(px(ROW))
+            .px(px(CH))
+            .child(ferrite_ui::components::form_label(label, INK_SUBTLE))
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                open(window, cx);
+            })
+    });
     div()
         .debug_selector(|| "preview-unshown".into())
         .flex_1()
@@ -922,17 +965,7 @@ fn cant_show(
                 .text_center()
                 .child(detail)
         }))
-        .child(
-            ferrite_ui::components::form_button("preview-open-original", cx)
-                .debug_selector(|| "preview-open-original".into())
-                .h(px(ROW))
-                .px(px(CH))
-                .child(ferrite_ui::components::form_label(door, INK_SUBTLE))
-                .on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    open(window, cx);
-                }),
-        )
+        .child(div().flex().gap(px(SPACE_2)).children(doors))
         .into_any_element()
 }
 

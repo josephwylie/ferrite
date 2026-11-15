@@ -1467,6 +1467,7 @@ impl CockpitView {
         cx.on_app_quit(|view, cx| {
             view.save_drafts(cx);
             view.save_surfaces();
+            view.save_working_sets();
             view.cockpit.halt_sessions();
             #[cfg(feature = "cef")]
             let browser = view.browsers.controller.clone();
