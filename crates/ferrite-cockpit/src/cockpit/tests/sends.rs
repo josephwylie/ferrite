@@ -8,7 +8,7 @@ use ferrite_core::replies::Reply;
 use ferrite_core::transcript::Body;
 use ferrite_reviewr::model::{Comment, Rev, Side};
 
-const WORDS: &str = "Please check the quoted passage";
+pub(super) const WORDS: &str = "Please check the quoted passage";
 
 /// A Session grown past any limit: `Some(thread)`'s only, or every one's.
 struct Meter(Option<ThreadId>);
@@ -25,12 +25,12 @@ impl ferrite_core::cockpit::RssSampler for Meter {
 
 /// How a send can be refused.
 #[derive(Clone, Copy, Debug)]
-enum Refusal {
+pub(super) enum Refusal {
     ProviderStart,
     Delivery,
 }
 
-fn annotation(name: &str) -> Annotation {
+pub(super) fn annotation(name: &str) -> Annotation {
     let root = scratch(name);
     let png = include_bytes!("../../../../ferrite-core/tests/fixtures/browser-original.png");
     browser_annotations::retain(
@@ -61,7 +61,7 @@ fn annotation(name: &str) -> Annotation {
     .unwrap()
 }
 
-fn review_comment() -> Comment {
+pub(super) fn review_comment() -> Comment {
     Comment {
         file: "src/lib.rs".into(),
         side: Side::New,
@@ -75,7 +75,7 @@ fn review_comment() -> Comment {
     }
 }
 
-fn window(
+pub(super) fn window(
     core: Cockpit,
     cx: &mut TestAppContext,
 ) -> (Entity<CockpitView>, &mut gpui::VisualTestContext) {
@@ -88,7 +88,7 @@ fn window(
 
 /// Fill the focused Pane's Composer with a whole draft: a file, a quote, a
 /// review comment, a Browser annotation and typed words.
-fn stage(view: &Entity<CockpitView>, name: &str, cx: &mut gpui::VisualTestContext) {
+pub(super) fn stage(view: &Entity<CockpitView>, name: &str, cx: &mut gpui::VisualTestContext) {
     let file = scratch(&format!("{name}-file.txt"));
     std::fs::write(&file, "attached").unwrap();
     let annotation = annotation(&format!("{name}-annotation"));
@@ -108,7 +108,7 @@ fn stage(view: &Entity<CockpitView>, name: &str, cx: &mut gpui::VisualTestContex
 /// A window on a Thread whose send `refusal` will refuse, with the whole
 /// draft staged: typed words, a file, a quote, a review comment and a
 /// Browser annotation.
-fn staged<'a>(
+pub(super) fn staged<'a>(
     name: &str,
     refusal: Option<Refusal>,
     cx: &'a mut TestAppContext,
@@ -129,7 +129,7 @@ fn staged<'a>(
 }
 
 /// What the Composer holds, kind by kind.
-fn held(
+pub(super) fn held(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
 ) -> (String, usize, usize, usize, usize) {
@@ -145,9 +145,9 @@ fn held(
     })
 }
 
-const WHOLE: (usize, usize, usize, usize) = (1, 1, 1, 1);
+pub(super) const WHOLE: (usize, usize, usize, usize) = (1, 1, 1, 1);
 
-fn notices(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<String> {
+pub(super) fn notices(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> Vec<String> {
     view.read_with(cx, |view, _| {
         let thread = view.panes[0].thread().unwrap();
         view.cockpit

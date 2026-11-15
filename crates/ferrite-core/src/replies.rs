@@ -4,6 +4,8 @@
 
 use std::borrow::Cow;
 
+use serde::{Deserialize, Serialize};
+
 /// `passage` as a block quote: each line behind `> `, a blank one a bare
 /// `>`, as Claude's own Copy as quote writes one.
 fn block(passage: &str) -> String {
@@ -22,7 +24,7 @@ fn block(passage: &str) -> String {
 
 /// A passage the operator replied to, and what they said about it (empty
 /// for a bare quote).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reply {
     pub quote: String,
     pub text: String,

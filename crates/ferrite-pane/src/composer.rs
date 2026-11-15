@@ -35,6 +35,7 @@ use gpui::{
 };
 
 use crate::line::Line;
+use ferrite_core::draft_content::{DraftContent, ReviewNote};
 use ferrite_core::replies::Reply;
 use ferrite_ui::pointer::Pointer;
 
@@ -136,18 +137,13 @@ pub(crate) fn key_context(role: Role, empty: bool, history: bool, menu: bool) ->
 /// `@` menus following what the operator is typing (#23).
 pub struct Edited;
 
-/// What one send took out of a Composer: the line as typed and each kind of
-/// attachment, kept apart so `Composer::restore` can put the draft back
-/// exactly, and the `prompt` the wire was given.
+/// What one send took out of a Composer: the typed parts of the draft, kept
+/// apart so `Composer::restore` can put it back exactly, and the `prompt` the
+/// wire was given.
 #[derive(Clone, Debug)]
 pub struct SentDraft {
     prompt: String,
-    line: String,
-    files: Vec<PathBuf>,
-    replies: Vec<Reply>,
-    review: Vec<ReviewComment>,
-    annotations: Vec<Annotation>,
-    chips: Vec<SharedString>,
+    content: DraftContent,
 }
 
 impl SentDraft {
@@ -158,7 +154,12 @@ impl SentDraft {
 
     /// What the operator typed, without the attachments the wire also got.
     pub fn line(&self) -> &str {
-        &self.line
+        &self.content.text
+    }
+
+    /// The draft as its typed parts.
+    pub fn content(&self) -> &DraftContent {
+        &self.content
     }
 }
 
@@ -521,26 +522,61 @@ impl Composer {
         }
     }
 
-    /// Put a line back into the Composer, ready to edit at its end. The
-    /// review comments stay as they are: they are not part of the line.
+    /// Put prompt text back into the Composer, ready to edit at its end.
+    /// The review comments and picked tokens stay as they are: they are not
+    /// part of the text. Only text that existed as a string alone (a
+    /// recalled or retrieved prompt) comes here; a draft is `load`ed.
     pub fn set(&mut self, text: String, cx: &mut Context<Self>) {
-        self.files_added.clear();
-        if matches!(self.role, Role::Field(_)) {
-            // Fields hold literal values, including captured page text and
-            // comments. Only a prompt recalls attachment/reply context.
-            self.line.set(text);
-            self.files.clear();
-            self.replies.clear();
-            self.browser_annotations.clear();
+        // Fields hold literal values, including captured page text and
+        // comments. Only a prompt recalls attachment/reply context.
+        let content = if matches!(self.role, Role::Field(_)) {
+            DraftContent {
+                text,
+                ..DraftContent::default()
+            }
         } else {
-            let (text, files, annotations) = browser_annotations::split(text);
-            let (replies, text) = ferrite_core::replies::split(&text);
-            self.files = files;
-            self.browser_annotations = annotations;
-            self.line.set(text.to_string());
-            self.replies = replies;
+            DraftContent::from_prompt(text)
+        };
+        self.put(content, cx);
+    }
+
+    /// Replace everything the Composer holds with `content`, as it was
+    /// saved.
+    pub fn load(&mut self, content: DraftContent, cx: &mut Context<Self>) {
+        self.review = CommentStore::new();
+        for note in content.review.clone() {
+            self.review.add(note.into());
         }
+        self.chips = content
+            .chips
+            .iter()
+            .cloned()
+            .map(SharedString::from)
+            .collect();
+        self.put(content, cx);
+    }
+
+    /// Replace the line, files, replies and annotations with those of
+    /// `content`, leaving the review comments and picked tokens.
+    pub fn put(&mut self, content: DraftContent, cx: &mut Context<Self>) {
+        self.files_added.clear();
+        self.line.set(content.text);
+        self.files = content.files;
+        self.replies = content.replies;
+        self.browser_annotations = content.annotations;
         self.edited(cx);
+    }
+
+    /// Everything the Composer holds, as its typed parts.
+    pub fn content(&self) -> DraftContent {
+        DraftContent {
+            text: self.line.text().to_string(),
+            files: self.files.clone(),
+            replies: self.replies.clone(),
+            review: self.review.iter().map(ReviewNote::from).collect(),
+            annotations: self.browser_annotations.clone(),
+            chips: self.chips.iter().map(ToString::to_string).collect(),
+        }
     }
 
     /// Hand the line to the Pane and clear it — pills and all.
@@ -553,14 +589,14 @@ impl Composer {
     pub fn take_draft(&mut self, cx: &mut Context<Self>) -> SentDraft {
         let draft = SentDraft {
             prompt: self.prompt(),
-            line: self.line.text().to_string(),
-            files: std::mem::take(&mut self.files),
-            replies: std::mem::take(&mut self.replies),
-            review: self.review.take_all(),
-            annotations: std::mem::take(&mut self.browser_annotations),
-            chips: std::mem::take(&mut self.chips),
+            content: self.content(),
         };
         self.line.take();
+        self.files.clear();
+        self.replies.clear();
+        self.review.take_all();
+        self.browser_annotations.clear();
+        self.chips.clear();
         self.files_added.clear();
         self.edited(cx);
         draft
@@ -571,23 +607,36 @@ impl Composer {
     /// after them otherwise. Attachments already on the shelf are not added
     /// twice.
     pub fn restore(&mut self, draft: SentDraft, prepend: bool, cx: &mut Context<Self>) {
+        self.restore_content(draft.content, prepend, cx);
+    }
+
+    /// `restore` for typed parts that never went out as a send: a prompt
+    /// handed back, a queued one taken back to edit.
+    pub fn restore_content(
+        &mut self,
+        content: DraftContent,
+        prepend: bool,
+        cx: &mut Context<Self>,
+    ) {
         let typed = self.line.text().to_string();
-        let line = match (draft.line.is_empty(), typed.is_empty(), prepend) {
-            (_, true, _) => draft.line,
+        let line = match (content.text.is_empty(), typed.is_empty(), prepend) {
+            (_, true, _) => content.text,
             (true, false, _) => typed,
-            (false, false, true) => format!("{}\n\n{typed}", draft.line),
-            (false, false, false) => format!("{typed}\n\n{}", draft.line),
+            (false, false, true) => format!("{}\n\n{typed}", content.text),
+            (false, false, false) => format!("{typed}\n\n{}", content.text),
         };
         self.line.set(line);
-        merge(&mut self.files, draft.files, prepend);
-        merge(&mut self.replies, draft.replies, prepend);
-        merge(&mut self.browser_annotations, draft.annotations, prepend);
-        for comment in draft.review {
+        merge(&mut self.files, content.files, prepend);
+        merge(&mut self.replies, content.replies, prepend);
+        merge(&mut self.browser_annotations, content.annotations, prepend);
+        for note in content.review {
+            let comment = note.into();
             if !self.review.iter().any(|kept| kept == &comment) {
                 self.review.add(comment);
             }
         }
-        for chip in draft.chips {
+        for chip in content.chips {
+            let chip = SharedString::from(chip);
             if !self.chips.contains(&chip) {
                 self.chips.push(chip);
             }

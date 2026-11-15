@@ -1465,7 +1465,7 @@ impl CockpitView {
             updating::schedule_checks(cx);
         }
         cx.on_app_quit(|view, cx| {
-            view.save_drafts();
+            view.save_drafts(cx);
             view.save_surfaces();
             view.cockpit.halt_sessions();
             #[cfg(feature = "cef")]
@@ -1660,6 +1660,7 @@ impl CockpitView {
         // every Thread it did not open is a parked row from the first
         // frame — a launch that opens nothing has no change to notice.
         view.sync_panes(cx);
+        view.reopen_unsent_drafts(cx);
         view.parked_changed(cx);
         // The bar's free disk from the first frame; the sweep re-reads it
         // each minute.
@@ -2332,14 +2333,16 @@ impl CockpitView {
         // The API reports it as the Thread's `draft` (ADR 0030), so no
         // agent types over the operator.
         let unsent = !state.is_empty();
-        if let Some(thread) = self
+        if let Some(identity) = self
             .panes
             .iter()
             .find(|pane| pane.composer == composer)
-            .and_then(|pane| pane.thread())
+            .map(|pane| pane.identity)
         {
-            self.cockpit.set_composing(thread, unsent);
-            self.keep_draft(thread, &composer, cx);
+            if let Some(thread) = identity.thread() {
+                self.cockpit.set_composing(thread, unsent);
+            }
+            self.keep_draft(identity, cx);
         }
         // A picker or a band chip is not text-derived (#11, #25, #29):
         // writing a prompt on its line dismisses it — while the clearing
@@ -2456,29 +2459,9 @@ impl CockpitView {
                     self.put_back_send(index, draft, true, cx);
                 }
                 while let Some((held, prepend)) = self.cockpit.take_retrieved_prompt(thread) {
-                    if let Some(draft) = self.held_draft(thread, &held) {
-                        self.put_back_send(index, draft, prepend, cx);
-                        continue;
-                    }
+                    let content = self.recovered_content(thread, held);
                     self.panes[index].composer.update(cx, |composer, cx| {
-                        let (current, mut files) =
-                            ferrite_core::prompt_files::split(composer.editable());
-                        let (held, restored_files) = ferrite_core::prompt_files::split(held);
-                        let text = if current.is_empty() {
-                            held
-                        } else if prepend {
-                            format!("{held}\n\n{current}")
-                        } else {
-                            format!("{current}\n\n{held}")
-                        };
-                        if prepend {
-                            let mut restored_files = restored_files;
-                            restored_files.extend(files);
-                            files = restored_files;
-                        } else {
-                            files.extend(restored_files);
-                        }
-                        composer.set(ferrite_core::prompt_files::compose(&text, &files), cx);
+                        composer.restore_content(content, prepend, cx)
                     });
                     cx.notify();
                 }
@@ -5703,7 +5686,10 @@ impl CockpitView {
         if text.is_empty() {
             // Enter on an empty line takes a held prompt back to edit it.
             if let Some(held) = self.cockpit.unqueue(thread) {
-                composer.update(cx, |composer, cx| composer.set(held, cx));
+                let content = self.recovered_content(thread, held);
+                composer.update(cx, |composer, cx| {
+                    composer.restore_content(content, true, cx)
+                });
                 cx.notify();
             }
             return;
@@ -5716,7 +5702,9 @@ impl CockpitView {
             .is_some_and(|open| open.needs_queue())
         {
             let queued = self.cockpit.queue(thread, text.clone());
-            if !queued {
+            if queued {
+                self.hold_queued(thread, draft);
+            } else {
                 self.put_back_send(focused, draft, true, cx);
             }
             queued
@@ -6735,13 +6723,16 @@ impl CockpitView {
         }
         let composer = self.panes[index].composer.clone();
         let draft = composer.read(cx).editable();
+        self.unsent
+            .step_from(thread, draft.clone(), composer.read(cx).content());
         let Some(text) = self.cockpit.recall_prompt(thread, direction, &draft) else {
             return;
         };
         self.popover = None;
         self.menu_muted = true;
         self.suppress_recall_menu_once = true;
-        composer.update(cx, |composer, cx| composer.set(text, cx));
+        let content = self.unsent.stepped_to(text);
+        composer.update(cx, |composer, cx| composer.put(content, cx));
         cx.notify();
     }
 
@@ -7438,8 +7429,21 @@ impl CockpitView {
             self.open_project_creator(cx);
             return;
         };
+        let binding = ferrite_core::draft::DraftBinding::new(provider, project, target);
+        self.spawn_draft_pane(binding, placement, cx);
+        cx.notify();
+    }
+
+    /// A draft Pane aimed at `binding`, focused. The one place a draft Pane
+    /// is built, for a press of cmd-t and for a draft kept across a restart.
+    fn spawn_draft_pane(
+        &mut self,
+        binding: ferrite_core::draft::DraftBinding,
+        placement: DraftPlacement,
+        cx: &mut Context<Self>,
+    ) -> ferrite_core::roster::DraftId {
         let binding = pane::DraftBinding {
-            binding: ferrite_core::draft::DraftBinding::new(provider, project, target),
+            binding,
             band_focus: None,
             error: None,
         };
@@ -7454,7 +7458,7 @@ impl CockpitView {
         cx.subscribe(&pane.composer, Self::composer_edited).detach();
         self.panes.push(pane);
         self.sync_panes(cx);
-        cx.notify();
+        draft
     }
 
     /// Open one chip's popover on the focused draft — the shared tail of a
@@ -7997,6 +8001,7 @@ impl CockpitView {
                     }
                 });
                 self.panes[index].adopt_thread(done.thread);
+                self.promote_draft(id, done.thread, cx);
                 if done.applied_leave {
                     self.group_error = None;
                 }
@@ -9322,7 +9327,9 @@ impl CockpitView {
                 .is_some_and(|scope| scope.pending_leave.is_some()),
             (View::Solo, PaneIdentity::Thread(_)) => false,
         };
-        match self.cockpit.close(identity) {
+        let result = self.cockpit.close(identity);
+        let closed = result.is_ok();
+        match result {
             Ok(()) => {
                 if changes_group {
                     self.group_error = None;
@@ -9345,6 +9352,9 @@ impl CockpitView {
             self.popover = None;
         }
         self.sync_panes(cx);
+        if let (true, PaneIdentity::Draft(draft)) = (closed, identity) {
+            self.discard_draft(draft, cx);
+        }
         cx.notify();
     }
 
