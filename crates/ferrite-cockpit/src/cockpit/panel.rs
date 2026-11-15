@@ -35,6 +35,7 @@ pub(crate) mod hunks;
 pub(crate) mod preview;
 mod pull_request;
 mod sections;
+pub(in crate::cockpit) use sections::Depth;
 mod strip;
 
 use super::surfaces::{SurfaceId, Surfaces, ThreadSurfaces};
@@ -686,7 +687,7 @@ impl CockpitView {
                     .pl(px(PANEL_PAD_L))
                     .pr(px(PANEL_PAD_R))
                     .pb(px(PANEL_PAD_B))
-                    .child(panel_body(self.panel_sections(thread, window, cx), &scroll))
+                    .child(panel_body(self.panel_sections(thread, Depth::Full, window, cx), &scroll))
                     .into_any_element()
             }
             Some(SurfaceId::Background) => {

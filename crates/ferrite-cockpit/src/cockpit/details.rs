@@ -1,24 +1,22 @@
 //! The Thread details card (T3's `ThreadDetailsCard`, ADR 0039): the
-//! Thread's lightweight context, a float over the top right of its
-//! transcript, reachable whatever the right panel holds. It is the
-//! panel's Overview (`panel_sections`) drawn compact, not a second source
-//! of Thread context.
+//! Thread's key facts and its context at a glance, floating over the top
+//! right of its transcript beside whatever the Panel holds. It draws the
+//! Panel's own sections at `Depth::Summary`, so there is no second source
+//! of Thread context, and one press opens the full Overview in the Panel.
 //!
-//! Its visibility is the Pane's own (`ferrite_pane::details`): ⌘⇧B or its
-//! title-bar toggle opens it and takes the keyboard; Escape or a press
-//! outside it closes it and the Composer has the keyboard again. It opens
-//! and leaves as a float does (`menu_in`, `float_out`), at `DETAILS_W`
-//! and `DETAILS_GAP` from the edges, narrowing with a narrow Pane and
-//! scrolling when the Thread has more to say than the Pane has height, and
-//! hangs below the find bar while that is open.
+//! A Pane too narrow to float it without covering most of its transcript
+//! (`DETAILS_MIN_PANE_W`) opens the Overview in the Panel instead.
 
+use super::panel::Depth;
 use super::*;
 use ferrite_pane::details::Standing;
-use ferrite_ui::motion::{self, Opens};
+use ferrite_ui::motion;
 use ferrite_ui::theme::*;
 
+/// The corner the card hangs from, which it grows and shrinks about.
+const DETAILS_ORIGIN: motion::ScaleFrom = (1.0, 0.0);
+
 impl CockpitView {
-    /// ⌘⇧B, the View menu, the palette and the title bar's toggle.
     pub(super) fn toggle_details(
         &mut self,
         _: &ToggleDetails,
@@ -36,6 +34,10 @@ impl CockpitView {
             self.close_details(thread, window, cx);
             return;
         }
+        if !self.details_fit(pane) {
+            self.open_panel(thread, cx);
+            return;
+        }
         let card = &self.panes[pane].details;
         card.set_open(true);
         window.focus(&card.focus, cx);
@@ -43,7 +45,6 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Escape in the card.
     pub(super) fn dismiss_details(
         &mut self,
         _: &CloseDetails,
@@ -76,20 +77,43 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The focused Pane's Thread and index, when it can show a card.
+    /// Whether Pane `index` is wide enough to float the card without
+    /// covering most of its transcript. A Pane not yet laid out is.
+    fn details_fit(&self, index: usize) -> bool {
+        self.panes[index]
+            .geometry
+            .get()
+            .card
+            .is_none_or(|card| card.size.width >= px(DETAILS_MIN_PANE_W))
+    }
+
+    /// A card open in a Pane that no longer holds the focus shuts: Escape
+    /// only reaches the focused Pane's card.
+    pub(super) fn tend_details(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let focused = self.focused();
+        let stale: Vec<ThreadId> = self
+            .panes
+            .iter()
+            .enumerate()
+            .filter(|(index, pane)| *index != focused && pane.details.is_open())
+            .filter_map(|(_, pane)| pane.thread())
+            .collect();
+        for thread in stale {
+            self.close_details(thread, window, cx);
+        }
+    }
+
     fn focused_details(&self) -> Option<(ThreadId, usize)> {
         let index = self.focused();
         let thread = self.panes.get(index)?.thread()?;
         Some((thread, index))
     }
 
-    /// Whether the focused Pane's card is open (the toggle's pressed face).
     pub(super) fn details_open(&self) -> bool {
         self.focused_details()
             .is_some_and(|(_, index)| self.panes[index].details.is_open())
     }
 
-    /// Whether a Pane's card holds the keyboard.
     pub(super) fn details_hold_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         self.panes
             .get(self.focused())
@@ -97,7 +121,8 @@ impl CockpitView {
     }
 
     /// The card over `index`'s body: its Thread's name over the panel's
-    /// sections, while it is open and while it leaves.
+    /// summary and the way to the full Overview, while it is open and
+    /// while it leaves.
     pub(super) fn details_card(
         &self,
         index: usize,
@@ -136,7 +161,7 @@ impl CockpitView {
                     .track_scroll(&scroll)
                     .px(px(FLOAT_PAD_X))
                     .pt(px(FLOAT_PAD))
-                    .child(self.panel_sections(thread, window, cx)),
+                    .child(self.panel_sections(thread, Depth::Summary, window, cx)),
             )
             .child(ferrite_ui::components::scrollbar_layer().child(
                 ferrite_ui::components::scrollbar_bar("details-scrollbar", &scroll),
@@ -174,12 +199,30 @@ impl CockpitView {
                     .debug_selector(|| "details-head".into())
                     .px(px(FLOAT_PAD_X)),
             )
-            .child(body);
+            .child(body)
+            .child(
+                ferrite_ui::menu::footer_shell()
+                    .id(("details-overview", thread.get() as usize))
+                    .debug_selector(|| "details-overview".into())
+                    .cursor_pointer()
+                    .hover(|style| style.text_color(rgb(INK_STRONG)))
+                    .child("Open overview")
+                    .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                        view.close_details(thread, window, cx);
+                        view.open_panel(thread, cx);
+                    })),
+            );
         let card = match standing {
             Standing::Leaving(left) => {
-                motion::float_out(left, motion::DIALOG_OUT, card, (1.0, 0.0)).into_any_element()
+                motion::float_out(left, motion::DIALOG_OUT, card, DETAILS_ORIGIN).into_any_element()
             }
-            _ => motion::menu_in("details-card-in", card, Opens::Down),
+            _ => motion::dialog_in_casting(
+                ("details-card-in", thread.get() as usize),
+                card,
+                ferrite_ui::components::float_shadow,
+                DETAILS_ORIGIN,
+            )
+            .into_any_element(),
         };
         let top = if find_open {
             2.0 * FLOAT_OFFSET + FLOAT_ROW_H
@@ -201,7 +244,6 @@ impl CockpitView {
         )
     }
 
-    /// The title bar's toggle for the card, pressed while it is open.
     pub(super) fn details_toggle(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let card = self.focused_details().map(|(_, index)| index);
         let door = crate::nav::icon_button(

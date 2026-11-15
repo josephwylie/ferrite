@@ -114,6 +114,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::ToggleNav" => Row(Board, "Toggle sidebar"),
         "cockpit::TogglePanel" => Row(Board, "Toggle panel"),
         "cockpit::ToggleDetails" => Row(Board, "Toggle thread details"),
+        "cockpit::CloseDetails" => Row(Board, "Close thread details"),
         "cockpit::ToggleTerminal" => Row(Board, "Terminal"),
         "cockpit::ToggleChanges" => Row(Board, "Changes"),
         "cockpit::ToggleFiles" => Row(Board, "Files"),
@@ -201,7 +202,6 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "find::Next" => Row(Transcript, "Find: next"),
         "find::Previous" => Row(Transcript, "Find: previous"),
         "find::Close" => Row(Transcript, "Find: close"),
-        "cockpit::CloseDetails" => Row(Board, "Thread details: close"),
         // The floats' own keys live in their footers.
         "reply::Send"
         | "reply::Close"

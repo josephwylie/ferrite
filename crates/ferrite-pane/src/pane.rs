@@ -50,7 +50,7 @@ use output::{call_body, diff_rows, hunk_rows, render_diff, running_tests, DiffRo
 pub use output::{diff_number_cells, test_elbow, DiffKind, DiffPaint, TestElbow};
 pub(crate) use text::{collect_block_text, collect_group_text, group_live, group_tools, is_agent_card};
 pub use usage::{
-    compact_count, context_meter_segments, context_segments, context_usage, ctx_meter_ink,
+    compact_count, context_meter_segments, context_segments, context_summary, context_usage, ctx_meter_ink,
     plan_usage_fraction, plan_usage_popover, plan_usage_ring, usage_ink,
 };
 pub(crate) use working::{turn_fold, FoldFace};

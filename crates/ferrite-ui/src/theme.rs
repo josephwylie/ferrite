@@ -1211,6 +1211,10 @@ pub const FLOAT_OFFSET: f32 = 6.0;
 /// (`threadDetailsCardLayout`).
 pub const DETAILS_W: f32 = 280.0;
 pub const DETAILS_GAP: f32 = 12.0;
+/// The narrowest Pane that floats the card: the card and its gap take at
+/// most half of it, so what is left still holds the transcript's centred
+/// hero line and its Composer. Narrower, the Overview opens in the Panel.
+pub const DETAILS_MIN_PANE_W: f32 = 2.0 * (DETAILS_W + DETAILS_GAP);
 /// The context menu's least width (it grows to its longest verb beside
 /// its key: Claude's row menu is 165, claude/row-menu.png), and any
 /// floating list's height cap before it scrolls.

@@ -8,11 +8,11 @@
 //! (`head_branch`). A Group names itself — its title, `<project> · N
 //! threads`, and `New thread`. There is no layout switch and no PR button.
 //! The title bar keeps two tools (ADR 0039, `title_tools_element`): the
-//! details card's toggle and the Panel's, at the row's right end at the window's edge, where it
-//! stays whatever the Panel holds. Everything else the old tools opened is
-//! a Surface of the Panel, opened from its `+` menu or its chord; a Thread
-//! beside is the palette's (`open_palette_beside`). The head leaves the
-//! toggle its room.
+//! details card's toggle and the Panel's, at the row's right end at the
+//! window's edge, where they stay whatever the Panel holds. Everything
+//! else the old tools opened is a Surface of the Panel, opened from its
+//! `+` menu or its chord; a Thread beside is the palette's
+//! (`open_palette_beside`). The head leaves the toggles their room.
 //!
 //! The head is an overlay laid after the titlebar's drag strip
 //! (the frame's titlebar), over the frame the board column already paints

@@ -2129,8 +2129,17 @@ impl CockpitView {
         }
     }
 
-    /// PageUp, PageDown, Home or End on the focused Pane's transcript.
-    fn page_transcript(&mut self, page: ferrite_pane::transcript::Page, cx: &mut Context<Self>) {
+    /// PageUp, PageDown, Home or End on the focused Pane's transcript; the
+    /// details card, holding the keyboard, takes them and leaves it be.
+    fn page_transcript(
+        &mut self,
+        page: ferrite_pane::transcript::Page,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.details_hold_focus(window, cx) {
+            return;
+        }
         if let Some(transcript) = self
             .panes
             .get(self.focused())
@@ -9924,6 +9933,7 @@ impl CockpitView {
         // so it never stands as a File tab of its own.
         self.redirect_previews_to_files(cx);
         self.tend_panel(window, cx);
+        self.tend_details(window, cx);
         if self.solo_beside.is_some() && self.solo_pair().is_none() {
             self.solo_beside = None;
         }
@@ -10417,17 +10427,17 @@ impl CockpitView {
                         view.answer_chorded(Answer::Always, window, cx)
                     }))
                     .on_action(cx.listener(Self::close_thread))
-                    .on_action(cx.listener(|view, _: &TranscriptPageUp, _, cx| {
-                        view.page_transcript(ferrite_pane::transcript::Page::Up, cx)
+                    .on_action(cx.listener(|view, _: &TranscriptPageUp, window, cx| {
+                        view.page_transcript(ferrite_pane::transcript::Page::Up, window, cx)
                     }))
-                    .on_action(cx.listener(|view, _: &TranscriptPageDown, _, cx| {
-                        view.page_transcript(ferrite_pane::transcript::Page::Down, cx)
+                    .on_action(cx.listener(|view, _: &TranscriptPageDown, window, cx| {
+                        view.page_transcript(ferrite_pane::transcript::Page::Down, window, cx)
                     }))
-                    .on_action(cx.listener(|view, _: &TranscriptTop, _, cx| {
-                        view.page_transcript(ferrite_pane::transcript::Page::Top, cx)
+                    .on_action(cx.listener(|view, _: &TranscriptTop, window, cx| {
+                        view.page_transcript(ferrite_pane::transcript::Page::Top, window, cx)
                     }))
-                    .on_action(cx.listener(|view, _: &TranscriptBottom, _, cx| {
-                        view.page_transcript(ferrite_pane::transcript::Page::Bottom, cx)
+                    .on_action(cx.listener(|view, _: &TranscriptBottom, window, cx| {
+                        view.page_transcript(ferrite_pane::transcript::Page::Bottom, window, cx)
                     }))
                     .on_action(cx.listener(Self::reopen_thread))
                     .on_action(cx.listener(Self::paste_into_composer))

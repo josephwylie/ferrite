@@ -138,24 +138,122 @@ fn a_press_outside_shuts_the_card(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn a_narrow_pane_keeps_the_card_inside_it(cx: &mut TestAppContext) {
-    let (view, _, cx) = solo("details-narrow", 760., cx);
+fn a_pane_too_narrow_for_the_card_opens_the_overview_in_the_panel(cx: &mut TestAppContext) {
+    let (view, thread, cx) = solo("details-narrow", 760., cx);
     cx.simulate_keystrokes("cmd-alt-b");
     tick(cx);
     assert!(cx.debug_bounds("panel").is_none(), "the Panel is put away");
     cx.simulate_keystrokes("cmd-shift-b");
     tick(cx);
-    assert!(open(&view, cx));
+    assert!(!open(&view, cx), "no card floats over a narrow transcript");
+    assert!(cx.debug_bounds("details-card").is_none());
+    assert!(
+        cx.debug_bounds("panel").is_some(),
+        "the Panel opens instead"
+    );
+    assert_eq!(
+        panel_tabs(&view, thread, cx).1,
+        Some(SurfaceId::Overview),
+        "on the full Overview"
+    );
+}
+
+#[gpui::test]
+fn the_card_is_a_summary_with_a_way_to_the_overview(cx: &mut TestAppContext) {
+    let (view, thread, cx) = solo("details-overview", 1900., cx);
+    view.update(cx, |view, cx| {
+        view.upsert_surface(thread, SurfaceId::Files, cx)
+    });
+    tick(cx);
+    cx.simulate_keystrokes("cmd-shift-b");
+    tick(cx);
     let card = cx.debug_bounds("details-card").expect("the card");
     assert!(
-        card.left() >= px(0.) && card.right() <= px(760.),
-        "inside the window: {card:?}"
+        card.size.height < px(300.),
+        "it fits its summary, not the Overview's length: {card:?}"
     );
-    assert!(
-        card.size.width >= px(160.),
-        "still wide enough to read: {card:?}"
-    );
-    assert!(card.size.width <= px(DETAILS_W));
+    let link = cx
+        .debug_bounds("details-overview")
+        .expect("its way to the Overview");
+    cx.simulate_click(link.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(!open(&view, cx), "the card gives way to the Overview");
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Overview));
+}
+
+#[gpui::test]
+fn the_page_keys_leave_the_transcript_alone_while_the_card_has_them(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("details-page-keys", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1900.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: (0..80)
+                .map(|line| format!("history line {line:03}\n\n"))
+                .collect(),
+        })
+        .unwrap();
+    tick(cx);
+    let offset = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.panes[0]
+                .transcript()
+                .unwrap()
+                .read(cx)
+                .scroll()
+                .offset()
+                .y
+        })
+    };
+    let rest = offset(cx);
+    cx.simulate_keystrokes("cmd-shift-b");
+    tick(cx);
+    for key in ["pageup", "pagedown", "home", "end"] {
+        cx.simulate_keystrokes(key);
+        cx.run_until_parked();
+        assert_eq!(offset(cx), rest, "{key} did not scroll the transcript");
+    }
+    assert!(open(&view, cx), "and did not shut the card");
+}
+
+#[gpui::test]
+fn focus_moving_to_another_thread_shuts_the_card_it_left(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("details-two-threads", 2);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(2400.), px(900.)));
+    tick(cx);
+    let cards = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            view.panes
+                .iter()
+                .map(|pane| pane.details.is_open())
+                .collect::<Vec<_>>()
+        })
+    };
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        cx.notify();
+    });
+    tick(cx);
+    cx.simulate_keystrokes("cmd-shift-b");
+    tick(cx);
+    assert_eq!(cards(cx), [true, false]);
+
+    view.update(cx, |view, cx| {
+        view.focus_pane(1);
+        cx.notify();
+    });
+    tick(cx);
+    assert_eq!(cards(cx), [false, false], "the card it left shuts");
+
+    cx.simulate_keystrokes("cmd-shift-b");
+    tick(cx);
+    assert_eq!(cards(cx), [false, true], "the new Thread has its own");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert_eq!(cards(cx), [false, false], "and Escape shuts it");
 }
 
 #[gpui::test]
