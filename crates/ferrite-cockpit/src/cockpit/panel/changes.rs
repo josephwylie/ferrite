@@ -130,7 +130,7 @@ impl CockpitView {
             .get(thread)
             .and_then(|facts| facts.default_branch.clone());
         let prompt = create_pr_prompt(branch.as_deref(), base.as_deref());
-        self.send_again(index, thread, prompt, cx);
+        self.send_again(index, thread, prompt, cx).ok();
     }
 
     /// One changed file's block (r8): its head (48, `RAISED`) — the name,

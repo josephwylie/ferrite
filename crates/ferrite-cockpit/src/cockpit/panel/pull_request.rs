@@ -22,6 +22,7 @@
 //! (`facts.pr`); its whole snapshot (body, checks, conversation) is read
 //! when the Surface opens (`Cockpit::review_pull_request`).
 
+use super::pr_action::{ActionState, Stage};
 use super::pr_read::{Answer, PrFailure, PrRead, PrSource, PrTarget};
 use super::*;
 use crate::cockpit::surfaces::PrTab;
@@ -133,6 +134,12 @@ impl PrAction {
             Self::CopyLink => "Copy link",
             Self::CopyBranch => "Copy branch name",
         }
+    }
+
+    /// Whether the row asks the Thread's agent (and so is one action in
+    /// flight at a time), rather than copying or opening a side chat.
+    pub(crate) fn hands_off(self) -> bool {
+        !matches!(self, Self::Ask | Self::CopyLink | Self::CopyBranch)
     }
 
     /// Whether the row arms before it runs.
@@ -391,6 +398,7 @@ impl CockpitView {
             _ => None,
         };
         if self.panel.pr_reads.finish(target, request, answer) {
+            self.pr_action_checked(target, cx);
             if let (Some(number), PrSource::Thread(thread)) = (moved, target.source) {
                 self.retire_other_prs(thread, number);
             }
@@ -473,7 +481,7 @@ impl CockpitView {
     }
 
     /// Merge armed on a PR Surface no longer shown (another tab, the Panel
-    /// hidden, another Thread) is disarmed: one press, much later, must
+    /// hidden, another Thread or PR) is disarmed: one press, much later, must
     /// not merge.
     pub(super) fn disarm_unseen_merge(&mut self) {
         let Some(armed) = self.panel.pr_armed else {
@@ -482,7 +490,12 @@ impl CockpitView {
         let shown = self
             .panel_pane()
             .and_then(|index| Some((self.panes[index].thread()?, self.shown_surface(index)?)));
-        if !matches!(shown, Some((thread, SurfaceId::PullRequest(_))) if thread == armed) {
+        let on_show = matches!(
+            shown,
+            Some((thread, SurfaceId::PullRequest(number)))
+                if armed == PrTarget::thread(thread, number)
+        );
+        if !on_show {
             self.panel.pr_armed = None;
         }
     }
@@ -515,6 +528,7 @@ impl CockpitView {
             self.ensure_branch_changes(thread, cx);
         }
         self.panel.pr_armed = None;
+        self.panel.pr_actions.clear_done(PrTarget::thread(thread, number));
         self.surfaces_mut(thread).pr_tabs.insert(number, tab);
         cx.notify();
     }
@@ -527,15 +541,18 @@ impl CockpitView {
         }
     }
 
-    /// The `⋯`'s rows for the PR as it stands; an armed row asks again.
-    pub(in crate::cockpit) fn pr_menu_rows(
-        &self,
-        thread: ThreadId,
-    ) -> Vec<Option<(menu::Item, MenuVerb)>> {
+    /// The `⋯`'s rows for `target`'s PR as it stands: a row the forge's
+    /// reading rules out, or one an action in flight holds, says why.
+    pub(in crate::cockpit) fn pr_menu_rows(&self, target: PrTarget) -> Vec<Option<(menu::Item, MenuVerb)>> {
+        let PrSource::Thread(thread) = target.source else {
+            return Vec::new();
+        };
         let Some(tone) = self.pr_tone(thread) else {
             return Vec::new();
         };
-        let guide = self.pr_snapshot(thread).and_then(guide).is_some();
+        let snapshot = self.panel.pr_reads.snapshot(target);
+        let guide = snapshot.and_then(guide).is_some();
+        let busy = self.panel.pr_actions.pending(target);
         let mut rows = Vec::new();
         for group in MENU {
             let group: Vec<_> = group.iter().filter(|action| action.applies(tone)).collect();
@@ -550,39 +567,17 @@ impl CockpitView {
                 if action.destructive() {
                     item = item.destructive();
                 }
+                if action.hands_off() {
+                    if let Some(why) = snapshot.and_then(|pr| action.blocked_by(pr)) {
+                        item = item.disabled_because(why);
+                    } else if busy {
+                        item = item.disabled_because("Another action on this PR is in flight");
+                    }
+                }
                 rows.push(Some((item, MenuVerb::Pr(*action))));
             }
         }
         rows
-    }
-
-    /// A row of the `⋯` (or the primary action): copy, open a side chat
-    /// on the PR, or ask the Thread's agent, queued behind a running turn.
-    pub(in crate::cockpit) fn run_pr_action(
-        &mut self,
-        thread: ThreadId,
-        action: PrAction,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(pr) = self.pr_snapshot(thread).cloned() else {
-            return;
-        };
-        match action {
-            PrAction::CopyLink => cx.write_to_clipboard(ClipboardItem::new_string(pr.url)),
-            PrAction::CopyBranch => cx.write_to_clipboard(ClipboardItem::new_string(pr.head)),
-            PrAction::Ask => {
-                let passage = format!("Pull request #{} {}", pr.number, pr.title);
-                self.open_side_chat(thread, Some(passage), cx);
-            }
-            _ => {
-                let (Some(prompt), Some(index)) = (action.prompt(&pr), self.pane_for(thread))
-                else {
-                    return;
-                };
-                self.send_again(index, thread, prompt, cx);
-            }
-        }
-        cx.notify();
     }
 
     /// The PR Surface: header, then its content.
@@ -605,7 +600,8 @@ impl CockpitView {
             .flex_1()
             .min_h_0()
             .text_size(px(FS_BADGE))
-            .child(self.pr_header(thread, number, cx))
+            .child(self.pr_header(PrTarget::thread(thread, number), cx))
+            .children(self.pr_action_notice(PrTarget::thread(thread, number), cx))
             .child(self.pr_content(PrTarget::thread(thread, number), tab, cx))
             .into_any_element()
     }
@@ -673,27 +669,10 @@ impl CockpitView {
         } else {
             failure.note.clone()
         };
-        let retry = div()
-            .id("pr-retry")
-            .debug_selector(|| "pr-retry".into())
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .h(px(SURFACE_TAB_H))
-            .px(px(PR_SEGMENT_PAD_X))
-            .rounded(px(R_CONTROL))
-            .bg(paint::RAISED)
-            .font_weight(W_LABEL)
-            .text_color(rgb(INK_STRONG))
-            .hover_control(ferrite_ui::pointer::hover_key(&gpui::ElementId::from(
-                "pr-retry",
-            )))
-            .press_control()
-            .child("Retry")
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.read_pr_snapshot(target, true, cx);
-            }));
+        let retry = pr_chip("pr-retry", "Retry").on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            cx.stop_propagation();
+            view.read_pr_snapshot(target, true, cx);
+        }));
         div()
             .debug_selector(|| "pr-failed".into())
             .flex()
@@ -717,13 +696,16 @@ impl CockpitView {
     }
 
     /// T3's header grid: the crumbs, then the actions.
-    fn pr_header(&self, thread: ThreadId, number: u64, cx: &mut Context<Self>) -> Div {
+    fn pr_header(&self, target: PrTarget, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
+        let PrTarget { source: PrSource::Thread(thread), number } = target else {
+            return div();
+        };
         let tone = self.pr_tone(thread).unwrap_or(PrTone::Open);
         let repo = self
             .panel
             .pr_reads
-            .snapshot(PrTarget::thread(thread, number))
+            .snapshot(target)
             .map(|pr| pr.url.clone())
             .or_else(|| self.facts.pr(thread).and_then(|pr| pr.url.clone()))
             .and_then(|url| repo_of(&url));
@@ -776,7 +758,7 @@ impl CockpitView {
         let primary = if tone.settled() {
             pr_pill(tone).into_any_element()
         } else {
-            self.pr_primary(thread, tone, cx)
+            self.pr_primary(target, tone, cx)
         };
         let more_semantics = Semantics::button("More pull request actions");
         let more_handle = self.panel_control(PanelControl::PrMore, more_semantics.clone(), cx);
@@ -790,7 +772,7 @@ impl CockpitView {
         .tooltip(ferrite_ui::menu::tooltip("More"))
         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
             cx.stop_propagation();
-            view.open_panel_menu(PanelControl::PrMore, MenuTarget::PrMore(thread), cx);
+            view.open_panel_menu(PanelControl::PrMore, MenuTarget::PrMore(target), cx);
         }));
         div()
             .debug_selector(|| "pr-header".into())
@@ -815,14 +797,23 @@ impl CockpitView {
     }
 
     /// An open PR's primary action: Merge, which asks once more before it
-    /// hands off; a draft's, Ready for review.
-    fn pr_primary(&self, thread: ThreadId, tone: PrTone, cx: &mut Context<Self>) -> AnyElement {
+    /// hands off; a draft's, Ready for review. While an action is in
+    /// flight on the PR, or the forge's reading rules Merge out, it is
+    /// there but cannot be pressed (`pr_action_notice` says why).
+    fn pr_primary(&self, target: PrTarget, tone: PrTone, cx: &mut Context<Self>) -> AnyElement {
         use ferrite_ui::theme::*;
+        let armed = self.panel.pr_armed == Some(target);
         let (action, label) = match tone {
             PrTone::Draft => (PrAction::ReadyForReview, "Ready for review"),
-            _ if self.panel.pr_armed == Some(thread) => (PrAction::MergeNow, "Confirm merge?"),
+            _ if armed => (PrAction::MergeNow, "Confirm merge?"),
             _ => (PrAction::MergeNow, "Merge"),
         };
+        let held = self.panel.pr_actions.pending(target)
+            || self
+                .panel
+                .pr_reads
+                .snapshot(target)
+                .is_some_and(|pr| action.blocked_by(pr).is_some());
         let key = ferrite_ui::pointer::hover_key(&gpui::ElementId::from("pr-primary"));
         let semantics = Semantics::button(label);
         let handle = self.panel_control(PanelControl::PrPrimary, semantics.clone(), cx);
@@ -837,22 +828,108 @@ impl CockpitView {
             .rounded(px(R_CONTROL))
             .bg(paint::RAISED)
             .font_weight(W_LABEL)
-            .text_color(rgb(INK_STRONG))
-            .hover_control(key)
-            .press_control()
+            .text_color(rgb(if held { INK_SUBTLE } else { INK_STRONG }))
+            .when(!held, |button| button.hover_control(key).press_control())
             .map(|primary| controls::focusable(primary, &handle, &semantics))
             .child(label)
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                if action == PrAction::MergeNow && view.panel.pr_armed != Some(thread) {
-                    view.panel.pr_armed = Some(thread);
-                    cx.notify();
-                    return;
-                }
-                view.panel.pr_armed = None;
-                view.run_pr_action(thread, action, cx);
-            }))
+            .when(!held, |button| {
+                button.on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    if action == PrAction::MergeNow && view.panel.pr_armed != Some(target) {
+                        view.panel.pr_armed = Some(target);
+                        cx.notify();
+                        return;
+                    }
+                    view.panel.pr_armed = None;
+                    view.run_pr_action(target, action, cx);
+                }))
+            })
             .into_any_element()
+    }
+
+    /// What an action on `target`'s PR stands at, or what keeps Merge from
+    /// it, in a line under the header: queued, running, failed with its
+    /// retry, done. Merge armed says what it will merge with and what the
+    /// panel does not know of it.
+    pub(in crate::cockpit) fn pr_action_words(&self, target: PrTarget) -> Option<PrNotice> {
+        use ferrite_ui::theme::*;
+        let number = target.number;
+        let notice = match self.panel.pr_actions.get(target) {
+            Some(ActionState::Pending { action, stage, .. }) => {
+                let what = match stage {
+                    Stage::Queued(_) => "queued behind the agent's running turn",
+                    Stage::Running => "the agent is on it",
+                    Stage::Checking => "checking the PR",
+                };
+                (
+                    format!("{} #{number}: {what}.", action.working()),
+                    INK_SUBTLE,
+                    vec![("pr-action-dismiss", "Stop waiting", false)],
+                )
+            }
+            Some(ActionState::Failed { action, error, .. }) => (
+                format!("{} #{number} failed. {error}", action.working()),
+                RED,
+                vec![
+                    ("pr-action-retry", "Retry", true),
+                    ("pr-action-dismiss", "Dismiss", false),
+                ],
+            ),
+            Some(ActionState::Done { action }) => (
+                format!("{} #{number}.", action.done()),
+                INK_SUBTLE,
+                vec![("pr-action-dismiss", "Dismiss", false)],
+            ),
+            None => {
+                let pr = self.panel.pr_reads.snapshot(target)?;
+                let (said, ink) = match (PrTone::of_snapshot(pr), pr.merge) {
+                    (PrTone::Open, _) if self.panel.pr_armed == Some(target) => (
+                        "Merges with the repository's default method. Your permission and the methods it allows are not read here.".to_string(),
+                        INK_SUBTLE,
+                    ),
+                    (PrTone::Open, _) => (PrAction::MergeNow.blocked_by(pr).map(|why| format!("Merge unavailable. {why}"))?, RED),
+                    _ => return None,
+                };
+                (said, ink, Vec::new())
+            }
+        };
+        Some(notice)
+    }
+
+    /// `pr_action_words`, drawn.
+    fn pr_action_notice(&self, target: PrTarget, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use ferrite_ui::theme::*;
+        let (said, ink, buttons) = self.pr_action_words(target)?;
+        let buttons = buttons.into_iter().map(|(id, label, retry)| {
+            let chip = pr_chip(id, label).on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                if retry {
+                    view.retry_pr_action(target, cx);
+                } else {
+                    view.dismiss_pr_action(target, cx);
+                }
+            }));
+            // The leaving chip holds one width and the right edge, in
+            // every state, so a second click on Retry never lands on the
+            // Stop waiting that replaces it.
+            if retry { chip } else { chip.w(px(PR_LEAVE_CHIP_W)).justify_center() }
+        });
+        Some(
+            div()
+                .debug_selector(|| "pr-action".into())
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(px(SPACE_2))
+                .px(px(SPACE_4))
+                .py(px(SPACE_2))
+                .border_b(px(HAIRLINE_W))
+                .border_color(soft_line())
+                .text_color(rgb(ink))
+                .child(div().flex_1().min_w_0().whitespace_normal().child(SharedString::from(said)))
+                .children(buttons)
+                .into_any_element(),
+        )
     }
 
     /// The views as a segmented group, the checks and comments after it.
@@ -1075,7 +1152,11 @@ impl CockpitView {
             .gap(px(SPACE_2))
             .text_color(rgb(INK_SUBTLE))
             .child("No review guide yet")
-            .when_some(thread, |empty, thread| {
+            .when(thread.is_some(), |empty| {
+                let working = matches!(
+                    self.panel.pr_actions.get(target),
+                    Some(ActionState::Pending { action: PrAction::WriteGuide, .. })
+                );
                 empty.child(
                     div()
                         .id("pr-write-guide")
@@ -1086,13 +1167,16 @@ impl CockpitView {
                         .px(px(PR_SEGMENT_PAD_X))
                         .rounded(px(R_CONTROL))
                         .bg(paint::RAISED)
-                        .text_color(rgb(INK_STRONG))
-                        .hover_control("pr-write-guide")
-                        .press_control()
-                        .child("Write guide")
-                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                            view.run_pr_action(thread, PrAction::WriteGuide, cx);
-                        })),
+                        .text_color(rgb(if working { INK_SUBTLE } else { INK_STRONG }))
+                        .when(!working, |button| {
+                            button
+                                .hover_control("pr-write-guide")
+                                .press_control()
+                                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                                    view.run_pr_action(target, PrAction::WriteGuide, cx);
+                                }))
+                        })
+                        .child(if working { "Writing guide\u{2026}" } else { "Write guide" }),
                 )
             })
             .into_any_element()
@@ -1295,6 +1379,33 @@ fn pr_refreshing() -> AnyElement {
         ))
         .child("Refreshing\u{2026}")
         .into_any_element()
+}
+
+/// What a PR's notice strip says: its words, their ink, and its chips as
+/// (selector, label, whether it retries).
+type PrNotice = (String, u32, Vec<(&'static str, &'static str, bool)>);
+
+/// The width of the chip that dismisses a notice, whatever it is called.
+const PR_LEAVE_CHIP_W: f32 = 112.;
+
+/// A small raised button of a PR's notice strip.
+fn pr_chip(id: &'static str, label: &'static str) -> gpui::Stateful<Div> {
+    use ferrite_ui::theme::*;
+    div()
+        .id(id)
+        .debug_selector(|| id.into())
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(SURFACE_TAB_H))
+        .px(px(PR_SEGMENT_PAD_X))
+        .rounded(px(R_CONTROL))
+        .bg(paint::RAISED)
+        .font_weight(W_LABEL)
+        .text_color(rgb(INK_STRONG))
+        .hover_control(ferrite_ui::pointer::hover_key(&gpui::ElementId::from(id)))
+        .press_control()
+        .child(label)
 }
 
 fn pr_note(note: SharedString) -> AnyElement {

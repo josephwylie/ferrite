@@ -50,6 +50,7 @@ pub(super) mod panel_focus;
 mod panel_preview;
 mod parking;
 mod pr;
+mod pr_actions;
 mod pr_reads;
 mod project_picker;
 mod provider_controls;

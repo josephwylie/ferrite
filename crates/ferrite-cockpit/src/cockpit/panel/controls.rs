@@ -401,7 +401,12 @@ impl CockpitView {
             }
             PanelControl::Plus => MenuTarget::SurfaceMenu(thread),
             PanelControl::PrNumber => MenuTarget::PrLink(thread),
-            PanelControl::PrMore => MenuTarget::PrMore(thread),
+            PanelControl::PrMore => {
+                let Some(pr) = self.pr_snapshot(thread) else {
+                    return;
+                };
+                MenuTarget::PrMore(super::pr_read::PrTarget::thread(thread, pr.number))
+            }
             _ => return,
         };
         self.open_panel_menu(control, target, cx);

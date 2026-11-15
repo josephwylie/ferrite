@@ -301,7 +301,7 @@ fn merge_asks_twice_and_a_merged_pr_shows_its_pill(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("pr-primary").is_none(), "in the action's place");
     assert!(cx.debug_bounds("pr-merge").is_none(), "merged: nothing to merge");
     let rows: Vec<String> = view.read_with(cx, |view, _| {
-        view.context_rows(MenuTarget::PrMore(thread))
+        view.context_rows(MenuTarget::PrMore(crate::cockpit::panel::pr_read::PrTarget::thread(thread, 48)))
             .into_iter()
             .flatten()
             .map(|(item, _)| item.label.to_string())
@@ -336,7 +336,7 @@ fn an_open_pr_surface_follows_a_merge(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("pr-pill").is_some(), "merged: the pill");
     assert!(cx.debug_bounds("pr-primary").is_none(), "no Merge to press again");
     let rows: Vec<String> = view.read_with(cx, |view, _| {
-        view.context_rows(MenuTarget::PrMore(thread))
+        view.context_rows(MenuTarget::PrMore(crate::cockpit::panel::pr_read::PrTarget::thread(thread, 48)))
             .into_iter()
             .flatten()
             .map(|(item, _)| item.label.to_string())
