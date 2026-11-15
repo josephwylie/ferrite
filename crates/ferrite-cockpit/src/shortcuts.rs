@@ -127,6 +127,10 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "empty_board::Previous" => Row(Board, "Empty board: previous"),
         "empty_board::Next" => Row(Board, "Empty board: next"),
         "empty_board::Run" => Row(Board, "Empty board: run"),
+        "pull_requests::Previous" => Row(Board, "Pull requests: previous"),
+        "pull_requests::Next" => Row(Board, "Pull requests: next"),
+        "pull_requests::Open" => Row(Board, "Pull requests: open"),
+        "pull_requests::Back" => Row(Board, "Pull requests: back"),
         // A Decision row (and the wall's quick answers).
         "cockpit::Allow" if wall => Row(Wall, "Allow"),
         "cockpit::Deny" if wall => Row(Wall, "Deny"),

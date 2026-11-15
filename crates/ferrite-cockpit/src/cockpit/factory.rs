@@ -191,6 +191,7 @@ impl CockpitView {
     /// Show `project`'s Factory board in the board's place.
     pub(crate) fn open_factory(&mut self, project: ProjectId, cx: &mut Context<Self>) {
         self.empty_shown = false;
+        self.prs.shown = false;
         let focus_at_open = self.cockpit.roster().focused();
         match self.factory_view.as_mut() {
             Some(view) if view.project == project => view.focus_at_open = focus_at_open,

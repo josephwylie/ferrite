@@ -33,8 +33,8 @@ pub(in crate::cockpit) mod background;
 mod changes;
 pub(crate) mod hunks;
 pub(crate) mod preview;
-mod pr_read;
-mod pull_request;
+pub(in crate::cockpit) mod pr_read;
+pub(in crate::cockpit) mod pull_request;
 mod sections;
 pub(in crate::cockpit) use sections::Depth;
 mod strip;
@@ -81,7 +81,9 @@ pub(crate) struct Panel {
     /// finished closed), by call.
     pub(crate) background_turned: std::collections::HashSet<String>,
     /// Each Thread's pull request, read whole for its Surface.
-    pr_reads: pr_read::PrReads,
+    pub(in crate::cockpit) pr_reads: pr_read::PrReads,
+    /// What a PR's prose (its body, guide and comments) renders through.
+    pub(crate) pr_rich: ferrite_pane::rich::TextCache,
     /// The Thread whose PR's Merge waits for its second press.
     pr_armed: Option<ThreadId>,
 }
@@ -112,6 +114,7 @@ impl Panel {
             empty_highlight: 0,
             background_turned: Default::default(),
             pr_reads: Default::default(),
+            pr_rich: Default::default(),
             pr_armed: None,
         }
     }
@@ -188,7 +191,7 @@ impl CockpitView {
 
     fn panel_candidate_index(&self) -> Option<usize> {
         // A Panel is its Thread's: the Factory in the board's place has none.
-        if self.empty_board_shown() || self.factory_view.is_some() {
+        if self.empty_board_shown() || self.destination_shown() {
             return None;
         }
         let index = self.focused();
@@ -248,7 +251,7 @@ impl CockpitView {
             SurfaceId::Changes => self.ensure_changes(thread, cx),
             SurfaceId::Overview => self.refresh_context(thread),
             SurfaceId::PullRequest(number) => {
-                self.read_pr_snapshot(pr_read::PrTarget { thread, number: *number }, true, cx)
+                self.read_pr_snapshot(pr_read::PrTarget::thread(thread, *number), true, cx)
             }
             _ => {}
         }
@@ -379,7 +382,7 @@ impl CockpitView {
                 }
                 Some(SurfaceId::Changes) => self.ensure_changes(thread, cx),
                 Some(SurfaceId::PullRequest(number)) => {
-                    self.read_pr_snapshot(pr_read::PrTarget { thread, number }, false, cx)
+                    self.read_pr_snapshot(pr_read::PrTarget::thread(thread, number), false, cx)
                 }
                 _ => {}
             }

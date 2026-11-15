@@ -683,6 +683,115 @@ impl From<forge::PrSnapshot> for WirePr {
     }
 }
 
+/// Which of a repository's pull requests a list shows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WirePrFilter {
+    #[default]
+    Open,
+    /// Merged and closed ones.
+    Closed,
+    #[serde(other)]
+    All,
+}
+
+impl From<WirePrFilter> for forge::ListFilter {
+    fn from(filter: WirePrFilter) -> Self {
+        match filter {
+            WirePrFilter::Open => Self::Open,
+            WirePrFilter::Closed => Self::Closed,
+            WirePrFilter::All => Self::All,
+        }
+    }
+}
+
+/// One pull request of a list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WirePrRow {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: WirePrState,
+    #[serde(default)]
+    pub draft: bool,
+    pub author: String,
+    pub head: String,
+    pub base: String,
+    pub updated_at: String,
+}
+
+impl From<forge::PrRow> for WirePrRow {
+    fn from(row: forge::PrRow) -> Self {
+        Self {
+            number: row.number,
+            title: row.title,
+            url: row.url,
+            state: match row.state {
+                forge::PrState::Open => WirePrState::Open,
+                forge::PrState::Merged => WirePrState::Merged,
+                forge::PrState::Closed => WirePrState::Closed,
+            },
+            draft: row.is_draft,
+            author: row.author,
+            head: row.head_ref,
+            base: row.base_ref,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+/// A repository's pull requests as the window draws them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WirePrList {
+    pub rows: Vec<WirePrRow>,
+    /// The forge holds more than the rows.
+    pub more: bool,
+}
+
+/// A `list_pull_requests`' answer: the list, or what stands in its place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewPullRequests {
+    pub list: Result<WirePrList, String>,
+    pub unread: Option<WirePrUnread>,
+}
+
+impl ReviewPullRequests {
+    pub fn of(read: Result<forge::PrList, PrView>, noun: &str) -> Self {
+        match read {
+            Ok(list) => Self {
+                list: Ok(WirePrList {
+                    rows: list.rows.into_iter().map(Into::into).collect(),
+                    more: list.more,
+                }),
+                unread: None,
+            },
+            Err(view) => Self {
+                unread: WirePrUnread::of(&view),
+                list: Err(ferrite_reviewr::ferrite::pr_note(&view, noun)),
+            },
+        }
+    }
+}
+
+impl From<ReviewPullRequests> for Done {
+    fn from(ReviewPullRequests { list, unread }: ReviewPullRequests) -> Self {
+        match list {
+            Ok(list) => Done::ReviewPullRequests {
+                rows: list.rows,
+                more: list.more,
+                note: None,
+                unread,
+            },
+            Err(note) => Done::ReviewPullRequests {
+                rows: Vec::new(),
+                more: false,
+                note: Some(note),
+                unread,
+            },
+        }
+    }
+}
+
 /// A `review_pull_request`'s answer as the window draws it: the forge's noun for
 /// one (`PR`, `MR`), and the pull request or what stands in its place.
 #[derive(Debug, Clone, PartialEq, Eq)]

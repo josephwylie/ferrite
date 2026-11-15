@@ -31,6 +31,8 @@ impl CockpitView {
         let mut parts = Vec::new();
         if self.factory_view.is_some() {
             parts.extend(self.factory_head());
+        } else if self.prs.shown {
+            parts.extend(self.prs_head());
         } else if !self.empty_board_shown() {
             let named = match self.cockpit.roster().view() {
                 View::Solo => self.solo_head(cx),
@@ -44,7 +46,7 @@ impl CockpitView {
         let menu_thread = matches!(self.cockpit.roster().view(), View::Solo)
             .then(|| self.focused_thread())
             .flatten()
-            .filter(|_| !self.empty_board_shown() && self.factory_view.is_none());
+            .filter(|_| !self.empty_board_shown() && !self.destination_shown());
         div()
             .debug_selector(|| "view-head".into())
             .when_some(menu_thread, |head, thread| {
@@ -161,7 +163,7 @@ impl CockpitView {
     /// Whether the title bar shows the Panel's toggle: for a Thread, not a
     /// draft or the empty board.
     fn panel_toggle_shown(&self) -> bool {
-        !self.empty_board_shown() && self.factory_view.is_none() && self.focused_thread().is_some()
+        !self.empty_board_shown() && !self.destination_shown() && self.focused_thread().is_some()
     }
 
     /// The Factory's breadcrumb: its Project, `Factory`, then the Task

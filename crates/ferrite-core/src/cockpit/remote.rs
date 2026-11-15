@@ -17,11 +17,11 @@ use base64::Engine as _;
 use crate::engine::{BootstrapResult, Bootstrapped};
 use crate::link;
 use crate::machine::{self, Bridge, Failure};
-use crate::protocol::ReviewPullRequest;
 use crate::protocol::{
     self, Capability, ClientMessage, Command, Done, ErrorCode, Op, Peer, Resume, ServerInfo,
     ServerMessage, Snapshot, WireError, WirePng,
 };
+use crate::protocol::{ReviewPullRequest, ReviewPullRequests, WirePrFilter, WirePrList};
 use crate::providers::FileSuggestion;
 use crate::roster::DraftId;
 use crate::visual::{RenderRequest, Renderer};
@@ -658,9 +658,11 @@ impl Remote {
     pub(crate) fn review_pull_request(
         &mut self,
         path: &Path,
+        number: Option<u64>,
     ) -> io::Result<Receiver<io::Result<ReviewPullRequest>>> {
         let op = Op::ReviewPullRequest {
             path: path.to_path_buf(),
+            number,
         };
         self.ask(op, |done| match done {
             Done::ReviewPullRequest {
@@ -671,6 +673,32 @@ impl Remote {
             } => Some(ReviewPullRequest {
                 noun,
                 pr: pr.ok_or_else(|| note.unwrap_or_default()),
+                unread,
+            }),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn list_pull_requests(
+        &mut self,
+        path: &Path,
+        filter: WirePrFilter,
+    ) -> io::Result<Receiver<io::Result<ReviewPullRequests>>> {
+        let op = Op::ListPullRequests {
+            path: path.to_path_buf(),
+            filter,
+        };
+        self.ask(op, |done| match done {
+            Done::ReviewPullRequests {
+                rows,
+                more,
+                note,
+                unread,
+            } => Some(ReviewPullRequests {
+                list: match note {
+                    Some(note) => Err(note),
+                    None => Ok(WirePrList { rows, more }),
+                },
                 unread,
             }),
             _ => None,

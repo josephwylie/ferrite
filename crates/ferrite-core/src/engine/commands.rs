@@ -286,6 +286,7 @@ impl Engine {
             | Op::SearchRepo { .. }
             | Op::ReadFile { .. }
             | Op::ReviewPullRequest { .. }
+            | Op::ListPullRequests { .. }
             | Op::ListFiles { .. }
             | Op::ListBases { .. }
             | Op::PickBase { .. }

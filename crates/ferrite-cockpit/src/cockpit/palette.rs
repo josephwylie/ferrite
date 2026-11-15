@@ -897,6 +897,7 @@ impl CockpitView {
             bound_chord("cockpit::OpenSettings"),
             Command::Settings,
         );
+        add(true, "Pull requests".into(), "", None, Command::PullRequests);
         add(
             true,
             "Toggle sidebar".into(),
@@ -1185,6 +1186,7 @@ impl CockpitView {
             Command::NewProject => self.open_project_creator(cx),
             Command::EditProject(project) => self.open_project_editor(project, cx),
             Command::Settings => self.open_settings(&OpenSettings, window, cx),
+            Command::PullRequests => self.open_prs(None, cx),
             Command::ToggleSidebar => self.toggle_nav_now(cx),
             Command::TogglePanel => self.toggle_panel_now(cx),
             Command::ToggleDetails => self.toggle_details_now(window, cx),

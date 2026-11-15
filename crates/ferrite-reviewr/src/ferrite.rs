@@ -664,6 +664,16 @@ pub fn pull_request(repo: &Path, config: &PluginConfig) -> (PrView, &'static str
     }
 }
 
+/// Pull request `number` of the repository `repo` is a checkout of, read as `pull_request` reads
+/// the branch's, and the forge's noun for one.
+pub fn pull_request_numbered(
+    repo: &Path,
+    config: &PluginConfig,
+    number: u64,
+) -> (PrView, &'static str) {
+    (crate::forge::fetch_numbered(repo, config, number), git::Forge::GitHub.noun())
+}
+
 /// What a PR read with no snapshot says, `noun` naming the forge's: the remedy for a
 /// retryable failure. Upstream's `ui::pr_empty_msg`.
 pub fn pr_note(view: &PrView, noun: &str) -> String {

@@ -900,12 +900,27 @@ impl Server {
                 });
                 return;
             }
-            Op::ReviewPullRequest { path } => {
-                let (path, forge) = (path.clone(), self.forge.clone());
+            Op::ReviewPullRequest { path, number } => {
+                let (path, number, forge) = (path.clone(), *number, self.forge.clone());
                 self.read_off_pump(id, request, move || {
-                    let (view, noun) = ferrite_reviewr::ferrite::pull_request(&path, &forge);
+                    let (view, noun) = match number {
+                        Some(number) => {
+                            ferrite_reviewr::ferrite::pull_request_numbered(&path, &forge, number)
+                        }
+                        None => ferrite_reviewr::ferrite::pull_request(&path, &forge),
+                    };
                     Ok(Some(
                         crate::protocol::ReviewPullRequest::of(view, noun).into(),
+                    ))
+                });
+                return;
+            }
+            Op::ListPullRequests { path, filter } => {
+                let (path, filter, forge) = (path.clone(), *filter, self.forge.clone());
+                self.read_off_pump(id, request, move || {
+                    let list = ferrite_reviewr::forge::list(&path, &forge, filter.into());
+                    Ok(Some(
+                        crate::protocol::ReviewPullRequests::of(list, "PR").into(),
                     ))
                 });
                 return;

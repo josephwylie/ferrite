@@ -1,8 +1,9 @@
 //! What each PR tab knows of its pull request, and which forge answer may
 //! change it.
 //!
-//! A read belongs to one target: a PR number on a Thread's checkout, which
-//! names the repository (`LinkTarget::PullRequest`). Each target keeps its
+//! A read belongs to one target: a PR number in a repository, which a
+//! Thread's checkout names (`LinkTarget::PullRequest`) or a Project does (the
+//! PRs destination, whatever is checked out). Each target keeps its
 //! last good snapshot beside the state of its newest read, so a refresh or a
 //! failure never takes the snapshot away, and an answer lands only if it
 //! carries the request that is still out for its target (the pattern of
@@ -11,13 +12,37 @@
 use std::collections::HashMap;
 
 use ferrite_core::protocol::{WirePr, WirePrUnread};
+use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
 
-/// A pull request as a Thread's PR tab names it.
+/// Whose repository a PR number is read in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum PrSource {
+    Thread(ThreadId),
+    Project(ProjectId),
+}
+
+/// A pull request as a PR tab or the PRs destination names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct PrTarget {
-    pub thread: ThreadId,
+    pub source: PrSource,
     pub number: u64,
+}
+
+impl PrTarget {
+    pub(crate) fn thread(thread: ThreadId, number: u64) -> Self {
+        Self {
+            source: PrSource::Thread(thread),
+            number,
+        }
+    }
+
+    pub(crate) fn project(project: ProjectId, number: u64) -> Self {
+        Self {
+            source: PrSource::Project(project),
+            number,
+        }
+    }
 }
 
 /// Why the newest read brought no snapshot, and how to say it.
@@ -169,10 +194,7 @@ mod tests {
     use super::*;
 
     fn target(number: u64) -> PrTarget {
-        PrTarget {
-            thread: ThreadId::new(1),
-            number,
-        }
+        PrTarget::thread(ThreadId::new(1), number)
     }
 
     fn failure(kind: WirePrUnread) -> PrFailure {
