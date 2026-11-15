@@ -187,7 +187,7 @@ impl Editor {
     fn begin_save(&mut self, overwrite: bool, cx: &mut Context<Self>) {
         self.pause = None;
         let blocked = matches!(self.save, SaveState::Saving(_))
-            || (self.save == SaveState::Conflict && !overwrite);
+            || (matches!(self.save, SaveState::Conflict | SaveState::ReloadFailed(_)) && !overwrite);
         if !self.is_dirty() || blocked {
             return;
         }
@@ -251,7 +251,7 @@ impl Editor {
                 self.closing = false;
                 self.writing = None;
             }
-            Err(error) => self.save = SaveState::Failed(error),
+            Err(error) => self.save = SaveState::ReloadFailed(error),
         }
         cx.notify();
     }
@@ -547,25 +547,51 @@ macro_rules! on {
     }};
 }
 
+/// The buttons of the status bar.
+#[derive(Clone, Copy)]
+enum BarAction {
+    Retry,
+    Discard,
+    Reload,
+    Overwrite,
+}
+
+impl BarAction {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Retry => "editor-retry",
+            Self::Discard => "editor-discard",
+            Self::Reload => "editor-reload",
+            Self::Overwrite => "editor-overwrite",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Retry => "Retry",
+            Self::Discard => "Discard",
+            Self::Reload => "Reload",
+            Self::Overwrite => "Overwrite",
+        }
+    }
+}
+
 impl Editor {
     /// What went wrong with a save, under the lines, with its way out.
     fn status_bar(&self, cx: &mut Context<Self>) -> Option<Div> {
-        let (message, danger, actions): (SharedString, bool, &[(&'static str, &'static str)]) =
-            match &self.save {
-                SaveState::Idle | SaveState::Saving(_) | SaveState::Saved => return None,
-                SaveState::Failed(error) => (
-                    format!("Could not save: {error}").into(),
-                    true,
-                    &[("editor-retry", "Retry"), ("editor-discard", "Discard")],
-                ),
-                SaveState::Conflict => (
-                    "This file changed on disk".into(),
-                    true,
-                    &[("editor-reload", "Reload"), ("editor-overwrite", "Overwrite")],
-                ),
-            };
-        let buttons = actions.iter().map(|(key, label)| {
-            let key = *key;
+        use BarAction::{Discard, Overwrite, Reload, Retry};
+        let (message, actions): (SharedString, [BarAction; 2]) = match &self.save {
+            SaveState::Idle | SaveState::Saving(_) | SaveState::Saved => return None,
+            SaveState::Failed(error) => {
+                (format!("Could not save: {error}").into(), [Retry, Discard])
+            }
+            SaveState::Conflict => ("This file changed on disk".into(), [Reload, Overwrite]),
+            SaveState::ReloadFailed(error) => {
+                (format!("Could not reload: {error}").into(), [Reload, Overwrite])
+            }
+        };
+        let buttons = actions.into_iter().map(|action| {
+            let key = action.key();
             div()
                 .id(key)
                 .debug_selector(move || key.into())
@@ -574,12 +600,12 @@ impl Editor {
                 .rounded(px(theme::R_CONTROL))
                 .hover_control(key)
                 .text_color(rgb(theme::INK_STRONG))
-                .child(*label)
-                .on_click(cx.listener(move |editor, _: &ClickEvent, _, cx| match key {
-                    "editor-retry" => editor.save(cx),
-                    "editor-reload" => editor.reload(cx),
-                    "editor-overwrite" => editor.overwrite(cx),
-                    _ => cx.emit(Event::Discard),
+                .child(action.label())
+                .on_click(cx.listener(move |editor, _: &ClickEvent, _, cx| match action {
+                    Retry => editor.save(cx),
+                    Reload => editor.reload(cx),
+                    Overwrite => editor.overwrite(cx),
+                    Discard => cx.emit(Event::Discard),
                 }))
         });
         Some(
@@ -600,7 +626,7 @@ impl Editor {
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_color(rgb(if danger { theme::RED } else { theme::INK_SUBTLE }))
+                        .text_color(rgb(theme::RED))
                         .child(message),
                 )
                 .children(buttons),

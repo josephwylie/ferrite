@@ -345,6 +345,23 @@ fn an_external_edit_is_not_overwritten_until_the_user_chooses(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn a_failed_reload_says_so_and_keeps_the_buffer(cx: &mut TestAppContext) {
+    use crate::cockpit::tools::SaveState;
+    let (_view, _thread, file, editor, cx) = open_editor("files-reload-fails", cx);
+    std::fs::write(&file, "agent\n").unwrap();
+    type_into("// hi\n", cx);
+    pause_and_settle(cx);
+    std::fs::remove_file(&file).unwrap();
+    let reload = cx.debug_bounds("editor-reload").expect("Reload");
+    cx.simulate_click(reload.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(matches!(editor.read_with(cx, |e, _| e.save_state().clone()), SaveState::ReloadFailed(_)));
+    assert!(editor.read_with(cx, |e, _| e.is_dirty()), "the buffer survives");
+    assert!(cx.debug_bounds("editor-discard").is_none());
+    assert!(cx.debug_bounds("editor-reload").is_some());
+}
+
+#[gpui::test]
 fn a_late_write_does_not_mark_newer_edits_saved(cx: &mut TestAppContext) {
     use crate::cockpit::tools::SaveState;
     let (_view, _thread, file, editor, cx) = open_editor("files-late", cx);

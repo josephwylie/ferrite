@@ -36,6 +36,7 @@ gpui::actions!(cockpit, [ToggleTerminal, ToggleChanges, ToggleFiles, ToggleFileT
 #[cfg(test)]
 pub(crate) use editor::AUTO_SAVE_AFTER;
 pub(crate) use changes::{Diff, Sub as ChangesSub, Verb as ChangesVerb};
+#[cfg(test)]
 pub(crate) use editor::Editor;
 #[cfg(test)]
 pub(crate) use save::SaveState;
