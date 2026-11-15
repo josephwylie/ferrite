@@ -131,6 +131,9 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::Always" if wall => Row(Wall, "Always allow"),
         "cockpit::PickOption1" if wall => Row(Wall, "Answer 1\u{2013}3"),
         "cockpit::PickOption2" | "cockpit::PickOption3" if wall => Hidden,
+        "cockpit::Allow" => Row(Decision, "Allow, on a subagent's request"),
+        "cockpit::Deny" => Row(Decision, "Deny, on a subagent's request"),
+        "cockpit::Always" => Row(Decision, "Always allow, on a subagent's request"),
         // The approval card's chorded buttons: they act with text on the
         // line, where the letters type.
         "cockpit::AllowOnce" => Row(Decision, "Allow once, from any line"),

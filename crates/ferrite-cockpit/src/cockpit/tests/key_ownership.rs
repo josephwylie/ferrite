@@ -20,6 +20,10 @@ fn composer_unchanged(view: &Entity<CockpitView>, fake: &Fake, cx: &mut gpui::Vi
     assert!(fake.sent.borrow().is_empty(), "nothing was sent to the provider");
 }
 
+fn answered(fake: &Fake) -> Vec<(String, DecisionAnswer)> {
+    fake.answered.borrow().clone()
+}
+
 #[gpui::test]
 fn the_launcher_opens_its_highlighted_tool_on_enter(cx: &mut TestAppContext) {
     let (core, fake, _checkout) = bound_cockpit("key-launcher", Provider::Claude);
@@ -75,6 +79,52 @@ fn approval_words_type_into_the_composer_and_answer_nothing(cx: &mut TestAppCont
     cx.simulate_keystrokes("cmd-enter");
     cx.run_until_parked();
     assert!(!pending(&view, cx), "the explicit chord still answers");
+}
+
+#[gpui::test]
+fn y_answers_a_composerless_subagent_tab_while_a_composer_types_it(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, Subject};
+    let (core, fake) = cockpit("key-subagent", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let agent = AgentKey::new(Provider::Claude, "root", "keys-child");
+    let mut info = AgentInfo::new(agent.clone());
+    info.parent = Some(Subject::Main);
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Activity(ActivityEvent::Discovered(info)))
+        .unwrap();
+    fake.streams.borrow()[0].send(decision("main_req")).unwrap();
+    let SessionEvent::DecisionRequested { decision } = decision("child_req") else {
+        unreachable!()
+    };
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Activity(ActivityEvent::Decision {
+            subject: Some(Subject::Subagent(agent.clone())),
+            decision,
+        }))
+        .unwrap();
+    tick(cx);
+
+    cx.simulate_keystrokes("y e s");
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "yes", "the composer types it");
+    assert!(answered(&fake).is_empty(), "typing answered nothing");
+
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.select_subject(thread, Subject::Subagent(agent.clone()), window, cx)
+        })
+    });
+    tick(cx);
+    cx.simulate_keystrokes("y");
+    tick(cx);
+    assert!(
+        matches!(answered(&fake).as_slice(), [(id, DecisionAnswer::Allow { .. })] if id == "child_req"),
+        "{:?}",
+        answered(&fake)
+    );
 }
 
 #[gpui::test]

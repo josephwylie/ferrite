@@ -205,8 +205,11 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             "cockpit::AlwaysAllow",
             Some("Decision"),
         ),
-        // A question Decision's options, by number — digits again with
-        // text on the line, the y/n/a rule.
+        // A Subagent's tab has no Composer, so its letters never type.
+        ("y".into(), "cockpit::Allow", Some(SUBAGENT_DECISION)),
+        ("n".into(), "cockpit::Deny", Some(SUBAGENT_DECISION)),
+        ("a".into(), "cockpit::Always", Some(SUBAGENT_DECISION)),
+        // A question Decision's options, by number.
         ("1".into(), "cockpit::PickOption1", Some("Decision")),
         ("2".into(), "cockpit::PickOption2", Some("Decision")),
         ("3".into(), "cockpit::PickOption3", Some("Decision")),
@@ -655,6 +658,9 @@ pub const READER: &str = "Reader";
 /// The embedded browser's page (`ferrite-pane`'s `WebView`): it forwards
 /// raw keys to the page, so the host's own bindings on them stand down.
 pub const BROWSER: &str = "Browser";
+/// A Subagent tab's body while its request pends: no Composer is there to
+/// type into, so the bare answer letters bind.
+pub const SUBAGENT_DECISION: &str = "SubagentDecision";
 /// The Panel's "Open a surface" list, which opens its highlighted row on ⏎.
 pub const PANEL_EMPTY: &str = "PanelEmpty";
 /// The Files editor's key context (`cockpit/tools/editor.rs`).
@@ -669,7 +675,7 @@ pub const IMAGE_VIEWER: &str = "ImageViewer";
 
 /// The contexts where no text field takes typing (a Decision answers its
 /// own letters), so a plain key may act there.
-const LETTER_CONTEXTS: [&str; 4] = [NO_TEXT_FIELD, REVIEW, "Decision", "Wall"];
+const LETTER_CONTEXTS: [&str; 4] = [NO_TEXT_FIELD, REVIEW, SUBAGENT_DECISION, "Wall"];
 
 /// gpui's "no action": a row that keeps a key from the bindings under it.
 const NO_ACTION: &str = "zed::NoAction";
@@ -1061,6 +1067,7 @@ mod tests {
                     !table.contains(&(key.into(), action, Some("Decision"))),
                     "{key} types under a Decision"
                 );
+                assert!(table.contains(&(key.into(), action, Some(SUBAGENT_DECISION))));
                 assert!(table.contains(&(key.into(), action, Some("Wall"))));
             }
         }
@@ -1330,7 +1337,10 @@ mod tests {
         );
         assert_eq!(
             rows("cockpit::Allow"),
-            [("shift-y".to_string(), Some("Wall"))]
+            [
+                ("shift-y".to_string(), Some("SubagentDecision")),
+                ("shift-y".to_string(), Some("Wall"))
+            ]
         );
         assert!(rows("cockpit::ToggleNav").is_empty());
         assert_eq!(
