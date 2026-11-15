@@ -195,6 +195,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::MenuDismiss" => Row(Composer, "Menu: close"),
         // The transcript.
         "cockpit::CopySelection" => Row(Transcript, "Copy selection"),
+        "cockpit::CiteSelection" => Row(Transcript, "Quote selection into the prompt"),
         "cockpit::ToggleTool" => Row(Transcript, "Open or fold a tool call"),
         "cockpit::StopAgent" => Row(Transcript, "Stop the agent"),
         "cockpit::ToolCyclePrevious" => Row(Transcript, "Previous tool call"),
@@ -267,6 +268,8 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         | "review::Close"
         | "review::Search"
         | "review::SaveComment"
+        | "cite::SaveComment"
+        | "cite::CancelComment"
         | "review::CancelComment"
         | "review::OpenFound"
         | "review::CloseSearch"

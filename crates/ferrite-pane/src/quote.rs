@@ -26,6 +26,10 @@ pub fn passage(selected: &str) -> Option<String> {
         .then(|| text.to_string())
 }
 
+/// Why a whole message past the bound has no Attach, and what to do instead.
+pub const TOO_LONG_TO_ATTACH: &str =
+    "Too long to attach whole (over 10,000 characters). Select the part you mean and Cite it.";
+
 /// Whether a selection is too long to quote (T3's `Shorten selection`).
 pub fn too_long(selected: &str) -> bool {
     selected.trim().chars().count() > MAX_CHARS

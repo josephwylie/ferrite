@@ -111,7 +111,7 @@ use gpui::{
 use crate::facts::Facts;
 use crate::nav;
 use crate::notifications::{Handle, NeedsYou, Row as NoticeRow, RowTarget, Verb};
-use ferrite_pane::composer::{Composer, Edited};
+use ferrite_pane::composer::{Composer, Edited, OpenSource};
 use ferrite_pane::link_target::{LinkTarget, Open};
 use ferrite_pane::decision;
 use ferrite_pane::pane::{self, PaneView};
@@ -154,6 +154,7 @@ actions!(
         CloseThread,
         ReopenThread,
         CopySelection,
+        CiteSelection,
         Paste,
         PickOption1,
         PickOption2,
@@ -1747,6 +1748,7 @@ impl CockpitView {
             };
             let pane = CockpitPane::new(PaneView::new(thread, cx), cx);
             cx.subscribe(&pane.composer, Self::composer_edited).detach();
+            cx.subscribe(&pane.composer, Self::composer_opens_source).detach();
             self.restore_draft(thread, &pane.composer.clone(), cx);
             self.panes.push(pane);
             self.thread_opened(thread, cx);
@@ -2240,13 +2242,17 @@ impl CockpitView {
             ferrite_pane::transcript::TranscriptEvent::Prompt { block, action, at } => {
                 self.prompt_action(index, *block, *action, *at, cx);
             }
-            // The reply waits in the Pane's tray as a Reply card; the
-            // focus pump hands the Composer the keyboard.
-            ferrite_pane::transcript::TranscriptEvent::Reply(reply) => {
+            // The reply waits in the Pane's tray as a quote chip, naming its
+            // source; the focus pump hands the Composer the keyboard.
+            ferrite_pane::transcript::TranscriptEvent::Reply(reply, block) => {
+                let mut reply = reply.clone();
+                if let Some((thread, block)) = self.panes[index].thread().zip(*block) {
+                    reply = reply.cited_from(ferrite_core::replies::Source { thread, block });
+                }
                 self.focus_pane(index);
                 self.panes[index]
                     .composer
-                    .update(cx, |composer, cx| composer.reply(reply.clone(), cx));
+                    .update(cx, |composer, cx| composer.reply(reply, cx));
                 cx.notify();
             }
             ferrite_pane::transcript::TranscriptEvent::Fork { after } => {
@@ -2317,6 +2323,26 @@ impl CockpitView {
     /// Where this Pane sits in the grid.
     fn index_of(&self, identity: PaneIdentity) -> Option<usize> {
         self.panes.iter().position(|pane| pane.identity == identity)
+    }
+
+    /// A quote chip's Go to source: the Pane's transcript scrolls to the
+    /// message it was cited from, or the chip says that message is gone.
+    fn composer_opens_source(
+        &mut self,
+        composer: Entity<Composer>,
+        OpenSource(source): &OpenSource,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pane) = self.panes.iter().find(|pane| pane.composer == composer) else {
+            return;
+        };
+        let found = pane.thread() == Some(source.thread)
+            && pane.transcript().is_some_and(|transcript| {
+                transcript.update(cx, |transcript, cx| transcript.reveal_block(source.block, cx))
+            });
+        if !found {
+            composer.update(cx, |composer, cx| composer.source_missing(*source, cx));
+        }
     }
 
     /// The focused Composer's line moved: unmute and re-derive the menu.
@@ -7461,6 +7487,7 @@ impl CockpitView {
         };
         let pane = CockpitPane::new(PaneView::new_draft(draft, binding, cx), cx);
         cx.subscribe(&pane.composer, Self::composer_edited).detach();
+        cx.subscribe(&pane.composer, Self::composer_opens_source).detach();
         self.panes.push(pane);
         self.sync_panes(cx);
         draft
@@ -9436,6 +9463,13 @@ impl CockpitView {
         }
     }
 
+    /// Cite the selection from the keyboard, as the button beside it does.
+    fn cite_selection(&mut self, _: &CiteSelection, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(transcript) = self.panes[self.focused()].transcript() {
+            transcript.update(cx, |transcript, cx| transcript.cite_selection(window, cx));
+        }
+    }
+
     /// ⌘V anywhere in the window lands in the focused Pane's Composer.
     /// The Composer's own Paste runs first while it holds the keyboard;
     /// this is the fallback for when a click in the transcript — a drag
@@ -10593,6 +10627,7 @@ impl CockpitView {
             .on_action(cx.listener(Self::toggle_tool_action))
             .on_action(cx.listener(Self::stop_agent_action))
             .on_action(cx.listener(Self::copy_selection))
+            .on_action(cx.listener(Self::cite_selection))
             .on_action(cx.listener(Self::toggle_fullscreen))
             .on_action(cx.listener(Self::open_find))
             .on_action(cx.listener(Self::toggle_nav))

@@ -1981,11 +1981,6 @@ pub const SELECTION_CITE_EDGE: f32 = 8.0;
 pub const SELECTION_CITE_NEAR: f32 = 8.0;
 pub const SELECTION_CITE_BELOW: f32 = 4.0;
 pub const SELECTION_CITE_MULTI_CLICK_MS: u64 = 500;
-/// A sent Reply in the Composer's tray (`claude/reply-sent-chip.png`), an
-/// image card's size, ring and `×`: the typed words behind a quote bar at
-/// its top, cut at `REPLY_TILE_LINES`, a muted `Reply` at its foot, on the
-/// file chip's `RAISED` ground.
-pub const REPLY_TILE_LINES: usize = 3;
 /// **The side chat** (Claude's, `claude/sidechat-open.png`): the right
 /// pane's other body, `SIDE_CHAT_W` wide beside the thread, which reflows
 /// narrower. Its head is a tab strip (`Side chat ×`, `+`) in the row's
@@ -2620,6 +2615,12 @@ pub const ATTACH_REMOVE_ICON: f32 = 10.0;
 pub const COMPOSER_THUMB: f32 = 88.0;
 pub const THUMB_REMOVE: f32 = 20.0;
 pub const THUMB_REMOVE_INSET: f32 = SPACE_1;
+/// The pending tray never grows past this: a narrow Pane wraps its chips
+/// into more rows, and the rows scroll here so the field and Send stay on
+/// screen. A shut tray is one `ATTACH_CHIP_H` row, its count.
+pub const ATTACH_TRAY_MAX_H: f32 = 7.0 * SPACE_6;
+/// A reply's quote, opened in the tray, scrolls past this height.
+pub const CITE_QUOTE_MAX_H: f32 = 5.0 * LH_META;
 /// In Solo the pending files ride inside the box, a row of chips
 /// `COMPOSER_INPUT_PAD_X` in and `COMPOSER_INPUT_PAD_T` under its top (or
 /// the queued row), `ATTACH_ROW_GAP` over the text.

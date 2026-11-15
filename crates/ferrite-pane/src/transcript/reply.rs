@@ -24,8 +24,9 @@ use gpui::{
     Pixels, Point, SharedString, Size, Window,
 };
 
-use super::{TranscriptEvent, TranscriptView};
+use super::{Navigate, TranscriptEvent, TranscriptView};
 use ferrite_core::replies::Reply;
+use ferrite_core::transcript::BlockId;
 use ferrite_ui::{icons, motion, theme};
 
 /// The button on offer: the passage it quotes (none when the selection is
@@ -36,6 +37,8 @@ pub(super) struct SelectionReply {
     /// A reference scene's, offered with no selection behind it.
     staged: bool,
     passage: Option<String>,
+    /// The Block under the selection's first line, the citation's source.
+    block: Option<BlockId>,
     at: Point<Pixels>,
     appears: Instant,
     fading: Option<Instant>,
@@ -75,10 +78,14 @@ impl TranscriptView {
         cx.defer_in(window, move |view, window, cx| {
             let selected = gpui::base::TextSelection::selected_text(window, cx);
             let passage = crate::quote::passage(&selected);
+            let block = gpui::base::TextSelection::painted_bounds(window, cx)
+                .first()
+                .and_then(|first| view.block_at(first.center().y));
             view.reply = (passage.is_some() || crate::quote::too_long(&selected)).then(|| {
                 SelectionReply {
                     staged: false,
                     passage,
+                    block,
                     at,
                     appears: cx.background_executor().now() + delay,
                     fading: None,
@@ -132,6 +139,75 @@ impl TranscriptView {
         offered
     }
 
+    fn cite_passage(
+        &mut self,
+        passage: String,
+        block: Option<BlockId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        gpui::base::TextSelection::clear(window, cx);
+        self.reply = None;
+        cx.emit(TranscriptEvent::Reply(Reply::new(passage, ""), block));
+        cx.notify();
+    }
+
+    /// Cite from the keyboard: the passage on offer, else the selection as
+    /// it stands. Whether there was a passage to quote.
+    pub fn cite_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.input.quotes {
+            return false;
+        }
+        let offered = self
+            .reply
+            .as_ref()
+            .and_then(|reply| reply.passage.clone().map(|passage| (passage, reply.block)));
+        let (passage, block) = match offered {
+            Some(offered) => offered,
+            None => {
+                let selected = gpui::base::TextSelection::selected_text(window, cx);
+                let Some(passage) = crate::quote::passage(&selected) else {
+                    return false;
+                };
+                let block = gpui::base::TextSelection::painted_bounds(window, cx)
+                    .first()
+                    .and_then(|first| self.block_at(first.center().y));
+                (passage, block)
+            }
+        };
+        self.cite_passage(passage, block, window, cx);
+        true
+    }
+
+    /// The Block the row under window `y` begins with: what a citation
+    /// there names as its source.
+    fn block_at(&self, y: Pixels) -> Option<BlockId> {
+        let state = self.scroll.list_state();
+        let first = state.logical_scroll_top().item_ix;
+        (first..self.rows.rows().len()).find_map(|index| {
+            let bounds = state.bounds_for_item(index)?;
+            (bounds.top() <= y && y < bounds.bottom())
+                .then(|| self.rows.get(index)?.blocks().first().map(|block| block.id))
+                .flatten()
+        })
+    }
+
+    /// Scroll to the row holding `block`. Whether it is still in this
+    /// transcript (a replayed or evicted history may have dropped it).
+    pub fn reveal_block(&mut self, block: BlockId, cx: &mut Context<Self>) -> bool {
+        let Some(row) = self
+            .rows
+            .rows()
+            .iter()
+            .position(|row| row.blocks().iter().any(|candidate| candidate.id == block))
+        else {
+            return false;
+        };
+        self.navigate(Navigate::Reveal { row }, cx);
+        cx.notify();
+        true
+    }
+
     /// The button on offer at `at` for `passage` (a reference scene's: no
     /// pointer drags a selection there).
     #[cfg(feature = "visual-reference")]
@@ -139,6 +215,7 @@ impl TranscriptView {
         self.reply = Some(SelectionReply {
             staged: true,
             passage: Some(passage.to_string()),
+            block: None,
             at,
             appears: cx.background_executor().now(),
             fading: None,
@@ -193,6 +270,7 @@ impl TranscriptView {
             window.viewport_size(),
         );
         let passage = reply.passage.clone();
+        let block = reply.block;
         let fading = reply.fading.is_some();
         let weak = cx.entity().downgrade();
         let away = weak.clone();
@@ -212,12 +290,9 @@ impl TranscriptView {
                         MouseButton::Left,
                         move |_: &MouseDownEvent, window: &mut Window, cx: &mut gpui::App| {
                             cx.stop_propagation();
-                            gpui::base::TextSelection::clear(window, cx);
                             let passage = passage.clone();
                             let _ = weak.update(cx, |view, cx| {
-                                view.reply = None;
-                                cx.emit(TranscriptEvent::Reply(Reply::new(passage, "")));
-                                cx.notify();
+                                view.cite_passage(passage, block, window, cx)
                             });
                         },
                     )

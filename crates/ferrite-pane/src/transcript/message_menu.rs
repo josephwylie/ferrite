@@ -107,7 +107,13 @@ type Row = (Verb, Option<SharedString>);
 impl TranscriptView {
     /// A menu's rows, `None` a rule between groups (Claude's).
     pub(super) fn menu_rows(&self, menu: &MessageMenu) -> Vec<Option<Row>> {
-        let attach = self.input.quotes.then_some((Verb::Attach, None));
+        let attach = self.input.quotes.then(|| {
+            let too_long = crate::quote::too_long(&menu.markdown);
+            (
+                Verb::Attach,
+                too_long.then(|| SharedString::from(crate::quote::TOO_LONG_TO_ATTACH)),
+            )
+        });
         let copies = [Some((Verb::Copy, None)), Some((Verb::CopyMarkdown, None))];
         let group = |rows: Vec<Option<Row>>| rows.into_iter().flatten().collect::<Vec<_>>();
         let mut groups: Vec<Vec<Option<Row>>> = Vec::new();
@@ -180,7 +186,12 @@ impl TranscriptView {
             (Verb::CopyMarkdown, _) => copy(&menu.markdown, cx),
             (Verb::Attach, _) => {
                 if let Some(passage) = crate::quote::passage(&menu.markdown) {
-                    cx.emit(TranscriptEvent::Reply(Reply::new(passage, "")));
+                    let block = match &menu.target {
+                        Target::Answer { last } => Some(*last),
+                        Target::Prompt { block, .. } => Some(*block),
+                        Target::Link(_) => None,
+                    };
+                    cx.emit(TranscriptEvent::Reply(Reply::new(passage, ""), block));
                 }
             }
             (Verb::Pin, Target::Answer { last }) => {

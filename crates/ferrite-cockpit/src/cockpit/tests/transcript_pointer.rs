@@ -481,14 +481,14 @@ fn a_sweep_across_a_tool_row_copies_its_text_and_never_its_chrome(cx: &mut TestA
 
 /// A selection's Cite button is offered once a drag has selected a passage,
 /// in the focused transcript.
-fn offered(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
+pub(super) fn offered(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
     view.read_with(cx, |view, cx| {
         view.panes[0].transcript().unwrap().read(cx).reply_offered()
     })
 }
 
 /// Drag from block `from`'s byte to block `to`'s, and let go.
-fn drag(
+pub(super) fn drag(
     view: &gpui::Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
     from: (usize, usize),
@@ -558,13 +558,13 @@ fn a_selections_cite_becomes_a_tray_card_and_sends(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         let composer = view.panes[0].composer.read(cx);
         assert_eq!(composer.text(), "Look:", "the draft's words stay as typed");
-        assert_eq!(composer.replies(), [Reply::new("ph", "")]);
+        assert_eq!(quotes(composer.replies()), [("ph", "")]);
+        assert!(composer.replies()[0].source.is_some(), "it names its source");
     });
-    let chip = cx.debug_bounds("tray-reply-0").expect("a tray card");
+    let chip = cx.debug_bounds("cite-chip-0").expect("a tray chip");
     assert!(
-        (chip.size.width - px(ferrite_ui::theme::COMPOSER_THUMB)).abs() < px(1.)
-            && (chip.size.height - px(ferrite_ui::theme::COMPOSER_THUMB)).abs() < px(1.),
-        "an attachment tile's square: {chip:?}"
+        (chip.size.height - px(ferrite_ui::theme::ATTACH_CHIP_H)).abs() < px(1.),
+        "a one-line chip, not a tile: {chip:?}"
     );
 
     // A second passage, across lines, stacks beside the first.
@@ -574,22 +574,22 @@ fn a_selections_cite_becomes_a_tray_card_and_sends(cx: &mut TestAppContext) {
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.panes[0].composer.read(cx).replies(),
-            [Reply::new("ph", ""), Reply::new("vo\nchar", "")]
+            quotes(view.panes[0].composer.read(cx).replies()),
+            [("ph", ""), ("vo\nchar", "")]
         );
     });
-    assert!(cx.debug_bounds("tray-reply-1").is_some());
+    assert!(cx.debug_bounds("cite-chip-1").is_some());
 
     // Each card's × takes that reply alone.
     let remove = cx
-        .debug_bounds("tray-reply-0-remove")
+        .debug_bounds("cite-chip-0-remove")
         .expect("a draft's card removes");
     cx.simulate_click(remove.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.panes[0].composer.read(cx).replies(),
-            [Reply::new("vo\nchar", "")]
+            quotes(view.panes[0].composer.read(cx).replies()),
+            [("vo\nchar", "")]
         );
     });
 
@@ -610,7 +610,7 @@ fn a_selections_cite_becomes_a_tray_card_and_sends(cx: &mut TestAppContext) {
         "the sent prompt draws its Quote row"
     );
     assert!(
-        cx.debug_bounds("tray-reply-0").is_none(),
+        cx.debug_bounds("cite-chip-0").is_none(),
         "the tray is empty"
     );
 }
@@ -894,8 +894,8 @@ fn the_cite_button_stays_under_the_pointer_and_its_press_fires(cx: &mut TestAppC
     tick(cx);
     view.read_with(cx, |view, cx| {
         assert_eq!(
-            view.panes[0].composer.read(cx).replies(),
-            [Reply::new("beta", "")],
+            quotes(view.panes[0].composer.read(cx).replies()),
+            [("beta", "")],
             "its press quotes the passage"
         );
     });

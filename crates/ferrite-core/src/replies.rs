@@ -6,6 +6,9 @@ use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
+use crate::transcript::BlockId;
+use crate::ThreadId;
+
 /// `passage` as a block quote: each line behind `> `, a blank one a bare
 /// `>`, as Claude's own Copy as quote writes one.
 fn block(passage: &str) -> String {
@@ -22,12 +25,23 @@ fn block(passage: &str) -> String {
         .join("\n")
 }
 
-/// A passage the operator replied to, and what they said about it (empty
-/// for a bare quote).
+/// Where a quoted passage came from: the Thread and the transcript Block
+/// that showed it. It lives in the draft, never in the prompt text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Source {
+    pub thread: ThreadId,
+    pub block: BlockId,
+}
+
+/// A passage the operator replied to, what they said about it (empty for a
+/// bare quote; it may span lines), and where it came from when it was cited
+/// from a transcript.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reply {
     pub quote: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Source>,
 }
 
 impl Reply {
@@ -35,7 +49,13 @@ impl Reply {
         Self {
             quote: quote.into(),
             text: text.into(),
+            source: None,
         }
+    }
+
+    pub fn cited_from(mut self, source: Source) -> Self {
+        self.source = Some(source);
+        self
     }
 }
 
@@ -43,15 +63,36 @@ impl Reply {
 /// reply's own.
 const WORDS_MARK: &str = "\u{21a9} ";
 
+/// `words` with the mark ahead of every line, a blank one a bare mark.
+fn words_block(words: &str) -> String {
+    words
+        .lines()
+        .map(|line| format!("{WORDS_MARK}{line}").trim_end().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `words_block` undone; none when a line lacks the mark.
+fn unmark(paragraph: &str) -> Option<String> {
+    paragraph
+        .split('\n')
+        .map(|line| {
+            line.strip_prefix(WORDS_MARK)
+                .or_else(|| (line == WORDS_MARK.trim_end()).then_some(""))
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|lines| lines.join("\n"))
+}
+
 /// The prompt text: each reply's quote block and its marked words, a blank
-/// line apart, then `text`. A reply's words are one line (the field they
-/// are typed in is), so a line break in them is a space.
+/// line apart, then `text`. Every line of a reply's words leads with the
+/// mark, so a blank line in them cannot end the paragraph.
 pub fn compose(replies: &[Reply], text: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
     for reply in replies {
         parts.push(block(&reply.quote));
         if !reply.text.is_empty() {
-            parts.push(format!("{WORDS_MARK}{}", reply.text.replace('\n', " ")));
+            parts.push(words_block(&reply.text));
         }
     }
     if !text.is_empty() || parts.is_empty() {
@@ -75,16 +116,15 @@ pub fn split(prompt: &str) -> (Vec<Reply>, &str) {
                     .or_else(|| (line == ">").then_some(""))
             })
             .collect();
-        let words = paragraph
-            .strip_prefix(WORDS_MARK)
-            .filter(|_| replies.last().is_some_and(|reply| reply.text.is_empty()));
+        let words =
+            unmark(paragraph).filter(|_| replies.last().is_some_and(|reply| reply.text.is_empty()));
         match (lines, words) {
             (Some(lines), _) if !paragraph.is_empty() => {
                 replies.push(Reply::new(lines.join("\n"), ""));
             }
             (_, Some(words)) => {
                 if let Some(reply) = replies.last_mut() {
-                    reply.text = words.to_string();
+                    reply.text = words;
                 }
             }
             _ => return (replies, rest),
@@ -184,6 +224,37 @@ mod tests {
         );
         assert_eq!(compose(&replies[1..], ""), "> two");
         assert_eq!(compose(&[], "plain"), "plain");
+    }
+
+    #[test]
+    fn a_multiline_comment_keeps_its_lines_and_round_trips() {
+        let replies = vec![Reply::new("q", "one\n\nthree @x"), Reply::new("r", "")];
+        let prompt = compose(&replies, "go");
+        assert_eq!(
+            prompt,
+            "> q\n\n\u{21a9} one\n\u{21a9}\n\u{21a9} three @x\n\n> r\n\ngo"
+        );
+        assert_eq!(split(&prompt), (replies, "go"));
+        assert_eq!(authored(&prompt), "one\n\nthree @x\ngo");
+    }
+
+    #[test]
+    fn a_source_stays_out_of_the_prompt_and_in_the_draft() {
+        let source = Source {
+            thread: ThreadId::new(3),
+            block: serde_json::from_str("9").unwrap(),
+        };
+        let reply = Reply::new("q", "c").cited_from(source);
+        assert_eq!(
+            compose(&[reply.clone()], ""),
+            compose(&[Reply::new("q", "c")], "")
+        );
+        let json = serde_json::to_string(&reply).unwrap();
+        assert_eq!(serde_json::from_str::<Reply>(&json).unwrap(), reply);
+        assert_eq!(
+            serde_json::from_str::<Reply>(r#"{"quote":"q","text":""}"#).unwrap(),
+            Reply::new("q", "")
+        );
     }
 
     #[test]

@@ -105,7 +105,7 @@ fn a_whole_draft_comes_back_after_a_restart(cx: &mut TestAppContext) {
     assert_eq!(held(&view, cx), before, "the same words and attachments");
     assert!(before.0.ends_with("\n> not a quote"));
     for control in [
-        "tray-reply-0",
+        "cite-chip-0",
         "review-attachment",
         "browser-annotation-attachment",
     ] {

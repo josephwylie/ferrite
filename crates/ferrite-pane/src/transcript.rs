@@ -331,9 +331,10 @@ pub enum TranscriptEvent {
         action: PromptAction,
         at: gpui::Point<gpui::Pixels>,
     },
-    /// A selection's `Cite` (or an answer's Reply row), its words empty: a
-    /// Reply card in the Pane's tray (`Composer::reply`).
-    Reply(ferrite_core::replies::Reply),
+    /// A selection's `Cite` (or a message's Attach), its words empty, and
+    /// the Block that showed the passage: a Reply chip in the Pane's tray
+    /// (`Composer::reply`).
+    Reply(ferrite_core::replies::Reply, Option<BlockId>),
     /// An answer's Fork: a new Thread holding the conversation through
     /// the answer whose last block is `after`.
     Fork {

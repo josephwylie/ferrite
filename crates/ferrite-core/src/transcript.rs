@@ -19,7 +19,10 @@ pub use tools::display_tool_name;
 use tools::{result_summary, tool_summary};
 
 /// A Block's identity, stable for as long as the Block lives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
 pub struct BlockId(u64);
 
 /// One rendered unit of the transcript.

@@ -95,10 +95,9 @@ fn an_answers_menu_copies_replies_and_forks(cx: &mut TestAppContext) {
     cx.simulate_click(reply.center(), gpui::Modifiers::none());
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(
-            view.panes[0].composer.read(cx).replies(),
-            [ferrite_core::replies::Reply::new("alpha", "")]
-        );
+        let replies = view.panes[0].composer.read(cx).replies().to_vec();
+        assert_eq!(quotes(&replies), [("alpha", "")]);
+        assert!(replies[0].source.is_some(), "the whole answer names its source");
     });
 
     // Fork from here, past the rule.
