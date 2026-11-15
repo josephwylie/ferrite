@@ -10390,6 +10390,11 @@ impl CockpitView {
         let panel_keys_held =
             self.panel_keys.contains_focused(window, cx) || self.panel_control_focused(window);
         let dialog_took_focus = self.browsers.focus_shown_dialogs(window, cx);
+        if dialog_took_focus {
+            // A page's dialog is modal: it closes an open menu and keeps the keys.
+            self.context_menu = None;
+            self.menu_return = None;
+        }
         if window.has_active_dialog(cx)
             || dialog_took_focus
             || self.browsers.dialog_holds_focus(window, cx)
