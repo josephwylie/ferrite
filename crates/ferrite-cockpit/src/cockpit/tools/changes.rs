@@ -20,7 +20,8 @@
 //! read off the UI thread whenever the pane opens, the scope changes or
 //! Refresh is pressed.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use ferrite_reviewr::ferrite::{review_against, Read};
 use ferrite_ui::icons;
@@ -31,7 +32,7 @@ use ferrite_pane::composer::{Composer, Role};
 use super::*;
 use crate::cockpit::surfaces::SurfaceId;
 use crate::cockpit::context_menu::Submenu;
-use crate::cockpit::panel::hunks::{hunks_element, shown, Line, Shown, Sign};
+use crate::cockpit::panel::hunks::{hunks_element, shown, Layout, Line, Shown, Sign};
 
 /// What the Changes diff is against.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,6 +116,14 @@ struct File {
     hunks: Shown,
     /// The file's change is in git's index (`git add`).
     staged: bool,
+    /// What its hunks say, so a mark made on other content is not this one's.
+    revision: u64,
+}
+
+fn revision_of(hunks: &Shown) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hunks.hash(&mut hasher);
+    hasher.finish()
 }
 
 enum Load {
@@ -126,8 +135,9 @@ enum Load {
 pub(crate) struct Changes {
     scope: Scope,
     load: Load,
-    /// Files marked reviewed: folded, their circle filled.
-    reviewed: HashSet<String>,
+    /// Files marked reviewed (folded, their circle filled), each with the
+    /// revision of the hunks that were reviewed.
+    reviewed: HashMap<String, u64>,
     folded: HashSet<String>,
     wrap: bool,
     hide_whitespace: bool,
@@ -140,14 +150,41 @@ pub(crate) struct Changes {
     generation: u64,
     /// The filter field over the files: only names it matches are listed.
     filter: Entity<Composer>,
+    /// The last stage or unstage git refused, until the next one replaces it
+    /// or Refresh clears it.
+    stage_failure: Option<StageFailure>,
+}
+
+/// A stage or unstage git refused: the file it was for, and git's word.
+struct StageFailure {
+    path: String,
+    stage: bool,
+    message: SharedString,
 }
 
 impl Changes {
+    /// A mark made on content other than what `files` now holds goes, and its
+    /// file opens again so the new hunks show.
+    fn forget_stale_reviews(&mut self, files: &[File]) {
+        let current: HashMap<&str, u64> =
+            files.iter().map(|file| (file.path.as_str(), file.revision)).collect();
+        let stale: Vec<String> = self
+            .reviewed
+            .iter()
+            .filter(|(path, revision)| current.get(path.as_str()) != Some(revision))
+            .map(|(path, _)| path.clone())
+            .collect();
+        for path in stale {
+            self.reviewed.remove(&path);
+            self.folded.remove(&path);
+        }
+    }
+
     pub(super) fn new(scope: Scope, filter: Entity<Composer>) -> Self {
         Self {
             scope,
             load: Load::Reading,
-            reviewed: HashSet::new(),
+            reviewed: HashMap::new(),
             folded: HashSet::new(),
             wrap: true,
             hide_whitespace: false,
@@ -156,6 +193,7 @@ impl Changes {
             branches: Vec::new(),
             generation: 0,
             filter,
+            stage_failure: None,
         }
     }
 }
@@ -263,8 +301,10 @@ impl CockpitView {
         let Some(root) = self.thread_path(diff.thread()) else {
             return;
         };
+        let target = path.clone();
         cx.spawn(async move |view, cx| {
-            cx.background_executor()
+            let outcome = cx
+                .background_executor()
                 .spawn(async move {
                     let mut git = std::process::Command::new("git");
                     git.current_dir(&root);
@@ -273,10 +313,24 @@ impl CockpitView {
                     } else {
                         git.args(["restore", "--staged", "--"]);
                     }
-                    let _ = git.arg(path).output();
+                    match git.arg(&path).output() {
+                        Ok(out) if out.status.success() => Ok(()),
+                        Ok(out) => Err(String::from_utf8_lossy(&out.stderr).trim().to_string()),
+                        Err(error) => Err(error.to_string()),
+                    }
                 })
                 .await;
-            view.update(cx, |view, cx| view.refresh_changes(diff, cx)).ok();
+            view.update(cx, |view, cx| {
+                if let Some(changes) = view.changes_of(diff) {
+                    changes.stage_failure = outcome.err().map(|message| StageFailure {
+                        path: target,
+                        stage,
+                        message: message.into(),
+                    });
+                }
+                view.refresh_changes(diff, cx)
+            })
+            .ok();
         })
         .detach();
     }
@@ -307,12 +361,16 @@ impl CockpitView {
                     review_against(&root, &read, base.as_deref()).map(|files| {
                         files
                             .iter()
-                            .map(|sides| File {
-                                path: sides.file.path.clone(),
-                                added: sides.file.additions,
-                                removed: sides.file.deletions,
-                                hunks: shown(Some(sides)),
-                                staged: staged.contains(&sides.file.path),
+                            .map(|sides| {
+                                let hunks = shown(Some(sides));
+                                File {
+                                    path: sides.file.path.clone(),
+                                    added: sides.file.additions,
+                                    removed: sides.file.deletions,
+                                    revision: revision_of(&hunks),
+                                    hunks,
+                                    staged: staged.contains(&sides.file.path),
+                                }
                             })
                             .collect::<Vec<_>>()
                     })
@@ -321,7 +379,10 @@ impl CockpitView {
             view.update(cx, |view, cx| {
                 if let Some(changes) = view.changes_of(diff).filter(|c| c.generation == generation) {
                     changes.load = match files {
-                        Ok(files) => Load::Read(files),
+                        Ok(files) => {
+                            changes.forget_stale_reviews(&files);
+                            Load::Read(files)
+                        }
                         Err(why) => Load::Failed(why.into()),
                     };
                     cx.notify();
@@ -366,6 +427,7 @@ impl CockpitView {
             Verb::ToggleWhitespace => changes.hide_whitespace = !changes.hide_whitespace,
             Verb::ToggleTests => changes.hide_tests = !changes.hide_tests,
             Verb::Refresh => {
+                changes.stage_failure = None;
                 self.refresh_changes(diff, cx);
                 return;
             }
@@ -384,11 +446,13 @@ impl CockpitView {
 
     fn toggle_reviewed(&mut self, diff: Diff, path: &str, cx: &mut Context<Self>) {
         if let Some(changes) = self.changes_of(diff) {
-            if changes.reviewed.remove(path) {
+            if changes.reviewed.remove(path).is_some() {
                 changes.folded.remove(path);
-            } else {
-                changes.reviewed.insert(path.to_string());
-                changes.folded.insert(path.to_string());
+            } else if let Load::Read(files) = &changes.load {
+                if let Some(file) = files.iter().find(|file| file.path == path) {
+                    changes.reviewed.insert(path.to_string(), file.revision);
+                    changes.folded.insert(path.to_string());
+                }
             }
             cx.notify();
         }
@@ -494,6 +558,7 @@ impl CockpitView {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
+                    .children(changes.stage_failure.as_ref().map(Self::stage_failure_note))
                     .child(
                         div()
                             .debug_selector(|| "changes-filter".into())
@@ -558,6 +623,29 @@ impl CockpitView {
                     view.run_changes_verb(diff, Verb::All, cx)
                 })),
         )
+    }
+
+    /// Why the last stage or unstage did nothing, naming its file; pressing
+    /// the file's button again retries.
+    fn stage_failure_note(failure: &StageFailure) -> Div {
+        use theme::*;
+        let verb = if failure.stage { "stage" } else { "unstage" };
+        div()
+            .debug_selector(|| "changes-stage-failure".into())
+            .flex_shrink_0()
+            .mx(px(SPACE_2))
+            .mb(px(SPACE_1))
+            .px(px(SPACE_2))
+            .py(px(SPACE_1))
+            .rounded(px(R_CONTROL))
+            .bg(paint::RAISED)
+            .text_size(px(FS_META))
+            .text_color(rgb(RED))
+            .child(SharedString::from(format!(
+                "Couldn't {verb} {}: {}",
+                failure.path,
+                if failure.message.is_empty() { "git refused" } else { &failure.message },
+            )))
     }
 
     fn changes_note(&self, note: impl Into<SharedString>) -> Div {
@@ -733,7 +821,7 @@ impl CockpitView {
     ) -> Div {
         use theme::*;
         let folded = changes.folded.contains(&file.path);
-        let reviewed = changes.reviewed.contains(&file.path);
+        let reviewed = changes.reviewed.get(&file.path) == Some(&file.revision);
         let (name, dir) = match file.path.rsplit_once('/') {
             Some((dir, name)) => (name.to_string(), dir.to_string()),
             None => (file.path.clone(), String::new()),
@@ -842,7 +930,7 @@ impl CockpitView {
                 (Shown::Hunks(hunks), true) => Shown::Hunks(without_whitespace(hunks.clone())),
                 (other, _) => other.clone(),
             };
-            hunks_element(at, &hunks, changes.wrap)
+            hunks_element(at, &hunks, Layout::Whole { wrap: changes.wrap })
         });
         div().flex().flex_col().flex_shrink_0().child(head).children(hunks)
     }
@@ -856,6 +944,15 @@ impl CockpitView {
             Load::Read(files) => Some(files.len()),
             _ => None,
         }
+    }
+
+    pub(in crate::cockpit) fn changes_reviewed_for_test(&self, diff: Diff, path: &str) -> bool {
+        self.tools.changes.get(&diff).is_some_and(|changes| changes.reviewed.contains_key(path))
+    }
+
+    pub(in crate::cockpit) fn changes_stage_failure_for_test(&self, diff: Diff) -> Option<String> {
+        let failure = self.tools.changes.get(&diff)?.stage_failure.as_ref()?;
+        Some(format!("{} {}", failure.path, failure.message))
     }
 
     pub(in crate::cockpit) fn changes_filter(&self, diff: Diff) -> Option<Entity<Composer>> {

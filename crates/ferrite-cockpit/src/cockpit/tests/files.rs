@@ -378,3 +378,38 @@ fn a_late_write_does_not_mark_newer_edits_saved(cx: &mut TestAppContext) {
     assert!(std::fs::read_to_string(&file).unwrap().contains("ab"));
     assert_eq!(editor.read_with(cx, |e, _| e.save_state().clone()), SaveState::Saved);
 }
+
+fn rows_drawn(cx: &mut gpui::VisualTestContext) -> usize {
+    (0..12)
+        .filter(|at| cx.debug_bounds(Box::leak(format!("files-row-{at}").into_boxed_str())).is_some())
+        .count()
+}
+
+#[gpui::test]
+fn the_refresh_door_shows_a_file_made_after_the_tree_was_read(cx: &mut TestAppContext) {
+    let (view, thread, checkout, cx) = files_window("files-refresh", cx);
+    view.update(cx, |view, cx| view.run_opener(thread, Opener::Files, cx));
+    tick(cx);
+    let before = rows_drawn(cx);
+    std::fs::write(checkout.join("made-later.rs"), "x\n").unwrap();
+    tick(cx);
+    assert_eq!(rows_drawn(cx), before, "nothing reads the disk by itself");
+    let refresh = cx.debug_bounds("files-refresh").expect("the Refresh door");
+    cx.simulate_click(refresh.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(rows_drawn(cx), before + 1, "the new file's row");
+}
+
+#[gpui::test]
+fn coming_back_to_the_files_tab_shows_what_changed_while_away(cx: &mut TestAppContext) {
+    let (view, thread, checkout, cx) = files_window("files-return", cx);
+    view.update(cx, |view, cx| view.run_opener(thread, Opener::Files, cx));
+    tick(cx);
+    let before = rows_drawn(cx);
+    view.update(cx, |view, cx| view.run_opener(thread, Opener::Changes, cx));
+    tick(cx);
+    std::fs::write(checkout.join("made-while-away.rs"), "x\n").unwrap();
+    view.update(cx, |view, cx| view.run_opener(thread, Opener::Files, cx));
+    tick(cx);
+    assert_eq!(rows_drawn(cx), before + 1);
+}

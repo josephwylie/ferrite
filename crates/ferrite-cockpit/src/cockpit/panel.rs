@@ -256,6 +256,9 @@ impl CockpitView {
         self.empty_shown = false;
         match &id {
             SurfaceId::Files => {
+                if self.active_surface(thread) != Some(SurfaceId::Files) {
+                    self.refresh_file_tree(thread);
+                }
                 self.ensure_files(thread, cx);
             }
             SurfaceId::Changes => self.ensure_changes(thread, cx),
@@ -281,6 +284,9 @@ impl CockpitView {
 
     /// A tab pressed: its Surface shows.
     pub(super) fn activate_surface(&mut self, thread: ThreadId, id: &SurfaceId, cx: &mut Context<Self>) {
+        if *id == SurfaceId::Files {
+            self.refresh_file_tree(thread);
+        }
         self.surfaces_mut(thread).activate(id);
         cx.notify();
     }

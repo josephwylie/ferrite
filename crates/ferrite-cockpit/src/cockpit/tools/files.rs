@@ -47,6 +47,8 @@ gpui::actions!(files, [OpenFirst]);
 pub(crate) enum Verb {
     ToggleTree,
     CollapseAll,
+    /// Read the tree and git's word again.
+    Refresh,
     TogglePreviewTabs,
     ToggleAutoSave,
     ToggleWrap,
@@ -258,6 +260,14 @@ impl CockpitView {
         self.upsert_surface(thread, SurfaceId::Files, cx);
     }
 
+    /// The Files tab is brought forward again: what changed in the checkout
+    /// while it was away shows.
+    pub(in crate::cockpit) fn refresh_file_tree(&mut self, thread: ThreadId) {
+        if let Some(files) = self.files_of(thread) {
+            files.tree.refresh();
+        }
+    }
+
     fn select_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
         if let Some(files) = self.files_of(thread) {
             files.active = Some(at);
@@ -352,6 +362,7 @@ impl CockpitView {
         match verb {
             Verb::ToggleTree => files.show_tree = !files.show_tree,
             Verb::CollapseAll => files.tree.collapse_all(),
+            Verb::Refresh => files.tree.refresh(),
             Verb::TogglePreviewTabs => files.preview_tabs = !files.preview_tabs,
             Verb::ToggleAutoSave => files.settings.auto_save = !files.settings.auto_save,
             Verb::ToggleWrap => files.settings.wrap = !files.settings.wrap,
@@ -570,6 +581,13 @@ impl CockpitView {
                     .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                         cx.stop_propagation();
                         view.go_to_file(thread, window, cx);
+                    })),
+            )
+            .child(
+                door("files-refresh", icons::REFRESH, "Refresh file tree", None)
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.run_files_verb(thread, Verb::Refresh, cx);
                     })),
             )
             .child(
