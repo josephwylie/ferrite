@@ -1169,12 +1169,7 @@ impl Editor {
         if !self.is_dirty() || !self.settings.auto_save {
             return;
         }
-        let outcome = save::write(
-            &self.path,
-            self.text.text(),
-            Some(self.on_disk),
-            self.writer,
-        );
+        let outcome = save::write(&self.path, self.text.text(), Some(self.on_disk), self.writer);
         self.refused = matches!(outcome, Outcome::Refused(_));
         if let Outcome::Written(on_disk) = outcome {
             self.saved_revision = self.revision;

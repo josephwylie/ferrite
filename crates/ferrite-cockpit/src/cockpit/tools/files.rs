@@ -1521,7 +1521,6 @@ impl CockpitView {
         self.files_ref(thread)?.tree.status_of(path)
     }
 
-
     pub(in crate::cockpit) fn files_filter_text_for_test(&self, thread: ThreadId, cx: &gpui::App) -> String {
         self.files_ref(thread)
             .map_or_else(String::new, |files| files.filter.read(cx).text().to_string())

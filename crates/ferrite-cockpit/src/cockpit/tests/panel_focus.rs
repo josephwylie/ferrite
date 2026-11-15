@@ -423,6 +423,40 @@ fn the_first_find_hit_in_a_long_file_is_in_view(cx: &mut TestAppContext) {
     );
 }
 
+/// A hit past a stretch the view never drew still lands on screen: read to
+/// the end and back first, so only the file's two ends have been laid out.
+#[gpui::test]
+fn a_find_hit_past_unseen_lines_is_in_view(cx: &mut TestAppContext) {
+    let (view, thread, file, cx) = with_marked_file("focus-file-unseen-hit", cx);
+    let mut source = "// filler\n".repeat(690);
+    source.push_str(&format!("const MARK: &str = \"{ONLY_IN_THE_FILE}\";\n"));
+    source.push_str(&"// after\n".repeat(10));
+    std::fs::write(&file, source).unwrap();
+    view.update(cx, |view, cx| view.open_in_files(thread, file, None, true, cx));
+    tick(cx);
+    let editor = view.read_with(cx, |view, _| {
+        view.files_editor_of(thread).expect("a code file")
+    });
+
+    press("f6", cx);
+    for keys in ["cmd-down", "cmd-up"] {
+        press(keys, cx);
+        for _ in 0..3 {
+            tick(cx);
+        }
+    }
+    press("cmd-f", cx);
+    cx.simulate_input(ONLY_IN_THE_FILE);
+    for _ in 0..3 {
+        tick(cx);
+    }
+    assert_eq!(file_find_count(&editor, cx).as_deref(), Some("1/1"));
+    assert!(
+        editor.read_with(cx, |editor, _| editor.line_in_view_for_test(691)),
+        "the hit is on screen"
+    );
+}
+
 /// ⌘↓ and ⌘↑ with the keyboard on the Panel's controls read the open code
 /// file to its end and back to its start.
 #[gpui::test]
