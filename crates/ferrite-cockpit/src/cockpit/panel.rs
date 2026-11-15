@@ -537,8 +537,9 @@ impl CockpitView {
     }
 
     /// The pointer moved (the root's every move): with the edge held the
-    /// Panel's width follows it, between its Surface's floor and all it
-    /// can take; with a tab held, past the drag distance, the tab drags.
+    /// Panel's width follows it, between the sections' width and all it
+    /// can take (a tool's floor widens what is drawn, not what is chosen);
+    /// with a tab held, past the drag distance, the tab drags.
     pub(super) fn panel_pointer_moved(&mut self, position: Point<Pixels>, dragging: bool, cx: &mut Context<Self>) {
         if !dragging {
             self.panel.resizing = None;
@@ -555,8 +556,7 @@ impl CockpitView {
         };
         let window = self.panel.window_w;
         let nav = self.nav_rest_w();
-        let floor = floor_w(self.active_surface(thread).as_ref(), window, nav);
-        let width = (window - f32::from(position.x)).clamp(floor, most_w(window, nav).max(floor));
+        let width = (window - f32::from(position.x)).clamp(ferrite_ui::theme::PANEL_W, most_w(window, nav));
         let state = self.surfaces_mut(thread);
         if state.maximized {
             state.set_maximized(false);

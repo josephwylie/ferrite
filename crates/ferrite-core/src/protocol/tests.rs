@@ -2194,6 +2194,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 action: crate::drive::Action::Click(crate::drive::Click {
                     at: crate::drive::Target::Selector("settings-close".into()),
                     press: crate::drive::Press::Double,
+                    command: false,
                 }),
             }),
         ),

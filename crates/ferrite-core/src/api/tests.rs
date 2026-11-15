@@ -590,6 +590,7 @@ fn samples() -> Vec<Request> {
         request(Method::WindowClick(drive::Click {
             at: drive::Target::Selector("settings-close".into()),
             press: drive::Press::Single,
+            command: false,
         })),
         request(Method::WindowFind(drive::Find {
             selector: "settings-close".into(),
@@ -1447,6 +1448,7 @@ fn window_actions_read_as_the_window_takes_them() {
         Ok(Method::WindowClick(drive::Click {
             at: drive::Target::Selector("settings-close".into()),
             press: drive::Press::Double,
+            command: false,
         }))
     );
     assert_eq!(
@@ -1454,6 +1456,7 @@ fn window_actions_read_as_the_window_takes_them() {
         Ok(Method::WindowClick(drive::Click {
             at: drive::Target::Point { x: 40, y: 12 },
             press: drive::Press::Right,
+            command: false,
         }))
     );
     for wrong in [

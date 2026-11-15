@@ -18,6 +18,7 @@
 use std::path::Path;
 
 use ferrite_core::replies::Reply;
+use ferrite_pane::link_target::LinkTarget;
 use ferrite_terminal::{Cursor, Settings, Terminal, TerminalEvent, TerminalView};
 use ferrite_ui::icons;
 use ferrite_ui::theme;
@@ -196,7 +197,26 @@ impl CockpitView {
                     self.forget_surface(thread, &SurfaceId::Terminal(number));
                 }
             }
+            TerminalEvent::Open(address) => self.open_terminal_address(thread, address, cx),
             TerminalEvent::Title(_) => {}
+        }
+    }
+
+    /// A ⌘-press on an address in the shell: it opens where the Panel
+    /// opens it (`Destination`), against the folder the shell started in.
+    fn open_terminal_address(&mut self, thread: ThreadId, address: &str, cx: &mut Context<Self>) {
+        let folder = self.thread_path(thread);
+        match Destination::of(address, folder.as_deref()) {
+            Some(Destination::Web(url)) => {
+                self.browser_action(thread, ferrite_core::browser::Action::Open { url }, cx)
+            }
+            Some(Destination::File(file)) => {
+                if let Some(index) = self.pane_for(thread) {
+                    let line = file.line();
+                    self.open_preview_from(index, file.path, line, cx);
+                }
+            }
+            None => {}
         }
     }
 
@@ -474,5 +494,56 @@ mod tests {
         assert_eq!(scrollback_label(1_000), "1,000 lines");
         assert_eq!(scrollback_label(10_000), "10,000 lines");
         assert_eq!(scrollback_label(100_000), "100,000 lines");
+    }
+}
+
+/// Where a printed address goes: a web address to the Thread's browser, a
+/// path to the Panel's editor. Other schemes a program names stay shut:
+/// terminal output is not trusted with the OS's openers.
+#[derive(Debug, PartialEq)]
+enum Destination {
+    Web(String),
+    File(ferrite_pane::file_links::FileLink),
+}
+
+impl Destination {
+    fn of(address: &str, folder: Option<&std::path::Path>) -> Option<Self> {
+        match LinkTarget::resolve(address, folder) {
+            LinkTarget::External(url) if url.starts_with("http://") || url.starts_with("https://") => {
+                Some(Self::Web(url))
+            }
+            LinkTarget::File(file) => Some(Self::File(file)),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod destination_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn web_addresses_go_to_the_browser_and_paths_to_the_editor_at_their_line() {
+        let folder = Path::new("/work/app");
+        assert_eq!(
+            Destination::of("http://localhost:5173/app", Some(folder)),
+            Some(Destination::Web("http://localhost:5173/app".into()))
+        );
+        assert_eq!(
+            Destination::of("https://example.com/docs", Some(folder)),
+            Some(Destination::Web("https://example.com/docs".into()))
+        );
+        let Some(Destination::File(file)) = Destination::of("src/main.rs:12", Some(folder)) else {
+            panic!("a path opens in the editor");
+        };
+        assert_eq!(file.path, folder.join("src/main.rs"));
+        assert_eq!(file.line(), Some(12));
+    }
+
+    #[test]
+    fn other_schemes_stay_shut() {
+        assert_eq!(Destination::of("mailto:a@b.c", None), None);
+        assert_eq!(Destination::of("slack://open", None), None);
     }
 }

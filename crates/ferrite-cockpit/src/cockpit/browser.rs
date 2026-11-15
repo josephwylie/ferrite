@@ -44,6 +44,11 @@ pub(super) struct Browsers {
     /// operator revision when it asked: an agent's page may reveal the
     /// Browser tab, not take the Panel from a tab chosen since.
     reveal: BTreeMap<ThreadId, u64>,
+    /// The revision stamped on each of this window's own Opens and Selects,
+    /// oldest first, until the Server's echo of it arrives: the echo reveals
+    /// with the stamp of its action, not of the frame it is read in, or it
+    /// would outrank a tab the operator chose in between.
+    sent: BTreeMap<ThreadId, std::collections::VecDeque<u64>>,
     control_queue: std::collections::VecDeque<ControlRequest>,
     #[cfg(feature = "cef")]
     pub(super) controller:
@@ -295,8 +300,10 @@ impl CockpitView {
     ) {
         self.cancel_browser_capture(thread, cx);
         self.ensure_browser(thread, cx);
+        let seen = self.surface_revision(thread);
+        // Only an action the Server accepts is echoed back to claim this revision.
+        let echoed = matches!(action, Action::Open { .. } | Action::Select { .. });
         if matches!(action, Action::Open { .. }) {
-            let seen = self.surface_revision(thread);
             self.browsers.reveal.entry(thread).or_insert(seen);
         }
         if self.browsers.threads[&thread].owner.is_none() {
@@ -341,6 +348,9 @@ impl CockpitView {
         }
         match result {
             Ok(state) => {
+                if echoed {
+                    self.browsers.sent.entry(thread).or_default().push_back(seen);
+                }
                 let browser = self.browsers.threads.get_mut(&thread).unwrap();
                 browser.state = state;
                 browser.error = None;
@@ -461,7 +471,12 @@ impl CockpitView {
             };
             self.ensure_browser(thread, cx);
             if matches!(action, Some(Action::Open { .. } | Action::Select { .. })) {
-                let seen = self.surface_revision(thread);
+                let seen = self
+                    .browsers
+                    .sent
+                    .get_mut(&thread)
+                    .and_then(std::collections::VecDeque::pop_front)
+                    .unwrap_or_else(|| self.surface_revision(thread));
                 self.browsers.reveal.entry(thread).or_insert(seen);
             }
             let browser = self.browsers.threads.get_mut(&thread).unwrap();
