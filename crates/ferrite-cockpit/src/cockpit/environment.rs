@@ -286,7 +286,7 @@ impl CockpitView {
             Ok(answer) => self.environment.versions = Some(answer),
             Err(error) => {
                 ferrite_core::log!("could not ask the CLIs' versions: {error}");
-                self.cli_versions = Some(("unavailable".into(), "unavailable".into()));
+                self.cli_versions = None;
             }
         }
         cx.notify();
