@@ -103,9 +103,7 @@ enum Navigate {
     /// The reader took the scroll (wheel, scrollbar, minimap): nothing
     /// automatic moves it any more. The room a band jump left stays.
     Reader,
-    /// A page up or down.
     Page { down: bool },
-    /// The first row.
     Top,
     /// The live tail, following it from there: eased (the Scroll to end
     /// pill), or at once (End, a prompt letting go).

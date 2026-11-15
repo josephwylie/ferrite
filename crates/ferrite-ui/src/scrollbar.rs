@@ -474,9 +474,7 @@ pub struct AxisPrepaintState {
 /// clicking the track, so they cannot disagree.
 #[derive(Clone, Copy, Debug)]
 struct Track {
-    /// The viewport's extent along the axis.
     container: Pixels,
-    /// The scrollable content's extent (the viewport included).
     content: Pixels,
     /// The track's end kept clear (the corner another bar occupies).
     margin_end: Pixels,
