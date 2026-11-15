@@ -234,7 +234,8 @@ impl CockpitView {
             ),
         ];
         vec![
-            settings::Group::new(None).rows(std::iter::once(applies).chain(self.defaults_unsaved())),
+            settings::Group::new(None)
+                .rows(std::iter::once(applies).chain(self.defaults_unsaved())),
             provider_group(Provider::Claude).rows(claude),
             provider_group(Provider::Codex).rows(codex),
         ]
@@ -249,29 +250,34 @@ impl CockpitView {
             return group.rows([applies, self.defaults_unread()]);
         };
         let at_once = defaults.factory_tasks_at_once;
-        group.rows(std::iter::once(applies).chain(self.defaults_unsaved()).chain([
-            settings::toggle(
-                "settings-placeholder-suggestions",
-                "Suggest follow-up prompts",
-                "A likely next prompt in an empty composer · tab takes it",
-                defaults.placeholder_suggestions,
-                self.default_change(cx, |d, v| d.placeholder_suggestions = v),
-            ),
-            settings::stepper(
-                "settings-factory-limit",
-                "Tasks working at once",
-                "In the Factory · the rest wait in Queued",
-                at_once.to_string().into(),
-                at_once > *ferrite_core::factory::LIMIT_RANGE.start(),
-                at_once < *ferrite_core::factory::LIMIT_RANGE.end(),
-                {
-                    let view = cx.entity().downgrade();
-                    move |delta, cx| {
-                        let _ = view.update(cx, |view, cx| view.step_factory_limit(delta, cx));
-                    }
-                },
-            ),
-        ]))
+        group.rows(
+            std::iter::once(applies)
+                .chain(self.defaults_unsaved())
+                .chain([
+                    settings::toggle(
+                        "settings-placeholder-suggestions",
+                        "Suggest follow-up prompts",
+                        "A likely next prompt in an empty composer · tab takes it",
+                        defaults.placeholder_suggestions,
+                        self.default_change(cx, |d, v| d.placeholder_suggestions = v),
+                    ),
+                    settings::stepper(
+                        "settings-factory-limit",
+                        "Tasks working at once",
+                        "In the Factory · the rest wait in Queued",
+                        at_once.to_string().into(),
+                        at_once > *ferrite_core::factory::LIMIT_RANGE.start(),
+                        at_once < *ferrite_core::factory::LIMIT_RANGE.end(),
+                        {
+                            let view = cx.entity().downgrade();
+                            move |delta, cx| {
+                                let _ =
+                                    view.update(cx, |view, cx| view.step_factory_limit(delta, cx));
+                            }
+                        },
+                    ),
+                ]),
+        )
     }
 
     /// Ask the machine's CLIs their versions.

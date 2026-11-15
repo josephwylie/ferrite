@@ -1737,6 +1737,9 @@ fn settings_on_a_machine_edit_its_defaults_not_this_computers(cx: &mut TestAppCo
         })
     });
 
+    until(cx, |_| {
+        Settings::load(&remote).is_ok_and(|written| written.placeholder_suggestions)
+    });
     let written = Settings::load(&remote).unwrap();
     assert_eq!(written.factory_tasks_at_once, 6, "written to its file");
     assert!(written.placeholder_suggestions);
@@ -1772,15 +1775,12 @@ fn two_quick_edits_to_a_machines_defaults_both_land(cx: &mut TestAppContext) {
     let more = cx.debug_bounds("settings-factory-limit-1").unwrap().center();
     cx.simulate_click(more, gpui::Modifiers::none());
     cx.simulate_click(more, gpui::Modifiers::none());
-    until(cx, |cx| {
-        view.read_with(cx, |view, _| {
-            view.shown_defaults()
-                .is_some_and(|shown| shown.factory_tasks_at_once == 7)
-        })
+    until(cx, |_| {
+        Settings::load(&remote).is_ok_and(|written| written.factory_tasks_at_once == 7)
     });
-    tick(cx);
-    assert_eq!(view.read_with(cx, |view, _| view.factory_limit()), Some(7));
-    assert_eq!(Settings::load(&remote).unwrap().factory_tasks_at_once, 7);
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.factory_limit()) == Some(7)
+    });
 }
 
 /// A machine that cannot write its file says so in both groups that show
@@ -1817,10 +1817,8 @@ fn a_machine_that_cannot_save_its_defaults_says_so(cx: &mut TestAppContext) {
     };
     until(cx, |cx| unsaved(cx).0);
     assert!(unsaved(cx).1, "the Permissions page says it too");
-    assert_eq!(
-        view.read_with(cx, |view, _| view.factory_limit()),
-        Some(5),
-        "Settings shows what the machine kept"
-    );
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.factory_limit()) == Some(5)
+    });
     std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
