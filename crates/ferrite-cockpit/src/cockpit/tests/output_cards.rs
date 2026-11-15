@@ -324,7 +324,7 @@ fn a_running_command_opens_onto_its_output_so_far(cx: &mut TestAppContext) {
 fn a_steered_turns_opened_folder_stays_open(cx: &mut TestAppContext) {
     let (mut core, fake, workspace) = bound_cockpit("steered-folder", Provider::Claude);
     let first = core.threads()[0];
-    core.send(first, "write the site".into());
+    let _ = core.send(first, "write the site".into());
     std::fs::create_dir_all(workspace.join("site")).unwrap();
     std::fs::create_dir_all(workspace.join("docs")).unwrap();
     std::fs::write(workspace.join("site/index.html"), "<p>x</p>").unwrap();

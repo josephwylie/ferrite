@@ -718,7 +718,9 @@ pub(crate) fn play(
         clock.set(beat.at);
         last.insert(beat.who, beat.at);
         match beat.act {
-            Act::Prompt(text) => core.send(beat.who, text),
+            Act::Prompt(text) => {
+                let _ = core.send(beat.who, text);
+            }
             Act::Event(event) => {
                 if feed(beat.who).send(event).is_err() {
                     panic!(

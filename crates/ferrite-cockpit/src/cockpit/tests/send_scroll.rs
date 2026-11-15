@@ -54,7 +54,7 @@ fn answered_with<'a>(
 ) -> (Entity<CockpitView>, Fake, &'a mut gpui::VisualTestContext) {
     let (mut core, fake) = cockpit(name, 1);
     let thread = core.threads()[0];
-    core.send(thread, "first".into());
+    let _ = core.send(thread, "first".into());
     cx.update(|cx| {
         cx.bind_keys([KeyBinding::new("enter", Submit, None)]);
     });

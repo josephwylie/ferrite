@@ -60,8 +60,11 @@ impl Engine {
             }
             Op::Send { thread, text } => {
                 self.open_thread(thread)?;
-                self.send(*thread, text.clone());
-                Ok(None)
+                match self.send(*thread, text.clone()) {
+                    Admission::Held => Ok(Some(Done::Held)),
+                    Admission::Refused(refusal) => Err(failed(refusal)),
+                    Admission::Delivered | Admission::Unconfirmed(_) => Ok(None),
+                }
             }
             Op::Queue { thread, text } => {
                 if self.queue(*thread, text.clone()) {

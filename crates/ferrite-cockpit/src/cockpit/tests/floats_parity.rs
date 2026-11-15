@@ -49,7 +49,7 @@ fn palette_open(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) ->
 fn cmd_k_opens_the_palette_centred_over_the_board(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("palette-open", 1);
     let thread = core.threads()[0];
-    core.send(thread, "keep working".into());
+    let _ = core.send(thread, "keep working".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
@@ -148,7 +148,7 @@ fn par_keeps_two_commands_and_the_parked_thread(cx: &mut TestAppContext) {
     core.rename_thread(threads[2], "Release notes").unwrap();
     // Used today, as a Thread parked within the day is: a log of Ferrite's
     // own marks alone has no known time (`Store::last_activity`).
-    core.send(threads[2], "tidy the release notes".into());
+    let _ = core.send(threads[2], "tidy the release notes".into());
     core.park(threads[2]).unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -264,7 +264,7 @@ fn palette_keys_wrap_and_land_on_a_thread(cx: &mut TestAppContext) {
 fn thread_rows_name_their_scope_state_and_digit(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("palette-rows", 2);
     let threads = core.threads();
-    core.send(threads[0], "work".into());
+    let _ = core.send(threads[0], "work".into());
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
             text: "Working on it".into(),
@@ -516,7 +516,7 @@ fn cmd_i_walks_the_list_requests_first(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("needs-you-list", 6);
     let threads = core.threads();
     for thread in &threads[3..6] {
-        core.send(*thread, "go".into());
+        let _ = core.send(*thread, "go".into());
     }
     core.focus_thread(threads[0]);
     bind_production_keys(cx);

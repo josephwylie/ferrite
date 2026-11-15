@@ -1597,7 +1597,7 @@ fn a_timed_interruption_is_never_read_as_a_completion() {
     let (mut cockpit, fake) = cockpit("timed-interruption");
     cockpit.set_notification_grace(Duration::ZERO);
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    cockpit.send(thread, "work".into());
+    let _ = cockpit.send(thread, "work".into());
     fake.streams.borrow()[0].send(text("partial")).unwrap();
     cockpit.pump();
     fake.streams.borrow()[0]
@@ -1656,7 +1656,7 @@ fn a_finish_is_seen_when_it_is_on_screen_while_the_window_has_focus() {
         .unwrap();
     cockpit.enter_group(group).unwrap();
     let finish = |cockpit: &mut Cockpit, at: usize| {
-        cockpit.send(threads[at], "work".into());
+        let _ = cockpit.send(threads[at], "work".into());
         cockpit.pump();
         fake.streams.borrow()[at]
             .send(SessionEvent::TurnEnded {
@@ -1686,7 +1686,7 @@ fn a_finish_is_seen_when_it_is_on_screen_while_the_window_has_focus() {
 fn a_finished_turn_asks_for_one_follow_up_prediction() {
     let (mut cockpit, fake) = cockpit("suggest-trigger");
     let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
-    cockpit.send(thread, "fix the decoder".into());
+    let _ = cockpit.send(thread, "fix the decoder".into());
 
     fake.streams.borrow()[0]
         .send(text("Fixed it. Want me to run the tests?"))
@@ -1731,7 +1731,7 @@ fn a_finished_turn_asks_for_one_follow_up_prediction() {
 fn a_codex_thread_requests_a_codex_prediction() {
     let (mut cockpit, fake) = cockpit("suggest-no-cli");
     let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
-    cockpit.send(thread, "go".into());
+    let _ = cockpit.send(thread, "go".into());
 
     fake.streams.borrow()[0].send(text("Done.")).unwrap();
     fake.streams.borrow()[0]
@@ -1751,7 +1751,7 @@ fn disabled_suggestions_neither_run_nor_land() {
     let (mut cockpit, fake) = cockpit("suggest-disabled");
     let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
     cockpit.set_suggestions_enabled(false);
-    cockpit.send(thread, "go".into());
+    let _ = cockpit.send(thread, "go".into());
 
     fake.streams.borrow()[0].send(text("Done.")).unwrap();
     fake.streams.borrow()[0]
@@ -1768,7 +1768,7 @@ fn disabled_suggestions_neither_run_nor_land() {
     assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
 
     cockpit.set_suggestions_enabled(true);
-    cockpit.send(thread, "again".into());
+    let _ = cockpit.send(thread, "again".into());
     fake.streams.borrow()[0].send(text("Done again.")).unwrap();
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
@@ -1846,7 +1846,7 @@ fn a_stale_prediction_is_dropped() {
 fn a_new_turn_drops_the_previous_prediction() {
     let (mut cockpit, fake) = cockpit("suggest-supersede");
     let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
-    cockpit.send(thread, "go".into());
+    let _ = cockpit.send(thread, "go".into());
 
     let generation = cockpit.engine().threads[&thread].generation;
     fake.streams.borrow()[0].send(text("Done.")).unwrap();
@@ -1902,11 +1902,11 @@ fn older_turn_predictions_cannot_replace_the_latest_or_survive_disabling() {
             })
             .unwrap();
     };
-    cockpit.send(thread, "first".into());
+    let _ = cockpit.send(thread, "first".into());
     finish();
     cockpit.pump();
     let first = fake.suggest_calls()[0].clone();
-    cockpit.send(thread, "second".into());
+    let _ = cockpit.send(thread, "second".into());
     let old = Suggestion {
         thread,
         generation: first.generation,
@@ -1939,7 +1939,7 @@ fn older_turn_predictions_cannot_replace_the_latest_or_survive_disabling() {
 fn claude_uses_native_suggestions_without_a_second_model_request() {
     let (mut cockpit, fake) = cockpit("native-suggestion");
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    cockpit.send(thread, "show code".into());
+    let _ = cockpit.send(thread, "show code".into());
     fake.streams.borrow()[0]
         .send(text("Here is the code."))
         .unwrap();
@@ -2008,7 +2008,7 @@ fn completion_observation_is_quiet_factual_and_unchanged_after_reopen() {
     let fake = Fake::default();
     let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    cockpit.send(thread, "work".into());
+    let _ = cockpit.send(thread, "work".into());
     fake.streams.borrow()[0].send(text("answer")).unwrap();
     cockpit.pump();
     let before = cockpit
@@ -2075,7 +2075,7 @@ fn completion_observation_is_quiet_factual_and_unchanged_after_reopen() {
         first,
         "replay uses the original observation, never now"
     );
-    reopened.send(thread, "next turn".into());
+    let _ = reopened.send(thread, "next turn".into());
     assert_eq!(
         completion(&reopened),
         first,
@@ -2465,7 +2465,7 @@ fn a_sent_prompt_reaches_the_provider_the_transcript_and_the_log() {
     let (mut cockpit, fake) = cockpit("send");
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
 
-    cockpit.send(thread, "run the tests".into());
+    let _ = cockpit.send(thread, "run the tests".into());
 
     assert_eq!(fake.sent.borrow().as_slice(), ["run the tests"]);
     let echoed = cockpit
@@ -2493,9 +2493,9 @@ fn prompt_history_is_per_thread_and_rebuilt_from_the_log() {
     let (mut cockpit, _) = cockpit("prompt-history-core");
     let first = cockpit.open(Provider::Claude, main_choice()).unwrap();
     let second = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    cockpit.send(first, "one".into());
-    cockpit.send(first, "two".into());
-    cockpit.send(second, "other".into());
+    let _ = cockpit.send(first, "one".into());
+    let _ = cockpit.send(first, "two".into());
+    let _ = cockpit.send(second, "other".into());
 
     assert_eq!(
         cockpit.recall_prompt(first, HistoryDirection::Older, "draft"),
@@ -2522,7 +2522,7 @@ fn prompt_history_is_per_thread_and_rebuilt_from_the_log() {
 fn native_queue_history_records_consumption_once() {
     let (mut cockpit, fake) = cockpit("native-history");
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    cockpit.send(thread, "sent".into());
+    let _ = cockpit.send(thread, "sent".into());
     assert!(cockpit.queue(thread, "held".into()));
     let delivery = |cockpit: &Cockpit| {
         cockpit
@@ -2601,7 +2601,7 @@ fn native_queue_history_records_consumption_once() {
 fn a_sent_prompts_own_echo_is_not_drawn_again() {
     let (mut cockpit, fake) = cockpit("sent-echo");
     let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
-    cockpit.send(thread, "first".into());
+    let _ = cockpit.send(thread, "first".into());
     cockpit.interrupt(thread);
     fake.streams.borrow()[0]
         .send(SessionEvent::TurnEnded {
@@ -2611,7 +2611,7 @@ fn a_sent_prompts_own_echo_is_not_drawn_again() {
         .unwrap();
     cockpit.pump();
 
-    cockpit.send(thread, "again".into());
+    let _ = cockpit.send(thread, "again".into());
     let id = cockpit
         .thread(thread)
         .unwrap()
@@ -2655,7 +2655,7 @@ fn a_new_cockpit_recovers_prompt_history_from_the_store() {
     let fake = Fake::default();
     let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    cockpit.send(thread, "before relaunch".into());
+    let _ = cockpit.send(thread, "before relaunch".into());
     cockpit.park(thread).unwrap();
     drop(cockpit);
 
@@ -2737,8 +2737,8 @@ fn the_first_prompt_of_a_session_carries_the_hidden_context_and_the_second_does_
         Some(root.as_path())
     );
 
-    cockpit.send(thread, "run the tests".into());
-    cockpit.send(thread, "and the lints".into());
+    let _ = cockpit.send(thread, "run the tests".into());
+    let _ = cockpit.send(thread, "and the lints".into());
 
     let binding = std::env::temp_dir(); // main_choice()'s checkout
     assert_eq!(
@@ -2780,7 +2780,7 @@ fn changing_the_root_ends_the_session_and_the_next_prompt_respawns_with_the_pref
     cockpit
         .set_session_project_root(thread, Some(first_root.clone()))
         .unwrap();
-    cockpit.send(thread, "one".into());
+    let _ = cockpit.send(thread, "one".into());
     // The provider names the session; a later respawn must resume it.
     fake.streams
         .borrow()
@@ -2792,7 +2792,7 @@ fn changing_the_root_ends_the_session_and_the_next_prompt_respawns_with_the_pref
         })
         .unwrap();
     cockpit.pump();
-    cockpit.send(thread, "two".into());
+    let _ = cockpit.send(thread, "two".into());
     let spawns = fake.streams.borrow().len();
 
     cockpit
@@ -2800,7 +2800,7 @@ fn changing_the_root_ends_the_session_and_the_next_prompt_respawns_with_the_pref
         .unwrap();
     // The Session ended; nothing respawns until the operator speaks.
     assert_eq!(fake.streams.borrow().len(), spawns);
-    cockpit.send(thread, "three".into());
+    let _ = cockpit.send(thread, "three".into());
 
     assert_eq!(fake.streams.borrow().len(), spawns + 1);
     assert_eq!(
@@ -2834,7 +2834,7 @@ fn a_revived_thread_keeps_its_root_and_prefaces_its_first_prompt_again() {
     cockpit
         .set_session_project_root(thread, Some(root.clone()))
         .unwrap();
-    cockpit.send(thread, "before the park".into());
+    let _ = cockpit.send(thread, "before the park".into());
 
     cockpit.park(thread).unwrap();
     cockpit.revive(thread).unwrap();
@@ -2845,7 +2845,7 @@ fn a_revived_thread_keeps_its_root_and_prefaces_its_first_prompt_again() {
             .and_then(|open| open.session_project_root()),
         Some(root.as_path())
     );
-    cockpit.send(thread, "after the revive".into());
+    let _ = cockpit.send(thread, "after the revive".into());
     let binding = std::env::temp_dir();
     assert_eq!(
         fake.sent.borrow().last().unwrap(),
@@ -2865,10 +2865,10 @@ fn a_sweep_respawned_session_prefaces_its_next_prompt() {
     cockpit
         .set_session_project_root(thread, Some(root.clone()))
         .unwrap();
-    cockpit.send(thread, "one".into()); // consumes the first preface
+    let _ = cockpit.send(thread, "one".into()); // consumes the first preface
 
     assert_eq!(cockpit.sweep().len(), 1, "the leak replaces the Session");
-    cockpit.send(thread, "two".into());
+    let _ = cockpit.send(thread, "two".into());
 
     let binding = std::env::temp_dir();
     assert_eq!(
@@ -2890,8 +2890,12 @@ fn a_send_with_a_vanished_root_is_refused_naming_the_path_and_the_remedy() {
         .unwrap();
     std::fs::remove_dir_all(&root).unwrap();
 
-    cockpit.send(thread, "into the void".into());
+    let admission = cockpit.send(thread, "into the void".into());
 
+    assert!(
+        matches!(&admission, crate::cockpit::Admission::Refused(words) if words.contains("re-pick")),
+        "the refusal comes back to the caller: {admission:?}"
+    );
     assert!(
         fake.sent.borrow().is_empty(),
         "nothing may reach the provider"
@@ -2921,7 +2925,7 @@ fn replacing_a_claude_session_does_not_resubmit_native_pending_work() {
     cockpit
         .set_session_project_root(thread, Some(existing_root("native-replacement-root")))
         .unwrap();
-    cockpit.send(thread, "new input".into());
+    let _ = cockpit.send(thread, "new input".into());
     fake.streams.borrow()[0]
         .send(SessionEvent::Queue(crate::QueueEvent::Started {
             historical: false,
@@ -2953,7 +2957,7 @@ fn a_send_after_a_failed_restart_attempts_one_spawn_and_reports_the_failure() {
     assert_eq!(cockpit.sweep().len(), 1, "the restart fails; no Session");
     let attempts = *fake.attempts.borrow();
 
-    cockpit.send(thread, "hello".into());
+    let _ = cockpit.send(thread, "hello".into());
 
     assert_eq!(
         *fake.attempts.borrow(),
@@ -3032,7 +3036,7 @@ fn the_log_holds_everything_before_a_pending_decision() {
     let fake = Fake::default();
     let mut cockpit = Cockpit::new(store, Box::new(fake.clone()));
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    cockpit.send(thread, "write the file".into());
+    let _ = cockpit.send(thread, "write the file".into());
     let log = dir.join(thread.to_string()).join("log.jsonl");
     let on_disk = || std::fs::read_to_string(&log).unwrap();
 
@@ -3431,7 +3435,7 @@ fn native_pending_prompts_survive_turn_end_without_client_dispatch() {
 fn a_queued_prompt_is_removed_by_its_own_id() {
     let (mut cockpit, _fake) = cockpit("queue-by-id");
     let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
-    cockpit.send(thread, "start".into());
+    let _ = cockpit.send(thread, "start".into());
     cockpit.pump();
     for text in ["first", "second", "third"] {
         assert!(cockpit.queue(thread, text.into()));
@@ -3468,7 +3472,7 @@ fn send_now_steers_a_queued_prompt_into_the_running_turn() {
     let (mut cockpit, fake) = cockpit("send-now-steers");
     *fake.steers.borrow_mut() = true;
     let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
-    cockpit.send(thread, "start".into());
+    let _ = cockpit.send(thread, "start".into());
     fake.streams.borrow()[0].send(text("working")).unwrap();
     cockpit.pump();
     for text in ["first", "second", "third"] {
@@ -3513,7 +3517,7 @@ fn a_queue_that_folds_says_steering_and_send_now_never_interrupts() {
     *fake.steers.borrow_mut() = true;
     *fake.folds.borrow_mut() = true;
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    cockpit.send(thread, "start".into());
+    let _ = cockpit.send(thread, "start".into());
     fake.streams.borrow()[0].send(text("working")).unwrap();
     cockpit.pump();
     assert!(cockpit.queue(thread, "also this".into()));
@@ -3535,7 +3539,7 @@ fn a_queue_that_folds_says_steering_and_send_now_never_interrupts() {
 fn send_now_interrupts_a_provider_that_cannot_steer() {
     let (mut cockpit, fake) = cockpit("send-now-interrupts");
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    cockpit.send(thread, "start".into());
+    let _ = cockpit.send(thread, "start".into());
     fake.streams.borrow()[0].send(text("working")).unwrap();
     cockpit.pump();
     assert!(cockpit.queue(thread, "then this".into()));
@@ -3557,7 +3561,7 @@ fn send_now_interrupts_a_provider_that_cannot_steer() {
 fn escape_on_codex_resends_the_whole_pile_as_one_prompt() {
     let (mut cockpit, fake) = cockpit("codex-escape-resend");
     let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
-    cockpit.send(thread, "start".into());
+    let _ = cockpit.send(thread, "start".into());
     fake.streams.borrow()[0].send(text("working")).unwrap();
     cockpit.pump();
     assert!(cockpit.queue(thread, "first".into()));
@@ -3633,7 +3637,7 @@ fn escape_on_codex_resends_the_whole_pile_as_one_prompt() {
 fn escape_on_claude_leaves_the_native_queue_to_the_provider() {
     let (mut cockpit, fake) = cockpit("claude-escape-native");
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    cockpit.send(thread, "start".into());
+    let _ = cockpit.send(thread, "start".into());
     fake.streams.borrow()[0].send(text("working")).unwrap();
     cockpit.pump();
     assert!(cockpit.queue(thread, "held".into()));
@@ -3978,7 +3982,7 @@ fn choosing_a_provider_pre_lock_respawns_eagerly_and_the_first_send_uses_it() {
     assert_eq!(meta.provider, Provider::Codex);
     assert_eq!(meta.model, Some("gpt-5.4-mini".into()));
 
-    cockpit.send(thread, "first prompt".into());
+    let _ = cockpit.send(thread, "first prompt".into());
     assert_eq!(fake.streams.borrow().len(), 2, "no respawn for the send");
     assert_eq!(fake.sent.borrow().as_slice(), ["first prompt"]);
 }
@@ -3993,7 +3997,7 @@ fn choosing_a_provider_pre_lock_respawns_eagerly_and_the_first_send_uses_it() {
 fn a_provider_switch_after_the_first_prompt_hands_the_conversation_over() {
     let (mut cockpit, fake) = cockpit("provider-handover");
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    cockpit.send(thread, "hello".into());
+    let _ = cockpit.send(thread, "hello".into());
     let stream = fake.streams.borrow()[0].clone();
     stream
         .send(SessionEvent::Init {
@@ -4005,7 +4009,7 @@ fn a_provider_switch_after_the_first_prompt_hands_the_conversation_over() {
     stream.send(text("there")).unwrap();
     stream.send(ended()).unwrap();
     cockpit.pump();
-    cockpit.send(thread, "second".into());
+    let _ = cockpit.send(thread, "second".into());
     stream.send(text("again")).unwrap();
     stream.send(ended()).unwrap();
     cockpit.pump();
@@ -4054,8 +4058,8 @@ fn a_provider_switch_after_the_first_prompt_hands_the_conversation_over() {
     assert_eq!(meta.provider, Provider::Codex);
     assert_eq!(meta.model, Some("gpt-5.6-sol".into()));
 
-    cockpit.send(thread, "third".into());
-    cockpit.send(thread, "fourth".into());
+    let _ = cockpit.send(thread, "third".into());
+    let _ = cockpit.send(thread, "fourth".into());
     assert_eq!(
         &fake.sent.borrow()[2..],
         [
@@ -4106,7 +4110,7 @@ fn trimming_the_displayed_history_never_loses_agent_context() {
     let mut streamed = Vec::new();
     // Six turns of 1 MiB answers: past the 4 MiB the display keeps.
     for turn in 0..6 {
-        cockpit.send(thread, format!("prompt {turn}"));
+        let _ = cockpit.send(thread, format!("prompt {turn}"));
         let stream = fake.streams.borrow()[0].clone();
         if turn == 0 {
             stream
@@ -4194,7 +4198,7 @@ fn trimming_the_displayed_history_never_loses_agent_context() {
 fn changing_effort_after_handover_keeps_the_session_and_delivers_context() {
     let (mut cockpit, fake) = cockpit("handover-live-effort");
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    cockpit.send(thread, "hello".into());
+    let _ = cockpit.send(thread, "hello".into());
     fake.streams.borrow()[0].send(text("hi")).unwrap();
     fake.streams.borrow()[0].send(ended()).unwrap();
     cockpit.pump();
@@ -4218,7 +4222,7 @@ fn changing_effort_after_handover_keeps_the_session_and_delivers_context() {
     cockpit.pump();
 
     cockpit.set_effort(thread, Some("max".into())).unwrap();
-    cockpit.send(thread, "next".into());
+    let _ = cockpit.send(thread, "next".into());
 
     assert_eq!(*fake.attempts.borrow(), 2, "effort must not replace Codex");
     assert_eq!(
@@ -4247,7 +4251,7 @@ fn the_carry_rides_between_the_preface_and_the_prompt() {
     cockpit
         .set_session_project_root(thread, Some(root.clone()))
         .unwrap();
-    cockpit.send(thread, "hello".into());
+    let _ = cockpit.send(thread, "hello".into());
     let stream = fake.streams.borrow().last().unwrap().clone();
     stream.send(text("hi")).unwrap();
     stream.send(ended()).unwrap();
@@ -4262,7 +4266,7 @@ fn the_carry_rides_between_the_preface_and_the_prompt() {
             },
         )
         .unwrap();
-    cockpit.send(thread, "next".into());
+    let _ = cockpit.send(thread, "next".into());
 
     let binding = std::env::temp_dir();
     assert_eq!(
@@ -4319,7 +4323,7 @@ fn the_carry_digest_keeps_the_newest_pairs_within_budget() {
 fn the_model_can_change_after_the_first_prompt_by_resuming() {
     let (mut cockpit, fake) = cockpit("model-after-prompt");
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    cockpit.send(thread, "hello".into());
+    let _ = cockpit.send(thread, "hello".into());
     fake.streams.borrow()[0]
         .send(SessionEvent::Init {
             session_id: "sess-1".into(),
@@ -4394,7 +4398,7 @@ fn a_thread_is_named_by_its_title_then_its_first_prompt_then_its_number() {
     let (mut cockpit, _fake) = cockpit("display-title");
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
     assert_eq!(cockpit.display_title(thread, true), "thread-1");
-    cockpit.send(thread, "  Fix the   flaky\ntest in ci  ".into());
+    let _ = cockpit.send(thread, "  Fix the   flaky\ntest in ci  ".into());
     assert_eq!(cockpit.display_title(thread, true), "Fix the flaky");
     assert_eq!(
         cockpit.display_title(thread, false),
@@ -4433,7 +4437,7 @@ fn a_thread_is_named_by_its_title_then_its_first_prompt_then_its_number() {
 fn a_parked_switch_waits_for_revive_and_a_revived_switch_still_carries() {
     let (mut cockpit, fake) = cockpit("provider-handover-parked");
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    cockpit.send(thread, "hello".into());
+    let _ = cockpit.send(thread, "hello".into());
     let stream = fake.streams.borrow()[0].clone();
     stream
         .send(SessionEvent::Init {
@@ -4500,14 +4504,14 @@ fn a_parked_switch_waits_for_revive_and_a_revived_switch_still_carries() {
         )),
         "the handover replays: {blocks:?}"
     );
-    cockpit.send(thread, "next".into());
+    let _ = cockpit.send(thread, "next".into());
     assert_eq!(fake.providers.borrow().last().unwrap(), &Provider::Codex);
     assert_eq!(
         fake.resumed.borrow().last().unwrap(),
         &None,
         "the undelivered handover needs a fresh Session, not the empty Codex id"
     );
-    cockpit.send(thread, "after".into());
+    let _ = cockpit.send(thread, "after".into());
     let sent = fake.sent.borrow();
     assert_eq!(
         sent[sent.len() - 2],
@@ -4520,7 +4524,7 @@ fn a_parked_switch_waits_for_revive_and_a_revived_switch_still_carries() {
 fn a_refused_effort_keeps_the_choice_and_pending_handover() {
     let (mut cockpit, fake) = cockpit("refused-effort");
     let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-    cockpit.send(thread, "hello".into());
+    let _ = cockpit.send(thread, "hello".into());
     fake.streams.borrow()[0].send(text("hi")).unwrap();
     fake.streams.borrow()[0].send(ended()).unwrap();
     cockpit.pump();
@@ -4541,7 +4545,7 @@ fn a_refused_effort_keeps_the_choice_and_pending_handover() {
     assert_eq!(cockpit.peek(thread).unwrap().effort, None);
     assert_eq!(cockpit.thread(thread).unwrap().effort(), None);
     assert_eq!(*fake.attempts.borrow(), 2);
-    cockpit.send(thread, "next".into());
+    let _ = cockpit.send(thread, "next".into());
     assert_eq!(
         fake.sent.borrow().last().unwrap(),
         "Earlier in this Thread (on Claude):\n\nUser: hello\nAssistant: hi\n\nnext"
@@ -4574,7 +4578,7 @@ fn effort_changes_in_place_and_persists() {
         Some("high")
     );
 
-    cockpit.send(thread, "hello".into());
+    let _ = cockpit.send(thread, "hello".into());
     let stream = fake.streams.borrow()[0].clone();
     stream
         .send(SessionEvent::Init {
@@ -4844,7 +4848,7 @@ fn a_failed_provider_spawn_leaves_the_old_session_serving() {
     assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
     // The old Session still serves: the next send spawns nothing new.
     *fake.fail.borrow_mut() = false;
-    cockpit.send(thread, "still here".into());
+    let _ = cockpit.send(thread, "still here".into());
     assert_eq!(fake.sent.borrow().as_slice(), ["still here"]);
     assert_eq!(fake.streams.borrow().len(), 1);
 }
@@ -5406,7 +5410,7 @@ fn stale_board_launch_after_handover_resumes_the_current_provider() {
     ] {
         let (mut core, fake) = cockpit(&format!("stale-board-launch-{from}"));
         let thread = core.open(from, main_choice()).unwrap();
-        core.send(thread, "keep this conversation".into());
+        let _ = core.send(thread, "keep this conversation".into());
         fake.streams.borrow()[0].send(ended()).unwrap();
         core.pump();
         core.set_provider(
@@ -5427,7 +5431,7 @@ fn stale_board_launch_after_handover_resumes_the_current_provider() {
             })
             .unwrap();
         core.pump();
-        core.send(thread, "continue on this provider".into());
+        let _ = core.send(thread, "continue on this provider".into());
         fake.streams.borrow().last().unwrap().send(ended()).unwrap();
         core.pump();
         core.park(thread).unwrap();
@@ -5502,7 +5506,7 @@ fn only_the_first_session_names_the_conversation_it_begins() {
         })
         .unwrap();
     core.pump();
-    core.send(thread, "again".into());
+    let _ = core.send(thread, "again".into());
     core.park(thread).unwrap();
     revive_awake(&mut core, thread);
 

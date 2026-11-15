@@ -113,7 +113,7 @@ fn exercise_model_control(reject: bool) {
         )
         .unwrap();
     cockpit.pump();
-    cockpit.send(thread, "hello".into());
+    let _ = cockpit.send(thread, "hello".into());
     native.0.lock().unwrap().streams[0]
         .send(SessionEvent::TurnEnded {
             outcome: TurnOutcome::Completed,

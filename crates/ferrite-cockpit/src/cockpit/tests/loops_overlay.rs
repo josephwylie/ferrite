@@ -289,7 +289,7 @@ fn working_marks_draw_every_frame_in_the_overlay_unclipped(cx: &mut TestAppConte
     ferrite_ui::motion::testing::drive();
     let (mut core, fake) = cockpit("overlay-working-marks", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Inspect progress".into());
+    let _ = core.send(thread, "Inspect progress".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));

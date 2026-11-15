@@ -862,7 +862,7 @@ mod tests {
                 )
                 .unwrap();
             cockpit.pump();
-            cockpit.send(thread, "first turn".into());
+            let _ = cockpit.send(thread, "first turn".into());
             cockpit.pump();
             cockpit.set_model(thread, Some("selected".into())).unwrap();
             assert_eq!(
@@ -888,7 +888,7 @@ mod tests {
                 cockpit.peek(thread).unwrap().model.as_deref(),
                 Some("selected")
             );
-            cockpit.send(thread, "after rejected model change".into());
+            let _ = cockpit.send(thread, "after rejected model change".into());
             cockpit.pump();
             assert_eq!(
                 cockpit.thread(thread).unwrap().transcript().session_id(),

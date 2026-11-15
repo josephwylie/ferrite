@@ -536,7 +536,7 @@ fn a_wrap_up_is_spent_once_the_thread_moves_on(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("wrap-up-step-w-0").is_some());
     view.update(cx, |view, cx| {
-        view.cockpit.send(thread, "something else".into());
+        let _ = view.cockpit.send(thread, "something else".into());
         cx.notify();
     });
     tick(cx);

@@ -516,7 +516,7 @@ fn find() -> (Scene, Setup) {
 fn scroll_to_end() -> (Scene, Setup) {
     let mut scene = conversation("scroll-to-end");
     let thread = scene.core.roster().focused_thread().expect("focus");
-    scene
+    let _ = scene
         .core
         .send(thread, "Now check the parked rows by hand.".into());
     scene.core.pump();
@@ -541,7 +541,7 @@ fn send_landed() -> (Scene, Setup) {
         let Some(thread) = view.focused_thread() else {
             return;
         };
-        view.cockpit
+        let _ = view.cockpit
             .send(thread, "Push the branch with the nav fix.".into());
         view.scroll_transcript_to_new_prompt(view.focused(), cx);
     });
@@ -699,12 +699,12 @@ fn nav_states() -> (Scene, Setup) {
     let shop = scene.project("shop");
 
     let (working, feed) = scene.open(Provider::Claude, &shop, "Stripe webhook retries");
-    scene.core.send(working, "Retry failed webhooks.".into());
+    let _ = scene.core.send(working, "Retry failed webhooks.".into());
     feed.boot(Provider::Claude, 48_000)
         .text("Writing the backoff; the idempotency key already lands in orders.");
 
     let (blocked, feed) = scene.open(Provider::Codex, &shop, "Cart copy pass");
-    scene
+    let _ = scene
         .core
         .send(blocked, "Rewrite the cart's empty state.".into());
     feed.boot(Provider::Codex, 12_000)
@@ -712,7 +712,7 @@ fn nav_states() -> (Scene, Setup) {
         .approval("grep", "rg -n 'Your cart is empty' web/");
 
     let (done, done_feed) = scene.open(Provider::Claude, &shop, "Order confirmation emails");
-    scene
+    let _ = scene
         .core
         .send(done, "Send confirmations from the new template.".into());
     done_feed
@@ -720,7 +720,7 @@ fn nav_states() -> (Scene, Setup) {
         .text("Done: the template renders and the PR is up.");
 
     let (checking, feed) = scene.open(Provider::Claude, &shop, "Tax rounding");
-    scene
+    let _ = scene
         .core
         .send(checking, "Round tax per line, not per order.".into());
     feed.boot(Provider::Claude, 22_000)
@@ -768,7 +768,7 @@ fn mermaid() -> (Scene, Setup) {
     let mut scene = Scene::new("mermaid");
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Webhook retry flow");
-    scene
+    let _ = scene
         .core
         .send(thread, "Draw how a failed webhook is retried.".into());
     feed.boot(Provider::Claude, 26_000)
@@ -798,7 +798,7 @@ fn toast_done() -> (Scene, Setup) {
     let ferrite = scene.project("ferrite");
     let focused = scene.core.roster().focused_thread().expect("focus");
     let (notes, feed) = scene.open(Provider::Claude, &ferrite, "Release notes 0.9");
-    scene
+    let _ = scene
         .core
         .send(notes, "Draft the 0.9 release notes.".into());
     feed.boot(Provider::Claude, 31_000)
@@ -937,7 +937,7 @@ fn wrap_up(spent: bool) -> (Scene, Setup) {
     let mut scene = Scene::new(if spent { "wrap-up-spent" } else { "wrap-up" });
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Append line to notes.txt");
-    scene.core.send(
+    let _ = scene.core.send(
         thread,
         "Append the line \"second line\" to notes.txt. Then stop and ask me whether to commit it."
             .into(),
@@ -965,7 +965,7 @@ fn wrap_up(spent: bool) -> (Scene, Setup) {
         });
     if spent {
         scene.core.pump();
-        scene.core.send(thread, "Commit it".into());
+        let _ = scene.core.send(thread, "Commit it".into());
     }
     (scene, Box::new(|_, _, _| {}))
 }
@@ -988,7 +988,7 @@ fn output_cards(label: &str) -> (super::Scene, std::path::PathBuf) {
     .unwrap();
     std::fs::write(ferrite.join("NOTES.md"), "# Q3 notes\n").unwrap();
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Q3 sales report");
-    scene.core.send(
+    let _ = scene.core.send(
         thread,
         "Build a one-page Q3 sales report and serve it.".into(),
     );
@@ -1109,7 +1109,7 @@ fn composer_stop() -> (Scene, Setup) {
     let mut scene = Scene::new("composer-stop");
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Composer queue polish");
-    scene
+    let _ = scene
         .core
         .send(thread, "Tighten the queued prompt rows.".into());
     feed.boot(Provider::Claude, 64_000)
@@ -1185,7 +1185,7 @@ fn long_prompt() -> (Scene, Setup) {
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Audit the pane crate");
     let paragraph = "Walk every module under the pane crate and list which of them still hold a second owner of the same state, then say what the single owner would be and what it would cost to move. ";
-    scene.core.send(thread, paragraph.repeat(5));
+    let _ = scene.core.send(thread, paragraph.repeat(5));
     feed.boot(Provider::Claude, 64_000)
         .text("Starting with the transcript module.")
         .end(0.03);

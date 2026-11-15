@@ -303,6 +303,23 @@ impl PaneUpdate {
     }
 }
 
+/// What became of a prompt the operator sent, as far as the Engine can
+/// tell at once. The caller keeps the whole draft until it knows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[must_use = "a refused or unconfirmed send leaves the draft with the caller"]
+pub enum Admission {
+    /// On the wire: the Session has it.
+    Delivered,
+    /// Waiting for the Session to start. If it never does, the prompt comes
+    /// back through `take_retrieved_prompt`.
+    Held,
+    /// Not sent, and nothing will send it: the words say why.
+    Refused(String),
+    /// The Server did not say whether it took the prompt (it never answered
+    /// or went away mid-act): sending again may duplicate it.
+    Unconfirmed(String),
+}
+
 /// A provider and the model to serve it with — what the #25 picker picks,
 /// whole. `None` is the provider's own default, which is also what every
 /// Thread starts on.
@@ -1896,7 +1913,7 @@ impl Engine {
             .map(|state| std::mem::take(&mut state.awaiting.prompts))
             .unwrap_or_default();
         for held in awaiting {
-            self.send(thread, held.text);
+            let _ = self.send(thread, held.text);
         }
         Ok(())
     }
@@ -2559,7 +2576,7 @@ impl Engine {
     /// a revive uses, which re-arms the preface. One that closed starts
     /// afresh on Main; one that ended unseen (ADR 0032) keeps what its
     /// window shows.
-    pub fn send(&mut self, thread: ThreadId, text: String) {
+    pub fn send(&mut self, thread: ThreadId, text: String) -> Admission {
         if self
             .threads
             .get(&thread)
@@ -2570,7 +2587,11 @@ impl Engine {
             }
         }
         if self.bootstraps.contains_key(&thread) {
-            return;
+            let refusal = "the Thread is still starting; nothing was sent".to_string();
+            if let Some(state) = self.threads.get_mut(&thread) {
+                state.apply(Input::Notice(refusal.clone()));
+            }
+            return Admission::Refused(refusal);
         }
         if self
             .threads
@@ -2580,39 +2601,50 @@ impl Engine {
             self.visible_subjects.remove(&thread);
         }
         let Some(state) = self.threads.get_mut(&thread) else {
-            return;
+            return Admission::Refused("no such Thread".into());
         };
         state.prompt_history.reset();
         // Guarded before anything spawns: a refused send must not leave a
         // fresh provider process behind. `deliver` guards again for the
         // sends that never pass through here.
         if let Some(refusal) = vanished_root_refusal(state) {
-            state.apply(Input::Notice(refusal));
-            return;
+            state.apply(Input::Notice(refusal.clone()));
+            return Admission::Refused(refusal);
         }
-        if !self.start_or_say(thread, "send failed") {
-            return;
+        if let Err(refusal) = self.start_session_or_say(thread, "send failed") {
+            return Admission::Refused(refusal);
         }
         let state = self.threads.get_mut(&thread).expect("checked");
         if state.ready_session().is_none() || !state.awaiting.prompts.is_empty() {
             state.hold(text);
-            return;
+            return Admission::Held;
         }
-        if let Err(error) = deliver(state, text.clone(), self.suggestions_enabled) {
-            state.undelivered(text, error);
+        match deliver(state, text, self.suggestions_enabled) {
+            Ok(_) => Admission::Delivered,
+            Err(error) => {
+                let refusal = format!("send failed: {error}");
+                state.apply(Input::Notice(refusal.clone()));
+                Admission::Refused(refusal)
+            }
         }
     }
 
     /// `start_session` for something the operator asked of the Thread: a
     /// start that fails says so on it, `what` naming what failed.
     fn start_or_say(&mut self, thread: ThreadId, what: &str) -> bool {
+        self.start_session_or_say(thread, what).is_ok()
+    }
+
+    /// `start_or_say`, handing back the words it said on a failed start.
+    fn start_session_or_say(&mut self, thread: ThreadId, what: &str) -> Result<(), String> {
         let Err(error) = self.start_session(thread, None) else {
-            return true;
+            return Ok(());
         };
+        let words = format!("{what}: {error}");
         if let Some(state) = self.threads.get_mut(&thread) {
-            state.apply(Input::Notice(format!("{what}: {error}")));
+            state.apply(Input::Notice(words.clone()));
         }
-        false
+        Err(words)
     }
 
     /// Start an open Thread's Session where its conversation left off, the

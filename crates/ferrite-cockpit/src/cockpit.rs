@@ -33,6 +33,7 @@ mod nav_pick;
 mod palette;
 pub(crate) mod panel;
 mod parts;
+mod sends;
 mod server;
 mod side_chat;
 mod snooze;
@@ -397,6 +398,9 @@ pub struct CockpitView {
     selection: TranscriptText,
     /// Each Thread's side chat, the right pane's other body.
     side_chats: side_chat::SideChats,
+    /// Drafts sent while a Session was starting, kept whole until it takes
+    /// the prompt or hands it back.
+    held_sends: sends::HeldSends,
     tools: tools::Tools,
     agent_drills: agent_pane::AgentDrills,
     native_copy: Option<String>,
@@ -1512,6 +1516,7 @@ impl CockpitView {
             branch_refresh_queued: false,
             selection: TranscriptText::default(),
             side_chats: Default::default(),
+            held_sends: Default::default(),
             tools: Default::default(),
             agent_drills: Default::default(),
             native_copy: None,
@@ -2219,7 +2224,7 @@ impl CockpitView {
             ferrite_pane::transcript::TranscriptEvent::Send(words) => {
                 self.focus_pane(index);
                 if let Some(thread) = self.panes[index].thread() {
-                    self.cockpit.send(thread, words.clone());
+                    let _ = self.cockpit.send(thread, words.clone());
                 }
                 cx.notify();
             }
@@ -2406,10 +2411,18 @@ impl CockpitView {
         self.apply_thread_rules(&frame, cx);
         self.land(cx);
         self.ring_alerts(cx);
-        for pane in &self.panes {
-            if let Some(thread) = pane.thread() {
+        self.settle_held_sends();
+        for index in 0..self.panes.len() {
+            if let Some(thread) = self.panes[index].thread() {
+                for draft in self.lost_sends(thread) {
+                    self.put_back_send(index, draft, true, cx);
+                }
                 while let Some((held, prepend)) = self.cockpit.take_retrieved_prompt(thread) {
-                    pane.composer.update(cx, |composer, cx| {
+                    if let Some(draft) = self.held_draft(thread, &held) {
+                        self.put_back_send(index, draft, prepend, cx);
+                        continue;
+                    }
+                    self.panes[index].composer.update(cx, |composer, cx| {
                         let (current, mut files) =
                             ferrite_core::prompt_files::split(composer.editable());
                         let (held, restored_files) = ferrite_core::prompt_files::split(held);
@@ -5615,8 +5628,8 @@ impl CockpitView {
             return;
         }
         let composer = self.panes[self.focused()].composer.clone();
-        let text = composer.update(cx, |composer, cx| composer.take(cx));
-        let text = text.trim().to_string();
+        let draft = composer.update(cx, |composer, cx| composer.take_draft(cx));
+        let text = draft.prompt().trim().to_string();
         // `/effort max` and `/model sonnet` typed out are Ferrite's own
         // acts, the same as the pickers: the chip stays truthful, Codex
         // (which has no such command) gets them too, and a level or model
@@ -5648,23 +5661,30 @@ impl CockpitView {
             return;
         }
         // Typing does not wait for the agent; sending does.
-        if self
+        let focused = self.focused();
+        let admitted = if self
             .cockpit
             .thread(thread)
             .is_some_and(|open| open.needs_queue())
         {
-            if !self.cockpit.queue(thread, text.clone()) {
-                composer.update(cx, |composer, cx| composer.set(text.clone(), cx));
+            let queued = self.cockpit.queue(thread, text.clone());
+            if !queued {
+                self.put_back_send(focused, draft, true, cx);
             }
+            queued
         } else {
-            self.cockpit.send(thread, text.clone());
-            self.scroll_transcript_to_new_prompt(self.focused(), cx);
-        }
+            let admission = self.cockpit.send(thread, text.clone());
+            let admitted = self.settle_send(focused, thread, draft, admission, cx);
+            if admitted {
+                self.scroll_transcript_to_new_prompt(focused, cx);
+            }
+            admitted
+        };
         self.facts.acted(&self.cockpit, thread);
         // A first prompt names an untitled Thread.
         self.facts.renamed(&self.cockpit, thread);
         self.refresh_names();
-        if self.is_first_prompt(thread) {
+        if admitted && self.is_first_prompt(thread) {
             self.start_titling(thread, text, cx);
         }
         cx.notify();

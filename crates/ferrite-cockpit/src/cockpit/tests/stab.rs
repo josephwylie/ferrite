@@ -9,7 +9,7 @@ use super::*;
 fn the_working_mark_rests_under_reduced_motion(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("working-mark-motion", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Inspect progress".into());
+    let _ = core.send(thread, "Inspect progress".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -384,7 +384,7 @@ fn the_parked_fold_holds_still_with_no_toast_card(cx: &mut TestAppContext) {
     let threads = core.threads();
     core.park(threads[4]).unwrap();
     for (n, thread) in threads[..4].iter().enumerate() {
-        core.send(*thread, format!("task {n}"));
+        let _ = core.send(*thread, format!("task {n}"));
     }
     core.pump();
     core.focus_thread(threads[0]);

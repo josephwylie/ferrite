@@ -344,7 +344,7 @@ fn stepping_focus_across_nine_cells_moves_no_body(cx: &mut TestAppContext) {
 fn nothing_paints_under_a_group_head(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("board-head-clip", 2);
     let thread = core.threads()[0];
-    core.send(thread, "Explain the board".into());
+    let _ = core.send(thread, "Explain the board".into());
     let group = group_all(&mut core);
     core.enter_group(group).unwrap();
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -376,7 +376,7 @@ fn nothing_paints_under_a_group_head(cx: &mut TestAppContext) {
 fn the_prompt_bubble_keeps_the_transcript_column(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("board-mark-axis", 1);
     let thread = core.threads()[0];
-    core.send(thread, "Line the marks up".into());
+    let _ = core.send(thread, "Line the marks up".into());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     super::hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));

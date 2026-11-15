@@ -188,7 +188,7 @@ fn a_finished_thread_the_operator_is_not_on_is_unread_until_they_land_on_it() {
     let mut h = Harness::new("unread", 2);
     let [first, second] = [h.threads[0], h.threads[1]];
     assert!(h.cockpit.focus(PaneIdentity::Thread(first)));
-    h.cockpit.send(second, "go".into());
+    let _ = h.cockpit.send(second, "go".into());
     h.control
         .emit(1, SessionEvent::TextDelta { text: "…".into() });
     h.cockpit.pump();
@@ -212,7 +212,7 @@ fn a_finished_thread_the_operator_is_not_on_is_unread_until_they_land_on_it() {
 fn a_finish_on_the_focused_thread_is_born_read() {
     let mut h = Harness::new("focused", 1);
     let thread = h.threads[0];
-    h.cockpit.send(thread, "go".into());
+    let _ = h.cockpit.send(thread, "go".into());
     h.control.emit(0, ended());
     h.cockpit.pump();
     assert_eq!(h.count(), 1);
@@ -228,7 +228,7 @@ fn a_finish_on_the_focused_thread_waits_while_the_window_is_away() {
     let mut h = Harness::new("away", 1);
     let thread = h.threads[0];
     h.cockpit.set_window_active(false);
-    h.cockpit.send(thread, "go".into());
+    let _ = h.cockpit.send(thread, "go".into());
     h.control.emit(0, ended());
     h.cockpit.pump();
     assert_eq!(h.unread(), 1, "nobody was looking");
@@ -244,7 +244,7 @@ fn a_finish_on_the_focused_thread_waits_while_the_window_is_away() {
 fn notifications_wait_for_a_child_permission_before_finishing() {
     let mut h = Harness::new("waiting-permission", 1);
     let thread = h.threads[0];
-    h.cockpit.send(thread, "go".into());
+    let _ = h.cockpit.send(thread, "go".into());
     let child = h.child(0, "blocked");
     h.control.activity(
         0,
@@ -299,12 +299,12 @@ fn notifications_wait_for_a_child_permission_before_finishing() {
 fn notifications_discard_a_parked_deferral_but_keep_existing_notices() {
     let mut h = Harness::new("park-deferred", 1);
     let thread = h.threads[0];
-    h.cockpit.send(thread, "first".into());
+    let _ = h.cockpit.send(thread, "first".into());
     h.control.emit(0, ended());
     h.cockpit.pump();
     let notice = h.cockpit.notifications().newest().unwrap();
 
-    h.cockpit.send(thread, "delegate".into());
+    let _ = h.cockpit.send(thread, "delegate".into());
     h.child(0, "worker");
     h.control.emit(0, ended());
     h.cockpit.pump();
@@ -317,7 +317,7 @@ fn notifications_discard_a_parked_deferral_but_keep_existing_notices() {
     }
     assert_eq!(h.count(), 1, "reopening history is not a new live finish");
 
-    h.cockpit.send(thread, "new live turn".into());
+    let _ = h.cockpit.send(thread, "new live turn".into());
     h.control.emit(1, ended());
     h.cockpit.pump();
     assert_eq!(h.count(), 2, "a new live finish still notifies");
@@ -327,7 +327,7 @@ fn notifications_discard_a_parked_deferral_but_keep_existing_notices() {
 fn a_native_pending_prompt_suppresses_finish_until_provider_consumption() {
     let mut h = Harness::new("held", 2);
     let second = h.threads[1];
-    h.cockpit.send(second, "first".into());
+    let _ = h.cockpit.send(second, "first".into());
     h.control
         .emit(1, SessionEvent::TextDelta { text: "…".into() });
     h.cockpit.pump();
@@ -366,7 +366,7 @@ fn opening_a_notice_lands_on_its_thread_and_revives_a_parked_one() {
     let mut h = Harness::new("open", 2);
     let [first, second] = [h.threads[0], h.threads[1]];
     assert!(h.cockpit.focus(PaneIdentity::Thread(first)));
-    h.cockpit.send(second, "go".into());
+    let _ = h.cockpit.send(second, "go".into());
     h.control.emit(1, ended());
     h.cockpit.pump();
     let id = h.cockpit.notifications().newest().unwrap();
@@ -388,7 +388,7 @@ fn opening_a_notice_lands_on_its_thread_and_revives_a_parked_one() {
 fn a_main_that_ends_while_children_work_waits_for_its_resume() {
     let mut h = Harness::new("deferred", 2);
     let second = h.threads[1];
-    h.cockpit.send(second, "go".into());
+    let _ = h.cockpit.send(second, "go".into());
     let alpha = h.child(1, "alpha");
     let beta = h.child(1, "beta");
     // Claude: Main's own result while both background agents run.
@@ -459,7 +459,7 @@ fn a_main_that_ends_while_children_work_waits_for_its_resume() {
 fn a_subagents_own_end_never_notifies_and_a_deleted_thread_is_forgotten() {
     let mut h = Harness::new("child", 2);
     let second = h.threads[1];
-    h.cockpit.send(second, "go".into());
+    let _ = h.cockpit.send(second, "go".into());
     h.control
         .emit(1, SessionEvent::TextDelta { text: "…".into() });
     let child = h.child(1, "helper");
@@ -689,7 +689,7 @@ fn replay(label: &str, spawner: Replay) -> Vec<TurnOutcome> {
         .open(provider, WorkspaceChoice::Main { checkout })
         .unwrap();
     assert!(cockpit.focus(PaneIdentity::Thread(other)));
-    cockpit.send(watched, "go".into());
+    let _ = cockpit.send(watched, "go".into());
     let deadline = Instant::now() + Duration::from_secs(15);
     while !main_text(&cockpit, watched).contains(MARK) {
         assert!(
@@ -888,7 +888,7 @@ fn an_unseen_end_keeps_the_shown_subject() {
     clock.advance(Duration::from_secs(10 * 60));
     h.cockpit.pump();
     assert_eq!(h.control.0.lock().unwrap().len(), 1);
-    h.cockpit.send(thread, "carry on".into());
+    let _ = h.cockpit.send(thread, "carry on".into());
     h.cockpit.pump();
     assert_eq!(
         h.control.0.lock().unwrap().len(),

@@ -53,7 +53,7 @@ fn a_ready_release_waits_for_working_agents(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("update-waits", 1);
     let thread = core.threads()[0];
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.update(cx, |view, _| {
+    let _ = view.update(cx, |view, _| {
         view.cockpit.send(thread, "Run the checks".into())
     });
     fake.streams.borrow()[0]

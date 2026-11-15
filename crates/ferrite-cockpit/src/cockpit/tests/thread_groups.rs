@@ -629,7 +629,7 @@ fn inline_title_rename_disarms_the_thread_composer_history_context_and_hint(
 ) {
     let (mut core, _) = cockpit("prompt-history-rename", 1);
     let thread = core.threads()[0];
-    core.send(thread, "history".into());
+    let _ = core.send(thread, "history".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);

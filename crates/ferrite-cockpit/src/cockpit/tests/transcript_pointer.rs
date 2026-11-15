@@ -811,7 +811,7 @@ fn redraw_chrome_only(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTes
 fn a_plain_drag_selects_after_frames_that_reuse_the_panes(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("drag-after-chrome-frames", 1);
     let thread = core.threads()[0];
-    core.send(thread, "the prompt words".into());
+    let _ = core.send(thread, "the prompt words".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));

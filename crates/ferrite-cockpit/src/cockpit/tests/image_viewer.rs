@@ -98,7 +98,7 @@ fn a_sent_image_opens_in_the_lightbox(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("viewer-sent", 1);
     let thread = core.threads()[0];
     let mut core = core;
-    core.send(
+    let _ = core.send(
         thread,
         ferrite_core::prompt_files::compose("compare these", &[wide.clone(), small.clone()]),
     );
@@ -487,7 +487,7 @@ fn a_read_picture_draws_under_its_row_and_opens(cx: &mut TestAppContext) {
     png(&file, 256, 256);
     let (mut core, fake) = cockpit("viewer-read", 1);
     let thread = core.threads()[0];
-    core.send(thread, "look at the icon".into());
+    let _ = core.send(thread, "look at the icon".into());
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
@@ -528,7 +528,10 @@ fn the_lightbox_grows_from_the_pressed_picture(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("viewer-origin", 1);
     let thread = core.threads()[0];
     let mut core = core;
-    core.send(thread, ferrite_core::prompt_files::compose("look", &[image]));
+    let _ = core.send(
+        thread,
+        ferrite_core::prompt_files::compose("look", &[image]),
+    );
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);
