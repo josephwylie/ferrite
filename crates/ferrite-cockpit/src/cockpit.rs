@@ -10441,11 +10441,11 @@ impl CockpitView {
         // The list keeps the keyboard it was handed until the operator
         // takes it elsewhere.
         let nav_list_focused = self.nav_keys_held && self.nav_focus.is_focused(window);
-        // So does a Panel body that reads its own keys: "Open a surface",
-        // pressed, or a Files editor or filter being typed in.
         if self.closing_holds_focus(window, cx) {
             window.focus(&wanted, cx);
         }
+        // So does a Panel body that reads its own keys: "Open a surface",
+        // pressed, or a Files editor or filter being typed in.
         let panel_keys_held =
             self.panel_keys.contains_focused(window, cx) || self.panel_control_focused(window);
         if window.has_active_dialog(cx)

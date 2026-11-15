@@ -49,7 +49,7 @@
 //! | find bar | [`FADE_QUICK`] 150ms, opacity only | the transcript's find bar fades in ([`fade_in`]); it goes at once |
 //! | notices | [`FADE_QUICK`] 150ms, opacity only | a notice over or in the Composer (a draft's failed start) fades in ([`fade_in`]); it goes at once. The approval card keeps [`PROMOTE_IN`], the queue strip none |
 //! | usage ring | [`USAGE_ARC`] 300ms / [`USAGE_INK`] 200ms, quart | the footer's plan-usage ring moving to a new reading ([`settle`]); first paint lands |
-//! | row-in | [`ROW_IN`] 180ms, opacity only | a preview opening in the Panel, or another document replacing it, and a Panel tab's body when the operator picks the tab, from 0.3 ([`swap_in`]) |
+//! | row-in | [`ROW_IN`] 180ms, opacity only | a preview opening in the Panel, or another document replacing it ([`swap_in`]), and every other Panel tab's body when the operator picks the tab ([`swap_since`]), from 0.3; the outgoing body goes at once and hears nothing |
 //! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`SCROLLBAR_FADE`] 100ms | a thumb appears on the first scroll frame, holds 1.4s, then fades, and widens 4 → 6px under the pointer (`scrollbar::step_widen`); idle, nothing is drawn |
 //!
 //! Kit-drawn surfaces (gpui-kit's `PopupMenu`, its dialogs) keep the kit's
@@ -599,6 +599,21 @@ where
     })
 }
 
+/// [`swap_in`] for a body whose tab was picked at `picked`, drawn in the
+/// same place whether or not it plays: `None` is a body that arrived with
+/// no pick (first paint, a Thread's change, the Panel opening).
+pub fn swap_since<E>(picked: Option<Instant>, element: E) -> impl IntoElement
+where
+    E: Styled + IntoElement + 'static,
+{
+    Played {
+        origin: picked.map_or(Origin::Settled, Origin::At),
+        spec: ROW_IN,
+        element,
+        face: |el: E, t: f32| el.opacity(lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t)),
+    }
+}
+
 /// `toast-in` for a toast hung under the window's head: it fades up from
 /// 0 while sliding its own height down out from under the edge it hangs
 /// on, over `TOAST_IN` (Claude's toasts rise their own height from the
@@ -815,6 +830,8 @@ enum Origin {
     Mount(ElementId),
     /// At an instant the caller holds (an exit: when its subject went).
     At(Instant),
+    /// Already played out.
+    Settled,
 }
 
 /// A one-shot drawn at its spec's eased progress on the executor's clock:
@@ -858,6 +875,7 @@ fn play(origin: Origin, spec: MotionSpec, window: &mut Window, cx: &mut App) -> 
     }
     let now = cx.background_executor().now();
     let started = match origin {
+        Origin::Settled => return 1.0,
         Origin::At(at) => at,
         Origin::Mount(id) => window.with_global_id(id, |id, window| {
             window.with_element_state(id, |started: Option<Instant>, _| {
@@ -2170,9 +2188,9 @@ pub mod testing {
     }
 }
 
-/// Launch: adopt the system's Reduce Motion setting. gpui reads no platform
-/// setting itself, so without this the flag is never set. Read off the main
-/// thread; `FERRITE_REDUCE_MOTION=1` (or `0`) overrides it.
+/// Launch: adopt the system's Reduce Motion setting, and follow it while
+/// the app runs. gpui reads no platform setting itself, so without this
+/// the flag is never set. `FERRITE_REDUCE_MOTION=1` (or `0`) overrides it.
 pub fn init(cx: &mut App) {
     if let Some(forced) = std::env::var("FERRITE_REDUCE_MOTION")
         .ok()
@@ -2181,21 +2199,9 @@ pub fn init(cx: &mut App) {
         cx.set_reduce_motion(forced);
         return;
     }
-    if !cfg!(target_os = "macos") {
-        return;
-    }
-    let read = cx.background_executor().spawn(async {
-        std::process::Command::new("defaults")
-            .args(["read", "com.apple.universalaccess", "reduceMotion"])
-            .output()
-            .is_ok_and(|out| out.status.success() && out.stdout.trim_ascii() == b"1")
-    });
-    cx.spawn(async move |cx| {
-        if read.await {
-            cx.update(|cx| cx.set_reduce_motion(true));
-        }
-    })
-    .detach();
+    cx.set_reduce_motion(cx.system_reduce_motion());
+    cx.on_system_reduce_motion_change(|cx| cx.set_reduce_motion(cx.system_reduce_motion()))
+        .detach();
 }
 
 #[cfg(test)]
@@ -2708,6 +2714,25 @@ mod tests {
         let (view, drawn, cx) = switch(cx, false);
         flip(&view, true, cx);
         assert_eq!(drawn.get(), 1.0);
+        assert_eq!(next_frame(cx), 0);
+    }
+
+    /// The system's Reduce Motion turning on lands a flip that is mid-flight.
+    #[gpui::test]
+    fn reduced_motion_following_the_system_lands_a_flip_mid_flight(cx: &mut TestAppContext) {
+        testing::drive();
+        cx.update(init);
+        let (view, drawn, cx) = switch(cx, true);
+        flip(&view, false, cx);
+        cx.executor().advance_clock(Duration::from_millis(75));
+        assert!(next_frame(cx) > 0);
+        let mid = drawn.get();
+        assert!(mid > 0.0 && mid < 1.0, "mid-flight {mid}");
+
+        cx.simulate_system_reduce_motion(true);
+        cx.run_until_parked();
+        next_frame(cx);
+        assert_eq!(drawn.get(), 0.0, "landed at once");
         assert_eq!(next_frame(cx), 0);
     }
 

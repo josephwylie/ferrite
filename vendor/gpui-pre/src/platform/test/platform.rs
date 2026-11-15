@@ -44,6 +44,8 @@ pub(crate) struct TestPlatform {
     pub expect_restart:
         RefCell<Option<oneshot::Sender<(Option<PathBuf>, Vec<std::ffi::OsString>)>>>,
     headless_renderer_factory: Option<Box<dyn Fn() -> Option<Box<dyn PlatformHeadlessRenderer>>>>,
+    reduce_motion: std::cell::Cell<bool>,
+    reduce_motion_callback: RefCell<Option<Box<dyn FnMut()>>>,
     weak: Weak<Self>,
 }
 
@@ -155,11 +157,21 @@ impl TestPlatform {
             #[cfg(target_os = "macos")]
             current_find_pasteboard_item: Mutex::new(None),
             weak: weak.clone(),
+            reduce_motion: Default::default(),
+            reduce_motion_callback: Default::default(),
             opened_url: Default::default(),
             system_notifications: Default::default(),
             text_system,
             headless_renderer_factory,
         })
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn simulate_system_reduce_motion(&self, reduced: bool) {
+        self.reduce_motion.set(reduced);
+        if let Some(callback) = self.reduce_motion_callback.borrow_mut().as_mut() {
+            callback();
+        }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -370,6 +382,14 @@ impl Platform for TestPlatform {
     fn on_keyboard_layout_change(&self, _: Box<dyn FnMut()>) {}
 
     fn on_thermal_state_change(&self, _: Box<dyn FnMut()>) {}
+
+    fn reduce_motion(&self) -> bool {
+        self.reduce_motion.get()
+    }
+
+    fn on_reduce_motion_change(&self, callback: Box<dyn FnMut()>) {
+        *self.reduce_motion_callback.borrow_mut() = Some(callback);
+    }
 
     fn thermal_state(&self) -> ThermalState {
         ThermalState::Nominal

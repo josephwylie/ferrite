@@ -74,6 +74,12 @@ pub(crate) struct Panel {
     /// The first frame has been tended: a preview open by then is simply
     /// there (`tend_previews`).
     tended: bool,
+    /// The tab the last frame showed and when the operator moved to the
+    /// one now shown: its body fades in from that instant
+    /// (`ferrite_ui::motion::swap_since`), the outgoing one having gone
+    /// at once.
+    shown: Option<(ThreadId, Option<SurfaceId>)>,
+    picked: Option<std::time::Instant>,
     /// The Thread whose Panel's left edge is being dragged.
     resizing: Option<ThreadId>,
     /// The tab pressed, until the button goes up.
@@ -116,6 +122,8 @@ impl Panel {
             hunks: Default::default(),
             window_w: 0.,
             tended: false,
+            shown: None,
+            picked: None,
             resizing: None,
             tab_press: None,
             empty_highlight: 0,
@@ -372,6 +380,32 @@ impl CockpitView {
         }
     }
 
+    /// Note a move from one tab to another of the same Thread's open
+    /// Panel. A document's preview fades itself, so a pick of or from
+    /// one starts none here, nor does the Panel opening or another
+    /// Thread's coming up.
+    fn tend_tab_pick(&mut self, cx: &mut Context<Self>) {
+        let shown = self
+            .panel_pane()
+            .and_then(|index| self.panes[index].thread())
+            .map(|thread| (thread, self.active_surface(thread)));
+        if shown == self.panel.shown {
+            return;
+        }
+        let previewed = |id: &Option<SurfaceId>| {
+            matches!(id, Some(SurfaceId::File(_) | SurfaceId::Browser))
+        };
+        self.panel.picked = match (&self.panel.shown, &shown) {
+            (Some((was, before)), Some((now, after)))
+                if was == now && !previewed(before) && !previewed(after) =>
+            {
+                Some(cx.background_executor().now())
+            }
+            _ => None,
+        };
+        self.panel.shown = shown;
+    }
+
     /// Once per frame, before anything measures the board: tend the
     /// previews (`tend_previews`), disarm a Merge no longer in view, give
     /// the shown Surface what it needs to draw, and write the tabs if they
@@ -380,6 +414,7 @@ impl CockpitView {
         self.tend_previews(window, cx);
         self.disarm_unseen_merge();
         self.panel.window_w = f32::from(window.viewport_size().width);
+        self.tend_tab_pick(cx);
         if let Some(thread) = self
             .panel_pane()
             .and_then(|index| self.panes[index].thread())
@@ -690,7 +725,7 @@ impl CockpitView {
                 .child(body)
                 .into_any_element()
         };
-        match active {
+        let body = match active {
             None => keyed(self.surface_empty(thread, cx)),
             Some(SurfaceId::Overview) => {
                 let scroll = self.panel.scrolls.get(&thread).cloned().unwrap_or_default();
@@ -727,7 +762,12 @@ impl CockpitView {
             Some(SurfaceId::SideChat(tab)) => filled(self.side_chat_body(thread, tab, cx)),
             Some(SurfaceId::Agent(key)) => filled(self.agent_drill_body(thread, &key, cx)),
             Some(SurfaceId::PullRequest(number)) => filled(self.pr_surface(thread, number, cx)),
-        }
+        };
+        ferrite_ui::motion::swap_since(
+            self.panel.picked,
+            div().flex().flex_col().flex_1().min_h_0().min_w_0().child(body),
+        )
+        .into_any_element()
     }
 }
 

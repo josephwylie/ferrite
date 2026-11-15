@@ -312,3 +312,89 @@ fn a_wide_tool_in_a_narrow_window_leaves_the_board_its_least(cx: &mut TestAppCon
     show(&view, SurfaceId::Overview, cx);
     assert_eq!(drawn_w(&view, cx), PANEL_W);
 }
+
+/// The keyboard inside a Panel that slides shut is taken back at once: what
+/// is typed while it goes lands in the Composer, and Enter sends it.
+#[gpui::test]
+fn keys_typed_while_the_panel_slides_shut_reach_the_composer(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    bind_production_keys(cx);
+    let (core, fake) = cockpit("column-keys", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let dir = scratch("column-keys-settings");
+    std::fs::create_dir_all(&dir).unwrap();
+    view.update(cx, |view, _| {
+        view.prefs.dir = dir;
+        view.prefs.settings.panel_shown = true;
+        view.nav_forced_open = true;
+    });
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    settle(cx);
+    show(&view, SurfaceId::Files, cx);
+    cx.update(|window, cx| {
+        let keys = view.read(cx).panel_keys.clone();
+        window.focus(&keys, cx);
+    });
+    settle(cx);
+    assert!(cx.update(|window, cx| view.read(cx).panel_keys.contains_focused(window, cx)));
+
+    toggle_panel(&view, cx);
+    at(MOTION_DUR_BASE_MS / 4, cx);
+    assert!(cx.debug_bounds("column-veil").is_some(), "still sliding");
+    cx.simulate_input("typed mid-slide");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        fake.sent.borrow().as_slice(),
+        ["typed mid-slide"],
+        "the Composer heard it and Enter sent it"
+    );
+}
+
+fn pick(id: SurfaceId, view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+    let thread = thread(view, cx);
+    view.update(cx, |view, cx| view.upsert_surface(thread, id, cx));
+    cx.run_until_parked();
+}
+
+/// A picked tab's body fades in over the place the last one left, and the
+/// outgoing body is gone on the frame the pick lands, so the strip and the
+/// body never disagree and nothing under the fade answers for the old tab.
+/// An update that is no pick plays nothing.
+#[gpui::test]
+fn a_picked_tabs_body_fades_in_and_the_outgoing_one_goes_at_once(cx: &mut TestAppContext) {
+    let (view, cx) = window("column-tab-fade", 1600., cx);
+    show(&view, SurfaceId::Overview, cx);
+    assert!(cx.debug_bounds("panel-body").is_some(), "Overview shows");
+    assert_eq!(frame(cx), 0);
+
+    pick(SurfaceId::Files, &view, cx);
+    assert!(frame(cx) > 0, "the new body is fading in");
+    assert!(cx.debug_bounds("files").is_some());
+    assert!(cx.debug_bounds("panel-body").is_none(), "Overview is gone");
+    at(MOTION_DUR_BASE_MS / 4, cx);
+    pick(SurfaceId::Overview, &view, cx);
+    assert!(frame(cx) > 0, "a reversal starts its own fade");
+    assert!(cx.debug_bounds("files").is_none());
+    assert!(cx.debug_bounds("panel-body").is_some());
+    settle(cx);
+
+    view.update(cx, |_, cx| cx.notify());
+    assert_eq!(frame(cx), 0, "an update that is no pick plays nothing");
+}
+
+/// The system setting flipping while the panel and the nav are mid-slide
+/// lands both where they were going, with no further frame asked for.
+#[gpui::test]
+fn reduced_motion_turned_on_mid_slide_lands_it(cx: &mut TestAppContext) {
+    let (view, cx) = window("column-reduced-live", 1600., cx);
+    toggle_panel(&view, cx);
+    at(MOTION_DUR_BASE_MS / 4, cx);
+    assert!(panel_w(cx) > 0.0, "mid-close");
+
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    frame(cx);
+    assert_eq!(cx.debug_bounds("panel"), None, "landed shut");
+    assert_eq!(card_right(&view, cx), 1600.);
+    assert_eq!(frame(cx), 0);
+}
