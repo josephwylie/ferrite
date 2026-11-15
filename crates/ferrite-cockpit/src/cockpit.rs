@@ -30,6 +30,7 @@ mod nav_chrome;
 mod nav_keys;
 mod nav_list;
 mod nav_pick;
+mod nav_undo;
 mod palette;
 pub(crate) mod panel;
 mod parts;
@@ -457,10 +458,10 @@ pub struct CockpitView {
     /// The Thread whose card last scrolled into view for being shown
     /// (`shown_reveal`): a focus change scrolls the new one's.
     nav_shown: std::rc::Rc<std::cell::Cell<Option<ThreadId>>>,
-    /// The nav's search field (`nav_chrome`), and the result its ↑/↓ stand
-    /// on.
+    /// The nav's search field (`nav_chrome`), and the Thread its ↑/↓ stand
+    /// on: a Thread, not a place in the results, which live updates reorder.
     nav_search: Entity<ferrite_pane::composer::Composer>,
-    nav_search_cursor: usize,
+    nav_search_pick: std::cell::Cell<Option<ThreadId>>,
     /// The foot's undo notice: what the last Park or Snooze did, until it
     /// fades (`nav_chrome::NavUndo`).
     nav_undo: Option<nav_chrome::NavUndo>,
@@ -1041,10 +1042,10 @@ fn version_label(version: &str, dev: bool) -> String {
 /// A rename editor with its keys beside it while it edits: `↵ save · esc
 /// cancel` in mono `INK_SUBTLE`, the `·` in structure ink. The keys live
 /// here, where they act, rather than on the menu row that opened it.
-fn rename_field(editor: Entity<ferrite_pane::composer::Composer>) -> Div {
+fn rename_field(editor: Entity<ferrite_pane::composer::Composer>, hint: bool) -> Div {
     let text = "↵ save · esc cancel";
     let at = text.find(" · ").unwrap_or(0);
-    let hint = ferrite_ui::components::text_meta()
+    let hint_text = ferrite_ui::components::text_meta()
         .debug_selector(|| "rename-hint".into())
         .flex_shrink_0()
         .font_family(ferrite_ui::theme::FONT_CODE)
@@ -1061,8 +1062,14 @@ fn rename_field(editor: Entity<ferrite_pane::composer::Composer>) -> Div {
         .gap(px(ferrite_ui::theme::SPACE_2))
         .min_w_0()
         .flex_1()
-        .child(div().min_w_0().flex_1().child(editor))
-        .child(hint)
+        .child(
+            div()
+                .debug_selector(|| "rename-field".into())
+                .min_w_0()
+                .flex_1()
+                .child(editor),
+        )
+        .children(hint.then_some(hint_text))
 }
 
 /// What rides the pointer while a nav card is dragged: that card itself,
@@ -1526,7 +1533,7 @@ impl CockpitView {
             nav_cursor_bounds: Default::default(),
             nav_shown: Default::default(),
             nav_search: nav_chrome::search_line(cx),
-            nav_search_cursor: 0,
+            nav_search_pick: Default::default(),
             nav_undo: None,
             nav_cursor: None,
             nav_keys_held: false,
@@ -3480,7 +3487,7 @@ impl CockpitView {
         };
         let editor = cx.new(ferrite_pane::composer::Composer::new);
         editor.update(cx, |editor, cx| {
-            editor.set_role(ferrite_pane::composer::Role::Field(None), cx);
+            editor.set_role(ferrite_pane::composer::Role::Field(Some("NavRename")), cx);
             editor.set(title, cx)
         });
         self.rename = Some((target, editor));
@@ -5423,7 +5430,7 @@ impl CockpitView {
     fn pane_title(&self, index: usize, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
         if let Some((RenameTarget::PaneTitle(editing), editor)) = &self.rename {
             if *editing == thread {
-                return rename_field(editor.clone())
+                return rename_field(editor.clone(), true)
                     .font_weight(ferrite_ui::theme::W_BODY)
                     .on_mouse_down(
                         MouseButton::Left,
@@ -5478,11 +5485,12 @@ impl CockpitView {
         &self,
         thread: ThreadId,
         title: SharedString,
+        hint: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if let Some((RenameTarget::Thread(editing), editor)) = &self.rename {
             if *editing == thread {
-                return rename_field(editor.clone())
+                return rename_field(editor.clone(), hint)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
@@ -9084,7 +9092,18 @@ impl CockpitView {
             if let Some(index) = self.pane_for(thread) {
                 self.focus_pane(index);
             }
+            self.widen_scope_to(thread, cx);
             cx.notify();
+        }
+    }
+
+    /// The operator went to a Thread the nav's Project scope hides: the
+    /// scope widens to all Projects, so the shown Thread has its row in the
+    /// list (and the Filter button says why). Owned Threads are never
+    /// listed, so nothing here reveals them.
+    fn widen_scope_to(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        if self.nav_filter.is_some() && self.cockpit.operators(thread) && !self.admitted(thread) {
+            self.choose_nav_filter(None, cx);
         }
     }
 
@@ -9105,18 +9124,34 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Revive one parked Thread into the view that shows it — the shared
-    /// tail of cmd-o and a parked nav row's click (#21).
-    fn revive_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    /// Revive one parked Thread into the view that shows it: the shared
+    /// tail of cmd-o and a parked nav row's click (#21). Whether it came
+    /// back; when it did not, the nav says so.
+    fn revive_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) -> bool {
+        let revived = self.try_revive(thread, cx);
+        let outcome = nav_undo::Outcome {
+            thread,
+            result: revived.as_ref().map(drop).map_err(|e| e.to_string()),
+        };
+        self.report_failures("reopen", &[outcome]);
+        cx.notify();
+        revived.is_ok()
+    }
+
+    /// `revive_thread` without the words, for a caller with several to
+    /// tell. The board's own state gives way only to a Thread that is back.
+    fn try_revive(
+        &mut self,
+        thread: ThreadId,
+        cx: &mut Context<Self>,
+    ) -> Result<(), ferrite_core::store::LoadError> {
+        self.cockpit.reopen(thread)?;
         self.empty_shown = false;
         self.factory_view = None;
-        match self.cockpit.reopen(thread) {
-            Ok(()) => {
-                self.sync_panes(cx);
-                cx.notify();
-            }
-            Err(e) => ferrite_core::log!("thread {thread} could not be reopened: {e:?}"),
-        }
+        self.widen_scope_to(thread, cx);
+        self.sync_panes(cx);
+        cx.notify();
+        Ok(())
     }
 
     /// Focus by grid index — the pointer's and the tests' spelling of the
@@ -9180,15 +9215,17 @@ impl CockpitView {
     /// closed, which is the one they want back (#17); the core walks the
     /// park order, then creation order.
     fn reopen_thread(&mut self, _: &ReopenThread, _window: &mut Window, cx: &mut Context<Self>) {
-        match self.cockpit.reopen_last() {
-            Some((_, Ok(()))) => {
+        if let Some((thread, result)) = self.cockpit.reopen_last() {
+            let outcome = nav_undo::Outcome {
+                thread,
+                result: result.map_err(|e| e.to_string()),
+            };
+            if outcome.result.is_ok() {
+                self.widen_scope_to(thread, cx);
                 self.sync_panes(cx);
-                cx.notify();
             }
-            Some((thread, Err(e))) => {
-                ferrite_core::log!("thread {thread} could not be reopened: {e:?}")
-            }
-            None => {}
+            self.report_failures("reopen", &[outcome]);
+            cx.notify();
         }
     }
 
@@ -9804,6 +9841,12 @@ impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         ferrite_ui::motion::hover_frame_start(cx);
         self.tend_reader_slides(cx);
+        if let Some((_, editor)) = &self.rename {
+            let line = editor.read(cx).focus_handle(cx);
+            if !line.is_focused(window) {
+                window.focus(&line, cx);
+            }
+        }
         // Seen is on screen while the window has focus: the Cockpit follows
         // the window's activation from its first frame — a window that opens
         // unfocused sees nothing until it is focused — and the window coming
@@ -12863,21 +12906,6 @@ impl CockpitView {
             pr,
             pin: Some(pin),
         }
-    }
-
-    /// Park each of `threads` (reversible: the Parked shelf holds them,
-    /// and ⌘Z takes it back while the foot's notice stands).
-    fn park_listed(&mut self, threads: &[ThreadId], cx: &mut Context<Self>) {
-        let parked: Vec<ThreadId> = threads
-            .iter()
-            .copied()
-            .filter(|thread| self.cockpit.park_thread(*thread).is_ok())
-            .collect();
-        self.sync_panes(cx);
-        if !parked.is_empty() {
-            self.offer_undo(nav_chrome::UndoAct::Parked(parked), cx);
-        }
-        cx.notify();
     }
 
     /// The nav column as far in as it is this frame, its face pinned to the

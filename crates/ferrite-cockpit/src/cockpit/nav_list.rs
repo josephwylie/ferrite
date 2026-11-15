@@ -284,7 +284,7 @@ impl CockpitView {
     ) -> AnyElement {
         let thread = row.thread;
         faces.push((NavKey::Card(thread), NavFace::Card(row.clone())));
-        let title = self.editable_thread_title(thread, row.name.clone(), cx);
+        let title = self.editable_thread_title(thread, row.name.clone(), true, cx);
         let card = nav::thread_card(
             row,
             title,
@@ -332,7 +332,9 @@ impl CockpitView {
                 view.snooze_editor = None;
                 match &open {
                     Some(verb) => view.notice_verb(verb.clone(), cx),
-                    None => view.open_nav_row(thread, cx),
+                    None => {
+                        view.open_nav_row(thread, cx);
+                    }
                 }
                 window.blur(cx);
             }))
@@ -432,7 +434,12 @@ impl CockpitView {
             }
         };
         faces.push((NavKey::Slim(thread), NavFace::Slim(row.clone(), time.clone())));
-        let slim = list::slim_row(row, time, action, &nav::Measure::Text(cx))
+        let title = if self.renaming_thread(thread) {
+            list::SlimTitle::Editor(self.editable_thread_title(thread, row.name.clone(), false, cx))
+        } else {
+            list::SlimTitle::Row
+        };
+        let slim = list::slim_row(row, title, time, action, &nav::Measure::Text(cx))
             .children(self.cursor_reveal(NavItem::Thread(thread)))
             .children(self.shown_reveal(row))
             .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {

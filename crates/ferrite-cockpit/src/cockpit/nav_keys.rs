@@ -318,6 +318,23 @@ impl CockpitView {
         })
     }
 
+    /// On the highlighted search result: once after the highlight moves, a
+    /// scroll that shows it whole. The keyboard stays in the field.
+    pub(super) fn search_reveal(&self) -> impl IntoElement {
+        let reveal = self.nav_reveal.clone();
+        let scroll = self.nav_scroll.clone();
+        gpui::canvas(
+            move |row: Bounds<Pixels>, window, _| {
+                if reveal.replace(false) {
+                    scroll_into_view(&scroll, row, window);
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0()
+    }
+
     /// On the shown Thread's row: once each time the shown Thread changes
     /// (a focus move from the board, the palette, a toast), a scroll that
     /// shows it whole (#231).
@@ -342,11 +359,12 @@ impl CockpitView {
     /// A Thread row's press, and ⏎ on it: an open Thread takes focus (on
     /// the Group on screen when it holds it, else Solo); a parked one
     /// revives.
-    pub(super) fn open_nav_row(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(super) fn open_nav_row(&mut self, thread: ThreadId, cx: &mut Context<Self>) -> bool {
         if self.pane_for(thread).is_some() {
             self.focus_thread(thread, cx);
+            true
         } else {
-            self.revive_thread(thread, cx);
+            self.revive_thread(thread, cx)
         }
     }
 }

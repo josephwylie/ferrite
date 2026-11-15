@@ -435,7 +435,7 @@ impl CockpitView {
     fn view_title(&self, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
         if let Some((RenameTarget::ViewTitle(editing), editor)) = &self.rename {
             if *editing == thread {
-                return rename_field(editor.clone())
+                return rename_field(editor.clone(), true)
                     .occlude()
                     .on_mouse_down(
                         MouseButton::Left,

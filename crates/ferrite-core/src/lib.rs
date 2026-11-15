@@ -51,6 +51,7 @@ pub mod transcript;
 pub mod update_plan;
 pub mod user_commands;
 pub mod visual;
+pub mod window_frame;
 pub mod workspace;
 pub mod wrap_up;
 
