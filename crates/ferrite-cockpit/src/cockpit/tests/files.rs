@@ -350,10 +350,14 @@ fn a_clean_buffer_keeps_its_caret_when_it_follows_its_file(cx: &mut TestAppConte
     tick(cx);
     let caret = editor.read_with(cx, |e, _| e.caret_for_test());
     assert!(caret > 0, "the caret is off the first line");
-    std::fs::write(&file, "alpha\nBETA\ngamma\n").unwrap();
+    std::fs::write(&file, "a\nBETA\ngamma\n").unwrap();
     agent_worked(&view, &fake, 0, cx);
-    assert_eq!(editor.read_with(cx, |e, _| e.text_for_test().to_string()), "alpha\nBETA\ngamma\n");
-    assert_eq!(editor.read_with(cx, |e, _| e.caret_for_test()), caret);
+    assert_eq!(editor.read_with(cx, |e, _| e.text_for_test().to_string()), "a\nBETA\ngamma\n");
+    assert_eq!(
+        editor.read_with(cx, |e, _| e.caret_for_test()),
+        caret - "lpha".len(),
+        "the caret keeps its line and column when a line above it shrinks"
+    );
 }
 
 #[gpui::test]

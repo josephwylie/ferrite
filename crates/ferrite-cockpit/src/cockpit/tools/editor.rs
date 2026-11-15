@@ -322,7 +322,8 @@ impl Editor {
         }
         if let Ok(text) = String::from_utf8(bytes) {
             let caret = self.text.cursor();
-            self.take_disk(text, on_disk, caret);
+            let at = (self.line_of(caret), self.column_of(caret));
+            self.take_disk(text, on_disk, at);
             cx.emit(Event::Settled);
             cx.notify();
         }
@@ -340,7 +341,7 @@ impl Editor {
             });
         match read {
             Ok((text, on_disk)) => {
-                self.take_disk(text, on_disk, 0);
+                self.take_disk(text, on_disk, (0, 0));
                 self.closing = false;
                 self.writing = None;
             }
@@ -350,11 +351,12 @@ impl Editor {
     }
 
     /// The buffer becomes the disk's `text`, saved, with the caret at
-    /// `caret`.
-    fn take_disk(&mut self, text: String, on_disk: u64, caret: usize) {
+    /// `(line, column)`, held to the new text's lines.
+    fn take_disk(&mut self, text: String, on_disk: u64, (line, column): (usize, usize)) {
         self.text.set(text);
-        self.text.place_caret(caret);
         self.reindex();
+        let line = line.min(self.starts.len() - 1);
+        self.text.place_caret(self.offset_at_column(line, column));
         self.list.reset(self.starts.len());
         self.revision += 1;
         self.saved_revision = self.revision;
