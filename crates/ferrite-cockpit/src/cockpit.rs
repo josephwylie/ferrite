@@ -1520,7 +1520,11 @@ impl CockpitView {
         let launch_project = launch_project.or_else(|| cockpit.register_project(&here()).ok());
         cx.bind_keys([
             gpui::KeyBinding::new("enter", browser::Go, Some("BrowserAddress")),
-            gpui::KeyBinding::new("escape", browser::CancelNewTab, Some("BrowserAddress")),
+            gpui::KeyBinding::new("escape", browser::CancelAddress, Some("BrowserAddress")),
+            gpui::KeyBinding::new("enter", browser::AcceptDialog, Some("BrowserDialog")),
+            gpui::KeyBinding::new("escape", browser::DismissDialog, Some("BrowserDialog")),
+            gpui::KeyBinding::new("enter", browser::AcceptDialog, Some("BrowserPrompt")),
+            gpui::KeyBinding::new("escape", browser::DismissDialog, Some("BrowserPrompt")),
         ]);
         cx.bind_keys([
             gpui::KeyBinding::new("escape", browser::CancelAnnotation, Some("BrowserAnnotationCapture")),
@@ -3666,7 +3670,8 @@ impl CockpitView {
             | MenuTarget::SurfaceMenu(_)
             | MenuTarget::SurfaceTab { .. }
             | MenuTarget::PrMore(_)
-            | MenuTarget::PrLink(_) => None,
+            | MenuTarget::PrLink(_)
+            | MenuTarget::BrowserPage(_) => None,
             MenuTarget::Parked
             | MenuTarget::NavFilter
             | MenuTarget::NavFactory
@@ -10333,7 +10338,10 @@ impl CockpitView {
         // pressed, or a Files editor or filter being typed in.
         let panel_keys_held =
             self.panel_keys.contains_focused(window, cx) || self.panel_control_focused(window);
+        let dialog_took_focus = self.browsers.focus_shown_dialogs(window, cx);
         if window.has_active_dialog(cx)
+            || dialog_took_focus
+            || self.browsers.dialog_holds_focus(window, cx)
             || self.floats_hold_focus()
             || nav_list_focused
             || panel_keys_held

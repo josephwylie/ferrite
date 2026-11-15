@@ -58,6 +58,8 @@ pub(super) enum MenuTarget {
     PrLink(ThreadId),
     /// A Factory picker (#221): its rows are the Factory view's `picks`.
     Factory,
+    /// A right-click on the Thread's web page.
+    BrowserPage(ThreadId),
 }
 
 /// One thing a context-menu row does.
@@ -117,6 +119,8 @@ pub(super) enum MenuVerb {
     Changes(tools::ChangesVerb),
     /// A Terminal verb (`tools::TerminalVerb`).
     Terminal(tools::TerminalVerb),
+    /// A web page verb (`browser::page_menu::PageVerb`).
+    Browser(super::browser::PageVerb),
     /// The Thread's id in the form the CLI takes (`thread_link`).
     CopyLink,
     /// Move the Thread into this Group (Claude's `Move to section ›`).
@@ -403,6 +407,7 @@ impl CockpitView {
             MenuTarget::ChangesBase(diff) => {
                 rows = self.changes_branch_rows(diff).into_iter().map(Some).collect()
             }
+            MenuTarget::BrowserPage(thread) => rows = self.browser_page_rows(thread),
             MenuTarget::Terminal(_) => rows = self.terminal_context_rows(),
             MenuTarget::TerminalMore(_) => rows = self.terminal_more_rows(),
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread),
@@ -798,6 +803,9 @@ impl CockpitView {
                 | MenuTarget::ChangesBase(diff),
                 MenuVerb::Changes(verb),
             ) => self.run_changes_verb(diff, verb, cx),
+            (MenuTarget::BrowserPage(thread), MenuVerb::Browser(verb)) => {
+                self.run_browser_page_verb(thread, verb, cx)
+            }
             (
                 MenuTarget::Terminal(thread) | MenuTarget::TerminalMore(thread),
                 MenuVerb::Terminal(verb),
@@ -880,6 +888,7 @@ impl CockpitView {
                     | MenuTarget::PrMore(_)
                     | MenuTarget::PrLink(_)
                     | MenuTarget::Factory
+                    | MenuTarget::BrowserPage(_)
                     | MenuTarget::Page(_) => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);

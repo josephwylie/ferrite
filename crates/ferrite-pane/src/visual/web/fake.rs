@@ -26,7 +26,8 @@ use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
 use super::{
-    BrowserDirty, BrowserState, BrowserView, BrowserViewport, Cursor, Engine, Frame, Input, Page,
+    BrowserDirty, BrowserState, BrowserView, BrowserViewport, Cursor, DialogAnswer, DialogRequest,
+    Engine, Frame, Input, Page, PageContext,
     Updates, View, Viewport, Wake,
 };
 
@@ -56,6 +57,8 @@ pub enum Call {
     BrowserOpen(String, BrowserViewport),
     BrowserResize(BrowserViewport),
     BrowserNavigate(String),
+    /// The operator replied to a script dialog.
+    DialogAnswered(DialogAnswer),
     Resize(Viewport),
     Input(Input),
     Theme(String),
@@ -113,6 +116,48 @@ impl FakeEngine {
                 navigation.generation.set(navigation.generation.get() + 1);
                 (navigation.wake)();
             }
+        }
+    }
+
+    fn page(&self) -> Option<Rc<BrowserNavigation>> {
+        self.navigation.borrow().iter().rev().find_map(Weak::upgrade)
+    }
+
+    /// The newest browser page's script raises a dialog and blocks on it.
+    pub fn raise_dialog(&self, request: DialogRequest) {
+        if let Some(page) = self.page() {
+            *page.dialog.borrow_mut() = Some(request);
+            (page.wake)();
+        }
+    }
+
+    /// The script of the page showing `url` raises a dialog and blocks on it.
+    pub fn raise_dialog_at(&self, url: &str, request: DialogRequest) {
+        let page = self
+            .navigation
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find(|page| *page.url.borrow() == url);
+        if let Some(page) = page {
+            *page.dialog.borrow_mut() = Some(request);
+            (page.wake)();
+        }
+    }
+
+    /// The newest browser page asks to open `url` in another window.
+    pub fn request_window(&self, url: &str) {
+        if let Some(page) = self.page() {
+            page.windows.borrow_mut().push(url.into());
+            (page.wake)();
+        }
+    }
+
+    /// The newest browser page reports a right-click.
+    pub fn right_click(&self, context: PageContext) {
+        if let Some(page) = self.page() {
+            *page.context.borrow_mut() = Some(context);
+            (page.wake)();
         }
     }
 
@@ -200,6 +245,9 @@ impl Engine for FakeEngine {
             generation: Cell::new(1),
             pending: RefCell::new(None),
             defer: self.defer_navigation.clone(),
+            dialog: RefCell::default(),
+            windows: RefCell::default(),
+            context: RefCell::default(),
             wake,
         });
         self.navigation
@@ -253,6 +301,9 @@ struct BrowserNavigation {
     generation: Cell<u64>,
     pending: RefCell<Option<String>>,
     defer: Rc<Cell<bool>>,
+    dialog: RefCell<Option<DialogRequest>>,
+    windows: RefCell<Vec<String>>,
+    context: RefCell<Option<PageContext>>,
     wake: Rc<dyn Fn()>,
 }
 impl View for BrowserHandle {
@@ -286,6 +337,7 @@ impl BrowserView for BrowserHandle {
             error: None,
             document_generation: self.navigation.generation.get(),
             dirty: BrowserDirty::Unknown,
+            dialog: self.navigation.dialog.borrow().clone(),
         }
     }
     fn target_id(&self) -> Option<String> {
@@ -339,6 +391,18 @@ impl BrowserView for BrowserHandle {
         self.navigate(&url)
     }
     fn set_protected(&self, _: bool) {}
+    fn take_new_windows(&self) -> Vec<String> {
+        std::mem::take(&mut *self.navigation.windows.borrow_mut())
+    }
+    fn take_context(&self) -> Option<PageContext> {
+        self.navigation.context.borrow_mut().take()
+    }
+    fn answer_dialog(&self, answer: DialogAnswer) {
+        if self.navigation.dialog.borrow_mut().take().is_some() {
+            self.journal.borrow_mut().push(Call::DialogAnswered(answer));
+            (self.navigation.wake)();
+        }
+    }
     fn try_release(&self) -> Result<bool, String> {
         Ok(false)
     }
