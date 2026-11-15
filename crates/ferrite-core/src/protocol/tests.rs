@@ -272,6 +272,7 @@ fn state() -> ThreadState {
         }],
         models: vec![model("sonnet")],
         permission_mode: Some("default".into()),
+        sandbox: None,
         permission_modes: vec![WirePermissionMode {
             value: "default".into(),
             label: "Default".into(),
@@ -296,6 +297,16 @@ fn input(seq: u64, input: WireInput) -> Sample {
 
 fn live(seq: u64, live: Live) -> Sample {
     input(seq, WireInput::Live(live))
+}
+
+fn server_defaults() -> crate::settings::ServerDefaults {
+    crate::settings::ServerDefaults {
+        claude_permission_mode: Some("plan".into()),
+        codex_approval_policy: "on-request".into(),
+        codex_sandbox: Some("workspace-write".into()),
+        placeholder_suggestions: true,
+        factory_tasks_at_once: 3,
+    }
 }
 
 fn command(id: u64, op: Op) -> Sample {
@@ -1252,6 +1263,82 @@ fn samples() -> Vec<(&'static str, Sample)> {
             ),
         ),
         ("command_settings_changed", command(23, Op::SettingsChanged)),
+        (
+            "command_server_defaults",
+            command(230, Op::ServerDefaults { set: None }),
+        ),
+        (
+            "command_server_defaults_set",
+            command(
+                231,
+                Op::ServerDefaults {
+                    set: Some(server_defaults()),
+                },
+            ),
+        ),
+        (
+            "command_cli_versions",
+            command(
+                232,
+                Op::Cli {
+                    action: CliAction::Versions,
+                },
+            ),
+        ),
+        (
+            "command_cli_update",
+            command(
+                233,
+                Op::Cli {
+                    action: CliAction::Update {
+                        provider: crate::store::Provider::Codex,
+                    },
+                },
+            ),
+        ),
+        (
+            "reply_server_defaults",
+            Sample::Server(ServerMessage::Reply {
+                id: 230,
+                ok: Some(Done::ServerDefaults {
+                    defaults: server_defaults(),
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_clis",
+            Sample::Server(ServerMessage::Reply {
+                id: 232,
+                ok: Some(Done::Clis {
+                    clis: vec![CliReport {
+                        provider: crate::store::Provider::Claude,
+                        binary: Some(CliBinary {
+                            version: "2.1.259".into(),
+                            path: "/opt/box/bin/claude".into(),
+                        }),
+                        status: Some(CliStatus::UpToDate {
+                            current: "2.1.259".into(),
+                        }),
+                    }],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_cli_updated",
+            Sample::Server(ServerMessage::Reply {
+                id: 233,
+                ok: Some(Done::CliUpdated {
+                    provider: crate::store::Provider::Codex,
+                    binary: CliBinary {
+                        version: "0.160.0".into(),
+                        path: "/opt/box/bin/codex".into(),
+                    },
+                }),
+                error: None,
+            }),
+        ),
         (
             "command_search_files",
             command(
@@ -2605,6 +2692,33 @@ fn an_unknown_enum_value_decodes_to_unknown() {
 }
 
 #[test]
+fn a_cli_status_from_a_newer_server_decodes_to_unknown() {
+    let report: CliReport = serde_json::from_str(
+        r#"{"provider":"claude","status":{"kind":"quarantined","since":"yesterday"}}"#,
+    )
+    .unwrap();
+    assert_eq!(report.status, Some(CliStatus::Unknown));
+    assert_eq!(report.status.and_then(CliStatus::known), None);
+}
+
+#[test]
+fn server_defaults_a_server_leaves_out_take_their_defaults() {
+    let sparse: crate::settings::ServerDefaults =
+        serde_json::from_str(r#"{"factory_tasks_at_once":5}"#).unwrap();
+    assert_eq!(
+        sparse,
+        crate::settings::ServerDefaults {
+            factory_tasks_at_once: 5,
+            ..Default::default()
+        }
+    );
+    assert_eq!(
+        serde_json::from_str::<crate::settings::ServerDefaults>("{}").unwrap(),
+        Default::default()
+    );
+}
+
+#[test]
 fn an_unknown_message_type_is_ignored() {
     let message: ServerMessage = decode(&tolerance("unknown_message")).unwrap();
     assert_eq!(message, ServerMessage::Unknown);
@@ -2942,4 +3056,20 @@ fn review_diff_names_only_what_an_older_server_reads() {
     });
     assert_eq!(Op::review_diff(path, &run), None);
     assert_eq!(Op::review_diff(path, &Read::LastTurn), None);
+}
+
+/// A Server that names the sandbox its provider announced sends it with the
+/// Thread; an older one sends none, and the card then claims none.
+#[test]
+fn a_threads_announced_sandbox_crosses_the_wire_and_may_be_absent() {
+    let mut said = state();
+    said.sandbox = Some("workspace-write".into());
+    let wire = serde_json::to_value(&said).unwrap();
+    assert_eq!(wire["sandbox"], "workspace-write");
+    let heard: ThreadState = serde_json::from_value(wire).unwrap();
+    assert_eq!(heard.sandbox.as_deref(), Some("workspace-write"));
+    let older = serde_json::to_value(state()).unwrap();
+    assert!(older.get("sandbox").is_none());
+    let heard: ThreadState = serde_json::from_value(older).unwrap();
+    assert_eq!(heard.sandbox, None);
 }

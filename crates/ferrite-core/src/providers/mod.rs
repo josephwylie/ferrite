@@ -204,6 +204,12 @@ pub trait Session {
     fn permission_modes(&self) -> Vec<PermissionModeChoice> {
         Vec::new()
     }
+    /// The sandbox the provider says this Session runs in, in `read-only`,
+    /// `workspace-write` or `danger-full-access` words. `None` when the
+    /// provider has none or has not said: a default is never guessed.
+    fn sandbox(&self) -> Option<String> {
+        None
+    }
     /// Native follow-ups are optional; providers without them use the
     /// one-shot prediction path. These never enter the durable transcript.
     fn set_suggestions_enabled(&mut self, _enabled: bool) -> io::Result<()> {
@@ -410,6 +416,10 @@ impl Session for CodexSession {
 
     fn permission_modes(&self) -> Vec<PermissionModeChoice> {
         CodexSession::permission_modes(self)
+    }
+
+    fn sandbox(&self) -> Option<String> {
+        CodexSession::sandbox(self)
     }
 
     fn supports_control(&self, kind: ControlKind) -> bool {

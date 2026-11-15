@@ -93,14 +93,16 @@ pub(crate) fn script_command(executable: &str, workflow: &str) -> String {
 impl CockpitView {
     /// Settings' stepper on how many Factory Tasks work at once.
     pub(crate) fn step_factory_limit(&mut self, delta: i32, cx: &mut Context<Self>) {
-        let now = self.prefs.settings.factory_tasks_at_once;
+        let Some(now) = self.factory_limit() else {
+            return;
+        };
         let next = if delta == 0 {
             core_factory::DEFAULT_LIMIT
         } else {
             core_factory::clamp_limit(now.saturating_add_signed(delta as isize))
         };
         if next != now {
-            self.change_settings(|settings| settings.factory_tasks_at_once = next, cx);
+            self.change_defaults(|defaults| defaults.factory_tasks_at_once = next, cx);
             cx.notify();
         }
     }

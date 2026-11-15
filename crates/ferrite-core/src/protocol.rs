@@ -383,6 +383,18 @@ pub enum Op {
     },
     /// Settings changed on disk: reread them for the next Session.
     SettingsChanged,
+    /// The Server's own defaults (`ServerDefaults`): read from its
+    /// `settings.json`, or, with `set`, written there and read back. Either
+    /// way replied `server_defaults`, as the file now says.
+    ServerDefaults {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        set: Option<crate::settings::ServerDefaults>,
+    },
+    /// What the provider CLIs are on the machine the Server runs on, and
+    /// the one update that would replace one of them.
+    Cli {
+        action: CliAction,
+    },
     /// A provider's CLI was replaced on disk: its Sessions restart on the
     /// new release as they idle, and its models are asked for again.
     CliReplaced {
@@ -591,6 +603,8 @@ impl Op {
             | Op::Coordinator { .. }
             | Op::Notice { .. }
             | Op::SettingsChanged
+            | Op::ServerDefaults { .. }
+            | Op::Cli { .. }
             | Op::CliReplaced { .. }
             | Op::Focused { .. }
             | Op::ListDir { .. }
@@ -977,6 +991,99 @@ pub enum CoordinatorAction {
     },
     #[serde(other)]
     Unknown,
+}
+
+/// What a `cli` command asks of the machine the Server runs on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CliAction {
+    /// Which copy of each CLI the machine runs.
+    Versions,
+    /// `Versions`, and what the registry says is newest. Reaches the
+    /// network from that machine.
+    Check,
+    /// Install the newest release of `provider`'s CLI on that machine.
+    Update {
+        provider: Provider,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+/// The copy of a provider CLI a machine runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CliBinary {
+    pub version: String,
+    pub path: PathBuf,
+}
+
+/// One provider's CLI as a machine has it: the copy it runs (none when no
+/// copy answers) and, for a `check`, how that compares to the newest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CliReport {
+    pub provider: Provider,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<CliBinary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<CliStatus>,
+}
+
+/// What a check found, as it crosses the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CliStatus {
+    Missing,
+    UpToDate {
+        current: String,
+    },
+    Available {
+        current: String,
+        latest: String,
+        #[serde(default)]
+        upgrade: Option<crate::providers::update::Upgrade>,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+impl From<crate::providers::update::Status> for CliStatus {
+    fn from(status: crate::providers::update::Status) -> Self {
+        use crate::providers::update::Status;
+        match status {
+            Status::Missing => CliStatus::Missing,
+            Status::UpToDate { current } => CliStatus::UpToDate { current },
+            Status::Available {
+                current,
+                latest,
+                upgrade,
+            } => CliStatus::Available {
+                current,
+                latest,
+                upgrade,
+            },
+        }
+    }
+}
+
+impl CliStatus {
+    /// The check's finding, or `None` for one this build does not know.
+    pub fn known(self) -> Option<crate::providers::update::Status> {
+        use crate::providers::update::Status;
+        match self {
+            CliStatus::Missing => Some(Status::Missing),
+            CliStatus::UpToDate { current } => Some(Status::UpToDate { current }),
+            CliStatus::Available {
+                current,
+                latest,
+                upgrade,
+            } => Some(Status::Available {
+                current,
+                latest,
+                upgrade,
+            }),
+            CliStatus::Unknown => None,
+        }
+    }
 }
 
 /// What a GitHub start's pickers list (#225).
@@ -1523,6 +1630,19 @@ pub enum Done {
     Names {
         names: Vec<String>,
     },
+    /// A Server's `settings.json` defaults, as read back.
+    ServerDefaults {
+        defaults: crate::settings::ServerDefaults,
+    },
+    /// Each provider CLI the Server's machine has, from a `cli` ask.
+    Clis {
+        clis: Vec<CliReport>,
+    },
+    /// A `cli` update that ran: the copy that answers `--version` now.
+    CliUpdated {
+        provider: Provider,
+        binary: CliBinary,
+    },
     /// A `pull_request`'s reading: `gh pr view`'s JSON as `gh` printed it
     /// (`workspace::pr_view`), or none when `gh` had nothing to say — no
     /// `gh`, not logged in, no PR for the branch.
@@ -1676,6 +1796,8 @@ pub struct ThreadState {
     pub models: Vec<crate::ModelInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<String>,
     #[serde(default)]
     pub permission_modes: Vec<WirePermissionMode>,
     #[serde(default)]

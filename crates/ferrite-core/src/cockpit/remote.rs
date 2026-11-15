@@ -767,6 +767,24 @@ impl Remote {
         })
     }
 
+    /// The Server's defaults as its own file says, or, with `set`, after
+    /// writing them there.
+    pub(crate) fn server_defaults(
+        &mut self,
+        set: Option<crate::settings::ServerDefaults>,
+    ) -> io::Result<Receiver<io::Result<crate::settings::ServerDefaults>>> {
+        self.ask(Op::ServerDefaults { set }, |done| match done {
+            Done::ServerDefaults { defaults } => Some(defaults),
+            _ => None,
+        })
+    }
+
+    /// What the Server's machine has of the provider CLIs, or the update it
+    /// ran: the Server's `Done`, for the caller to read.
+    pub(crate) fn cli(&mut self, action: crate::protocol::CliAction) -> io::Result<Receiver<io::Result<Done>>> {
+        self.ask(Op::Cli { action }, Some)
+    }
+
     /// Send `op` and answer its reply later, as `read` makes of it.
     fn ask<T: Send + 'static>(
         &mut self,
@@ -1188,7 +1206,10 @@ fn gone(reason: &str) -> WireError {
 
 impl From<WireError> for io::Error {
     fn from(error: WireError) -> Self {
-        io::Error::other(error.message)
+        match error.code {
+            ErrorCode::Unsupported => io::Error::new(io::ErrorKind::Unsupported, error.message),
+            _ => io::Error::other(error.message),
+        }
     }
 }
 

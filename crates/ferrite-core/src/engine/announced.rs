@@ -33,6 +33,7 @@ struct Said {
     models: Vec<ModelInfo>,
     permission_mode: Option<String>,
     permission_modes: Vec<PermissionModeChoice>,
+    sandbox: Option<String>,
     controls: Vec<ControlKind>,
     mcp_servers: Vec<McpServer>,
 }
@@ -63,6 +64,12 @@ impl Announced {
 
     pub fn permission_mode(&self) -> Option<&str> {
         self.said.permission_mode.as_deref()
+    }
+
+    /// The sandbox the last Session ran in, as its provider said. It is the
+    /// label a Decision shows, never a setting a spawn reads.
+    pub fn sandbox(&self) -> Option<&str> {
+        self.said.sandbox.as_deref()
     }
 
     pub fn permission_modes(&self) -> &[PermissionModeChoice] {
@@ -99,7 +106,7 @@ impl Announced {
     }
 
     /// Take what a ready Session offers without saying it: its permission
-    /// modes and controls. Answers whether that changed anything.
+    /// modes, sandbox and controls. Answers whether that changed anything.
     pub fn ask(&mut self, session: &dyn Session) -> bool {
         let said = &mut self.said;
         let controls: Vec<ControlKind> = CONTROLS
@@ -107,7 +114,8 @@ impl Announced {
             .filter(|kind| session.supports_control(*kind))
             .collect();
         let modes = replace(&mut said.permission_modes, &session.permission_modes());
-        let changed = replace(&mut said.controls, &controls) | modes;
+        let sandbox = replace(&mut said.sandbox, &session.sandbox());
+        let changed = replace(&mut said.controls, &controls) | modes | sandbox;
         if changed {
             self.save();
         }

@@ -144,6 +144,28 @@ pub struct Settings {
     pub favourite_models: Vec<FavouriteModel>,
 }
 
+/// The defaults a Server owns: what the machine whose Server runs the
+/// Sessions starts them with, kept in that machine's own `settings.json`.
+/// A window on another machine reads and writes them through the Server
+/// (`Op::ServerDefaults`), never through its own file. Every other
+/// setting is the window's: how it looks and what it starts new Threads
+/// with.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ServerDefaults {
+    pub claude_permission_mode: Option<String>,
+    pub codex_approval_policy: String,
+    pub codex_sandbox: Option<String>,
+    pub placeholder_suggestions: bool,
+    pub factory_tasks_at_once: usize,
+}
+
+impl Default for ServerDefaults {
+    fn default() -> Self {
+        Settings::default().server_defaults()
+    }
+}
+
 /// One starred model: its provider and the value the provider takes for it
 /// (`opus`, `gpt-5.6`), `default` for the provider's own default.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -324,6 +346,24 @@ impl Settings {
         )
     }
 
+    pub fn server_defaults(&self) -> ServerDefaults {
+        ServerDefaults {
+            claude_permission_mode: self.claude_permission_mode.clone(),
+            codex_approval_policy: self.codex_approval_policy.clone(),
+            codex_sandbox: self.codex_sandbox.clone(),
+            placeholder_suggestions: self.placeholder_suggestions,
+            factory_tasks_at_once: self.factory_tasks_at_once,
+        }
+    }
+
+    pub fn set_server_defaults(&mut self, defaults: ServerDefaults) {
+        self.claude_permission_mode = defaults.claude_permission_mode;
+        self.codex_approval_policy = defaults.codex_approval_policy;
+        self.codex_sandbox = defaults.codex_sandbox;
+        self.placeholder_suggestions = defaults.placeholder_suggestions;
+        self.factory_tasks_at_once = defaults.factory_tasks_at_once;
+    }
+
     /// The model choice for `provider`; `None` is that provider's own
     /// default.
     pub fn model_for(&self, provider: Provider) -> Option<&str> {
@@ -359,16 +399,6 @@ impl Settings {
         match provider {
             Provider::Claude => "auto",
             Provider::Codex => "never",
-        }
-    }
-
-    /// The sandbox `provider`'s Sessions run in, for a provider that has
-    /// one: Codex's (`read-only`, its own default, unless one is set).
-    /// Claude runs in none.
-    pub fn sandbox_for(&self, provider: Provider) -> Option<&str> {
-        match provider {
-            Provider::Claude => None,
-            Provider::Codex => Some(self.codex_sandbox.as_deref().unwrap_or("read-only")),
         }
     }
 

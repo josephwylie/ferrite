@@ -273,6 +273,8 @@ impl Engine {
             | Op::BrowserAttach { .. }
             | Op::Browser { .. }
             | Op::SettingsChanged
+            | Op::ServerDefaults { .. }
+            | Op::Cli { .. }
             | Op::Bootstrap { .. }
             | Op::CancelBootstrap { .. }
             | Op::SearchFiles { .. }

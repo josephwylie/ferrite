@@ -60,8 +60,9 @@ impl CockpitView {
     }
 
     /// The head's provider and its context word: the sandbox its provider
-    /// runs in, else its permission mode (the Session's, else the one it
-    /// was spawned with).
+    /// announced for this Thread, else its permission mode (the Session's,
+    /// else the one it was spawned with). Settings' defaults are for the
+    /// next Session and never relabel this one.
     pub(super) fn decision_context(
         &self,
         thread: ThreadId,
@@ -74,7 +75,7 @@ impl CockpitView {
         let context = decision::context_label(
             open.permission_mode()
                 .unwrap_or(settings.permission_mode_for(provider)),
-            settings.sandbox_for(provider),
+            open.sandbox(),
         );
         (Some(provider), Some(context))
     }

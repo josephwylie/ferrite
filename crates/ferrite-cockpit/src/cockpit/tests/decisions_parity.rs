@@ -156,6 +156,38 @@ fn the_head_names_its_provider_and_context(cx: &mut TestAppContext) {
     );
 }
 
+/// PS-01: the head states the sandbox the provider announced for this
+/// Thread. A later change to the default sandbox is for the next Session
+/// and leaves this card as it was; a Session that announced none shows no
+/// invented sandbox.
+#[gpui::test]
+fn the_head_states_the_announced_sandbox_not_the_default(cx: &mut TestAppContext) {
+    let (view, fake, cx) = waiting("parity-sandbox", cx, bash("sandbox", "ls"));
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let context = |view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.decision_context(thread).1)
+    };
+    assert_eq!(context(&view, cx).as_deref(), Some("default"));
+    *fake.sandbox.borrow_mut() = Some("workspace-write".into());
+    tick(cx);
+    assert_eq!(
+        context(&view, cx).as_deref(),
+        Some("workspace-write sandbox")
+    );
+    view.update(cx, |view, cx| {
+        view.change_defaults(
+            |defaults| defaults.codex_sandbox = Some("read-only".into()),
+            cx,
+        )
+    });
+    tick(cx);
+    assert_eq!(
+        context(&view, cx).as_deref(),
+        Some("workspace-write sandbox"),
+        "the default is for the next Session"
+    );
+}
+
 /// D-4, D-5: `2` with a standing answer offered sends it.
 #[gpui::test]
 fn option_two_sends_the_providers_standing_answer(cx: &mut TestAppContext) {
