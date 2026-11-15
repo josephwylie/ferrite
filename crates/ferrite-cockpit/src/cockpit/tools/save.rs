@@ -40,6 +40,11 @@ pub(crate) fn fingerprint(bytes: &[u8]) -> u64 {
     hasher.finish()
 }
 
+/// Whether the file on disk is no longer the one `expected` was read from.
+pub(crate) fn changed_on_disk(path: &Path, expected: u64) -> bool {
+    std::fs::read(path).is_ok_and(|bytes| fingerprint(&bytes) != expected)
+}
+
 /// Write `text` over the file, unless `expected` (the fingerprint the buffer
 /// was read with) no longer matches what is on disk. `None` overwrites.
 pub(crate) fn write(path: &Path, text: &str, expected: Option<u64>, writer: Writer) -> Outcome {

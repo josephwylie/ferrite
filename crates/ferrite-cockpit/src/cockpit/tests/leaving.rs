@@ -7,7 +7,7 @@ fn closing_while_an_agent_works_asks_first(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("leaving-asks", 1);
     let thread = core.threads()[0];
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    view.read_with(cx, |view, _| assert_eq!(view.leaving_warning(), None));
+    view.read_with(cx, |view, cx| assert_eq!(view.leaving_warning(cx), None));
     assert!(view.update_in(cx, |view, window, cx| view.close_requested(window, cx)));
     assert!(
         !cx.has_pending_prompt(),
@@ -23,7 +23,7 @@ fn closing_while_an_agent_works_asks_first(cx: &mut TestAppContext) {
         })
         .unwrap();
     tick(cx);
-    let warning = view.read_with(cx, |view, _| view.leaving_warning());
+    let warning = view.read_with(cx, |view, cx| view.leaving_warning(cx));
     assert_eq!(
         warning.as_deref(),
         Some("1 agent is working. Leaving stops them; their Threads reopen next launch.")
@@ -55,7 +55,7 @@ fn a_pending_decision_is_named_as_waiting(cx: &mut TestAppContext) {
     tick(cx);
 
     let warning = view
-        .read_with(cx, |view, _| view.leaving_warning())
+        .read_with(cx, |view, cx| view.leaving_warning(cx))
         .unwrap();
     assert!(
         warning.starts_with("1 agent is waiting on a Decision."),
@@ -98,7 +98,7 @@ fn a_starting_session_is_not_working(cx: &mut TestAppContext) {
     assert!(core.thread(thread).unwrap().starting());
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
 
-    view.read_with(cx, |view, _| assert_eq!(view.leaving_warning(), None));
+    view.read_with(cx, |view, cx| assert_eq!(view.leaving_warning(cx), None));
     assert!(view.update_in(cx, |view, window, cx| view.close_requested(window, cx)));
     assert!(!cx.has_pending_prompt());
 }

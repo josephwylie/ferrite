@@ -39,7 +39,7 @@ pub(in crate::cockpit) mod pull_request;
 mod sections;
 pub(in crate::cockpit) use sections::Depth;
 mod strip;
-mod controls;
+pub(in crate::cockpit) mod controls;
 
 use super::surfaces::{Close, Restart, SurfaceId, Surfaces, ThreadSurfaces};
 use ferrite_ui::icons::{self, icon};
@@ -49,7 +49,7 @@ pub(crate) use controls::{PanelControl, PanelFocus, Semantics};
 pub(crate) use pull_request::PrAction;
 pub(crate) use strip::Opener;
 #[cfg(test)]
-pub(crate) use strip::tab_scroll_step;
+pub(crate) use super::tab_scroll::tab_scroll_step;
 pub(crate) use strip::soft_key_cap;
 
 /// The panel's own state on the cockpit.
@@ -62,10 +62,8 @@ pub(crate) struct Panel {
     /// Each Thread's sections' scroll, so a Thread's Overview comes back
     /// where it was left.
     scrolls: std::collections::HashMap<ThreadId, ScrollHandle>,
-    /// The head row's tabs' own horizontal scroll, and its ease to where a
-    /// chevron sent it, until the frame that lands it lets it go.
-    pub(crate) tabs_scroll: ScrollHandle,
-    tabs_tween: std::cell::Cell<Option<ferrite_ui::motion::Tween>>,
+    /// The head row's tabs' own horizontal scroll.
+    pub(crate) tabs_scroll: super::tab_scroll::TabScroll,
     /// The Changes section's unfolded files and their hunks.
     hunks: hunks::Hunks,
     /// The window's width as of the last frame, what the floors and the
@@ -117,8 +115,7 @@ impl Panel {
             dirty: false,
             working_sets: super::tools::WorkingSets::load(dir),
             scrolls: Default::default(),
-            tabs_scroll: ScrollHandle::new(),
-            tabs_tween: Default::default(),
+            tabs_scroll: Default::default(),
             hunks: Default::default(),
             window_w: 0.,
             tended: false,

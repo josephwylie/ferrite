@@ -28,6 +28,8 @@ use crate::cockpit::surfaces::PrTab;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum PanelControl {
     Tab(SurfaceId),
+    /// A file open in the Files tool, by its place in that tool's tabs.
+    FileTab(usize),
     Plus,
     Maximize,
     PrNumber,
@@ -66,7 +68,7 @@ impl Semantics {
 /// to the keyboard only, its role, name and selection. A press with the
 /// pointer leaves the keyboard where it was, as the head's controls always
 /// have.
-pub(super) fn focusable<E: StatefulInteractiveElement>(
+pub(in crate::cockpit) fn focusable<E: StatefulInteractiveElement>(
     element: E,
     handle: &FocusHandle,
     semantics: &Semantics,
@@ -152,7 +154,7 @@ impl CockpitView {
     }
 
     /// Draw a stop: its handle, made if new, and its place in the row.
-    pub(super) fn panel_control(
+    pub(in crate::cockpit) fn panel_control(
         &self,
         control: PanelControl,
         semantics: Semantics,
@@ -212,6 +214,9 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         if let Some(handle) = self.panel.focus.handle(control) {
+            if let (PanelControl::FileTab(at), Some(thread)) = (control, self.panel_thread()) {
+                self.reveal_files_tab(thread, *at);
+            }
             window.focus(&handle, cx);
             cx.notify();
         }
@@ -330,7 +335,13 @@ impl CockpitView {
             return false;
         }
         let on_control = self.panel_control_focused(window);
-        let closing = match self.panel.focus.focused(window) {
+        let focused = self.panel.focus.focused(window);
+        if let Some(PanelControl::FileTab(at)) = focused {
+            self.close_tab(thread, at, cx);
+            self.focus_after_file_close(thread, at, window, cx);
+            return true;
+        }
+        let closing = match focused {
             Some(PanelControl::Tab(id)) => Some(id),
             _ => self.active_surface(thread),
         };
@@ -356,6 +367,23 @@ impl CockpitView {
         self.focus_panel_control(&next, window, cx);
     }
 
+    /// A file tab has closed: the keyboard goes to the file that took its
+    /// place, else back to the Panel's own tab.
+    fn focus_after_file_close(
+        &mut self,
+        thread: ThreadId,
+        closed: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let left = self.files_tab_count(thread);
+        let next = match left {
+            0 => PanelControl::Tab(SurfaceId::Files),
+            left => PanelControl::FileTab(closed.min(left - 1)),
+        };
+        self.focus_panel_control(&next, window, cx);
+    }
+
     /// ⌫ or ⌦ on a tab closes it, and the keyboard goes to the tab that
     /// takes its place.
     pub(in crate::cockpit) fn panel_control_close(
@@ -367,11 +395,17 @@ impl CockpitView {
         let Some(thread) = self.panel_thread() else {
             return;
         };
-        let Some(PanelControl::Tab(id)) = self.panel.focus.focused(window) else {
-            return;
-        };
-        self.close_surface(thread, &id, cx);
-        self.focus_after_close(thread, window, cx);
+        match self.panel.focus.focused(window) {
+            Some(PanelControl::Tab(id)) => {
+                self.close_surface(thread, &id, cx);
+                self.focus_after_close(thread, window, cx);
+            }
+            Some(PanelControl::FileTab(at)) => {
+                self.close_tab(thread, at, cx);
+                self.focus_after_file_close(thread, at, window, cx);
+            }
+            _ => {}
+        }
     }
 
     /// ⇧F10 on a stop: its menu opens, where it has one.

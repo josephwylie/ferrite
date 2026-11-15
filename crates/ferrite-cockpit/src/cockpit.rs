@@ -43,6 +43,7 @@ mod side_chat;
 mod snooze;
 pub(crate) mod starts;
 mod surfaces;
+mod tab_scroll;
 pub(crate) mod subagents;
 pub(crate) mod tools;
 mod transcript_glue;
@@ -1488,6 +1489,7 @@ impl CockpitView {
         }
         cx.on_app_quit(|view, cx| {
             view.save_drafts(cx);
+            view.flush_unsaved_files(cx);
             view.save_surfaces();
             view.save_working_sets();
             view.cockpit.halt_sessions();
