@@ -591,6 +591,20 @@ fn spoken(fake: &Fake, stream: usize) {
         .unwrap();
 }
 
+/// The agent on `stream` works, and the window's next sweep comes round: what
+/// it changed on disk is for the panel to follow.
+fn agent_worked(view: &gpui::Entity<CockpitView>, fake: &Fake, stream: usize, cx: &mut gpui::VisualTestContext) {
+    fake.streams.borrow()[stream]
+        .send(SessionEvent::TextDelta { text: "Edited.".into() })
+        .unwrap();
+    view.update(cx, |view, cx| {
+        view.swept = cx.background_executor().now() - SWEEP_INTERVAL;
+        view.pump(cx);
+    });
+    cx.run_until_parked();
+    tick(cx);
+}
+
 /// Open every settled turn's fold on Pane 0 (`DisclosureId::Turn`), for a
 /// test whose subject is the work rows the fold hides.
 fn open_folds(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {

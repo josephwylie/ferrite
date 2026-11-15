@@ -54,6 +54,13 @@ impl Terminal {
     /// caller reckons it, so the shell's first prompt is drawn to fit; the
     /// view sets the measured size on its first frame.
     pub fn spawn(directory: &Path, scrollback: usize, (columns, lines): (u16, u16)) -> io::Result<Self> {
+        // Left to the pty, a missing folder is quietly swapped for the home one.
+        if !directory.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{} is not a folder", directory.display()),
+            ));
+        }
         let (events_tx, events) = channel();
         let listener = Listener(events_tx);
         let config = Config {
@@ -268,6 +275,13 @@ mod tests {
         let text = wait_for(&terminal, "ferrite-42");
         assert!(text.contains("ferrite-42"), "{text}");
         assert!(text.contains(dir.to_str().unwrap()), "in its folder: {text}");
+    }
+
+    #[test]
+    fn a_missing_folder_is_refused() {
+        let gone = scratch("gone").join("nowhere");
+        let error = Terminal::spawn(&gone, 1000, (80, 24)).err().expect("no shell in a missing folder");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]

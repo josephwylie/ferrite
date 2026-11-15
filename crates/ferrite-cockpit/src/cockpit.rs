@@ -2501,6 +2501,7 @@ impl CockpitView {
             self.sync_menu(cx);
         }
         let frame = self.cockpit.pump();
+        self.note_work(&frame);
         self.pump_browsers(cx);
         self.poll_remote_path(cx);
         self.poll_machine_repo(cx);
@@ -2615,6 +2616,7 @@ impl CockpitView {
             swept_frame = self.frame_turn_at.is_some_and(|at| wall >= at);
             swept_change = aged;
             self.refresh_branches(cx);
+            self.follow_workspace(cx);
             // Free disk rides the sweep, once a minute: no wake of its own.
             if self
                 .free_disk_asked

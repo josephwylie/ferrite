@@ -70,6 +70,31 @@ fn cmd_w_in_the_shell_closes_its_tab_not_the_thread(cx: &mut TestAppContext) {
     );
 }
 
+/// A shell that cannot start (its folder is gone) leaves a tab that says so
+/// and offers Try again, which starts it once the folder is back.
+#[gpui::test]
+fn a_shell_that_cannot_start_says_so_and_retries(cx: &mut TestAppContext) {
+    let (core, _fake, checkout) = bound_cockpit("terminal-fails", Provider::Claude);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let moved = checkout.with_extension("moved");
+    std::fs::rename(&checkout, &moved).unwrap();
+    opened(&view, cx);
+    assert!(cx.debug_bounds("terminal-failed").is_some(), "the tab says it could not start");
+    assert!(cx.debug_bounds("terminal").is_none(), "no grid");
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)));
+    std::fs::rename(&moved, &checkout).unwrap();
+    let at = cx.debug_bounds("terminal-retry").unwrap();
+    cx.simulate_click(at.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("terminal-failed").is_none());
+    assert!(cx.debug_bounds("terminal").is_some(), "the retry started the shell");
+}
+
 /// Each new terminal is its own tab and shell; ⌘J shows the last one, not
 /// another.
 #[gpui::test]
