@@ -4,9 +4,13 @@ use ferrite_ui::motion::{MotionSpec, Tween, EASE_STANDARD};
 use gpui::{px, FollowMode, ListAlignment, ListOffset, ListState, Pixels};
 #[cfg(any(test, feature = "test-support"))]
 use gpui::{Bounds, Point};
-use std::{cell::Cell, rc::Rc, time::Instant};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    time::Instant,
+};
 
-use super::rows::RowDelta;
+use super::rows::{RowDelta, RowId, TranscriptRows};
 
 /// GPUI measures the viewport plus this small buffer, not the full transcript.
 const OVERDRAW: Pixels = px(200.);
@@ -21,14 +25,18 @@ pub struct TranscriptScroll {
     // layout (find reveals below it).
     top_mask: Rc<Cell<Pixels>>,
     // A programmatic scroll easing to its target (`ease_to`).
-    ease: Rc<Cell<Option<ScrollEase>>>,
+    ease: Rc<RefCell<Option<ScrollEase>>>,
+    // How many scrollbar gestures the list had counted when last asked
+    // (`take_scrollbar_gesture`).
+    gestures_seen: Rc<Cell<u64>>,
 }
 
 /// Where a programmatic scroll eases to: a row's offset (a send's prompt),
-/// or the tail (Scroll to end).
-#[derive(Clone, Copy, Debug)]
+/// or the tail (Scroll to end). A row is named by its identity, not its
+/// index: rows spliced in or out above it move the index, not the row.
+#[derive(Clone, Debug)]
 pub(crate) enum EaseTarget {
-    Row(ListOffset),
+    Row { id: RowId, offset: Pixels },
     End,
 }
 
@@ -36,7 +44,7 @@ pub(crate) enum EaseTarget {
 /// re-measured every frame, so rows growing under it are absorbed (T3's
 /// settle loop). Its tween starts on the first frame that can measure the
 /// target.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct ScrollEase {
     target: EaseTarget,
     tween: Option<Tween>,
@@ -51,8 +59,8 @@ pub(crate) enum EaseStep {
     Moving,
     /// It reached its target: the offset is exact from here.
     Landed,
-    /// The operator took the scroll (a scrollbar drag): it stopped where it
-    /// stands.
+    /// The operator took the scroll, or its row left the transcript: it
+    /// stopped where it stands.
     Cancelled,
 }
 
@@ -83,6 +91,7 @@ impl TranscriptScroll {
             resize_anchor: Default::default(),
             top_mask: Rc::new(Cell::new(px(0.))),
             ease: Default::default(),
+            gestures_seen: Rc::new(Cell::new(0)),
         }
     }
 
@@ -107,9 +116,17 @@ impl TranscriptScroll {
         self.list.viewport_bounds()
     }
 
+    /// Whether the reader used the scrollbar (a thumb grab or move, a track
+    /// click) since this was last asked. The scrollbar writes the offset
+    /// itself, so this is how the transcript learns it lost the scroll.
+    pub(crate) fn take_scrollbar_gesture(&self) -> bool {
+        let now = self.list.scrollbar_gestures();
+        self.gestures_seen.replace(now) != now
+    }
+
     /// Resume native tail following and reveal the newest row.
     pub(crate) fn scroll_to_bottom(&self) {
-        self.ease.set(None);
+        self.ease.take();
         self.list.set_follow_mode(FollowMode::Tail);
         self.list.scroll_to_end();
     }
@@ -118,18 +135,20 @@ impl TranscriptScroll {
     /// minimap jump): tail following pauses until the reader returns to the
     /// end.
     pub(crate) fn scroll_to(&self, item_ix: usize, offset: Pixels) {
-        self.ease.set(None);
+        self.ease.take();
         self.list.scroll_to(ListOffset {
             item_ix,
             offset_in_item: offset,
         });
     }
 
-    /// Scroll a page up or down (`by` a viewport less the line kept in
-    /// view of the page before): reaching the end resumes following it.
+    /// Scroll a page up or down: the viewport below the pinned band (the
+    /// rows pass under it), less the line kept in view of the page before.
+    /// Reaching the end resumes following it.
     pub(crate) fn scroll_page(&self, down: bool, keep: Pixels) {
-        self.ease.set(None);
-        let page = (self.list.viewport_bounds().size.height - keep).max(keep);
+        self.ease.take();
+        let readable = self.list.viewport_bounds().size.height - self.top_mask.get();
+        let page = (readable - keep).max(keep);
         self.list.scroll_by(if down { page } else { -page });
     }
 
@@ -139,15 +158,15 @@ impl TranscriptScroll {
     /// it.
     pub(crate) fn ease_to(&self, target: EaseTarget) {
         self.list.pause_following_tail();
-        self.ease.set(Some(ScrollEase {
+        *self.ease.borrow_mut() = Some(ScrollEase {
             target,
             tween: None,
-        }));
+        });
     }
 
     /// Whether an ease is on its way.
     pub fn easing(&self) -> bool {
-        self.ease.get().is_some()
+        self.ease.borrow().is_some()
     }
 
     /// Stop an ease where it stands (the operator scrolled): whether one
@@ -159,24 +178,29 @@ impl TranscriptScroll {
     /// One frame of the ease, after a layout: re-measure what is left to
     /// go, and scroll so that what is left is the tween's value now. `foot`
     /// is the list's padding past its last row (the end lies under it). A
-    /// target the list has not measured is snapped to.
-    pub(crate) fn step_ease(&self, now: Instant, foot: Pixels) -> EaseStep {
-        let Some(mut ease) = self.ease.get() else {
+    /// target the list has not measured is snapped to; one whose row has
+    /// left the transcript ends the ease where it stands.
+    pub(crate) fn step_ease(&self, now: Instant, foot: Pixels, rows: &TranscriptRows) -> EaseStep {
+        let Some(mut ease) = self.ease.borrow().clone() else {
             return EaseStep::Idle;
         };
         if self.list.is_scrollbar_dragging() {
-            self.ease.set(None);
+            self.ease.take();
             return EaseStep::Cancelled;
         }
         let viewport = self.list.viewport_bounds();
-        let left = match ease.target {
-            EaseTarget::Row(offset) => {
+        let left = match &ease.target {
+            EaseTarget::Row { id, offset } => {
+                let Some(item_ix) = rows.position(id) else {
+                    self.ease.take();
+                    return EaseStep::Cancelled;
+                };
                 // The end can reach the offset before the room under it is
                 // laid out: the list would follow it, and the ease moves it.
                 self.list.pause_following_tail();
                 self.list
-                    .bounds_for_item(offset.item_ix)
-                    .map(|bounds| bounds.top() + offset.offset_in_item - viewport.top())
+                    .bounds_for_item(item_ix)
+                    .map(|bounds| bounds.top() + *offset - viewport.top())
             }
             EaseTarget::End if self.list.is_following_tail() => Some(px(0.)),
             EaseTarget::End => Some(
@@ -186,7 +210,7 @@ impl TranscriptScroll {
             ),
         };
         let Some(mut left) = left else {
-            self.land(ease.target);
+            self.land(&ease.target, rows);
             return EaseStep::Landed;
         };
         let tween = match ease.tween {
@@ -206,18 +230,23 @@ impl TranscriptScroll {
             }
         };
         if !tween.running(now, false) {
-            self.land(ease.target);
+            self.land(&ease.target, rows);
             return EaseStep::Landed;
         }
         self.list.scroll_by(left - px(tween.value(now, false)));
-        self.ease.set(Some(ease));
+        *self.ease.borrow_mut() = Some(ease);
         EaseStep::Moving
     }
 
     /// The ease is done: its target exactly, and at the end following it.
-    fn land(&self, target: EaseTarget) {
+    fn land(&self, target: &EaseTarget, rows: &TranscriptRows) {
         match target {
-            EaseTarget::Row(offset) => self.scroll_to(offset.item_ix, offset.offset_in_item),
+            EaseTarget::Row { id, offset } => match rows.position(id) {
+                Some(item_ix) => self.scroll_to(item_ix, *offset),
+                None => {
+                    self.ease.take();
+                }
+            },
             EaseTarget::End => self.scroll_to_bottom(),
         }
     }

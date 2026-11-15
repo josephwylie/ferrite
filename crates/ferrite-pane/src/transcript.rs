@@ -94,6 +94,33 @@ pub enum Page {
     Bottom,
 }
 
+/// Where the transcript takes its own viewport. Every move of it that is not
+/// the list's native tail follow goes through `TranscriptView::navigate`, which
+/// first revokes whatever else was moving it (an ease, a held send prompt, a
+/// band jump's pending offset), so two movers never compete for the offset.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Navigate {
+    /// The reader took the scroll (wheel, scrollbar, minimap): nothing
+    /// automatic moves it any more. The room a band jump left stays.
+    Reader,
+    /// A page up or down.
+    Page { down: bool },
+    /// The first row.
+    Top,
+    /// The live tail, following it from there: eased (the Scroll to end
+    /// pill), or at once (End, a prompt letting go).
+    Tail { eased: bool },
+    /// A turn's band, with its output `offset` scrolled under it.
+    Band { turn: usize, offset: f32 },
+    /// A row `into` px from the top (the minimap's jumps).
+    At { index: usize, into: f32 },
+    /// A Find hit's row: where it lies if it is in view, else its top.
+    Reveal { row: usize },
+    /// The prompt a send just added, to the top with room under it for its
+    /// answer: eased, or at once.
+    Prompt { eased: bool },
+}
+
 /// Where a scene (or a command) asks a transcript to scroll.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(not(feature = "visual-reference"), allow(dead_code))]
@@ -670,6 +697,7 @@ impl TranscriptView {
         cx: &mut Context<Self>,
     ) {
         relative_paths(&mut input);
+        self.reader_took_scrollbar(cx);
         let before = self.input.key();
         let after = input.key();
         let namespace_changed = before.namespace != after.namespace;
@@ -722,13 +750,16 @@ impl TranscriptView {
                 self.rows
                     .reconcile(&self.input.blocks, &self.input.shape(), self.grid().size);
             self.scroll.reconcile(&delta);
+            // What was moving the old history's viewport has nothing to
+            // move in the new one.
+            let send_pending = std::mem::take(&mut self.jump_to_new_prompt);
             if namespace_changed {
-                self.send_anchor = None;
+                self.revoke_automatic_movement();
             }
-            if std::mem::take(&mut self.jump_to_new_prompt) {
-                self.land_new_prompt(cx);
+            if send_pending {
+                self.navigate(Navigate::Prompt { eased: true }, cx);
             } else {
-                self.release_send_anchor();
+                self.release_send_anchor(cx);
             }
             // The newest row grew in place while the turn runs: its new
             // words fade in by the run.
@@ -996,41 +1027,11 @@ impl TranscriptView {
         cx.notify();
     }
 
-    /// The prompt a send just added rises to the top of the view,
-    /// `TX_SEND_ANCHOR_OFFSET` below it, with the room under it for its
-    /// answer (`Runway`): eased, or at once under reduced motion.
-    fn land_new_prompt(&mut self, cx: &App) {
-        let Some((index, row)) = self
-            .rows
-            .rows()
-            .iter()
-            .enumerate()
-            .rfind(|(_, row)| row.kind() == RowKind::Prompt)
-        else {
-            return;
-        };
-        let into = (row.gap() - theme::TX_SEND_ANCHOR_OFFSET).max(0.);
-        self.send_anchor = Some(row.id().clone());
-        self.runway.set(Runway {
-            jump: Some(into),
-            index,
-            ..self.runway.get()
-        });
-        if ferrite_ui::motion::reduced_motion(cx) {
-            self.scroll.scroll_to(index, px(into));
-        } else {
-            self.scroll.ease_to(EaseTarget::Row(gpui::ListOffset {
-                item_ix: index,
-                offset_in_item: px(into),
-            }));
-        }
-    }
-
     /// The sent prompt's turn has started work (a call, a group, its
     /// reasoning): the prompt lets go and the transcript follows the tail,
     /// at once, as T3's does. A prose-only answer keeps the prompt at the
     /// top. Rows that outgrew the room let it go too, where they stand.
-    fn release_send_anchor(&mut self) {
+    fn release_send_anchor(&mut self, cx: &mut Context<Self>) {
         let Some(anchor) = &self.send_anchor else {
             return;
         };
@@ -1050,19 +1051,17 @@ impl TranscriptView {
             _ => false,
         });
         if worked {
-            self.send_anchor = None;
-            self.runway.set(Runway::default());
-            self.scroll.scroll_to_bottom();
+            self.navigate(Navigate::Tail { eased: false }, cx);
         }
     }
 
-    /// The operator scrolled (a wheel, a page, a jump): a programmatic
-    /// scroll on its way stops where it stands, and a sent prompt is no
-    /// longer held for its turn. The room under it stays, used up as rows
-    /// arrive.
-    fn operator_scrolled(&mut self) {
+    /// Stop what moved the viewport on its own: an ease on its way, the
+    /// sent prompt's hold, a band jump still sizing its room. The room
+    /// already under the rows stays, used up as they arrive.
+    fn revoke_automatic_movement(&mut self) {
         self.scroll.cancel_ease();
         self.send_anchor = None;
+        self.jump_to_new_prompt = false;
         let runway = self.runway.get();
         self.runway.set(Runway {
             jump: None,
@@ -1070,38 +1069,39 @@ impl TranscriptView {
         });
     }
 
-    pub fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
-        self.send_anchor = None;
-        self.scroll.scroll_to_bottom();
-        cx.notify();
-    }
-
-    /// PageUp and PageDown (a page, a line of the last kept in view), Home
-    /// and End (the top, the live tail).
-    pub fn page(&mut self, page: Page, cx: &mut Context<Self>) {
-        match page {
-            Page::Up | Page::Down => {
-                self.operator_scrolled();
-                self.runway.set(Runway::default());
-                self.scroll
-                    .scroll_page(page == Page::Down, px(self.grid().line));
-                cx.notify();
-            }
-            Page::Top => self.scroll_to(ScrollTarget::Top, cx),
-            Page::Bottom => self.scroll_to_bottom(cx),
+    /// The scrollbar writes the list's offset itself: when the reader used it
+    /// (a thumb grab or move, a track click) the transcript lets go of the
+    /// scroll as it does for a wheel, whether or not an ease is running.
+    fn reader_took_scrollbar(&mut self, cx: &mut Context<Self>) {
+        if self.scroll.take_scrollbar_gesture() {
+            self.navigate(Navigate::Reader, cx);
         }
     }
 
-    /// Scroll to `target` (a scene's Solo views): the top,
-    /// the live tail, or a turn's band with its output scrolled under it.
-    pub fn scroll_to(&mut self, target: ScrollTarget, cx: &mut Context<Self>) {
-        self.send_anchor = None;
-        match target {
-            ScrollTarget::Top => {
+    /// The one operation that positions the viewport.
+    fn navigate(&mut self, to: Navigate, cx: &mut Context<Self>) {
+        self.revoke_automatic_movement();
+        let reduced = ferrite_ui::motion::reduced_motion(cx);
+        match to {
+            Navigate::Reader => return,
+            Navigate::Page { down } => {
                 self.runway.set(Runway::default());
-                self.scroll.scroll_to(0, px(0.))
+                self.scroll.scroll_page(down, px(self.grid().line));
             }
-            ScrollTarget::TurnBand { turn, offset } => {
+            Navigate::Top => {
+                self.runway.set(Runway::default());
+                self.scroll.scroll_to(0, px(0.));
+            }
+            Navigate::Tail { eased } => {
+                self.scroll_end_wanted = None;
+                self.runway.set(Runway::default());
+                if eased && !reduced {
+                    self.scroll.ease_to(EaseTarget::End);
+                } else {
+                    self.scroll.scroll_to_bottom();
+                }
+            }
+            Navigate::Band { turn, offset } => {
                 let Some((index, row)) = self
                     .rows
                     .rows()
@@ -1128,8 +1128,74 @@ impl TranscriptView {
                 }
                 self.scroll.scroll_to(index, px(into));
             }
+            Navigate::At { index, into } => self.scroll.scroll_to(index, px(into)),
+            Navigate::Reveal { row } => {
+                self.runway.set(Runway::default());
+                // Keep the hit where it is: a tail follow must not take the
+                // viewport back when later content arrives.
+                self.scroll.list_state().pause_following_tail();
+                if !self.scroll.item_is_visible(row) {
+                    self.scroll.scroll_to(row, px(0.));
+                }
+            }
+            Navigate::Prompt { eased } => {
+                let Some((index, row)) = self
+                    .rows
+                    .rows()
+                    .iter()
+                    .enumerate()
+                    .rfind(|(_, row)| row.kind() == RowKind::Prompt)
+                else {
+                    return;
+                };
+                let into = (row.gap() - theme::TX_SEND_ANCHOR_OFFSET).max(0.);
+                self.send_anchor = Some(row.id().clone());
+                self.runway.set(Runway {
+                    jump: Some(into),
+                    index,
+                    ..self.runway.get()
+                });
+                if eased && !reduced {
+                    self.scroll.ease_to(EaseTarget::Row {
+                        id: row.id().clone(),
+                        offset: px(into),
+                    });
+                } else {
+                    self.scroll.scroll_to(index, px(into));
+                }
+            }
         }
         cx.notify();
+    }
+
+    pub fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
+        self.navigate(Navigate::Tail { eased: false }, cx);
+    }
+
+    /// PageUp and PageDown (a page, a line of the last kept in view), Home
+    /// and End (the top, the live tail).
+    pub fn page(&mut self, page: Page, cx: &mut Context<Self>) {
+        self.navigate(
+            match page {
+                Page::Up => Navigate::Page { down: false },
+                Page::Down => Navigate::Page { down: true },
+                Page::Top => Navigate::Top,
+                Page::Bottom => Navigate::Tail { eased: false },
+            },
+            cx,
+        );
+    }
+
+    /// Scroll to `target` (a scene's Solo views): the top,
+    /// the live tail, or a turn's band with its output scrolled under it.
+    pub fn scroll_to(&mut self, target: ScrollTarget, cx: &mut Context<Self>) {
+        self.navigate(
+            match target {
+                ScrollTarget::Top => Navigate::Top,
+                ScrollTarget::TurnBand { turn, offset } => Navigate::Band { turn, offset },
+            },
+            cx,
+        );
     }
 
     /// The prompt the operator is reading: the pinned band's turn, else the
@@ -2321,15 +2387,7 @@ impl TranscriptView {
     /// prompt's hold are let go, and the transcript eases to the tail (at
     /// once under reduced motion), following it from there.
     fn scroll_to_end(&mut self, cx: &mut Context<Self>) {
-        self.scroll_end_wanted = None;
-        self.send_anchor = None;
-        self.runway.set(Runway::default());
-        if ferrite_ui::motion::reduced_motion(cx) {
-            self.scroll.scroll_to_bottom();
-        } else {
-            self.scroll.ease_to(EaseTarget::End);
-        }
-        cx.notify();
+        self.navigate(Navigate::Tail { eased: true }, cx);
     }
 }
 
@@ -2735,23 +2793,19 @@ impl TranscriptView {
         tops.get(top.item_ix).copied().unwrap_or(total) + f32::from(top.offset_in_item)
     }
 
-    /// Hold the viewport's top at `at` in the estimated tops' space.
-    fn jump_to(&self, at: f32, tops: &[f32]) {
-        if tops.is_empty() {
-            return;
-        }
-        let index = tops.iter().rposition(|top| *top <= at).unwrap_or(0);
-        self.scroll.scroll_to(index, px((at - tops[index]).max(0.)));
-    }
-
     /// Scroll to `goal` (estimated tops' space) in one frame, stopping any
     /// programmatic scroll on its way. T3 eases its minimap's jumps; this
     /// one snaps, as a drag along the rail lands here on every move.
     fn jump_to_goal(&mut self, goal: f32, cx: &mut Context<Self>) {
-        self.operator_scrolled();
         let (tops, total) = self.estimated_tops();
-        self.jump_to(goal.clamp(0., total), &tops);
-        cx.notify();
+        let at = goal.clamp(0., total);
+        let index = tops.iter().rposition(|top| *top <= at).unwrap_or(0);
+        let into = tops.get(index).map_or(0., |top| (at - top).max(0.));
+        if tops.is_empty() {
+            self.navigate(Navigate::Reader, cx);
+        } else {
+            self.navigate(Navigate::At { index, into }, cx);
+        }
     }
 
     /// The minimap (the WP-A minimap tokens): a tick per prompt, failure,
@@ -2911,6 +2965,7 @@ fn pinned_of(
 
 impl Render for TranscriptView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.reader_took_scrollbar(cx);
         // The working row's spinner and shimmer are loops: the overlay
         // draws them, so their steps rebuild nothing of this transcript.
         ferrite_ui::loops_overlay::begin(window, cx.entity_id());
@@ -3006,7 +3061,7 @@ impl Render for TranscriptView {
                 // out once more at its target. A scrollbar drag took it: the
                 // room stays, the prompt is no longer held.
                 let foot = px(pad_b + runway.get().room);
-                match scroll.step_ease(cx.background_executor().now(), foot) {
+                match scroll.step_ease(cx.background_executor().now(), foot, &gaps) {
                     EaseStep::Idle | EaseStep::Moving => {}
                     EaseStep::Landed => {
                         let weak = weak.clone();
@@ -3018,7 +3073,7 @@ impl Render for TranscriptView {
                         let weak = weak.clone();
                         window.defer(cx, move |_, cx| {
                             let _ = weak.update(cx, |view, cx| {
-                                view.operator_scrolled();
+                                view.navigate(Navigate::Reader, cx);
                                 cx.notify();
                             });
                         });
@@ -3196,7 +3251,7 @@ impl Render for TranscriptView {
             // A scroll fades the Cite button out, and stops a programmatic
             // scroll where it stands.
             .on_scroll_wheel(cx.listener(|view, _, _, cx| {
-                view.operator_scrolled();
+                view.navigate(Navigate::Reader, cx);
                 view.scrolled(cx)
             }))
             .child(list)

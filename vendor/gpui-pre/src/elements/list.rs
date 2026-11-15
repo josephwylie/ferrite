@@ -70,6 +70,7 @@ struct StateInner {
     #[allow(clippy::type_complexity)]
     scroll_handler: Option<Box<dyn FnMut(&ListScrollEvent, &mut Window, &mut App)>>,
     scrollbar_drag_start_height: Option<Pixels>,
+    scrollbar_gestures: u64,
     measuring_behavior: ListMeasuringBehavior,
     pending_scroll: Option<PendingScroll>,
     follow_state: FollowState,
@@ -322,6 +323,7 @@ impl ListState {
             scroll_handler: None,
             reset: false,
             scrollbar_drag_start_height: None,
+            scrollbar_gestures: 0,
             measuring_behavior: ListMeasuringBehavior::default(),
             pending_scroll: None,
             follow_state: FollowState::default(),
@@ -743,6 +745,7 @@ impl ListState {
     pub fn scrollbar_drag_started(&self) {
         let mut state = self.0.borrow_mut();
         state.scrollbar_drag_start_height = Some(state.items.summary().height);
+        state.scrollbar_gestures += 1;
     }
 
     /// Called when the user stops dragging the scrollbar.
@@ -764,7 +767,16 @@ impl ListState {
 
     /// Set the offset from the scrollbar
     pub fn set_offset_from_scrollbar(&self, point: Point<Pixels>) {
-        self.0.borrow_mut().set_offset_from_scrollbar(point);
+        let mut state = self.0.borrow_mut();
+        state.scrollbar_gestures += 1;
+        state.set_offset_from_scrollbar(point);
+    }
+
+    /// How many scrollbar gestures (a thumb grab, a thumb move, a track click)
+    /// have moved this list. Compare two readings to learn whether the reader
+    /// took the scroll in between, whatever else was moving it.
+    pub fn scrollbar_gestures(&self) -> u64 {
+        self.0.borrow().scrollbar_gestures
     }
 
     /// Returns the maximum scroll offset according to the items we have measured.

@@ -308,6 +308,11 @@ impl TranscriptRows {
         &self.rows
     }
 
+    /// Where the row named `id` stands now.
+    pub(crate) fn position(&self, id: &RowId) -> Option<usize> {
+        self.rows.iter().position(|row| row.id() == id)
+    }
+
     pub(crate) fn get(&self, index: usize) -> Option<&Rc<TranscriptRow>> {
         self.rows.get(index)
     }

@@ -10,9 +10,9 @@
 
 use std::collections::HashMap;
 
-use gpui::{prelude::*, px, AnyElement, Context, SharedString, Window};
+use gpui::{prelude::*, AnyElement, Context, SharedString, Window};
 
-use super::{Runway, TranscriptView};
+use super::{Navigate, TranscriptView};
 use crate::select::FindMarks;
 
 /// The bar's count, its hit's row, and where that occurrence last painted.
@@ -110,7 +110,7 @@ impl TranscriptView {
         let TranscriptFind { bar, plain, .. } = find;
         let changed = bar.search(plain.iter().map(|(.., text)| text.as_str()), from, cx);
         if changed {
-            self.reveal_found();
+            self.reveal_found(cx);
         } else if let Some((key, ordinal)) = on {
             if let Some(unit) = plain.iter().position(|(at, ..)| *at == key) {
                 bar.keep(crate::find::Hit { unit, ordinal });
@@ -126,14 +126,14 @@ impl TranscriptView {
             .as_mut()
             .is_some_and(|find| find.bar.step(forward).is_some())
         {
-            self.reveal_found();
+            self.reveal_found(cx);
             cx.notify();
         }
     }
 
     /// Bring the active hit's row into view, and settle its occurrence
     /// once it paints (`settle_found`).
-    fn reveal_found(&mut self) {
+    fn reveal_found(&mut self, cx: &mut Context<Self>) {
         let Some(find) = self.find.as_mut() else {
             return;
         };
@@ -142,11 +142,7 @@ impl TranscriptView {
         };
         find.bar.report().revealed.set(None);
         find.reveal = crate::find::REVEAL_FRAMES;
-        if !self.scroll.item_is_visible(row) {
-            self.operator_scrolled();
-            self.runway.set(Runway::default());
-            self.scroll.scroll_to(row, px(0.));
-        }
+        self.navigate(Navigate::Reveal { row }, cx);
     }
 
     /// Each render while a reveal is due: once the active occurrence has

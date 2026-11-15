@@ -465,10 +465,51 @@ pub struct AxisPrepaintState {
     // Bounds of thumb to be rendered.
     thumb_fill_bounds: Bounds<Pixels>,
     thumb_bg: Hsla,
-    scroll_size: Pixels,
-    container_size: Pixels,
-    thumb_size: Pixels,
+    track: Track,
+    inset: Pixels,
+}
+
+/// One axis's track: the single place a scroll offset and the thumb's
+/// position convert into each other, for painting the thumb, dragging it and
+/// clicking the track, so they cannot disagree.
+#[derive(Clone, Copy, Debug)]
+struct Track {
+    /// The viewport's extent along the axis.
+    container: Pixels,
+    /// The scrollable content's extent (the viewport included).
+    content: Pixels,
+    /// The track's end kept clear (the corner another bar occupies).
     margin_end: Pixels,
+}
+
+impl Track {
+    fn thumb_len(self) -> Pixels {
+        (self.container / self.content * self.container).max(px(MIN_THUMB_SIZE))
+    }
+
+    /// How far the thumb's leading edge can travel.
+    fn travel(self) -> Pixels {
+        (self.container - self.margin_end - self.thumb_len()).max(px(0.))
+    }
+
+    fn scroll_range(self) -> Pixels {
+        self.content - self.container
+    }
+
+    /// The thumb's leading edge when the content is `scrolled` past the
+    /// viewport's start.
+    fn thumb_start(self, scrolled: Pixels) -> Pixels {
+        scrolled / self.scroll_range() * self.travel()
+    }
+
+    /// How far the content is scrolled when the thumb's leading edge is at
+    /// `start`.
+    fn scrolled_at(self, start: Pixels) -> Pixels {
+        if self.travel() <= px(0.) {
+            return px(0.);
+        }
+        (start / self.travel()).clamp(0., 1.) * self.scroll_range()
+    }
 }
 
 impl Element for Scrollbar {
@@ -568,11 +609,13 @@ impl Element for Scrollbar {
                 continue;
             }
 
-            let thumb_length =
-                (container_size / scroll_area_size * container_size).max(px(MIN_THUMB_SIZE));
-            let thumb_start = -(scroll_position / (scroll_area_size - container_size)
-                * (container_size - margin_end - thumb_length));
-            let thumb_end = (thumb_start + thumb_length).min(container_size - margin_end);
+            let track = Track {
+                container: container_size,
+                content: scroll_area_size,
+                margin_end,
+            };
+            let thumb_start = track.thumb_start(-scroll_position);
+            let thumb_end = (thumb_start + track.thumb_len()).min(container_size - margin_end);
 
             let bounds = Bounds {
                 origin: if is_vertical {
@@ -743,10 +786,8 @@ impl Element for Scrollbar {
                 thumb_bounds,
                 thumb_fill_bounds,
                 thumb_bg,
-                scroll_size: scroll_area_size,
-                container_size,
-                thumb_size: thumb_length,
-                margin_end,
+                track,
+                inset,
             })
         }
 
@@ -798,10 +839,8 @@ impl Element for Scrollbar {
                     }
                     let bounds = state.bounds;
                     let thumb_bounds = state.thumb_bounds;
-                    let scroll_area_size = state.scroll_size;
-                    let container_size = state.container_size;
-                    let thumb_size = state.thumb_size;
-                    let margin_end = state.margin_end;
+                    let track = state.track;
+                    let track_inset = state.inset;
                     let is_vertical = matches!(axis, Axis::Vertical);
 
                     window.set_cursor_style(CursorStyle::default(), &state.bar_hitbox);
@@ -857,7 +896,6 @@ impl Element for Scrollbar {
                         }
                     });
 
-                    let safe_range = (-scroll_area_size + container_size)..px(0.);
 
                     if is_hover_to_show || is_visible {
                         window.on_mouse_event({
@@ -879,29 +917,20 @@ impl Element for Scrollbar {
                                     } else {
                                         // click on the scrollbar, jump to the position
                                         // Set the thumb bar center to the click position
+                                        let along = if is_vertical {
+                                            event.position.y - bounds.origin.y
+                                        } else {
+                                            event.position.x - bounds.origin.x
+                                        };
+                                        let scrolled =
+                                            track.scrolled_at(along - track.thumb_len() / 2.);
                                         let offset = scroll_handle.offset();
-                                        let percentage = if is_vertical {
-                                            (event.position.y - thumb_size / 2. - bounds.origin.y)
-                                                / (bounds.size.height - thumb_size)
+                                        scroll_handle.set_offset(if is_vertical {
+                                            point(offset.x, -scrolled)
                                         } else {
-                                            (event.position.x - thumb_size / 2. - bounds.origin.x)
-                                                / (bounds.size.width - thumb_size)
-                                        }
-                                        .min(1.);
-
-                                        if is_vertical {
-                                            scroll_handle.set_offset(point(
-                                                offset.x,
-                                                (-scroll_area_size * percentage)
-                                                    .clamp(safe_range.start, safe_range.end),
-                                            ));
-                                        } else {
-                                            scroll_handle.set_offset(point(
-                                                (-scroll_area_size * percentage)
-                                                    .clamp(safe_range.start, safe_range.end),
-                                                offset.y,
-                                            ));
-                                        }
+                                            point(-scrolled, offset.y)
+                                        });
+                                        cx.notify(view_id);
                                     }
                                 }
                             }
@@ -956,27 +985,19 @@ impl Element for Scrollbar {
                                 // We need to keep the thumb bar still at the origin down position
                                 let drag_pos = state.get().drag_pos;
 
-                                let percentage = (if is_vertical {
-                                    (event.position.y - drag_pos.y - bounds.origin.y)
-                                        / (bounds.size.height - thumb_size)
+                                // The pointer's place on the track, less where it
+                                // took hold of the thumb (`drag_pos` is from the
+                                // thumb's inset hit area).
+                                let along = if is_vertical {
+                                    event.position.y - drag_pos.y - bounds.origin.y
                                 } else {
-                                    (event.position.x - drag_pos.x - bounds.origin.x)
-                                        / (bounds.size.width - thumb_size - margin_end)
-                                })
-                                .clamp(0., 1.);
-
+                                    event.position.x - drag_pos.x - bounds.origin.x
+                                } - track_inset;
+                                let scrolled = track.scrolled_at(along);
                                 let offset = if is_vertical {
-                                    point(
-                                        scroll_handle.offset().x,
-                                        (-(scroll_area_size - container_size) * percentage)
-                                            .clamp(safe_range.start, safe_range.end),
-                                    )
+                                    point(scroll_handle.offset().x, -scrolled)
                                 } else {
-                                    point(
-                                        (-(scroll_area_size - container_size) * percentage)
-                                            .clamp(safe_range.start, safe_range.end),
-                                        scroll_handle.offset().y,
-                                    )
+                                    point(-scrolled, scroll_handle.offset().y)
                                 };
 
                                 if (scroll_handle.offset().y - offset.y).abs() > px(1.)
@@ -1045,7 +1066,8 @@ mod tests {
         div, prelude::*, Context, Modifiers, MouseButton, Render, ScrollHandle, TestAppContext,
     };
 
-    struct ScrollFixture(ScrollHandle);
+    /// A scroller whose content is the given height.
+    struct ScrollFixture(ScrollHandle, f32);
 
     impl Render for ScrollFixture {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -1059,7 +1081,7 @@ mod tests {
                         .overflow_y_scroll()
                         .track_scroll(&self.0)
                         .cursor_text()
-                        .child(div().h(px(1200.)).w_full()),
+                        .child(div().h(px(self.1)).w_full()),
                 )
                 .child(crate::components::scrollbar("bar", &self.0))
         }
@@ -1069,7 +1091,7 @@ mod tests {
     fn thumb_padding_drags_without_jumping(cx: &mut TestAppContext) {
         cx.update(crate::theme::init_components);
         let scroll = ScrollHandle::new();
-        let (view, cx) = cx.add_window_view(|_, _| ScrollFixture(scroll.clone()));
+        let (view, cx) = cx.add_window_view(|_, _| ScrollFixture(scroll.clone(), 1200.));
         cx.simulate_resize(size(px(200.), px(300.)));
         cx.run_until_parked();
         assert_eq!(scroll.bounds().size, size(px(200.), px(300.)));
@@ -1096,6 +1118,38 @@ mod tests {
                 "thumb padding must start a drag"
             );
             cx.simulate_mouse_up(point(px(x), px(80.)), MouseButton::Left, Modifiers::none());
+        }
+    }
+
+    /// A click on the track puts the painted thumb's centre under the
+    /// pointer, for a thumb of its natural size (1200px of content) and one
+    /// held at the minimum size (30000px).
+    #[gpui::test]
+    fn a_track_click_centres_the_painted_thumb_under_the_pointer(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init_components);
+        let viewport = 300.;
+        for content in [1200., 30000.] {
+            let scroll = ScrollHandle::new();
+            let (view, cx) = cx.add_window_view(|_, _| ScrollFixture(scroll.clone(), content));
+            cx.simulate_resize(size(px(200.), px(viewport)));
+            cx.run_until_parked();
+            let thumb = (viewport / content * viewport).max(f32::from(MIN_THUMB_SIZE));
+            let travel = viewport - thumb;
+            for fraction in [0.25, 0.5, 0.75, 1.0] {
+                scroll.set_offset(point(px(0.), px(0.)));
+                view.update(cx, |_, cx| cx.notify());
+                cx.run_until_parked();
+                let click = thumb / 2. + fraction * travel;
+                cx.simulate_mouse_down(point(px(199.), px(click)), MouseButton::Left, Modifiers::none());
+                cx.simulate_mouse_up(point(px(199.), px(click)), MouseButton::Left, Modifiers::none());
+                cx.run_until_parked();
+                let scrolled = -f32::from(scroll.offset().y);
+                let painted = thumb / 2. + scrolled / (content - viewport) * travel;
+                assert!(
+                    (painted - click).abs() <= 1.,
+                    "content {content}, click at {click}: the thumb's centre is at {painted}"
+                );
+            }
         }
     }
 
