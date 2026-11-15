@@ -595,7 +595,7 @@ impl CockpitView {
             .border_b(px(HAIRLINE_W))
             .border_color(soft_line())
             .text_color(rgb(RED))
-            .child(div().flex_1().min_w_0().child(SharedString::from(said)))
+            .child(div().flex_1().min_w_0().whitespace_normal().child(SharedString::from(said)))
             .child(retry)
             .into_any_element()
     }
