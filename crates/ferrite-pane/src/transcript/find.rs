@@ -259,7 +259,7 @@ impl TranscriptView {
     /// Each render while a reveal is due: once the active occurrence has
     /// painted, scroll it a third of the way down the view if it lies
     /// outside it (or under the pinned band).
-    pub(super) fn settle_found(&mut self, window: &mut Window) {
+    pub(super) fn settle_found(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(find) = self.find.as_mut().filter(|find| find.reveal > 0) else {
             return;
         };
@@ -275,7 +275,7 @@ impl TranscriptView {
         let top = viewport.top() + self.scroll.top_mask();
         if found.top() < top || found.bottom() > viewport.bottom() {
             let goal = top + (viewport.bottom() - top) / 3.;
-            self.scroll.list_state().scroll_by(found.top() - goal);
+            self.navigate(Navigate::Settle { by: found.top() - goal }, cx);
         }
     }
 

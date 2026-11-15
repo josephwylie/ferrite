@@ -38,7 +38,7 @@ use gpui::{
 
 use self::{
     rows::{live_anchor, RowId, RowKind, RowShape, TranscriptRow, TranscriptRows},
-    scroll::{EaseStep, EaseTarget},
+    scroll::{EaseStep, EaseTarget, Settled},
 };
 pub use self::scroll::TranscriptScroll;
 use crate::{
@@ -121,6 +121,9 @@ enum Navigate {
     /// The prompt a send just added, to the top with room under it for its
     /// answer: eased, or at once.
     Prompt { eased: bool },
+    /// The Find hit, painted outside the readable view: `by` px to bring it
+    /// a third of the way down.
+    Settle { by: gpui::Pixels },
 }
 
 /// Where a scene (or a command) asks a transcript to scroll.
@@ -844,6 +847,12 @@ impl TranscriptView {
         self.send_anchor.is_some()
     }
 
+    /// One line of the transcript's reading grid.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn line_height(&self) -> f32 {
+        self.grid().line
+    }
+
     /// The room under the last row a band jump left (`Runway`).
     #[cfg(any(test, feature = "test-support"))]
     pub fn runway_room(&self) -> f32 {
@@ -1079,6 +1088,7 @@ impl TranscriptView {
     /// already under the rows stays, used up as they arrive.
     fn revoke_automatic_movement(&mut self) {
         self.scroll.cancel_ease();
+        self.scroll.release_reading_place();
         self.drop_pending_reveal();
         self.send_anchor = None;
         self.jump_to_new_prompt = false;
@@ -1159,6 +1169,7 @@ impl TranscriptView {
                     self.scroll.scroll_to(row, px(0.));
                 }
             }
+            Navigate::Settle { by } => self.scroll.list_state().scroll_by(by),
             Navigate::Prompt { eased } => {
                 let Some((index, row)) = self
                     .rows
@@ -3052,7 +3063,7 @@ impl Render for TranscriptView {
         crate::file_links::begin_layout(&self.input.namespace, cx);
         // The answers' file links are this transcript's path targets.
         self.rich.set_path_scope(self.input.namespace.clone());
-        self.settle_found(window);
+        self.settle_found(window, cx);
         if self.fading(cx) {
             window.request_animation_frame();
         }
@@ -3134,12 +3145,13 @@ impl Render for TranscriptView {
         let pad_b = theme::body_pad_b(solo);
         let list = div()
             .on_children_prepainted(move |_, window, cx| {
-                let anchored = scroll.did_layout();
+                let Settled { anchored, ease } =
+                    scroll.settle_layout(cx.background_executor().now(), &gaps);
                 // A programmatic scroll on its way moves one frame more (the
                 // render asked for the frame: `fading`); landed, the list lays
                 // out once more at its target. A scrollbar drag took it: the
                 // room stays, the prompt is no longer held.
-                match scroll.step_ease(cx.background_executor().now(), &gaps) {
+                match ease {
                     EaseStep::Idle | EaseStep::Moving => {}
                     EaseStep::Landed => {
                         let weak = weak.clone();
