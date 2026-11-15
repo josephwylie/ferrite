@@ -1,13 +1,11 @@
-//! The subagent drill-in (Claude's, `claude/subagent-drillin.png`): a press
-//! on a `Ran agent` row opens that agent as a Surface of the Thread's Panel
-//! (ADR 0039), its tab named by the agent's task; the body is the agent's
-//! own transcript — its prompt as a bubble, `Model Haiku 5.5` under it, its
-//! tool summary, its answer — drawn by the same compact transcript the side
-//! chat uses (`sync_compact_transcript`). The tab's × closes it.
-//!
-//! The Pane keeps showing Main: this is not `select_subject`, which is how
-//! a Pane takes a subagent's transcript for itself (a notice's jump, the
-//! history arrows).
+//! The subagent inspector: an agent held open beside Main as a Surface of
+//! the Thread's Panel (ADR 0039), its tab named by the agent's task; the
+//! body is the agent's own transcript, drawn by the same compact transcript
+//! the side chat uses (`sync_compact_transcript`). It is the secondary way
+//! to read an agent: a press on a `Ran agent` row takes the whole Pane for
+//! it (`select_subject`, `open_agent_from`), and the head's `Side panel`
+//! button holds it here instead. Both read the Thread's one Subject: its
+//! saved history, its ancestry and coverage line, its stop.
 
 use std::collections::HashMap;
 
@@ -19,6 +17,8 @@ use ferrite_core::activity::Subject;
 /// One agent held open in a Thread's Panel.
 struct Drill {
     subject: Subject,
+    /// Why its saved history could not load, while it could not.
+    history_error: Option<String>,
     /// What the pane draws it with: the Pane's pieces (its transcript, its
     /// tool disclosures), never in the grid.
     pane: PaneView,
@@ -64,17 +64,6 @@ impl CockpitView {
         )
     }
 
-    /// A press on an agent call's row in Pane `index`: that agent opens in
-    /// the Panel.
-    pub(super) fn open_agent_from(&mut self, index: usize, call: String, cx: &mut Context<Self>) {
-        let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
-            return;
-        };
-        if let Some(subject) = self.agent_of_call(thread, &call) {
-            self.open_agent_drill(thread, subject, cx);
-        }
-    }
-
     /// Open `subject` (an agent of `thread`) as a Surface of its Panel: one
     /// tab per agent, brought forward if it is open already.
     pub(super) fn open_agent_drill(
@@ -103,11 +92,34 @@ impl CockpitView {
             if let Some(entity) = pane.transcript() {
                 cx.subscribe(&entity, Self::agent_transcript_event).detach();
             }
-            self.agent_drills
-                .drills
-                .insert((thread, key.clone()), Drill { subject, pane });
+            let history_error = self.load_subject_history(thread, &subject);
+            self.agent_drills.drills.insert(
+                (thread, key.clone()),
+                Drill {
+                    subject,
+                    history_error,
+                    pane,
+                },
+            );
         }
         self.upsert_surface(thread, SurfaceId::Agent(key), cx);
+    }
+
+    /// Remember why `subject`'s history failed to load, wherever it is open.
+    pub(super) fn hold_history_error(
+        &mut self,
+        thread: ThreadId,
+        subject: &Subject,
+        error: Option<String>,
+    ) {
+        if let Some(index) = self.pane_for(thread).filter(|&index| self.panes[index].selected == *subject) {
+            self.panes[index].history_error = error.clone();
+        }
+        if let Some(key) = agent_key(subject) {
+            if let Some(drill) = self.agent_drills.drills.get_mut(&(thread, key)) {
+                drill.history_error = error;
+            }
+        }
     }
 
     /// Its tab closed: the agent goes from the Panel.
@@ -200,7 +212,12 @@ impl CockpitView {
     // ------------------------------------------------------------ drawing
 
     /// Agent `key`'s Surface: its transcript.
-    pub(super) fn agent_drill_body(&self, owner: ThreadId, key: &str) -> AnyElement {
+    pub(super) fn agent_drill_body(
+        &self,
+        owner: ThreadId,
+        key: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         use ferrite_ui::theme::*;
         let Some(drill) = self.agent_drills.drills.get(&(owner, key.to_owned())) else {
             return div().into_any_element();
@@ -214,6 +231,18 @@ impl CockpitView {
             .text_size(px(FS_UI))
             .line_height(px(LH_UI))
             .text_color(rgb(INK_STRONG))
+            .children(
+                self.subject_history_line(owner, &drill.subject, drill.history_error.as_deref(), cx)
+                    .map(|line| {
+                        div()
+                            .debug_selector(|| "agent-drill-history".into())
+                            .flex_shrink_0()
+                            .px(px(SPACE_3))
+                            .py(px(SPACE_1))
+                            .text_color(rgb(INK_SUBTLE))
+                            .child(line)
+                    }),
+            )
             .child(
                 div()
                     .relative()

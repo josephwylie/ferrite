@@ -15,6 +15,14 @@ use ferrite_core::transcript::ToolBlock;
 use ferrite_pane::pane::{BackgroundTask, WorkKind};
 use ferrite_pane::transcript::TranscriptTail;
 
+/// Where a `Stop` on one task stands.
+#[derive(Clone, PartialEq, Eq)]
+pub(super) enum StopState {
+    Stopping,
+    /// The provider refused, with its reason.
+    Refused(String),
+}
+
 /// One piece of work still running. A command is the provider's task
 /// (`id` names it for a stop, `call` the call that launched it, which holds
 /// its output); a subagent is the agent a call started, still working
@@ -122,10 +130,17 @@ impl CockpitView {
         let presented = pane::present_background_work(&tasks, waiting)?;
         let stoppable = open.supports_control(ferrite_core::ControlKind::StopTask)
             && work.iter().any(|work| work.id.is_some());
-        let stopping = work
+        let generation = open.generation();
+        let stops: Vec<Option<&StopState>> = work
             .iter()
             .filter_map(|work| work.id.as_ref())
-            .all(|id| self.background_stopping.contains(id));
+            .map(|id| self.background_stops.get(&(thread, generation, id.clone())))
+            .collect();
+        let stopping = stops.iter().all(|stop| *stop == Some(&StopState::Stopping));
+        let refused = stops.iter().find_map(|stop| match stop {
+            Some(StopState::Refused(why)) => Some(why.clone()),
+            _ => None,
+        });
         let single = match work.as_slice() {
             [only] => Some((
                 only.task.launched,
@@ -142,6 +157,7 @@ impl CockpitView {
                 &presented.description,
                 stoppable,
                 stopping,
+                &refused,
                 work.iter().map(|work| (&work.id, &work.call)).collect::<Vec<_>>(),
             )
                 .hash(&mut hasher);
@@ -182,9 +198,24 @@ impl CockpitView {
                 }
                 if stoppable {
                     let stopper = owner.clone();
+                    if let Some(why) = &refused {
+                        actions.push(
+                            div()
+                                .debug_selector(|| "background-stop-refused".into())
+                                .text_color(rgb(ferrite_ui::theme::BLOCKED))
+                                .child(SharedString::from(format!("Couldn\u{2019}t stop: {why}")))
+                                .into_any_element(),
+                        );
+                    }
                     let stop = pane::inline_button(
                         ("background-stop-all", thread.get() as usize),
-                        if stopping { "Stopping..." } else { "Stop" },
+                        if stopping {
+                            "Stopping..."
+                        } else if refused.is_some() {
+                            "Retry"
+                        } else {
+                            "Stop"
+                        },
                     );
                     actions.push(
                         if stopping {
@@ -214,12 +245,20 @@ impl CockpitView {
             .filter_map(|work| work.id)
             .collect();
         for id in ids {
-            self.background_stopping.insert(id.clone());
+            let stop = (thread, generation, id.clone());
+            self.background_stops.insert(stop.clone(), StopState::Stopping);
             self.run_session_control(
                 thread,
                 generation,
                 ferrite_core::SessionControl::StopTask { id },
             );
+            if let Some((_, _, why)) = self
+                .session_control_error
+                .as_ref()
+                .filter(|(shown, shown_generation, _)| *shown == thread && *shown_generation == generation)
+            {
+                self.background_stops.insert(stop, StopState::Refused(why.clone()));
+            }
         }
         cx.notify();
     }

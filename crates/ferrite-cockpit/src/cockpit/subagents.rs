@@ -370,9 +370,9 @@ fn coverage_words(
 
 impl CockpitView {
     /// Show `subject`'s transcript in `thread`'s Pane: Main, or a subagent
-    /// opened from its row (`open_agent_from`) and left by its head's back
-    /// button or escape. Every Subject switch the operator makes comes
-    /// through here.
+    /// opened from its row (`open_agent_from`) and left by its head's
+    /// crumbs, back button or escape. Every Subject switch the operator
+    /// makes comes through here.
     pub(super) fn select_subject(
         &mut self,
         thread: ThreadId,
@@ -380,27 +380,11 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(index) = self.pane_for(thread) else {
+        let Some(index) = self.take_subject(thread, subject, cx) else {
             return;
         };
-        let Some(open) = self.cockpit.thread(thread) else {
-            return;
-        };
-        let subject = open.activity().canonical_subject(&subject);
-        let Some(generation) = open
-            .activity()
-            .subject(&subject)
-            .map(|subject| subject.revision())
-        else {
-            return;
-        };
-        self.panes[index].select_subject(subject, generation, cx);
-        self.retry_subject_history(index, cx);
-        self.cockpit
-            .set_visible_subject(thread, self.panes[index].selected.clone());
         self.cockpit.focus_thread(thread);
         self.focus_pane(index);
-        self.popover = None;
         // Keep native text selections in their retained Subject entities.
         // A subagent's transcript must not edit or focus Main's hidden
         // Composer.
@@ -409,7 +393,23 @@ impl CockpitView {
         } else {
             window.focus(&self.panes[index].transcript_focus, cx);
         }
-        cx.notify();
+    }
+
+    /// A press on an agent call's row in Pane `index`, or ↵ on it: the
+    /// Pane takes that agent's transcript at full reading width. The
+    /// Subject's own viewport (scroll, open tools) and Main's draft stay
+    /// where they were; the focus pump hands the transcript the keyboard.
+    pub(super) fn open_agent_from(&mut self, index: usize, call: String, cx: &mut Context<Self>) {
+        let Some(thread) = self.panes.get(index).and_then(|pane| pane.thread()) else {
+            return;
+        };
+        let Some(subject) = self.agent_of_call(thread, &call) else {
+            return;
+        };
+        if self.take_subject(thread, subject, cx).is_some() {
+            self.cockpit.focus_thread(thread);
+            self.focus_pane(index);
+        }
     }
 
     /// A NeedsYou request already focused its Thread in core. Select its owning
@@ -420,49 +420,159 @@ impl CockpitView {
         subject: Subject,
         cx: &mut Context<Self>,
     ) {
-        let Some(index) = self.pane_for(thread) else {
-            return;
-        };
-        let Some(open) = self.cockpit.thread(thread) else {
-            return;
-        };
+        self.take_subject(thread, subject, cx);
+    }
+
+    /// The Pane that now shows `subject`, its saved history asked for
+    /// without resuming the provider.
+    fn take_subject(
+        &mut self,
+        thread: ThreadId,
+        subject: Subject,
+        cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let index = self.pane_for(thread)?;
+        let open = self.cockpit.thread(thread)?;
         let subject = open.activity().canonical_subject(&subject);
-        let Some(subject_view) = open.activity().subject(&subject) else {
-            return;
-        };
-        self.panes[index].select_subject(subject, subject_view.revision(), cx);
+        let generation = open.activity().subject(&subject)?.revision();
+        self.panes[index].select_subject(subject, generation, cx);
         self.retry_subject_history(index, cx);
         self.cockpit
             .set_visible_subject(thread, self.panes[index].selected.clone());
         self.popover = None;
         cx.notify();
+        Some(index)
+    }
+
+    /// `subject`'s ancestors by each agent's recorded parent, the
+    /// immediate parent last (Main, which every chain ends in, first).
+    pub(super) fn agent_lineage(&self, thread: ThreadId, subject: &Subject) -> Vec<Subject> {
+        let Some(open) = self.cockpit.thread(thread) else {
+            return vec![Subject::Main];
+        };
+        let activity = open.activity();
+        let mut lineage = vec![Subject::Main];
+        let mut at = subject.clone();
+        let mut reversed = Vec::new();
+        while let Some(parent) = activity
+            .children()
+            .into_iter()
+            .find(|agent| agent.subject() == at)
+            .and_then(|agent| agent.info().parent.clone())
+            .map(|parent| activity.canonical_subject(&parent))
+            .filter(|parent| *parent != Subject::Main && *parent != at)
+        {
+            if reversed.contains(&parent) {
+                break;
+            }
+            reversed.push(parent.clone());
+            at = parent;
+        }
+        lineage.extend(reversed.into_iter().rev());
+        lineage
+    }
+
+    /// What a Subject's transcript covers, or why its saved history could
+    /// not load with `Retry`: the one line the full head and the compact
+    /// Panel view both say it with.
+    pub(super) fn subject_history_line(
+        &self,
+        thread: ThreadId,
+        subject: &Subject,
+        error: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let view = self.cockpit.thread(thread)?.activity().subject(subject)?;
+        if let Some(error) = error {
+            // `Couldn't load transcript · <error>  Retry`: the words in
+            // `BLOCKED`, the error machine text.
+            let subject = subject.clone();
+            return Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(theme::SPACE_2))
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(rgb(theme::BLOCKED))
+                            .child("Couldn\u{2019}t load transcript"),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_family(theme::FONT_CODE)
+                            .child(SharedString::from(error.to_owned())),
+                    )
+                    .child(
+                        components::ghost_button(
+                            ("retry-child-history", thread.get()),
+                            "Retry",
+                            cx,
+                        )
+                        .tab_stop(true)
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.reload_subject_history(thread, &subject, cx)
+                        })),
+                    )
+                    .into_any_element(),
+            );
+        }
+        let (lead, tail) = coverage_words(view.retained(), view.coverage())?;
+        Some(
+            div()
+                .flex()
+                .flex_wrap()
+                .justify_end()
+                .h(px(theme::LH_UI))
+                .overflow_hidden()
+                .min_w_0()
+                .child(div().flex_shrink_0().child(lead))
+                .children(tail.map(|tail| div().flex_shrink_0().child(tail)))
+                .into_any_element(),
+        )
     }
 
     /// A subagent's head, over its transcript while the Pane shows one
-    /// (Claude's drill-in): the back button and `Main`, either of which
-    /// goes back; `›`; the agent's mark, its name and its state word; and at
-    /// the far end what its transcript covers (`coverage_words`), or why it
-    /// could not load with `Retry`. Main has no head: its agents are its
-    /// transcript's `Ran agent` rows.
+    /// (Claude's drill-in): the back button, to its immediate parent, and
+    /// the crumbs of its ancestry from `Main`, each of which goes there;
+    /// the agent's mark, its name and its state word; at the far end what
+    /// its transcript covers (`subject_history_line`), `Stop` while it
+    /// runs, and `Side panel`, which holds it open beside Main instead.
+    /// Main has no head: its agents are its transcript's `Ran agent` rows.
     pub(super) fn subagent_head(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let pane = &self.panes[index];
         if pane.is_main() {
             return None;
         }
         let thread = pane.thread()?;
+        let selected = pane.selected.clone();
         let activity = self.cockpit.thread(thread)?.activity();
-        let subject = activity.subject(&pane.selected)?;
+        activity.subject(&selected)?;
         let agent = activity
             .children()
             .into_iter()
-            .find(|agent| agent.subject() == pane.selected)?;
+            .find(|agent| agent.subject() == selected)?;
         let waiting = activity
             .pending_decisions()
             .iter()
-            .any(|request| request.subject.as_ref() == Some(&pane.selected));
-        let back = move |view: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
-            view.select_subject(thread, Subject::Main, window, cx)
+            .any(|request| request.subject.as_ref() == Some(&selected));
+        let lineage = self.agent_lineage(thread, &selected);
+        let crumb_name = |subject: &Subject| -> SharedString {
+            match subject {
+                Subject::Main => "Main".into(),
+                Subject::Subagent(_) => activity
+                    .children()
+                    .into_iter()
+                    .find(|agent| agent.subject() == *subject)
+                    .map_or_else(|| "Subagent".to_owned(), |agent| agent_name(agent.info()))
+                    .into(),
+            }
         };
+        let parent = lineage.last().cloned().unwrap_or(Subject::Main);
+        let back_to = crumb_name(&parent);
         let back_button = components::button(("subagent-back", thread.get()))
             .debug_selector(move || format!("subagent-back-{}", thread.get()))
             .tab_stop(true)
@@ -471,26 +581,24 @@ impl CockpitView {
             .h(px(theme::ICON_BUTTON))
             .p_0()
             .rounded(px(theme::R_CONTROL))
-            .accessibility_label("Back to Main")
-            .tooltip_builder(ferrite_ui::menu::tooltip("Back to Main"))
+            .accessibility_label(format!("Back to {back_to}"))
+            .tooltip_builder(ferrite_ui::menu::tooltip(format!("Back to {back_to}")))
             .child(ferrite_ui::icons::icon(
                 ferrite_ui::icons::BACK,
                 theme::ICON_BUTTON_GLYPH,
                 theme::INK_SUBTLE,
             ))
-            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| back(view, window, cx)));
-        let main_crumb = components::button(("subagent-main", thread.get()))
-            .debug_selector(move || format!("subagent-main-{}", thread.get()))
-            .flex_shrink_0()
-            .h(px(theme::SUBAGENT_CRUMB_H))
-            .px(px(theme::SPACE_1_5))
-            .rounded(px(theme::R_CONTROL))
-            .text_color(rgb(theme::INK_SUBTLE))
-            .child("Main")
-            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| back(view, window, cx)));
+            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                view.select_subject(thread, parent.clone(), window, cx)
+            }));
         let name = agent_name(agent.info());
         let word = state_word(agent.status(), agent.fresh());
-        let crumb = div()
+        let running = agent.fresh()
+            && matches!(
+                agent.status(),
+                AgentStatus::Pending | AgentStatus::Working | AgentStatus::Waiting
+            );
+        let current = div()
             .debug_selector(move || format!("subagent-name-{}", thread.get()))
             .flex()
             .items_center()
@@ -519,60 +627,7 @@ impl CockpitView {
                     .text_color(rgb(theme::INK_SUBTLE))
                     .child(word),
             );
-        let error = pane.history_error.clone();
-        let end = match (
-            &error,
-            coverage_words(subject.retained(), subject.coverage()),
-        ) {
-            // `Couldn't load transcript · <error>  Retry`: the words in
-            // `BLOCKED`, the error machine text.
-            (Some(error), _) => Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(theme::SPACE_2))
-                    .min_w_0()
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_color(rgb(theme::BLOCKED))
-                            .child("Couldn\u{2019}t load transcript"),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .font_family(theme::FONT_CODE)
-                            .child(SharedString::from(error.clone())),
-                    )
-                    .child(
-                        components::ghost_button(
-                            ("retry-child-history", thread.get()),
-                            "Retry",
-                            cx,
-                        )
-                        .tab_stop(true)
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.reload_subject_history(thread, cx)
-                        })),
-                    )
-                    .into_any_element(),
-            ),
-            (None, Some((lead, tail))) => Some(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .justify_end()
-                    .h(px(theme::LH_UI))
-                    .overflow_hidden()
-                    .min_w_0()
-                    .child(div().flex_shrink_0().child(lead))
-                    .children(tail.map(|tail| div().flex_shrink_0().child(tail)))
-                    .into_any_element(),
-            ),
-            (None, None) => None,
-        };
-        let head = div()
+        let mut head = div()
             .debug_selector(move || format!("subagent-head-{}", thread.get()))
             .font_family(theme::FONT_UI)
             .font_weight(theme::W_BODY)
@@ -583,25 +638,74 @@ impl CockpitView {
             .items_center()
             .min_w_0()
             .gap(px(theme::SPACE_0_5))
-            .child(back_button)
-            .child(main_crumb)
-            .child(ferrite_ui::icons::icon(
-                ferrite_ui::icons::CHEVRON_RIGHT,
-                theme::SUBAGENT_CRUMB_ICON,
-                theme::TEXT_FAINT,
-            ))
-            .child(div().flex_1().min_w_0().pl(px(theme::SPACE_1)).child(crumb))
-            .children(end.map(|end| {
-                div()
-                    .debug_selector(move || format!("subagent-coverage-{}", thread.get()))
-                    .flex()
+            .child(back_button);
+        for (depth, ancestor) in lineage.into_iter().enumerate() {
+            let label = crumb_name(&ancestor);
+            let selector = if depth == 0 {
+                format!("subagent-main-{}", thread.get())
+            } else {
+                format!("subagent-ancestor-{depth}-{}", thread.get())
+            };
+            head = head
+                .child(
+                    components::button(SharedString::from(format!(
+                        "subagent-crumb-{depth}-{}",
+                        thread.get()
+                    )))
+                    .debug_selector(move || selector.clone())
                     .flex_shrink(1.)
                     .min_w_0()
-                    .ml(px(theme::SPACE_2))
+                    .h(px(theme::SUBAGENT_CRUMB_H))
+                    .px(px(theme::SPACE_1_5))
+                    .rounded(px(theme::R_CONTROL))
                     .text_color(rgb(theme::INK_SUBTLE))
-                    .child(end)
-            }));
-        Some(native_keys(head).into_any_element())
+                    .child(div().truncate().child(label))
+                    .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                        view.select_subject(thread, ancestor.clone(), window, cx)
+                    })),
+                )
+                .child(ferrite_ui::icons::icon(
+                    ferrite_ui::icons::CHEVRON_RIGHT,
+                    theme::SUBAGENT_CRUMB_ICON,
+                    theme::TEXT_FAINT,
+                ));
+        }
+        let history = self.subject_history_line(thread, &selected, pane.history_error.as_deref(), cx);
+        let stop_key = agent.key().clone();
+        let panel_subject = selected.clone();
+        Some(
+            native_keys(
+                head.child(div().flex_1().min_w_0().pl(px(theme::SPACE_1)).child(current))
+                    .children(history.map(|history| {
+                        div()
+                            .debug_selector(move || format!("subagent-coverage-{}", thread.get()))
+                            .flex()
+                            .flex_shrink(1.)
+                            .min_w_0()
+                            .ml(px(theme::SPACE_2))
+                            .text_color(rgb(theme::INK_SUBTLE))
+                            .child(history)
+                    }))
+                    .children(running.then(|| {
+                        components::ghost_button(("subagent-stop", thread.get()), "Stop", cx)
+                            .debug_selector(move || format!("subagent-stop-{}", thread.get()))
+                            .tab_stop(true)
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.stop_subagent(thread, &stop_key);
+                                cx.notify();
+                            }))
+                    }))
+                    .child(
+                        components::ghost_button(("subagent-panel", thread.get()), "Side panel", cx)
+                            .debug_selector(move || format!("subagent-panel-{}", thread.get()))
+                            .tab_stop(true)
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.open_agent_drill(thread, panel_subject.clone(), cx)
+                            })),
+                    ),
+            )
+            .into_any_element(),
+        )
     }
 
     /// The head's title: the Thread's, whichever Subject is selected — the
@@ -1039,16 +1143,15 @@ impl CockpitView {
         }
     }
 
-    fn reload_subject_history(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let Some(index) = self.pane_for(thread) else {
-            return;
-        };
-        let subject = self.panes[index].selected.clone();
-        self.panes[index].history_error = self
+    /// `Retry`: ask again for `subject`'s saved history, wherever it is
+    /// held open, the Pane or the Panel.
+    fn reload_subject_history(&mut self, thread: ThreadId, subject: &Subject, cx: &mut Context<Self>) {
+        let error = self
             .cockpit
-            .retry_subject_history(thread, &subject)
+            .retry_subject_history(thread, subject)
             .err()
             .map(|error| error.to_string());
+        self.hold_history_error(thread, subject, error);
         cx.notify();
     }
 
@@ -1057,17 +1160,22 @@ impl CockpitView {
             return;
         };
         let subject = self.panes[index].selected.clone();
-        self.panes[index].history_error = self
-            .cockpit
-            .ensure_subject_history(thread, &subject)
+        self.panes[index].history_error = self.load_subject_history(thread, &subject);
+        cx.notify();
+    }
+
+    /// Ask core for `subject`'s saved history (it never resumes the
+    /// provider); the reason it could not be had.
+    pub(super) fn load_subject_history(&mut self, thread: ThreadId, subject: &Subject) -> Option<String> {
+        self.cockpit
+            .ensure_subject_history(thread, subject)
             .err()
             .map(|error| error.to_string())
             .or_else(|| {
                 self.cockpit
-                    .subject_history_error(thread, &subject)
+                    .subject_history_error(thread, subject)
                     .map(str::to_string)
-            });
-        cx.notify();
+            })
     }
 
     pub(super) fn prune_request_forms(&mut self, index: usize) {

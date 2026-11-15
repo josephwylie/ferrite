@@ -121,6 +121,8 @@ struct Scripted {
     sent: Rc<RefCell<Vec<String>>>,
     answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
     controls: Rc<RefCell<Vec<ferrite_core::SessionControl>>>,
+    /// While set, the provider refuses every Session control.
+    fail_control: Rc<RefCell<bool>>,
     native_controls: Rc<RefCell<bool>>,
     withheld: Rc<RefCell<Vec<ferrite_core::ControlKind>>>,
     modes: Rc<RefCell<Option<Vec<ferrite_core::PermissionModeChoice>>>>,
@@ -163,6 +165,9 @@ impl Session for Scripted {
         *self.native_controls.borrow() && !self.withheld.borrow().contains(&kind)
     }
     fn control(&mut self, action: ferrite_core::SessionControl) -> std::io::Result<()> {
+        if *self.fail_control.borrow() {
+            return Err(std::io::Error::other("stub refused the control"));
+        }
         self.controls.borrow_mut().push(action);
         Ok(())
     }
@@ -263,6 +268,8 @@ struct Fake {
     /// Every Decision answer that went out, with the Decision's id.
     answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
     controls: Rc<RefCell<Vec<ferrite_core::SessionControl>>>,
+    /// While set, the provider refuses every Session control.
+    fail_control: Rc<RefCell<bool>>,
     native_controls: Rc<RefCell<bool>>,
     /// Controls the native ones leave out, as a provider without them does.
     withheld: Rc<RefCell<Vec<ferrite_core::ControlKind>>>,
@@ -334,6 +341,7 @@ impl Spawner for Fake {
             sent: self.sent.clone(),
             answered: self.answered.clone(),
             controls: self.controls.clone(),
+            fail_control: self.fail_control.clone(),
             native_controls: self.native_controls.clone(),
             withheld: self.withheld.clone(),
             modes: self.modes.clone(),

@@ -100,3 +100,30 @@ fn one_running_subagent_is_waited_on_once(cx: &mut TestAppContext) {
     );
     assert!(debug_bounds(cx, "background-work-line".into()).is_some());
 }
+
+/// A refused `Stop` clears its `Stopping...`, says why beside the line,
+/// and the same button retries it.
+#[gpui::test]
+fn a_refused_background_stop_offers_retry(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("background-stop-refused", 1);
+    *fake.native_controls.borrow_mut() = true;
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    running(&fake, &[("task:1", "cargo test")]);
+    tick(cx);
+    *fake.fail_control.borrow_mut() = true;
+    let stop = bounds(cx, "background-stop-all".into());
+    cx.simulate_click(stop.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(debug_bounds(cx, "background-stopping".into()).is_none(), "nothing is pending");
+    assert!(debug_bounds(cx, "background-stop-refused".into()).is_some(), "it says why");
+    *fake.fail_control.borrow_mut() = false;
+    let retry = bounds(cx, "background-stop-all".into());
+    cx.simulate_click(retry.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(
+        *fake.controls.borrow(),
+        [ferrite_core::SessionControl::StopTask { id: "task:1".into() }]
+    );
+    assert!(debug_bounds(cx, "background-stopping".into()).is_some());
+    assert!(debug_bounds(cx, "background-stop-refused".into()).is_none());
+}
