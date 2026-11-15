@@ -658,9 +658,9 @@ pub const READER: &str = "Reader";
 /// The embedded browser's page (`ferrite-pane`'s `WebView`): it forwards
 /// raw keys to the page, so the host's own bindings on them stand down.
 pub const BROWSER: &str = "Browser";
-/// A Subagent tab's body while its request pends: no Composer is there to
-/// type into, so the bare answer letters bind.
-pub const SUBAGENT_DECISION: &str = "SubagentDecision";
+/// A Subagent tab's body while its request pends. It has no Composer, so the
+/// bare answer letters bind there unless one of its cards' fields types.
+pub const SUBAGENT_DECISION: &str = "SubagentDecision && !Input && !Composer";
 /// The Panel's "Open a surface" list, which opens its highlighted row on ⏎.
 pub const PANEL_EMPTY: &str = "PanelEmpty";
 /// The Files editor's key context (`cockpit/tools/editor.rs`).
@@ -1338,7 +1338,7 @@ mod tests {
         assert_eq!(
             rows("cockpit::Allow"),
             [
-                ("shift-y".to_string(), Some("SubagentDecision")),
+                ("shift-y".to_string(), Some(SUBAGENT_DECISION)),
                 ("shift-y".to_string(), Some("Wall"))
             ]
         );

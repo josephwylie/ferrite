@@ -196,3 +196,53 @@ fn the_browser_page_gets_the_keys_the_host_binds(cx: &mut TestAppContext) {
     }
     assert_eq!(composer_text(&view, cx), SENTINEL, "the draft is untouched");
 }
+
+#[gpui::test]
+fn a_subagent_questions_own_answer_types_its_letters(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, Subject};
+    let (core, fake) = cockpit("key-subagent-answer", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(900.)));
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let agent = AgentKey::new(Provider::Claude, "root", "asking-child");
+    let mut info = AgentInfo::new(agent.clone());
+    info.parent = Some(Subject::Main);
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Activity(ActivityEvent::Discovered(info)))
+        .unwrap();
+    let SessionEvent::DecisionRequested { decision } = question("child_q") else {
+        unreachable!()
+    };
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Activity(ActivityEvent::Decision {
+            subject: Some(Subject::Subagent(agent.clone())),
+            decision,
+        }))
+        .unwrap();
+    tick(cx);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.select_subject(thread, Subject::Subagent(agent.clone()), window, cx)
+        })
+    });
+    tick(cx);
+
+    cx.simulate_keystrokes("3");
+    tick(cx);
+    cx.simulate_keystrokes("n a y");
+    tick(cx);
+    assert!(answered(&fake).is_empty(), "typing answered nothing: {:?}", answered(&fake));
+    let serial = view.read_with(cx, |view, _| {
+        view.cockpit.thread(thread).unwrap().pending_decisions()[0].handle.serial
+    });
+    let send = bounds(cx, format!("request-submit-{}-{serial}", thread.get()));
+    cx.simulate_click(send.center(), gpui::Modifiers::none());
+    tick(cx);
+    let answered = answered(&fake);
+    let [(id, DecisionAnswer::Questions { answers })] = answered.as_slice() else {
+        panic!("the question was answered once: {answered:?}")
+    };
+    assert_eq!(id, "child_q");
+    assert_eq!(answers[0].other.as_deref(), Some("nay"));
+}

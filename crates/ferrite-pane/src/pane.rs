@@ -1058,7 +1058,7 @@ pub fn render_pane(
                 .file_context(workspace.map(WorkspaceBinding::cwd), &view.preview);
             // A child's tab has no Composer to carry the `Decision` key
             // context: while that child's request pends, its body does, and
-            // with no text field there the answer letters bind too.
+            // with no Composer there the answer letters bind too.
             let child_request = !view.is_main()
                 && thread.is_some_and(|thread| {
                     thread

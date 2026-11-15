@@ -1649,9 +1649,6 @@ impl Cards {
                 });
             }};
         }
-        letter!(Allow, "y");
-        letter!(Deny, "n");
-        letter!(Always, "a");
         letter!(PickOption1, "1");
         letter!(PickOption2, "2");
         letter!(PickOption3, "3");
