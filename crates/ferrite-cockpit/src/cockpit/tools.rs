@@ -11,6 +11,7 @@ use std::collections::HashMap;
 mod changes;
 mod editor;
 mod files;
+mod save;
 mod terminal;
 mod tree;
 
@@ -35,6 +36,10 @@ gpui::actions!(cockpit, [ToggleTerminal, ToggleChanges, ToggleFiles, ToggleFileT
 #[cfg(test)]
 pub(crate) use editor::AUTO_SAVE_AFTER;
 pub(crate) use changes::{Diff, Sub as ChangesSub, Verb as ChangesVerb};
+#[cfg(test)]
+pub(crate) use editor::Editor;
+#[cfg(test)]
+pub(crate) use save::SaveState;
 pub(crate) use files::{Sub as FilesSub, Verb as FilesVerb};
 pub(crate) use terminal::{Sub as TerminalSub, Verb as TerminalVerb};
 

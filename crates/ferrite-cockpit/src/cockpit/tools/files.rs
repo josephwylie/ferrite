@@ -29,6 +29,7 @@ use ferrite_ui::icons::{self, icon};
 use ferrite_ui::theme::{self};
 
 use super::editor::{self, Editor};
+use super::save::SaveState;
 use super::tree::{FileTree, Row, Status};
 use super::*;
 use crate::cockpit::surfaces::SurfaceId;
@@ -226,14 +227,25 @@ impl CockpitView {
             });
         }
         let editor = cx.new(|cx| Editor::new(path, source, settings, cx));
-        cx.subscribe(&editor, move |view, editor, _: &editor::Edited, cx| {
-            // Typing keeps a preview tab.
-            if let Some(files) = view.files_of(thread) {
-                for tab in &mut files.tabs {
-                    if matches!(&tab.body, TabBody::Code(own) if *own == editor) {
-                        tab.preview = false;
-                    }
+        cx.subscribe(&editor, move |view, editor, event: &editor::Event, cx| {
+            let Some(files) = view.files_of(thread) else {
+                return;
+            };
+            let Some(at) = files
+                .tabs
+                .iter()
+                .position(|tab| matches!(&tab.body, TabBody::Code(own) if *own == editor))
+            else {
+                return;
+            };
+            match event {
+                // Typing keeps a preview tab.
+                editor::Event::Edited => files.tabs[at].preview = false,
+                editor::Event::Settled if editor.read(cx).is_closing_clean() => {
+                    return view.remove_tab(thread, at, cx);
                 }
+                editor::Event::Settled => {}
+                editor::Event::Discard => return view.remove_tab(thread, at, cx),
             }
             cx.notify();
         })
@@ -253,14 +265,25 @@ impl CockpitView {
         }
     }
 
+    /// Close a tab, unless its text is not on disk: it is written first, and
+    /// stays with its status bar when that fails.
     fn close_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
         let Some(files) = self.files_of(thread) else {
             return;
         };
-        let tab = files.tabs.remove(at);
-        if let TabBody::Code(editor) = &tab.body {
-            editor.update(cx, |editor, _| editor.save());
+        if let TabBody::Code(editor) = &files.tabs[at].body {
+            if !editor.update(cx, |editor, cx| editor.request_close(cx)) {
+                return;
+            }
         }
+        self.remove_tab(thread, at, cx);
+    }
+
+    fn remove_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
+        let Some(files) = self.files_of(thread) else {
+            return;
+        };
+        files.tabs.remove(at);
         files.active = match files.tabs.len() {
             0 => None,
             len => Some(files.active.map_or(0, |active| active.min(len - 1))),
@@ -649,6 +672,15 @@ impl CockpitView {
                         ]
                     }).flatten()),
             )
+            .children(match &tab.body {
+                TabBody::Code(editor) => match editor.read(cx).save_state() {
+                    SaveState::Saving(_) => Some("Saving"),
+                    SaveState::Saved => Some("Saved"),
+                    _ => None,
+                },
+                _ => None,
+            }
+            .map(|word| div().debug_selector(|| "files-save-state".into()).flex_shrink_0().child(word)))
             .children(changed.then(|| {
                 let path = relative_path.clone();
                 text_action("files-show-changes", "Show changes").on_click(cx.listener(
