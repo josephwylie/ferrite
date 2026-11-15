@@ -25,7 +25,7 @@ pub(super) fn input_content(
     let mut content = skills.notes(text);
     content.push(serde_json::json!({"type": "text", "text": text}));
     let mut inline_bytes = 0;
-    for path in crate::prompt_files::paths(text, cwd) {
+    for path in crate::prompt_files::paths(&crate::replies::authored(text), cwd) {
         let Some((block, media_type)) = crate::prompt_files::image_type(&path)
             .map(|media_type| ("image", media_type))
             .or_else(|| {
@@ -1625,10 +1625,41 @@ mod tests {
     }
 
     #[test]
+    fn quoted_file_syntax_is_reference_text_not_input() {
+        use crate::replies::{compose, Reply};
+        let dir = std::env::temp_dir().join(format!("ferrite-claude-inert-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pic.png"), b"fixture").unwrap();
+        std::fs::write(dir.join("doc.pdf"), b"fixture").unwrap();
+        let prompt = compose(
+            &[Reply::new("see @pic.png and @doc.pdf", "")],
+            "what is this?",
+        );
+        let blocks = input_content(&prompt, &Default::default(), Some(&dir));
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["text"], prompt);
+
+        let trailer = crate::prompt_files::compose(&prompt, &[dir.join("pic.png")]);
+        let blocks = input_content(&trailer, &Default::default(), Some(&dir));
+        assert_eq!(blocks.len(), 2, "an explicit attachment still rides");
+        assert_eq!(blocks[1]["type"], "image");
+        let own = compose(&[Reply::new("see @pic.png", "")], "and @doc.pdf");
+        assert_eq!(
+            input_content(&own, &Default::default(), Some(&dir)).len(),
+            2
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn browser_annotation_native_image_reaches_claude() {
         use crate::browser::{Document, TabId};
-        use crate::browser_annotations::{self, Capture, ElementContext, Rect, Selection, Viewport};
-        let root = std::env::temp_dir().join(format!("ferrite-claude-browser-{}", std::process::id()));
+        use crate::browser_annotations::{
+            self, Capture, ElementContext, Rect, Selection, Viewport,
+        };
+        let root =
+            std::env::temp_dir().join(format!("ferrite-claude-browser-{}", std::process::id()));
         let png = include_bytes!("../../../tests/fixtures/browser-original.png");
         std::fs::create_dir_all(&root).unwrap();
         let private = root.join("private.png");
@@ -2161,12 +2192,11 @@ mod tests {
     /// "[Request interrupted by user for tool use]" line is dropped.
     #[test]
     fn a_denial_with_interrupt_ends_the_turn_as_an_interrupt() {
-        let events: Vec<SessionEvent> = include_str!(
-            "../../../tests/fixtures/claude-permission-deny-interrupt-2.1.318.jsonl"
-        )
-        .lines()
-        .filter_map(parse_line)
-        .collect();
+        let events: Vec<SessionEvent> =
+            include_str!("../../../tests/fixtures/claude-permission-deny-interrupt-2.1.318.jsonl")
+                .lines()
+                .filter_map(parse_line)
+                .collect();
         let ends: Vec<_> = events
             .iter()
             .filter_map(|event| match event {
@@ -2179,10 +2209,9 @@ mod tests {
             "{ends:?}"
         );
         assert!(
-            events.iter().any(|event| matches!(
-                event,
-                SessionEvent::ToolCompleted { is_error: true, .. }
-            )),
+            events
+                .iter()
+                .any(|event| matches!(event, SessionEvent::ToolCompleted { is_error: true, .. })),
             "the denied call settles as an error result"
         );
     }
@@ -2205,7 +2234,10 @@ mod tests {
             SessionEvent::ToolDenied { id } => Some(id.clone()),
             _ => None,
         });
-        assert!(started.is_some() && started == denied, "{started:?} / {denied:?}");
+        assert!(
+            started.is_some() && started == denied,
+            "{started:?} / {denied:?}"
+        );
     }
 
     /// Captured from `claude` 2.1.243 (the hello fixture, taken with hooks
@@ -2224,7 +2256,10 @@ mod tests {
         assert_eq!(hooks.len(), 2);
         assert_eq!(hooks[0].0, hooks[1].0);
         assert_eq!(hooks[0].1, "SessionStart:startup");
-        assert_eq!((hooks[0].2.as_deref(), hooks[1].2.as_deref()), (None, Some("success")));
+        assert_eq!(
+            (hooks[0].2.as_deref(), hooks[1].2.as_deref()),
+            (None, Some("success"))
+        );
     }
 
     /// A `Read` of a picture, as Claude Desktop's own log records it
