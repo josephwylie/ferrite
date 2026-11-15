@@ -471,6 +471,6 @@ fn cmd_click_opens_what_the_shell_printed(cx: &mut TestAppContext) {
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Files));
     assert!(view.read_with(cx, |view, _| view.files_tab_names(thread)).contains(&("main.rs".to_string(), true)));
     let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).expect("the editor"));
-    let (text, caret) = editor.read_with(cx, |editor, _| (editor.text_for_test().to_string(), editor.caret_for_test()));
+    let (text, caret) = editor.read_with(cx, |editor, _| (editor.text().to_string(), editor.caret_for_test()));
     assert_eq!(text[..caret].matches('\n').count(), 2, "the caret is on line 3");
 }
