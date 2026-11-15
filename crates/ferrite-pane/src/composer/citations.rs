@@ -16,7 +16,10 @@ gpui::actions!(cite, [SaveComment, CancelComment]);
 
 /// The operator asked to see a reply's source: the Pane's transcript
 /// scrolls to it, or says it is gone (`Composer::source_missing`).
-pub struct OpenSource(pub Source);
+pub struct OpenSource {
+    pub source: Source,
+    pub quote: String,
+}
 
 impl gpui::EventEmitter<OpenSource> for Composer {}
 
@@ -163,8 +166,14 @@ impl Composer {
     }
 
     pub fn open_source(&mut self, index: usize, cx: &mut gpui::Context<Self>) {
-        if let Some(source) = self.replies.get(index).and_then(|reply| reply.source) {
-            cx.emit(OpenSource(source));
+        let Some(reply) = self.replies.get(index) else {
+            return;
+        };
+        if let Some(source) = reply.source {
+            let quote = reply.quote.clone();
+            // The transcript may hold the message now: ask it again.
+            self.citations.missing.remove(&source);
+            cx.emit(OpenSource { source, quote });
         }
     }
 

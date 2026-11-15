@@ -528,6 +528,71 @@ fn a_sent_quote_says_when_its_source_is_gone(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("quote-row-0-source").is_some(), "it says so");
 }
 
+/// A source the transcript does not hold yet is "unavailable" only until it
+/// does: when the Block turns up (earlier history arriving), the quote offers
+/// Go to source again.
+#[gpui::test]
+fn a_source_that_arrives_later_is_no_longer_unavailable(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("cite-sent-late", 1);
+    let thread = core.threads()[0];
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let stream = fake.streams.borrow()[0].clone();
+    let answer = |text: &str| {
+        stream.send(SessionEvent::TextDelta { text: text.into() }).unwrap();
+        stream
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+    };
+    answer(PARAGRAPHS);
+    tick(cx);
+    cite_alpha(&view, cx);
+    let cited = replies(&view, cx)[0].source.expect("cited").block;
+    let id: u64 = serde_json::to_string(&cited).unwrap().parse().unwrap();
+    let later: ferrite_core::transcript::BlockId = serde_json::from_str(&(id + 20).to_string()).unwrap();
+    let reply = ferrite_core::replies::Reply::new("a passage to come", "")
+        .cited_from(Source { thread, block: later });
+    view.update(cx, |view, cx| {
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.reply(reply, cx))
+    });
+    tick(cx);
+    let line = cx.debug_bounds("focused-prompt-editor").expect("the line");
+    cx.simulate_click(line.center(), gpui::Modifiers::none());
+    cx.simulate_input("go on");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    click(cx, "quote-row-1-go");
+    assert!(cx.debug_bounds("quote-row-1-go").is_none(), "it says it is unavailable");
+    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
+    for round in 0..30 {
+        if transcript.read_with(cx, |transcript, _| transcript.holds_block(later)) {
+            break;
+        }
+        let _ = view.update(cx, |view, _| view.cockpit.send(thread, format!("more {round}")));
+        answer(&format!("answer {round}\n\n"));
+        tick(cx);
+    }
+    tick(cx);
+    assert!(
+        transcript.read_with(cx, |transcript, _| transcript.holds_block(later)),
+        "the block arrived"
+    );
+    transcript.update(cx, |transcript, cx| {
+        transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
+    });
+    tick(cx);
+    assert!(
+        cx.debug_bounds("quote-row-1-go").is_some(),
+        "no longer unavailable: Go to source is offered again"
+    );
+}
+
 /// A prompt, then an answer of `lines` paragraphs, the last one cited and
 /// the tray's chip opened: the pinned band covers the top of the view.
 fn cited_answer<'a>(
@@ -548,7 +613,7 @@ fn cited_answer<'a>(
     let stream = fake.streams.borrow()[0].clone();
     stream
         .send(SessionEvent::TextDelta {
-            text: (0..lines).map(|n| format!("Line {n}\n\n")).collect(),
+            text: (0..lines).map(|n| format!("Entry {n:02}\n\n")).collect(),
         })
         .unwrap();
     stream
@@ -558,7 +623,7 @@ fn cited_answer<'a>(
         })
         .unwrap();
     tick(cx);
-    drag(&view, cx, (lines, 0), (lines, 4));
+    drag(&view, cx, (lines, 0), (lines, 8));
     let cite = cx.debug_bounds("selection-reply-quote").expect("Cite draws");
     cx.simulate_click(cite.center(), gpui::Modifiers::none());
     tick(cx);
@@ -582,28 +647,75 @@ fn row_against_band(
     })
 }
 
-/// Go to source lands the top of a long answer just below its turn's
-/// pinned prompt, not under it.
+/// Where the landed passage is, against the band and the view's foot.
+fn passage_against_view(
+    transcript: &gpui::Entity<ferrite_pane::transcript::TranscriptView>,
+    cx: &mut gpui::VisualTestContext,
+) -> (Option<gpui::Bounds<gpui::Pixels>>, gpui::Pixels, gpui::Pixels) {
+    transcript.read_with(cx, |transcript, _| {
+        let scroll = transcript.scroll();
+        let viewport = scroll.bounds();
+        (
+            transcript.cited_painted(),
+            viewport.top() + scroll.top_mask(),
+            viewport.bottom(),
+        )
+    })
+}
+
+/// Go to source brings a cited paragraph far below the top of a long answer
+/// into the reading band, marked, not the answer's top.
 #[gpui::test]
-fn go_to_source_lands_the_answers_top_below_the_pinned_band(cx: &mut TestAppContext) {
-    let (transcript, block, cx) = cited_answer("cite-below-band", 40, cx);
-    let (top, floor, _) = row_against_band(&transcript, block, cx);
-    assert!(top < floor, "the answer's top starts out under the band");
+fn go_to_source_lands_the_cited_passage_in_view(cx: &mut TestAppContext) {
+    let (transcript, block, cx) = cited_answer("cite-passage-in-view", 40, cx);
+    transcript.update(cx, |transcript, cx| {
+        transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
+    });
+    tick(cx);
+    let (top, _, bottom) = row_against_band(&transcript, block, cx);
+    assert!(top < bottom, "the answer is on screen");
     open_chip(cx, 0);
     click(cx, "cite-source");
-    tick(cx);
-    let (top, floor, bottom) = row_against_band(&transcript, block, cx);
+    for _ in 0..4 {
+        tick(cx);
+    }
+    let (found, floor, bottom) = passage_against_view(&transcript, cx);
+    let found = found.expect("the passage is marked and has painted");
     assert!(
-        top >= floor && top < bottom,
-        "the cited row's top {top:?} is visible at or below the band's foot {floor:?}"
+        found.top() >= floor && found.bottom() <= bottom,
+        "the passage {found:?} lies between the band's foot {floor:?} and the view's foot {bottom:?}"
     );
+}
+
+/// A passage already fully readable does not move, whatever is above it.
+#[gpui::test]
+fn go_to_source_leaves_a_visible_passage_where_it_is(cx: &mut TestAppContext) {
+    let (transcript, block, cx) = cited_answer("cite-passage-in-place", 40, cx);
+    let (top, floor, _) = row_against_band(&transcript, block, cx);
+    assert!(top < floor, "the answer's top is under the band; the passage is in view");
+    open_chip(cx, 0);
+    tick(cx);
+    let before = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
+    click(cx, "cite-source");
+    for _ in 0..4 {
+        tick(cx);
+    }
+    let after = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
+    assert_eq!(after, before, "the view did not move");
+    let (found, floor, bottom) = passage_against_view(&transcript, cx);
+    let found = found.expect("the passage is marked");
+    assert!(found.top() >= floor && found.bottom() <= bottom);
 }
 
 /// A wheel straight after Go to source belongs to the operator: the
 /// landing never pulls the row back under the band.
 #[gpui::test]
 fn a_wheel_right_after_go_to_source_is_not_undone(cx: &mut TestAppContext) {
-    let (transcript, block, cx) = cited_answer("cite-then-wheel", 40, cx);
+    let (transcript, _, cx) = cited_answer("cite-then-wheel", 40, cx);
+    transcript.update(cx, |transcript, cx| {
+        transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
+    });
+    tick(cx);
     open_chip(cx, 0);
     click(cx, "cite-source");
     let viewport = transcript.read_with(cx, |transcript, _| transcript.scroll().bounds());
@@ -612,30 +724,15 @@ fn a_wheel_right_after_go_to_source_is_not_undone(cx: &mut TestAppContext) {
         delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-150.))),
         ..Default::default()
     });
+    let held = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
     cx.run_until_parked();
     for _ in 0..4 {
         tick(cx);
     }
-    let (top, floor, _) = row_against_band(&transcript, block, cx);
-    assert!(top < floor, "the wheel moved the row {top:?} up past the band's foot {floor:?}");
-}
-
-/// A cited answer whose top is already readable stays where it is.
-#[gpui::test]
-fn go_to_source_leaves_a_readable_answer_in_place(cx: &mut TestAppContext) {
-    let (transcript, block, cx) = cited_answer("cite-in-place", 40, cx);
-    transcript.update(cx, |transcript, cx| {
-        transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
-    });
-    tick(cx);
-    let (top, floor, bottom) = row_against_band(&transcript, block, cx);
-    assert!(top >= floor && top < bottom, "the answer's top is readable");
-    let before = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
-    open_chip(cx, 0);
-    click(cx, "cite-source");
-    tick(cx);
+    let (found, ..) = passage_against_view(&transcript, cx);
+    assert!(found.is_none(), "the wheel dropped the landing and its mark");
     let after = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
-    assert_eq!(after, before, "the view did not move");
+    assert_eq!(after, held, "the landing did not pull the view back");
 }
 
 /// The pinned band follows the turn on screen: from a later turn's short
@@ -670,11 +767,10 @@ fn go_to_source_clears_the_band_of_the_turn_it_lands_in(cx: &mut TestAppContext)
         transcript.scroll_to(ferrite_pane::transcript::ScrollTarget::Top, cx)
     });
     tick(cx);
-    drag(&view, cx, (5, 0), (5, 4));
+    drag(&view, cx, (5, 0), (5, 7));
     let cite = cx.debug_bounds("selection-reply-quote").expect("Cite draws");
     cx.simulate_click(cite.center(), gpui::Modifiers::none());
     tick(cx);
-    let block = replies(&view, cx)[0].source.expect("cited").block;
     transcript.update(cx, |transcript, cx| transcript.scroll_to_bottom(cx));
     tick(cx);
     let later_floor = transcript.read_with(cx, |transcript, _| transcript.scroll().top_mask());
@@ -683,10 +779,11 @@ fn go_to_source_clears_the_band_of_the_turn_it_lands_in(cx: &mut TestAppContext)
     for _ in 0..4 {
         tick(cx);
     }
-    let (top, floor, bottom) = row_against_band(&transcript, block, cx);
+    let (found, floor, bottom) = passage_against_view(&transcript, cx);
+    let found = found.expect("the passage is marked and has painted");
     assert!(
-        top >= floor && top < bottom,
-        "the cited row's top {top:?} is visible at or below its turn's band {floor:?} (was {later_floor:?} from the later turn)"
+        found.top() >= floor && found.bottom() <= bottom,
+        "the passage {found:?} is visible at or below its turn's band {floor:?} (was {later_floor:?} from the later turn)"
     );
     let mask = transcript.read_with(cx, |transcript, _| transcript.scroll().top_mask());
     assert!(mask > later_floor, "the earlier turn's band is the taller");

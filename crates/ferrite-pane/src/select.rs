@@ -90,6 +90,7 @@ impl RunText {
 
 /// What a find marks in these runs: its query, and the run (by key) and
 /// ordinal of the occurrence it is on, which reports where it painted.
+#[derive(Clone)]
 pub struct FindMarks {
     pub query: crate::find::Query,
     pub active: Option<(SharedString, usize)>,
