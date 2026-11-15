@@ -205,7 +205,7 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             "cockpit::AlwaysAllow",
             Some("Decision"),
         ),
-        // A Subagent's tab has no Composer, so its letters never type.
+        // A Subagent's tab has no Composer; its cards' own fields still type.
         ("y".into(), "cockpit::Allow", Some(SUBAGENT_DECISION)),
         ("n".into(), "cockpit::Deny", Some(SUBAGENT_DECISION)),
         ("a".into(), "cockpit::Always", Some(SUBAGENT_DECISION)),
