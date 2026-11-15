@@ -36,50 +36,6 @@ fn answered(fake: &Fake) -> Vec<(String, DecisionAnswer)> {
     fake.answered.borrow().clone()
 }
 
-/// An approval card on an empty Composer line answers in one key: `y`
-/// allows, `n` denies, and `a` sends the provider's standing answer.
-#[gpui::test]
-fn an_approval_answers_y_a_and_n_in_one_key(cx: &mut TestAppContext) {
-    for (key, id) in [("y", "one-key-y"), ("n", "one-key-n"), ("a", "one-key-a")] {
-        let (core, fake) = cockpit(id, 1);
-        bind_production_keys(cx);
-        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
-        let SessionEvent::DecisionRequested { mut decision } = decision(id) else {
-            unreachable!()
-        };
-        decision.suggestions = vec![ferrite_core::DecisionChoice {
-            label: "Always allow Write".into(),
-            value: serde_json::json!({ "rule": "Write" }),
-            standing: true,
-        }];
-        fake.streams.borrow()[0]
-            .send(SessionEvent::DecisionRequested { decision })
-            .unwrap();
-        tick(cx);
-        assert!(
-            cx.debug_bounds("question-island").is_some(),
-            "the card is up"
-        );
-        cx.simulate_keystrokes(key);
-        tick(cx);
-        let answered = answered(&fake);
-        let [(answered_id, answer)] = answered.as_slice() else {
-            panic!("`{key}` answers exactly once: {answered:?}");
-        };
-        assert_eq!(answered_id, id);
-        match key {
-            "y" => assert!(matches!(answer, DecisionAnswer::Allow { .. })),
-            "n" => assert!(matches!(answer, DecisionAnswer::Deny { .. })),
-            _ => assert!(
-                matches!(answer, DecisionAnswer::AllowAlways { suggestion, .. }
-                    if *suggestion == serde_json::json!({ "rule": "Write" })),
-                "{answer:?}"
-            ),
-        }
-    }
-}
-
 /// Every approval offers exactly three options and a digit picks one of
 /// them: a native choice outside the three (`Block example.com`) has no
 /// row, so `2` is option 2 — allow for this thread (Ferrite keeps the rule

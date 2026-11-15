@@ -1109,9 +1109,8 @@ impl CockpitView {
         self.answer_request(thread, request, answer, cx);
     }
 
-    /// The letter keys (`y` `n` `a`) and the L2 keycaps: an approval takes
-    /// its option (`y` 1, `a` 2, `n` 3) through the one answer path; a
-    /// question, form or link takes only a deny.
+    /// An approval takes its option (allow 1, always 2, deny 3) through the
+    /// one answer path; a question, form or link takes only a deny.
     pub(super) fn answer_request(
         &mut self,
         thread: ThreadId,
@@ -1650,9 +1649,6 @@ impl Cards {
                 });
             }};
         }
-        letter!(Allow, "y");
-        letter!(Deny, "n");
-        letter!(Always, "a");
         letter!(PickOption1, "1");
         letter!(PickOption2, "2");
         letter!(PickOption3, "3");

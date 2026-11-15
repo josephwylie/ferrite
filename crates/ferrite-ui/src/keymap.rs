@@ -190,11 +190,9 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // Kit buttons synthesize clicks from Enter/Space; do not submit a prompt.
         ("enter".into(), "zed::NoAction", Some("PromptAttachment")),
         ("escape".into(), "cockpit::Interrupt", Some(COCKPIT)),
-        // Only while a Decision holds the keyboard: elsewhere these are
-        // just letters going into the Composer.
-        ("y".into(), "cockpit::Allow", Some("Decision")),
-        ("n".into(), "cockpit::Deny", Some("Decision")),
-        ("a".into(), "cockpit::Always", Some("Decision")),
+        // No bare y/n/a under a Decision: its Composer is a live text
+        // field, so those are the first letters of "yes", "no", "also". The
+        // approval's own keys are the chords below and its buttons.
         // The approval card's buttons (Claude's): ⌘⏎ allows once, ⇧⌘⏎
         // always allows — they act with text on the line too.
         (
@@ -207,8 +205,11 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             "cockpit::AlwaysAllow",
             Some("Decision"),
         ),
-        // A question Decision's options, by number — digits again with
-        // text on the line, the y/n/a rule.
+        // A Subagent's tab has no Composer; its cards' own fields still type.
+        ("y".into(), "cockpit::Allow", Some(SUBAGENT_DECISION)),
+        ("n".into(), "cockpit::Deny", Some(SUBAGENT_DECISION)),
+        ("a".into(), "cockpit::Always", Some(SUBAGENT_DECISION)),
+        // A question Decision's options, by number.
         ("1".into(), "cockpit::PickOption1", Some("Decision")),
         ("2".into(), "cockpit::PickOption2", Some("Decision")),
         ("3".into(), "cockpit::PickOption3", Some("Decision")),
@@ -614,6 +615,19 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("escape".into(), "terminal::Escape", Some(TERMINAL)),
         // The Files tree's filter: ⏎ opens the first match.
         ("enter".into(), "files::OpenFirst", Some("FilesFilter")),
+        // A surface that reads its own keys: the keys the window binds
+        // (⏎, ⇥, ⇧⇥, esc, and the clipboard chords) stand down, so the raw
+        // key handler under them gets the keystroke. Last, so these win
+        // every same-depth tie.
+        ("enter".into(), NO_ACTION, Some(PANEL_EMPTY)),
+        ("enter".into(), NO_ACTION, Some(BROWSER)),
+        ("tab".into(), NO_ACTION, Some(BROWSER)),
+        ("shift-tab".into(), NO_ACTION, Some(BROWSER)),
+        ("escape".into(), NO_ACTION, Some(BROWSER)),
+        (with_primary("c"), NO_ACTION, Some(BROWSER)),
+        (with_primary("v"), NO_ACTION, Some(BROWSER)),
+        (with_primary("x"), NO_ACTION, Some(BROWSER)),
+        (with_primary("a"), NO_ACTION, Some(BROWSER)),
     ]);
     if platform == Platform::Mac {
         table.extend([
@@ -641,6 +655,14 @@ const REVIEW: &str = "Review && !Composer";
 /// binds its own keys deeper; this context's esc beats the Cockpit's
 /// interrupt.
 pub const READER: &str = "Reader";
+/// The embedded browser's page (`ferrite-pane`'s `WebView`): it forwards
+/// raw keys to the page, so the host's own bindings on them stand down.
+pub const BROWSER: &str = "Browser";
+/// A Subagent tab's body while its request pends. It has no Composer, so the
+/// bare answer letters bind there unless one of its cards' fields types.
+pub const SUBAGENT_DECISION: &str = "SubagentDecision && !Input && !Composer";
+/// The Panel's "Open a surface" list, which opens its highlighted row on ⏎.
+pub const PANEL_EMPTY: &str = "PanelEmpty";
 /// The Files editor's key context (`cockpit/tools/editor.rs`).
 pub const FILE_EDITOR: &str = "FileEditor";
 /// The Terminal grid's key context (`ferrite_terminal::KEY_CONTEXT`'s first
@@ -653,7 +675,7 @@ pub const IMAGE_VIEWER: &str = "ImageViewer";
 
 /// The contexts where no text field takes typing (a Decision answers its
 /// own letters), so a plain key may act there.
-const LETTER_CONTEXTS: [&str; 4] = [NO_TEXT_FIELD, REVIEW, "Decision", "Wall"];
+const LETTER_CONTEXTS: [&str; 4] = [NO_TEXT_FIELD, REVIEW, SUBAGENT_DECISION, "Wall"];
 
 /// gpui's "no action": a row that keeps a key from the bindings under it.
 const NO_ACTION: &str = "zed::NoAction";
@@ -1041,7 +1063,11 @@ mod tests {
                 ("n", "cockpit::Deny"),
                 ("a", "cockpit::Always"),
             ] {
-                assert!(table.contains(&(key.into(), action, Some("Decision"))));
+                assert!(
+                    !table.contains(&(key.into(), action, Some("Decision"))),
+                    "{key} types under a Decision"
+                );
+                assert!(table.contains(&(key.into(), action, Some(SUBAGENT_DECISION))));
                 assert!(table.contains(&(key.into(), action, Some("Wall"))));
             }
         }
@@ -1312,7 +1338,7 @@ mod tests {
         assert_eq!(
             rows("cockpit::Allow"),
             [
-                ("shift-y".to_string(), Some("Decision")),
+                ("shift-y".to_string(), Some(SUBAGENT_DECISION)),
                 ("shift-y".to_string(), Some("Wall"))
             ]
         );
@@ -1412,7 +1438,6 @@ mod tests {
                 .iter()
                 .any(|refusal| refusal.contains(&format!("for {action} would take that key"))));
         }
-        assert!(table.contains(&("o".into(), "cockpit::Allow", Some("Decision"))));
         assert!(table.contains(&("o".into(), "cockpit::Allow", Some("Wall"))));
         assert!(table.contains(&("g".into(), "review::Reread", Some(REVIEW))));
     }

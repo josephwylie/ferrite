@@ -131,9 +131,9 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "cockpit::Always" if wall => Row(Wall, "Always allow"),
         "cockpit::PickOption1" if wall => Row(Wall, "Answer 1\u{2013}3"),
         "cockpit::PickOption2" | "cockpit::PickOption3" if wall => Hidden,
-        "cockpit::Allow" => Row(Decision, "Allow"),
-        "cockpit::Deny" => Row(Decision, "Deny"),
-        "cockpit::Always" => Row(Decision, "Always allow"),
+        "cockpit::Allow" => Row(Decision, "Allow, on a subagent's request"),
+        "cockpit::Deny" => Row(Decision, "Deny, on a subagent's request"),
+        "cockpit::Always" => Row(Decision, "Always allow, on a subagent's request"),
         // The approval card's chorded buttons: they act with text on the
         // line, where the letters type.
         "cockpit::AllowOnce" => Row(Decision, "Allow once, from any line"),
@@ -500,7 +500,12 @@ mod tests {
             find(Place::Board, "Focus pane 1\u{2013}9"),
             "cmd-1\u{2026}9"
         );
-        assert_eq!(find(Place::Decision, "Allow"), "Y");
+        assert!(
+            rows.iter()
+                .all(|row| !(row.place == Place::Decision && row.label == "Allow")),
+            "no bare letter answers an approval"
+        );
+        assert!(find(Place::Decision, "Allow once, from any line").contains("cmd"));
         assert_eq!(find(Place::Decision, "Pick 1\u{2013}3"), "1\u{2026}3");
         assert_eq!(
             find(Place::Decision, "Amend (a note with the answer)"),

@@ -882,6 +882,11 @@ impl CockpitView {
         }
     }
 
+    pub(in crate::cockpit) fn files_filter_text_for_test(&self, thread: ThreadId, cx: &gpui::App) -> String {
+        self.files_ref(thread)
+            .map_or_else(String::new, |files| files.filter.read(cx).text().to_string())
+    }
+
     pub(in crate::cockpit) fn set_files_filter_for_test(
         &mut self,
         thread: ThreadId,

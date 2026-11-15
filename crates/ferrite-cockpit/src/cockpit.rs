@@ -128,7 +128,7 @@ actions!(
         Deny,
         Always,
         // The approval card's chorded buttons: they answer whatever is on
-        // the line (unlike `y`/`a`, which type with text there).
+        // the line.
         AllowOnce,
         AlwaysAllow,
         // ⌘U: the `+` menu's `Add files or photos`, on the focused Pane.
@@ -500,6 +500,9 @@ pub struct CockpitView {
     panel: panel::Panel,
     /// "Open a surface": the Panel's default focus while no tab shows.
     panel_empty_focus: gpui::FocusHandle,
+    /// The Panel bodies that take keys of their own (the launcher, Files):
+    /// while focus is anywhere inside, the focus pump leaves it be.
+    panel_focus: gpui::FocusHandle,
     /// Back and forward through where the operator has been (`history`).
     history: history::History,
     session_controls: Option<(ThreadId, u64)>,
@@ -1531,6 +1534,7 @@ impl CockpitView {
             context_menu: None,
             panel: panel::Panel::load(&prefs.dir),
             panel_empty_focus: cx.focus_handle(),
+            panel_focus: cx.focus_handle(),
             history: Default::default(),
             session_controls: None,
             mode_picker: None,
@@ -5982,15 +5986,15 @@ impl CockpitView {
     }
 
     fn allow(&mut self, _: &Allow, window: &mut Window, cx: &mut Context<Self>) {
-        self.answer_or_type(Answer::Allow, "y", window, cx);
+        self.answer_chorded(Answer::Allow, window, cx);
     }
 
     fn deny(&mut self, _: &Deny, window: &mut Window, cx: &mut Context<Self>) {
-        self.answer_or_type(Answer::Deny, "n", window, cx);
+        self.answer_chorded(Answer::Deny, window, cx);
     }
 
     fn always(&mut self, _: &Always, window: &mut Window, cx: &mut Context<Self>) {
-        self.answer_or_type(Answer::Always, "a", window, cx);
+        self.answer_chorded(Answer::Always, window, cx);
     }
 
     /// ⌘⏎ / ⇧⌘⏎, the approval buttons' chords: they answer whether or not
@@ -6003,45 +6007,7 @@ impl CockpitView {
         }
     }
 
-    /// The answer keys with the keyboard in the Composer (#23): on an empty
-    /// line they are the keycaps' answers; with text on the line they are
-    /// letters again — the ⌫-unqueue rule, applied to y/n/a — because an
-    /// operator half-way through "not yet…" must be able to finish typing
-    /// it. At L1 and L2, where a Composer is live; the wall has no line to
-    /// be typing into.
-    fn answer_or_type(
-        &mut self,
-        answer: Answer,
-        letter: &'static str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.panes[self.focused()].is_main() {
-            self.answer_subject(answer, cx);
-            return;
-        }
-        if self.level_now(window) == Level::Transcript {
-            if let Some(pane) = self.panes.get(self.focused()) {
-                // A question is answered in words as often as by a pick,
-                // and "no, the second one" starts with the deny key: while
-                // a question pends the letters only ever type. Denying a
-                // question is the keycap's job.
-                let asking = pane
-                    .thread()
-                    .is_some_and(|thread| self.pending_questions(thread).is_some());
-                if asking || !pane.composer.read(cx).is_empty() {
-                    pane.composer
-                        .clone()
-                        .update(cx, |composer, cx| composer.insert(letter, cx));
-                    return;
-                }
-            }
-        }
-        self.answer(answer, window, cx);
-    }
-
-    /// `y` `n` `a` — listed in the shortcuts sheet, not on the row: an
-    /// approval takes option 1, 3 or 2 through the one answer path; a
+    /// An approval takes option 1, 3 or 2 through the one answer path; a
     /// question, form or link takes only the deny.
     fn answer(&mut self, answer: Answer, window: &mut Window, cx: &mut Context<Self>) {
         // The focused Thread if it is the one waiting; otherwise whichever
@@ -10154,8 +10120,7 @@ impl CockpitView {
                     }
                     // At L1 the Composer keeps the keyboard even while a
                     // Decision pends: the card is part of its stack and the
-                    // input stays live (PromptBox state 04) — y/n/a answer
-                    // through the region's own Decision key context (#23).
+                    // input stays live (PromptBox state 04).
                     Level::Transcript if pane.has_tool_target() => Some(pane.tool_focus()),
                     // A subagent's tab keeps the keyboard on its body.
                     Level::Transcript if !pane.is_main() => Some(pane.transcript_focus.clone()),
@@ -10236,16 +10201,13 @@ impl CockpitView {
         // The list keeps the keyboard it was handed until the operator
         // takes it elsewhere.
         let nav_list_focused = self.nav_keys_held && self.nav_focus.is_focused(window);
-        // So does "Open a surface", pressed, while it shows.
-        let panel_empty_focused = self.panel_empty_focus.is_focused(window)
-            && self
-                .panel_pane()
-                .and_then(|index| self.panes[index].thread())
-                .is_some_and(|thread| self.active_surface(thread).is_none());
+        // So does a Panel body that reads its own keys: "Open a surface",
+        // pressed, or a Files editor or filter being typed in.
+        let panel_keys_held = self.panel_focus.contains_focused(window, cx);
         if window.has_active_dialog(cx)
             || self.floats_hold_focus()
             || nav_list_focused
-            || panel_empty_focused
+            || panel_keys_held
             || native_text_focused
             || reader_text_focused
             || find_focused
@@ -11106,24 +11068,6 @@ impl CockpitView {
         self.panes[index].toggle_tool(call);
         window.focus(&self.panes[index].tool_focus(), cx);
         cx.notify();
-    }
-
-    /// The pending Decision of `thread` when it is a question, borrowed.
-    fn pending_questions(
-        &self,
-        thread: ThreadId,
-    ) -> Option<(
-        ferrite_core::activity::DecisionHandle,
-        &[ferrite_core::questions::Question],
-    )> {
-        let request = self
-            .cockpit
-            .thread(thread)?
-            .pending_decisions()
-            .iter()
-            .find(|request| request.subject == Some(ferrite_core::activity::Subject::Main))?;
-        let questions = pane::questions_of(&request.decision)?;
-        Some((request.handle.clone(), questions))
     }
 
     /// A digit key (`PickOption1..4`, bound where a Decision holds the

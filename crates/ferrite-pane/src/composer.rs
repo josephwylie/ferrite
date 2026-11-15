@@ -635,8 +635,7 @@ impl Composer {
         self.edited(cx);
     }
 
-    /// Type `text` at the caret — the letter path of a y/n/a key pressed
-    /// while the line already holds a sentence.
+    /// Type `text` at the caret.
     pub fn insert(&mut self, text: &str, cx: &mut Context<Self>) {
         self.line.replace(None, text);
         self.edited(cx);

@@ -1379,19 +1379,17 @@ fn a_review_of_a_machines_thread_reads_its_checkout_there(cx: &mut TestAppContex
     );
 }
 
-/// The public Server/window path must show its exact native page, including
-/// provider-initiated opens and navigation that finishes before the next paint.
-#[gpui::test]
-fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx: &mut TestAppContext) {
+/// A Cockpit attached to a Server whose browser window has one tab open on
+/// a local page, and the Thread and tab document it belongs to.
+pub(super) fn browser_core(name: &str) -> (Cockpit, ThreadId, ferrite_core::browser::Document) {
     use ferrite_core::browser::Action;
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
-    use ferrite_pane::visual::{engine::Visuals, web::fake::{Call, FakeEngine}};
-    let dir = scratch("browser-preview");
+    let dir = scratch(name);
     let dial = ferrite_core::server::fixture_machine(dir.join("box"), Box::new(OnBox(Default::default()))).unwrap();
     let bridge = std::sync::Arc::new(Bridge::new("box", dir.join("bridge.sock"), dial));
     let mut core = Cockpit::attach(Attach {
         store: dir.join("window"), server: Endpoint::Machine(bridge),
-        client: ferrite_core::protocol::Peer { name: "browser-preview".into(), version: "0".into() },
+        client: ferrite_core::protocol::Peer { name: name.into(), version: "0".into() },
         renderer: None, browser: true, driven: false, discovery: Box::new(Fake::default()),
     }).unwrap();
     ferrite_core::doorbell::until("browser window did not attach", || {
@@ -1401,6 +1399,16 @@ fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx:
     core.browser_attach(thread).unwrap();
     let opened = core.browser(thread, Action::Open { url: "http://localhost:5173/start".into() }).unwrap();
     let document = opened.tabs[0].document();
+    (core, thread, document)
+}
+
+/// The public Server/window path must show its exact native page, including
+/// provider-initiated opens and navigation that finishes before the next paint.
+#[gpui::test]
+fn conversation_browser_shares_the_live_preview_and_new_tab_opens_separately(cx: &mut TestAppContext) {
+    use ferrite_core::browser::Action;
+    use ferrite_pane::visual::{engine::Visuals, web::fake::{Call, FakeEngine}};
+    let (core, thread, document) = browser_core("browser-preview");
     bind_production_keys(cx);
     let engine = std::rc::Rc::new(FakeEngine::new());
     cx.update(|cx| Visuals::install(engine.clone(), cx));

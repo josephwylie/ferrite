@@ -955,15 +955,11 @@ fn a_press_on_the_transcript_dismisses_the_open_menu(cx: &mut TestAppContext) {
 }
 
 /// #23: while a Decision pends at L1 the keyboard stays in the Composer
-/// — the input is live (typing queues, since the turn is running) and
-/// the empty line makes y the keycap's answer.
+/// — the input is live (typing queues, since the turn is running).
 #[gpui::test]
-fn a_pending_decision_keeps_the_composer_live_and_an_empty_line_answers(cx: &mut TestAppContext) {
+fn a_pending_decision_keeps_the_composer_live(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("decision-live", 1);
     bind_production_keys(cx);
-    cx.update(|cx| {
-        cx.bind_keys([KeyBinding::new("y", Allow, Some("Decision"))]);
-    });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
     tick(cx);
@@ -994,8 +990,7 @@ fn a_pending_decision_keeps_the_composer_live_and_an_empty_line_answers(cx: &mut
     });
 
     // The input is still live: typing lands, enter queues behind the
-    // turn. (The first key of an empty line is where y/n/a mean their
-    // keycaps, so the sentence starts past them.)
+    // turn.
     cx.simulate_input("fix the tests too");
     cx.simulate_keystrokes("enter");
     tick(cx);
@@ -1012,57 +1007,6 @@ fn a_pending_decision_keeps_the_composer_live_and_an_empty_line_answers(cx: &mut
                 .and_then(|open| open.pending())
                 .is_some(),
             "typing answered nothing"
-        );
-    });
-
-    // Emptied, y is the keycap's answer.
-    cx.simulate_keystrokes("y");
-    cx.run_until_parked();
-    view.read_with(cx, |view, _| {
-        assert!(
-            view.cockpit
-                .thread(thread)
-                .and_then(|open| open.pending())
-                .is_none(),
-            "y on the empty line answered the Decision"
-        );
-    });
-}
-
-/// The other half of the y/n/a rule: with text on the line they are
-/// letters — an operator half-way through a word keeps typing it.
-#[gpui::test]
-fn the_answer_keys_stay_letters_while_the_line_holds_text(cx: &mut TestAppContext) {
-    let (core, fake) = cockpit("decision-letters", 1);
-    bind_production_keys(cx);
-    cx.update(|cx| {
-        cx.bind_keys([KeyBinding::new("y", Allow, Some("Decision"))]);
-    });
-    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-    tick(cx);
-    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    fake.streams.borrow()[0]
-        .send(decision("perm_type"))
-        .unwrap();
-    tick(cx);
-
-    cx.simulate_input("wait");
-    cx.simulate_keystrokes("y");
-    cx.run_until_parked();
-
-    assert_eq!(
-        composer_text(&view, cx),
-        "waity",
-        "y typed instead of answering"
-    );
-    view.read_with(cx, |view, _| {
-        assert!(
-            view.cockpit
-                .thread(thread)
-                .and_then(|open| open.pending())
-                .is_some(),
-            "the Decision is still waiting"
         );
     });
 }

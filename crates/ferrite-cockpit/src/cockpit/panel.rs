@@ -654,8 +654,19 @@ impl CockpitView {
                 .child(body)
                 .into_any_element()
         };
+        let keyed = |body: AnyElement| {
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .track_focus(&self.panel_focus)
+                .child(body)
+                .into_any_element()
+        };
         match active {
-            None => filled(self.surface_empty(thread, cx)),
+            None => keyed(self.surface_empty(thread, cx)),
             Some(SurfaceId::Overview) => {
                 let scroll = self.panel.scrolls.get(&thread).cloned().unwrap_or_default();
                 div()
@@ -683,7 +694,7 @@ impl CockpitView {
                     .into_any_element()
             }
             Some(SurfaceId::File(_) | SurfaceId::Browser) => padded(self.panel_preview(owner, cx)),
-            Some(SurfaceId::Files) => filled(self.files_pane(thread, cx).into_any_element()),
+            Some(SurfaceId::Files) => keyed(self.files_pane(thread, cx).into_any_element()),
             Some(SurfaceId::Changes) => filled(self.changes_pane(tools::Diff::Changes(thread), cx).into_any_element()),
             Some(SurfaceId::Terminal(number)) => {
                 filled(self.terminal_pane(thread, number, cx).into_any_element())

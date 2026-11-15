@@ -1057,8 +1057,8 @@ pub fn render_pane(
             view.rich
                 .file_context(workspace.map(WorkspaceBinding::cwd), &view.preview);
             // A child's tab has no Composer to carry the `Decision` key
-            // context: while that child's request pends, its body does, so
-            // y/n/a and the digits reach the card from the transcript.
+            // context: while that child's request pends, its body does, and
+            // with no Composer there the answer letters bind too.
             let child_request = !view.is_main()
                 && thread.is_some_and(|thread| {
                     thread
@@ -1079,7 +1079,9 @@ pub fn render_pane(
                     // own top edge — the Pane's edge in Solo, the head rule
                     // on a board.
                     .overflow_hidden()
-                    .when(child_request, |body| body.key_context("Decision"))
+                    .when(child_request, |body| {
+                        body.key_context("Decision SubagentDecision")
+                    })
                     .child(
                         retained_transcript.expect("L1 transcript entity is wired by CockpitView"),
                     )
