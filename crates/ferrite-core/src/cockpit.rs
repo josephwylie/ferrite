@@ -2227,6 +2227,12 @@ impl Cockpit {
         }
     }
 
+    /// The log of an open Thread, to read its whole history on a worker;
+    /// `None` when the log is on another computer.
+    pub fn history_log(&self, thread: ThreadId) -> Option<&Store> {
+        self.open_log(thread)
+    }
+
     /// This computer's logs, when `thread` is open and its log is here.
     fn open_log(&self, thread: ThreadId) -> Option<&Store> {
         self.logs.as_ref().filter(|_| self.thread(thread).is_some())

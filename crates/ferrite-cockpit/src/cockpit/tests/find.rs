@@ -225,6 +225,154 @@ fn find_reaches_into_a_scrolling_output(cx: &mut TestAppContext) {
     );
 }
 
+fn bash(fake: &Fake, id: &str, output: &str) {
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolStarted {
+            id: id.into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "cargo build" }),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolCompleted {
+            id: id.into(),
+            output: output.into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        })
+        .unwrap();
+}
+
+fn in_view(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+    let painted = state(view, cx)
+        .unwrap()
+        .painted
+        .expect("the occurrence painted");
+    let shown = viewport(view, cx);
+    assert!(
+        painted.top() >= shown.top() && painted.bottom() <= shown.bottom(),
+        "the occurrence is in view: {painted:?} in {shown:?}"
+    );
+}
+
+/// A settled turn folds its interim prose and its calls under `Worked for`,
+/// and a shut call hides its output. Find counts them all before anything
+/// opens; stepping to a hit opens what hides it and shows that occurrence.
+#[gpui::test]
+fn find_opens_the_folds_that_hide_a_hit(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("find-folded", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Look into it".into());
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    say(&fake, "An interim remark about a zebra.\n\n");
+    bash(&fake, "build", "compiling\nthe zebra token\ndone");
+    say(&fake, "All done.\n\n");
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("turn-fold-shut").is_some(),
+        "the work is folded"
+    );
+    let shut = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            !view.panes[0].tool_expanded(pane::DisclosureId::Tool("build".into()))
+        })
+    };
+
+    open(cx);
+    cx.simulate_input("zebra");
+    settle(&view, cx);
+    let found = state(&view, cx).unwrap();
+    assert_eq!(
+        found.count.as_deref(),
+        Some("1/2"),
+        "folded text is counted"
+    );
+    assert!(
+        cx.debug_bounds("turn-fold-open").is_some(),
+        "its fold opened"
+    );
+    in_view(&view, cx);
+    assert!(shut(&view, cx), "the output it does not hold stays shut");
+
+    cx.simulate_keystrokes("enter");
+    settle(&view, cx);
+    assert_eq!(state(&view, cx).unwrap().count.as_deref(), Some("2/2"));
+    assert!(!shut(&view, cx), "the call's output opened for its hit");
+    in_view(&view, cx);
+
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(
+        cx.debug_bounds("turn-fold-open").is_some(),
+        "closing the bar leaves what it opened"
+    );
+}
+
+/// A turn that ends in its answer keeps its plan in the fold: a step left
+/// pending still reads pending, and Find reaches it.
+#[gpui::test]
+fn a_completed_turns_plan_is_kept_in_its_fold(cx: &mut TestAppContext) {
+    use ferrite_core::progress::{PlanStep, ProgressEvent, StepStatus};
+    let (mut core, fake) = cockpit("plan-kept", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Ship it".into());
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    super::hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let step = |text: &str, status| PlanStep {
+        text: text.into(),
+        status,
+    };
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Progress {
+            event: ProgressEvent::Plan {
+                steps: vec![
+                    step("Read the config", StepStatus::Completed),
+                    step("Rebuild the index", StepStatus::Pending),
+                ],
+                explanation: String::new(),
+            },
+        })
+        .unwrap();
+    read(&fake, "look");
+    say(&fake, "All done.\n\n");
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("turn-fold-shut").is_some(),
+        "the work is folded"
+    );
+    assert!(
+        cx.debug_bounds("task-list").is_none(),
+        "shut, the plan is hidden"
+    );
+
+    open(cx);
+    cx.simulate_input("Rebuild");
+    settle(&view, cx);
+    assert_eq!(state(&view, cx).unwrap().count.as_deref(), Some("1/1"));
+    assert!(
+        cx.debug_bounds("task-list").is_some(),
+        "the fold opened on the plan"
+    );
+    in_view(&view, cx);
+}
+
 /// Output that scrolls fades into the ground at its foot while text is out
 /// of view; a short one draws no fade.
 #[gpui::test]

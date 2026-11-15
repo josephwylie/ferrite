@@ -6,7 +6,7 @@ use ferrite_core::{
 };
 use gpui::base::{TextSelectionDocument, TextSelectionDocumentMember};
 use gpui::{HighlightStyle, SharedString};
-use std::{cell::RefCell, ops::Range, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc};
 
 #[cfg(any(test, feature = "test-support"))]
 type Registry =
@@ -34,6 +34,8 @@ impl TranscriptText {
             next_ordinal: RefCell::new(0),
             document: None,
             find: None,
+            hidden: HashMap::new(),
+            behind: RefCell::new(Vec::new()),
             members: RefCell::new(None),
             #[cfg(any(test, feature = "test-support"))]
             registry: self.registry.clone(),
@@ -56,6 +58,9 @@ pub struct RunText {
     pub key: SharedString,
     pub source: SharedString,
     markdown: bool,
+    /// The disclosures that hide this text while shut, outermost first:
+    /// what a find opens to bring it into view.
+    pub reveals: Vec<crate::pane::DisclosureId>,
 }
 
 impl RunText {
@@ -100,6 +105,10 @@ pub struct TextRuns {
     next_ordinal: RefCell<u32>,
     document: Option<TextSelectionDocument>,
     find: Option<FindMarks>,
+    /// The disclosure that hides each block while shut (`rows::hidden_by`).
+    hidden: HashMap<BlockId, crate::pane::DisclosureId>,
+    /// The disclosures the text being collected sits behind (`behind`).
+    behind: RefCell<Vec<crate::pane::DisclosureId>>,
     members: RefCell<Option<(Vec<TextSelectionDocumentMember>, Vec<RunText>)>>,
     #[cfg(any(test, feature = "test-support"))]
     registry: Registry,
@@ -113,6 +122,24 @@ impl TextRuns {
     pub fn with_find(mut self, find: Option<FindMarks>) -> Self {
         self.find = find;
         self
+    }
+
+    /// Name what hides each block while shut, so a collected text says what
+    /// a find must open to show it.
+    pub(crate) fn with_hidden(
+        mut self,
+        hidden: HashMap<BlockId, crate::pane::DisclosureId>,
+    ) -> Self {
+        self.hidden = hidden;
+        self
+    }
+
+    /// Collect the texts `build` notes as hidden by `disclosure` while it is
+    /// shut.
+    pub(crate) fn behind(&self, disclosure: crate::pane::DisclosureId, build: impl FnOnce()) {
+        self.behind.borrow_mut().push(disclosure);
+        build();
+        self.behind.borrow_mut().pop();
     }
 
     /// Reuse the presentation's text identities to describe logical membership.
@@ -151,12 +178,26 @@ impl TextRuns {
     /// Note a native text for copy (a member of the selection document)
     /// and find, in order. A bounded output viewer owns its selection, so
     /// only find notes it (`copied` false).
-    fn collect(&self, id: &SharedString, source: &str, markdown: bool, copied: bool) {
+    fn collect(
+        &self,
+        block: BlockId,
+        id: &SharedString,
+        source: &str,
+        markdown: bool,
+        copied: bool,
+    ) {
         if let Some((members, texts)) = self.members.borrow_mut().as_mut() {
             let text = RunText {
                 key: id.clone(),
                 source: source.to_owned().into(),
                 markdown,
+                reveals: self
+                    .hidden
+                    .get(&block)
+                    .into_iter()
+                    .chain(self.behind.borrow().iter())
+                    .cloned()
+                    .collect(),
             };
             if copied {
                 let version = text.source.clone();
@@ -190,7 +231,7 @@ impl TextRuns {
                 .push((first, 0, true, source.clone()));
         }
         let id: SharedString = format!("markdown-{}-{first:?}", self.namespace).into();
-        self.collect(&id, &source, true, true);
+        self.collect(first, &id, &source, true, true);
         let find = self.marks(&id);
         crate::rich::Markdown::new(id, source, self.cache.clone())
             .selection_document(self.document.clone())
@@ -207,7 +248,7 @@ impl TextRuns {
                 .push((block, 0, true, text.to_string()));
         }
         let id: SharedString = format!("output-{}-{block:?}-{part}", self.namespace).into();
-        self.collect(&id, text, false, false);
+        self.collect(block, &id, text, false, false);
         crate::rich::Output {
             find: self.marks(&id),
             id,
@@ -228,7 +269,7 @@ impl TextRuns {
                 .push((block, 0, true, source.clone()));
         }
         let id: SharedString = format!("thinking-{}-{block:?}", self.namespace).into();
-        self.collect(&id, &source, true, true);
+        self.collect(block, &id, &source, true, true);
         let find = self.marks(&id);
         crate::rich::Markdown::new(id, source, self.cache.clone())
             .selection_document(self.document.clone())
@@ -258,7 +299,7 @@ impl TextRuns {
                 .push((block, ordinal, true, text.to_string()));
         }
         let id: SharedString = format!("literal-{}-{block:?}-{ordinal}", self.namespace).into();
-        self.collect(&id, &text, false, true);
+        self.collect(block, &id, &text, false, true);
         crate::rich::Literal {
             find: self.marks(&id),
             id,

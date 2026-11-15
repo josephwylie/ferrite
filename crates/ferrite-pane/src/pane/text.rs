@@ -601,16 +601,23 @@ pub(crate) fn collect_block_text(
     match &block.body {
         Body::Visual(visual) => crate::visual::collect_text(block.id, visual, selection),
         Body::WrapUp(wrap) => super::wrap_up::collect_text(block.id, wrap, selection),
-        Body::Prompt(line) => match prompt_text(line, skills).0 {
-            PromptText::Literal(words) => {
-                if !words.is_empty() {
-                    let _ = selection.line(block.id, words, Vec::new());
+        Body::Prompt(line) => {
+            let collect = || match prompt_text(line, skills).0 {
+                PromptText::Literal(words) => {
+                    if !words.is_empty() {
+                        let _ = selection.line(block.id, words, Vec::new());
+                    }
                 }
+                PromptText::Markdown(source) => {
+                    let _ = selection.markdown(block.id, source);
+                }
+            };
+            if super::prompt_clamps(line) {
+                selection.behind(DisclosureId::Prompt(block.id), collect);
+            } else {
+                collect();
             }
-            PromptText::Markdown(source) => {
-                let _ = selection.markdown(block.id, source);
-            }
-        },
+        }
         Body::Paragraph { spans } | Body::Heading { spans, .. } | Body::Bullet { spans } => {
             let (text, _) = inline(spans);
             let _ = selection.line(block.id, text, Vec::new());
@@ -619,7 +626,9 @@ pub(crate) fn collect_block_text(
         // whole body is.
         Body::Thinking(thought) => {
             if expanded && !thought.trim().is_empty() {
-                let _ = selection.markdown(block.id, thought.trim().to_owned());
+                selection.behind(DisclosureId::Reasoning(block.id), || {
+                    let _ = selection.markdown(block.id, thought.trim().to_owned());
+                });
             }
         }
         Body::Notice(text) | Body::Meta(text) => {
@@ -632,6 +641,11 @@ pub(crate) fn collect_block_text(
         }
         // A divider, not the conversation: a sweep reads across it.
         Body::Compaction(_) => {}
+        Body::Plan(steps) => {
+            for step in steps {
+                let _ = selection.line(block.id, step.text.clone(), Vec::new());
+            }
+        }
         Body::Code { source, .. } => {
             let _ = selection.line(block.id, source.clone(), Vec::new());
         }
@@ -644,6 +658,7 @@ pub(crate) fn collect_block_text(
 /// the working call while shut — each as its own row's would be.
 pub(crate) fn collect_group_text(
     members: &[Block],
+    group: &DisclosureId,
     expanded: bool,
     member_expanded: impl Fn(&Block) -> bool,
     selection: &TextRuns,
@@ -663,8 +678,14 @@ pub(crate) fn collect_group_text(
     } else {
         group_live(members)
     };
+    let live = group_live(members);
     for block in drawn {
-        collect_block_text(block, member_expanded(block), &[], selection);
+        let collect = || collect_block_text(block, member_expanded(block), &[], selection);
+        if live.iter().any(|working| working.id == block.id) {
+            collect();
+        } else {
+            selection.behind(group.clone(), collect);
+        }
     }
 }
 
@@ -688,6 +709,12 @@ fn collect_tool_text(block: BlockId, tool: &ToolBlock, expanded: bool, selection
     if !expanded {
         return;
     }
+    selection.behind(DisclosureId::Tool(tool.call.clone()), || {
+        collect_tool_details(block, tool, selection)
+    });
+}
+
+fn collect_tool_details(block: BlockId, tool: &ToolBlock, selection: &TextRuns) {
     if tools::is_command_run(&tool.name) {
         let shell = super::output::shell(tool);
         collect_output_text(block, "command", &shell.command, selection);

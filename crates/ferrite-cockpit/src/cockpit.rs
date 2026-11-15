@@ -1994,6 +1994,7 @@ impl CockpitView {
         // A subagent's tab draws no Composer to quote into.
         let quotes = self.panes[index].is_main();
         let queued = open.queue().len();
+        let earlier = self.earlier_history(thread, subject_view.transcript(), quotes);
         let key = ferrite_pane::transcript::TranscriptKey {
             namespace: namespace.clone(),
             content_revision: revision,
@@ -2012,6 +2013,7 @@ impl CockpitView {
             quotes,
             skills: open.commands().len(),
             note: None,
+            earlier,
             queued,
         };
         let entity = self.panes[index]
@@ -2064,10 +2066,29 @@ impl CockpitView {
             reply_to: open.provider().to_string().into(),
             skills: open.commands().into(),
             note: None,
+            earlier,
             queued,
         };
         let selection = self.selection.clone();
         entity.update(cx, |transcript, cx| transcript.sync(input, selection, cx));
+    }
+
+    /// Whether the Thread began before the first row `transcript` draws: its
+    /// Blocks were dropped to the limit, or the pane's window is cut from
+    /// them. Its whole history can be copied out when the log is readable
+    /// here, or when nothing was dropped from the Blocks.
+    fn earlier_history(
+        &self,
+        thread: ThreadId,
+        transcript: &ferrite_core::transcript::Transcript,
+        main: bool,
+    ) -> Option<ferrite_pane::transcript::Earlier> {
+        let dropped = transcript.earlier_dropped();
+        let cut = pane::rendered_window(transcript.blocks(), Level::Transcript).len()
+            < transcript.blocks().len();
+        (dropped || cut).then(|| ferrite_pane::transcript::Earlier {
+            copyable: main && (!dropped || self.cockpit.history_log(thread).is_some()),
+        })
     }
 
     /// What the open floats make of each Composer: the open popover widens
@@ -2225,6 +2246,11 @@ impl CockpitView {
             ferrite_pane::transcript::TranscriptEvent::Fork { after } => {
                 if let Some(thread) = self.panes[index].thread() {
                     self.fork_after(thread, *after, cx);
+                }
+            }
+            ferrite_pane::transcript::TranscriptEvent::CopyFullHistory => {
+                if let Some(thread) = self.panes[index].thread() {
+                    self.copy_transcript(thread, cx);
                 }
             }
             ferrite_pane::transcript::TranscriptEvent::SideChat(passage) => {

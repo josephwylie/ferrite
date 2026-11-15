@@ -287,3 +287,41 @@ fn a_restart_restores_the_thread_and_the_next_prompt_continues_the_session() {
         operator_saw.view().main().transcript().blocks()
     );
 }
+
+/// transcript-002: the capped view drops the oldest Blocks and says so, and
+/// the log it was replayed from still holds the whole conversation.
+#[test]
+fn a_long_threads_log_gives_back_the_history_its_view_dropped() {
+    let dir = scratch("long-history");
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = store
+        .create(
+            Provider::Claude,
+            None,
+            WorkspaceBinding::Main {
+                checkout: std::env::temp_dir(),
+            },
+        )
+        .unwrap();
+    let mut seen = Activity::default();
+    seen.apply(ActivityInput::Connect { generation: 1 });
+    let prompts = ferrite_core::activity::ActivityLimits::default().blocks_per_subject + 50;
+    for n in 0..prompts {
+        let prompt = format!("question {n}");
+        writer.record_prompt(&prompt).unwrap();
+        seen.apply(ActivityInput::Main {
+            input: Input::Prompt(prompt),
+            at: Instant::now(),
+        });
+    }
+
+    writer.flush().unwrap();
+
+    let view = seen.view().main().transcript();
+    assert!(view.earlier_dropped());
+    assert!(!ferrite_core::transcript::plain_text(view.blocks()).contains("question 0\n"));
+
+    let whole = store.full_history_text(id).unwrap();
+    assert!(whole.starts_with("> question 0\n"), "{}", &whole[..40]);
+    assert!(whole.contains(&format!("> question {}", prompts - 1)));
+}

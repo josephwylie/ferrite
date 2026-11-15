@@ -3164,6 +3164,13 @@ pub(crate) fn render_block(
             .into_any_element(),
         Body::Compaction(compaction) => crate::transcript::compaction_divider(compaction)
             .into_any_element(),
+        Body::Plan(steps) => row
+            .child(working::plan_card(steps, grid, |_, words| {
+                selection
+                    .line(block.id, words.to_owned(), Vec::new())
+                    .into_any_element()
+            }))
+            .into_any_element(),
         // Code keeps literal indentation and highlighting on a 1px rule,
         // with no ground.
         Body::Code {
@@ -4380,14 +4387,28 @@ pub(crate) struct GroupCx<'a> {
 #[derive(Default)]
 pub(crate) struct GroupList {
     handle: gpui::ScrollHandle,
+    /// The content height the last frame laid out, and whether this frame
+    /// laid out the same: a list still growing under its cap asks for
+    /// another frame (`GroupList::settled`).
+    seen_h: std::cell::Cell<f32>,
+    steady: std::cell::Cell<bool>,
+}
+
+impl GroupList {
+    /// Whether the last frame measured the list's content as the one before
+    /// did, so its cap needs no further frame.
+    pub(crate) fn settled(&self) -> bool {
+        self.steady.get()
+    }
 }
 
 /// A run of work under one summary (`text::group_summary`), T3 Code's
 /// group: its header a work row (the group's icon, the summary, its time
 /// under the pointer, no chevron: the whole row is the toggle), and, open,
 /// its members as plain work rows touching in a list — no card, no rules —
-/// at most `WORK_LIST_MAX_H` or half the transcript tall (uncapped while a
-/// member is opened in it, so an open member is never trapped), scrolling
+/// at most `WORK_LIST_MAX_H` or half the transcript tall (while a member is
+/// opened in it, that plus the member's detail, never past the transcript's
+/// height, so an open member is shown whole yet never unbounded), scrolling
 /// in itself, `WORK_LIST_FADE` fades at whichever edge has rows past it,
 /// pinned to its end while it is there. Shut, a working call alone stands
 /// under it, so a live suite's bar stays in view. Opening and shutting snap.
@@ -4451,6 +4472,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
         }
     }
     let drawn = draw_members();
+    let calls = drawn.len();
     let members = (!drawn.is_empty()).then(|| {
         let rows = div()
             .flex()
@@ -4460,7 +4482,7 @@ pub(crate) fn render_tool_group(members: &[Block], row_cx: &RowCx, state: GroupC
             .children(drawn);
         match list {
             None => rows.into_any_element(),
-            Some((list, opened)) => group_list(&leader_key, list, opened, view_h, ground, rows),
+            Some((list, opened)) => group_list(&leader_key, list, opened, view_h, ground, calls, rows),
         }
     });
     div()
@@ -4484,6 +4506,7 @@ fn group_list(
     opened: bool,
     view_h: f32,
     ground: u32,
+    calls: usize,
     rows: Div,
 ) -> AnyElement {
     let handle = &list.handle;
@@ -4492,10 +4515,18 @@ fn group_list(
     if max > 0. && scrolled >= max - 1. {
         handle.scroll_to_bottom();
     }
-    let cap = (!opened).then(|| {
-        let half = if view_h > 0. { view_h / 2. } else { f32::MAX };
-        theme::WORK_LIST_MAX_H.min(half)
-    });
+    let content_h = max + f32::from(handle.bounds().size.height);
+    list.steady.set((content_h - list.seen_h.get()).abs() < 0.5);
+    list.seen_h.set(content_h);
+    let half = if view_h > 0. { view_h / 2. } else { f32::MAX };
+    let base = theme::WORK_LIST_MAX_H.min(half);
+    let cap = if opened {
+        let detail = (content_h - calls as f32 * theme::WORK_ROW_H).max(0.);
+        let most = if view_h > 0. { view_h } else { f32::MAX };
+        (base + detail).min(most)
+    } else {
+        base
+    };
     let fade = |rising: bool| {
         components::fade(
             rgb(ground).into(),
@@ -4518,7 +4549,7 @@ fn group_list(
                 .id(SharedString::from(format!("tool-group-list-{key}")))
                 .w_full()
                 .min_w_0()
-                .when_some(cap, |scroller, cap| scroller.max_h(px(cap)))
+                .max_h(px(cap))
                 .overflow_y_scroll()
                 .track_scroll(handle)
                 .child(rows),
@@ -5196,6 +5227,7 @@ mod tests {
                 reply_to: "Claude".into(),
                 skills: Default::default(),
                 note: None,
+                earlier: None,
                 queued: 0,
             };
             let selection = self.selection.clone();
@@ -5238,6 +5270,7 @@ mod tests {
                     reply_to: "Claude".into(),
                     skills: Default::default(),
                     note: None,
+                    earlier: None,
                     queued: 0,
                 },
                 crate::rich::TextCache::default(),
@@ -5428,6 +5461,7 @@ mod tests {
                 Body::Visual(_) => "visual",
                 Body::WrapUp(_) => "wrap-up",
                 Body::Compaction(_) => "compaction",
+                Body::Plan(_) => "plan",
             })
             .collect();
         for wanted in [
@@ -5732,6 +5766,71 @@ mod tests {
         assert!(output.top() > well.bottom(), "{well:?} {output:?}");
         assert!(cx.debug_bounds("tool-card").is_none(), "no card in a card");
         assert!(cx.debug_bounds("tool-exit").is_none(), "a success is quiet");
+    }
+
+    /// Opening one call in a long group grows the group by that call's
+    /// detail, no further: the other calls stay in the list's scroll, and
+    /// shutting the call restores the list.
+    #[gpui::test]
+    fn an_opened_call_grows_its_group_by_its_detail_only(cx: &mut TestAppContext) {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Prompt("sweep".into()));
+        for n in 0..60 {
+            transcript.apply(Input::Event(SessionEvent::ToolStarted {
+                id: format!("c{n}"),
+                name: "Bash".into(),
+                input: serde_json::json!({ "command": format!("grep -n item{n} notes.md") }),
+            }));
+            transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+                id: format!("c{n}"),
+                output: "first\nsecond".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            }));
+        }
+        let blocks: Vec<Block> = transcript.blocks().to_vec();
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            gpui::component::init(cx);
+            shows_blocks(blocks, cx)
+        });
+        cx.simulate_resize(size(px(900.), px(900.)));
+        view.update(cx, |view, cx| {
+            view.groups.insert("c0".into());
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let height = |cx: &mut gpui::VisualTestContext| {
+            cx.debug_bounds("tool-group-members").unwrap().size.height
+        };
+        let shut = height(cx);
+        assert!(
+            shut <= px(theme::WORK_LIST_MAX_H + theme::WORK_LIST_PAD_B),
+            "an open group is capped: {shut:?}"
+        );
+        view.update(cx, |view, cx| {
+            view.expanded.insert("c0".into());
+            cx.notify();
+        });
+        for _ in 0..3 {
+            cx.run_until_parked();
+            cx.update(|window, _| window.refresh());
+        }
+        let opened = height(cx);
+        let rows = px(theme::WORK_ROW_H * 60.);
+        assert!(opened > shut, "its detail shows: {shut:?} then {opened:?}");
+        assert!(
+            opened < shut + px(300.) && opened < rows / 2.,
+            "the other calls stay in the scroll: {shut:?} then {opened:?}"
+        );
+        view.update(cx, |view, cx| {
+            view.expanded.remove("c0");
+            cx.notify();
+        });
+        for _ in 0..3 {
+            cx.run_until_parked();
+            cx.update(|window, _| window.refresh());
+        }
+        assert_eq!(height(cx), shut, "shutting the call restores the list");
     }
 
     /// A call opened alone draws the same body under its row, no card; a
