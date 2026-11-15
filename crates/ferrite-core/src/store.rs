@@ -1445,6 +1445,8 @@ impl Record {
             SessionEvent::AccountPlan { .. }
             | SessionEvent::Handshake { .. }
             | SessionEvent::HookRan { .. } => return None,
+            // The provider's late no to a control: live, not history.
+            SessionEvent::ControlRefused { .. } => return None,
             SessionEvent::ScheduledWork { .. } => return None,
         })
     }

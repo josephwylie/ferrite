@@ -965,17 +965,19 @@ fn read_stdout(
                 if let Some(action) = control {
                     if response["subtype"] != "success" {
                         let message = response["error"].as_str().unwrap_or("control refused");
-                        if sender
-                            .send(SessionEvent::Activity(
-                                crate::activity::ActivityEvent::MainContent {
-                                    id: None,
-                                    event: crate::activity::ExecutionEvent::Notice {
-                                        text: format!("control failed: {message}"),
-                                    },
+                        let refused = [
+                            SessionEvent::ControlRefused {
+                                control: action,
+                                message: message.to_owned(),
+                            },
+                            SessionEvent::Activity(crate::activity::ActivityEvent::MainContent {
+                                id: None,
+                                event: crate::activity::ExecutionEvent::Notice {
+                                    text: format!("control failed: {message}"),
                                 },
-                            ))
-                            .is_err()
-                        {
+                            }),
+                        ];
+                        if refused.into_iter().any(|event| sender.send(event).is_err()) {
                             return;
                         }
                         continue;

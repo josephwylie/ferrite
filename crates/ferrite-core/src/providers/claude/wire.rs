@@ -1975,6 +1975,8 @@ mod tests {
             // Read from `init` by the Activity decoder; proved on a capture there.
             SessionEvent::Handshake { .. } => return None,
             SessionEvent::HookRan { .. } => "HookRan",
+            // Answered by the control reader, proved in tests/contract_native_controls.rs.
+            SessionEvent::ControlRefused { .. } => return None,
             // A stateful stream read by the activity decoder (`drafts`),
             // proved by the show-visual capture in tests/claude_session.rs.
             SessionEvent::ToolDraft { .. } => return None,

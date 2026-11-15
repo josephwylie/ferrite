@@ -15,11 +15,18 @@ use ferrite_core::transcript::ToolBlock;
 use ferrite_pane::pane::{BackgroundTask, WorkKind};
 use ferrite_pane::transcript::TranscriptTail;
 
+/// How long a `Stop` may go unanswered while the task still runs before the
+/// line offers `Retry`.
+pub(super) const STOP_SETTLES_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Where a `Stop` on one task stands.
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum StopState {
-    Stopping,
-    /// The provider refused, with its reason.
+    /// Sent, the provider not yet heard from. `refusals` is how many times
+    /// the provider had refused this task before: a later count is this
+    /// stop's refusal.
+    Stopping { refusals: u32 },
+    /// Refused, or never settled, with the reason.
     Refused(String),
 }
 
@@ -131,12 +138,14 @@ impl CockpitView {
         let stoppable = open.supports_control(ferrite_core::ControlKind::StopTask)
             && work.iter().any(|work| work.id.is_some());
         let generation = open.generation();
-        let stops: Vec<Option<&StopState>> = work
+        let stops: Vec<Option<StopState>> = work
             .iter()
             .filter_map(|work| work.id.as_ref())
-            .map(|id| self.background_stops.get(&(thread, generation, id.clone())))
+            .map(|id| self.stop_state(&open, thread, generation, id))
             .collect();
-        let stopping = stops.iter().all(|stop| *stop == Some(&StopState::Stopping));
+        let stopping = stops
+            .iter()
+            .all(|stop| matches!(stop, Some(StopState::Stopping { .. })));
         let refused = stops.iter().find_map(|stop| match stop {
             Some(StopState::Refused(why)) => Some(why.clone()),
             _ => None,
@@ -234,19 +243,48 @@ impl CockpitView {
         })
     }
 
+    /// Where the stop of task `id` stands: what the cockpit sent, read with
+    /// what the provider has since said of it.
+    fn stop_state(
+        &self,
+        open: &ferrite_core::cockpit::ThreadView<'_>,
+        thread: ThreadId,
+        generation: u64,
+        id: &str,
+    ) -> Option<StopState> {
+        let sent = self
+            .background_stops
+            .get(&(thread, generation, id.to_owned()))?;
+        match (sent, open.transcript().stop_refusal(id)) {
+            (StopState::Stopping { refusals }, Some((count, why))) if count > *refusals => {
+                Some(StopState::Refused(why.to_owned()))
+            }
+            _ => Some(sent.clone()),
+        }
+    }
+
     /// `Stop` on the line: every piece of work this Session still runs.
     fn stop_background_work(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         let Some(open) = self.cockpit.thread(thread) else {
             return;
         };
         let generation = open.generation();
-        let ids: Vec<String> = running_work(&open)
+        let stops: Vec<(String, u32)> = running_work(&open)
             .into_iter()
             .filter_map(|work| work.id)
+            .map(|id| {
+                let refusals = open
+                    .transcript()
+                    .stop_refusal(&id)
+                    .map_or(0, |(count, _)| count);
+                (id, refusals)
+            })
             .collect();
-        for id in ids {
+        for (id, refusals) in stops {
             let stop = (thread, generation, id.clone());
-            self.background_stops.insert(stop.clone(), StopState::Stopping);
+            let sent = StopState::Stopping { refusals };
+            self.background_stops.insert(stop.clone(), sent.clone());
+            self.offer_retry_unless_settled(stop.clone(), sent, cx);
             self.run_session_control(
                 thread,
                 generation,
@@ -261,6 +299,30 @@ impl CockpitView {
             }
         }
         cx.notify();
+    }
+
+    /// A provider that never answers a stop leaves the task running: after
+    /// `STOP_SETTLES_WITHIN` the line says so and offers `Retry`.
+    fn offer_retry_unless_settled(
+        &self,
+        stop: (ThreadId, u64, String),
+        sent: StopState,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(STOP_SETTLES_WITHIN).await;
+            this.update(cx, |view, cx| {
+                if view.background_stops.get(&stop) == Some(&sent) {
+                    view.background_stops.insert(
+                        stop,
+                        StopState::Refused("the provider did not stop it".into()),
+                    );
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// `Open` on the line, or `Open thread` in the dialog: the agent the

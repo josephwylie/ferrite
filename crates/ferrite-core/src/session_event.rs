@@ -173,6 +173,13 @@ pub enum SessionEvent {
         name: String,
         outcome: Option<String>,
     },
+    /// The provider refused `control` after accepting it: its answer came
+    /// later, as a failure, in the provider's words. Live only, never
+    /// persisted.
+    ControlRefused {
+        control: SessionControl,
+        message: String,
+    },
     /// The provider's running estimate of the tokens the model has thought
     /// in the message it is writing (Claude's `system/thinking_tokens`): it
     /// grows while the model thinks and starts again with the next message.

@@ -1071,6 +1071,53 @@ fn a_nested_agent_goes_back_to_its_parent_then_to_the_root(cx: &mut TestAppConte
     assert!(selected(&view, cx) == Subject::Main, "the root crumb goes to Main");
 }
 
+/// Escape on a nested child, with nothing to stop, goes where the back
+/// button does: its immediate parent, and from a top-level child, Main.
+#[gpui::test]
+fn escape_on_a_nested_agent_goes_to_its_parent(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("agent-route-escape-nested", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    agent_call(&fake, "Atlas");
+    child(&fake, "Atlas", AgentStatus::Idle);
+    grandchild(&fake, "Atlas", "Birch", AgentStatus::Idle);
+    emit(&fake, ActivityEvent::Status { key: key("Atlas"), state: AgentStatus::Idle });
+    tick(cx);
+    click(cx, "agent-open-Atlas");
+    click(cx, "agent-open-Birch");
+    assert_eq!(selected(&view, cx), Subject::Subagent(key("Birch")));
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert_eq!(selected(&view, cx), Subject::Subagent(key("Atlas")));
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert_eq!(selected(&view, cx), Subject::Main);
+}
+
+/// A fresh Session forgets its agents. The Pane that showed one goes back
+/// to Main instead of staying on a child with no head to leave by.
+#[gpui::test]
+fn a_pane_on_an_agent_a_fresh_session_forgot_returns_to_main(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("agent-route-forgotten", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    agent_call(&fake, "Atlas");
+    child(&fake, "Atlas", AgentStatus::Idle);
+    tick(cx);
+    click(cx, "agent-open-Atlas");
+    assert_eq!(selected(&view, cx), Subject::Subagent(key("Atlas")));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ConversationReset {
+            session_id: "fresh".into(),
+        })
+        .unwrap();
+    tick(cx);
+    assert_eq!(selected(&view, cx), Subject::Main);
+    assert!(cx.debug_bounds("subagent-back-1").is_none(), "the child's head is gone");
+}
+
 /// A child whose history core released opens from its row with the
 /// loading state said aloud, and gets its saved transcript without the
 /// provider being asked for anything.

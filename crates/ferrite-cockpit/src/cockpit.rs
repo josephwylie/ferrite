@@ -2582,7 +2582,16 @@ impl CockpitView {
                     self.panes[index].redirect_subject(from, to);
                 }
                 self.release_evicted_transcripts(index, &update.subjects);
-                let selected = self.panes[index].selected.clone();
+                let mut selected = self.panes[index].selected.clone();
+                let resolves = self
+                    .cockpit
+                    .thread(update.thread)
+                    .is_some_and(|open| open.activity().subject(&selected).is_some());
+                // A fresh Session forgets its agents: the Pane they filled
+                // has no head to leave by, so it goes back to Main.
+                if !resolves {
+                    selected = ferrite_core::activity::Subject::Main;
+                }
                 let generation = self
                     .cockpit
                     .thread(update.thread)
@@ -5778,18 +5787,18 @@ impl CockpitView {
         // Escape stops what the Pane shows: on Main its turn, never the
         // Subagents and background work it started; on a Subagent that
         // Subagent alone — and once it has nothing to stop, it goes back to
-        // Main.
+        // its parent.
         if let Some(thread) = self.focused_thread().filter(|_| !self.machine_lost()) {
-            match self.panes[self.focused()].selected.clone() {
+            let selected = self.panes[self.focused()].selected.clone();
+            match &selected {
                 ferrite_core::activity::Subject::Main => self.cockpit.interrupt(thread),
                 ferrite_core::activity::Subject::Subagent(key) => {
-                    if !self.stop_subagent(thread, &key) {
-                        self.select_subject(
-                            thread,
-                            ferrite_core::activity::Subject::Main,
-                            window,
-                            cx,
-                        );
+                    if !self.stop_subagent(thread, key) {
+                        let parent = self
+                            .agent_lineage(thread, &selected)
+                            .pop()
+                            .unwrap_or(ferrite_core::activity::Subject::Main);
+                        self.select_subject(thread, parent, window, cx);
                     }
                 }
             }

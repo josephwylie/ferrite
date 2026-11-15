@@ -127,3 +127,60 @@ fn a_refused_background_stop_offers_retry(cx: &mut TestAppContext) {
     assert!(debug_bounds(cx, "background-stopping".into()).is_some());
     assert!(debug_bounds(cx, "background-stop-refused".into()).is_none());
 }
+
+fn refuse_stop_later(fake: &Fake, id: &str) {
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ControlRefused {
+            control: ferrite_core::SessionControl::StopTask { id: id.into() },
+            message: "no such task".into(),
+        })
+        .unwrap();
+}
+
+/// Claude answers a `stop_task` after it was accepted: the refusal comes as
+/// an event naming the control, and the line gets its reason and `Retry`;
+/// a retry waits again, and the next refusal reads as its own.
+#[gpui::test]
+fn a_stop_the_provider_refuses_later_offers_retry(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("background-stop-late", 1);
+    *fake.native_controls.borrow_mut() = true;
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    running(&fake, &[("task:1", "cargo test")]);
+    tick(cx);
+    let stop = bounds(cx, "background-stop-all".into());
+    cx.simulate_click(stop.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(debug_bounds(cx, "background-stopping".into()).is_some());
+    refuse_stop_later(&fake, "task:1");
+    tick(cx);
+    assert!(debug_bounds(cx, "background-stopping".into()).is_none(), "nothing is pending");
+    assert!(debug_bounds(cx, "background-stop-refused".into()).is_some(), "it says why");
+    let retry = bounds(cx, "background-stop-all".into());
+    cx.simulate_click(retry.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(debug_bounds(cx, "background-stopping".into()).is_some(), "the retry waits again");
+    assert!(debug_bounds(cx, "background-stop-refused".into()).is_none());
+    refuse_stop_later(&fake, "task:1");
+    tick(cx);
+    assert!(debug_bounds(cx, "background-stop-refused".into()).is_some(), "its refusal is its own");
+}
+
+/// A provider that never answers leaves the task running: past the wait
+/// the line stops saying `Stopping...` and offers `Retry`.
+#[gpui::test]
+fn a_stop_the_provider_never_settles_offers_retry(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("background-stop-silent", 1);
+    *fake.native_controls.borrow_mut() = true;
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    running(&fake, &[("task:1", "cargo test")]);
+    tick(cx);
+    let stop = bounds(cx, "background-stop-all".into());
+    cx.simulate_click(stop.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(debug_bounds(cx, "background-stopping".into()).is_some());
+    cx.executor().advance_clock(super::super::background_work::STOP_SETTLES_WITHIN);
+    tick(cx);
+    assert!(debug_bounds(cx, "background-stopping".into()).is_none());
+    assert!(debug_bounds(cx, "background-stop-refused".into()).is_some(), "it says why");
+    assert!(debug_bounds(cx, "background-stop-all".into()).is_some(), "Retry is offered");
+}
