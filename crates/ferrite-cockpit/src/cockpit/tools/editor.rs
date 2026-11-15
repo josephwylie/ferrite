@@ -91,6 +91,8 @@ pub(crate) struct Editor {
     /// The file's modification time and size when `follow_disk` last read it.
     seen: Option<(std::time::SystemTime, u64)>,
     save: SaveState,
+    /// The last write was refused, and none has landed since.
+    refused: bool,
     writer: save::Writer,
     /// The tab is to close once its text is on disk.
     closing: bool,
@@ -131,6 +133,7 @@ impl Editor {
             on_disk,
             seen: None,
             save: SaveState::Idle,
+            refused: false,
             writer: save::replace_file,
             closing: false,
             focus: cx.focus_handle(),
@@ -280,6 +283,7 @@ impl Editor {
         if self.save != SaveState::Saving(revision) {
             return;
         }
+        self.refused = matches!(outcome, Outcome::Refused(_));
         self.save = match outcome {
             Outcome::Written(on_disk) => {
                 self.saved_revision = revision;
@@ -1113,20 +1117,49 @@ impl Editor {
     pub(crate) fn save_state(&self) -> &SaveState {
         &self.save
     }
+
+    pub(crate) fn text(&self) -> &str {
+        self.text.text()
+    }
+
+    /// Whether leaving would lose this buffer's text: it is dirty, and
+    /// `flush_for_quit` will not write it, because auto save is off, the
+    /// disk refused its last write, or the file changed under it.
+    pub(crate) fn lost_by_leaving(&self) -> bool {
+        self.is_dirty()
+            && (!self.settings.auto_save
+                || self.refused
+                || save::changed_on_disk(&self.path, self.on_disk))
+    }
+
+    /// A quit's last write. Auto save promised the text would reach the
+    /// disk, so what its pause has not yet written is written now, unless
+    /// the file changed under the buffer.
+    pub(crate) fn flush_for_quit(&mut self) {
+        if !self.is_dirty() || !self.settings.auto_save {
+            return;
+        }
+        let outcome = save::write(&self.path, self.text.text(), Some(self.on_disk), self.writer);
+        self.refused = matches!(outcome, Outcome::Refused(_));
+        if let Outcome::Written(on_disk) = outcome {
+            self.saved_revision = self.revision;
+            self.on_disk = on_disk;
+        }
+    }
 }
 
 #[cfg(test)]
 impl Editor {
+    pub(crate) fn caret_line_for_test(&self) -> usize {
+        self.cursor_line() + 1
+    }
+
     pub(crate) fn find_count_for_test(&self) -> Option<String> {
         self.find.as_ref()?.count().map(|count| count.to_string())
     }
 
     pub(crate) fn caret_for_test(&self) -> usize {
         self.text.cursor()
-    }
-
-    pub(crate) fn text_for_test(&self) -> &str {
-        self.text.text()
     }
 
     /// Writes fail as a read-only disk would.

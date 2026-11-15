@@ -90,11 +90,243 @@ fn typing_edits_the_file_and_auto_save_writes_it_after_a_pause(cx: &mut TestAppC
 }
 
 #[gpui::test]
-fn prose_reads_rendered_not_in_the_code_face(cx: &mut TestAppContext) {
+fn prose_reads_rendered_until_its_source_is_asked_for(cx: &mut TestAppContext) {
     let (view, thread, checkout, cx) = files_window("files-prose", cx);
     open(&view, thread, &checkout.join("README.md"), false, cx);
     assert!(cx.debug_bounds("files-prose").is_some());
     assert!(view.read_with(cx, |view, _| view.files_editor_of(thread).is_none()));
+    let toggle = cx.debug_bounds("files-show-source").expect("Show source");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("files-prose").is_none());
+    assert!(cx.debug_bounds("editor").is_some());
+    assert!(view.read_with(cx, |view, _| view.files_editor_of(thread).is_some()));
+}
+
+#[gpui::test]
+fn prose_edits_in_its_source_saves_and_reads_the_edit_rendered(cx: &mut TestAppContext) {
+    let (view, thread, checkout, cx) = files_window("files-prose-edit", cx);
+    for name in ["README.md", "notes.txt"] {
+        let file = checkout.join(name);
+        std::fs::write(&file, "start\n").unwrap();
+        open(&view, thread, &file, false, cx);
+        let toggle = cx.debug_bounds("files-show-source").expect("Show source");
+        cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+        tick(cx);
+        type_into("// hi\n", cx);
+        pause_and_settle(cx);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "// hi\nstart\n", "{name} saved");
+        let toggle = cx.debug_bounds("files-show-rendered").expect("Show rendered");
+        cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+        tick(cx);
+        assert!(cx.debug_bounds("files-prose").is_some(), "{name} reads rendered again");
+        let markup = view.read_with(cx, |view, _| view.files_rendered_markup(thread));
+        assert!(markup.is_some_and(|markup| markup.contains("hi")), "{name} shows the edit");
+    }
+}
+
+#[gpui::test]
+fn a_line_for_a_markdown_file_opens_its_source_there(cx: &mut TestAppContext) {
+    let (view, thread, checkout, cx) = files_window("files-prose-line", cx);
+    let file = checkout.join("README.md");
+    let text: String = (1..=120).map(|line| format!("line {line}\n")).collect();
+    std::fs::write(&file, text).unwrap();
+    open(&view, thread, &file, false, cx);
+    assert!(cx.debug_bounds("files-prose").is_some());
+    view.update(cx, |view, cx| view.open_in_files(thread, file.clone(), Some(80), false, cx));
+    tick(cx);
+    assert!(cx.debug_bounds("files-prose").is_none(), "the source shows the line");
+    let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).expect("source"));
+    assert_eq!(editor.read_with(cx, |editor, _| editor.caret_line_for_test()), 80);
+    let toggle = cx.debug_bounds("files-show-rendered").expect("back to rendered");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("files-prose").is_some());
+    assert_eq!(tab_names(&view, thread, cx).len(), 1, "the file stayed one tab");
+}
+
+#[gpui::test]
+fn an_image_from_the_tree_opens_the_lightbox_and_a_pdf_names_its_kind(cx: &mut TestAppContext) {
+    let (view, thread, checkout, cx) = files_window("files-media", cx);
+    image::RgbaImage::from_pixel(8, 8, image::Rgba([90, 140, 200, 255]))
+        .save(checkout.join("a.png"))
+        .unwrap();
+    std::fs::write(checkout.join("b.pdf"), [0x25, 0x50, 0x44, 0x46, 0xff, 0xfe, 0x00]).unwrap();
+    view.update(cx, |view, cx| view.run_opener(thread, Opener::Files, cx));
+    tick(cx);
+    let row = |name: &str, view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        let at = view
+            .read_with(cx, |view, _| view.files_row_names(thread))
+            .iter()
+            .position(|row| row == name)
+            .unwrap_or_else(|| panic!("{name} in the tree"));
+        cx.debug_bounds(Box::leak(format!("files-row-{at}").into_boxed_str())).unwrap().center()
+    };
+    let at = row("a.png", &view, cx);
+    cx.simulate_click(at, gpui::Modifiers::none());
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.panes[0].preview.lightbox().is_some()));
+    assert!(tab_names(&view, thread, cx).is_empty(), "no tab for an image");
+    view.update(cx, |view, cx| {
+        view.panes[0].preview.close_lightbox();
+        cx.notify();
+    });
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.panes[0].preview.lightbox().is_none()), "closed");
+    let at = row("b.pdf", &view, cx);
+    cx.simulate_click(at, gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_click(at, gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(tab_names(&view, thread, cx).len(), 1, "the pdf has a tab");
+    assert!(cx.debug_bounds("files-unshown").is_some());
+    assert!(cx.debug_bounds("files-open-original").is_some(), "its own app is offered");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.files_unshown_note(thread)).as_deref(),
+        Some("PDF document")
+    );
+}
+
+/// Whether `selector` sits fully inside the Files tabs row.
+fn inside_the_row(selector: &'static str, cx: &mut gpui::VisualTestContext) -> Option<bool> {
+    let strip = cx.debug_bounds("files-tabs")?;
+    let bounds = cx.debug_bounds(selector)?;
+    Some(bounds.left() >= strip.left() - px(1.) && bounds.right() <= strip.right() + px(1.))
+}
+
+/// Twenty tabs at a narrow width, scrolled by the chevron back to the first.
+fn twenty_tabs<'a>(
+    name: &str,
+    cx: &'a mut TestAppContext,
+) -> (Entity<CockpitView>, ThreadId, std::path::PathBuf, &'a mut gpui::VisualTestContext) {
+    let (view, thread, checkout, cx) = files_window(name, cx);
+    cx.simulate_resize(gpui::size(px(1300.), px(900.)));
+    for at in 0..20 {
+        let file = checkout.join(format!("file-number-{at}.rs"));
+        std::fs::write(&file, "x\n").unwrap();
+        open(&view, thread, &file, true, cx);
+    }
+    tick(cx);
+    (view, thread, checkout, cx)
+}
+
+#[gpui::test]
+fn twenty_tabs_at_a_narrow_width_are_all_reachable(cx: &mut TestAppContext) {
+    use crate::cockpit::panel::PanelControl;
+    let (view, thread, checkout, cx) = twenty_tabs("files-twenty", cx);
+    assert_eq!(inside_the_row("files-tab-19", cx), Some(true), "the shown tab is in view");
+    assert!(cx.debug_bounds("files-tabs-left").is_some(), "more lies to the left");
+    let left = cx.debug_bounds("files-tabs-left").unwrap();
+    for _ in 0..40 {
+        if cx.debug_bounds("files-tabs-left").is_none() {
+            break;
+        }
+        cx.simulate_click(left.center(), gpui::Modifiers::none());
+        cx.executor().advance_clock(std::time::Duration::from_millis(500));
+        tick(cx);
+    }
+    assert_eq!(inside_the_row("files-tab-0", cx), Some(true), "the chevron reaches the first");
+    let first = cx.debug_bounds("files-tab-0").unwrap();
+    cx.simulate_click(first.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(view.read_with(cx, |view, _| view.files_active_path(thread)), Some(checkout.join("file-number-0.rs")));
+
+    let first = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        let handle = view.read_with(cx, |view, _| view.panel.focus.handle(&PanelControl::FileTab(0)).unwrap());
+        cx.update(|window, cx| window.focus(&handle, cx));
+    };
+    first(&view, cx);
+    for _ in 0..19 {
+        super::panel_focus::press("right", cx);
+    }
+    let focused = cx.update(|window, cx| view.read(cx).panel.focus.focused(window));
+    assert_eq!(focused, Some(PanelControl::FileTab(19)));
+    assert_eq!(inside_the_row("files-tab-19", cx), Some(true), "the arrow keys never park focus off screen");
+
+    first(&view, cx);
+    super::panel_focus::press("right right", cx);
+    super::panel_focus::activate("enter", cx);
+    assert_eq!(view.read_with(cx, |view, _| view.files_active_path(thread)), Some(checkout.join("file-number-2.rs")));
+    super::panel_focus::press("backspace", cx);
+    assert_eq!(tab_names(&view, thread, cx).len(), 19, "the key closed it");
+    let focused = cx.update(|window, cx| view.read(cx).panel.focus.focused(window));
+    assert_eq!(focused, Some(PanelControl::FileTab(2)), "the keyboard moved to the neighbour");
+    for _ in 0..19 {
+        super::panel_focus::press("backspace", cx);
+    }
+    assert!(tab_names(&view, thread, cx).is_empty(), "every tab closed by key");
+}
+
+/// The tab whose opening first overflows the row lands whole in it, though
+/// the chevron slots that overflow brings in narrow the row.
+#[gpui::test]
+fn the_tab_that_first_overflows_the_row_sits_whole_in_it(cx: &mut TestAppContext) {
+    let (view, thread, checkout, cx) = files_window("files-first-overflow", cx);
+    cx.simulate_resize(gpui::size(px(1300.), px(900.)));
+    for at in 0..20 {
+        let file = checkout.join(format!("file-number-{at}.rs"));
+        std::fs::write(&file, "x\n").unwrap();
+        open(&view, thread, &file, true, cx);
+        tick(cx);
+        if cx.debug_bounds("files-tabs-left").is_some() {
+            let selector: &'static str = Box::leak(format!("files-tab-{at}").into_boxed_str());
+            let frames = cx.update(|window, cx| window.simulate_next_frame(cx));
+            assert!(frames > 0, "the row asks for the frame that aims at the tab again");
+            cx.run_until_parked();
+            assert_eq!(inside_the_row(selector, cx), Some(true), "tab {at} lies whole in the row");
+            return;
+        }
+    }
+    panic!("twenty tabs never overflowed the row");
+}
+
+/// A reveal in a row that is not drawn asks for no frames.
+#[gpui::test]
+fn a_reveal_in_a_hidden_row_asks_for_no_frames(cx: &mut TestAppContext) {
+    let (view, thread, _checkout, cx) = twenty_tabs("files-hidden-reveal", cx);
+    view.update(cx, |view, cx| view.toggle_panel_now(cx));
+    tick(cx);
+    assert!(cx.debug_bounds("files-tabs").is_none(), "the row is hidden");
+    view.update(cx, |view, cx| {
+        view.reveal_files_tab(thread, 3);
+        cx.notify();
+    });
+    tick(cx);
+    for _ in 0..4 {
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
+    let frames = cx.update(|window, cx| window.simulate_next_frame(cx));
+    assert_eq!(frames, 0, "the hidden row asks for nothing");
+}
+
+/// A tab revealed from the far end lands whole inside the row, and the
+/// chevron that appears beside it takes none of the row's width.
+#[gpui::test]
+fn a_revealed_tab_sits_whole_in_the_row_whatever_the_chevrons_do(cx: &mut TestAppContext) {
+    let (view, thread, _checkout, cx) = twenty_tabs("files-reveal", cx);
+    let left = cx.debug_bounds("files-tabs-left").expect("more lies to the left");
+    for _ in 0..40 {
+        if cx.debug_bounds("files-tabs-left").is_none() {
+            break;
+        }
+        cx.simulate_click(left.center(), gpui::Modifiers::none());
+        cx.executor().advance_clock(std::time::Duration::from_millis(500));
+        tick(cx);
+    }
+    let row = cx.debug_bounds("files-tabs").unwrap().size.width;
+    assert!(cx.debug_bounds("files-tabs-right").is_some(), "at the start, more lies right");
+    for at in [10, 18, 2] {
+        view.update(cx, |view, cx| {
+            view.reveal_files_tab(thread, at);
+            cx.notify();
+        });
+        tick(cx);
+        tick(cx);
+        let selector: &'static str = Box::leak(format!("files-tab-{at}").into_boxed_str());
+        assert_eq!(inside_the_row(selector, cx), Some(true), "tab {at} lies whole in the row");
+        assert_eq!(cx.debug_bounds("files-tabs").unwrap().size.width, row, "the row kept its width");
+    }
 }
 
 #[gpui::test]
@@ -278,7 +510,7 @@ fn a_refused_write_keeps_the_buffer_and_retry_writes_it(cx: &mut TestAppContext)
     cx.simulate_click(close.center(), gpui::Modifiers::none());
     pause_and_settle(cx);
     assert_eq!(tab_names(&view, thread, cx).len(), 1, "closing keeps the unsaved tab");
-    assert!(editor.read_with(cx, |e, _| e.text_for_test().contains("// hi")));
+    assert!(editor.read_with(cx, |e, _| e.text().contains("// hi")));
 
     editor.update(cx, |editor, _| editor.allow_writes());
     let retry = cx.debug_bounds("editor-retry").expect("Retry");
@@ -319,14 +551,14 @@ fn a_clean_buffer_follows_its_file_when_the_agent_edits_it(cx: &mut TestAppConte
     let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).expect("a code file"));
     std::fs::write(&file, "agent\n").unwrap();
     agent_worked(&view, &fake, 0, cx);
-    assert_eq!(editor.read_with(cx, |e, _| e.text_for_test().to_string()), "agent\n");
+    assert_eq!(editor.read_with(cx, |e, _| e.text().to_string()), "agent\n");
     assert!(!editor.read_with(cx, |e, _| e.is_dirty()));
 
     type_into("// mine\n", cx);
     std::fs::write(&file, "agent again\n").unwrap();
     agent_worked(&view, &fake, 0, cx);
     assert!(
-        editor.read_with(cx, |e, _| e.text_for_test().to_string()).contains("// mine"),
+        editor.read_with(cx, |e, _| e.text().to_string()).contains("// mine"),
         "an edited buffer is left to its owner"
     );
 }
@@ -352,7 +584,7 @@ fn a_clean_buffer_keeps_its_caret_when_it_follows_its_file(cx: &mut TestAppConte
     assert!(caret > 0, "the caret is off the first line");
     std::fs::write(&file, "a\nBETA\ngamma\n").unwrap();
     agent_worked(&view, &fake, 0, cx);
-    assert_eq!(editor.read_with(cx, |e, _| e.text_for_test().to_string()), "a\nBETA\ngamma\n");
+    assert_eq!(editor.read_with(cx, |e, _| e.text().to_string()), "a\nBETA\ngamma\n");
     assert_eq!(
         editor.read_with(cx, |e, _| e.caret_for_test()),
         caret - "lpha".len(),
@@ -413,7 +645,7 @@ fn an_external_edit_is_not_overwritten_until_the_user_chooses(cx: &mut TestAppCo
 
     cx.simulate_click(reload.center(), gpui::Modifiers::none());
     tick(cx);
-    assert_eq!(editor.read_with(cx, |e, _| e.text_for_test().to_string()), "agent\n");
+    assert_eq!(editor.read_with(cx, |e, _| e.text().to_string()), "agent\n");
     assert!(!editor.read_with(cx, |e, _| e.is_dirty()));
 
     std::fs::write(&file, "agent again\n").unwrap();
@@ -494,4 +726,53 @@ fn coming_back_to_the_files_tab_shows_what_changed_while_away(cx: &mut TestAppCo
     view.update(cx, |view, cx| view.run_opener(thread, Opener::Files, cx));
     tick(cx);
     assert_eq!(rows_drawn(cx), before + 1);
+}
+
+#[gpui::test]
+fn a_quit_writes_what_auto_save_had_not_yet(cx: &mut TestAppContext) {
+    let (view, _thread, file, _editor, cx) = open_editor("files-quit", cx);
+    type_into("// hi\n", cx);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "l\n", "not yet");
+    view.update(cx, |view, cx| view.flush_unsaved_files(cx));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "// hi\nl\n");
+}
+
+#[gpui::test]
+fn leaving_asks_about_text_the_disk_refused(cx: &mut TestAppContext) {
+    let (view, _thread, _file, editor, cx) = open_editor("files-quit-refused", cx);
+    editor.update(cx, |editor, _| editor.refuse_writes());
+    type_into("// hi\n", cx);
+    pause_and_settle(cx);
+    type_into("x", cx);
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.leaving_warning(cx)).as_deref(),
+        Some("1 file has unsaved changes. Leaving discards them."),
+        "a typed edit after a refused write is still only in the buffer"
+    );
+}
+
+/// Auto save's quit flush writes what it can. What it cannot, text with
+/// auto save off or over a file that changed on disk, the quit asks about.
+#[gpui::test]
+fn leaving_asks_about_the_text_a_quit_will_not_write(cx: &mut TestAppContext) {
+    let (view, thread, file, _editor, cx) = open_editor("files-quit-asks", cx);
+    let warning = |view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| view.leaving_warning(cx))
+    };
+    assert_eq!(warning(&view, cx), None, "nothing typed");
+    type_into("// hi\n", cx);
+    assert_eq!(warning(&view, cx), None, "auto save writes it at quit");
+
+    std::fs::write(&file, "changed elsewhere\n").unwrap();
+    assert_eq!(
+        warning(&view, cx).as_deref(),
+        Some("1 file has unsaved changes. Leaving discards them."),
+        "the file changed under the buffer"
+    );
+    view.update(cx, |view, cx| view.flush_unsaved_files(cx));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "changed elsewhere\n", "the quit did not overwrite");
+
+    view.update(cx, |view, cx| view.run_files_verb(thread, FilesVerb::ToggleAutoSave, cx));
+    std::fs::write(&file, "l\n").unwrap();
+    assert!(warning(&view, cx).is_some(), "auto save off, the text is only in the buffer");
 }

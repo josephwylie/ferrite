@@ -1468,8 +1468,8 @@ fn a_window_without_a_server_says_so_once(cx: &mut TestAppContext) {
         use gpui::component::WindowExt;
         assert_eq!(window.notifications(cx).len(), 1, "said once");
     });
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.leaving_warning(), None, "quitting ends nothing");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.leaving_warning(cx), None, "quitting ends nothing");
     });
 }
 

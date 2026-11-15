@@ -19,6 +19,7 @@
 //! with its letter; one that cannot run here is dimmed and says why.
 
 use super::*;
+use crate::cockpit::tab_scroll::{self, Side};
 use ferrite_ui::icons::{self, icon};
 
 /// One row of the `+` menu and of "Open a surface", in T3's order.
@@ -85,12 +86,6 @@ impl Opener {
             Self::Overview => icons::PANEL_RIGHT,
         }
     }
-}
-
-/// How far a chevron scrolls a strip showing `visible` of its tabs.
-pub(crate) fn tab_scroll_step(visible: f32) -> f32 {
-    use ferrite_ui::theme::{SURFACE_TAB_SCROLL_MIN, SURFACE_TAB_SCROLL_SHARE};
-    (visible * SURFACE_TAB_SCROLL_SHARE).max(SURFACE_TAB_SCROLL_MIN)
 }
 
 /// A Surface's icon in its tab. Overview and Background have no T3
@@ -364,47 +359,19 @@ impl CockpitView {
             cx.stop_propagation();
             view.toggle_panel_maximized(thread, cx);
         }));
-        // The chevrons show only on overflow, each at an end with more.
         let scroll = &self.panel.tabs_scroll;
-        // A chevron's ease, where this frame has it; landed, the strip is
-        // the operator's to scroll again.
-        if let Some(tween) = self.panel.tabs_tween.get() {
-            let now = cx.background_executor().now();
-            let reduced = ferrite_ui::motion::reduced_motion(cx);
-            scroll.set_offset(gpui::point(
-                px(-tween.value(now, reduced)),
-                scroll.offset().y,
-            ));
-            if !tween.running(now, reduced) {
-                self.panel.tabs_tween.set(None);
-            }
-        }
-        let scrolled = -f32::from(scroll.offset().x);
-        let most = f32::from(scroll.max_offset().x);
-        let chevron = |side: &'static str, glyph: &'static str, shows: bool, toward: f32| {
-            shows.then(|| {
-                let key = SharedString::from(format!("panel-tabs-{side}"));
-                div()
-                    .id(key.clone())
-                    .debug_selector({
-                        let key = key.clone();
-                        move || key.to_string()
-                    })
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .justify_center()
-                    .size(px(SURFACE_PLUS))
-                    .rounded(px(R_CONTROL))
-                    .occlude()
-                    .hover_raised(key)
-                    .child(icon(glyph, ICON_CHEVRON, INK_SUBTLE))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.scroll_surface_tabs(toward, cx);
-                    }))
-            })
+        scroll.settle(cx);
+        let chevron = |side: Side| {
+            tab_scroll::chevron(
+                "panel-tabs",
+                side,
+                scroll,
+                cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.panel.tabs_scroll.ease(side, cx);
+                    cx.notify();
+                }),
+            )
         };
         // The title bar's tools keep the row's right end.
         let toggle = TITLE_TOOLS_W + TITLE_TOOLS_GAP;
@@ -417,77 +384,39 @@ impl CockpitView {
             .h(px(WIN_CHROME_H))
             .pl(px(SURFACE_HEAD_PAD_L))
             .pr(px(super::tools_inset() + toggle))
-            .children(chevron("left", icons::BACK, scrolled > 0.5, -1.))
             .child(
                 div()
-                    .id("panel-tab-scroll")
                     .flex()
                     .flex_1()
                     .min_w_0()
-                    .overflow_x_scroll()
-                    .track_scroll(&self.panel.tabs_scroll)
-                    // The wheel's vertical turn scrolls the tabs sideways.
-                    .on_scroll_wheel(cx.listener(
-                        |view, event: &gpui::ScrollWheelEvent, window, cx| {
-                            let delta = event.delta.pixel_delta(window.line_height());
-                            if delta.y.abs() > delta.x.abs() {
-                                view.scroll_surface_tabs_by(-f32::from(delta.y), cx);
-                            }
-                        },
-                    ))
-                    .child(strip),
+                    .items_center()
+                    .children(chevron(Side::Left))
+                    .child(
+                        div()
+                            .id("panel-tab-scroll")
+                            .flex()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_x_scroll()
+                            .track_scroll(&**scroll)
+                            // The wheel's vertical turn scrolls the tabs sideways.
+                            .on_scroll_wheel(cx.listener(
+                                |view, event: &gpui::ScrollWheelEvent, window, cx| {
+                                    if view.panel.tabs_scroll.wheel(event, window) {
+                                        cx.notify();
+                                    }
+                                },
+                            ))
+                            .child(strip),
+                    )
+                    .children(chevron(Side::Right)),
             )
-            .children(chevron(
-                "right",
-                icons::CHEVRON_RIGHT,
-                scrolled < most - 0.5,
-                1.,
-            ))
             .child(maximize)
-    }
-
-    /// A chevron's press: the tabs ease `toward` (-1 left, 1 right) by
-    /// `tab_scroll_step` of what shows; under reduced motion they jump.
-    fn scroll_surface_tabs(&mut self, toward: f32, cx: &mut Context<Self>) {
-        let scroll = &self.panel.tabs_scroll;
-        let visible = f32::from(scroll.bounds().size.width);
-        let most = f32::from(scroll.max_offset().x).max(0.);
-        let at = -f32::from(scroll.offset().x);
-        let to = (at + toward * tab_scroll_step(visible)).clamp(0., most);
-        let now = cx.background_executor().now();
-        let reduced = ferrite_ui::motion::reduced_motion(cx);
-        self.panel
-            .tabs_tween
-            .set(Some(ferrite_ui::motion::Tween::retarget(
-                self.panel.tabs_tween.take(),
-                at,
-                to,
-                ferrite_ui::motion::TAB_SCROLL,
-                now,
-                reduced,
-            )));
-        cx.notify();
     }
 
     /// Whether the strip is mid-ease: the frame must be drawn again.
     pub(in crate::cockpit) fn tabs_scrolling(&self, cx: &gpui::App) -> bool {
-        let now = cx.background_executor().now();
-        let reduced = ferrite_ui::motion::reduced_motion(cx);
-        self.panel
-            .tabs_tween
-            .get()
-            .is_some_and(|tween| tween.running(now, reduced))
-    }
-
-    /// The tabs scrolled `by` sideways, within their overflow (the wheel's
-    /// turn, which stops a chevron's ease).
-    fn scroll_surface_tabs_by(&mut self, by: f32, cx: &mut Context<Self>) {
-        self.panel.tabs_tween.set(None);
-        let scroll = &self.panel.tabs_scroll;
-        let most = f32::from(scroll.max_offset().x);
-        let at = (-f32::from(scroll.offset().x) + by).clamp(0., most.max(0.));
-        scroll.set_offset(gpui::point(px(-at), scroll.offset().y));
-        cx.notify();
+        self.panel.tabs_scroll.running(cx) || self.files_tabs_scrolling(cx)
     }
 
     /// One tab (T3's `group/tab`, see the module doc).

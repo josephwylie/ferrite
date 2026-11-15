@@ -555,14 +555,43 @@ fn swap_key(document: &Document) -> u64 {
     hash.finish()
 }
 
+fn is_markdown_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
+        })
+}
+
+/// Plain text a reader reads as prose: a `.txt`, or a file with no
+/// extension and no build file's name.
+fn is_prose_path(path: &Path) -> bool {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some(extension) => {
+            extension.eq_ignore_ascii_case("txt") || extension.eq_ignore_ascii_case("text")
+        }
+        None => path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| !name.starts_with('.') && !BUILD_FILES.contains(&name)),
+    }
+}
+
+/// What a Markdown or prose file's `source` renders as, as Markdown; nothing
+/// for a file that reads as code.
+pub fn reading_markup(path: &Path, source: &str) -> Option<String> {
+    if is_markdown_path(path) {
+        Some(source.to_string())
+    } else if is_prose_path(path) {
+        Some(prose_markdown(source))
+    } else {
+        None
+    }
+}
+
 impl Document {
     pub fn is_markdown(&self) -> bool {
-        self.path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
-            })
+        is_markdown_path(&self.path)
     }
 
     /// Whether it is prose, not code: a file of plain text (`.txt`, or no
@@ -570,23 +599,7 @@ impl Document {
     /// reads as Claude's file viewer reads prose: the reading face at the
     /// reading size, wrapped, no line numbers.
     pub fn is_prose(&self) -> bool {
-        if self.name.is_some() {
-            return false;
-        }
-        match self
-            .path
-            .extension()
-            .and_then(|extension| extension.to_str())
-        {
-            Some(extension) => {
-                extension.eq_ignore_ascii_case("txt") || extension.eq_ignore_ascii_case("text")
-            }
-            None => self
-                .path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| !name.starts_with('.') && !BUILD_FILES.contains(&name)),
-        }
+        self.name.is_none() && is_prose_path(&self.path)
     }
 
     /// The Markdown it renders, when it renders as a reading document
