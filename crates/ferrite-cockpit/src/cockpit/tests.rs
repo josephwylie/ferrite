@@ -81,6 +81,7 @@ mod citing;
 mod transcript_pointer;
 mod scroll_continuity;
 mod send_scroll;
+mod resume_recovery;
 mod sends;
 mod transcript_rows;
 mod ui_a;
@@ -276,6 +277,10 @@ struct Fake {
     /// The next start waits on this, then fails with the words it hears:
     /// a Session that is still starting while prompts are held for it.
     start_gate: Rc<RefCell<Option<Receiver<String>>>>,
+    /// A provider that refuses to resume this native id, in these words.
+    refused_resume: Rc<RefCell<Option<(String, String)>>>,
+    /// The native id each start asked to resume, in call order.
+    resumed: Rc<RefCell<Vec<Option<String>>>>,
     sent: Rc<RefCell<Vec<String>>>,
     /// Every Decision answer that went out, with the Decision's id.
     answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
@@ -321,6 +326,15 @@ impl Spawner for Fake {
         &mut self,
         request: ferrite_core::cockpit::SpawnRequest,
     ) -> std::io::Result<ferrite_core::session::SessionLifecycle> {
+        self.resumed
+            .borrow_mut()
+            .push(request.resume.map(str::to_string));
+        let refused = self.refused_resume.borrow().clone();
+        if let Some((_, words)) = refused.filter(|(id, _)| request.resume == Some(id.as_str())) {
+            return ferrite_core::session::SessionLifecycle::background(move || {
+                Err(ferrite_core::providers::ResumeRefused::error(true, words))
+            });
+        }
         let Some(gate) = self.start_gate.borrow_mut().take() else {
             return self
                 .spawn(request)

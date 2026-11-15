@@ -70,6 +70,7 @@ struct Facts {
     controls: Vec<ControlKind>,
     store_error: Option<String>,
     for_draft: bool,
+    resume_lost: bool,
     recovered: usize,
     wants_listing: bool,
     history_errors: HashMap<String, String>,
@@ -132,6 +133,7 @@ impl From<ThreadState> for Facts {
                 .collect(),
             store_error: state.store_error,
             for_draft: state.for_draft,
+            resume_lost: state.resume_lost,
             recovered: state.recovered.len(),
             wants_listing: state.wants_listing,
             history_errors: state
@@ -839,6 +841,12 @@ impl<'a> ThreadView<'a> {
     /// Session announces a list.
     pub fn models(&self) -> &'a [ModelInfo] {
         &self.facts.models
+    }
+
+    /// Its provider cannot resume the conversation it saved: a fresh one
+    /// is on offer (`Cockpit::start_fresh_conversation`).
+    pub fn resume_lost(&self) -> bool {
+        self.facts.resume_lost
     }
 
     /// How many prompts the provider handed back wait for the Composer.

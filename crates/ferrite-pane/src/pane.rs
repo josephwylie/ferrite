@@ -678,6 +678,9 @@ pub struct PaneWiring {
     pub start: Option<Hero>,
     /// The Thread details card, laid over the body's top right.
     pub details: Option<AnyElement>,
+    /// What the Thread offers when its provider lost the conversation it
+    /// saved (`resume_offer`), docked above the Composer.
+    pub resume_offer: Option<AnyElement>,
 }
 
 /// Turns the Pane head's band into its drag handle: the cockpit gives it an
@@ -925,6 +928,7 @@ pub fn render_pane(
         fill,
         start,
         details,
+        resume_offer,
     } = wiring;
     let has_activity_decisions = activity_decisions.is_some() || expand_question;
     // The Decision is the transcript's tail now (`decision_tail`): no card
@@ -1110,6 +1114,7 @@ pub fn render_pane(
             );
             // The order is head · body · progress · dock · composer.
             pane = pane.children(l1_dock(&mut cx));
+            pane = pane.children(resume_offer);
             // A question too big for this body answers in fullscreen: the
             // Pane's foot says so, where its state reads (theme rule 7).
             pane = pane.children(expand_question.then(|| question_door(key)));
@@ -1803,7 +1808,11 @@ pub fn quick_answer(id: SharedString, key: SharedString, label: SharedString) ->
     );
     let selector = id.clone();
     // Its two runs and a cell of padding each side, capped at the tile.
-    let key = format!("{key} ");
+    let key = if key.is_empty() {
+        String::new()
+    } else {
+        format!("{key} ")
+    };
     let width = components::run_width(&key)
         + components::run_width(&label)
         + 2.0 * theme::QUICK_ANSWER_PAD_X;
@@ -1997,6 +2006,29 @@ pub fn thread_word(
             .unwrap_or(theme::words::APPROVAL)
     });
     state_word(state, kind, card, Some(&turn), unread)
+}
+
+/// The Pane's offer when its provider no longer holds the conversation the
+/// Thread saved: what happened and what the way on costs, above the one
+/// button that takes it (`action`). The transcript above stays whole.
+pub fn resume_offer(key: u64, line: SharedString, action: Stateful<Div>) -> AnyElement {
+    div()
+        .debug_selector(move || format!("resume-offer-{key}"))
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .w_full()
+        .min_w_0()
+        .gap(px(theme::HALF_ROW))
+        .px(px(theme::GLYPH_GUTTER))
+        .py(px(theme::HALF_ROW))
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .text_color(rgb(INK_SUBTLE))
+        .child(line)
+        .child(div().flex().child(action))
+        .into_any_element()
 }
 
 /// The Pane's foot while its question is too big for the body: `◆ needs

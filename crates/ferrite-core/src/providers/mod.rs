@@ -18,6 +18,7 @@ mod elicitation;
 pub mod limits;
 pub mod models;
 pub(crate) mod oneshot;
+mod resume;
 pub mod shell;
 pub mod update;
 // The Win32 calls are cfg(windows); the pid-selection logic inside is pure
@@ -482,6 +483,7 @@ impl Session for CodexSession {
     }
 }
 pub use claude::discovery::list as claude_sessions;
+pub use resume::{ResumeFailure, ResumeRefused};
 /// Each Provider's title filler, beside its Session — the titler runs
 /// whichever the Thread's Provider is.
 pub use claude::title as claude_title;

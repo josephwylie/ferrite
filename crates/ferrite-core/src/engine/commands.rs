@@ -173,6 +173,10 @@ impl Engine {
                 )
                 .map(|()| None)
                 .map_err(failed),
+            Op::StartFresh { thread } => self
+                .start_fresh_conversation(*thread)
+                .map(|()| None)
+                .map_err(failed),
             Op::Snooze { thread, until } => self
                 .snooze_thread(*thread, *until)
                 .map(|()| None)

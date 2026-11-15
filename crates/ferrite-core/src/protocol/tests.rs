@@ -257,6 +257,7 @@ fn state() -> ThreadState {
         session_project_root: None,
         first_prompt_sent: true,
         has_prompt_history: true,
+        resume_lost: false,
         starting: false,
         working: true,
         tuning: false,
@@ -642,6 +643,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
             ),
         ),
         ("command_interrupt", command(7, Op::Interrupt { thread })),
+        ("command_start_fresh", command(52, Op::StartFresh { thread })),
         (
             "command_stop_subagent",
             command(

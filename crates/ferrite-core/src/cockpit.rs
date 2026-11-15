@@ -1727,6 +1727,15 @@ impl Cockpit {
         )
     }
 
+    /// Continue a Thread whose provider lost its saved conversation on a
+    /// fresh one, the earlier turns going with the next prompt as context.
+    pub fn start_fresh_conversation(&mut self, thread: ThreadId) -> Result<(), ProvisionError> {
+        self.act(
+            |engine| engine.start_fresh_conversation(thread),
+            |server| provisioned(server.execute(Op::StartFresh { thread })),
+        )
+    }
+
     pub fn project_id(&self, thread: ThreadId) -> Option<ProjectId> {
         self.try_project_id(thread).ok().flatten()
     }

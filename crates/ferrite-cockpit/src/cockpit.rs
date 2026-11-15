@@ -11123,6 +11123,7 @@ impl CockpitView {
                 .then(|| self.quick_answers(index, cx))
                 .flatten(),
             toolbar: l1.then(|| self.composer_toolbar(index, cx)).flatten(),
+            resume_offer: l1.then(|| self.resume_offer(index, cx)).flatten(),
             fill: self
                 .grid_board()
                 .then(|| self.fill_button(index, thread, cx)),
@@ -11501,6 +11502,55 @@ impl CockpitView {
     /// boxed word wired to its answer, its digit the key that answers it
     /// from the wall (`cockpit::PickOption1-3`). A question with more than
     /// one part answers in its form: its option lands on the Pane, in full.
+    /// The offer to go on in a fresh conversation, while the Thread's
+    /// provider has none to resume. It says what the way on costs.
+    fn resume_offer(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let thread = self.panes.get(index).filter(|pane| pane.is_main())?.thread()?;
+        let open = self.cockpit.thread(thread).filter(|open| open.resume_lost())?;
+        let key = thread.get();
+        let line = format!(
+            "{} no longer has this conversation. A fresh one starts from the transcript's \
+             latest turns, sent as context with your next prompt; it will not remember the rest.",
+            open.provider()
+        );
+        let action = pane::quick_answer(
+            SharedString::from(format!("resume-fresh-{key}")),
+            SharedString::default(),
+            "Start a fresh conversation".into(),
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |view, _: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                view.start_fresh_conversation(index, thread, window, cx);
+            }),
+        );
+        Some(pane::resume_offer(key, line.into(), action))
+    }
+
+    /// Take the offer: the Thread goes on in a fresh conversation, and what
+    /// the failed send gave back to the Composer goes out through the same
+    /// path ↵ takes.
+    fn start_fresh_conversation(
+        &mut self,
+        index: usize,
+        thread: ThreadId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(error) = self.cockpit.start_fresh_conversation(thread) {
+            self.cockpit
+                .say(thread, format!("could not start a fresh conversation: {error}"));
+            cx.notify();
+            return;
+        }
+        self.focus_pane(index);
+        if !self.panes[index].composer.read(cx).is_empty() {
+            self.submit(&Submit, window, cx);
+        }
+        cx.notify();
+    }
+
     fn quick_answers(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes.get(index)?.thread()?;
         let open = self.cockpit.thread(thread)?;
