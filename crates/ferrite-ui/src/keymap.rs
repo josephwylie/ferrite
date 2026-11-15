@@ -46,6 +46,9 @@ pub const PLATFORM: Platform = Platform::Windows;
 /// a Composer nor a kit input is on the focus path.
 pub const NO_TEXT_FIELD: &str = "Ferrite && !Composer && !Input";
 
+/// The Composer's caret keys the context menu takes over while it is open.
+pub const COMPOSER_TEXT: &str = "Composer && !ContextMenu";
+
 /// The Cockpit's own key context, on the window's root: a row bound in it
 /// acts anywhere in the Cockpit, and every deeper context — a Composer, a
 /// float, the kit's menus, popovers and dialogs — outranks it.
@@ -83,8 +86,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
     let mut table = vec![
         ("backspace".into(), "composer::Backspace", Some("Composer")),
         ("delete".into(), "composer::Delete", Some("Composer")),
-        ("left".into(), "composer::Left", Some("Composer")),
-        ("right".into(), "composer::Right", Some("Composer")),
+        ("left".into(), "composer::Left", Some(COMPOSER_TEXT)),
+        ("right".into(), "composer::Right", Some(COMPOSER_TEXT)),
         ("home".into(), "composer::Home", Some("Composer")),
         ("end".into(), "composer::End", Some("Composer")),
         (with_primary("v"), "composer::Paste", Some("Composer")),

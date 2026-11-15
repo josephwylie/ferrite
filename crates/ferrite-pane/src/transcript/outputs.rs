@@ -293,7 +293,7 @@ impl TranscriptView {
         for (index, (label, verb)) in open.target.verbs().iter().copied().enumerate() {
             let target = open.target.clone();
             shell = shell.child(
-                menu::row(index, &menu::Item::new(label), false)
+                menu::row(index, &menu::Item::new(label), false, false)
                     .debug_selector(move || format!("output-menu-row-{index}"))
                     .on_mouse_down(
                         MouseButton::Left,

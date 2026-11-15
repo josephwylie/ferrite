@@ -817,6 +817,8 @@ fn the_workflow_menus_offer_what_applies_and_keep_the_selection_in_view(cx: &mut
     tick(cx);
 
     click(cx, "outline-row-s-1-selected");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
     for _ in 0..5 {
         cx.simulate_keystrokes("down");
         tick(cx);

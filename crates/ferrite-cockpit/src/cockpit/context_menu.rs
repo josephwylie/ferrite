@@ -179,6 +179,17 @@ pub(super) struct ContextMenu {
     /// The submenu open beside its parent row: that row's index and the
     /// submenu's rows.
     pub(super) sub: Option<(usize, Vec<(menu::Item, MenuVerb)>)>,
+    /// Where the keyboard's cursor stands; none until a key moves it.
+    pub(super) cursor: MenuCursor,
+}
+
+/// The row the keyboard would press: in the menu, or in the submenu open
+/// beside it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum MenuCursor {
+    Idle,
+    Row(usize),
+    SubRow(usize),
 }
 
 /// What heads a copy that is only the latest part of a conversation.
@@ -284,6 +295,7 @@ impl CockpitView {
             rows,
             armed: None,
             sub: None,
+            cursor: MenuCursor::Idle,
         });
         cx.notify();
     }
@@ -676,6 +688,99 @@ impl CockpitView {
         })
     }
 
+    /// ↑ ↓ ← → ⏎ on the open menu. Up and down walk the rows of the menu
+    /// (or of its submenu while the cursor is in it) and wrap past the
+    /// ends; → enters a submenu, ← leaves it; ⏎ presses the cursor row.
+    /// True when the key was the menu's.
+    pub(super) fn menu_navigate(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(open) = self.context_menu.as_mut() else {
+            return false;
+        };
+        if keystroke.modifiers.modified() {
+            return false;
+        }
+        let live = |rows: &[Option<(menu::Item, MenuVerb)>], at: usize| {
+            rows.get(at)
+                .and_then(Option::as_ref)
+                .is_some_and(|(item, _)| !item.disabled)
+        };
+        let step = |len: usize, from: Option<usize>, forward: bool, live: &dyn Fn(usize) -> bool| {
+            let first = if forward { 0 } else { len.saturating_sub(1) };
+            let mut at = from.map_or(first, |at| {
+                if forward { (at + 1) % len.max(1) } else { (at + len.max(1) - 1) % len.max(1) }
+            });
+            for _ in 0..len {
+                if live(at) {
+                    return Some(at);
+                }
+                at = if forward { (at + 1) % len } else { (at + len - 1) % len };
+            }
+            None
+        };
+        match (keystroke.key.as_str(), open.cursor) {
+            ("up" | "down", MenuCursor::SubRow(at)) => {
+                let Some((_, rows)) = open.sub.as_ref() else {
+                    return false;
+                };
+                let rows: Vec<_> = rows.iter().map(|(item, _)| item.disabled).collect();
+                let forward = keystroke.key == "down";
+                if let Some(next) = step(rows.len(), Some(at), forward, &|i| !rows[i]) {
+                    open.cursor = MenuCursor::SubRow(next);
+                }
+            }
+            ("up" | "down", cursor) => {
+                let from = match cursor {
+                    MenuCursor::Row(at) => Some(at),
+                    _ => None,
+                };
+                let forward = keystroke.key == "down";
+                let len = open.rows.len();
+                if let Some(next) = step(len, from, forward, &|i| live(&open.rows, i)) {
+                    open.cursor = MenuCursor::Row(next);
+                    open.armed = None;
+                    open.sub = None;
+                }
+            }
+            ("right", MenuCursor::Row(at)) => {
+                let Some(Some((_, MenuVerb::Submenu(kind)))) = open.rows.get(at) else {
+                    return true;
+                };
+                let kind = *kind;
+                self.open_submenu(at, kind, cx);
+                if let Some(open) = self.context_menu.as_mut() {
+                    if open.sub.as_ref().is_some_and(|(_, rows)| !rows.is_empty()) {
+                        open.cursor = MenuCursor::SubRow(0);
+                    }
+                }
+            }
+            ("left", MenuCursor::SubRow(_)) => {
+                if let Some((parent, _)) = open.sub.take() {
+                    open.cursor = MenuCursor::Row(parent);
+                }
+            }
+            ("enter", MenuCursor::Row(at)) => {
+                self.press_menu_row(at, window, cx);
+                return true;
+            }
+            ("enter", MenuCursor::SubRow(at)) => {
+                if let Some(parent) = open.sub.as_ref().map(|(parent, _)| *parent) {
+                    self.press_submenu_row(parent, at, window, cx);
+                }
+                return true;
+            }
+            ("escape", _) => self.context_menu = None,
+            ("up" | "down" | "left" | "right" | "enter", _) => return true,
+            _ => return false,
+        }
+        cx.notify();
+        true
+    }
+
     /// A row's press: a destructive row arms on the first press and runs
     /// on the second; anything else runs at once. The menu closes after
     /// a verb runs, and stays up while a row is armed.
@@ -992,7 +1097,8 @@ impl CockpitView {
                     y += px(row_height(item));
                     let parent = matches!(verb, MenuVerb::Submenu(_));
                     let lit = open.sub.as_ref().is_some_and(|(at, _)| *at == index);
-                    let face = menu::row(index, item, open.armed == Some(index))
+                    let cursor = open.cursor == MenuCursor::Row(index);
+                    let face = menu::row(index, item, cursor, open.armed == Some(index))
                         .debug_selector(move || format!("context-menu-row-{index}"))
                         .when(lit, |row| row.bg(ferrite_ui::theme::paint::FLOAT_HOVER))
                         .when(parent, |row| {
@@ -1047,7 +1153,12 @@ impl CockpitView {
             for (index, (item, _)) in rows.iter().enumerate() {
                 let parent = *parent;
                 side = side.child(
-                    menu::item_row(("context-submenu-row", index), item, false, false)
+                    menu::item_row(
+                        ("context-submenu-row", index),
+                        item,
+                        open.cursor == MenuCursor::SubRow(index),
+                        false,
+                    )
                         .debug_selector(move || format!("context-submenu-row-{index}"))
                         .on_mouse_down(
                             MouseButton::Left,

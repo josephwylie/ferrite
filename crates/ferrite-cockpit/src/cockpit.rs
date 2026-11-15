@@ -10526,6 +10526,9 @@ impl CockpitView {
             .when(level == Level::Wall, |wall| {
                 wall.key_context("Ferrite Wall")
             })
+            .when(self.context_menu.is_some(), |root| {
+                root.key_context("ContextMenu")
+            })
             // Nothing that acts on a lost machine's Threads is listened for
             // until it is back (ADR 0026).
             .when(!lost, |root| {
@@ -10775,6 +10778,8 @@ impl CockpitView {
                 if let Some(index) = view.menu_mnemonic(&event.keystroke) {
                     cx.stop_propagation();
                     view.press_menu_row(index, window, cx);
+                } else if view.menu_navigate(&event.keystroke, window, cx) {
+                    cx.stop_propagation();
                 }
             }))
             .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, window, cx| {
