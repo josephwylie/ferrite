@@ -283,13 +283,13 @@ mod tests {
 
     #[test]
     fn a_file_trailer_does_not_hide_the_quotes_behind_it() {
-        let trailer = crate::prompt_files::compose(
-            &compose(&[Reply::new("see @pic.png", "")], ""),
-            &[std::path::PathBuf::from("/abs/f")],
-        );
-        assert_eq!(trailer, "> see @pic.png\n@\"/abs/f\"");
-        assert_eq!(authored(&trailer), "\n@\"/abs/f\"");
-        assert_eq!(inert(&trailer), "> see @\u{2060}pic.png\n@\"/abs/f\"");
+        let file = [std::env::temp_dir().join("f")];
+        let token = crate::prompt_files::compose("", &file);
+        let trailer =
+            crate::prompt_files::compose(&compose(&[Reply::new("see @pic.png", "")], ""), &file);
+        assert_eq!(trailer, format!("> see @pic.png\n{token}"));
+        assert_eq!(authored(&trailer), format!("\n{token}"));
+        assert_eq!(inert(&trailer), format!("> see @\u{2060}pic.png\n{token}"));
     }
 
     #[test]
