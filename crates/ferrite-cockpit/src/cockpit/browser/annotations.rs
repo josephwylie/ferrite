@@ -85,7 +85,7 @@ impl CockpitView {
             return;
         }
         let selected = self.browsers.threads.get(&thread).and_then(|browser| {
-            if browser.new_tab {
+            if browser.entry == Entry::NewTab {
                 return None;
             }
             let owner = browser.owner?;

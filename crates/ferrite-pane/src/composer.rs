@@ -1140,7 +1140,7 @@ impl Composer {
         self.edited(cx);
     }
 
-    pub(crate) fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+    pub fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
         self.line.select_all();
         self.edited(cx);
     }

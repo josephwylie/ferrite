@@ -2,14 +2,20 @@
 //! Native pages belong here, independently of whichever Preview is visible.
 mod annotations;
 mod manual;
+mod page_menu;
+
+pub(super) use page_menu::PageVerb;
 
 use super::*;
-use ferrite_core::browser::{Action, Document, Owner, PageState, State, TabId};
+use ferrite_core::browser::{Action, Document, Owner, PageState, State, Tab, TabId};
 use ferrite_pane::composer::{Composer, Role};
 use ferrite_pane::visual::{
     element::WebView,
     engine::{Availability, Visuals},
-    web::{BrowserState, BrowserView, BrowserViewport, Input},
+    web::{
+        BrowserState, BrowserView, BrowserViewport, DialogAnswer, DialogKind, DialogRequest,
+        Input, PageContext,
+    },
 };
 use std::{
     cell::{Cell, RefCell},
@@ -17,11 +23,22 @@ use std::{
     rc::Rc,
 };
 
-gpui::actions!(browser, [Go, CancelAnnotation, CancelNewTab]);
+gpui::actions!(
+    browser,
+    [Go, CancelAnnotation, CancelAddress, AcceptDialog, DismissDialog]
+);
+
+/// What the address field acts on when submitted. A new tab acts on no
+/// existing page, so while one is pending no page's controls apply.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Entry {
+    Page,
+    NewTab,
+}
 
 #[derive(Default)]
 pub(super) struct Browsers {
-    threads: BTreeMap<ThreadId, Browser>,
+    pub(super) threads: BTreeMap<ThreadId, Browser>,
     events: Rc<RefCell<Vec<Event>>>,
     /// Threads whose browser asked to be shown, with their Panel's
     /// operator revision when it asked: an agent's page may reveal the
@@ -78,14 +95,32 @@ struct RunningCapture {
     answer: std::sync::mpsc::Receiver<ferrite_pane::visual::browser_control::native::Event>,
 }
 
-struct Browser {
+pub(super) struct Browser {
     state: State,
     owner: Option<Owner>,
     pages: BTreeMap<TabId, Page>,
-    address: Entity<Composer>,
+    pub(super) address: Entity<Composer>,
+    /// The page address the field last took from the service. An edit is any
+    /// text that differs from it, and survives the page's own navigation.
     address_shown: Option<(TabId, String)>,
     error: Option<String>,
-    new_tab: bool,
+    entry: Entry,
+    /// The field and focus of the page's script dialog, and the dialog they
+    /// were last set up for.
+    prompt: Entity<Composer>,
+    dialog_focus: FocusHandle,
+    dialog_synced: Option<DialogRequest>,
+    /// The dialog has not yet had the keyboard: it takes it the first frame
+    /// its own Browser is on screen, never while another Thread's is.
+    dialog_unfocused: bool,
+    /// Its dialog's card was in the last frame drawn, so it can take focus.
+    dialog_drawn: Cell<bool>,
+    /// `dialog_drawn` as of the last frame: only a dialog on screen holds
+    /// the keyboard.
+    dialog_on_screen: bool,
+    /// The right-click the page reported, and where the pointer was.
+    context: Option<PageContext>,
+    pointer: Rc<Cell<gpui::Point<gpui::Pixels>>>,
     failed: BTreeMap<TabId, Document>,
     annotation: Option<annotations::Session>,
     native_peers: Rc<RefCell<manual::Peers>>,
@@ -99,6 +134,30 @@ struct Page {
     manual: Rc<RefCell<manual::Manual>>,
 }
 impl Browsers {
+    /// A dialog is modal to its page: it takes the keyboard when its Browser
+    /// is on screen, and lets the operator leave for anything outside it.
+    pub(super) fn focus_shown_dialogs(&mut self, window: &mut Window, cx: &mut gpui::App) -> bool {
+        let mut took = false;
+        for browser in self.threads.values_mut() {
+            let drawn = browser.dialog_drawn.replace(false);
+            browser.dialog_on_screen = drawn;
+            if drawn && browser.dialog_unfocused && browser.dialog_synced.is_some() {
+                browser.dialog_unfocused = false;
+                browser.focus_dialog(window, cx);
+                took = true;
+            }
+        }
+        took
+    }
+
+    pub(super) fn dialog_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
+        self.threads.values().any(|browser| {
+            browser.dialog_on_screen
+                && browser.dialog_synced.is_some()
+                && browser.dialog_focus.contains_focused(window, cx)
+        })
+    }
+
     /// Rechecked at queue dispatch and after native attachment becomes Ready.
     /// The latter additionally checks the exact native document and epoch.
     fn control_page(&self, request: &ControlRequest) -> Option<&Page> {
@@ -185,7 +244,20 @@ impl CockpitView {
                 }),
                 address_shown: None,
                 error: None,
-                new_tab: false,
+                entry: Entry::Page,
+                prompt: cx.new(|cx| {
+                    let mut field = Composer::new(cx);
+                    field.set_role(Role::Field(Some("BrowserPrompt")), cx);
+                    field.set_visible_row_limit(1, cx);
+                    field
+                }),
+                dialog_focus: cx.focus_handle(),
+                dialog_synced: None,
+                dialog_unfocused: false,
+                dialog_drawn: Cell::new(false),
+                dialog_on_screen: false,
+                context: None,
+                pointer: Default::default(),
                 failed: BTreeMap::new(),
                 annotation: None,
                 native_peers: Default::default(),
@@ -272,9 +344,9 @@ impl CockpitView {
                 let browser = self.browsers.threads.get_mut(&thread).unwrap();
                 browser.state = state;
                 browser.error = None;
-                browser.new_tab = false;
-                browser.address_shown = None;
+                browser.entry = Entry::Page;
                 if browser.state.active.is_none() {
+                    browser.address_shown = None;
                     browser
                         .address
                         .update(cx, |field, cx| field.set(String::new(), cx));
@@ -646,6 +718,7 @@ impl CockpitView {
                 }
             }
         }
+        self.serve_page_requests(cx);
         // Only the selected live tab is realized. Restored metadata does not
         // start Chromium until an explicit selection or open marks it live.
         let events = self.browsers.events.clone();
@@ -665,10 +738,15 @@ impl CockpitView {
                 continue;
             };
             let shown = (tab.id, tab.url.clone());
-            if !browser.new_tab && browser.address_shown.as_ref() != Some(&shown) {
-                browser
-                    .address
-                    .update(cx, |field, cx| field.set(tab.url.clone(), cx));
+            if browser.entry == Entry::Page && browser.address_shown.as_ref() != Some(&shown) {
+                let edited = browser.address_shown.as_ref().is_some_and(|(id, url)| {
+                    *id == tab.id && browser.address.read(cx).text() != url
+                });
+                if !edited {
+                    browser
+                        .address
+                        .update(cx, |field, cx| field.set(tab.url.clone(), cx));
+                }
                 browser.address_shown = Some(shown);
             }
             if !tab.live
@@ -820,6 +898,58 @@ impl CockpitView {
         #[cfg(feature = "cef")]
         self.pump_browser_captures(cx);
         self.pump_browser_controls(cx);
+    }
+
+    /// What websites asked of the window since the last frame: pages to open,
+    /// a right-click to answer, a script dialog to show.
+    fn serve_page_requests(&mut self, cx: &mut Context<Self>) {
+        let mut windows = Vec::new();
+        let mut menus = Vec::new();
+        for (thread, browser) in &mut self.browsers.threads {
+            let shown = browser.shown_tab().map(|tab| tab.id);
+            for (id, page) in &browser.pages {
+                windows.extend(
+                    page.native
+                        .take_new_windows()
+                        .into_iter()
+                        .map(|url| (*thread, url)),
+                );
+                let context = page.native.take_context();
+                if Some(*id) != shown {
+                    continue;
+                }
+                if let Some(context) = context {
+                    menus.push((*thread, browser.pointer.get()));
+                    browser.context = Some(context);
+                }
+            }
+            // A shown tab without a page (closed, not loaded yet, the
+            // Server gone) has no dialog.
+            let dialog = shown
+                .and_then(|id| browser.pages.get(&id))
+                .and_then(|page| page.native.state().dialog);
+            if dialog != browser.dialog_synced {
+                if let Some(DialogRequest {
+                    kind: DialogKind::Prompt { default },
+                    ..
+                }) = &dialog
+                {
+                    let default = default.clone();
+                    browser.prompt.update(cx, |field, cx| field.set(default, cx));
+                }
+                browser.dialog_unfocused = dialog.is_some();
+                browser.dialog_synced = dialog;
+                cx.notify();
+            }
+        }
+        for (thread, url) in windows {
+            let entry = self.browsers.threads[&thread].entry;
+            self.browser_action(thread, Action::Open { url }, cx);
+            self.browsers.threads.get_mut(&thread).unwrap().entry = entry;
+        }
+        for (thread, at) in menus {
+            self.open_context_menu(MenuTarget::BrowserPage(thread), at, cx);
+        }
     }
 
     #[cfg(feature = "cef")]
@@ -1306,13 +1436,7 @@ impl CockpitView {
             return;
         };
         let url = browser.address.read(cx).text().trim().to_owned();
-        let document = browser
-            .state
-            .tabs
-            .iter()
-            .find(|tab| Some(tab.id) == browser.state.active)
-            .filter(|_| !browser.new_tab)
-            .map(|tab| tab.document());
+        let document = browser.shown_tab().map(|tab| tab.document());
         self.browser_action(
             thread,
             match document {
@@ -1374,7 +1498,7 @@ impl CockpitView {
                 .py(px(4.))
                 .map(|tab| {
                     let key = format!("browser-tab-{}", id.0);
-                    if Some(id) == browser.state.active && !browser.new_tab {
+                    if Some(id) == browser.state.active && browser.entry == Entry::Page {
                         tab.hover_carried(key).text_color(rgb(INK_STRONG))
                     } else {
                         tab.hover_raised(key)
@@ -1404,7 +1528,9 @@ impl CockpitView {
                         this.browser_action(thread, Action::Close { tab: id }, cx);
                     })),
                 )
-        });
+        })
+        .collect::<Vec<_>>();
+        let active = browser.shown_tab();
         let mut toolbar = div().flex().items_center().gap(px(4.)).p(px(4.));
         for (id, glyph, label, enabled, kind) in [
             (
@@ -1451,14 +1577,12 @@ impl CockpitView {
                     })),
             );
         }
-        let failure = browser.error.as_ref().or_else(|| {
-            active
-                .filter(|_| !browser.new_tab)
-                .and_then(|tab| tab.error.as_ref())
-        });
-        let loading = !browser.new_tab && active.is_some_and(|tab| tab.loading);
-        let annotatable = !browser.new_tab
-            && !loading
+        let failure = browser
+            .error
+            .as_ref()
+            .or_else(|| active.and_then(|tab| tab.error.as_ref()));
+        let loading = active.is_some_and(|tab| tab.loading);
+        let annotatable = !loading
             && active.is_some_and(|tab| browser.pages.contains_key(&tab.id));
         let address_empty = browser.address.read(cx).text().is_empty();
         let annotate_why = if annotatable {
@@ -1507,17 +1631,10 @@ impl CockpitView {
                         )
                     })
                     .on_action(cx.listener(move |this, _: &Go, _, cx| this.browser_go(thread, cx)))
-                    .on_action(cx.listener(move |this, _: &CancelNewTab, _, cx| {
-                        let Some(browser) = this.browsers.threads.get_mut(&thread) else {
-                            return;
-                        };
-                        if !browser.new_tab {
+                    .on_action(cx.listener(move |this, _: &CancelAddress, _, cx| {
+                        if !this.cancel_address(thread, cx) {
                             cx.propagate();
-                            return;
                         }
-                        browser.new_tab = false;
-                        browser.address_shown = None;
-                        cx.notify();
                     })),
             )
             .child(
@@ -1535,13 +1652,45 @@ impl CockpitView {
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.cancel_browser_capture(thread, cx);
                     if let Some(browser) = this.browsers.threads.get_mut(&thread) {
-                        browser.new_tab = true;
+                        browser.entry = Entry::NewTab;
                         browser
                             .address
                             .update(cx, |field, cx| field.set(String::new(), cx));
                         let focus = browser.address.read(cx).focus_target(window, cx);
                         window.focus(&focus, cx);
                         cx.notify();
+                    }
+                })),
+            )
+            .child(
+                ferrite_pane::preview::head_door(
+                    "browser-open-external",
+                    "browser-open-external".into(),
+                    icons::EXTERNAL,
+                )
+                .opacity(if active.is_some() { 1. } else { 0.35 })
+                .tooltip(ferrite_ui::menu::tooltip("Open in system browser"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.run_browser_page_verb(thread, PageVerb::OpenExternal, cx)
+                })),
+            )
+            .child(
+                ferrite_pane::preview::head_door(
+                    "browser-close-page",
+                    "browser-close-page".into(),
+                    icons::CLOSE,
+                )
+                .opacity(if active.is_some() { 1. } else { 0.35 })
+                .tooltip(ferrite_ui::menu::tooltip("Close tab"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let tab = this
+                        .browsers
+                        .threads
+                        .get(&thread)
+                        .and_then(|browser| browser.shown_tab())
+                        .map(|tab| tab.id);
+                    if let Some(tab) = tab {
+                        this.browser_action(thread, Action::Close { tab }, cx);
                     }
                 })),
             );
@@ -1564,14 +1713,24 @@ impl CockpitView {
                 )
             });
         let body = active
-            .filter(|_| !browser.new_tab)
             .and_then(|tab| browser.pages.get(&tab.id))
             .map(|page| page.web.clone());
+        let retry = failure.is_some().then(|| active.map(|tab| tab.document())).flatten();
         let notice = match failure {
-            Some(error) => Some(format!("{error}\nEdit the address or reload to try again.")),
+            Some(error) if retry.is_some() => Some(format!("{error}\nEdit the address or retry.")),
+            Some(error) => Some(format!("{error}\nEdit the address.")),
             None if body.is_none() => Some("Enter a website address above to browse.".to_owned()),
             None => None,
         };
+        let dialog = active
+            .and(browser.dialog_synced.clone())
+            .map(|request| self.browser_dialog(thread, request, cx));
+        browser.dialog_drawn.set(dialog.is_some());
+        if dialog.is_some() && browser.dialog_unfocused {
+            let view = cx.entity();
+            cx.defer(move |cx| view.update(cx, |_, cx| cx.notify()));
+        }
+        let pointer = browser.pointer.clone();
         div()
             .debug_selector(|| "browser-preview".into())
             .flex()
@@ -1579,7 +1738,10 @@ impl CockpitView {
             .flex_1()
             .min_h_0()
             .overflow_hidden()
-            .when(browser.state.tabs.len() > 1 || browser.new_tab, |chrome| {
+            .when(
+                browser.state.tabs.len() > 1
+                    || (browser.entry == Entry::NewTab && !browser.state.tabs.is_empty()),
+                |chrome| {
                 chrome.child(
                     div()
                         .id("browser-tabs")
@@ -1589,20 +1751,33 @@ impl CockpitView {
                         .items_center()
                         .overflow_x_scroll()
                         .children(tabs)
-                        .when(browser.new_tab, |strip| {
-                            strip.child(
-                                div()
-                                    .flex_shrink_0()
-                                    .px(px(8.))
-                                    .py(px(4.))
-                                    .text_size(px(FS_LABEL))
-                                    .font_weight(W_LABEL)
-                                    .text_color(rgb(INK_STRONG))
-                                    .child("New tab"),
-                            )
+                        .when(browser.entry == Entry::NewTab, |strip| {
+                            strip
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .px(px(8.))
+                                        .py(px(4.))
+                                        .text_size(px(FS_LABEL))
+                                        .font_weight(W_LABEL)
+                                        .text_color(rgb(INK_STRONG))
+                                        .child("New tab"),
+                                )
+                                .child(
+                                    ferrite_pane::preview::head_door(
+                                        "browser-cancel-new-tab",
+                                        "browser-cancel-new-tab".into(),
+                                        icons::CLOSE,
+                                    )
+                                    .tooltip(ferrite_ui::menu::tooltip("Cancel new tab"))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.cancel_address(thread, cx);
+                                    })),
+                                )
                         }),
-                )
-            })
+                    )
+                },
+            )
             .child(toolbar)
             .child(
                 div()
@@ -1611,6 +1786,11 @@ impl CockpitView {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
+                    .capture_any_mouse_down(move |event, _, _| {
+                        if event.button == gpui::MouseButton::Right {
+                            pointer.set(event.position);
+                        }
+                    })
                     .child(self.annotation_browser_body(thread, body, cx))
                     .children(notice.map(|notice| {
                         div()
@@ -1620,19 +1800,196 @@ impl CockpitView {
                             .left_0()
                             .size_full()
                             .flex()
+                            .flex_col()
+                            .gap(px(SPACE_2))
                             .items_center()
                             .justify_center()
                             .p(px(SPACE_4))
                             .bg(paint::CARD)
                             .text_color(rgb(INK_SUBTLE))
                             .child(div().max_w_full().text_center().child(notice))
-                    })),
+                            .children(retry.map(|document| {
+                                ferrite_ui::components::button("browser-retry")
+                                    .debug_selector(|| "browser-retry".into())
+                                    .tab_stop(true)
+                                    .child("Retry")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.browser_action(thread, Action::Reload { document }, cx)
+                                    }))
+                            }))
+                    }))
+                    .children(dialog),
+            )
+            .into_any_element()
+    }
+}
+
+impl CockpitView {
+    /// Leave a pending new tab, or put back what an edit replaced. False when
+    /// the address held nothing to cancel.
+    fn cancel_address(&mut self, thread: ThreadId, cx: &mut Context<Self>) -> bool {
+        let Some(browser) = self.browsers.threads.get_mut(&thread) else {
+            return false;
+        };
+        let edited = browser.shown_tab().is_some_and(|tab| {
+            browser.address.read(cx).text() != tab.url
+        });
+        if browser.entry == Entry::Page && !edited {
+            return false;
+        }
+        browser.entry = Entry::Page;
+        browser.address_shown = None;
+        cx.notify();
+        true
+    }
+
+    fn answer_browser_dialog(&mut self, thread: ThreadId, accept: bool, cx: &mut Context<Self>) {
+        let Some(browser) = self.browsers.threads.get_mut(&thread) else {
+            return;
+        };
+        browser.dialog_unfocused = false;
+        let (Some(tab), Some(request)) = (browser.shown_tab().map(|tab| tab.id), browser.dialog_synced.take())
+        else {
+            return;
+        };
+        let answer = match request.kind {
+            DialogKind::Alert => DialogAnswer::Accept(String::new()),
+            DialogKind::Confirm if accept => DialogAnswer::Accept(String::new()),
+            DialogKind::Prompt { .. } if accept => {
+                DialogAnswer::Accept(browser.prompt.read(cx).text().to_owned())
+            }
+            _ => DialogAnswer::Cancel,
+        };
+        if let Some(page) = browser.pages.get(&tab) {
+            page.native.answer_dialog(answer);
+        }
+        cx.notify();
+    }
+
+    fn browser_dialog(
+        &self,
+        thread: ThreadId,
+        request: DialogRequest,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use ferrite_ui::theme::*;
+        let Some(browser) = self.browsers.threads.get(&thread) else {
+            return div().into_any_element();
+        };
+        let choice = |id: &'static str, label: &'static str, accept: bool, cx: &mut Context<Self>| {
+            ferrite_ui::components::button(id)
+                .debug_selector(move || id.into())
+                .tab_stop(true)
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.answer_browser_dialog(thread, accept, cx)
+                }))
+        };
+        let prompt = matches!(request.kind, DialogKind::Prompt { .. });
+        div()
+            .debug_selector(|| "browser-dialog".into())
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .flex()
+            .items_start()
+            .justify_center()
+            .p(px(SPACE_4))
+            .bg(paint::CARD)
+            .occlude()
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    if let Some(browser) = this.browsers.threads.get(&thread) {
+                        if !browser.dialog_focus.contains_focused(window, cx) {
+                            browser.focus_dialog(window, cx);
+                        }
+                    }
+                }),
+            )
+            .child(
+                div()
+                    .id("browser-dialog-card")
+                    .key_context("BrowserDialog")
+                    .track_focus(&browser.dialog_focus)
+                    .flex()
+                    .flex_col()
+                    .gap(px(SPACE_2))
+                    .w_full()
+                    .max_w(px(420.))
+                    .p(px(SPACE_3))
+                    .rounded(px(R_CONTROL))
+                    .border_1()
+                    .border_color(paint::LINE)
+                    .on_action(cx.listener(move |this, _: &AcceptDialog, _, cx| {
+                        this.answer_browser_dialog(thread, true, cx)
+                    }))
+                    .on_action(cx.listener(move |this, _: &DismissDialog, _, cx| {
+                        this.answer_browser_dialog(thread, false, cx)
+                    }))
+                    .child(
+                        div()
+                            .text_color(rgb(INK_STRONG))
+                            .font_weight(W_LABEL)
+                            .child(format!("{} says", request.origin)),
+                    )
+                    .child(div().text_color(rgb(INK_SUBTLE)).child(request.message))
+                    .when(prompt, |card| {
+                        card.child(
+                            div()
+                                .h(px(ICON_BUTTON))
+                                .px(px(SPACE_2))
+                                .flex()
+                                .items_center()
+                                .rounded(px(R_CONTROL))
+                                .border_1()
+                                .border_color(paint::FIELD_RING)
+                                .bg(paint::FIELD)
+                                .child(div().flex_1().min_w_0().child(browser.prompt.clone())),
+                        )
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap(px(SPACE_2))
+                            .when(!matches!(request.kind, DialogKind::Alert), |row| {
+                                row.child(choice("browser-dialog-cancel", "Cancel", false, cx))
+                            })
+                            .child(choice("browser-dialog-ok", "OK", true, cx)),
+                    ),
             )
             .into_any_element()
     }
 }
 
 impl Browser {
+    fn focus_dialog(&self, window: &mut Window, cx: &mut gpui::App) {
+        let prompt = matches!(
+            self.dialog_synced.as_ref().map(|request| &request.kind),
+            Some(DialogKind::Prompt { .. })
+        );
+        if prompt {
+            self.prompt.update(cx, |line, cx| {
+                line.select_all(&ferrite_pane::composer::SelectAll, window, cx)
+            });
+            let target = self.prompt.read(cx).focus_target(window, cx);
+            window.focus(&target, cx);
+        } else {
+            window.focus(&self.dialog_focus, cx);
+        }
+    }
+
+    /// The page the controls act on: none while a new tab is being entered.
+    fn shown_tab(&self) -> Option<&Tab> {
+        self.state
+            .tabs
+            .iter()
+            .find(|tab| Some(tab.id) == self.state.active)
+            .filter(|_| self.entry == Entry::Page)
+    }
+
     fn sync_documents(&self, cx: &mut Context<CockpitView>, resample: bool) {
         for tab in &self.state.tabs {
             if let Some(page) = self.pages.get(&tab.id) {

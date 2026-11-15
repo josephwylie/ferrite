@@ -64,6 +64,38 @@ pub enum BrowserDirty {
     Unknown,
 }
 
+/// A script dialog the page is blocked on, labelled by the origin that raised
+/// it so a site cannot pass its words off as the application's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DialogRequest {
+    pub origin: String,
+    pub kind: DialogKind,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DialogKind {
+    Alert,
+    Confirm,
+    Prompt { default: String },
+}
+
+/// The operator's reply to a [`DialogRequest`]. An alert has only `Accept`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DialogAnswer {
+    /// `confirm` returns true; `prompt` returns the text.
+    Accept(String),
+    /// `confirm` returns false; `prompt` returns null.
+    Cancel,
+}
+
+/// What a right-click landed on, in the page's own terms.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PageContext {
+    pub link: Option<String>,
+    pub selection: Option<String>,
+}
+
 /// Navigation and lifecycle state, independently readable from frame updates.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BrowserState {
@@ -75,6 +107,8 @@ pub struct BrowserState {
     pub error: Option<String>,
     pub document_generation: u64,
     pub dirty: BrowserDirty,
+    /// Only a website's own script dialog; never set for sealed visuals.
+    pub dialog: Option<DialogRequest>,
 }
 
 /// A website tab. Its identity belongs to the conversation service; the
@@ -91,6 +125,17 @@ pub trait BrowserView: View {
     fn forward(&self) -> Result<(), String>;
     fn reload(&self) -> Result<(), String>;
     fn set_protected(&self, protected: bool);
+    /// Pages the site asked to open (`target=_blank`, `window.open` from a
+    /// click) since the last call. The host decides where they open.
+    fn take_new_windows(&self) -> Vec<String> {
+        Vec::new()
+    }
+    /// The right-click the page reported since the last call.
+    fn take_context(&self) -> Option<PageContext> {
+        None
+    }
+    /// Reply to the pending [`BrowserState::dialog`]; a no-op without one.
+    fn answer_dialog(&self, _answer: DialogAnswer) {}
     /// Stop further controller writes at dispatch while operator input owns the
     /// page. Manual `View::input` and read-only captures remain available.
     fn set_agent_paused(&self, _paused: bool) {}

@@ -56,12 +56,12 @@ use std::time::{Duration, Instant};
 use cef::{
     args::Args, browser_host_create_browser_sync, do_message_loop_work, execute_process,
     initialize, Browser, BrowserSettings, CefString, ImplBrowser, ImplBrowserHost, ImplFrame,
-    PaintElementType, RuntimeStyle, Settings, WindowInfo,
+    ImplJsdialogCallback, JsdialogCallback, PaintElementType, RuntimeStyle, Settings, WindowInfo,
 };
 
 use super::{
-    BrowserDirty, BrowserState, BrowserView, BrowserViewport, ControllerEndpoint, Cursor, Engine,
-    Input, Page, Updates, View, Viewport, Wake,
+    BrowserDirty, BrowserState, BrowserView, BrowserViewport, ControllerEndpoint, Cursor,
+    DialogAnswer, DialogRequest, Engine, Input, Page, PageContext, Updates, View, Viewport, Wake,
 };
 
 /// The custom scheme pages are served from (`ferrite-view://page/<n>`).
@@ -420,11 +420,27 @@ impl BrowserLayers {
     }
 }
 
+/// What a website asked of the host that is not navigation state.
+#[derive(Default)]
+struct HostRequests {
+    windows: Vec<String>,
+    context: Option<PageContext>,
+    dialog: Option<MainThread<JsdialogCallback>>,
+}
+
+/// CEF's callbacks run on the browser process's UI thread, which is the
+/// host's main thread; a callback is parked here only to be answered there.
+struct MainThread<T>(T);
+// SAFETY: only ever touched on the main thread (see the module docs).
+unsafe impl<T> Send for MainThread<T> {}
+
 /// One view's state as the callbacks see it. It outlives the view's browsers:
 /// a released view keeps it, and the next browser picks up where it left off.
 struct ViewState {
     external: bool,
     navigation: Mutex<BrowserState>,
+    /// What a website asked of the host, taken by the host in order.
+    requests: Mutex<HostRequests>,
     geometry: Mutex<Geometry>,
     layers: Mutex<BrowserLayers>,
     updates: Mutex<Updates>,
@@ -482,6 +498,64 @@ impl ViewState {
                 self.dirty.store(true, Ordering::SeqCst);
             }
         }
+    }
+
+    fn request_window(&self, generation: u64, url: Option<&CefString>) {
+        let url = url.map(ToString::to_string).unwrap_or_default();
+        if self.external && self.is_current(generation) && handlers::external_url(&url) {
+            self.requests.lock().unwrap().windows.push(url);
+            self.dirty.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn page_context(&self, generation: u64, context: PageContext) {
+        if self.external && self.is_current(generation) {
+            self.requests.lock().unwrap().context = Some(context);
+            self.dirty.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Keep the page's dialog until the operator answers it. A dialog still
+    /// open under another is answered as dismissed.
+    fn hold_dialog(&self, generation: u64, request: DialogRequest, callback: JsdialogCallback) {
+        if !self.is_current(generation) {
+            callback.cont(0, None);
+            return;
+        }
+        if let Some(earlier) = self.requests.lock().unwrap().dialog.replace(MainThread(callback)) {
+            earlier.0.cont(0, None);
+        }
+        self.navigation(generation, |state| state.dialog = Some(request));
+    }
+
+    fn drop_dialog(&self, generation: u64) {
+        if !self.is_current(generation) {
+            return;
+        }
+        self.requests.lock().unwrap().dialog = None;
+        self.navigation(generation, |state| state.dialog = None);
+    }
+
+    fn answer_dialog(&self, answer: DialogAnswer) {
+        let held = self.requests.lock().unwrap().dialog.take();
+        if let Some(MainThread(callback)) = held {
+            match answer {
+                DialogAnswer::Accept(text) => callback.cont(1, Some(&text.as_str().into())),
+                DialogAnswer::Cancel => callback.cont(0, None),
+            }
+        }
+        self.navigation.lock().unwrap().dialog = None;
+        self.dirty.store(true, Ordering::SeqCst);
+    }
+
+    /// Dismiss the dialog of a browser about to close. Its reset arrives
+    /// under a retired generation and is ignored, and the callback must not
+    /// outlive `cef_shutdown`.
+    fn retire_dialog(&self) {
+        if let Some(MainThread(callback)) = self.requests.lock().unwrap().dialog.take() {
+            callback.cont(0, None);
+        }
+        self.navigation.lock().unwrap().dialog = None;
     }
 
     fn is_current(&self, generation: u64) -> bool {
@@ -729,6 +803,7 @@ impl CefEngine {
                 height: height.clamp(1, MAX_HEIGHT),
                 scale: viewport.scale.max(0.5),
             }),
+            requests: Mutex::default(),
             layers: Mutex::new(BrowserLayers::default()),
             updates: Mutex::new(Updates::default()),
             last_cursor: Mutex::new(Cursor::Arrow),
@@ -779,6 +854,7 @@ impl EngineInner {
         for view in self.live_views() {
             view.agent_access.paused.store(true, Ordering::SeqCst);
             view.agent_access.epoch.fetch_add(1, Ordering::SeqCst);
+            view.state.retire_dialog();
             view.state.generation.fetch_add(1, Ordering::SeqCst);
             view.observation.borrow_mut().take();
             if let Some(browser) = view.browser.borrow_mut().take() {
@@ -1004,6 +1080,7 @@ impl ViewInner {
         let started = Instant::now();
         // Retire the generation first: anything the closing browser still
         // sends is ignored.
+        self.state.retire_dialog();
         self.state.generation.fetch_add(1, Ordering::SeqCst);
         *self.state.layers.lock().unwrap() = BrowserLayers::default();
         if let Some(host) = self
@@ -1044,6 +1121,7 @@ impl ViewInner {
         if !due || self.browser.borrow().is_none() {
             return;
         }
+        self.state.retire_dialog();
         self.state.generation.fetch_add(1, Ordering::SeqCst);
         *self.state.layers.lock().unwrap() = BrowserLayers::default();
         if let Some(host) = self
@@ -1373,6 +1451,15 @@ impl BrowserView for CefView {
         }
         Ok(())
     }
+    fn take_new_windows(&self) -> Vec<String> {
+        std::mem::take(&mut self.0.state.requests.lock().unwrap().windows)
+    }
+    fn take_context(&self) -> Option<PageContext> {
+        self.0.state.requests.lock().unwrap().context.take()
+    }
+    fn answer_dialog(&self, answer: DialogAnswer) {
+        self.0.state.answer_dialog(answer);
+    }
     fn set_protected(&self, protected: bool) {
         if self.0.protected.replace(protected) && !protected {
             if let Some(observation) = self.0.observation.borrow_mut().as_mut() {
@@ -1401,6 +1488,7 @@ impl BrowserView for CefView {
             || view.protected.get()
             || view.agent_access.paused.load(Ordering::SeqCst)
             || state.loading
+            || state.dialog.is_some()
             || state.dirty != BrowserDirty::Clean
         {
             return Ok(false);
@@ -1431,5 +1519,55 @@ impl BrowserView for CefView {
         view.focused.set(false);
         view.pressed.set(0);
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn external_state() -> ViewState {
+        ViewState {
+            external: true,
+            navigation: Mutex::new(BrowserState::default()),
+            requests: Mutex::default(),
+            geometry: Mutex::new(Geometry { width: 1, height: 1, scale: 1.0 }),
+            layers: Mutex::new(BrowserLayers::default()),
+            updates: Mutex::new(Updates::default()),
+            last_cursor: Mutex::new(Cursor::Arrow),
+            dirty: AtomicBool::new(false),
+            generation: AtomicU64::new(2),
+            loaded: AtomicBool::new(false),
+            visible: AtomicBool::new(true),
+            restyle_unpainted: AtomicBool::new(false),
+            trace: false,
+        }
+    }
+
+    fn raised() -> DialogRequest {
+        DialogRequest {
+            origin: "https://site.example".into(),
+            kind: crate::visual::web::DialogKind::Alert,
+            message: "Hi".into(),
+        }
+    }
+
+    #[test]
+    fn answering_clears_a_dialog_whose_callback_is_gone() {
+        let state = external_state();
+        state.navigation.lock().unwrap().dialog = Some(raised());
+        state.answer_dialog(DialogAnswer::Cancel);
+        assert!(state.navigation.lock().unwrap().dialog.is_none());
+        assert!(state.dirty.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_reset_from_an_old_browser_leaves_the_current_dialog() {
+        let state = external_state();
+        state.navigation.lock().unwrap().dialog = Some(raised());
+        state.drop_dialog(1);
+        assert!(state.navigation.lock().unwrap().dialog.is_some());
+        state.drop_dialog(2);
+        assert!(state.navigation.lock().unwrap().dialog.is_none());
     }
 }
