@@ -1940,6 +1940,10 @@ pub enum Live {
         name: String,
         outcome: Option<String>,
     },
+    ControlRefused {
+        control: WireControl,
+        message: String,
+    },
     /// Tool clocks a replay restores, in milliseconds by call id.
     RestoreTimings {
         subject: WireSubject,
@@ -2372,6 +2376,10 @@ fn main_outgoing(input: &Input, duration: Option<Duration>) -> Outgoing {
             name: name.clone(),
             outcome: outcome.clone(),
         },
+        Input::Event(SessionEvent::ControlRefused { control, message }) => Live::ControlRefused {
+            control: control.into(),
+            message: message.clone(),
+        },
         // Queue acknowledgements and scheduled work are the Thread's state,
         // not its Activity's; the highlighter is each side's own; `Answered`
         // is Activity's.
@@ -2540,6 +2548,10 @@ pub fn incoming(
                     id: id.clone(),
                     name: name.clone(),
                     outcome: outcome.clone(),
+                }),
+                Live::ControlRefused { control, message } => main(SessionEvent::ControlRefused {
+                    control: control.try_into().ok()?,
+                    message: message.clone(),
                 }),
                 Live::RestoreTimings { subject, timings } => ActivityInput::RestoreTimings {
                     subject: subject.try_into().ok()?,

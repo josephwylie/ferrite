@@ -195,3 +195,26 @@ fn stopping_a_claude_subagent_stops_its_task_alone() {
         "a Subagent with no task is never guessed at"
     );
 }
+
+#[test]
+fn a_stop_the_cli_refuses_later_arrives_as_a_refusal_of_that_control() {
+    let mut r = Replay::new("claude", vec![]);
+    r.drain();
+    let stop = SessionControl::StopTask {
+        id: "refused".into(),
+    };
+    r.session.control(stop.clone()).unwrap();
+    for _ in 0..8 {
+        let event = r
+            .session
+            .events()
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap();
+        if let SessionEvent::ControlRefused { control, message } = event {
+            assert_eq!(control, stop);
+            assert_eq!(message, "no such task");
+            return;
+        }
+    }
+    panic!("a refused stop_task must name the control it refused");
+}

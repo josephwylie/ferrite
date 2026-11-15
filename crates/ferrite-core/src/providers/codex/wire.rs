@@ -1566,6 +1566,8 @@ mod tests {
             SessionEvent::Handshake { .. } => return None,
             // Claude's hooks.
             SessionEvent::HookRan { .. } => return None,
+            // Claude's reply to a control it first accepted.
+            SessionEvent::ControlRefused { .. } => return None,
             // The resume capture clears its goal.
             SessionEvent::ScheduledWork { .. } => "ScheduledWork",
             SessionEvent::ContextUsage { .. } | SessionEvent::UsageDetails { .. } => return None,

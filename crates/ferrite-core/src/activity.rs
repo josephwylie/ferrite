@@ -2637,6 +2637,7 @@ fn reports(input: &Input) -> bool {
                 | SessionEvent::AccountPlan { .. }
                 | SessionEvent::Handshake { .. }
                 | SessionEvent::HookRan { .. }
+                | SessionEvent::ControlRefused { .. }
         )
     )
 }

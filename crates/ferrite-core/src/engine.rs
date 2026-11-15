@@ -5983,6 +5983,7 @@ pub(crate) fn event_changes_content(event: &SessionEvent) -> bool {
         | SessionEvent::AccountPlan { .. }
         | SessionEvent::Handshake { .. }
         | SessionEvent::HookRan { .. }
+        | SessionEvent::ControlRefused { .. }
         | SessionEvent::ScheduledWork { .. } => false,
         _ => true,
     }

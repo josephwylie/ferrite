@@ -609,9 +609,10 @@ pub struct CockpitView {
     /// The Thread whose `Background work` dialog is open
     /// (`background_work.rs`).
     background_dialog: Option<ThreadId>,
-    /// The tasks `Stop` on the background-work line was pressed for: the
-    /// line reads `Stopping...` until they end.
-    background_stopping: std::collections::HashSet<String>,
+    /// The tasks `Stop` on the background-work line was pressed for, by
+    /// Thread and Session generation (a provider reuses task ids): the line
+    /// reads `Stopping...` until they end, or `Retry` once one refused.
+    background_stops: std::collections::HashMap<(ThreadId, u64, String), background_work::StopState>,
     settings_focus: FocusHandle,
     /// Whether the window is maximized, read once per frame in `render`.
     /// The nav's band is drawn without a `Window` in hand, and the two
@@ -1607,7 +1608,7 @@ impl CockpitView {
             project_editor_leaving: None,
             project_editor_focus: cx.focus_handle(),
             background_dialog: None,
-            background_stopping: Default::default(),
+            background_stops: Default::default(),
             settings_focus: cx.focus_handle(),
             maximized: false,
             cli_versions: None,
@@ -2585,7 +2586,16 @@ impl CockpitView {
                     self.panes[index].redirect_subject(from, to);
                 }
                 self.release_evicted_transcripts(index, &update.subjects);
-                let selected = self.panes[index].selected.clone();
+                let mut selected = self.panes[index].selected.clone();
+                let resolves = self
+                    .cockpit
+                    .thread(update.thread)
+                    .is_some_and(|open| open.activity().subject(&selected).is_some());
+                // A fresh Session forgets its agents: the Pane they filled
+                // has no head to leave by, so it goes back to Main.
+                if !resolves {
+                    selected = ferrite_core::activity::Subject::Main;
+                }
                 let generation = self
                     .cockpit
                     .thread(update.thread)
@@ -5781,18 +5791,18 @@ impl CockpitView {
         // Escape stops what the Pane shows: on Main its turn, never the
         // Subagents and background work it started; on a Subagent that
         // Subagent alone — and once it has nothing to stop, it goes back to
-        // Main.
+        // its parent.
         if let Some(thread) = self.focused_thread().filter(|_| !self.machine_lost()) {
-            match self.panes[self.focused()].selected.clone() {
+            let selected = self.panes[self.focused()].selected.clone();
+            match &selected {
                 ferrite_core::activity::Subject::Main => self.cockpit.interrupt(thread),
                 ferrite_core::activity::Subject::Subagent(key) => {
-                    if !self.stop_subagent(thread, &key) {
-                        self.select_subject(
-                            thread,
-                            ferrite_core::activity::Subject::Main,
-                            window,
-                            cx,
-                        );
+                    if !self.stop_subagent(thread, key) {
+                        let parent = self
+                            .agent_lineage(thread, &selected)
+                            .pop()
+                            .unwrap_or(ferrite_core::activity::Subject::Main);
+                        self.select_subject(thread, parent, window, cx);
                     }
                 }
             }
@@ -12355,17 +12365,7 @@ impl CockpitView {
     /// answer needs the window: `answer_from_toast`.)
     pub(crate) fn notice_verb(&mut self, verb: Verb, cx: &mut Context<Self>) {
         match verb {
-            Verb::OpenThread(thread) => {
-                let subject = self
-                    .cockpit
-                    .thread(thread)
-                    .and_then(|open| open.pending_decisions().first())
-                    .and_then(|pending| pending.subject.clone());
-                self.land_on_thread(thread, cx);
-                if let Some(subject) = subject {
-                    self.select_subject_from_notice(thread, subject, cx);
-                }
-            }
+            Verb::OpenThread(thread) => self.land_on_thread(thread, cx),
             Verb::Open(id) => {
                 self.needs_you
                     .drop_toast(&crate::notifications::RowTarget::Notice(id));

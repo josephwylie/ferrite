@@ -1046,6 +1046,9 @@ pub struct Transcript {
     /// How each user hook the CLI ran ended, by id (`None` while it runs):
     /// the name and the outcome (HD18).
     hooks: std::collections::BTreeMap<String, (String, Option<String>)>,
+    /// Background tasks the provider refused to stop, by task id: how many
+    /// times, and the last reason. Live only.
+    stop_refusals: std::collections::BTreeMap<String, (u32, String)>,
     /// When the running turn began — the operator's prompt went out — for
     /// the working line's clock. None between turns.
     turn_started: Option<std::time::Instant>,
@@ -1381,6 +1384,7 @@ impl Transcript {
             cli_version: None,
             cli_tools: Vec::new(),
             hooks: Default::default(),
+            stop_refusals: Default::default(),
             turn_started: None,
             turn_output_tokens: 0,
             last_report: 0,
@@ -1611,6 +1615,15 @@ impl Transcript {
         self.hooks
             .values()
             .map(|(name, outcome)| (name.as_str(), outcome.as_deref()))
+    }
+
+    /// How many times the provider has refused to stop background task
+    /// `id`, and why the last time. A caller that sent a stop compares the
+    /// count with the one it saw before, to learn its own was refused.
+    pub fn stop_refusal(&self, id: &str) -> Option<(u32, &str)> {
+        self.stop_refusals
+            .get(id)
+            .map(|(count, why)| (*count, why.as_str()))
     }
 
     /// The tools the CLI had loaded, when the live Session announced them
@@ -2272,6 +2285,13 @@ impl Transcript {
                 self.hooks.insert(id, (name, outcome));
                 Update::default()
             }
+            Input::Event(SessionEvent::ControlRefused { control, message }) => {
+                if let crate::SessionControl::StopTask { id } = control {
+                    let refusals = self.stop_refusals.entry(id).or_default();
+                    *refusals = (refusals.0 + 1, message);
+                }
+                Update::default()
+            }
             Input::Event(SessionEvent::Handshake { version, tools }) => {
                 self.cli_version = Some(version);
                 self.cli_tools = tools;
@@ -2317,6 +2337,7 @@ impl Transcript {
             Input::Revived => {
                 self.mcp_servers.clear();
                 self.mcp_authorizations.clear();
+                self.stop_refusals.clear();
                 self.progress.disconnected();
                 self.mcp_servers.clear();
                 self.turn_started = None;
