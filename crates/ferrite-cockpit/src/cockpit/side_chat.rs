@@ -36,7 +36,7 @@ use super::*;
 use ferrite_core::activity::Subject;
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_pane::composer::Role;
-use ferrite_pane::quote::Reply;
+use ferrite_core::replies::Reply;
 use ferrite_ui::icons::{self, icon};
 
 gpui::actions!(side_chat, [Ask]);
@@ -216,7 +216,7 @@ impl CockpitView {
             line.set_visible_row_limit(ferrite_pane::composer::MAX_ROWS, cx);
             if let Some(passage) = passage {
                 // The caret lands under the quote.
-                let quote = ferrite_pane::quote::compose(&[Reply::new(passage, "")], "");
+                let quote = ferrite_core::replies::compose(&[Reply::new(passage, "")], "");
                 line.insert(&format!("{quote}\n\n"), cx);
             }
             line
@@ -784,7 +784,7 @@ impl CockpitView {
         let (Some(run), Some(index)) = (self.side_run(owner, id), self.pane_for(owner)) else {
             return;
         };
-        let quote = ferrite_pane::quote::compose(&[Reply::new(format!("From a side chat:\n{run}"), "")], "");
+        let quote = ferrite_core::replies::compose(&[Reply::new(format!("From a side chat:\n{run}"), "")], "");
         self.panes[index]
             .composer
             .update(cx, |composer, cx| composer.insert(&format!("{quote}\n\n"), cx));

@@ -91,16 +91,40 @@ pub fn split(prompt: &str) -> (Vec<Reply>, &str) {
     }
 }
 
+/// `prompt` cut into its leading replies, the text after them, and the file
+/// trailer behind that, which hides the last paragraph's quote when the
+/// operator typed no words.
+struct Parts<'a> {
+    replies: Vec<Reply>,
+    head: &'a str,
+    rest: &'a str,
+    trailer: &'a str,
+}
+
+fn parts(prompt: &str) -> Parts<'_> {
+    let body_len = crate::prompt_files::split(prompt.to_owned()).0.len();
+    let (body, trailer) = prompt.split_at(body_len);
+    let (replies, rest) = split(body);
+    let head = &body[..body.len() - rest.len()];
+    Parts {
+        replies,
+        head,
+        rest,
+        trailer,
+    }
+}
+
 /// What the operator wrote in `prompt`: everything but the replies' quoted
 /// passages. Adapters scan this, never the passages, for `@path` and `/skill`
-/// input; the prompt itself still goes to the provider verbatim.
+/// input.
 pub fn authored(prompt: &str) -> Cow<'_, str> {
-    let (replies, rest) = split(prompt);
-    if replies.is_empty() {
+    let parts = parts(prompt);
+    if parts.replies.is_empty() {
         return Cow::Borrowed(prompt);
     }
     let mut text = String::new();
-    for words in replies
+    for words in parts
+        .replies
         .iter()
         .map(|reply| &reply.text)
         .filter(|words| !words.is_empty())
@@ -108,7 +132,37 @@ pub fn authored(prompt: &str) -> Cow<'_, str> {
         text.push_str(words);
         text.push('\n');
     }
-    text.push_str(rest);
+    text.push_str(parts.rest);
+    text.push_str(parts.trailer);
+    Cow::Owned(text)
+}
+
+/// Joins an `@` to what follows it without a space, so a CLI that expands
+/// `@path` itself reads a quoted one as plain words.
+const MENTION_BREAK: char = '\u{2060}';
+
+/// `prompt` as a CLI that expands `@path` in the text it is sent should
+/// receive it: the quoted passages carry no live `@`. The stored prompt keeps
+/// its words as typed.
+pub fn inert(prompt: &str) -> Cow<'_, str> {
+    let parts = parts(prompt);
+    if parts.replies.is_empty() || !parts.head.contains('@') {
+        return Cow::Borrowed(prompt);
+    }
+    let mut text = parts
+        .head
+        .split('\n')
+        .map(|line| {
+            if line.starts_with('>') {
+                line.replace('@', &format!("@{MENTION_BREAK}"))
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    text.push_str(parts.rest);
+    text.push_str(parts.trailer);
     Cow::Owned(text)
 }
 
@@ -152,6 +206,27 @@ mod tests {
         let prompt = compose(&replies, "read @d.png\n@\"/e.png\"");
         assert_eq!(authored(&prompt), "and @b.png\nread @d.png\n@\"/e.png\"");
         assert_eq!(authored("plain @x"), "plain @x");
+    }
+
+    #[test]
+    fn a_file_trailer_does_not_hide_the_quotes_behind_it() {
+        let trailer = crate::prompt_files::compose(
+            &compose(&[Reply::new("see @pic.png", "")], ""),
+            &[std::path::PathBuf::from("/abs/f")],
+        );
+        assert_eq!(trailer, "> see @pic.png\n@\"/abs/f\"");
+        assert_eq!(authored(&trailer), "\n@\"/abs/f\"");
+        assert_eq!(inert(&trailer), "> see @\u{2060}pic.png\n@\"/abs/f\"");
+    }
+
+    #[test]
+    fn inert_breaks_only_the_quoted_mentions() {
+        let prompt = compose(&[Reply::new("a @x\n\nb @y", "see @z")], "and @w");
+        assert_eq!(
+            inert(&prompt),
+            "> a @\u{2060}x\n>\n> b @\u{2060}y\n\n\u{21a9} see @z\n\nand @w"
+        );
+        assert_eq!(inert("plain @x"), "plain @x");
     }
 
     #[test]

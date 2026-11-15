@@ -35,7 +35,7 @@ use gpui::{
 };
 
 use crate::line::Line;
-use crate::quote::Reply;
+use ferrite_core::replies::Reply;
 use ferrite_ui::pointer::Pointer;
 
 actions!(
@@ -504,7 +504,7 @@ impl Composer {
             self.browser_annotations.clear();
         } else {
             let (text, files, annotations) = browser_annotations::split(text);
-            let (replies, text) = crate::quote::split(&text);
+            let (replies, text) = ferrite_core::replies::split(&text);
             self.files = files;
             self.browser_annotations = annotations;
             self.line.set(text.to_string());
@@ -551,7 +551,7 @@ impl Composer {
     /// The line with its quotes ahead of it, as the wire reads it.
     fn quoted_line(&self) -> String {
         let line = wire_text(self.line.text(), &self.tokens());
-        crate::quote::compose(&self.replies, &line)
+        ferrite_core::replies::compose(&self.replies, &line)
     }
 
     /// The files added a moment ago, still growing into the tray

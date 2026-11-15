@@ -15,7 +15,7 @@
 //! - **Attach as context** is the Reply card in the Composer's tray, the
 //!   same one the message menu's `Attach message as context` makes.
 
-use ferrite_pane::quote::Reply;
+use ferrite_core::replies::Reply;
 use ferrite_terminal::{Cursor, Settings, Terminal, TerminalEvent, TerminalView};
 use ferrite_ui::icons;
 use ferrite_ui::theme;

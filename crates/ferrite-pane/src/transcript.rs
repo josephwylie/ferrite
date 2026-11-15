@@ -288,7 +288,7 @@ pub enum TranscriptEvent {
     },
     /// A selection's `Cite` (or an answer's Reply row), its words empty: a
     /// Reply card in the Pane's tray (`Composer::reply`).
-    Reply(crate::quote::Reply),
+    Reply(ferrite_core::replies::Reply),
     /// An answer's Fork: a new Thread holding the conversation through
     /// the answer whose last block is `after`.
     Fork {

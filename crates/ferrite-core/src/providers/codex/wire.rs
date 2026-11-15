@@ -2455,6 +2455,29 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn a_quote_and_an_attachment_with_no_typed_words_keeps_the_quote_inert() {
+        use crate::replies::{compose, Reply};
+        let dir = std::env::temp_dir().join(format!("ferrite-bare-quote-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["pic.png", "other.png"] {
+            std::fs::write(dir.join(name), b"fixture").unwrap();
+        }
+        let prompt = crate::prompt_files::compose(
+            &compose(&[Reply::new("see @pic.png", "")], ""),
+            &[dir.join("other.png")],
+        );
+        assert_eq!(
+            input_items(&prompt, &[], Some(&dir)),
+            [
+                serde_json::json!({"type": "localImage", "path": dir.join("other.png")}),
+                serde_json::json!({"type": "text", "text": prompt}),
+            ]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// A skill and a mention compose: skill first, mentions, then the args
     /// text with its tokens kept verbatim; the same file twice rides once.
     #[test]

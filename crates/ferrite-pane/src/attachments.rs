@@ -20,7 +20,7 @@ use std::{
 use gpui::{prelude::*, px, App, ElementId, IntoElement, SharedString, Window};
 
 use crate::preview::Preview;
-use crate::quote::Reply;
+use ferrite_core::replies::Reply;
 use ferrite_core::browser_annotations::Annotation;
 
 /// Nothing to install now: delivered files draw in the float grammar rather

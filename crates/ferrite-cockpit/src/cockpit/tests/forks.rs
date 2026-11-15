@@ -97,7 +97,7 @@ fn an_answers_menu_copies_replies_and_forks(cx: &mut TestAppContext) {
     view.read_with(cx, |view, cx| {
         assert_eq!(
             view.panes[0].composer.read(cx).replies(),
-            [ferrite_pane::quote::Reply::new("alpha", "")]
+            [ferrite_core::replies::Reply::new("alpha", "")]
         );
     });
 

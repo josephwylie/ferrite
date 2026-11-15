@@ -558,7 +558,7 @@ fn reply_card() -> (Scene, Setup) {
         let index = view.focused();
         view.panes[index].composer.update(cx, |composer, cx| {
             composer.reply(
-                ferrite_pane::quote::Reply::new("Both commands ran.", "testing"),
+                ferrite_core::replies::Reply::new("Both commands ran.", "testing"),
                 cx,
             );
             // An image beside it: both are tiles of the one tray row.

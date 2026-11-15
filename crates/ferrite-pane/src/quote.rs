@@ -31,8 +31,6 @@ pub fn too_long(selected: &str) -> bool {
     selected.trim().chars().count() > MAX_CHARS
 }
 
-pub use ferrite_core::replies::{compose, split, Reply};
-
 #[cfg(test)]
 mod tests {
     use super::*;
