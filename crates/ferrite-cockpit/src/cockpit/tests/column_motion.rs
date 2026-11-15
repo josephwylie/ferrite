@@ -383,6 +383,46 @@ fn a_picked_tabs_body_fades_in_and_the_outgoing_one_goes_at_once(cx: &mut TestAp
     assert_eq!(frame(cx), 0, "an update that is no pick plays nothing");
 }
 
+/// The keyboard sat in a Panel body that reads its own keys (Files) goes
+/// to the Composer when a tab with no keys of its own is shown: what is
+/// typed afterwards lands in the line and Enter sends it, rather than
+/// going to a body that is no longer drawn.
+#[gpui::test]
+fn keys_held_by_a_panel_body_return_to_the_composer_when_the_tab_changes(
+    cx: &mut TestAppContext,
+) {
+    bind_production_keys(cx);
+    let (core, fake) = cockpit("column-tab-keys", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let dir = scratch("column-tab-keys-settings");
+    std::fs::create_dir_all(&dir).unwrap();
+    view.update(cx, |view, _| {
+        view.prefs.dir = dir;
+        view.prefs.settings.panel_shown = true;
+        view.nav_forced_open = true;
+    });
+    cx.simulate_resize(gpui::size(px(1600.), px(900.)));
+    settle(cx);
+    show(&view, SurfaceId::Files, cx);
+    cx.update(|window, cx| {
+        let keys = view.read(cx).panel_keys.clone();
+        window.focus(&keys, cx);
+    });
+    settle(cx);
+    assert!(cx.update(|window, cx| view.read(cx).panel_keys_held(window, cx)));
+
+    pick(SurfaceId::Overview, &view, cx);
+    settle(cx);
+    assert!(
+        !cx.update(|window, cx| view.read(cx).panel_keys_held(window, cx)),
+        "the keys left with the body that read them"
+    );
+    cx.simulate_input("after the switch");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(fake.sent.borrow().as_slice(), ["after the switch"]);
+}
+
 /// The system setting flipping while the panel and the nav are mid-slide
 /// lands both where they were going, with no further frame asked for.
 #[gpui::test]

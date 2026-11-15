@@ -36,6 +36,7 @@ use gpui::{
 };
 
 mod citations;
+mod departed;
 pub use citations::{CancelComment, OpenSource, SaveComment};
 
 use crate::line::Line;
@@ -175,6 +176,11 @@ pub struct Composer {
     /// When each file was added to the draft, while it may still be growing
     /// in (`attachments`).
     files_added: std::collections::HashMap<PathBuf, std::time::Instant>,
+    /// The reply added last and when, while it may still be growing in.
+    reply_added: Option<(usize, std::time::Instant)>,
+    /// What was taken off the draft a moment ago, still closing its place
+    /// in the tray (`departed`).
+    leaving: Vec<departed::Departed>,
     /// Transcript passages the operator is replying to (a selection's
     /// Reply), each with what they said about it: Reply cards in the tray,
     /// sent ahead of the line's words (`crate::quote`).
@@ -266,6 +272,8 @@ impl Composer {
             line: Line::default(),
             files: crate::draft_files::DraftFiles::new(),
             files_added: Default::default(),
+            reply_added: None,
+            leaving: Vec::new(),
             replies: Vec::new(),
             citations: citations::Citations::default(),
             tray_shut: false,
@@ -447,11 +455,23 @@ impl Composer {
     ) -> Option<gpui::AnyElement> {
         let composer = entity.read(cx);
         let count = composer.attachment_count();
-        if count == 0 {
+        let now = cx.background_executor().now();
+        let mut ghosts: Vec<_> = composer.departed(now).collect();
+        if count == 0 && ghosts.is_empty() {
             return None;
         }
-        let files = composer.files.paths().to_vec();
-        let readiness = composer.files.readiness().clone();
+        ghosts.sort_by_key(|ghost| ghost.at);
+        let mut files = composer.files.paths().to_vec();
+        let mut readiness = composer.files.readiness().clone();
+        let mut closing = std::collections::HashMap::new();
+        for ghost in &ghosts {
+            if let departed::Gone::File { path, readiness: state } = &ghost.what {
+                files.insert(ghost.at.min(files.len()), path.clone());
+                readiness.extend(state.clone().map(|state| (path.clone(), state)));
+                closing.insert(path.clone(), ghost.left);
+            }
+        }
+        let emptied = (count == 0).then(|| ghosts.iter().map(|ghost| ghost.left).max()).flatten();
         let added = composer.files_growing(cx);
         let comments = composer.review.len();
         let annotations = composer.browser_annotations.clone();
@@ -465,6 +485,7 @@ impl Composer {
         let shelf = has_shelf.then(|| {
             crate::attachments::Attachments::new("prompt-attachments", files, preview)
                 .added(added)
+                .closing(closing)
                 .readiness(readiness)
                 .on_retry(move |path, _, cx| {
                     let _ = retry_file.update(cx, |composer, cx| {
@@ -476,22 +497,21 @@ impl Composer {
                 .annotations(annotations)
                 .on_remove_annotation(move |id, window, cx| {
                     let _ = remove_annotation.update(cx, |composer, cx| {
+                        let tray_held = composer.files_focus.contains_focused(window, cx);
                         composer.remove_browser_annotation(id, cx);
-                        composer.focus_handle.focus(window, cx);
+                        composer.refocus_after_removal(tray_held, window, cx);
                     });
                 })
                 .in_island()
                 .on_remove(move |remove, window, cx| {
-                    let _ = remove_file.update(cx, |composer, cx| {
-                        composer.files.remove(remove);
-                        composer.focus_handle.focus(window, cx);
-                        composer.edited(cx);
-                    });
+                    let _ = remove_file
+                        .update(cx, |composer, cx| composer.remove_file(remove, window, cx));
                 })
                 .on_drop_review(move |window, cx| {
                     let _ = drop_review.update(cx, |composer, cx| {
+                        let tray_held = composer.files_focus.contains_focused(window, cx);
                         composer.review.take_all();
-                        composer.focus_handle.focus(window, cx);
+                        composer.refocus_after_removal(tray_held, window, cx);
                         composer.edited(cx);
                     });
                 })
@@ -541,21 +561,28 @@ impl Composer {
                 .max_h(px(ferrite_ui::theme::ATTACH_TRAY_MAX_H))
                 .overflow_y_scroll()
                 .children(shelf)
-                .children(citations::tray(entity, cx))
+                .children(citations::tray(entity, now, cx))
         });
-        Some(
-            div()
+        let tray = div()
                 .id("pending-attachment-tray")
                 .debug_selector(|| "pending-attachment-tray".into())
-                .track_focus(&focus)
-                .tab_stop(true)
+                .when(emptied.is_none(), |tray| tray.track_focus(&focus).tab_stop(true))
                 .flex()
                 .flex_col()
                 .gap(px(ferrite_ui::theme::CH))
                 .children(header)
                 .children(body)
-                .into_any_element(),
-        )
+                .into_any_element();
+        Some(match emptied {
+            Some(left) => ferrite_ui::motion::slip_shut(
+                "pending-attachment-tray-out",
+                left,
+                ferrite_ui::motion::CHIP_OUT,
+                tray,
+            )
+            .into_any_element(),
+            None => tray.into_any_element(),
+        })
     }
 
     pub fn focus_target(&self, window: &Window, cx: &App) -> FocusHandle {
@@ -653,6 +680,8 @@ impl Composer {
     /// `content`, leaving the review comments and picked tokens.
     pub fn put(&mut self, content: DraftContent, cx: &mut Context<Self>) {
         self.files_added.clear();
+        self.leaving.clear();
+        self.reply_added = None;
         self.line.set(content.text);
         self.files.replace(content.files, content.local);
         self.replies = content.replies;
@@ -696,6 +725,8 @@ impl Composer {
         self.browser_annotations.clear();
         self.chips.clear();
         self.files_added.clear();
+        self.leaving.clear();
+        self.reply_added = None;
         self.edited(cx);
         draft
     }
@@ -806,6 +837,9 @@ impl Composer {
         });
         for path in paths {
             if self.files.add(path, source) {
+                self.leaving.retain(|ghost| {
+                    !matches!(&ghost.what, departed::Gone::File { path: gone, .. } if gone == path)
+                });
                 self.files_added.insert(path.clone(), now);
             }
         }
@@ -892,6 +926,7 @@ impl Composer {
     /// stays as typed.
     pub fn reply(&mut self, reply: Reply, cx: &mut Context<Self>) {
         self.replies.push(reply);
+        self.reply_added = Some((self.replies.len() - 1, cx.background_executor().now()));
         self.edited(cx);
     }
 

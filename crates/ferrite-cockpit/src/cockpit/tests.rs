@@ -50,6 +50,7 @@ mod panel;
 mod panel_width;
 pub(super) mod panel_focus;
 mod panel_preview;
+mod tray_motion;
 mod parking;
 mod pr;
 mod pr_actions;

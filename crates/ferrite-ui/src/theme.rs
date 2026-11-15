@@ -3742,6 +3742,9 @@ pub const SCROLL_END_SHOW_DELAY_MS: u64 = 150;
 /// `MOTION_EASE_SNAP` (T3's `--ease-drawer`).
 pub const MOTION_CHIP_IN_MS: u64 = 300;
 pub const MOTION_CHIP_FROM_SCALE: f32 = 0.95;
+/// An attachment or citation taken off a draft closes its place along its
+/// row over this, as it fades.
+pub const MOTION_CHIP_OUT_MS: u64 = 160;
 /// A toast's timing: it comes in over `MOTION_DUR_BASE_MS` on the quart,
 /// sliding its own height out from under the edge it hangs on, and leaves
 /// over the same, shrinking to `MOTION_TOAST_OUT_SCALE` as it fades (the

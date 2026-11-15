@@ -5,12 +5,14 @@
 //! this holds only what the tray is showing of them.
 
 use std::collections::HashSet;
+use std::time::Instant;
 
 use gpui::{div, prelude::*, px, rgb, AnyElement, App, Entity, SharedString, Window};
 
+use super::departed::Gone;
 use super::Composer;
 use ferrite_core::replies::{Reply, Source};
-use ferrite_ui::{components, icons, theme};
+use ferrite_ui::{components, icons, motion, theme};
 
 gpui::actions!(cite, [SaveComment, CancelComment]);
 
@@ -148,7 +150,10 @@ impl Composer {
         if index >= self.replies.len() {
             return;
         }
-        self.replies.remove(index);
+        let tray_held = self.files_focus.contains_focused(window, cx);
+        let reply = self.replies.remove(index);
+        self.reply_added = None;
+        self.depart(super::departed::Gone::Reply(reply), index, cx);
         let shift = |at: &mut Option<usize>| match *at {
             Some(open) if open == index => *at = None,
             Some(open) if open > index => *at = Some(open - 1),
@@ -161,7 +166,7 @@ impl Composer {
             (Some(now), Some(edit)) => edit.index = now,
             _ => self.citations.editing = None,
         }
-        self.focus_handle.focus(window, cx);
+        self.refocus_after_removal(tray_held, window, cx);
         self.edited(cx);
     }
 
@@ -192,17 +197,44 @@ impl Composer {
     }
 }
 
-pub(super) fn tray(entity: &Entity<Composer>, cx: &App) -> Option<AnyElement> {
+/// The replies' chips, the ones the draft holds and, in the places they
+/// held, the ones taken off it that are still closing (`departed`).
+pub(super) fn tray(entity: &Entity<Composer>, now: Instant, cx: &App) -> Option<AnyElement> {
     let composer = entity.read(cx);
-    if composer.replies.is_empty() {
+    let mut closing: Vec<_> = composer
+        .departed(now)
+        .filter_map(|ghost| match &ghost.what {
+            Gone::Reply(reply) => Some((ghost.at, ghost.left, reply)),
+            Gone::File { .. } => None,
+        })
+        .collect();
+    if composer.replies.is_empty() && closing.is_empty() {
         return None;
     }
+    closing.sort_by_key(|(at, ..)| *at);
+    let growing = composer
+        .reply_added
+        .filter(|(_, at)| now.saturating_duration_since(*at) < motion::CHIP_IN.duration())
+        .map(|(index, _)| index);
     let open = composer.citations.open;
-    let chips = composer
-        .replies
-        .iter()
-        .enumerate()
-        .map(|(index, reply)| chip(entity, index, reply, open == Some(index)));
+    let mut chips = Vec::new();
+    let mut closing = closing.into_iter().peekable();
+    for (index, reply) in composer.replies.iter().enumerate() {
+        while let Some((at, left, gone)) = closing.next_if(|(at, ..)| *at <= index) {
+            chips.push(ghost_chip(at, left, gone));
+        }
+        let chip = chip(entity, index, reply, open == Some(index));
+        chips.push(if growing == Some(index) {
+            motion::chip_in(
+                SharedString::from(format!("reply-in-{index}")),
+                div().child(chip),
+            )
+            .into_any_element()
+        } else {
+            chip
+        });
+    }
+    chips.extend(closing.map(|(at, left, gone)| ghost_chip(at, left, gone)));
     let panel = open
         .and_then(|index| composer.replies.get(index).map(|reply| (index, reply)))
         .map(|(index, reply)| panel(entity, index, reply, cx));
@@ -229,12 +261,35 @@ pub(super) fn tray(entity: &Entity<Composer>, cx: &App) -> Option<AnyElement> {
     )
 }
 
-fn chip(entity: &Entity<Composer>, index: usize, reply: &Reply, open: bool) -> AnyElement {
-    let text = label(&reply.quote);
-    let toggle = entity.downgrade();
-    let remove = entity.downgrade();
+/// What a chip shows of its reply: the quote's mark and words, and a pencil
+/// when it carries a comment.
+fn chip_face(index: usize, reply: &Reply) -> Vec<AnyElement> {
+    let mut face = vec![
+        icons::icon(icons::QUOTE, theme::ATTACH_THUMB, theme::LINK_INK).into_any_element(),
+        div()
+            .min_w_0()
+            .truncate()
+            .child(SharedString::from(label(&reply.quote)))
+            .into_any_element(),
+    ];
+    if !reply.text.is_empty() {
+        face.push(
+            div()
+                .debug_selector(move || format!("cite-chip-{index}-comment"))
+                .flex_shrink_0()
+                .child(icons::icon(
+                    icons::PENCIL,
+                    theme::ATTACH_THUMB,
+                    theme::INK_SUBTLE,
+                ))
+                .into_any_element(),
+        );
+    }
+    face
+}
+
+fn chip_shell() -> gpui::Div {
     div()
-        .debug_selector(move || format!("cite-chip-{index}"))
         .flex()
         .flex_shrink_0()
         .items_center()
@@ -243,13 +298,51 @@ fn chip(entity: &Entity<Composer>, index: usize, reply: &Reply, open: bool) -> A
         .min_w_0()
         .rounded(px(theme::R_CONTROL))
         .bg(theme::paint::RAISED)
-        .when(open, |chip| chip.bg(theme::paint::SELECTED))
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_META))
         .line_height(px(theme::LH_META))
         .font_weight(theme::W_BODY)
         .text_color(rgb(theme::LINK_INK))
         .whitespace_nowrap()
+}
+
+/// A reply taken off the draft at `left`, closing its place: its chip with
+/// no controls to reach.
+fn ghost_chip(at: usize, left: Instant, reply: &Reply) -> AnyElement {
+    let face = div()
+        .flex()
+        .items_center()
+        .gap(px(theme::CH))
+        .min_w_0()
+        .px(px(theme::SPACE_2))
+        .children(chip_face(at, reply));
+    let mark = div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .w(px(theme::ATTACH_REMOVE))
+        .child(icons::icon(
+            icons::CLOSE,
+            theme::ATTACH_REMOVE_ICON,
+            theme::INK_SUBTLE,
+        ));
+    motion::slip_out(
+        SharedString::from(format!("reply-out-{at}-{left:?}")),
+        left,
+        motion::CHIP_OUT,
+        theme::CH,
+        chip_shell().child(face).child(mark),
+    )
+    .into_any_element()
+}
+
+fn chip(entity: &Entity<Composer>, index: usize, reply: &Reply, open: bool) -> AnyElement {
+    let toggle = entity.downgrade();
+    let remove = entity.downgrade();
+    chip_shell()
+        .debug_selector(move || format!("cite-chip-{index}"))
+        .when(open, |chip| chip.bg(theme::paint::SELECTED))
         .child(
             components::button(("cite-open", index))
                 .tab_stop(true)
@@ -267,24 +360,7 @@ fn chip(entity: &Entity<Composer>, index: usize, reply: &Reply, open: bool) -> A
                 } else {
                     "Show the quote and comment"
                 }))
-                .child(icons::icon(
-                    icons::QUOTE,
-                    theme::ATTACH_THUMB,
-                    theme::LINK_INK,
-                ))
-                .child(div().min_w_0().truncate().child(SharedString::from(text)))
-                .when(!reply.text.is_empty(), |button| {
-                    button.child(
-                        div()
-                            .debug_selector(move || format!("cite-chip-{index}-comment"))
-                            .flex_shrink_0()
-                            .child(icons::icon(
-                                icons::PENCIL,
-                                theme::ATTACH_THUMB,
-                                theme::INK_SUBTLE,
-                            )),
-                    )
-                })
+                .children(chip_face(index, reply))
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
                     let _ = toggle.update(cx, |composer, cx| composer.toggle_citation(index, cx));

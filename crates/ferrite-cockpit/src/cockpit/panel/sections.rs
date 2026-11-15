@@ -19,6 +19,7 @@
 
 use super::*;
 use ferrite_core::{McpServer, McpStatus};
+use ferrite_ui::motion::{fold_body, settled, FOLD};
 
 /// How much of the sections a surface draws: the Panel's Overview all of
 /// them, the details card (`cockpit/details.rs`) the Thread's facts and
@@ -235,7 +236,7 @@ pub(super) fn detail_row(
 /// Connectors (Claude's): its head, `Connectors ▸` with `N connected` at
 /// the right, folds its servers' lines open and shut — folded at first,
 /// the count saying what matters. The fold is the panel's own, kept while
-/// it shows.
+/// it shows, and eases open and shut (`motion::fold_body`).
 fn connectors(servers: &[McpServer], window: &mut Window, cx: &mut gpui::App) -> Div {
     use ferrite_ui::theme::*;
     let open = window.use_keyed_state("panel-connectors-open", cx, |_, _| false);
@@ -282,18 +283,26 @@ fn connectors(servers: &[McpServer], window: &mut Window, cx: &mut gpui::App) ->
                 cx.notify();
             })
         });
-    div()
-        .flex()
-        .flex_col()
-        .child(head)
-        .when(unfolded, |section| {
-            section.children(
-                servers
-                    .iter()
-                    .enumerate()
-                    .map(|(index, server)| connector_row(index, server)),
-            )
-        })
+    let rows = div().flex().flex_col().children(
+        servers
+            .iter()
+            .enumerate()
+            .map(|(index, server)| connector_row(index, server)),
+    );
+    // The lines are read-only, so a fold still shutting has nothing to take
+    // a press; it draws until it is shut.
+    div().flex().flex_col().child(head).child(settled(
+        "panel-connectors-fold",
+        unfolded,
+        FOLD,
+        move |shown| {
+            div().children((shown > 0.0).then(|| {
+                div()
+                    .debug_selector(|| "panel-connectors-body".into())
+                    .child(fold_body("panel-connectors-fold-body", shown, rows))
+            }))
+        },
+    ))
 }
 
 /// An MCP server's line: its name, and how it stands in the lexicon's

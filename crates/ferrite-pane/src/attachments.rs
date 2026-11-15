@@ -15,6 +15,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
+    time::Instant,
 };
 
 use gpui::{prelude::*, px, App, ElementId, IntoElement, SharedString, Window};
@@ -46,6 +47,7 @@ pub struct Attachments {
     annotations: Vec<Annotation>,
     on_remove_annotation: Option<RemoveAnnotation>,
     added: HashSet<PathBuf>,
+    closing: HashMap<PathBuf, Instant>,
     readiness: HashMap<PathBuf, Readiness>,
     on_retry: Option<Retry>,
 }
@@ -63,6 +65,7 @@ impl Attachments {
             annotations: Vec::new(),
             on_remove_annotation: None,
             added: HashSet::new(),
+            closing: HashMap::new(),
             readiness: HashMap::new(),
             on_retry: None,
         }
@@ -86,6 +89,14 @@ impl Attachments {
     /// The files just added to a draft: they grow in (`motion::chip_in`).
     pub fn added(mut self, added: HashSet<PathBuf>) -> Self {
         self.added = added;
+        self
+    }
+
+    /// The files taken off the draft a moment ago and still among `files`,
+    /// each with when it went: they close their places with no controls
+    /// (`motion::slip_out`).
+    pub fn closing(mut self, closing: HashMap<PathBuf, Instant>) -> Self {
+        self.closing = closing;
         self
     }
 
@@ -147,6 +158,34 @@ fn grown(added: &HashSet<PathBuf>, path: &Path, element: impl IntoElement) -> gp
     ferrite_ui::motion::chip_in(id, gpui::div().child(element)).into_any_element()
 }
 
+/// A file taken off the draft at `left`, closing its place.
+fn slipping(index: usize, path: &Path, left: Instant, ghost: impl IntoElement) -> gpui::AnyElement {
+    let id = SharedString::from(format!("attachment-out-{index}-{}", path.display()));
+    ferrite_ui::motion::slip_out(
+        id,
+        left,
+        ferrite_ui::motion::CHIP_OUT,
+        ferrite_ui::theme::CH,
+        ghost,
+    )
+    .into_any_element()
+}
+
+/// An image card with no controls, for the moment it closes.
+fn ghost_card(index: usize, path: &Path) -> gpui::Div {
+    use ferrite_ui::theme;
+    gpui::div()
+        .flex_shrink_0()
+        .size(px(theme::COMPOSER_THUMB))
+        .rounded(px(theme::R_CARD))
+        .overflow_hidden()
+        .child(thumbnail(
+            ("tray-image", index),
+            path,
+            (theme::COMPOSER_THUMB, theme::COMPOSER_THUMB),
+        ))
+}
+
 fn chips(attachments: Attachments) -> gpui::AnyElement {
     use ferrite_ui::pointer::Pointer as _;
     use ferrite_ui::theme;
@@ -162,6 +201,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         annotations,
         on_remove_annotation,
         added,
+        closing,
         readiness,
         on_retry,
     } = attachments;
@@ -173,6 +213,9 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
     let mut cards: Vec<_> = images
         .iter()
         .map(|(index, path)| {
+            if let Some(left) = closing.get(path) {
+                return slipping(*index, path, *left, ghost_card(*index, path));
+            }
             grown(
                 &added,
                 path,
@@ -198,6 +241,8 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
     );
     let others_empty = others.is_empty();
     let chips = others.into_iter().map(|(index, path)| {
+        let left = closing.get(&path).copied();
+        let live = left.is_none();
         let name = path
             .file_name()
             .unwrap_or_default()
@@ -208,7 +253,8 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         let explanation = readiness.get(&path).and_then(Readiness::explanation);
         let chip = div()
             .id(("attachment", index))
-            .when_some(explanation, |chip, why| {
+            .debug_selector(move || format!("tray-file-{index}"))
+            .when_some(explanation.filter(|_| live), |chip, why| {
                 chip.tooltip(ferrite_ui::menu::tooltip(why))
             })
             .flex()
@@ -221,8 +267,10 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
             .px(px(theme::SPACE_2))
             .rounded(px(theme::R_CONTROL))
             .bg(theme::paint::RAISED)
-            .cursor_pointer()
-            .hover_carried(format!("attachment-{index}-{}", open.display()))
+            .when(live, |chip| {
+                chip.cursor_pointer()
+                    .hover_carried(format!("attachment-{index}-{}", open.display()))
+            })
             .font_family(theme::FONT_UI)
             .text_size(px(theme::FS_META))
             .line_height(px(theme::LH_META))
@@ -254,7 +302,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
                     .and_then(|state| status_label(("attachment-status", index), state)),
             )
             .when_some(
-                retry_of(readiness.get(&path), on_retry.clone()),
+                retry_of(readiness.get(&path), on_retry.clone()).filter(|_| live),
                 |chip, retry| {
                     let retried = path.clone();
                     chip.child(
@@ -267,10 +315,11 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
                     )
                 },
             )
-            .when_some(on_remove.clone(), |chip, remove| {
+            .when_some(on_remove.clone().filter(|_| live), |chip, remove| {
                 let removed = path.clone();
                 chip.child(
                     remove_button(("remove-attachment", index))
+                        .debug_selector(move || format!("tray-file-{index}-remove"))
                         .accessibility_label(format!("Remove {name}"))
                         .tooltip_builder(ferrite_ui::menu::tooltip(format!(
                             "Remove {}",
@@ -282,11 +331,16 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
                         }),
                 )
             })
-            .on_click(move |_, window, cx| {
-                cx.stop_propagation();
-                host.open(open.clone(), None, &[], window, cx);
+            .when(live, |chip| {
+                chip.on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    host.open(open.clone(), None, &[], window, cx);
+                })
             });
-        grown(&added, &path, chip)
+        match left {
+            Some(left) => slipping(index, &path, left, chip),
+            None => grown(&added, &path, chip),
+        }
     });
     let review = (review > 0).then(|| review_chip(review, on_drop_review));
     let has_chips = !others_empty || review.is_some();

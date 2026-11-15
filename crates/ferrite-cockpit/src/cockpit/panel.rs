@@ -380,8 +380,9 @@ impl CockpitView {
     /// Note a move from one tab to another of the same Thread's open
     /// Panel. A document's preview fades itself, so a pick of or from
     /// one starts none here, nor does the Panel opening or another
-    /// Thread's coming up.
-    fn tend_tab_pick(&mut self, cx: &mut Context<Self>) {
+    /// Thread's coming up. Keys held for a body that is leaving, with none
+    /// of the new tab's own to take them, go back to the conversation.
+    fn tend_tab_pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let shown = self
             .panel_pane()
             .and_then(|index| self.panes[index].thread())
@@ -400,6 +401,10 @@ impl CockpitView {
             }
             _ => None,
         };
+        let keyed = matches!(&shown, Some((_, None | Some(SurfaceId::Files))));
+        if !keyed && self.panel_keys_held(window, cx) {
+            self.leave_panel(window, cx);
+        }
         self.panel.shown = shown;
     }
 
@@ -412,7 +417,7 @@ impl CockpitView {
         self.tend_prose_find(window);
         self.disarm_unseen_merge();
         self.panel.window_w = f32::from(window.viewport_size().width);
-        self.tend_tab_pick(cx);
+        self.tend_tab_pick(window, cx);
         if let Some(thread) = self
             .panel_pane()
             .and_then(|index| self.panes[index].thread())
