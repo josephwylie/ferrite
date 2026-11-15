@@ -11,6 +11,10 @@
 //! keeps the indent), `Tab`, the page keys and `Save`. Up and down step a
 //! logical line and keep their column.
 //!
+//! The buffer outlives a failed write: `save::Save` says where it stands
+//! against the disk, and a status bar under the lines offers Retry,
+//! Discard, Reload or Overwrite.
+//!
 //! Only the lines in view are laid out (`gpui::list`). Each line is a
 //! `CodeLine`, which paints its own selection and caret over the shaped
 //! text and reports its layout back, so a press lands the caret where it
@@ -27,13 +31,16 @@ use ferrite_pane::composer as keys;
 use ferrite_pane::line::Line;
 use ferrite_ui::theme;
 use gpui::prelude::*;
+use ferrite_ui::pointer::Pointer;
 use gpui::{
-    actions, div, fill, list, point, px, rgb, rgba, size, AnyElement, App, Bounds, ClipboardItem,
+    actions, div, fill, list, point, px, rgb, rgba, size, AnyElement, App, Bounds, ClickEvent, ClipboardItem, Div,
     Context, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter,
     FocusHandle, Focusable, GlobalElementId, HighlightStyle, IntoElement, LayoutId, ListAlignment,
     ListState, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Render, SharedString,
     StyledText, TextLayout, UTF16Selection, Window,
 };
+
+use super::save::{self, Outcome, SaveState};
 
 actions!(editor, [Enter, Tab, PageUp, PageDown, Save]);
 
@@ -42,8 +49,14 @@ pub(crate) const AUTO_SAVE_AFTER: Duration = Duration::from_millis(800);
 /// How far past the viewport the list lays out rows.
 const OVERDRAW: f32 = 400.0;
 
-/// The text changed.
-pub(crate) struct Edited;
+pub(crate) enum Event {
+    /// The text changed.
+    Edited,
+    /// A write ended, or the buffer was reloaded.
+    Settled,
+    /// The user chose to drop the buffer.
+    Discard,
+}
 
 /// What the Files ⋯ menu sets for every editor.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -70,7 +83,15 @@ pub(crate) struct Editor {
     starts: Vec<usize>,
     language: Option<&'static str>,
     settings: Settings,
-    dirty: bool,
+    /// Counts every change to the text; a write carries the one it saved.
+    revision: u64,
+    saved_revision: u64,
+    /// The fingerprint of the file as the buffer last matched it.
+    on_disk: u64,
+    save: SaveState,
+    writer: save::Writer,
+    /// The tab is to close once its text is on disk.
+    closing: bool,
     focus: FocusHandle,
     list: ListState,
     /// Each painted line's shaped text, for a press to read its column from.
@@ -79,14 +100,16 @@ pub(crate) struct Editor {
     goal_column: Option<usize>,
     dragging: bool,
     caret_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
-    saving: Option<gpui::Task<()>>,
+    pause: Option<gpui::Task<()>>,
+    writing: Option<gpui::Task<()>>,
 }
 
-impl EventEmitter<Edited> for Editor {}
+impl EventEmitter<Event> for Editor {}
 
 impl Editor {
     pub(crate) fn new(path: &Path, source: String, settings: Settings, cx: &mut Context<Self>) -> Self {
         let mut text = Line::default();
+        let on_disk = save::fingerprint(source.as_bytes());
         text.set(source);
         text.place_caret(0);
         let mut editor = Self {
@@ -95,14 +118,20 @@ impl Editor {
             starts: Vec::new(),
             language: ferrite_core::transcript::language_for_path(path),
             settings,
-            dirty: false,
+            revision: 0,
+            saved_revision: 0,
+            on_disk,
+            save: SaveState::Idle,
+            writer: save::replace_file,
+            closing: false,
             focus: cx.focus_handle(),
             list: ListState::new(0, ListAlignment::Top, px(OVERDRAW)),
             layouts: Rc::default(),
             goal_column: None,
             dragging: false,
             caret_bounds: Rc::default(),
-            saving: None,
+            pause: None,
+            writing: None,
         };
         editor.reindex();
         editor.list.reset(editor.starts.len());
@@ -110,14 +139,14 @@ impl Editor {
     }
 
     pub(crate) fn is_dirty(&self) -> bool {
-        self.dirty
+        self.revision != self.saved_revision
     }
 
     pub(crate) fn configure(&mut self, settings: Settings, cx: &mut Context<Self>) {
         if self.settings != settings {
             self.settings = settings;
             self.list.reset(self.starts.len());
-            if self.dirty && settings.auto_save {
+            if self.is_dirty() && settings.auto_save {
                 self.schedule_save(cx);
             }
             cx.notify();
@@ -132,12 +161,103 @@ impl Editor {
         cx.notify();
     }
 
-    /// Write the file now.
-    pub(crate) fn save(&mut self) {
-        self.saving = None;
-        if self.dirty && std::fs::write(&self.path, self.text.text()).is_ok() {
-            self.dirty = false;
+    /// Write the file now, unless the disk changed since it was read.
+    pub(crate) fn save(&mut self, cx: &mut Context<Self>) {
+        self.begin_save(false, cx);
+    }
+
+    /// A tab's close: whether it may go now. With unsaved text it writes
+    /// the file first and closes when that succeeds, or stays with its
+    /// status bar when it does not.
+    pub(crate) fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.is_dirty() {
+            return true;
         }
+        self.closing = true;
+        self.save(cx);
+        cx.notify();
+        false
+    }
+
+    /// A write finished that a close was waiting on.
+    pub(crate) fn is_closing_clean(&self) -> bool {
+        self.closing && !self.is_dirty()
+    }
+
+    fn begin_save(&mut self, overwrite: bool, cx: &mut Context<Self>) {
+        self.pause = None;
+        let blocked = matches!(self.save, SaveState::Saving(_))
+            || (self.save == SaveState::Conflict && !overwrite);
+        if !self.is_dirty() || blocked {
+            return;
+        }
+        let revision = self.revision;
+        self.save = SaveState::Saving(revision);
+        let (path, text, writer) = (self.path.clone(), self.text.text().to_string(), self.writer);
+        let expected = (!overwrite).then_some(self.on_disk);
+        self.writing = Some(cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_spawn(async move { save::write(&path, &text, expected, writer) })
+                .await;
+            this.update(cx, |editor, cx| editor.finished(revision, outcome, cx)).ok();
+        }));
+        cx.notify();
+    }
+
+    /// A write's result counts only for the write in flight, so a late one
+    /// cannot mark newer edits saved.
+    fn finished(&mut self, revision: u64, outcome: Outcome, cx: &mut Context<Self>) {
+        if self.save != SaveState::Saving(revision) {
+            return;
+        }
+        self.save = match outcome {
+            Outcome::Written(on_disk) => {
+                self.saved_revision = revision;
+                self.on_disk = on_disk;
+                if self.is_dirty() {
+                    self.schedule_save(cx);
+                    SaveState::Idle
+                } else {
+                    SaveState::Saved
+                }
+            }
+            Outcome::Changed => SaveState::Conflict,
+            Outcome::Refused(error) => SaveState::Failed(error),
+        };
+        cx.emit(Event::Settled);
+        cx.notify();
+    }
+
+    /// Take the disk's text in place of the buffer.
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        let read = std::fs::read(&self.path)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                let on_disk = save::fingerprint(&bytes);
+                String::from_utf8(bytes)
+                    .map(|text| (text, on_disk))
+                    .map_err(|_| "the file is no longer text".to_string())
+            });
+        match read {
+            Ok((text, on_disk)) => {
+                self.text.set(text);
+                self.text.place_caret(0);
+                self.reindex();
+                self.list.reset(self.starts.len());
+                self.revision += 1;
+                self.saved_revision = self.revision;
+                self.on_disk = on_disk;
+                self.save = SaveState::Idle;
+                self.closing = false;
+                self.writing = None;
+            }
+            Err(error) => self.save = SaveState::Failed(error),
+        }
+        cx.notify();
+    }
+
+    fn overwrite(&mut self, cx: &mut Context<Self>) {
+        self.begin_save(true, cx);
     }
 
     // ------------------------------------------------------------- lines
@@ -209,10 +329,14 @@ impl Editor {
             let line = self.cursor_line();
             self.list.splice(line..line + 1, 1);
         }
-        self.dirty = true;
+        self.revision += 1;
+        self.closing = false;
+        if self.save == SaveState::Saved {
+            self.save = SaveState::Idle;
+        }
         self.schedule_save(cx);
         self.reveal_caret();
-        cx.emit(Edited);
+        cx.emit(Event::Edited);
         cx.notify();
     }
 
@@ -220,9 +344,9 @@ impl Editor {
         if !self.settings.auto_save {
             return;
         }
-        self.saving = Some(cx.spawn(async move |this, cx| {
+        self.pause = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(AUTO_SAVE_AFTER).await;
-            this.update(cx, |editor, _| editor.save()).ok();
+            this.update(cx, |editor, cx| editor.save(cx)).ok();
         }));
     }
 
@@ -423,6 +547,67 @@ macro_rules! on {
     }};
 }
 
+impl Editor {
+    /// What went wrong with a save, under the lines, with its way out.
+    fn status_bar(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let (message, danger, actions): (SharedString, bool, &[(&'static str, &'static str)]) =
+            match &self.save {
+                SaveState::Idle | SaveState::Saving(_) | SaveState::Saved => return None,
+                SaveState::Failed(error) => (
+                    format!("Could not save: {error}").into(),
+                    true,
+                    &[("editor-retry", "Retry"), ("editor-discard", "Discard")],
+                ),
+                SaveState::Conflict => (
+                    "This file changed on disk".into(),
+                    true,
+                    &[("editor-reload", "Reload"), ("editor-overwrite", "Overwrite")],
+                ),
+            };
+        let buttons = actions.iter().map(|(key, label)| {
+            let key = *key;
+            div()
+                .id(key)
+                .debug_selector(move || key.into())
+                .flex_shrink_0()
+                .px(px(theme::SPACE_1))
+                .rounded(px(theme::R_CONTROL))
+                .hover_control(key)
+                .text_color(rgb(theme::INK_STRONG))
+                .child(*label)
+                .on_click(cx.listener(move |editor, _: &ClickEvent, _, cx| match key {
+                    "editor-retry" => editor.save(cx),
+                    "editor-reload" => editor.reload(cx),
+                    "editor-overwrite" => editor.overwrite(cx),
+                    _ => cx.emit(Event::Discard),
+                }))
+        });
+        Some(
+            div()
+                .debug_selector(|| "editor-status".into())
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(px(theme::SPACE_1))
+                .h(px(theme::SURFACE_BAR_H))
+                .px(px(theme::SIDE_CHAT_INSET))
+                .border_t(px(theme::HAIRLINE_W))
+                .border_color(theme::paint::LINE)
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::FS_LABEL))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(if danger { theme::RED } else { theme::INK_SUBTLE }))
+                        .child(message),
+                )
+                .children(buttons),
+        )
+    }
+}
+
 impl Render for Editor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let this = cx.entity();
@@ -430,6 +615,8 @@ impl Render for Editor {
             .debug_selector(|| "editor".into())
             .key_context(ferrite_ui::keymap::FILE_EDITOR)
             .track_focus(&self.focus)
+            .flex()
+            .flex_col()
             .size_full()
             .font_family(theme::FONT_CODE)
             .text_size(px(theme::FS_READER_CODE))
@@ -473,7 +660,7 @@ impl Render for Editor {
             keys::Down => |e, cx| e.step_lines(1, false, cx),
             PageUp => |e, cx| e.step_lines(-e.page(), false, cx),
             PageDown => |e, cx| e.step_lines(e.page(), false, cx),
-            Save => |e, _cx| e.save(),
+            Save => |e, cx| e.save(cx),
         );
         root.on_action(cx.listener(|editor, _: &Enter, _, cx| editor.enter(cx)))
             .on_action(cx.listener(|editor, _: &Tab, _, cx| editor.tab(cx)))
@@ -498,9 +685,12 @@ impl Render for Editor {
                 list(self.list.clone(), move |line, window, cx| {
                     this.update(cx, |editor, cx| editor.render_line(line, window, cx))
                 })
-                .size_full()
+                .w_full()
+                .flex_1()
+                .min_h_0()
                 .py(px(theme::HALF_ROW)),
             )
+            .children(self.status_bar(cx))
     }
 }
 
@@ -701,8 +891,27 @@ impl Element for CodeLine {
     }
 }
 
+impl Editor {
+    pub(crate) fn save_state(&self) -> &SaveState {
+        &self.save
+    }
+}
+
 #[cfg(test)]
 impl Editor {
+    pub(crate) fn text_for_test(&self) -> &str {
+        self.text.text()
+    }
+
+    /// Writes fail as a read-only disk would.
+    pub(crate) fn refuse_writes(&mut self) {
+        self.writer = |_, _| Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "refused"));
+    }
+
+    pub(crate) fn allow_writes(&mut self) {
+        self.writer = save::replace_file;
+    }
+
     /// What typing `text` at the caret does.
     pub(crate) fn type_text(&mut self, text: &str, cx: &mut Context<Self>) {
         self.edit(cx, |line| line.replace(None, text));

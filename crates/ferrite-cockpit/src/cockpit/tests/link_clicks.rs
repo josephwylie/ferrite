@@ -422,7 +422,8 @@ fn a_tap_on_a_file_chip_with_a_line_opens_the_reader_at_that_line(cx: &mut TestA
     let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).expect("a code file"));
     editor.update(cx, |editor, cx| {
         editor.type_text("X", cx);
-        editor.save();
+        editor.save(cx);
     });
+    cx.run_until_parked();
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "a\nXb\nc\n");
 }

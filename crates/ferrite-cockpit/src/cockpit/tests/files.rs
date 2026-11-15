@@ -76,7 +76,7 @@ fn typing_edits_the_file_and_auto_save_writes_it_after_a_pause(cx: &mut TestAppC
     let file = checkout.join("src/lib.rs");
     open(&view, thread, &file, false, cx);
     let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).expect("a code file"));
-    editor.update(cx, |editor, cx| editor.type_text("// hi\n", cx));
+    type_into("// hi\n", cx);
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "l\n", "not yet");
     assert_eq!(
         tab_names(&view, thread, cx),
@@ -217,4 +217,147 @@ fn a_changed_files_tab_offers_show_changes(cx: &mut TestAppContext) {
     cx.simulate_click(link.center(), gpui::Modifiers::none());
     tick(cx);
     assert!(cx.debug_bounds("changes").is_some(), "Show changes opens it");
+}
+
+fn open_editor<'a>(
+    name: &str,
+    cx: &'a mut TestAppContext,
+) -> (Entity<CockpitView>, ThreadId, std::path::PathBuf, Entity<crate::cockpit::tools::Editor>, &'a mut gpui::VisualTestContext) {
+    let (view, thread, checkout, cx) = files_window(name, cx);
+    let file = checkout.join("src/lib.rs");
+    open(&view, thread, &file, true, cx);
+    let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).expect("a code file"));
+    (view, thread, file, editor, cx)
+}
+
+/// Clicks the rendered editor, then types through the focused window as the
+/// keyboard does: text as input, Enter as the bound key.
+fn type_into(text: &str, cx: &mut gpui::VisualTestContext) {
+    let editor = cx.debug_bounds("editor").expect("the editor is on screen");
+    cx.simulate_click(editor.center(), gpui::Modifiers::none());
+    tick(cx);
+    for (i, line) in text.split('\n').enumerate() {
+        if i > 0 {
+            cx.simulate_keystrokes("enter");
+        }
+        if !line.is_empty() {
+            cx.simulate_input(line);
+        }
+    }
+    tick(cx);
+}
+
+/// Keystrokes that do not wait for background work, so a write stays in
+/// flight while the user keeps typing.
+fn press_without_waiting(keys: &str, cx: &mut gpui::VisualTestContext) {
+    cx.update(|window, cx| {
+        for key in keys.split(' ') {
+            window.dispatch_keystroke(gpui::Keystroke::parse(key).unwrap(), cx);
+        }
+    });
+}
+
+fn pause_and_settle(cx: &mut gpui::VisualTestContext) {
+    cx.executor().advance_clock(crate::cockpit::tools::AUTO_SAVE_AFTER);
+    cx.run_until_parked();
+    tick(cx);
+}
+
+#[gpui::test]
+fn a_refused_write_keeps_the_buffer_and_retry_writes_it(cx: &mut TestAppContext) {
+    use crate::cockpit::tools::SaveState;
+    let (view, thread, file, editor, cx) = open_editor("files-refused", cx);
+    editor.update(cx, |editor, _| editor.refuse_writes());
+    type_into("// hi\n", cx);
+    pause_and_settle(cx);
+    assert!(matches!(editor.read_with(cx, |e, _| e.save_state().clone()), SaveState::Failed(_)));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "l\n");
+    assert!(cx.debug_bounds("editor-status").is_some(), "the failure shows");
+
+    let close = cx.debug_bounds("files-tab-close-0").unwrap();
+    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    pause_and_settle(cx);
+    assert_eq!(tab_names(&view, thread, cx).len(), 1, "closing keeps the unsaved tab");
+    assert!(editor.read_with(cx, |e, _| e.text_for_test().contains("// hi")));
+
+    editor.update(cx, |editor, _| editor.allow_writes());
+    let retry = cx.debug_bounds("editor-retry").expect("Retry");
+    cx.simulate_click(retry.center(), gpui::Modifiers::none());
+    pause_and_settle(cx);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "// hi\nl\n");
+    assert_eq!(editor.read_with(cx, |e, _| e.save_state().clone()), SaveState::Saved);
+    assert!(cx.debug_bounds("editor-status").is_none());
+}
+
+#[gpui::test]
+fn discarding_a_failed_buffer_closes_the_tab(cx: &mut TestAppContext) {
+    let (view, thread, file, editor, cx) = open_editor("files-discard", cx);
+    editor.update(cx, |editor, _| editor.refuse_writes());
+    type_into("// hi\n", cx);
+    let close = cx.debug_bounds("files-tab-close-0").unwrap();
+    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    pause_and_settle(cx);
+    assert_eq!(tab_names(&view, thread, cx).len(), 1);
+    let discard = cx.debug_bounds("editor-discard").expect("Discard");
+    cx.simulate_click(discard.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(tab_names(&view, thread, cx).is_empty());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "l\n");
+}
+
+#[gpui::test]
+fn closing_a_dirty_tab_writes_it_then_closes(cx: &mut TestAppContext) {
+    let (view, thread, file, _editor, cx) = open_editor("files-close-dirty", cx);
+    type_into("// hi\n", cx);
+    let close = cx.debug_bounds("files-tab-close-0").unwrap();
+    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    tick(cx);
+    assert!(tab_names(&view, thread, cx).is_empty());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "// hi\nl\n");
+}
+
+#[gpui::test]
+fn an_external_edit_is_not_overwritten_until_the_user_chooses(cx: &mut TestAppContext) {
+    use crate::cockpit::tools::SaveState;
+    let (_view, _thread, file, editor, cx) = open_editor("files-external", cx);
+    std::fs::write(&file, "agent\n").unwrap();
+    type_into("// hi\n", cx);
+    pause_and_settle(cx);
+    assert_eq!(editor.read_with(cx, |e, _| e.save_state().clone()), SaveState::Conflict);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "agent\n", "the agent's edit survives");
+    let reload = cx.debug_bounds("editor-reload").expect("Reload");
+    assert!(cx.debug_bounds("editor-overwrite").is_some());
+
+    cx.simulate_click(reload.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(editor.read_with(cx, |e, _| e.text_for_test().to_string()), "agent\n");
+    assert!(!editor.read_with(cx, |e, _| e.is_dirty()));
+
+    std::fs::write(&file, "agent again\n").unwrap();
+    type_into("// mine\n", cx);
+    pause_and_settle(cx);
+    let overwrite = cx.debug_bounds("editor-overwrite").expect("Overwrite");
+    cx.simulate_click(overwrite.center(), gpui::Modifiers::none());
+    pause_and_settle(cx);
+    assert!(std::fs::read_to_string(&file).unwrap().contains("// mine"));
+    assert_eq!(editor.read_with(cx, |e, _| e.save_state().clone()), SaveState::Saved);
+}
+
+#[gpui::test]
+fn a_late_write_does_not_mark_newer_edits_saved(cx: &mut TestAppContext) {
+    use crate::cockpit::tools::SaveState;
+    let (_view, _thread, file, editor, cx) = open_editor("files-late", cx);
+    type_into("a", cx);
+    press_without_waiting("cmd-s", cx);
+    assert!(matches!(editor.read_with(cx, |e, _| e.save_state().clone()), SaveState::Saving(_)));
+    press_without_waiting("b", cx);
+    cx.run_until_parked();
+    assert!(editor.read_with(cx, |e, _| e.is_dirty()), "the first write does not cover the second edit");
+    assert_ne!(editor.read_with(cx, |e, _| e.save_state().clone()), SaveState::Saved);
+    let first = std::fs::read_to_string(&file).unwrap();
+    assert!(first.contains('a') && !first.contains('b'), "{first:?}");
+    pause_and_settle(cx);
+    assert!(std::fs::read_to_string(&file).unwrap().contains("ab"));
+    assert_eq!(editor.read_with(cx, |e, _| e.save_state().clone()), SaveState::Saved);
 }
