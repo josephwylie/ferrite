@@ -2,7 +2,7 @@
 //! each cell's colours, a block cursor (blue and blinking while the grid
 //! holds the keyboard, a hollow outline while it does not), the scrollback
 //! under the wheel, a selection by press and drag (a double press takes a
-//! word, a triple a line), copy, paste and select all, and the shell's size
+//! word, a triple a line), ⌘-press on an address to open it, copy, paste and select all, and the shell's size
 //! following the pane's. The grid takes the keyboard as a text field does:
 //! no key of the window's reaches it but the command chords.
 //!
@@ -81,6 +81,9 @@ pub enum TerminalEvent {
     Attach(String),
     /// A right-click, at this point of the window.
     ContextMenu(gpui::Point<Pixels>),
+    /// A ⌘-press on a web address or a path: what was written there, for
+    /// the cockpit to resolve.
+    Open(String),
 }
 
 pub struct TerminalView {
@@ -280,6 +283,12 @@ impl TerminalView {
                 let Some((at, side)) = self.cell_at(event.position, metrics) else {
                     return;
                 };
+                if event.modifiers.secondary() {
+                    if let Some(address) = self.terminal.with(|term| crate::links::address_at(term, at)) {
+                        cx.emit(TerminalEvent::Open(address));
+                        return;
+                    }
+                }
                 let kind = match event.click_count {
                     1 => SelectionType::Simple,
                     2 => SelectionType::Semantic,

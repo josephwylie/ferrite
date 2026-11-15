@@ -43,7 +43,7 @@ fn the_door_opens_a_shell_in_a_panel_tab_and_closing_it_ends_it(cx: &mut TestApp
     assert_eq!(numbers(&view, thread, cx), [1]);
     assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)));
     view.update(cx, |view, cx| view.close_surface(thread, &SurfaceId::Terminal(1), cx));
-    tick(cx);
+    leap(cx, std::time::Duration::from_secs(1));
     assert!(cx.debug_bounds("terminal-pane").is_none());
     assert!(numbers(&view, thread, cx).is_empty(), "its shell ended with it");
 }
@@ -342,4 +342,73 @@ fn a_panel_sliding_shut_gives_the_shell_no_keys(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-alt-b");
     frame_after(400, cx);
     assert!(cx.debug_bounds("panel").is_some(), "⌥⌘B reopens it without a click");
+}
+
+/// The point on the grid's row `row`, `column` cells in, as the face lays
+/// it out.
+fn cmd_click(cx: &mut gpui::VisualTestContext, row: usize, column: usize) {
+    let at = cell(cx, row, column);
+    cx.simulate_click(at, gpui::Modifiers::secondary_key());
+    tick(cx);
+}
+
+/// The browser holds the first click, so the shell is reached through Overview.
+fn back_to_shell(cx: &mut gpui::VisualTestContext) {
+    for tab in ["panel-tab-Overview", "panel-tab-Terminal-1"] {
+        let at = cx.debug_bounds(tab).expect("a tab").center();
+        cx.simulate_click(at, gpui::Modifiers::none());
+        leap(cx, std::time::Duration::from_secs(1));
+    }
+}
+
+fn cell(cx: &mut gpui::VisualTestContext, row: usize, column: usize) -> gpui::Point<gpui::Pixels> {
+    let grid = cx.debug_bounds("terminal").expect("the grid");
+    gpui::point(
+        grid.left() + px(ferrite_ui::theme::TERMINAL_PAD_X + (column as f32 + 0.5) * ferrite_ui::theme::FS_TERMINAL * ferrite_ui::theme::CODE_ADVANCE),
+        grid.top() + px(ferrite_ui::theme::TERMINAL_PAD_Y + (row as f32 + 0.5) * ferrite_ui::theme::LH_TERMINAL),
+    )
+}
+
+/// ⌘-click on what the shell printed: a local address and a web address
+/// open Ferrite's browser, a relative path with a line opens the editor on
+/// that line, resolved against the shell's folder. A plain click opens
+/// nothing.
+#[gpui::test]
+fn cmd_click_opens_what_the_shell_printed(cx: &mut TestAppContext) {
+    let (core, _fake, checkout) = bound_cockpit("terminal-links", Provider::Claude);
+    std::fs::write(checkout.join("src/main.rs"), "one\ntwo\nthree\nfour\n").unwrap();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    opened(&view, cx);
+    run(
+        &view,
+        thread,
+        b"printf '\\033[2J\\033[Hhttp://localhost:5173/app\\nhttps://example.com/docs\\nsrc/main.rs:3\\n'\r",
+        cx,
+    );
+    let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
+    assert!(typed_reaches(&shell, "docs\nsrc/main.rs:3", cx), "the shell printed the three");
+    let at = cell(cx, 0, 12);
+    cx.simulate_click(at, gpui::Modifiers::none());
+    tick(cx);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)), "a plain click opens nothing");
+
+    cmd_click(cx, 0, 12);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Browser));
+
+    back_to_shell(cx);
+    cmd_click(cx, 1, 12);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Browser));
+
+    back_to_shell(cx);
+    cmd_click(cx, 2, 5);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Files));
+    assert_eq!(view.read_with(cx, |view, _| view.files_tab_names(thread)), [("main.rs".to_string(), true)]);
+    let editor = view.read_with(cx, |view, _| view.files_editor_of(thread).expect("the editor"));
+    let (text, caret) = editor.read_with(cx, |editor, _| (editor.text_for_test().to_string(), editor.caret_for_test()));
+    assert_eq!(text[..caret].matches('\n').count(), 2, "the caret is on line 3");
 }

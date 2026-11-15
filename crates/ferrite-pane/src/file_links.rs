@@ -80,6 +80,11 @@ impl FileLink {
         }
     }
 
+    /// The line the location names (`12` of `:12:5`, of `#L12-L15`).
+    pub fn line(&self) -> Option<u32> {
+        self.location.as_deref().and_then(location_line)
+    }
+
     pub fn url(&self) -> Option<String> {
         url::Url::from_file_path(&self.path).ok().map(Into::into)
     }
