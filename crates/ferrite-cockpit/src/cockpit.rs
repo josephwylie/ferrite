@@ -524,7 +524,7 @@ pub struct CockpitView {
     /// summoned, and which destructive row is armed for its second press.
     context_menu: Option<ContextMenu>,
     /// What held focus before the open menu took it (`tend_menu_focus`).
-    menu_return: Option<FocusHandle>,
+    menu_return: Option<context_menu::MenuReturn>,
     /// The Solo view's right panel (`panel`): its tab per Thread and
     /// whether the window has room for it.
     panel: panel::Panel,

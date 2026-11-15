@@ -484,7 +484,7 @@ impl CockpitView {
     }
 
     /// Open `target`'s menu under the stop `control`, its left edge on the
-    /// stop's. The keyboard stays on the stop.
+    /// stop's. The keyboard comes back to the stop as it closes.
     pub(super) fn open_panel_menu(
         &mut self,
         control: PanelControl,

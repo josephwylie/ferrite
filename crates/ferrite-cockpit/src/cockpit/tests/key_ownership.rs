@@ -132,11 +132,53 @@ fn an_open_menu_keeps_its_keys_from_a_pending_approval(cx: &mut TestAppContext) 
     tick(cx);
     let cursor = view.read_with(cx, |view, _| view.context_menu.as_ref().map(|open| open.cursor));
     assert_eq!(cursor, Some(MenuCursor::Row(0)), "down moved the menu's cursor");
+    cx.update(|window, cx| window.focus(&composer, cx));
+    view.update(cx, |view, cx| {
+        view.open_context_menu(MenuTarget::Pane(thread), gpui::point(px(500.), px(400.)), cx)
+    });
+    tick(cx);
+    cx.simulate_keystrokes("down");
+    tick(cx);
+    let cursor = view.read_with(cx, |view, _| view.context_menu.as_ref().map(|open| open.cursor));
+    assert!(
+        matches!(cursor, Some(MenuCursor::Row(_))),
+        "a menu opened over a focused field keeps its keys too: {cursor:?}"
+    );
     cx.simulate_keystrokes("escape");
     tick(cx);
     assert!(view.read_with(cx, |view, _| view.context_menu.is_none()), "escape closed the menu");
     assert!(answered(&fake).is_empty(), "the approval heard none of it");
     assert!(cx.update(|window, _| composer.is_focused(window)), "the Composer has the keyboard back");
+}
+
+/// A menu opened from the nav list gives the list its keys and cursor back.
+#[gpui::test]
+fn a_menu_from_the_nav_list_gives_the_list_back_its_keys(cx: &mut TestAppContext) {
+    use crate::cockpit::context_menu::MenuTarget;
+    let (core, _fake) = cockpit("key-menu-from-nav", 2);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    view.update_in(cx, |view, window, cx| view.focus_nav(window, cx));
+    tick(cx);
+    let held = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| {
+            let view = view.read(cx);
+            (view.nav_keys_held && view.nav_focus.is_focused(window), view.nav_cursor.clone())
+        })
+    };
+    let (before, cursor) = held(cx);
+    assert!(before && cursor.is_some(), "the list holds the keys");
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.update(cx, |view, cx| {
+        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(200.), px(200.)), cx)
+    });
+    tick(cx);
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.context_menu.is_none()));
+    assert_eq!(held(cx), (true, cursor), "the list has its keys and its cursor back");
 }
 
 #[gpui::test]

@@ -196,6 +196,13 @@ pub(super) enum MenuCursor {
 const PARTIAL_HISTORY: &str =
     "[Earlier messages are not included: this view keeps only the latest.]";
 
+/// Where the keyboard goes back to as an open menu closes.
+pub(super) enum MenuReturn {
+    /// The nav list held the keys, its cursor here.
+    Nav(Option<crate::nav::NavCursor>),
+    Focus(FocusHandle),
+}
+
 impl CockpitView {
     /// `thread`'s conversation to the clipboard. Once the view dropped its
     /// oldest Blocks, the whole of it is replayed from the Thread's log off
@@ -695,12 +702,23 @@ impl CockpitView {
     pub(super) fn tend_menu_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.context_menu.is_some() {
             if self.menu_return.is_none() {
-                self.menu_return = Some(window.focused(cx).unwrap_or_else(|| self.focus.clone()));
+                self.menu_return = Some(if self.nav_keys_held && self.nav_focus.is_focused(window) {
+                    MenuReturn::Nav(self.nav_cursor.clone())
+                } else {
+                    MenuReturn::Focus(window.focused(cx).unwrap_or_else(|| self.focus.clone()))
+                });
+            }
+            // A press that opened another menu over this one may have
+            // focused a field under it.
+            if !self.focus.is_focused(window) {
                 window.focus(&self.focus, cx);
             }
         } else if let Some(back) = self.menu_return.take() {
             if self.focus.is_focused(window) {
-                window.focus(&back, cx);
+                match back {
+                    MenuReturn::Nav(cursor) => self.focus_nav_on(cursor, window, cx),
+                    MenuReturn::Focus(handle) => window.focus(&handle, cx),
+                }
             }
         }
     }
