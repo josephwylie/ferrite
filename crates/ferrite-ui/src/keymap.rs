@@ -207,6 +207,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             "cockpit::AlwaysAllow",
             Some("Decision"),
         ),
+        // Deny, the card's other button: ⌘. (stop this).
+        (with_primary("."), "cockpit::DenyOnce", Some("Decision")),
         // A Subagent's tab has no Composer; its cards' own fields still type.
         ("y".into(), "cockpit::Allow", Some(SUBAGENT_DECISION)),
         ("n".into(), "cockpit::Deny", Some(SUBAGENT_DECISION)),

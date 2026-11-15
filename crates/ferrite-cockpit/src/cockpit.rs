@@ -142,6 +142,7 @@ actions!(
         // the line.
         AllowOnce,
         AlwaysAllow,
+        DenyOnce,
         // ⌘U: the `+` menu's `Add files or photos`, on the focused Pane.
         AttachFiles,
         NextPane,
@@ -10541,6 +10542,9 @@ impl CockpitView {
                     }))
                     .on_action(cx.listener(|view, _: &AllowOnce, window, cx| {
                         view.answer_chorded(Answer::Allow, window, cx)
+                    }))
+                    .on_action(cx.listener(|view, _: &DenyOnce, window, cx| {
+                        view.answer_chorded(Answer::Deny, window, cx)
                     }))
                     .on_action(cx.listener(|view, _: &AlwaysAllow, window, cx| {
                         view.answer_chorded(Answer::Always, window, cx)

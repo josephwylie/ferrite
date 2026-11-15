@@ -82,6 +82,32 @@ fn approval_words_type_into_the_composer_and_answer_nothing(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+fn the_deny_chord_denies_an_approval_with_text_on_the_line(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("key-deny-chord", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    fake.streams.borrow()[0].send(decision("perm_deny")).unwrap();
+    tick(cx);
+    cx.simulate_input("a note");
+    tick(cx);
+    assert!(answered(&fake).is_empty());
+    cx.simulate_keystrokes("cmd-.");
+    cx.run_until_parked();
+    let pending = view.read_with(cx, |view, _| {
+        view.cockpit.thread(thread).and_then(|open| open.pending()).is_some()
+    });
+    assert!(!pending, "the chord answered the approval");
+    assert_eq!(answered(&fake).len(), 1);
+    assert!(
+        matches!(answered(&fake)[0].1, DecisionAnswer::Deny { .. }),
+        "and the answer was a denial"
+    );
+}
+
+#[gpui::test]
 fn y_answers_a_composerless_subagent_tab_while_a_composer_types_it(cx: &mut TestAppContext) {
     use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, Subject};
     let (core, fake) = cockpit("key-subagent", 1);

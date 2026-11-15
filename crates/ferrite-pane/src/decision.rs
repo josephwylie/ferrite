@@ -1270,6 +1270,7 @@ fn labelled(label: SharedString, keys: Vec<SharedString>, primary: bool) -> Div 
 pub fn secondary_action(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
+    keys: Vec<SharedString>,
     stacked: bool,
     disabled: bool,
     cx: &App,
@@ -1289,7 +1290,7 @@ pub fn secondary_action(
     .px(px(theme::CONTROL_PAD_X))
     .rounded(px(theme::R_CONTROL))
     .when(stacked, |button| button.w_full())
-    .child(labelled(label.into(), Vec::new(), false).text_color(rgb(theme::INK_STRONG)))
+    .child(labelled(label.into(), keys, false).text_color(rgb(theme::INK_STRONG)))
 }
 
 /// A primary action with no chord: `PRIMARY` with its dark ink, as `Allow
@@ -1313,7 +1314,7 @@ pub fn deny_button(
     disabled: bool,
     cx: &App,
 ) -> gpui::component::button::Button {
-    secondary_action(id, "Deny", stacked, disabled, cx)
+    secondary_action(id, "Deny", decision_keys("cockpit::DenyOnce"), stacked, disabled, cx)
 }
 
 /// The split primary's face: `Allow once` and its chord (`⌘⏎`) on

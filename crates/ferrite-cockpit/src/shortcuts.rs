@@ -144,6 +144,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         // line, where the letters type.
         "cockpit::AllowOnce" => Row(Decision, "Allow once, from any line"),
         "cockpit::AlwaysAllow" => Row(Decision, "Always allow, from any line"),
+        "cockpit::DenyOnce" => Row(Decision, "Deny, from any line"),
         "cockpit::PickOption1" => Row(Decision, "Pick 1\u{2013}3"),
         "cockpit::PickOption2" | "cockpit::PickOption3" => Hidden,
         "cockpit::PickOption4" => Row(Decision, "Pick 4"),
