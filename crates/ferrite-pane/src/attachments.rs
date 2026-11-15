@@ -5,10 +5,10 @@
 //! too (`thumbnail`). This module owns presentation and
 //! opening (in the Pane's preview, the Panel's Preview tab: `Preview::open`); callers
 //! only supply paths and, for a draft, a removal callback. The prompt codec owns persistence. A draft's review comments
-//! (ADR 0021) ride the same shelf as one more chip. Its replies (a
-//! selection's Reply, `crate::quote`) are cards beside the images
-//! (`reply_card`); a sent prompt draws its quotes as Quote rows over its
-//! bubble (`quote_row`).
+//! (ADR 0021) ride the same shelf as one more chip. A draft's replies (a
+//! selection's Reply, `crate::quote`) are chips of their own in
+//! `composer::citations`; a sent prompt draws its quotes as Quote rows over
+//! its bubble (`quote_row`).
 
 use std::{
     collections::HashSet,
@@ -31,7 +31,6 @@ pub fn init(_cx: &mut App) {}
 type Remove = Rc<dyn Fn(&PathBuf, &mut Window, &mut App)>;
 type DropReview = Rc<dyn Fn(&mut Window, &mut App)>;
 type RemoveAnnotation = Rc<dyn Fn(&str, &mut Window, &mut App)>;
-type RemoveReply = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 
 #[derive(IntoElement)]
 pub struct Attachments {
@@ -41,8 +40,6 @@ pub struct Attachments {
     on_remove: Option<Remove>,
     review: usize,
     on_drop_review: Option<DropReview>,
-    replies: Vec<Reply>,
-    on_remove_reply: Option<RemoveReply>,
     island: bool,
     annotations: Vec<Annotation>,
     on_remove_annotation: Option<RemoveAnnotation>,
@@ -58,8 +55,6 @@ impl Attachments {
             on_remove: None,
             review: 0,
             on_drop_review: None,
-            replies: Vec::new(),
-            on_remove_reply: None,
             island: false,
             annotations: Vec::new(),
             on_remove_annotation: None,
@@ -106,21 +101,6 @@ impl Attachments {
         self
     }
 
-    /// The replies the draft carries, as cards beside the images.
-    pub fn replies(mut self, replies: Vec<Reply>) -> Self {
-        self.replies = replies;
-        self
-    }
-
-    /// A Reply card's ×: that reply (by index) goes.
-    pub fn on_remove_reply(
-        mut self,
-        callback: impl Fn(usize, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.on_remove_reply = Some(Rc::new(callback));
-        self
-    }
-
     /// The review chip's ×: every gathered comment goes.
     pub fn on_drop_review(mut self, callback: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_drop_review = Some(Rc::new(callback));
@@ -157,8 +137,6 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         on_remove,
         review,
         on_drop_review,
-        replies,
-        on_remove_reply,
         island,
         annotations,
         on_remove_annotation,
@@ -257,11 +235,6 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         grown(&added, &path, chip)
     });
     let review = (review > 0).then(|| review_chip(review, on_drop_review));
-    let replies: Vec<_> = replies
-        .into_iter()
-        .enumerate()
-        .map(|(index, reply)| reply_card(index, reply, on_remove_reply.clone()))
-        .collect();
     let has_chips = !others_empty || review.is_some();
     let chips = div()
         .flex()
@@ -272,14 +245,13 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         .max_w_full()
         .children(chips)
         .children(review);
-    let has_cards = !cards.is_empty() || !replies.is_empty();
+    let has_cards = !cards.is_empty();
     let cards = div()
         .flex()
         .flex_wrap()
         .gap(px(theme::SPACE_2))
         .min_w_0()
         .max_w_full()
-        .children(replies)
         .children(cards);
     div()
         .id(id)
@@ -542,81 +514,6 @@ pub fn quote_row(index: usize, reply: Reply) -> gpui::Stateful<gpui::Div> {
         })
 }
 
-/// A reply waiting in the tray (`claude/reply-sent-chip.png`), one of the
-/// tray's tiles: an image card's own `COMPOSER_THUMB` square at `R_CARD` in
-/// its `LINE` ring and `×` (`tile_remove`), on the file chip's `RAISED`
-/// ground. Its top is a quote bar holding what the operator typed (the
-/// passage itself when they typed nothing), cut at `REPLY_TILE_LINES`; its
-/// foot the muted `Reply` label, where a file's type would stand.
-fn reply_card(index: usize, reply: Reply, on_remove: Option<RemoveReply>) -> gpui::AnyElement {
-    use ferrite_ui::theme;
-    use gpui::{div, rgb};
-    let group = SharedString::from(format!("tray-reply-{index}"));
-    let words = if reply.text.is_empty() {
-        reply.quote
-    } else {
-        reply.text
-    };
-    let remove = on_remove.map(|remove| {
-        tile_remove(
-            format!("tray-reply-{index}-remove"),
-            ("remove-reply", index),
-            group.clone(),
-            "Remove reply".into(),
-            "Remove reply".into(),
-            move |window, cx| remove(index, window, cx),
-        )
-    });
-    div()
-        .id(("tray-reply-card", index))
-        .debug_selector(move || format!("tray-reply-{index}"))
-        .group(group)
-        .relative()
-        .flex()
-        .flex_col()
-        .justify_between()
-        .flex_shrink_0()
-        .size(px(theme::COMPOSER_THUMB))
-        .p(px(theme::SPACE_1_5))
-        .rounded(px(theme::R_CARD))
-        .bg(theme::paint::RAISED)
-        .border_1()
-        .border_color(theme::paint::LINE)
-        .overflow_hidden()
-        .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_META))
-        .line_height(px(theme::LH_META))
-        .font_weight(theme::W_BODY)
-        .text_color(rgb(theme::INK_SUBTLE))
-        .child(
-            div()
-                .flex()
-                .gap(px(theme::SPACE_1_5))
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .w(px(theme::QUOTE_RULE_W))
-                        .h(px(theme::LH_META))
-                        .bg(theme::paint::LINE),
-                )
-                .child(
-                    div()
-                        .debug_selector(move || format!("tray-reply-{index}-words"))
-                        .min_w_0()
-                        .line_clamp(theme::REPLY_TILE_LINES)
-                        .text_ellipsis()
-                        .child(SharedString::from(words)),
-                ),
-        )
-        .child(
-            div()
-                .debug_selector(move || format!("tray-reply-{index}-badge"))
-                .child("Reply"),
-        )
-        .children(remove)
-        .into_any_element()
-}
-
 /// A tile's `×` in its top corner (an image card's, a reply's): clear until
 /// the pointer is over the tile (`group`) or the keyboard reaches it — a
 /// tab stop either way, in the `PromptAttachment` context.
@@ -710,7 +607,7 @@ fn review_chip(comments: usize, on_drop: Option<DropReview>) -> gpui::Div {
 /// `INK_SUBTLE` in an `ATTACH_REMOVE`-wide slot, the kit ghost's fill under the
 /// pointer — a tab stop in the `PromptAttachment` context, so its Enter
 /// never sends.
-fn remove_button(id: impl Into<ElementId>) -> gpui::component::button::Button {
+pub(crate) fn remove_button(id: impl Into<ElementId>) -> gpui::component::button::Button {
     use ferrite_ui::theme;
     ferrite_ui::components::button(id)
         .tab_stop(true)

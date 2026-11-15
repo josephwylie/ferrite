@@ -74,6 +74,7 @@ mod subagents;
 mod thread_groups;
 mod terminal;
 mod tools;
+mod citing;
 mod transcript_pointer;
 mod scroll_continuity;
 mod send_scroll;
@@ -607,6 +608,14 @@ fn open_live(cx: &mut gpui::VisualTestContext) {
         .center();
     cx.simulate_click(live, gpui::Modifiers::none());
     tick(cx);
+}
+
+/// The quotes and comments of `replies`, without where they came from.
+fn quotes(replies: &[ferrite_core::replies::Reply]) -> Vec<(&str, &str)> {
+    replies
+        .iter()
+        .map(|reply| (reply.quote.as_str(), reply.text.as_str()))
+        .collect()
 }
 
 fn tick(cx: &mut gpui::VisualTestContext) {

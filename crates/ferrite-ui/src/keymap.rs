@@ -179,6 +179,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // Copy the transcript selection a drag made; with nothing selected
         // the key does nothing (the Composer has no selection of its own).
         (with_primary("c"), "cockpit::CopySelection", None),
+        // Quote the selection into the Composer, as the Cite button does.
+        (with_primary("shift-l"), "cockpit::CiteSelection", None),
         // The Cockpit's own, not every context's: a binding with none ranks
         // as deep as the deepest, so it outranked the kit's menus, popovers
         // and dialogs, whose Enter picks and Escape closes.
@@ -549,6 +551,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("escape".into(), "reader::Close", Some(READER)),
         ("escape".into(), "lightbox::Close", Some(LIGHTBOX)),
         ("enter".into(), "review::SaveComment", Some("ReviewComment")),
+        ("enter".into(), "cite::SaveComment", Some("CiteComment")),
+        ("escape".into(), "cite::CancelComment", Some("CiteComment")),
         (
             "escape".into(),
             "review::CancelComment",
@@ -882,6 +886,7 @@ mod tests {
             ("composer::Undo", "z"),
             ("composer::Redo", "shift-z"),
             ("cockpit::CopySelection", "c"),
+            ("cockpit::CiteSelection", "shift-l"),
             ("cockpit::GoBack", "["),
             ("cockpit::GoForward", "]"),
             ("cockpit::NextPane", "}"),
