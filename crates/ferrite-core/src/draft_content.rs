@@ -181,10 +181,14 @@ pub(crate) mod tests {
 
     #[test]
     fn a_prompt_as_text_is_split_into_typed_parts() {
-        let content =
-            DraftContent::from_prompt("> quoted\n\n\u{21a9} why\n\nbody\n@\"/tmp/f\"".into());
+        let file = std::env::temp_dir().join("f");
+        let prompt = crate::prompt_files::compose(
+            "> quoted\n\n\u{21a9} why\n\nbody",
+            std::slice::from_ref(&file),
+        );
+        let content = DraftContent::from_prompt(prompt);
         assert_eq!(content.replies, vec![Reply::new("quoted", "why")]);
         assert_eq!(content.text, "body");
-        assert_eq!(content.files, vec![PathBuf::from("/tmp/f")]);
+        assert_eq!(content.files, vec![file]);
     }
 }
