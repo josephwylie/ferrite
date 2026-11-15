@@ -22,6 +22,7 @@ pub(super) struct Unsent {
 /// History hands back as text the draft it was given, so the typed parts of
 /// that draft are kept here to come back when the walk reaches it again.
 struct Walk {
+    thread: ThreadId,
     draft: String,
     content: DraftContent,
     /// The text the last step showed.
@@ -38,17 +39,16 @@ impl Unsent {
     }
 
     /// A history step is about to replace the Composer's `content`, whose
-    /// text form is `draft`. Mid-walk, that is a prompt the walk showed and
-    /// the draft it began from stays.
-    pub(super) fn step_from(&mut self, draft: String, content: DraftContent) {
-        if self
-            .walk
-            .as_ref()
-            .is_some_and(|walk| walk.shown.as_deref() == Some(draft.as_str()))
-        {
+    /// text form is `draft`. Mid-walk, that is a prompt the walk showed on
+    /// this Thread and the draft it began from stays.
+    pub(super) fn step_from(&mut self, thread: ThreadId, draft: String, content: DraftContent) {
+        if self.walk.as_ref().is_some_and(|walk| {
+            walk.thread == thread && walk.shown.as_deref() == Some(draft.as_str())
+        }) {
             return;
         }
         self.walk = Some(Walk {
+            thread,
             draft,
             content,
             shown: None,
@@ -161,6 +161,14 @@ impl CockpitView {
         }
     }
 
+    /// New Pane `id` was closed unsent: what it held is not for the next
+    /// launch, and the file says so now. A Thread's draft is not touched.
+    pub(super) fn discard_draft(&mut self, id: DraftId, cx: &gpui::App) {
+        if self.unsent.drafts.discard_fresh(id) {
+            self.save_drafts(cx);
+        }
+    }
+
     /// Write the drafts now (the wait over, or the window quitting), the new
     /// Panes' choices as they stand.
     pub(super) fn save_drafts(&mut self, cx: &gpui::App) {
@@ -177,5 +185,40 @@ impl CockpitView {
         if let Err(error) = self.unsent.drafts.save(&self.prefs.dir) {
             eprintln!("ferrite: drafts were not saved: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unsent() -> Unsent {
+        Unsent::load(&std::env::temp_dir().join(format!("ferrite-walk-{}", std::process::id())))
+    }
+
+    /// A walk through one Thread's history never hands that Thread's draft
+    /// parts to another Thread whose Composer happens to show the same text.
+    #[test]
+    fn a_walk_belongs_to_its_thread() {
+        let (first, second) = (ThreadId::new(1), ThreadId::new(2));
+        let mut unsent = unsent();
+        let first_draft = DraftContent {
+            text: "mine".into(),
+            files: vec!["/tmp/a.png".into()],
+            ..DraftContent::default()
+        };
+        unsent.step_from(first, "mine".into(), first_draft.clone());
+        assert_eq!(unsent.stepped_to("older".into()).text, "older");
+
+        let second_draft = DraftContent {
+            text: "older".into(),
+            ..DraftContent::default()
+        };
+        unsent.step_from(second, "older".into(), second_draft);
+        assert_eq!(
+            unsent.stepped_to("mine".into()),
+            DraftContent::from_prompt("mine".into()),
+            "the first Thread's files stay with it"
+        );
     }
 }

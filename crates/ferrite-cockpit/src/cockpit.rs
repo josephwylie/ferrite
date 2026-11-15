@@ -6698,7 +6698,7 @@ impl CockpitView {
         let composer = self.panes[index].composer.clone();
         let draft = composer.read(cx).editable();
         self.unsent
-            .step_from(draft.clone(), composer.read(cx).content());
+            .step_from(thread, draft.clone(), composer.read(cx).content());
         let Some(text) = self.cockpit.recall_prompt(thread, direction, &draft) else {
             return;
         };
@@ -9301,7 +9301,9 @@ impl CockpitView {
                 .is_some_and(|scope| scope.pending_leave.is_some()),
             (View::Solo, PaneIdentity::Thread(_)) => false,
         };
-        match self.cockpit.close(identity) {
+        let result = self.cockpit.close(identity);
+        let closed = result.is_ok();
+        match result {
             Ok(()) => {
                 if changes_group {
                     self.group_error = None;
@@ -9324,6 +9326,9 @@ impl CockpitView {
             self.popover = None;
         }
         self.sync_panes(cx);
+        if let (true, PaneIdentity::Draft(draft)) = (closed, identity) {
+            self.discard_draft(draft, cx);
+        }
         cx.notify();
     }
 

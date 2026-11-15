@@ -144,6 +144,76 @@ fn a_new_pane_comes_back_with_its_words_and_binding(cx: &mut TestAppContext) {
     });
 }
 
+/// A new Pane written in and then closed is discarded: the next launch
+/// neither reopens it nor finds it in the file. `close` is the operator's
+/// way of closing, from the production key or the rendered discard control.
+fn a_closed_new_pane_is_not_reopened(
+    name: &str,
+    placement: fn(ThreadId) -> DraftPlacement,
+    cx: &mut TestAppContext,
+    close: fn(&mut gpui::VisualTestContext),
+) {
+    let (core, _fake) = cockpit(name, 1);
+    let thread = core.threads()[0];
+    let prefs = prefs_in(&format!("{name}-prefs"));
+    let dir = prefs.dir.clone();
+    let (view, cx) = window_with(core, prefs, cx);
+    view.update(cx, |view, cx| {
+        view.open_draft_with_placement(DraftTarget::Main, placement(thread), cx)
+    });
+    tick(cx);
+    cx.simulate_input("never send this");
+    tick(cx);
+    view.update(cx, |view, cx| view.save_drafts(cx));
+    assert!(
+        std::fs::read_to_string(dir.join(Drafts::FILE))
+            .unwrap()
+            .contains("never send this"),
+        "the pane's words are on disk while it is open"
+    );
+
+    close(cx);
+    tick(cx);
+    view.update(cx, |view, cx| view.save_drafts(cx));
+    drop(view);
+
+    assert!(
+        !std::fs::read_to_string(dir.join(Drafts::FILE))
+            .unwrap()
+            .contains("never send this"),
+        "the file forgot the discarded pane"
+    );
+    let (core, _fake) = cockpit(&format!("{name}-again"), 1);
+    assert_eq!(core.threads()[0], thread);
+    let (view, _cx) = window_with(core, prefs_at(&dir), cx);
+    view.read_with(_cx, |view, _| {
+        assert!(
+            view.panes.iter().all(|pane| pane.draft().is_none()),
+            "no new Pane comes back"
+        );
+    });
+}
+
+#[gpui::test]
+fn cmd_w_discards_a_new_pane_for_good(cx: &mut TestAppContext) {
+    a_closed_new_pane_is_not_reopened(
+        "drafts-cmd-w",
+        |_| DraftPlacement::Loose,
+        cx,
+        |cx| cx.simulate_keystrokes("cmd-w"),
+    );
+}
+
+#[gpui::test]
+fn the_discard_control_discards_a_new_pane_for_good(cx: &mut TestAppContext) {
+    a_closed_new_pane_is_not_reopened("drafts-discard-x", DraftPlacement::NewGroupWith, cx, |cx| {
+        let close = cx
+            .debug_bounds("discard-draft")
+            .expect("the discard control is drawn");
+        cx.simulate_click(close.center(), gpui::Modifiers::none());
+    });
+}
+
 /// A prompt taken back from the queue (Enter on the empty line) returns as the parts it was sent
 /// with: its quote is a control again and a literal "> " line stays words.
 #[gpui::test]

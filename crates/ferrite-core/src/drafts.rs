@@ -128,6 +128,12 @@ impl Drafts {
         self.fresh.insert(draft, kept.clone()) != Some(kept)
     }
 
+    /// A new Pane was discarded unsent: its prompt is not kept for the next
+    /// launch. Says whether anything changed, so a caller saves only then.
+    pub fn discard_fresh(&mut self, draft: DraftId) -> bool {
+        self.fresh.remove(&draft).is_some()
+    }
+
     /// The first send made a Thread of `draft`: what the Composer still
     /// holds (typing done while the Thread started) moves to the Thread in
     /// the one step, so a save sees it under exactly one key.

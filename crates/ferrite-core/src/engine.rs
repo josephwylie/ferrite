@@ -829,8 +829,8 @@ fn read_back_inputs(
     at: Instant,
 ) -> impl Iterator<Item = ActivityInput> {
     let main = move |input| ActivityInput::Main { input, at };
-    let announced =
-        (!servers.is_empty()).then(|| main(Input::Event(SessionEvent::McpServers { servers })));
+    let announced = (!servers.is_empty())
+        .then(|| main(Input::Event(SessionEvent::McpServers { servers })));
     std::iter::once(ActivityInput::Disconnect)
         .chain(inputs)
         .chain(std::iter::once(main(Input::Revived)))
