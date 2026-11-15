@@ -116,6 +116,9 @@ pub struct Cockpit {
     /// What a fixture world's disk says is free (`fixture_free_disk`):
     /// answered in place of the volume. `None` outside fixtures.
     free_disk_fixture: Option<u64>,
+    /// A fixture world's Server accepts every browser act
+    /// (`fixture_browser_accepts`), answering an empty browser.
+    browser_fixture: bool,
     /// What this window draws at Transcript level (`draws_transcripts`).
     /// `None` for an Engine in this process until its window first says:
     /// until then it streams every open Thread.
@@ -256,6 +259,7 @@ impl Cockpit {
             forge_held: Default::default(),
             held_reads: Vec::new(),
             free_disk_fixture: None,
+            browser_fixture: false,
             drawn: None,
             told: None,
         }
@@ -279,6 +283,9 @@ impl Cockpit {
     }
 
     fn browser_op(&mut self, op: Op) -> io::Result<crate::browser::State> {
+        if self.browser_fixture {
+            return Ok(crate::browser::State::default());
+        }
         match self
             .remote()?
             .execute(op)
@@ -2926,6 +2933,11 @@ impl Cockpit {
     /// would hear it; an in-process window hears none.
     pub fn fixture_browser_message(&mut self, message: ServerMessage) {
         self.browser_messages.push(message);
+    }
+
+    /// A fixture world's browser acts succeed, as a linked Server's would.
+    pub fn fixture_browser_accepts(&mut self) {
+        self.browser_fixture = true;
     }
 
     /// A fixture world's free disk: from now on the bar's `N GB free`

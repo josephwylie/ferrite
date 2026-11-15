@@ -300,12 +300,11 @@ impl CockpitView {
     ) {
         self.cancel_browser_capture(thread, cx);
         self.ensure_browser(thread, cx);
-        if matches!(action, Action::Open { .. } | Action::Select { .. }) {
-            let seen = self.surface_revision(thread);
-            self.browsers.sent.entry(thread).or_default().push_back(seen);
-            if matches!(action, Action::Open { .. }) {
-                self.browsers.reveal.entry(thread).or_insert(seen);
-            }
+        let seen = self.surface_revision(thread);
+        // Only an action the Server accepts is echoed back to claim this revision.
+        let echoed = matches!(action, Action::Open { .. } | Action::Select { .. });
+        if matches!(action, Action::Open { .. }) {
+            self.browsers.reveal.entry(thread).or_insert(seen);
         }
         if self.browsers.threads[&thread].owner.is_none() {
             match self.cockpit.browser_attach(thread) {
@@ -349,6 +348,9 @@ impl CockpitView {
         }
         match result {
             Ok(state) => {
+                if echoed {
+                    self.browsers.sent.entry(thread).or_default().push_back(seen);
+                }
                 let browser = self.browsers.threads.get_mut(&thread).unwrap();
                 browser.state = state;
                 browser.error = None;

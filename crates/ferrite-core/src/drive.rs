@@ -38,6 +38,8 @@ pub struct Text {
 pub struct Click {
     pub at: Target,
     pub press: Press,
+    /// Held with the platform's command key (⌘ on macOS).
+    pub command: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +82,9 @@ struct ClickParams {
     /// A right click.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     right: bool,
+    /// Hold the command key (⌘ on macOS) through the click.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    command: bool,
 }
 
 impl TryFrom<ClickParams> for Click {
@@ -97,12 +102,16 @@ impl TryFrom<ClickParams> for Click {
             (false, true) => Press::Right,
             (true, true) => return Err("a click is `double` or `right`, not both".into()),
         };
-        Ok(Self { at, press })
+        Ok(Self {
+            at,
+            press,
+            command: params.command,
+        })
     }
 }
 
 impl From<Click> for ClickParams {
-    fn from(Click { at, press }: Click) -> Self {
+    fn from(Click { at, press, command }: Click) -> Self {
         let (selector, x, y) = match at {
             Target::Selector(selector) => (Some(selector), None, None),
             Target::Point { x, y } => (None, Some(x), Some(y)),
@@ -113,6 +122,7 @@ impl From<Click> for ClickParams {
             y,
             double: press == Press::Double,
             right: press == Press::Right,
+            command,
         }
     }
 }

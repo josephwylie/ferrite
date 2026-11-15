@@ -344,6 +344,39 @@ fn a_panel_sliding_shut_gives_the_shell_no_keys(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("panel").is_some(), "⌥⌘B reopens it without a click");
 }
 
+/// An open the Server refused (here: an in-process window has no browser)
+/// is never echoed, so it leaves nothing behind that could later turn away
+/// an agent's open as stale.
+#[gpui::test]
+fn an_agents_open_after_a_refused_one_still_shows_the_browser(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (core, _fake, _checkout) = bound_cockpit("terminal-refused-open", Provider::Claude);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    opened(&view, cx);
+    view.update(cx, |view, cx| {
+        view.browser_action(
+            thread,
+            ferrite_core::browser::Action::Open { url: "http://user:pw@localhost:5173/".into() },
+            cx,
+        )
+    });
+    settle(cx);
+    back_to_shell(cx);
+    assert_eq!(panel_tabs(&view, thread, cx).1, Some(SurfaceId::Terminal(1)));
+
+    hear_own_open_echoed(&view, thread, cx);
+    assert_eq!(
+        panel_tabs(&view, thread, cx).1,
+        Some(SurfaceId::Browser),
+        "an agent's open after the operator's last click shows the browser"
+    );
+}
+
 fn cmd_click(cx: &mut gpui::VisualTestContext, row: usize, column: usize) {
     let at = cell(cx, row, column);
     cx.simulate_click(at, gpui::Modifiers::secondary_key());
@@ -400,6 +433,7 @@ fn cmd_click_opens_what_the_shell_printed(cx: &mut TestAppContext) {
     std::fs::write(checkout.join("src/main.rs"), "one\ntwo\nthree\nfour\n").unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    view.update(cx, |view, _| view.cockpit.fixture_browser_accepts());
     hold_nav_open(&view, cx);
     cx.simulate_resize(gpui::size(px(1900.), px(900.)));
     tick(cx);

@@ -116,13 +116,17 @@ fn act(driver: &mut Driver, action: Action) -> Result<Answer, String> {
             Ok(Answer::Pressed { unhandled })
         }
         Action::Type(Text { text }) => driver.type_text(&text).map(|()| Answer::Typed),
-        Action::Click(Click { at, press }) => {
+        Action::Click(Click { at, press, command }) => {
             let (button, clicks) = match press {
                 Press::Single => (MouseButton::Left, 1),
                 Press::Double => (MouseButton::Left, 2),
                 Press::Right => (MouseButton::Right, 1),
             };
-            let modifiers = Modifiers::default();
+            let modifiers = if command {
+                Modifiers::secondary_key()
+            } else {
+                Modifiers::default()
+            };
             let at = match at {
                 Target::Selector(selector) => driver
                     .click(&selector, button, clicks, modifiers)
