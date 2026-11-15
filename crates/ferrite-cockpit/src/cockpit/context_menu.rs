@@ -688,6 +688,23 @@ impl CockpitView {
         })
     }
 
+    /// An open menu takes the keyboard whole: the root holds focus while it
+    /// is up, so no field's bindings (a Decision's, the Composer's history)
+    /// answer its keys. The focus it took comes back as it closes, unless
+    /// what it did moved focus elsewhere. Tended once a frame.
+    pub(super) fn tend_menu_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.context_menu.is_some() {
+            if self.menu_return.is_none() {
+                self.menu_return = Some(window.focused(cx).unwrap_or_else(|| self.focus.clone()));
+                window.focus(&self.focus, cx);
+            }
+        } else if let Some(back) = self.menu_return.take() {
+            if self.focus.is_focused(window) {
+                window.focus(&back, cx);
+            }
+        }
+    }
+
     /// ↑ ↓ ← → ⏎ on the open menu. Up and down walk the rows of the menu
     /// (or of its submenu while the cursor is in it) and wrap past the
     /// ends; → enters a submenu, ← leaves it; ⏎ presses the cursor row.

@@ -107,6 +107,38 @@ fn the_deny_chord_denies_an_approval_with_text_on_the_line(cx: &mut TestAppConte
     );
 }
 
+/// An open menu's keys are the menu's, even over an approval whose empty
+/// line binds the same arrows and ⎋, and the Composer has the keyboard
+/// back once it closes.
+#[gpui::test]
+fn an_open_menu_keeps_its_keys_from_a_pending_approval(cx: &mut TestAppContext) {
+    use crate::cockpit::context_menu::{MenuCursor, MenuTarget};
+    let (core, fake) = cockpit("key-menu-over-decision", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    fake.streams.borrow()[0].send(decision("perm_menu")).unwrap();
+    tick(cx);
+    let composer = view.read_with(cx, |view, cx| view.panes[0].composer.focus_handle(cx));
+    cx.update(|window, cx| window.focus(&composer, cx));
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(300.), px(200.)), cx)
+    });
+    tick(cx);
+    cx.simulate_keystrokes("down");
+    tick(cx);
+    let cursor = view.read_with(cx, |view, _| view.context_menu.as_ref().map(|open| open.cursor));
+    assert_eq!(cursor, Some(MenuCursor::Row(0)), "down moved the menu's cursor");
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.context_menu.is_none()), "escape closed the menu");
+    assert!(answered(&fake).is_empty(), "the approval heard none of it");
+    assert!(cx.update(|window, _| composer.is_focused(window)), "the Composer has the keyboard back");
+}
+
 #[gpui::test]
 fn y_answers_a_composerless_subagent_tab_while_a_composer_types_it(cx: &mut TestAppContext) {
     use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, Subject};

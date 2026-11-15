@@ -523,6 +523,8 @@ pub struct CockpitView {
     /// The right-click menu, if one is up: what it is about, where it was
     /// summoned, and which destructive row is armed for its second press.
     context_menu: Option<ContextMenu>,
+    /// What held focus before the open menu took it (`tend_menu_focus`).
+    menu_return: Option<FocusHandle>,
     /// The Solo view's right panel (`panel`): its tab per Thread and
     /// whether the window has room for it.
     panel: panel::Panel,
@@ -1588,6 +1590,7 @@ impl CockpitView {
             rename: None,
             snooze_editor: None,
             context_menu: None,
+            menu_return: None,
             panel: panel::Panel::load(&prefs.dir),
             panel_empty_focus: cx.focus_handle(),
             panel_keys: cx.focus_handle(),
@@ -9907,6 +9910,7 @@ impl Render for CockpitView {
             }));
         }
         self.tend_history();
+        self.tend_menu_focus(window, cx);
         let root = self.render_cockpit(window, cx);
         // The motion tail: the cockpit is the window's root view, so this
         // runs once per frame, after every hover blend has been read. A
@@ -10402,6 +10406,8 @@ impl CockpitView {
             || pane_control_focused
         {
             // Native text, dialogs, and the Inbox keep their own keyboard focus.
+        } else if self.context_menu.is_some() {
+            // An open menu holds the keyboard at the root (`tend_menu_focus`).
         } else if self.settings_open {
             // The pump must not steal focus from Settings search or controls.
             if !self.settings_focus.contains_focused(window, cx) {
