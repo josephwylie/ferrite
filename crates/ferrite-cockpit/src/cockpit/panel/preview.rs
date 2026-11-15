@@ -184,7 +184,6 @@ impl CockpitView {
         }
     }
 
-    /// Read `path` from disk again into `thread`'s preview.
     fn retry_preview(
         &mut self,
         thread: ThreadId,
@@ -925,11 +924,8 @@ fn unshown(
     cant_show(note, detail, doors, cx)
 }
 
-/// A door off a "can't show" note: its label and what it does.
 type Door = (&'static str, Box<dyn Fn(&mut Window, &mut gpui::App)>);
 
-/// The "can't show" note: what, why under it, and the doors that show it
-/// elsewhere or try again.
 fn cant_show(
     note: &'static str,
     detail: Option<SharedString>,

@@ -55,7 +55,6 @@ pub(crate) struct Panel {
     /// they were last written.
     pub(crate) surfaces: Surfaces,
     dirty: bool,
-    /// Each Thread's open Files and preferences, as stored (`files.json`).
     pub(crate) working_sets: super::tools::WorkingSets,
     /// Each Thread's sections' scroll, so a Thread's Overview comes back
     /// where it was left.
@@ -336,7 +335,6 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Every Thread the roster or the parked list still holds.
     pub(super) fn known_threads(&self) -> std::collections::HashSet<ThreadId> {
         let mut known: std::collections::HashSet<ThreadId> =
             self.cockpit.threads().into_iter().collect();

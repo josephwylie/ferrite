@@ -20,7 +20,6 @@ pub(super) struct OpenFile {
     pub(super) preview: bool,
 }
 
-/// One Thread's Files, as it is stored.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct WorkingSet {
     pub(super) files: Vec<OpenFile>,
@@ -36,15 +35,12 @@ struct Persisted {
     threads: BTreeMap<u64, WorkingSet>,
 }
 
-/// Every Thread's stored working set.
 #[derive(Default)]
 pub(crate) struct WorkingSets {
     sets: BTreeMap<u64, WorkingSet>,
 }
 
 impl WorkingSets {
-    /// `<dir>/files.json`'s sets. A file that cannot be read is no sets,
-    /// written over at the next change.
     pub(crate) fn load(dir: &Path) -> Self {
         let read = || -> io::Result<BTreeMap<u64, WorkingSet>> {
             let bytes = match std::fs::read(dir.join(FILE_NAME)) {
@@ -72,8 +68,6 @@ impl WorkingSets {
         self.sets.get(&thread)
     }
 
-    /// Take `live` as the truth for its Threads. Says whether anything
-    /// changed.
     pub(super) fn sync(&mut self, live: impl Iterator<Item = (u64, WorkingSet)>) -> bool {
         let mut changed = false;
         for (thread, set) in live {
@@ -85,7 +79,6 @@ impl WorkingSets {
         changed
     }
 
-    /// Drop the Threads `known` no longer holds.
     pub(super) fn retain(&mut self, known: &HashSet<u64>) {
         if !known.is_empty() {
             self.sets.retain(|thread, _| known.contains(thread));

@@ -45,7 +45,6 @@ pub(crate) enum SurfaceId {
     PullRequest(u64),
 }
 
-/// What closing a Surface's tab does to what it holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Close {
     /// Nothing outlives the tab but its identity: the Surface reads what it
@@ -59,7 +58,6 @@ pub(crate) enum Close {
     End(&'static str),
 }
 
-/// What a restart does to a stored tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Restart {
     /// The tab returns, and builds what it shows from its subject as it is
@@ -70,7 +68,6 @@ pub(crate) enum Restart {
     Ends,
 }
 
-/// One Surface kind's close, reopen and restart behavior.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Lifecycle {
     pub(crate) close: Close,
@@ -82,14 +79,12 @@ impl Lifecycle {
         Self { close, restart }
     }
 
-    /// Whether a closed tab of this kind can come back.
     pub(crate) fn reopenable(self) -> bool {
         !matches!(self.close, Close::End(_))
     }
 }
 
 impl SurfaceId {
-    /// The one table of how each kind lives, closes, reopens and restarts.
     pub(crate) fn lifecycle(&self) -> Lifecycle {
         match self {
             Self::Overview
@@ -280,7 +275,6 @@ impl ThreadSurfaces {
         self.tabs.insert(index.min(self.tabs.len()), tab);
     }
 
-    /// Whether a closed tab waits to come back.
     pub(crate) fn can_reopen(&self) -> bool {
         !self.closed.is_empty()
     }

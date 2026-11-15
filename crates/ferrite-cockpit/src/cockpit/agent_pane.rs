@@ -77,8 +77,6 @@ impl CockpitView {
         }
     }
 
-    /// Build the view of `subject`'s history if none is held, from what the
-    /// Thread knows of the agent. None when the Thread does not know it.
     fn hold_agent_drill(
         &mut self,
         thread: ThreadId,
@@ -112,8 +110,6 @@ impl CockpitView {
         Some(key)
     }
 
-    /// A shown Agent tab with no view (reopened after its close, or stored
-    /// across a restart) takes one from the agent's saved history.
     fn restore_shown_agent_drills(&mut self, cx: &mut Context<Self>) {
         let wanted: Vec<(ThreadId, String)> = self
             .panes
@@ -285,8 +281,6 @@ impl CockpitView {
             .into_any_element()
     }
 
-    /// An Agent tab whose agent the Thread no longer knows: why, and the
-    /// tab's close.
     fn agent_unavailable(&self, owner: ThreadId, key: &str, cx: &mut Context<Self>) -> AnyElement {
         use ferrite_ui::theme::*;
         let surface = SurfaceId::Agent(key.to_owned());

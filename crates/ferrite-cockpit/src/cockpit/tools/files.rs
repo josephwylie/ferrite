@@ -82,7 +82,6 @@ enum TabBody {
     Unshown(Unshown),
 }
 
-/// Why a tab's file is not shown.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Unshown {
     Unreadable,
@@ -340,7 +339,6 @@ impl CockpitView {
         self.remove_tab(thread, at, cx);
     }
 
-    /// Read tab `at`'s file again, after it could not be read.
     fn reload_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
         let Some(files) = self.files_of(thread) else {
             return;
@@ -358,8 +356,6 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Write every Thread's open files and Files preferences when they
-    /// changed, once a frame (`tend_panel`).
     pub(in crate::cockpit) fn save_working_sets(&mut self) {
         let live = self
             .tools
