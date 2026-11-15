@@ -2009,6 +2009,7 @@ impl CockpitView {
         // One reading size for every transcript, on every board.
         let reading_size = self.prefs.settings.reading_size;
         let tail = self.transcript_tail(index, cx);
+        self.wake_for_background_clock(index, cx);
         // The gated call hides while its Decision waits as the tail row.
         let pending_call = tail
             .as_ref()

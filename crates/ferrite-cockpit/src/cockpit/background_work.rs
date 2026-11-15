@@ -47,7 +47,8 @@ pub(super) enum StopState {
 
 /// One piece of work still running. A command is the provider's task
 /// (`call` is the call that launched it, which holds its output); a
-/// subagent is the agent a call started, still working after Main's turn.
+/// subagent is an agent launched into the background, or any still
+/// working after Main's turn.
 pub(super) struct Work {
     pub(super) task: BackgroundTask,
     pub(super) stop: Option<StopTarget>,
@@ -107,6 +108,11 @@ pub(super) fn running_work(open: &ferrite_core::cockpit::ThreadView<'_>) -> Vec<
             AgentStatus::Working | AgentStatus::Pending | AgentStatus::Waiting
         );
         if !(stoppable || agent.status() == AgentStatus::Unknown) || !agent.fresh() {
+            continue;
+        }
+        // While Main's turn runs, an agent it launched in the foreground is
+        // work it waits on, not background work.
+        if open.busy() && !names.iter().any(|name| transcript.running_in_background(name)) {
             continue;
         }
         // The name the transcript holds a call by, for the label and the
@@ -324,6 +330,7 @@ impl CockpitView {
             )),
             _ => None,
         };
+        let clock_width = lone_launch(&work).map(|launched| clock_reading(launched).len());
         let key = {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             (
@@ -333,6 +340,7 @@ impl CockpitView {
                 &presented.description,
                 &stop,
                 work.iter().map(|work| (&work.stop, &work.call)).collect::<Vec<_>>(),
+                clock_width,
             )
                 .hash(&mut hasher);
             hasher.finish()
@@ -344,11 +352,8 @@ impl CockpitView {
                 let mut actions: Vec<AnyElement> = Vec::new();
                 if let Some((Some(launched), _)) = &single {
                     actions.push(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .min_w(px(ferrite_ui::theme::BACKGROUND_LINE_CLOCK_W))
-                            .child(pane::background_clock(*launched))
+                        pane::background_clock(*launched)
+                            .debug_selector(|| "background-line-clock".into())
                             .into_any_element(),
                     );
                 }
@@ -388,6 +393,37 @@ impl CockpitView {
                 pane::background_work_line(key, presented.clone(), actions).into_any_element()
             }),
         })
+    }
+
+    /// Lay the line out again when its clock next changes width (`9s` to
+    /// `10s`, `59s` to `1m`): the overlay redraws the clock each second in
+    /// the box the last layout gave it, so a wider reading would run into
+    /// `Details`.
+    pub(super) fn wake_for_background_clock(&self, index: usize, cx: &mut Context<Self>) {
+        if ferrite_ui::motion::reduced_motion(cx) {
+            return;
+        }
+        let Some(launched) = self
+            .panes
+            .get(index)
+            .filter(|pane| pane.is_main())
+            .and_then(|pane| pane.thread())
+            .and_then(|thread| self.cockpit.thread(thread))
+            .and_then(|open| lone_launch(&line_work(&open)))
+        else {
+            return;
+        };
+        let elapsed = ferrite_core::clock::instant().saturating_duration_since(launched).as_secs();
+        let width = clock_reading(launched).len();
+        let Some(change) = (elapsed + 1..=elapsed + 61).find(|secs| {
+            ferrite_core::progress::live_seconds(Duration::from_secs(*secs)).len() != width
+        }) else {
+            return;
+        };
+        let since = Duration::from_secs(change)
+            .saturating_sub(ferrite_core::clock::instant().saturating_duration_since(launched));
+        let at = cx.background_executor().now() + since;
+        ferrite_ui::motion::wake_at(cx.entity_id(), at, cx);
     }
 
     /// The `Stop` of `work`: what it says, and where the stops it sent stand.
@@ -736,4 +772,19 @@ impl CockpitView {
             .children(call.map(|call| output_block(call, false, false)))
             .children(open_thread)
     }
+}
+
+/// When the line's one piece of work launched, the line's clock shows it.
+fn lone_launch(work: &[Work]) -> Option<std::time::Instant> {
+    match work {
+        [only] => only.task.launched,
+        _ => None,
+    }
+}
+
+/// The line's clock as it reads now.
+fn clock_reading(launched: std::time::Instant) -> String {
+    ferrite_core::progress::live_seconds(
+        ferrite_core::clock::instant().saturating_duration_since(launched),
+    )
 }

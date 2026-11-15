@@ -481,12 +481,12 @@ impl CockpitView {
     }
 
     /// Tell `pane`'s transcript what `subject` of `thread` holds after its
-    /// first `skip` blocks, `note` standing under the first prompt — the
+    /// first `skip` blocks, `note` standing under the first prompt. The
     /// compact, read-only twin of `sync_transcript`, for the right pane's
-    /// bodies (the side chat's tabs, a subagent's drill-in): no Decision strip,
-    /// subagents or rewinds, and no Reply (they have no Composer of a
-    /// Pane's to reply into). `decisions` is the Decision row after the
-    /// last, where the view answers its own.
+    /// bodies (the side chat's tabs, a subagent's drill-in): no subagents,
+    /// rewinds or Reply, as they have no Pane's Composer to reply into.
+    /// `decisions` is the row after the last, where the view answers the
+    /// Decisions `subject` waits on.
     pub(super) fn sync_compact_transcript(
         &self,
         thread: ThreadId,

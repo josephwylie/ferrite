@@ -397,10 +397,22 @@ fn an_agent_waited_on_is_in_the_line_the_dialog_and_the_tab(cx: &mut TestAppCont
 fn an_agent_is_in_the_tab_while_main_is_busy(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("background-inventory-busy", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    working_agent(&fake, "toolu_a", "Read the docs");
-    fake.streams.borrow()[0]
-        .send(SessionEvent::ThinkingDelta { text: "Waiting on the agent.".into() })
-        .unwrap();
+    let send = |event: SessionEvent| fake.streams.borrow()[0].send(event).unwrap();
+    for id in ["toolu_bg", "toolu_fg"] {
+        send(SessionEvent::ToolStarted {
+            id: id.into(),
+            name: "Agent".into(),
+            input: serde_json::json!({"description": id, "prompt": "Read the docs"}),
+        });
+    }
+    send(SessionEvent::ToolCompleted {
+        id: "toolu_bg".into(),
+        output: "Async agent launched.".into(),
+        is_error: false,
+        result: ferrite_core::ToolResult::Background { task: "agent:bg".into() },
+    });
+    working_agent(&fake, "toolu_bg", "In the background");
+    working_agent(&fake, "toolu_fg", "Waited on");
     tick(cx);
     assert!(view.read_with(cx, |view, _| {
         view.cockpit.thread(view.panes[0].thread().unwrap()).unwrap().busy()
@@ -408,6 +420,10 @@ fn an_agent_is_in_the_tab_while_main_is_busy(cx: &mut TestAppContext) {
     open_background_tab(&view, cx);
     assert!(debug_bounds(cx, "background-work-line".into()).is_none(), "the rows show it");
     assert!(debug_bounds(cx, "background-running-0".into()).is_some(), "the tab lists it");
+    assert!(
+        debug_bounds(cx, "background-running-1".into()).is_none(),
+        "the agent Main waits on is not background work"
+    );
 }
 
 /// A command only a progress snapshot knows of is in the tab as well.
@@ -428,4 +444,43 @@ fn a_command_known_only_from_a_snapshot_is_in_the_tab(cx: &mut TestAppContext) {
         [ferrite_core::SessionControl::StopTask { id: "task:1".into() }]
     );
     assert!(debug_bounds(cx, "background-stopping".into()).is_some(), "the line says so too");
+}
+
+/// The line's clock lays out again as its reading widens, `9s` to `10s`,
+/// so it never runs into `Details`.
+#[gpui::test]
+fn the_lines_clock_widens_clear_of_details(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let held = hold_wall_clock();
+    let (core, fake) = cockpit("background-clock-width", 1);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let send = |event: SessionEvent| fake.streams.borrow()[0].send(event).unwrap();
+    send(SessionEvent::ToolStarted {
+        id: "toolu_bg".into(),
+        name: "Agent".into(),
+        input: serde_json::json!({"description": "Read the docs", "prompt": "Read the docs"}),
+    });
+    send(SessionEvent::ToolCompleted {
+        id: "toolu_bg".into(),
+        output: "Async agent launched.".into(),
+        is_error: false,
+        result: ferrite_core::ToolResult::Background { task: "agent:bg".into() },
+    });
+    send(SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Completed,
+        cost_usd: None,
+    });
+    tick(cx);
+    let step = |cx: &mut gpui::VisualTestContext, by: u64| {
+        held.advance(Duration::from_secs(by));
+        cx.executor().advance_clock(Duration::from_secs(by));
+        tick(cx);
+    };
+    step(cx, 9);
+    let narrow = bounds(cx, "background-line-clock".into());
+    step(cx, 1);
+    let wide = bounds(cx, "background-line-clock".into());
+    let details = bounds(cx, "background-details".into());
+    assert!(wide.size.width > narrow.size.width, "`10s` is laid out wider than `9s`");
+    assert!(wide.right() <= details.left(), "the clock stays clear of Details");
 }
