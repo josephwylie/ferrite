@@ -187,9 +187,15 @@ fn a_conversation_in_use_is_refused_and_never_forked(cx: &mut TestAppContext) {
         debug_bounds(cx, shown.clone()).is_none(),
         "no offer to start over"
     );
+    let attempts = fake.resumed.borrow().len();
     view.update(cx, |view, _| {
-        assert!(view.cockpit.start_fresh_conversation(thread).is_err());
+        assert!(view.cockpit.start_fresh_conversation(thread).is_ok());
     });
+    assert_eq!(
+        fake.resumed.borrow().len(),
+        attempts,
+        "nothing to start over: no start of any kind"
+    );
     assert!(
         fake.resumed.borrow()[1..]
             .iter()
@@ -198,4 +204,32 @@ fn a_conversation_in_use_is_refused_and_never_forked(cx: &mut TestAppContext) {
         fake.resumed.borrow()
     );
     assert!(fake.sent.borrow().iter().all(|text| !text.contains(PROMPT)));
+}
+
+#[gpui::test]
+fn a_fresh_start_that_fails_keeps_the_prompt_and_does_not_loop(cx: &mut TestAppContext) {
+    let (view, fake, thread, cx) = lost(
+        "resume-fresh-fails",
+        "no rollout found for thread id old-native",
+        cx,
+    );
+    cx.simulate_input(PROMPT);
+    cx.simulate_keystrokes("enter");
+    settle(cx);
+    let offer = format!("resume-fresh-{}", thread.get());
+    let at = debug_bounds(cx, offer).unwrap().center();
+
+    *fake.fail.borrow_mut() = true;
+    cx.simulate_click(at, Default::default());
+    settle(cx);
+
+    assert_eq!(composer_text(&view, cx), PROMPT, "the prompt is kept");
+    assert!(fake.sent.borrow().iter().all(|text| !text.contains(PROMPT)));
+    let attempts = fake.resumed.borrow().len();
+    settle(cx);
+    assert_eq!(
+        fake.resumed.borrow().len(),
+        attempts,
+        "nothing starts again unasked"
+    );
 }

@@ -2007,14 +2007,13 @@ impl Engine {
     /// Continue a Thread whose provider lost its conversation on a fresh
     /// one in place: the transcript stays, and the earlier turns go with
     /// the next prompt as context, once, as a provider switch's do. Only a
-    /// start the provider refused as missing offers it: a conversation in
+    /// start the provider refused as missing offers it, and with none
+    /// lost this does nothing: a conversation in
     /// use elsewhere is not lost, and a fresh one beside it would fork.
     pub fn start_fresh_conversation(&mut self, thread: ThreadId) -> Result<(), ProvisionError> {
         let state = self.threads.get(&thread).ok_or(ProvisionError::Locked)?;
         if !state.resume_lost {
-            return Err(ProvisionError::Spawn(io::Error::other(
-                "the provider can still resume this conversation",
-            )));
+            return Ok(());
         }
         let (provider, model, effort) = (state.provider, state.model.clone(), state.effort.clone());
         self.replace_session(thread, provider, model, effort, ReplacementKind::Handover)
@@ -2666,7 +2665,9 @@ impl Engine {
             return Ok(());
         };
         let words = format!("{what}: {error}");
-        if let Some(state) = self.threads.get_mut(&thread) {
+        // A Thread whose resume is lost already has its offer on screen:
+        // the refusal of a send says nothing the offer has not.
+        if let Some(state) = self.threads.get_mut(&thread).filter(|state| !state.resume_lost) {
             state.apply(Input::Notice(words.clone()));
         }
         Err(words)
@@ -3324,19 +3325,23 @@ impl Engine {
                         state.end_session();
                         state.replace_generation();
                         crate::log!("thread {id}: session could not start: {error}");
+                        let returned = !state.awaiting.prompts.is_empty();
                         let notice = match ResumeFailure::of(&error) {
                             Some(ResumeFailure::SessionGone) => {
                                 state.resume_lost = true;
+                                let back = if returned { " Your prompt is back in the Composer." } else { "" };
+                                format!("could not start: {error}.{back}")
+                            }
+                            Some(ResumeFailure::InUse) => {
+                                let back = if returned {
+                                    "; your prompt is back in the Composer, to send once it is free"
+                                } else {
+                                    ""
+                                };
                                 format!(
-                                    "could not start: {error}. {} cannot resume this conversation; \
-                                     your prompt is back in the Composer",
-                                    state.provider
+                                    "could not start: {error}. The conversation is in use elsewhere{back}"
                                 )
                             }
-                            Some(ResumeFailure::InUse) => format!(
-                                "could not start: {error}. The conversation is in use elsewhere; \
-                                 your prompt is back in the Composer, to send once it is free"
-                            ),
                             None => format!("could not start: {error}"),
                         };
                         state.apply(Input::Notice(notice));

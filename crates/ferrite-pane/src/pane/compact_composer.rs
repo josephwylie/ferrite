@@ -34,6 +34,7 @@ pub(super) fn compact_composer(
         focused,
         drop_target,
         toolbar,
+        offer,
         ..
     } = stack;
     // Only the focused cell's Composer is live (C4): the others say what
@@ -162,6 +163,9 @@ pub(super) fn compact_composer(
         ));
     }
     composer_stack(attachments.filter(|_| live), false)
+        .children(
+            offer.map(|offer| composer::in_column(theme::COMPACT_COMPOSER_INSET, false, offer)),
+        )
         // A draft's failed bootstrap says why over the box.
         .children(draft_error.map(|error| {
             ferrite_ui::motion::fade_in(

@@ -441,6 +441,8 @@ pub(super) struct ComposerStack<'a> {
     /// footer; on a board, the focused Pane's send circle. Both carry the
     /// queue strip's actions.
     pub(super) toolbar: Option<ComposerControls>,
+    /// What the Thread offers over the Composer (`PaneWiring::resume_offer`).
+    pub(super) offer: Option<AnyElement>,
 }
 
 /// The Composer stack (theme WP-D): a board cell's compact box
@@ -487,6 +489,7 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         drop_target,
         joined: _,
         toolbar,
+        offer,
     } = stack;
     let geometry = view.geometry.clone();
     let namespace = view.text_namespace();
@@ -699,6 +702,7 @@ fn box_composer(view: &PaneView, transcript: Option<&Transcript>, stack: Compose
         ));
     }
     composer_stack(None, true)
+        .children(offer.map(|offer| in_column(theme::COMPOSER_INSET, true, offer)))
         .children(queue.map(|queue| {
             in_column(theme::COMPOSER_INSET, true, queue).pb(px(theme::QUEUE_CARD_GAP))
         }))

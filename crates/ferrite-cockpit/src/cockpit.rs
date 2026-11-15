@@ -11496,28 +11496,21 @@ impl CockpitView {
         }
     }
 
-    /// A wall tile's quick answers while its Thread waits (F-7): an
-    /// approval's three — `1 allow`, `2 always`, `3 deny` (R9) — or a
-    /// question's options, `1 retry on EEXIST`, `2 isolate per pid`, each a
-    /// boxed word wired to its answer, its digit the key that answers it
-    /// from the wall (`cockpit::PickOption1-3`). A question with more than
-    /// one part answers in its form: its option lands on the Pane, in full.
     /// The offer to go on in a fresh conversation, while the Thread's
     /// provider has none to resume. It says what the way on costs.
     fn resume_offer(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes.get(index).filter(|pane| pane.is_main())?.thread()?;
         let open = self.cockpit.thread(thread).filter(|open| open.resume_lost())?;
         let key = thread.get();
-        let line = format!(
-            "{} no longer has this conversation. A fresh one starts from the transcript's \
-             latest turns, sent as context with your next prompt; it will not remember the rest.",
-            open.provider()
-        );
-        let action = pane::quick_answer(
+        let line = "A fresh conversation starts from the transcript's latest turns, sent as \
+                    context with your next prompt. It will not remember the rest.";
+        let action = ferrite_ui::components::secondary_button(
             SharedString::from(format!("resume-fresh-{key}")),
-            SharedString::default(),
-            "Start a fresh conversation".into(),
+            None,
+            "Start a fresh conversation",
+            cx,
         )
+        .debug_selector(move || format!("resume-fresh-{key}"))
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |view, _: &MouseDownEvent, window, cx| {
@@ -11538,6 +11531,9 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.cockpit.thread(thread).is_some_and(|open| open.resume_lost()) {
+            return;
+        }
         if let Err(error) = self.cockpit.start_fresh_conversation(thread) {
             self.cockpit
                 .say(thread, format!("could not start a fresh conversation: {error}"));
@@ -11551,6 +11547,12 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// A wall tile's quick answers while its Thread waits (F-7): an
+    /// approval's three — `1 allow`, `2 always`, `3 deny` (R9) — or a
+    /// question's options, `1 retry on EEXIST`, `2 isolate per pid`, each a
+    /// boxed word wired to its answer, its digit the key that answers it
+    /// from the wall (`cockpit::PickOption1-3`). A question with more than
+    /// one part answers in its form: its option lands on the Pane, in full.
     fn quick_answers(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes.get(index)?.thread()?;
         let open = self.cockpit.thread(thread)?;

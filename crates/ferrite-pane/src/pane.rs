@@ -679,7 +679,7 @@ pub struct PaneWiring {
     /// The Thread details card, laid over the body's top right.
     pub details: Option<AnyElement>,
     /// What the Thread offers when its provider lost the conversation it
-    /// saved (`resume_offer`), docked above the Composer.
+    /// saved (`resume_offer`), the first row of the Composer's stack.
     pub resume_offer: Option<AnyElement>,
 }
 
@@ -880,6 +880,8 @@ pub(crate) struct PaneCtx<'a> {
     pub decision_joined: bool,
     /// `l1_composer`: the Solo box's controls.
     pub toolbar: Option<ComposerControls>,
+    /// `PaneWiring::resume_offer`, for `l1_composer`.
+    pub resume_offer: Option<AnyElement>,
 }
 
 /// The group name every Pane root carries (`.group(PANE_GROUP)`): what a
@@ -1054,6 +1056,7 @@ pub fn render_pane(
         activity_decisions: None,
         decision_joined,
         toolbar,
+        resume_offer,
     };
 
     // Solo (fullscreen included) has no head: the nav's row names the
@@ -1114,7 +1117,6 @@ pub fn render_pane(
             );
             // The order is head · body · progress · dock · composer.
             pane = pane.children(l1_dock(&mut cx));
-            pane = pane.children(resume_offer);
             // A question too big for this body answers in fullscreen: the
             // Pane's foot says so, where its state reads (theme rule 7).
             pane = pane.children(expand_question.then(|| question_door(key)));
@@ -1175,6 +1177,7 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
                 drop_target: cx.drop_target,
                 joined: cx.decision_joined,
                 toolbar: cx.toolbar.take(),
+                offer: cx.resume_offer.take(),
             },
         )
         .into_any_element(),
@@ -1384,6 +1387,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
             drop_target,
             joined: false,
             toolbar,
+            offer: None,
         },
     );
     // Codex's home: at the body's centre the hero, and the Composer at the
@@ -1808,11 +1812,7 @@ pub fn quick_answer(id: SharedString, key: SharedString, label: SharedString) ->
     );
     let selector = id.clone();
     // Its two runs and a cell of padding each side, capped at the tile.
-    let key = if key.is_empty() {
-        String::new()
-    } else {
-        format!("{key} ")
-    };
+    let key = format!("{key} ");
     let width = components::run_width(&key)
         + components::run_width(&label)
         + 2.0 * theme::QUICK_ANSWER_PAD_X;
@@ -2010,18 +2010,15 @@ pub fn thread_word(
 
 /// The Pane's offer when its provider no longer holds the conversation the
 /// Thread saved: what happened and what the way on costs, above the one
-/// button that takes it (`action`). The transcript above stays whole.
-pub fn resume_offer(key: u64, line: SharedString, action: Stateful<Div>) -> AnyElement {
+/// button that takes it (`action`). The Composer's column holds it.
+pub fn resume_offer(key: u64, line: SharedString, action: gpui::component::button::Button) -> AnyElement {
     div()
         .debug_selector(move || format!("resume-offer-{key}"))
         .flex()
         .flex_col()
-        .flex_shrink_0()
-        .w_full()
         .min_w_0()
         .gap(px(theme::HALF_ROW))
-        .px(px(theme::GLYPH_GUTTER))
-        .py(px(theme::HALF_ROW))
+        .pb(px(theme::SPACE_4))
         .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))

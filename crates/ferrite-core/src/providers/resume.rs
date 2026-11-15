@@ -1,6 +1,7 @@
 //! Why a start that asked to resume a provider-native conversation failed,
-//! told apart at the provider boundary: the two failures have opposite
-//! remedies, so the Engine must not read them from words.
+//! told apart where the Spawner reports it, from the provider's error text:
+//! the two failures have opposite remedies, so the Engine reads a variant,
+//! never words.
 
 use std::fmt;
 use std::io;
