@@ -6,6 +6,7 @@
 //! verbs the rows run (`run_menu_verb`).
 
 use super::*;
+use ferrite_pane::link_target::{thread_link, Open};
 
 /// What a right-click was on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -53,6 +54,8 @@ pub(super) enum MenuTarget {
     SurfaceTab { thread: ThreadId, at: usize },
     /// The pull request Surface's `⋯`.
     PrMore(ThreadId),
+    /// The nav card's PR badge: the PR's own doors, not the Thread's.
+    PrLink(ThreadId),
     /// A Factory picker (#221): its rows are the Factory view's `picks`.
     Factory,
 }
@@ -130,6 +133,10 @@ pub(super) enum MenuVerb {
     OpenFactory(ProjectId),
     /// A pull request Surface's row.
     Pr(panel::PrAction),
+    /// A PR link's rows (`MenuTarget::PrLink`): open it by a door, or copy
+    /// its forge address.
+    PrOpen(Open),
+    PrCopy,
     /// The Factory picker's row at this index.
     Factory(usize),
 }
@@ -365,6 +372,7 @@ impl CockpitView {
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread),
             MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at),
             MenuTarget::PrMore(thread) => rows = self.pr_menu_rows(thread),
+            MenuTarget::PrLink(thread) => rows = self.pr_link_rows(thread),
             MenuTarget::Factory => {
                 rows = self
                     .factory_pick_rows()
@@ -391,6 +399,30 @@ impl CockpitView {
             }
         }
         rows
+    }
+
+    /// The PR badge's menu: the PR's native detail and the two browsers,
+    /// then its forge address. A PR the forge gave no address says so on
+    /// the rows that need one.
+    fn pr_link_rows(&self, thread: ThreadId) -> Vec<Option<(menu::Item, MenuVerb)>> {
+        let Some(target) = self.pr_target(thread) else {
+            return Vec::new();
+        };
+        let address = |label: &'static str, verb| {
+            let item = menu::Item::new(label);
+            let item = match target.address() {
+                Ok(_) => item,
+                Err(why) => item.disabled_because(why),
+            };
+            Some((item, verb))
+        };
+        vec![
+            Some((menu::Item::new("Open pull request"), MenuVerb::PrOpen(Open::Primary))),
+            address("Open in integrated browser", MenuVerb::PrOpen(Open::Integrated)),
+            address("Open in system browser", MenuVerb::PrOpen(Open::System)),
+            None,
+            address("Copy link address", MenuVerb::PrCopy),
+        ]
     }
 
     /// The Thread's own menu, the nav row's and the title's ▾ alike, in
@@ -455,7 +487,7 @@ impl CockpitView {
             MenuVerb::NewThread,
         )));
         rows.push(Some((key("Copy path", "C"), MenuVerb::CopyPath)));
-        rows.push(Some((key("Copy link", "K"), MenuVerb::CopyLink)));
+        rows.push(Some((key("Copy thread link", "K"), MenuVerb::CopyLink)));
         rule(rows);
         rows.push(Some((key("Refresh PR status", "S"), MenuVerb::RefreshPr)));
         if self.facts.pr(thread).is_some_and(|pr| pr.url.is_some()) {
@@ -714,6 +746,14 @@ impl CockpitView {
                 self.run_surface_tab_verb(thread, at, verb, cx)
             }
             (MenuTarget::PrMore(thread), MenuVerb::Pr(action)) => self.run_pr_action(thread, action, cx),
+            (MenuTarget::PrLink(thread), MenuVerb::PrOpen(how)) => {
+                self.open_pr_as(thread, how, window, cx)
+            }
+            (MenuTarget::PrLink(thread), MenuVerb::PrCopy) => {
+                if let Some(Ok(address)) = self.pr_target(thread).map(|target| target.address()) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(address));
+                }
+            }
             (MenuTarget::File(thread) | MenuTarget::FilesMore(thread), MenuVerb::Files(verb)) => {
                 self.run_files_verb(thread, verb, cx)
             }
@@ -808,6 +848,7 @@ impl CockpitView {
                     | MenuTarget::SurfaceMenu(_)
                     | MenuTarget::SurfaceTab { .. }
                     | MenuTarget::PrMore(_)
+                    | MenuTarget::PrLink(_)
                     | MenuTarget::Factory
                     | MenuTarget::Page(_) => None,
                 };
@@ -1017,13 +1058,6 @@ fn row_height(item: &menu::Item) -> f32 {
     } else {
         ferrite_ui::theme::FLOAT_ROW_H
     }
-}
-
-/// A Thread's link, in the form the CLI takes: there is no `ferrite://`
-/// scheme, so the command that lands every window on it (`thread.focus`,
-/// ADR 0027).
-pub(super) fn thread_link(thread: ThreadId) -> String {
-    format!("ferrite thread focus {}", thread.get())
 }
 
 /// A Terminal window at `path`: macOS's Terminal, else the desktop's

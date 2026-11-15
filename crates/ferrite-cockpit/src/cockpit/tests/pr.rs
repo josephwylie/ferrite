@@ -164,7 +164,7 @@ fn a_push_reads_the_pr_again(cx: &mut TestAppContext) {
 }
 
 /// The branch's PR whole, as its Surface reads it.
-fn snapshot(state: ferrite_core::protocol::WirePrState) -> ferrite_core::protocol::WirePr {
+pub(super) fn snapshot(state: ferrite_core::protocol::WirePrState) -> ferrite_core::protocol::WirePr {
     use ferrite_core::protocol::*;
     WirePr {
         number: 48,

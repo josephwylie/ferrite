@@ -5,6 +5,7 @@ use gpui::component::input::{Textarea, TextareaState};
 use gpui::{prelude::*, px, rems, rgb, rgba, App, Entity, Focusable, SharedString, Window};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
+use crate::link_target::{LinkTarget, Open};
 use ferrite_ui::theme;
 
 pub fn init(cx: &mut App) {
@@ -614,33 +615,20 @@ impl gpui::RenderOnce for Markdown {
                 if !activate {
                     return;
                 }
-                if let Some(number) = url.strip_prefix(ISSUE_SCHEME) {
-                    if let Some(page) = link_cwd
-                        .as_deref()
-                        .and_then(|cwd| crate::file_links::issue_url(cwd, number))
-                    {
-                        if !link_preview.as_ref().is_some_and(|preview| preview.open_url(&page, window)) {
-                            cx.open_url(&page);
-                        }
-                    }
-                    return;
-                }
                 let from_call = url.starts_with(PATH_SCHEME);
-                let url = url.strip_prefix(PATH_SCHEME).unwrap_or(url);
-                if let Some(file) = crate::file_links::FileLink::resolve(url, link_cwd.as_deref()) {
+                let target = LinkTarget::resolve(url, link_cwd.as_deref());
+                match (&target, from_call, link_scope.clone()) {
                     // A call's path opens where a prose path's ⌘-click does:
                     // the Thread's preview, in Files.
-                    if let (true, Some(scope)) = (from_call, link_scope.clone()) {
+                    (LinkTarget::File(file), true, Some(scope)) => {
+                        let at = file.location.as_deref().and_then(crate::file_links::location_line);
                         let target = crate::file_links::PathTarget::new(file.path.clone())
-                            .at_line(file.location.as_deref().and_then(crate::file_links::location_line))
+                            .at_line(at)
                             .in_scope(scope);
                         crate::file_links::open_target(&target, window, cx);
-                    } else {
-                        file.open(window, cx);
                     }
-                } else {
-                    if !link_preview.as_ref().is_some_and(|preview| preview.open_url(url, window)) {
-                        cx.open_url(url);
+                    _ => {
+                        target.open(Open::of(event), link_preview.as_ref(), window, cx);
                     }
                 }
             })
