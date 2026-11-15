@@ -760,6 +760,18 @@ impl CodexSession {
         &self.capabilities
     }
 
+    /// The sandbox the thread/start response said took effect, in the words
+    /// Settings and the approval card use.
+    pub fn sandbox(&self) -> Option<String> {
+        match self.capabilities.sandbox.as_str() {
+            "" => None,
+            "readOnly" => Some("read-only".into()),
+            "workspaceWrite" => Some("workspace-write".into()),
+            "dangerFullAccess" => Some("danger-full-access".into()),
+            other => Some(other.into()),
+        }
+    }
+
     pub fn permission_modes(&self) -> Vec<PermissionModeChoice> {
         [
             ("untrusted", "Ask for untrusted commands"),

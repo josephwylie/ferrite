@@ -283,6 +283,10 @@ impl Session for SessionWithDefaults {
         self.inner.permission_modes()
     }
 
+    fn sandbox(&self) -> Option<String> {
+        self.inner.sandbox()
+    }
+
     fn set_model(&mut self, model: Option<&str>) -> io::Result<SettingAck> {
         self.inner.set_model(model)
     }

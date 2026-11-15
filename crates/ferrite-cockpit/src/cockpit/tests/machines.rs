@@ -622,6 +622,7 @@ fn box_thread(thread: ThreadId, title: &str) -> ferrite_core::protocol::ThreadSt
         commands: vec![],
         models: vec![],
         permission_mode: None,
+        sandbox: None,
         permission_modes: vec![],
         controls: vec![],
         store_error: None,

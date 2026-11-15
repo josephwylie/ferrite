@@ -885,6 +885,7 @@ impl Thread {
             commands: announced.commands().iter().map(Into::into).collect(),
             models: announced.models().to_vec(),
             permission_mode: announced.permission_mode().map(str::to_string),
+            sandbox: announced.sandbox().map(str::to_string),
             permission_modes: announced
                 .permission_modes()
                 .iter()
@@ -5634,6 +5635,11 @@ impl<'a> ThreadView<'a> {
     /// invented.
     pub fn permission_mode(&self) -> Option<&'a str> {
         self.state.announced.permission_mode()
+    }
+
+    /// The sandbox its agent runs in, as its provider announced it.
+    pub fn sandbox(&self) -> Option<&'a str> {
+        self.state.announced.sandbox()
     }
 }
 

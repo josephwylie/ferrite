@@ -112,7 +112,7 @@ pub fn tool_word(tool_name: &str) -> &str {
 
 /// What the agent may do while it asks, as the head's last detail: the
 /// sandbox it runs in, where its provider has one (`read-only sandbox`,
-/// `workspace-write sandbox`, `full access`: `Settings::sandbox_for`), else
+/// `workspace-write sandbox`, `full access`, as its provider announced), else
 /// its permission mode (`default`, `accept edits`, `plan`).
 pub fn context_label(permission_mode: &str, sandbox: Option<&str>) -> SharedString {
     match sandbox {

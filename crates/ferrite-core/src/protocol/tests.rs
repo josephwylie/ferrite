@@ -272,6 +272,7 @@ fn state() -> ThreadState {
         }],
         models: vec![model("sonnet")],
         permission_mode: Some("default".into()),
+        sandbox: None,
         permission_modes: vec![WirePermissionMode {
             value: "default".into(),
             label: "Default".into(),
@@ -3028,4 +3029,20 @@ fn review_diff_names_only_what_an_older_server_reads() {
     });
     assert_eq!(Op::review_diff(path, &run), None);
     assert_eq!(Op::review_diff(path, &Read::LastTurn), None);
+}
+
+/// A Server that names the sandbox its provider announced sends it with the
+/// Thread; an older one sends none, and the card then claims none.
+#[test]
+fn a_threads_announced_sandbox_crosses_the_wire_and_may_be_absent() {
+    let mut said = state();
+    said.sandbox = Some("workspace-write".into());
+    let wire = serde_json::to_value(&said).unwrap();
+    assert_eq!(wire["sandbox"], "workspace-write");
+    let heard: ThreadState = serde_json::from_value(wire).unwrap();
+    assert_eq!(heard.sandbox.as_deref(), Some("workspace-write"));
+    let older = serde_json::to_value(state()).unwrap();
+    assert!(older.get("sandbox").is_none());
+    let heard: ThreadState = serde_json::from_value(older).unwrap();
+    assert_eq!(heard.sandbox, None);
 }

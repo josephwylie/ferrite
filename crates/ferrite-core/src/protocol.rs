@@ -1738,6 +1738,8 @@ pub struct ThreadState {
     pub models: Vec<crate::ModelInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<String>,
     #[serde(default)]
     pub permission_modes: Vec<WirePermissionMode>,
     #[serde(default)]

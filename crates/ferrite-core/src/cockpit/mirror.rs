@@ -65,6 +65,7 @@ struct Facts {
     commands: Vec<SessionCommand>,
     models: Vec<ModelInfo>,
     permission_mode: Option<String>,
+    sandbox: Option<String>,
     permission_modes: Vec<PermissionModeChoice>,
     controls: Vec<ControlKind>,
     store_error: Option<String>,
@@ -115,6 +116,7 @@ impl From<ThreadState> for Facts {
             commands: state.commands.iter().map(Into::into).collect(),
             models: state.models,
             permission_mode: state.permission_mode,
+            sandbox: state.sandbox,
             permission_modes: state
                 .permission_modes
                 .into_iter()
@@ -847,6 +849,12 @@ impl<'a> ThreadView<'a> {
     /// The live Session's permission mode (#23): the meta row's mode chip.
     pub fn permission_mode(&self) -> Option<&'a str> {
         self.facts.permission_mode.as_deref()
+    }
+
+    /// The sandbox its provider announced for the live Session: the
+    /// approval card's context word.
+    pub fn sandbox(&self) -> Option<&'a str> {
+        self.facts.sandbox.as_deref()
     }
 }
 

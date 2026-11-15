@@ -395,16 +395,6 @@ impl Settings {
         }
     }
 
-    /// The sandbox `provider`'s Sessions run in, for a provider that has
-    /// one: Codex's (`read-only`, its own default, unless one is set).
-    /// Claude runs in none.
-    pub fn sandbox_for(&self, provider: Provider) -> Option<&str> {
-        match provider {
-            Provider::Claude => None,
-            Provider::Codex => Some(self.codex_sandbox.as_deref().unwrap_or("read-only")),
-        }
-    }
-
     pub fn effort_for(&self, provider: Provider) -> Option<&str> {
         match provider {
             Provider::Claude => self.claude_effort.as_deref(),

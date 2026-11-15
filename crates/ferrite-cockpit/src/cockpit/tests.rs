@@ -134,6 +134,7 @@ struct Scripted {
     native_controls: Rc<RefCell<bool>>,
     withheld: Rc<RefCell<Vec<ferrite_core::ControlKind>>>,
     modes: Rc<RefCell<Option<Vec<ferrite_core::PermissionModeChoice>>>>,
+    sandbox: Rc<RefCell<Option<String>>>,
     file_searches: Rc<RefCell<Vec<(String, ferrite_core::providers::FileSearchReply)>>>,
     native_files: Rc<RefCell<bool>>,
     effort_answers: EffortAnswers,
@@ -168,6 +169,9 @@ impl Session for Scripted {
         } else {
             vec![]
         }
+    }
+    fn sandbox(&self) -> Option<String> {
+        self.sandbox.borrow().clone()
     }
     fn supports_control(&self, kind: ferrite_core::ControlKind) -> bool {
         *self.native_controls.borrow() && !self.withheld.borrow().contains(&kind)
@@ -283,6 +287,8 @@ struct Fake {
     withheld: Rc<RefCell<Vec<ferrite_core::ControlKind>>>,
     /// When set, the permission modes every Session offers.
     modes: Rc<RefCell<Option<Vec<ferrite_core::PermissionModeChoice>>>>,
+    /// When set, the sandbox every Session says it runs in.
+    sandbox: Rc<RefCell<Option<String>>>,
     file_searches: Rc<RefCell<Vec<(String, ferrite_core::providers::FileSearchReply)>>>,
     native_files: Rc<RefCell<bool>>,
     effort_answers: EffortAnswers,
@@ -353,6 +359,7 @@ impl Spawner for Fake {
             native_controls: self.native_controls.clone(),
             withheld: self.withheld.clone(),
             modes: self.modes.clone(),
+            sandbox: self.sandbox.clone(),
             file_searches: self.file_searches.clone(),
             native_files: self.native_files.clone(),
             effort_answers: self.effort_answers.clone(),
