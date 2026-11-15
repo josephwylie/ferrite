@@ -2188,15 +2188,9 @@ pub mod testing {
     }
 }
 
-/// How often the system's Reduce Motion setting is read again while the
-/// app runs: macOS offers no cheap change callback to a process without a
-/// bridge to AppKit, and a read is one short `defaults` call.
-const SYSTEM_POLL: Duration = Duration::from_secs(2);
-
 /// Launch: adopt the system's Reduce Motion setting, and follow it while
 /// the app runs. gpui reads no platform setting itself, so without this
-/// the flag is never set. Read off the main thread;
-/// `FERRITE_REDUCE_MOTION=1` (or `0`) overrides it and is never polled.
+/// the flag is never set. `FERRITE_REDUCE_MOTION=1` (or `0`) overrides it.
 pub fn init(cx: &mut App) {
     if let Some(forced) = std::env::var("FERRITE_REDUCE_MOTION")
         .ok()
@@ -2205,23 +2199,9 @@ pub fn init(cx: &mut App) {
         cx.set_reduce_motion(forced);
         return;
     }
-    if !cfg!(target_os = "macos") {
-        return;
-    }
-    cx.spawn(async move |cx| loop {
-        let reduced = cx.background_executor().spawn(read_system_setting()).await;
-        cx.update(|cx| cx.set_reduce_motion(reduced));
-        cx.background_executor().timer(SYSTEM_POLL).await;
-    })
-    .detach();
-}
-
-/// Whether macOS's Reduce Motion is on: the key is absent while it is off.
-async fn read_system_setting() -> bool {
-    std::process::Command::new("defaults")
-        .args(["read", "com.apple.universalaccess", "reduceMotion"])
-        .output()
-        .is_ok_and(|out| out.status.success() && out.stdout.trim_ascii() == b"1")
+    cx.set_reduce_motion(cx.system_reduce_motion());
+    cx.on_system_reduce_motion_change(|cx| cx.set_reduce_motion(cx.system_reduce_motion()))
+        .detach();
 }
 
 #[cfg(test)]
@@ -2734,6 +2714,25 @@ mod tests {
         let (view, drawn, cx) = switch(cx, false);
         flip(&view, true, cx);
         assert_eq!(drawn.get(), 1.0);
+        assert_eq!(next_frame(cx), 0);
+    }
+
+    /// The system's Reduce Motion turning on lands a flip that is mid-flight.
+    #[gpui::test]
+    fn reduced_motion_following_the_system_lands_a_flip_mid_flight(cx: &mut TestAppContext) {
+        testing::drive();
+        cx.update(init);
+        let (view, drawn, cx) = switch(cx, true);
+        flip(&view, false, cx);
+        cx.executor().advance_clock(Duration::from_millis(75));
+        assert!(next_frame(cx) > 0);
+        let mid = drawn.get();
+        assert!(mid > 0.0 && mid < 1.0, "mid-flight {mid}");
+
+        cx.simulate_system_reduce_motion(true);
+        cx.run_until_parked();
+        next_frame(cx);
+        assert_eq!(drawn.get(), 0.0, "landed at once");
         assert_eq!(next_frame(cx), 0);
     }
 

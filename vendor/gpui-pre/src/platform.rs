@@ -250,6 +250,13 @@ pub trait Platform: 'static {
     fn thermal_state(&self) -> ThermalState;
     fn on_thermal_state_change(&self, callback: Box<dyn FnMut()>);
 
+    /// Whether the system asks for reduced motion.
+    fn reduce_motion(&self) -> bool {
+        false
+    }
+    /// Invokes `callback` when the system's reduced motion setting may have changed.
+    fn on_reduce_motion_change(&self, _callback: Box<dyn FnMut()>) {}
+
     /// Sets the application's process-wide identity and user-visible name.
     ///
     /// The identifier is used for platform identity mechanisms such as the
