@@ -906,14 +906,17 @@ impl CockpitView {
             }
         };
         let chevron = |side: Side| {
-            tab_scroll::chevron("files-tabs", side, &files.tab_scroll).map(|slot| {
-                slot.on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            tab_scroll::chevron(
+                "files-tabs",
+                side,
+                &files.tab_scroll,
+                cx.listener(move |view, _: &ClickEvent, _, cx| {
                     if let Some(files) = view.files_of(thread) {
                         files.tab_scroll.ease(side, cx);
                     }
                     cx.notify();
-                }))
-            })
+                }),
+            )
         };
         super::surface_bar()
             .child(

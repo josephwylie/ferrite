@@ -362,13 +362,16 @@ impl CockpitView {
         let scroll = &self.panel.tabs_scroll;
         scroll.settle(cx);
         let chevron = |side: Side| {
-            tab_scroll::chevron("panel-tabs", side, scroll).map(|slot| {
-                slot.on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            tab_scroll::chevron(
+                "panel-tabs",
+                side,
+                scroll,
+                cx.listener(move |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     view.panel.tabs_scroll.ease(side, cx);
                     cx.notify();
-                }))
-            })
+                }),
+            )
         };
         // The title bar's tools keep the row's right end.
         let toggle = TITLE_TOOLS_W + TITLE_TOOLS_GAP;

@@ -257,6 +257,29 @@ fn twenty_tabs_at_a_narrow_width_are_all_reachable(cx: &mut TestAppContext) {
     assert!(tab_names(&view, thread, cx).is_empty(), "every tab closed by key");
 }
 
+/// The tab whose opening first overflows the row lands whole in it, though
+/// the chevron slots that overflow brings in narrow the row.
+#[gpui::test]
+fn the_tab_that_first_overflows_the_row_sits_whole_in_it(cx: &mut TestAppContext) {
+    let (view, thread, checkout, cx) = files_window("files-first-overflow", cx);
+    cx.simulate_resize(gpui::size(px(1300.), px(900.)));
+    for at in 0..20 {
+        let file = checkout.join(format!("file-number-{at}.rs"));
+        std::fs::write(&file, "x\n").unwrap();
+        open(&view, thread, &file, true, cx);
+        tick(cx);
+        if cx.debug_bounds("files-tabs-left").is_some() {
+            let selector: &'static str = Box::leak(format!("files-tab-{at}").into_boxed_str());
+            let frames = cx.update(|window, cx| window.simulate_next_frame(cx));
+            assert!(frames > 0, "the row asks for the frame that aims at the tab again");
+            cx.run_until_parked();
+            assert_eq!(inside_the_row(selector, cx), Some(true), "tab {at} lies whole in the row");
+            return;
+        }
+    }
+    panic!("twenty tabs never overflowed the row");
+}
+
 /// A tab revealed from the far end lands whole inside the row, and the
 /// chevron that appears beside it takes none of the row's width.
 #[gpui::test]
@@ -692,6 +715,20 @@ fn a_quit_writes_what_auto_save_had_not_yet(cx: &mut TestAppContext) {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "l\n", "not yet");
     view.update(cx, |view, cx| view.flush_unsaved_files(cx));
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "// hi\nl\n");
+}
+
+#[gpui::test]
+fn leaving_asks_about_text_the_disk_refused(cx: &mut TestAppContext) {
+    let (view, _thread, _file, editor, cx) = open_editor("files-quit-refused", cx);
+    editor.update(cx, |editor, _| editor.refuse_writes());
+    type_into("// hi\n", cx);
+    pause_and_settle(cx);
+    type_into("x", cx);
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.leaving_warning(cx)).as_deref(),
+        Some("1 file has unsaved changes. Leaving discards them."),
+        "a typed edit after a refused write is still only in the buffer"
+    );
 }
 
 /// Auto save's quit flush writes what it can. What it cannot, text with

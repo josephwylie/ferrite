@@ -3,8 +3,8 @@
 //! scrolls the row, a chevron at each end with more to show eases it by
 //! `tab_scroll_step` (it jumps under reduced motion), and `reveal` brings a
 //! tab into view. Once the row overflows both chevron slots stay in the
-//! layout, the end with nothing more dimmed, so the viewport never changes
-//! width as a chevron comes and goes.
+//! layout, the end with nothing more dimmed and inert, so the viewport
+//! never changes width as a chevron comes and goes.
 
 use std::cell::Cell;
 use std::ops::Deref;
@@ -60,6 +60,10 @@ pub(crate) struct TabScroll {
     tween: Cell<Option<Tween>>,
     /// Whether the chevron slots are in the layout, settled once a frame.
     slotted: Cell<bool>,
+    /// The tab `reveal` asked for, and whether a frame has laid it out. The
+    /// next frame aims at it again, since slots that frame brought in may
+    /// have pushed it part way out.
+    revealing: Cell<Option<(usize, bool)>>,
 }
 
 impl Deref for TabScroll {
@@ -92,6 +96,11 @@ impl TabScroll {
     pub(crate) fn settle(&self, cx: &gpui::App) {
         let slots = if self.slotted.get() { 2. * SURFACE_PLUS } else { 0. };
         self.slotted.set(self.most() > slots + 0.5);
+        match self.revealing.take() {
+            Some((ix, false)) => self.revealing.set(Some((ix, true))),
+            Some((ix, true)) => self.handle.scroll_to_item(ix),
+            None => {}
+        }
         let Some(tween) = self.tween.get() else {
             return;
         };
@@ -103,9 +112,11 @@ impl TabScroll {
         }
     }
 
-    /// Whether the row is mid-ease: the frame must be drawn again.
+    /// Whether the row is mid-ease or mid-reveal: the frame must be drawn
+    /// again.
     pub(crate) fn running(&self, cx: &gpui::App) -> bool {
-        self.tween.get().is_some_and(|tween| {
+        self.revealing.get().is_some()
+            || self.tween.get().is_some_and(|tween| {
             tween.running(cx.background_executor().now(), motion::reduced_motion(cx))
         })
     }
@@ -116,6 +127,7 @@ impl TabScroll {
         let visible = f32::from(self.handle.bounds().size.width);
         let at = self.at();
         let to = (at + side.toward() * tab_scroll_step(visible)).clamp(0., self.most());
+        self.revealing.set(None);
         self.tween.set(Some(Tween::retarget(
             self.tween.take(),
             at,
@@ -134,6 +146,7 @@ impl TabScroll {
             return false;
         }
         self.tween.set(None);
+        self.revealing.set(None);
         self.set((self.at() - f32::from(delta.y)).clamp(0., self.most()));
         true
     }
@@ -141,6 +154,7 @@ impl TabScroll {
     /// Bring child `ix` of the row into view when it is next drawn.
     pub(crate) fn reveal(&self, ix: usize) {
         self.tween.set(None);
+        self.revealing.set(Some((ix, false)));
         self.handle.scroll_to_item(ix);
     }
 
@@ -159,10 +173,15 @@ impl TabScroll {
 }
 
 /// The chevron slot at `side`'s end, named `<prefix>-left` or
-/// `<prefix>-right` while the row has more that way and dimmed and inert
-/// while it has not; the caller wires a live one's press to
-/// `TabScroll::ease`. `None` while the row does not overflow.
-pub(crate) fn chevron(prefix: &str, side: Side, scroll: &TabScroll) -> Option<Stateful<Div>> {
+/// `<prefix>-right` and calling `press` while the row has more that way,
+/// dimmed and unnamed while it has not. Either way a press on it never
+/// reaches the title bar beneath. `None` while the row does not overflow.
+pub(crate) fn chevron(
+    prefix: &str,
+    side: Side,
+    scroll: &TabScroll,
+    press: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+) -> Option<Stateful<Div>> {
     if !scroll.overflowing() {
         return None;
     }
@@ -174,17 +193,18 @@ pub(crate) fn chevron(prefix: &str, side: Side, scroll: &TabScroll) -> Option<St
         .items_center()
         .justify_center()
         .size(px(SURFACE_PLUS))
-        .rounded(px(R_CONTROL));
+        .rounded(px(R_CONTROL))
+        .occlude()
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(icon(side.glyph(), ICON_CHEVRON, INK_SUBTLE));
     Some(if scroll.more(side) {
         slot.debug_selector({
             let key = key.clone();
             move || key.to_string()
         })
-        .occlude()
         .hover_raised(key)
-        .child(icon(side.glyph(), ICON_CHEVRON, INK_SUBTLE))
-        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(press)
     } else {
-        slot.opacity(SURFACE_TAB_CHEVRON_SPENT_OPACITY).child(icon(side.glyph(), ICON_CHEVRON, INK_SUBTLE))
+        slot.opacity(SURFACE_TAB_CHEVRON_SPENT_OPACITY)
     })
 }
