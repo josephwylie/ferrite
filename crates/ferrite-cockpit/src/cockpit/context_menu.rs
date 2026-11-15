@@ -177,7 +177,43 @@ pub(super) struct ContextMenu {
     pub(super) sub: Option<(usize, Vec<(menu::Item, MenuVerb)>)>,
 }
 
+/// What heads a copy that is only the latest part of a conversation.
+const PARTIAL_HISTORY: &str =
+    "[Earlier messages are not included: this view keeps only the latest.]";
+
 impl CockpitView {
+    /// `thread`'s conversation to the clipboard. Once the view dropped its
+    /// oldest Blocks, the whole of it is replayed from the Thread's log off
+    /// the window's thread; with no log to read here, or none readable, the
+    /// kept part is copied and says it is partial.
+    pub(super) fn copy_transcript(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let Some(open) = self.cockpit.thread(thread) else {
+            return;
+        };
+        let kept = plain_text(open.transcript().blocks());
+        if kept.is_empty() {
+            return;
+        }
+        if !open.transcript().earlier_dropped() {
+            cx.write_to_clipboard(ClipboardItem::new_string(kept));
+            return;
+        }
+        let partial = format!("{PARTIAL_HISTORY}\n\n{kept}");
+        let Some(store) = self.cockpit.history_log(thread).cloned() else {
+            cx.write_to_clipboard(ClipboardItem::new_string(partial));
+            return;
+        };
+        cx.spawn(async move |_, cx| {
+            let whole = cx
+                .background_executor()
+                .spawn(async move { store.full_history_text(thread) })
+                .await;
+            let text = whole.ok().filter(|text| !text.is_empty()).unwrap_or(partial);
+            cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string(text)));
+        })
+        .detach();
+    }
+
     /// Summon the context menu for `target` at the pointer. Whatever else
     /// was up (a popover, a card, a rename) closes: one floating thing at a
     /// time.
@@ -799,12 +835,7 @@ impl CockpitView {
                 }
             }
             (MenuTarget::Pane(thread), MenuVerb::CopyTranscript) => {
-                if let Some(open) = self.cockpit.thread(thread) {
-                    let text = plain_text(open.transcript().blocks());
-                    if !text.is_empty() {
-                        cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    }
-                }
+                self.copy_transcript(thread, cx);
             }
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::LeaveGroup) => {
                 match self.cockpit.apply_group(GroupChange::Leave { thread }) {

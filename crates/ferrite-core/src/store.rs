@@ -3785,6 +3785,26 @@ impl Store {
         )
     }
 
+    /// A Thread's whole conversation as plain text (`transcript::plain_text`),
+    /// replayed from its log under no Block or byte limit: what the
+    /// Thread's capped view (`Activity`'s limits) no longer holds. The log
+    /// lags a running turn by the flush interval. Reads the whole file:
+    /// call it on a worker.
+    pub fn full_history_text(&self, id: ThreadId) -> Result<String, LoadError> {
+        let limits = crate::activity::ActivityLimits {
+            blocks_per_subject: usize::MAX,
+            content_bytes_per_subject: usize::MAX,
+            ..self.activity_limits
+        };
+        let mut activity = crate::activity::Activity::new(limits);
+        for input in self.load(id)?.activity_inputs() {
+            activity.apply(input);
+        }
+        Ok(crate::transcript::plain_text(
+            activity.view().main().transcript().blocks(),
+        ))
+    }
+
     /// One Thread's log as it stands at `through` (`ThreadWriter::checkpoint`),
     /// to be read on another thread. The file is opened now, so a header
     /// rewrite in between replaces the path but not what this reads.

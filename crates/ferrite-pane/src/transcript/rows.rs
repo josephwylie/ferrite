@@ -40,6 +40,8 @@ pub(crate) enum RowId {
     Divider(BlockId),
     /// What a package appends after the last row (the pending Decision).
     Tail,
+    /// Over the first row, when earlier history is not shown.
+    Boundary,
 }
 
 /// What a row is, for the gap table: derived once in `project`.
@@ -98,6 +100,9 @@ pub(crate) enum RowKind {
     WrapUp {
         spent: bool,
     },
+    /// The line over the first row that says earlier history is not shown
+    /// (`RowShape::earlier`): a divider's neighbour, like a compaction.
+    Boundary,
     /// A fallback prose or code block.
     Other,
 }
@@ -152,7 +157,7 @@ pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind, reading: f32)
     match (previous, kind) {
         (previous, kind) if log(previous) && log(kind) => 0.,
         (_, TurnEnd | Meta) => 0.,
-        (Divider, _) => line,
+        (Divider | Boundary, _) => line,
         (previous, Divider) => gap_before(Some(previous), Prompt, reading),
         (_, Outputs) => theme::tx_half(line),
         (Prompt, Prompt) => pad(theme::TX_ROW_PAD_JOINED),
@@ -194,6 +199,9 @@ pub(crate) struct RowShape {
     pub thinking: bool,
     /// A muted line under the first prompt (`TranscriptInput::note`).
     pub note: Option<gpui::SharedString>,
+    /// Earlier history exists that these blocks do not hold: a boundary
+    /// row heads the window.
+    pub earlier: Option<crate::transcript::Earlier>,
 }
 
 /// One renderable transcript unit. Its blocks are owned so a list callback
@@ -630,6 +638,9 @@ fn project(blocks: &[Block], shape: &RowShape, reading: f32) -> Vec<Rc<Transcrip
         working.tail_key = Some(key);
         working
     };
+    if shape.earlier.is_some() {
+        rows.push(row(RowId::Boundary, &[], None, RowKind::Boundary));
+    }
     // The running turn's prompt was evicted: its header heads the window.
     if let (Some(key), None) = (shape.working, running) {
         rows.push(header(key));
@@ -942,6 +953,22 @@ mod tests {
             .iter()
             .map(|row| row.kind())
             .collect()
+    }
+
+    /// Earlier history the window does not hold is said above its first
+    /// row, and only then.
+    #[test]
+    fn a_boundary_row_heads_a_window_that_starts_after_the_thread_did() {
+        use RowKind::*;
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        text(&mut transcript, "Done.\n\n");
+        let earlier = RowShape {
+            earlier: Some(crate::transcript::Earlier { copyable: true }),
+            ..shape()
+        };
+        assert_eq!(kinds(&transcript, &earlier)[..2], [Boundary, Prompt]);
+        assert_eq!(kinds(&transcript, &shape())[0], Prompt);
     }
 
     /// The running turn's shape: its header under its prompt, its live row

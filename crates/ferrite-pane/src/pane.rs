@@ -5227,6 +5227,7 @@ mod tests {
                 reply_to: "Claude".into(),
                 skills: Default::default(),
                 note: None,
+                earlier: None,
                 queued: 0,
             };
             let selection = self.selection.clone();
@@ -5269,6 +5270,7 @@ mod tests {
                     reply_to: "Claude".into(),
                     skills: Default::default(),
                     note: None,
+                    earlier: None,
                     queued: 0,
                 },
                 crate::rich::TextCache::default(),

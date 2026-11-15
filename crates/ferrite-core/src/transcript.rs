@@ -1110,6 +1110,9 @@ pub struct Transcript {
     /// The latest `Input::ClockObservation`'s stamp: what a new block's
     /// `at` reads.
     clock: Option<String>,
+    /// The oldest Blocks were dropped, by the Block limit or the owner's
+    /// content budget: what shows is not where the conversation began.
+    earlier_dropped: bool,
 }
 
 /// A test runner's progress, read off its output one complete line at a
@@ -1422,7 +1425,21 @@ impl Transcript {
             reasoning_parts: Default::default(),
             orphan_results: Vec::new(),
             clock: None,
+            earlier_dropped: false,
         }
+    }
+
+    /// Whether the oldest Blocks were dropped to keep the rest: the Thread
+    /// began before the first Block here. A rewind's cut does not count, it
+    /// removes the end.
+    pub fn earlier_dropped(&self) -> bool {
+        self.earlier_dropped
+    }
+
+    /// Record a drop the owner made beyond this Transcript's sight: it
+    /// rebuilt the Blocks from the records it kept.
+    pub(crate) fn mark_earlier_dropped(&mut self) {
+        self.earlier_dropped = true;
     }
 
     /// The latest clock observation's stamp, which new blocks are stamped
@@ -1818,6 +1835,7 @@ impl Transcript {
         // trims.
         let trimmed = self.evict();
         if !trimmed.is_empty() {
+            self.earlier_dropped = true;
             self.forget_evicted();
             update.evicted.extend(trimmed);
         }
@@ -1835,6 +1853,7 @@ impl Transcript {
             return Update::default();
         }
         let evicted = self.blocks.drain(..end).map(|block| block.id).collect();
+        self.earlier_dropped = true;
         if self.section.block().is_some_and(|open| open <= through) {
             self.section.clear();
         }
@@ -5477,15 +5496,24 @@ mod tests {
         assert_eq!(body_text(&transcript.blocks()[0]), "two");
     }
 
-    /// The long-history gap (transcript-002), pinned as it stands: a Thread
-    /// past `DEFAULT_CAPACITY` blocks loses its oldest, and nothing in what
-    /// remains says earlier turns exist or how to reach them. Paging them
-    /// back in is a stated limit, not built.
+    /// The long-history boundary (transcript-002): a Thread past
+    /// `DEFAULT_CAPACITY` blocks drops its oldest, and the Transcript says
+    /// so, for the pane to show where the kept history starts.
     #[test]
-    fn a_history_past_the_cap_loses_its_start_without_saying_so() {
+    fn a_history_past_the_cap_records_that_its_start_was_dropped() {
         let mut transcript = Transcript::default();
+        assert!(!transcript.earlier_dropped());
         let mut evicted = 0;
-        for n in 0..DEFAULT_CAPACITY + 100 {
+        for n in 0..DEFAULT_CAPACITY {
+            evicted += transcript
+                .apply(Input::Prompt(format!("question {n}")))
+                .evicted
+                .len();
+        }
+        assert_eq!(evicted, 0);
+        assert!(!transcript.earlier_dropped(), "everything still fits");
+
+        for n in DEFAULT_CAPACITY..DEFAULT_CAPACITY + 100 {
             evicted += transcript
                 .apply(Input::Prompt(format!("question {n}")))
                 .evicted
@@ -5494,13 +5522,7 @@ mod tests {
         assert_eq!(transcript.blocks().len(), DEFAULT_CAPACITY);
         assert_eq!(evicted, 100);
         assert_eq!(body_text(&transcript.blocks()[0]), "question 100");
-        assert!(
-            !transcript
-                .blocks()
-                .iter()
-                .any(|block| matches!(block.body, Body::Notice(_) | Body::Meta(_))),
-            "no row marks where the shown history starts"
-        );
+        assert!(transcript.earlier_dropped());
     }
 
     /// The memory claim behind a cockpit left running all day: a Thread that

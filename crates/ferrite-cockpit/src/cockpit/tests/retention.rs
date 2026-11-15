@@ -136,6 +136,61 @@ fn a_transcript_at_its_retention_cap_keeps_its_text_identity_as_it_streams(
     );
 }
 
+/// transcript-002. A Thread past its Block limit drops its oldest Blocks;
+/// the transcript says its first row is not the Thread's first, and the row
+/// gives back the whole conversation from the log, first prompt included.
+#[gpui::test]
+fn a_thread_past_its_cap_says_where_its_history_starts_and_copies_all_of_it(
+    cx: &mut TestAppContext,
+) {
+    let _clock = hold_wall_clock();
+    let limits = ferrite_core::activity::ActivityLimits {
+        blocks_per_subject: 12,
+        ..Default::default()
+    };
+    let fake = Fake::default();
+    let dir = scratch("retention-earlier-history");
+    let store = Store::open(&dir).unwrap().with_activity_limits(limits);
+    let mut core = Cockpit::new(store, Box::new(fake.clone()));
+    let thread = core
+        .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+        .unwrap();
+    did_something_now(&dir, thread);
+    core.send(thread, "the very first question".into());
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1000.), px(900.)));
+    pump(&view, cx);
+    assert!(
+        debug_bounds(cx, "earlier-boundary".to_string()).is_none(),
+        "a Thread that fits says nothing"
+    );
+
+    for at in 0..30 {
+        turn(&fake, at, 8);
+        pump(&view, cx);
+    }
+    for _ in 0..4 {
+        pump(&view, cx);
+    }
+    let kept = view.read_with(cx, |view, _| {
+        plain_text(view.cockpit.thread(thread).unwrap().transcript().blocks())
+    });
+    assert!(!kept.contains("the very first question"), "the cap dropped it");
+    assert!(
+        debug_bounds(cx, "earlier-boundary".to_string()).is_some(),
+        "the first row says earlier messages are not shown"
+    );
+
+    let at = bounds(cx, "earlier-copy".to_string());
+    cx.simulate_click(at.center(), gpui::Modifiers::none());
+    cx.executor().run_until_parked();
+    tick(cx);
+    let copied = clipboard(cx).expect("the action copied");
+    assert!(copied.contains("> the very first question"), "{copied}");
+    assert!(copied.contains("turn 29 "), "and the newest turn too");
+}
+
 /// ⌘-click routes and laid-out link boxes belong to live transcripts. A
 /// history regenerated in place re-keys its transcript; the old key's
 /// entries go with it. A Subject switch keeps the hidden Subject's own.
