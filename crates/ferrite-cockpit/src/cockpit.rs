@@ -1480,7 +1480,10 @@ impl CockpitView {
         // tested directly against an empty registry below.
         #[cfg(test)]
         let launch_project = launch_project.or_else(|| cockpit.register_project(&here()).ok());
-        cx.bind_keys([gpui::KeyBinding::new("enter", browser::Go, Some("BrowserAddress"))]);
+        cx.bind_keys([
+            gpui::KeyBinding::new("enter", browser::Go, Some("BrowserAddress")),
+            gpui::KeyBinding::new("escape", browser::CancelNewTab, Some("BrowserAddress")),
+        ]);
         cx.bind_keys([
             gpui::KeyBinding::new("escape", browser::CancelAnnotation, Some("BrowserAnnotationCapture")),
             gpui::KeyBinding::new("escape", ferrite_pane::annotation_editor::Cancel, Some("AnnotationEditor")),

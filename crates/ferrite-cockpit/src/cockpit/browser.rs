@@ -17,7 +17,7 @@ use std::{
     rc::Rc,
 };
 
-gpui::actions!(browser, [Go, CancelAnnotation]);
+gpui::actions!(browser, [Go, CancelAnnotation, CancelNewTab]);
 
 #[derive(Default)]
 pub(super) struct Browsers {
@@ -1328,7 +1328,8 @@ impl CockpitView {
         thread: Option<ThreadId>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use ferrite_ui::{icons, theme::*};
+        use ferrite_ui::{components::Tip as _, icons, theme::*};
+        use gpui::component::Disableable as _;
         let Some(thread) = thread else {
             return div()
                 .p(px(16.))
@@ -1360,6 +1361,7 @@ impl CockpitView {
                 .unwrap_or_else(|| tab.url.clone());
             div()
                 .id(("browser-tab", id.0))
+                .debug_selector(move || format!("browser-tab-{}", id.0))
                 .flex()
                 .items_center()
                 .min_w_0()
@@ -1449,37 +1451,127 @@ impl CockpitView {
                     })),
             );
         }
+        let failure = browser.error.as_ref().or_else(|| {
+            active
+                .filter(|_| !browser.new_tab)
+                .and_then(|tab| tab.error.as_ref())
+        });
+        let loading = !browser.new_tab && active.is_some_and(|tab| tab.loading);
         let annotatable = !browser.new_tab
-            && active.is_some_and(|tab| !tab.loading && browser.pages.contains_key(&tab.id));
+            && !loading
+            && active.is_some_and(|tab| browser.pages.contains_key(&tab.id));
+        let address_empty = browser.address.read(cx).text().is_empty();
+        let annotate_why = if annotatable {
+            None
+        } else if loading {
+            Some("Available when the page finishes loading")
+        } else {
+            Some("Open a page to annotate it")
+        };
         toolbar = toolbar
-            .when(annotatable, |toolbar| {
-                toolbar.child(
-                    ferrite_ui::components::button("browser-annotate")
-                        .debug_selector(|| "browser-annotate".into())
-                        .tab_stop(true)
-                        .child("Annotate")
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.begin_browser_annotation(thread, window, cx);
-                        })),
-                )
-            })
-            .child(div().px(px(4.)).child("Address"))
+            .child(
+                ferrite_ui::components::button("browser-annotate")
+                    .debug_selector(|| "browser-annotate".into())
+                    .tab_stop(true)
+                    .disabled(!annotatable)
+                    .when_some(annotate_why, |button, why| {
+                        button.opacity(0.35).tip(why)
+                    })
+                    .child("Annotate")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.begin_browser_annotation(thread, window, cx);
+                    })),
+            )
             .child(
                 div()
+                    .debug_selector(|| "browser-address".into())
+                    .relative()
+                    .flex()
+                    .items_center()
                     .flex_1()
                     .min_w_0()
-                    .child(browser.address.clone())
-                    .on_action(cx.listener(move |this, _: &Go, _, cx| this.browser_go(thread, cx))),
+                    .h(px(ICON_BUTTON))
+                    .px(px(SPACE_2))
+                    .rounded(px(R_CONTROL))
+                    .border_1()
+                    .border_color(paint::FIELD_RING)
+                    .bg(paint::FIELD)
+                    .child(div().flex_1().min_w_0().child(browser.address.clone()))
+                    .when(address_empty, |field| {
+                        field.child(
+                            div()
+                                .absolute()
+                                .left(px(SPACE_2))
+                                .text_color(rgb(PLACEHOLDER_INK))
+                                .child("Search or enter address"),
+                        )
+                    })
+                    .on_action(cx.listener(move |this, _: &Go, _, cx| this.browser_go(thread, cx)))
+                    .on_action(cx.listener(move |this, _: &CancelNewTab, _, cx| {
+                        let Some(browser) = this.browsers.threads.get_mut(&thread) else {
+                            return;
+                        };
+                        if !browser.new_tab {
+                            cx.propagate();
+                            return;
+                        }
+                        browser.new_tab = false;
+                        browser.address_shown = None;
+                        cx.notify();
+                    })),
             )
             .child(
                 ferrite_pane::preview::head_door("browser-go", "browser-go".into(), icons::FORWARD)
                     .tooltip(ferrite_ui::menu::tooltip("Go to address"))
                     .on_click(cx.listener(move |this, _, _, cx| this.browser_go(thread, cx))),
+            )
+            .child(
+                ferrite_pane::preview::head_door(
+                    "browser-new-tab",
+                    "browser-new-tab".into(),
+                    icons::PLUS,
+                )
+                .tooltip(ferrite_ui::menu::tooltip("New tab"))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.cancel_browser_capture(thread, cx);
+                    if let Some(browser) = this.browsers.threads.get_mut(&thread) {
+                        browser.new_tab = true;
+                        browser
+                            .address
+                            .update(cx, |field, cx| field.set(String::new(), cx));
+                        let focus = browser.address.read(cx).focus_target(window, cx);
+                        window.focus(&focus, cx);
+                        cx.notify();
+                    }
+                })),
             );
+        // The progress line sits on the toolbar's lower edge and the failure
+        // or empty notice covers the page region, so neither moves a control.
+        let toolbar = div()
+            .relative()
+            .flex_shrink_0()
+            .child(toolbar)
+            .when(loading, |bar| {
+                bar.child(
+                    div()
+                        .debug_selector(|| "browser-progress".into())
+                        .absolute()
+                        .bottom_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(2.))
+                        .bg(rgb(LINK_INK)),
+                )
+            });
         let body = active
             .filter(|_| !browser.new_tab)
             .and_then(|tab| browser.pages.get(&tab.id))
             .map(|page| page.web.clone());
+        let notice = match failure {
+            Some(error) => Some(format!("{error}\nEdit the address or reload to try again.")),
+            None if body.is_none() => Some("Enter a website address above to browse.".to_owned()),
+            None => None,
+        };
         div()
             .debug_selector(|| "browser-preview".into())
             .flex()
@@ -1487,62 +1579,55 @@ impl CockpitView {
             .flex_1()
             .min_h_0()
             .overflow_hidden()
+            .when(browser.state.tabs.len() > 1 || browser.new_tab, |chrome| {
+                chrome.child(
+                    div()
+                        .id("browser-tabs")
+                        .debug_selector(|| "browser-tabs".into())
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .overflow_x_scroll()
+                        .children(tabs)
+                        .when(browser.new_tab, |strip| {
+                            strip.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .px(px(8.))
+                                    .py(px(4.))
+                                    .text_size(px(FS_LABEL))
+                                    .font_weight(W_LABEL)
+                                    .text_color(rgb(INK_STRONG))
+                                    .child("New tab"),
+                            )
+                        }),
+                )
+            })
+            .child(toolbar)
             .child(
                 div()
-                    .id("browser-tabs")
+                    .relative()
                     .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .overflow_x_scroll()
-                    .children(tabs)
-                    .child(
-                        ferrite_pane::preview::head_door(
-                            "browser-new-tab",
-                            "browser-new-tab".into(),
-                            icons::PLUS,
-                        )
-                        .tooltip(ferrite_ui::menu::tooltip("New tab"))
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                this.cancel_browser_capture(thread, cx);
-                                if let Some(browser) = this.browsers.threads.get_mut(&thread) {
-                                    browser.new_tab = true;
-                                    browser
-                                        .address
-                                        .update(cx, |field, cx| field.set(String::new(), cx));
-                                    let focus = browser.address.read(cx).focus_target(window, cx);
-                                    window.focus(&focus, cx);
-                                    cx.notify();
-                                }
-                            },
-                        )),
-                    ),
-            )
-            .child(toolbar)
-            .when(
-                active.is_some_and(|tab| tab.loading) && !browser.new_tab,
-                |body| {
-                    body.child(
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.annotation_browser_body(thread, body, cx))
+                    .children(notice.map(|notice| {
                         div()
-                            .px(px(8.))
+                            .debug_selector(|| "browser-notice".into())
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .p(px(SPACE_4))
+                            .bg(paint::CARD)
                             .text_color(rgb(INK_SUBTLE))
-                            .child("Loading…"),
-                    )
-                },
+                            .child(div().max_w_full().text_center().child(notice))
+                    })),
             )
-            .when_some(
-                browser.error.as_ref().or_else(|| {
-                    active
-                        .filter(|_| !browser.new_tab)
-                        .and_then(|tab| tab.error.as_ref())
-                }),
-                |body, error| {
-                    body.child(div().px(px(8.)).py(px(4.)).child(format!(
-                        "{error} · Edit the address or reload to try again."
-                    )))
-                },
-            )
-            .child(self.annotation_browser_body(thread, body, cx))
             .into_any_element()
     }
 }
