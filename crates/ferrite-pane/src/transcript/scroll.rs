@@ -188,12 +188,14 @@ impl TranscriptScroll {
             return EaseStep::Cancelled;
         }
         let viewport = self.list.viewport_bounds();
+        let mut row = None;
         let left = match &ease.target {
             EaseTarget::Row { id, offset } => {
                 let Some(item_ix) = rows.position(id) else {
                     self.ease.take();
                     return EaseStep::Cancelled;
                 };
+                row = Some((item_ix, *offset));
                 // The end can reach the offset before the room under it is
                 // laid out: the list would follow it, and the ease moves it.
                 self.list.pause_following_tail();
@@ -208,7 +210,7 @@ impl TranscriptScroll {
             ),
         };
         let Some(mut left) = left else {
-            self.land(&ease.target, rows);
+            self.land(row);
             return EaseStep::Landed;
         };
         let tween = match ease.tween {
@@ -228,7 +230,7 @@ impl TranscriptScroll {
             }
         };
         if !tween.running(now, false) {
-            self.land(&ease.target, rows);
+            self.land(row);
             return EaseStep::Landed;
         }
         self.list.scroll_by(left - px(tween.value(now, false)));
@@ -236,16 +238,12 @@ impl TranscriptScroll {
         EaseStep::Moving
     }
 
-    /// The ease is done: its target exactly, and at the end following it.
-    fn land(&self, target: &EaseTarget, rows: &TranscriptRows) {
-        match target {
-            EaseTarget::Row { id, offset } => match rows.position(id) {
-                Some(item_ix) => self.scroll_to(item_ix, *offset),
-                None => {
-                    self.ease.take();
-                }
-            },
-            EaseTarget::End => self.scroll_to_bottom(),
+    /// The ease is done: its target exactly (`row`, an index and offset;
+    /// the end when there is none), and at the end following it.
+    fn land(&self, row: Option<(usize, Pixels)>) {
+        match row {
+            Some((item_ix, offset)) => self.scroll_to(item_ix, offset),
+            None => self.scroll_to_bottom(),
         }
     }
 
@@ -359,6 +357,48 @@ impl TranscriptScroll {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transcript::rows::{RowKind, RowShape};
+    use ferrite_core::transcript::{Input, Transcript};
+
+    fn rows_of(prompts: &[&str]) -> TranscriptRows {
+        let mut transcript = Transcript::default();
+        for prompt in prompts {
+            transcript.apply(Input::Prompt((*prompt).into()));
+        }
+        TranscriptRows::new(
+            transcript.blocks(),
+            &RowShape::default(),
+            ferrite_ui::theme::FS_PROSE,
+        )
+    }
+
+    /// A prompt's ease on its way when the prompt leaves the transcript (a
+    /// rewind): the ease ends where it stands and nothing takes the viewport
+    /// later, not even the tail.
+    #[test]
+    fn an_ease_whose_row_left_the_transcript_ends_where_it_stands() {
+        let scroll = TranscriptScroll::new(2);
+        let before = rows_of(&["one", "two"]);
+        let id = before
+            .rows()
+            .iter()
+            .rfind(|row| row.kind() == RowKind::Prompt)
+            .unwrap()
+            .id()
+            .clone();
+        scroll.ease_to(EaseTarget::Row {
+            id,
+            offset: px(0.),
+        });
+        assert!(scroll.easing());
+        let stood = scroll.offset();
+        let after = rows_of(&["one"]);
+        assert_eq!(scroll.step_ease(Instant::now(), &after), EaseStep::Cancelled);
+        assert!(!scroll.easing());
+        assert_eq!(scroll.step_ease(Instant::now(), &after), EaseStep::Idle);
+        assert_eq!(scroll.offset(), stood);
+        assert!(!scroll.is_following_tail(), "the tail did not take it");
+    }
 
     #[test]
     fn a_programmatic_scroll_takes_chromiums_smooth_scroll_length() {

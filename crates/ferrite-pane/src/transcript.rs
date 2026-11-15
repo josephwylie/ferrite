@@ -748,9 +748,9 @@ impl TranscriptView {
                 self.rows
                     .reconcile(&self.input.blocks, &self.input.shape(), self.grid().size);
             self.scroll.reconcile(&delta);
+            let send_pending = std::mem::take(&mut self.jump_to_new_prompt);
             // What was moving the old history's viewport has nothing to
             // move in the new one.
-            let send_pending = std::mem::take(&mut self.jump_to_new_prompt);
             if namespace_changed {
                 self.revoke_automatic_movement();
             }
@@ -1058,6 +1058,7 @@ impl TranscriptView {
     /// already under the rows stays, used up as they arrive.
     fn revoke_automatic_movement(&mut self) {
         self.scroll.cancel_ease();
+        self.drop_pending_reveal();
         self.send_anchor = None;
         self.jump_to_new_prompt = false;
         let runway = self.runway.get();
@@ -2796,14 +2797,14 @@ impl TranscriptView {
     /// one snaps, as a drag along the rail lands here on every move.
     fn jump_to_goal(&mut self, goal: f32, cx: &mut Context<Self>) {
         let (tops, total) = self.estimated_tops();
-        let at = goal.clamp(0., total);
-        let index = tops.iter().rposition(|top| *top <= at).unwrap_or(0);
-        let into = tops.get(index).map_or(0., |top| (at - top).max(0.));
         if tops.is_empty() {
             self.navigate(Navigate::Reader, cx);
-        } else {
-            self.navigate(Navigate::At { index, into }, cx);
+            return;
         }
+        let at = goal.clamp(0., total);
+        let index = tops.iter().rposition(|top| *top <= at).unwrap_or(0);
+        let into = (at - tops[index]).max(0.);
+        self.navigate(Navigate::At { index, into }, cx);
     }
 
     /// The minimap (the WP-A minimap tokens): a tick per prompt, failure,

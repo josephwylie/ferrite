@@ -141,8 +141,17 @@ impl TranscriptView {
             return;
         };
         find.bar.report().revealed.set(None);
-        find.reveal = crate::find::REVEAL_FRAMES;
         self.navigate(Navigate::Reveal { row }, cx);
+        if let Some(find) = self.find.as_mut() {
+            find.reveal = crate::find::REVEAL_FRAMES;
+        }
+    }
+
+    /// The reader took the scroll: the settle that was due no longer is.
+    pub(super) fn drop_pending_reveal(&mut self) {
+        if let Some(find) = self.find.as_mut() {
+            find.reveal = 0;
+        }
     }
 
     /// Each render while a reveal is due: once the active occurrence has

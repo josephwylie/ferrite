@@ -872,6 +872,8 @@ impl Element for Scrollbar {
                         cx.paint_quad(
                             fill(state.thumb_fill_bounds, state.thumb_bg).corner_radii(radius),
                         );
+                        #[cfg(any(test, feature = "test-support"))]
+                        painted::record(&self.id, is_vertical, state.thumb_fill_bounds);
                     });
 
                     window.on_mouse_event({
@@ -1034,6 +1036,35 @@ impl Element for Scrollbar {
     }
 }
 
+/// Where each scrollbar last painted its thumb, for tests that click what
+/// the reader sees.
+#[cfg(any(test, feature = "test-support"))]
+mod painted {
+    use super::*;
+    use std::{cell::RefCell, collections::HashMap};
+
+    thread_local! {
+        static THUMBS: RefCell<HashMap<(ElementId, bool), Bounds<Pixels>>> = Default::default();
+    }
+
+    pub(super) fn record(id: &ElementId, vertical: bool, thumb: Bounds<Pixels>) {
+        THUMBS.with_borrow_mut(|thumbs| thumbs.insert((id.clone(), vertical), thumb));
+    }
+
+    /// The vertical thumb last painted inside `layer`.
+    pub fn thumb_in(layer: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
+        THUMBS.with_borrow(|thumbs| {
+            thumbs
+                .iter()
+                .find(|((_, vertical), thumb)| *vertical && layer.contains(&thumb.center()))
+                .map(|(_, thumb)| *thumb)
+        })
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub use painted::thumb_in as painted_thumb_in;
+
 fn thumb_hit_bounds(
     bounds: Bounds<Pixels>,
     is_vertical: bool,
@@ -1063,6 +1094,7 @@ mod tests {
     use gpui::{
         div, prelude::*, Context, Modifiers, MouseButton, Render, ScrollHandle, TestAppContext,
     };
+    use super::painted::thumb_in as painted_thumb_in;
 
     /// A scroller whose content is the given height.
     struct ScrollFixture(ScrollHandle, f32);
@@ -1126,26 +1158,26 @@ mod tests {
     fn a_track_click_centres_the_painted_thumb_under_the_pointer(cx: &mut TestAppContext) {
         cx.update(crate::theme::init_components);
         let viewport = 300.;
+        let window = Bounds::new(point(px(0.), px(0.)), size(px(200.), px(viewport)));
         for content in [1200., 30000.] {
             let scroll = ScrollHandle::new();
             let (view, cx) = cx.add_window_view(|_, _| ScrollFixture(scroll.clone(), content));
             cx.simulate_resize(size(px(200.), px(viewport)));
             cx.run_until_parked();
-            let thumb = (viewport / content * viewport).max(f32::from(MIN_THUMB_SIZE));
-            let travel = viewport - thumb;
-            for fraction in [0.25, 0.5, 0.75, 1.0] {
-                scroll.set_offset(point(px(0.), px(0.)));
-                view.update(cx, |_, cx| cx.notify());
-                cx.run_until_parked();
-                let click = thumb / 2. + fraction * travel;
+            let thumb = f32::from(painted_thumb_in(window).expect("a thumb").size.height);
+            if content > 10000. {
+                assert!(thumb <= MIN_THUMB_SIZE, "the premise: held at the minimum size");
+            }
+            for fraction in [0.25, 0.5, 0.75, 0.9] {
+                let click = thumb / 2. + fraction * (viewport - thumb);
                 cx.simulate_mouse_down(point(px(199.), px(click)), MouseButton::Left, Modifiers::none());
                 cx.simulate_mouse_up(point(px(199.), px(click)), MouseButton::Left, Modifiers::none());
+                view.update(cx, |_, cx| cx.notify());
                 cx.run_until_parked();
-                let scrolled = -f32::from(scroll.offset().y);
-                let painted = thumb / 2. + scrolled / (content - viewport) * travel;
+                let painted = painted_thumb_in(window).expect("a thumb").center().y;
                 assert!(
-                    (painted - click).abs() <= 1.,
-                    "content {content}, click at {click}: the thumb's centre is at {painted}"
+                    (f32::from(painted) - click).abs() <= 1.,
+                    "content {content}, click at {click}: the thumb's centre is at {painted:?}"
                 );
             }
         }
