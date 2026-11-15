@@ -15,8 +15,15 @@
 //! - **Detail:** the PR as a Thread's PR tab shows it (`pr_content`), read
 //!   by number in the Project's repository (`PrTarget::project`), with no
 //!   actions: they belong to a Thread's own PR.
+//! - **Freshness:** the view, a scope or filter chosen, and a detail opened
+//!   each read again, over the content the last read left.
+//! - **Keys:** the view owns its keys under the `PullRequests` context:
+//!   ↑ ↓ move the marked row, ⏎ opens it, esc goes back to the list, then
+//!   closes the view.
 
 use std::collections::HashMap;
+
+use gpui::actions;
 
 use super::panel::pr_read::{PrFailure, PrTarget};
 use super::*;
@@ -24,6 +31,11 @@ use crate::cockpit::surfaces::PrTab;
 use ferrite_core::protocol::{WirePrFilter, WirePrList, WirePrRow, WirePrUnread};
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_ui::icons::{self, icon};
+
+actions!(pull_requests, [Next, Previous, Open, Back]);
+
+/// The key context the destination holds focus under.
+const KEY_CONTEXT: &str = "PullRequests";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ListStatus {
@@ -48,10 +60,11 @@ pub(crate) struct PrsView {
     pub(super) scroll: ScrollHandle,
     issued: u64,
     focus_at_open: Option<PaneIdentity>,
+    pub(super) focus: FocusHandle,
 }
 
-impl Default for PrsView {
-    fn default() -> Self {
+impl PrsView {
+    pub(super) fn new(cx: &mut Context<CockpitView>) -> Self {
         Self {
             shown: false,
             project: None,
@@ -63,7 +76,15 @@ impl Default for PrsView {
             scroll: ScrollHandle::new(),
             issued: 0,
             focus_at_open: None,
+            focus: cx.focus_handle(),
         }
+    }
+
+    fn rows(&self) -> &[WirePrRow] {
+        self.project
+            .and_then(|project| self.lists.get(&(project, self.filter)))
+            .and_then(|read| read.list.as_ref())
+            .map_or(&[], |list| list.rows.as_slice())
     }
 }
 
@@ -94,13 +115,8 @@ impl CockpitView {
 
     /// Show the PRs destination in the board's place: on `project` when
     /// told, else where it was left, else the shown Thread's Project, else
-    /// the first one. `number` opens that PR's detail.
-    pub(crate) fn open_prs(
-        &mut self,
-        project: Option<ProjectId>,
-        number: Option<u64>,
-        cx: &mut Context<Self>,
-    ) {
+    /// the first one.
+    pub(crate) fn open_prs(&mut self, project: Option<ProjectId>, cx: &mut Context<Self>) {
         self.empty_shown = false;
         self.factory_view = None;
         let focused = self.focused_thread();
@@ -120,29 +136,23 @@ impl CockpitView {
         self.prs.shown = true;
         self.prs.focus_at_open = self.cockpit.roster().focused();
         self.prs.project = chosen;
-        if let Some(number) = number {
-            self.prs.selected = Some(number);
-            self.prs.detail = true;
-        }
         if let Some(project) = chosen {
-            self.read_prs_list(project, false, cx);
-            if let Some(number) = number {
-                self.read_pr_snapshot(PrTarget::project(project, number), false, cx);
-            }
+            self.read_prs_list(project, cx);
         }
         cx.notify();
     }
 
-    /// The footer's Pull requests: the destination, on the shown Thread's
-    /// PR when its branch has one.
-    pub(crate) fn open_prs_for_focus(&mut self, cx: &mut Context<Self>) {
-        let own = self.focused_thread().and_then(|thread| {
-            let project = self.facts.get(thread)?.project?;
-            Some((project, self.facts.pr(thread)?.number))
-        });
-        match own {
-            Some((project, number)) => self.open_prs(Some(project), Some(number), cx),
-            None => self.open_prs(None, None, cx),
+    /// The footer's Pull requests: the shown Thread's own PR in its Panel
+    /// when its branch has one, else the destination.
+    pub(crate) fn open_prs_from_foot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self
+            .focused_thread()
+            .filter(|thread| self.facts.pr(*thread).is_some())
+        {
+            Some(thread) => {
+                self.open_pr_as(thread, ferrite_pane::link_target::Open::Primary, window, cx)
+            }
+            None => self.open_prs(None, cx),
         }
     }
 
@@ -164,9 +174,9 @@ impl CockpitView {
         }
     }
 
-    /// Read `project`'s list as the filter shows it, unless a read is out
-    /// or (without `again`) it was read.
-    fn read_prs_list(&mut self, project: ProjectId, again: bool, cx: &mut Context<Self>) {
+    /// Read `project`'s list as the filter shows it, over the rows the last
+    /// read left: they stay until the new ones land.
+    fn read_prs_list(&mut self, project: ProjectId, cx: &mut Context<Self>) {
         let filter = self.prs.filter;
         let Some(path) = self
             .cockpit
@@ -180,10 +190,6 @@ impl CockpitView {
             return;
         }
         let key = (project, filter);
-        let read = self.prs.lists.get(&key);
-        if !again && read.is_some() {
-            return;
-        }
         self.prs.issued += 1;
         let request = self.prs.issued;
         let status = ListStatus::Reading { request };
@@ -243,31 +249,72 @@ impl CockpitView {
             self.prs.selected = None;
             self.prs.detail = false;
         }
-        self.read_prs_list(project, false, cx);
+        self.read_prs_list(project, cx);
         cx.notify();
     }
 
     fn choose_prs_filter(&mut self, filter: WirePrFilter, cx: &mut Context<Self>) {
         self.prs.filter = filter;
         if let Some(project) = self.prs.project {
-            self.read_prs_list(project, false, cx);
+            self.read_prs_list(project, cx);
         }
         cx.notify();
     }
 
-    /// A row pressed: its PR's detail shows, read if it has not been.
+    /// A row pressed: its PR's detail shows, read again over what the last
+    /// read left.
     pub(super) fn open_pr_detail(&mut self, number: u64, cx: &mut Context<Self>) {
         let Some(project) = self.prs.project else {
             return;
         };
         self.prs.selected = Some(number);
         self.prs.detail = true;
-        self.read_pr_snapshot(PrTarget::project(project, number), false, cx);
+        self.read_pr_snapshot(PrTarget::project(project, number), true, cx);
         cx.notify();
     }
 
     fn close_pr_detail(&mut self, cx: &mut Context<Self>) {
         self.prs.detail = false;
+        cx.notify();
+    }
+
+    pub(super) fn register_prs_actions(&self, root: Div, cx: &mut Context<Self>) -> Div {
+        root.on_action(cx.listener(|view, _: &Next, _, cx| view.step_prs(1, cx)))
+            .on_action(cx.listener(|view, _: &Previous, _, cx| view.step_prs(-1, cx)))
+            .on_action(cx.listener(|view, _: &Open, _, cx| {
+                if let Some(number) = view.prs.selected.filter(|_| !view.prs.detail) {
+                    view.open_pr_detail(number, cx);
+                }
+            }))
+            .on_action(cx.listener(|view, _: &Back, _, cx| {
+                if view.prs.detail {
+                    view.close_pr_detail(cx);
+                } else {
+                    view.leave_destination();
+                    cx.notify();
+                }
+            }))
+    }
+
+    /// The marked row moves `delta` rows, holding at either end, and
+    /// scrolls into view. With none marked it starts at the first.
+    fn step_prs(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if self.prs.detail {
+            return;
+        }
+        let rows = self.prs.rows();
+        let Some(last) = rows.len().checked_sub(1) else {
+            return;
+        };
+        let at = rows
+            .iter()
+            .position(|row| Some(row.number) == self.prs.selected);
+        let next = match at {
+            Some(at) => at.saturating_add_signed(delta).min(last),
+            None => 0,
+        };
+        self.prs.selected = Some(rows[next].number);
+        self.prs.scroll.scroll_to_item(next);
         cx.notify();
     }
 
@@ -343,6 +390,8 @@ impl CockpitView {
         };
         div()
             .debug_selector(|| "prs-board".into())
+            .track_focus(&self.prs.focus)
+            .key_context(KEY_CONTEXT)
             .flex_1()
             .flex()
             .flex_col()
@@ -458,7 +507,7 @@ impl CockpitView {
             .map(|(id, title)| {
                 let id = *id;
                 self.prs_segment(
-                    format!("prs-project-{}", title).into(),
+                    format!("prs-project-{}", id.get()).into(),
                     title.clone().into(),
                     id == project,
                     move |view, cx| view.choose_prs_project(id, cx),
@@ -617,7 +666,7 @@ impl CockpitView {
             .debug_selector(|| "prs-retry".into())
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
-                view.read_prs_list(project, true, cx);
+                view.read_prs_list(project, cx);
             }))
             .into_any_element()
     }
@@ -693,11 +742,14 @@ impl CockpitView {
     fn prs_detail(&self, project: ProjectId, number: u64, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
         let target = PrTarget::project(project, number);
-        let url = self
-            .panel
-            .pr_reads
-            .snapshot(target)
-            .map(|pr| pr.url.clone());
+        let snapshot = self.panel.pr_reads.snapshot(target);
+        let url = snapshot.map(|pr| pr.url.clone());
+        let tone = snapshot
+            .map(panel::pull_request::PrTone::of_snapshot)
+            .or_else(|| {
+                let row = self.prs.rows().iter().find(|row| row.number == number)?;
+                Some(panel::pull_request::PrTone::of_wire(row.state, row.draft))
+            });
         let back = div()
             .id("prs-back")
             .debug_selector(|| "prs-back".into())
@@ -752,7 +804,8 @@ impl CockpitView {
                     .border_color(panel::pull_request::soft_line())
                     .child(back)
                     .child(div().flex_1())
-                    .children(open),
+                    .children(open)
+                    .children(tone.map(panel::pull_request::pr_pill)),
             )
             .child(self.pr_content(target, self.prs.tab, cx))
     }

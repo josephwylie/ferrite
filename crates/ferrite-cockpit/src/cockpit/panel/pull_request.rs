@@ -49,7 +49,7 @@ impl PrTone {
         }
     }
 
-    fn of_snapshot(pr: &WirePr) -> Self {
+    pub(in crate::cockpit) fn of_snapshot(pr: &WirePr) -> Self {
         Self::of_wire(pr.state, pr.draft)
     }
 
@@ -90,7 +90,7 @@ impl PrTone {
         }
     }
 
-    fn settled(self) -> bool {
+    pub(in crate::cockpit) fn settled(self) -> bool {
         matches!(self, Self::Merged | Self::Closed)
     }
 }
@@ -879,15 +879,22 @@ impl CockpitView {
     fn pr_summary(&self, target: PrTarget, pr: &WirePr, cx: &mut Context<Self>) -> AnyElement {
         use ferrite_ui::theme::*;
         let merge = match pr.merge {
+            _ if PrTone::of_snapshot(pr).settled() => None,
             ferrite_core::protocol::WireMerge::Clean => Some("Ready to merge"),
             ferrite_core::protocol::WireMerge::Conflicting => Some("Has conflicts"),
             ferrite_core::protocol::WireMerge::Blocked => Some("Blocked"),
             ferrite_core::protocol::WireMerge::Unknown => None,
         };
-        let facts = std::iter::once(format!("{} \u{2192} {}", pr.head, pr.base))
-            .chain(merge.map(str::to_string))
-            .collect::<Vec<_>>()
-            .join(" \u{b7} ");
+        let facts = div()
+            .flex()
+            .gap(px(SPACE_1))
+            .text_color(rgb(INK_SUBTLE))
+            .child(SharedString::from(format!("{} \u{2192} {}", pr.head, pr.base)))
+            .children(merge.map(|merge| {
+                div()
+                    .debug_selector(|| "pr-merge".into())
+                    .child(SharedString::from(format!("\u{b7} {merge}")))
+            }));
         let checks = pr.checks.iter().map(|check| {
             let (glyph, ink) = match check.status {
                 WireCheckStatus::Success => (icons::CHECK_CIRCLE, GREEN),
@@ -912,7 +919,7 @@ impl CockpitView {
                     .text_color(rgb(INK_STRONG))
                     .child(SharedString::from(pr.title.clone())),
             )
-            .child(div().text_color(rgb(INK_SUBTLE)).child(SharedString::from(facts)))
+            .child(facts)
             .when(!pr.body.is_empty(), |summary| {
                 summary.child(
                     div()
@@ -1147,7 +1154,7 @@ fn pr_more(
 
 /// A merged or closed PR's pill (T3's outline Badge): its state's icon and
 /// word in its ink.
-fn pr_pill(tone: PrTone) -> Div {
+pub(in crate::cockpit) fn pr_pill(tone: PrTone) -> Div {
     use ferrite_ui::theme::*;
     div()
         .debug_selector(|| "pr-pill".into())

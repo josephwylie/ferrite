@@ -1639,7 +1639,7 @@ impl CockpitView {
             nav_measure_rest: std::cell::Cell::new(false),
             empty_shown: false,
             factory_view: None,
-            prs: Default::default(),
+            prs: prs::PrsView::new(cx),
             task_toasts: Default::default(),
             empty_cursor: 0,
             empty_focus: cx.focus_handle(),
@@ -10327,6 +10327,8 @@ impl CockpitView {
             self.focus.clone()
         } else if let Some(focus) = self.factory_focus(window, cx) {
             focus
+        } else if self.rename.is_none() && fullscreen.is_none() && self.prs.shown {
+            self.prs.focus.clone()
         } else if self.rename.is_none() && fullscreen.is_none() && self.empty_board_shown() {
             self.empty_focus.clone()
         } else {
@@ -10768,6 +10770,7 @@ impl CockpitView {
             }))
             .on_action(cx.listener(Self::open_settings))
             .map(|root| self.register_board_actions(root, cx))
+            .map(|root| self.register_prs_actions(root, cx))
             .child(
                 div()
                     .relative()

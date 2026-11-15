@@ -344,9 +344,9 @@ impl CockpitView {
         let shown = self.focused_thread();
         let pulls = chrome::foot_button("nav-pull-requests", ferrite_ui::icons::GIT_PULL_REQUEST)
             .nav_tooltip("Pull requests")
-            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+            .on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
                 cx.stop_propagation();
-                view.open_prs_for_focus(cx);
+                view.open_prs_from_foot(window, cx);
             }));
         let provider = shown
             .and_then(|thread| self.cockpit.thread(thread))

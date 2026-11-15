@@ -423,6 +423,12 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("up".into(), "empty_board::Previous", Some("EmptyBoard")),
         ("down".into(), "empty_board::Next", Some("EmptyBoard")),
         ("enter".into(), "empty_board::Run", Some("EmptyBoard")),
+        // The PRs destination: ↑↓ walk its list, ⏎ opens the marked PR, esc
+        // goes back to the list, then closes the view.
+        ("up".into(), "pull_requests::Previous", Some("PullRequests")),
+        ("down".into(), "pull_requests::Next", Some("PullRequests")),
+        ("enter".into(), "pull_requests::Open", Some("PullRequests")),
+        ("escape".into(), "pull_requests::Back", Some("PullRequests")),
         // The floats' own keys, each in its float's context, deeper than the
         // Cockpit's: the palette (↑↓ select, ⏎ open, ⇥
         // preview in a pane, esc), the notifications list (↑↓ select, ⏎

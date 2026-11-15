@@ -299,6 +299,7 @@ fn merge_asks_twice_and_a_merged_pr_shows_its_pill(cx: &mut TestAppContext) {
     tick(cx);
     assert!(cx.debug_bounds("pr-pill").is_some(), "merged: the pill");
     assert!(cx.debug_bounds("pr-primary").is_none(), "in the action's place");
+    assert!(cx.debug_bounds("pr-merge").is_none(), "merged: nothing to merge");
     let rows: Vec<String> = view.read_with(cx, |view, _| {
         view.context_rows(MenuTarget::PrMore(thread))
             .into_iter()
