@@ -262,8 +262,14 @@ fn request_frame(card: impl IntoElement, overlay: bool, solo: bool, inset: f32) 
 /// Whether `pane` shows `request`: its selected Subject's, and on Main
 /// also a request whose owner the provider did not name.
 pub(super) fn shown_on(pane: &PaneView, request: &PendingDecision) -> bool {
-    request.subject.as_ref() == Some(&pane.selected)
-        || (request.subject.is_none() && pane.is_main())
+    shown_for(&pane.selected, request)
+}
+
+/// Whether `request` asks in `subject`'s transcript: its own, or Main's for
+/// one that names no agent.
+pub(super) fn shown_for(subject: &Subject, request: &PendingDecision) -> bool {
+    request.subject.as_ref() == Some(subject)
+        || (request.subject.is_none() && *subject == Subject::Main)
 }
 
 /// The question digit keys pick in: the first with options and no pick
@@ -816,6 +822,20 @@ impl CockpitView {
     /// transcript's foot (a question too big for the body answers in
     /// fullscreen there); the transcript's own cards scroll with its rows.
     pub(super) fn decision_cards(&self, index: usize, overlay: bool, short: bool) -> Option<Cards> {
+        let subject = self.panes.get(index)?.selected.clone();
+        self.decision_cards_of(index, &subject, overlay, short)
+    }
+
+    /// The cards of `subject`'s requests, answered through Pane `index`'s
+    /// forms: the Pane that holds the Thread, so a compact view of an agent
+    /// and the Pane showing it fill in one form.
+    pub(super) fn decision_cards_of(
+        &self,
+        index: usize,
+        subject: &Subject,
+        overlay: bool,
+        short: bool,
+    ) -> Option<Cards> {
         let pane = self.panes.get(index)?;
         let thread = pane.thread()?;
         let open = self.cockpit.thread(thread)?;
@@ -824,7 +844,7 @@ impl CockpitView {
         let requests: Vec<(PendingDecision, bool)> = activity
             .pending_decisions()
             .iter()
-            .filter(|request| shown_on(pane, request))
+            .filter(|request| shown_for(subject, request))
             .filter(|request| {
                 !overlay
                     || fullscreen

@@ -199,7 +199,8 @@ impl CockpitView {
                 continue;
             };
             let note = self.agent_model_note(key.0, &drill.subject);
-            self.sync_compact_transcript(key.0, &drill.subject, &drill.pane, 0, note, cx);
+            let decisions = self.compact_decision_tail(key.0, &drill.subject);
+            self.sync_compact_transcript(key.0, &drill.subject, &drill.pane, 0, note, decisions, cx);
         }
     }
 

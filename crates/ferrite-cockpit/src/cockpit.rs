@@ -631,10 +631,14 @@ pub struct CockpitView {
     /// The Thread whose `Background work` dialog is open
     /// (`background_work.rs`).
     background_dialog: Option<ThreadId>,
-    /// The tasks `Stop` on the background-work line was pressed for, by
+    /// The work `Stop` on the background-work line was pressed for, by
     /// Thread and Session generation (a provider reuses task ids): the line
-    /// reads `Stopping...` until they end, or `Retry` once one refused.
-    background_stops: std::collections::HashMap<(ThreadId, u64, String), background_work::StopState>,
+    /// reads `Stopping...` until it ends, or `Retry` once one refused.
+    background_stops:
+        std::collections::HashMap<(ThreadId, u64, background_work::StopTarget), background_work::StopState>,
+    /// How many stops `background_stops` has taken, to tell one send's
+    /// timer from another's.
+    background_stop_sends: u64,
     settings_focus: FocusHandle,
     /// Whether the window is maximized, read once per frame in `render`.
     /// The nav's band is drawn without a `Window` in hand, and the two
@@ -1644,6 +1648,7 @@ impl CockpitView {
             project_editor_focus: cx.focus_handle(),
             background_dialog: None,
             background_stops: Default::default(),
+            background_stop_sends: 0,
             settings_focus: cx.focus_handle(),
             maximized: false,
             cli_versions: None,
@@ -2008,6 +2013,7 @@ impl CockpitView {
         // One reading size for every transcript, on every board.
         let reading_size = self.prefs.settings.reading_size;
         let tail = self.transcript_tail(index, cx);
+        self.wake_for_background_clock(index, cx);
         // The gated call hides while its Decision waits as the tail row.
         let pending_call = tail
             .as_ref()
@@ -2550,6 +2556,7 @@ impl CockpitView {
         }
         let frame = self.cockpit.pump();
         self.note_work(&frame);
+        self.prune_background_stops();
         self.pump_browsers(cx);
         self.poll_remote_path(cx);
         self.poll_machine_repo(cx);

@@ -1270,3 +1270,80 @@ fn the_thread_card_opens_main_not_the_pending_child(cx: &mut TestAppContext) {
     tick(cx);
     assert!(selected(&view, cx) == Subject::Main);
 }
+
+/// An agent held beside Main asks in its own transcript: the card is drawn
+/// there, and its Allow answers that agent's request.
+#[gpui::test]
+fn the_side_panel_inspector_shows_and_answers_its_agents_decision(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("subagents-inspector-decision", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(800.)));
+    child(&fake, "Atlas", AgentStatus::Waiting);
+    let SessionEvent::DecisionRequested { decision } = decision("Atlas") else {
+        unreachable!()
+    };
+    emit(
+        &fake,
+        ActivityEvent::Decision {
+            subject: Some(Subject::Subagent(key("Atlas"))),
+            decision,
+        },
+    );
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let serial = view.read_with(cx, |view, _| {
+        view.cockpit.thread(thread).unwrap().pending_decisions()[0].handle.serial
+    });
+    let allow = format!("request-allow-1-{serial}");
+    assert!(debug_bounds(cx, allow.clone()).is_none(), "Main does not ask it");
+    view.update(cx, |view, cx| {
+        view.open_agent_drill(thread, Subject::Subagent(key("Atlas")), cx)
+    });
+    tick(cx);
+    assert!(debug_bounds(cx, "agent-drill".into()).is_some());
+    assert!(debug_bounds(cx, allow.clone()).is_some(), "the inspector shows the card");
+    let at = bounds(cx, allow).center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(fake.answered.borrow().len(), 1);
+    assert_eq!(fake.answered.borrow()[0].0, "Atlas");
+}
+
+/// With the agent shown in its Pane too, the Pane alone draws its card:
+/// the inspector beside it draws none.
+#[gpui::test]
+fn an_agent_shown_in_its_pane_asks_there_not_in_the_inspector(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("subagents-inspector-decision-once", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(800.)));
+    child(&fake, "Atlas", AgentStatus::Waiting);
+    let SessionEvent::DecisionRequested { decision } = decision("Atlas") else {
+        unreachable!()
+    };
+    emit(
+        &fake,
+        ActivityEvent::Decision {
+            subject: Some(Subject::Subagent(key("Atlas"))),
+            decision,
+        },
+    );
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let serial = view.read_with(cx, |view, _| {
+        view.cockpit.thread(thread).unwrap().pending_decisions()[0].handle.serial
+    });
+    view.update(cx, |view, cx| {
+        view.open_agent_drill(thread, Subject::Subagent(key("Atlas")), cx)
+    });
+    tick(cx);
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.select_subject(thread, Subject::Subagent(key("Atlas")), window, cx)
+        })
+    });
+    tick(cx);
+    let drill = bounds(cx, "agent-drill".into());
+    let allow = bounds(cx, format!("request-allow-1-{serial}"));
+    assert!(!drill.intersects(&allow), "the Pane draws the card, the inspector does not");
+}
