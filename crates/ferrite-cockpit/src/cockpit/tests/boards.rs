@@ -183,7 +183,8 @@ fn native_file_drops_follow_the_pointer_across_panes_and_groups(cx: &mut TestApp
                 .is_empty())
         });
         // The kit's controls receive Tab and Enter/Space without sending.
-        cx.simulate_keystrokes("tab");
+        // The tray header is the first stop, the first image the second.
+        cx.simulate_keystrokes("tab tab");
         tick(cx);
         cx.simulate_keystrokes("enter");
         cx.simulate_event(gpui::KeyUpEvent {
@@ -212,9 +213,9 @@ fn native_file_drops_follow_the_pointer_across_panes_and_groups(cx: &mut TestApp
         tick(cx);
         cx.executor().advance_clock(Duration::from_millis(300));
         cx.run_until_parked();
-        // Esc handed the keyboard back to the Composer: past the
-        // image's two controls to the other file's ×.
-        cx.simulate_keystrokes("tab tab tab");
+        // Esc handed the keyboard back to the Composer: past the tray
+        // header and the image's two controls to the other file's ×.
+        cx.simulate_keystrokes("tab tab tab tab");
         tick(cx);
         cx.simulate_keystrokes("space");
         cx.simulate_event(gpui::KeyUpEvent {

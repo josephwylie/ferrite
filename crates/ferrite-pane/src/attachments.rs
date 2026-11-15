@@ -707,10 +707,6 @@ fn review_chip(comments: usize, on_drop: Option<DropReview>) -> gpui::Div {
         })
 }
 
-/// A chip's remove control: the `close` icon (`ATTACH_REMOVE_ICON`) in
-/// `INK_SUBTLE` in an `ATTACH_REMOVE`-wide slot, the kit ghost's fill under the
-/// pointer — a tab stop in the `PromptAttachment` context, so its Enter
-/// never sends.
 fn retry_button(id: impl Into<ElementId>) -> gpui::component::button::Button {
     use ferrite_ui::theme;
     ferrite_ui::components::button(id)
@@ -757,6 +753,10 @@ fn retry_of(state: Option<&Readiness>, retry: Option<Retry>) -> Option<Retry> {
     }
 }
 
+/// A chip's remove control: the `close` icon (`ATTACH_REMOVE_ICON`) in
+/// `INK_SUBTLE` in an `ATTACH_REMOVE`-wide slot, the kit ghost's fill under the
+/// pointer — a tab stop in the `PromptAttachment` context, so its Enter
+/// never sends.
 pub(crate) fn remove_button(id: impl Into<ElementId>) -> gpui::component::button::Button {
     use ferrite_ui::theme;
     ferrite_ui::components::button(id)
