@@ -132,19 +132,22 @@ impl DraftFiles {
     }
 
     /// Swap each file of this computer for its retained copy, so what is
-    /// sent is what is kept. A workspace file stays the live path the agent
-    /// edits, and on a machine nothing is copied, for the paths are the
-    /// machine's. A file that cannot be copied is marked `Unreadable` and
-    /// nothing is swapped: whether the send may go ahead.
-    pub(crate) fn retain(&mut self) -> bool {
+    /// sent is what is kept. A workspace file, or one of this computer that
+    /// lies inside `workspace`, stays the live path the agent edits, and on a
+    /// machine nothing is copied, for the paths are the machine's. A file
+    /// that cannot be copied is marked `Unreadable` and nothing is swapped:
+    /// whether the send may go ahead.
+    pub(crate) fn retain(&mut self, workspace: Option<&Path>) -> bool {
         if self.destination == Destination::Remote {
             return true;
         }
         let mut paths = Vec::with_capacity(self.paths.len());
         let mut local = Vec::new();
         for path in &self.paths {
+            let inside = workspace.is_some_and(|root| inside(path, root));
             let kept = match self.source(path) {
                 Source::Workspace => path.clone(),
+                Source::Local if inside => path.clone(),
                 Source::Local => match attachment::retain(path, &self.store) {
                     Ok(copy) => {
                         local.push(copy.clone());
@@ -164,4 +167,14 @@ impl DraftFiles {
         self.replace(paths, local);
         true
     }
+}
+
+/// Whether `path` lies under `root`, either as written or once symlinks such
+/// as macOS's `/tmp` are resolved.
+fn inside(path: &Path, root: &Path) -> bool {
+    path.starts_with(root)
+        || match (path.canonicalize(), root.canonicalize()) {
+            (Ok(path), Ok(root)) => path.starts_with(root),
+            _ => false,
+        }
 }

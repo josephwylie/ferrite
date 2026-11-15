@@ -195,6 +195,31 @@ fn a_file_attached_from_the_workspace_is_sent_as_its_own_path(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn a_dropped_file_inside_the_workspace_is_sent_as_its_own_path(cx: &mut TestAppContext) {
+    let (view, fake, dir, cx) = window_on("attach-drop-inside", cx);
+    let root = view.read_with(cx, |view, _| view.pane_root(0)).expect("the pane has a workspace");
+    let notes = root.join("dropped-notes.txt");
+    std::fs::write(&notes, "one").unwrap();
+    view.update(cx, |view, cx| {
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.add_local_files(std::slice::from_ref(&notes), cx)
+        })
+    });
+    cx.simulate_input(WORDS);
+    tick(cx);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+
+    let sent = fake.sent.borrow().last().cloned().expect("it was sent");
+    assert_eq!(
+        ferrite_core::prompt_files::paths(&sent, None),
+        [notes],
+        "a drop from inside the workspace is the workspace's file, not a copy"
+    );
+    assert!(!dir.join("attachments").exists(), "nothing was copied");
+}
+
+#[gpui::test]
 fn a_workspace_file_that_goes_missing_stops_the_send(cx: &mut TestAppContext) {
     let (view, fake, _dir, cx) = window_on("attach-workspace-gone", cx);
     let notes = files_dir("attach-workspace-gone-repo").join("notes.txt");

@@ -5705,7 +5705,7 @@ impl CockpitView {
             return;
         }
         let composer = self.panes[self.focused()].composer.clone();
-        if !self.admit_files(&composer, cx) {
+        if !self.admit_files(self.focused(), cx) {
             return;
         }
         let draft = composer.update(cx, |composer, cx| composer.take_draft(cx));
@@ -6633,21 +6633,7 @@ impl CockpitView {
         }
         let (token_start, filter) = mention?;
         // No binding → nothing to walk → no popover.
-        let root = match (thread, pane.draft()) {
-            (Some(thread), _) => self
-                .cockpit
-                .thread(thread)?
-                .workspace()?
-                .cwd()
-                .to_path_buf(),
-            (None, Some(draft)) => draft
-                .binding
-                .resolve(self.cockpit.registry(), !self.on_machine())
-                .ok()?
-                .source_root()
-                .to_path_buf(),
-            _ => return None,
-        };
+        let root = self.pane_root(self.focused())?;
         if let Some(thread) = thread {
             if let Ok(receiver) = self.cockpit.search_files(thread, filter) {
                 let request_id = NEXT_FILE_SEARCH.fetch_add(1, Ordering::Relaxed);
@@ -8019,7 +8005,7 @@ impl CockpitView {
             return;
         };
         let composer = pane.composer.clone();
-        if !self.admit_files(&composer, cx) {
+        if !self.admit_files(self.focused(), cx) {
             return;
         }
         let text = composer.read(cx).prompt().trim().to_string();

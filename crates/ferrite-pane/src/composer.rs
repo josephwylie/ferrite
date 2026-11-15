@@ -18,7 +18,7 @@
 //! (`Role::Field`) never does, and may name its float's own context.
 
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use ferrite_core::attachment::{Destination, Source};
@@ -389,9 +389,10 @@ impl Composer {
 
     /// Swap the files of this computer for retained copies of their bytes:
     /// a send's attachments are what its history keeps. False when one could
-    /// not be copied, which the tray then says.
-    pub fn retain_files(&mut self, cx: &mut Context<Self>) -> bool {
-        let kept = self.files.retain();
+    /// not be copied, which the tray then says. A file inside `workspace`
+    /// stays the live path the agent edits.
+    pub fn retain_files(&mut self, workspace: Option<&Path>, cx: &mut Context<Self>) -> bool {
+        let kept = self.files.retain(workspace);
         cx.notify();
         kept
     }
