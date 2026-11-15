@@ -1589,7 +1589,7 @@ impl CockpitView {
                             .p(px(SPACE_4))
                             .bg(paint::CARD)
                             .text_color(rgb(INK_SUBTLE))
-                            .child(notice)
+                            .child(div().max_w_full().text_center().child(notice))
                     })),
             )
             .into_any_element()
