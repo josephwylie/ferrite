@@ -500,6 +500,9 @@ pub struct CockpitView {
     panel: panel::Panel,
     /// "Open a surface": the Panel's default focus while no tab shows.
     panel_empty_focus: gpui::FocusHandle,
+    /// The Panel bodies that take keys of their own (the launcher, Files):
+    /// while focus is anywhere inside, the focus pump leaves it be.
+    panel_focus: gpui::FocusHandle,
     /// Back and forward through where the operator has been (`history`).
     history: history::History,
     session_controls: Option<(ThreadId, u64)>,
@@ -1531,6 +1534,7 @@ impl CockpitView {
             context_menu: None,
             panel: panel::Panel::load(&prefs.dir),
             panel_empty_focus: cx.focus_handle(),
+            panel_focus: cx.focus_handle(),
             history: Default::default(),
             session_controls: None,
             mode_picker: None,
@@ -10236,16 +10240,13 @@ impl CockpitView {
         // The list keeps the keyboard it was handed until the operator
         // takes it elsewhere.
         let nav_list_focused = self.nav_keys_held && self.nav_focus.is_focused(window);
-        // So does "Open a surface", pressed, while it shows.
-        let panel_empty_focused = self.panel_empty_focus.is_focused(window)
-            && self
-                .panel_pane()
-                .and_then(|index| self.panes[index].thread())
-                .is_some_and(|thread| self.active_surface(thread).is_none());
+        // So does a Panel body that reads its own keys: "Open a surface",
+        // pressed, or a Files editor or filter being typed in.
+        let panel_keys_held = self.panel_focus.contains_focused(window, cx);
         if window.has_active_dialog(cx)
             || self.floats_hold_focus()
             || nav_list_focused
-            || panel_empty_focused
+            || panel_keys_held
             || native_text_focused
             || reader_text_focused
             || find_focused

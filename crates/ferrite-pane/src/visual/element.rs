@@ -266,6 +266,7 @@ impl Render for WebView {
             .size_full()
             .min_h_0()
             .overflow_hidden()
+            .key_context(ferrite_ui::keymap::BROWSER)
             .track_focus(&self.inner.focus)
             .on_key_down(move |event, _, cx| {
                 down.input(Input::Key {

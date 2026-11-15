@@ -670,6 +670,7 @@ impl CockpitView {
         div()
             .id("panel-empty")
             .debug_selector(|| "panel-empty".into())
+            .key_context(ferrite_ui::keymap::PANEL_EMPTY)
             .track_focus(&self.panel_empty_focus)
             // T3's empty panel is the Panel's focus target: a press in it
             // takes the keyboard from the Composer, so its letters work.

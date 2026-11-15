@@ -27,6 +27,7 @@ mod frame_parity;
 mod fullscreen;
 mod image_viewer;
 mod interaction_regressions;
+mod key_ownership;
 mod key_shortcuts;
 mod layout_polish;
 mod leaving;
