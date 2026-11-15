@@ -218,6 +218,12 @@ impl CockpitView {
                 self.reveal_files_tab(thread, *at);
             }
             window.focus(&handle, cx);
+            if matches!(control, PanelControl::Tab(_) | PanelControl::Plus) {
+                let stop = self.panel.focus.bounds.borrow().get(control).copied();
+                if let Some(stop) = stop {
+                    self.panel.tabs_scroll.ease_into_view(stop, cx);
+                }
+            }
             cx.notify();
         }
     }
@@ -242,10 +248,41 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// A character no stop bound, typed with the keyboard on a stop, is
+    /// text for the conversation: the Composer takes the keyboard and the
+    /// character with it.
+    pub(in crate::cockpit) fn typing_leaves_panel(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let modifiers = keystroke.modifiers;
+        // Space and ⏎ press the stop.
+        let Some(text) = keystroke.key_char.as_deref().filter(|text| {
+            !text.trim().is_empty()
+                && !(modifiers.control || modifiers.alt || modifiers.platform || modifiers.function)
+        }) else {
+            return;
+        };
+        if !self.panel_control_focused(window) {
+            return;
+        }
+        let Some(pane) = self.panes.get(self.focused()) else {
+            return;
+        };
+        // The Composer is not the focus yet, so the platform would hand
+        // this character to the stop, which takes none.
+        pane.composer.update(cx, |composer, cx| composer.insert(text, cx));
+        self.leave_panel(window, cx);
+        cx.stop_propagation();
+    }
+
     /// F6 and ⇧F6: the next or previous area, round the conversation and the
-    /// Panel.
+    /// Panel's controls. Typing or reading in a Panel body is neither: its
+    /// next area is the controls above it, not a way out of the Panel.
     pub(in crate::cockpit) fn step_area(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.panel_control_focused(window) || self.panel_keys_held(window, cx) {
+        if self.panel_control_focused(window) {
             self.leave_panel(window, cx);
         } else {
             self.focus_panel(window, cx);
@@ -447,7 +484,7 @@ impl CockpitView {
     }
 
     /// Open `target`'s menu under the stop `control`, its left edge on the
-    /// stop's. The keyboard stays on the stop.
+    /// stop's. The keyboard comes back to the stop as it closes.
     pub(super) fn open_panel_menu(
         &mut self,
         control: PanelControl,

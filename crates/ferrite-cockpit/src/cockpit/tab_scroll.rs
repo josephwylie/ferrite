@@ -143,13 +143,41 @@ impl TabScroll {
     /// what shows.
     pub(crate) fn ease(&self, side: Side, cx: &gpui::App) {
         let visible = f32::from(self.handle.bounds().size.width);
+        self.ease_to(self.at() + side.toward() * tab_scroll_step(visible), cx);
+    }
+
+    /// The keyboard came to `stop`, drawn in the row: the row eases until
+    /// it shows whole, as a chevron's press would have brought it.
+    pub(crate) fn ease_into_view(&self, stop: gpui::Bounds<gpui::Pixels>, cx: &gpui::App) {
+        let view = self.handle.bounds();
         let at = self.at();
-        let to = (at + side.toward() * tab_scroll_step(visible)).clamp(0., self.most());
+        let to = if stop.left() < view.left() {
+            at - f32::from(view.left() - stop.left())
+        } else if stop.right() > view.right() {
+            at + f32::from(stop.right() - view.right())
+        } else {
+            return;
+        };
+        // A chevron hides at its end, so what it covered is room too: a
+        // stop that near the end brings the end into view.
+        let chevron = SURFACE_PLUS + SURFACE_HEAD_GAP;
+        let most = self.most();
+        let to = if to <= chevron {
+            0.
+        } else if to >= most - chevron {
+            most
+        } else {
+            to
+        };
+        self.ease_to(to, cx);
+    }
+
+    fn ease_to(&self, to: f32, cx: &gpui::App) {
         self.revealing.set(None);
         self.tween.set(Some(Tween::retarget(
             self.tween.take(),
-            at,
-            to,
+            self.at(),
+            to.clamp(0., self.most()),
             motion::TAB_SCROLL,
             cx.background_executor().now(),
             motion::reduced_motion(cx),

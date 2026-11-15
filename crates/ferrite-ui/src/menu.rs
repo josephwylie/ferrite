@@ -414,13 +414,13 @@ pub fn rule() -> Div {
 /// One row, its key hard right (a one-letter mnemonic, Claude's `P`, in the
 /// label's size and `INK_SUBTLE`). `armed` is a destructive row waiting
 /// for its second press: `<label> · press again`, the label `BLOCKED`.
-pub fn row(index: usize, item: &Item, armed: bool) -> Stateful<Div> {
+pub fn row(index: usize, item: &Item, cursor: bool, armed: bool) -> Stateful<Div> {
     let keys = item.shortcut.clone();
     let face = MenuItem {
         shortcut: None,
         ..item.clone()
     };
-    item_row(("context-menu-row", index), &face, false, armed).when_some(
+    item_row(("context-menu-row", index), &face, cursor, armed).when_some(
         keys.filter(|_| !armed),
         |row, keys| {
             row.child(
@@ -1601,10 +1601,10 @@ mod tests {
     #[test]
     fn a_live_row_is_a_button_and_a_disabled_one_is_not() {
         let live = Item::new("Rename").shortcut("↵");
-        let mut drawn = row(0, &live, false);
+        let mut drawn = row(0, &live, false, false);
         assert_eq!(drawn.style().mouse_cursor, Some(CursorStyle::PointingHand));
         let dead = Item::new("Reveal in Finder").disabled(true);
-        let mut drawn = row(1, &dead, false);
+        let mut drawn = row(1, &dead, false, false);
         assert_eq!(drawn.style().mouse_cursor, None);
     }
 
@@ -1664,9 +1664,9 @@ mod tests {
     #[test]
     fn an_armed_destructive_row_holds_the_fill_and_colours_its_word() {
         let delete = Item::new("Delete thread").destructive();
-        let mut drawn = row(2, &delete, true);
+        let mut drawn = row(2, &delete, false, true);
         assert_eq!(drawn.style().background, Some(paint::FLOAT_SEL.into()));
-        let mut calm = row(2, &delete, false);
+        let mut calm = row(2, &delete, false, false);
         assert_eq!(calm.style().background, None);
         assert_eq!(
             components::row_inks(&delete, false, false).label,

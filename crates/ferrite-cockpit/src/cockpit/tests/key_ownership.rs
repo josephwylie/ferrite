@@ -82,6 +82,106 @@ fn approval_words_type_into_the_composer_and_answer_nothing(cx: &mut TestAppCont
 }
 
 #[gpui::test]
+fn the_deny_chord_denies_an_approval_with_text_on_the_line(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("key-deny-chord", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    fake.streams.borrow()[0].send(decision("perm_deny")).unwrap();
+    tick(cx);
+    cx.simulate_input("a note");
+    tick(cx);
+    assert!(answered(&fake).is_empty());
+    cx.simulate_keystrokes("cmd-.");
+    cx.run_until_parked();
+    let pending = view.read_with(cx, |view, _| {
+        view.cockpit.thread(thread).and_then(|open| open.pending()).is_some()
+    });
+    assert!(!pending, "the chord answered the approval");
+    assert_eq!(answered(&fake).len(), 1);
+    assert!(
+        matches!(answered(&fake)[0].1, DecisionAnswer::Deny { .. }),
+        "and the answer was a denial"
+    );
+}
+
+/// An open menu's keys are the menu's, even over an approval whose empty
+/// line binds the same arrows and ⎋, and the Composer has the keyboard
+/// back once it closes.
+#[gpui::test]
+fn an_open_menu_keeps_its_keys_from_a_pending_approval(cx: &mut TestAppContext) {
+    use crate::cockpit::context_menu::{MenuCursor, MenuTarget};
+    let (core, fake) = cockpit("key-menu-over-decision", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    fake.streams.borrow()[0].send(decision("perm_menu")).unwrap();
+    tick(cx);
+    let composer = view.read_with(cx, |view, cx| view.panes[0].composer.focus_handle(cx));
+    cx.update(|window, cx| window.focus(&composer, cx));
+    tick(cx);
+    view.update(cx, |view, cx| {
+        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(300.), px(200.)), cx)
+    });
+    tick(cx);
+    cx.simulate_keystrokes("down");
+    tick(cx);
+    let cursor = view.read_with(cx, |view, _| view.context_menu.as_ref().map(|open| open.cursor));
+    assert_eq!(cursor, Some(MenuCursor::Row(0)), "down moved the menu's cursor");
+    cx.update(|window, cx| window.focus(&composer, cx));
+    view.update(cx, |view, cx| {
+        view.open_context_menu(MenuTarget::Pane(thread), gpui::point(px(500.), px(400.)), cx)
+    });
+    tick(cx);
+    cx.simulate_keystrokes("down");
+    tick(cx);
+    let cursor = view.read_with(cx, |view, _| view.context_menu.as_ref().map(|open| open.cursor));
+    assert!(
+        matches!(cursor, Some(MenuCursor::Row(_))),
+        "a menu opened over a focused field keeps its keys too: {cursor:?}"
+    );
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.context_menu.is_none()), "escape closed the menu");
+    assert!(answered(&fake).is_empty(), "the approval heard none of it");
+    assert!(cx.update(|window, _| composer.is_focused(window)), "the Composer has the keyboard back");
+}
+
+/// A menu opened from the nav list gives the list its keys and cursor back.
+#[gpui::test]
+fn a_menu_from_the_nav_list_gives_the_list_back_its_keys(cx: &mut TestAppContext) {
+    use crate::cockpit::context_menu::MenuTarget;
+    let (core, _fake) = cockpit("key-menu-from-nav", 2);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    view.update_in(cx, |view, window, cx| view.focus_nav(window, cx));
+    tick(cx);
+    let held = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| {
+            let view = view.read(cx);
+            (view.nav_keys_held && view.nav_focus.is_focused(window), view.nav_cursor.clone())
+        })
+    };
+    let (before, cursor) = held(cx);
+    assert!(before && cursor.is_some(), "the list holds the keys");
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.update(cx, |view, cx| {
+        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(200.), px(200.)), cx)
+    });
+    tick(cx);
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| view.context_menu.is_none()));
+    assert_eq!(held(cx), (true, cursor), "the list has its keys and its cursor back");
+}
+
+#[gpui::test]
 fn y_answers_a_composerless_subagent_tab_while_a_composer_types_it(cx: &mut TestAppContext) {
     use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, Subject};
     let (core, fake) = cockpit("key-subagent", 1);
@@ -245,4 +345,31 @@ fn a_subagent_questions_own_answer_types_its_letters(cx: &mut TestAppContext) {
     };
     assert_eq!(id, "child_q");
     assert_eq!(answers[0].other.as_deref(), Some("nay"));
+}
+
+#[gpui::test]
+fn a_question_mark_typed_on_the_panel_is_text_for_the_composer(cx: &mut TestAppContext) {
+    let (core, _fake, _checkout) = bound_cockpit("key-question-panel", Provider::Claude);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hold_nav_open(&view, cx);
+    cx.simulate_resize(gpui::size(px(1900.), px(900.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.update(cx, |view, cx| view.upsert_surface(thread, SurfaceId::Files, cx));
+    tick(cx);
+    cx.simulate_keystrokes("f6");
+    tick(cx);
+    assert!(
+        super::panel_focus::focused_control(&view, cx).is_some(),
+        "the keyboard is on the panel"
+    );
+    cx.simulate_keystrokes("?");
+    cx.simulate_input("why");
+    tick(cx);
+    assert!(
+        view.read_with(cx, |view, _| view.floats.shortcuts.is_none()),
+        "no sheet took the keyboard"
+    );
+    assert_eq!(composer_text(&view, cx), "?why");
 }

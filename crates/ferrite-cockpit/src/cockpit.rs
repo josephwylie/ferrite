@@ -142,6 +142,7 @@ actions!(
         // the line.
         AllowOnce,
         AlwaysAllow,
+        DenyOnce,
         // ⌘U: the `+` menu's `Add files or photos`, on the focused Pane.
         AttachFiles,
         NextPane,
@@ -522,6 +523,8 @@ pub struct CockpitView {
     /// The right-click menu, if one is up: what it is about, where it was
     /// summoned, and which destructive row is armed for its second press.
     context_menu: Option<ContextMenu>,
+    /// What held focus before the open menu took it (`tend_menu_focus`).
+    menu_return: Option<context_menu::MenuReturn>,
     /// The Solo view's right panel (`panel`): its tab per Thread and
     /// whether the window has room for it.
     panel: panel::Panel,
@@ -1587,6 +1590,7 @@ impl CockpitView {
             rename: None,
             snooze_editor: None,
             context_menu: None,
+            menu_return: None,
             panel: panel::Panel::load(&prefs.dir),
             panel_empty_focus: cx.focus_handle(),
             panel_keys: cx.focus_handle(),
@@ -6222,16 +6226,16 @@ impl CockpitView {
         if self.level_now(window) == Level::Wall {
             return;
         }
-        let index = self.focused();
-        let Some(pane) = self.panes.get(index) else {
-            return;
-        };
         if let Some(thread) = self.panel_thread() {
             let on_controls = self.panel_control_focused(window);
             if self.open_files_find(thread, on_controls, window, cx) {
                 return;
             }
         }
+        let index = self.focused();
+        let Some(pane) = self.panes.get(index) else {
+            return;
+        };
         let reading =
             self.preview_pressed == Some(pane.identity) || pane.preview.focused(window, cx);
         if reading && self.preview_shown(index) && self.open_preview_find(index, window, cx) {
@@ -9906,6 +9910,7 @@ impl Render for CockpitView {
             }));
         }
         self.tend_history();
+        self.tend_menu_focus(window, cx);
         let root = self.render_cockpit(window, cx);
         // The motion tail: the cockpit is the window's root view, so this
         // runs once per frame, after every hover blend has been read. A
@@ -10385,6 +10390,11 @@ impl CockpitView {
         let panel_keys_held =
             self.panel_keys.contains_focused(window, cx) || self.panel_control_focused(window);
         let dialog_took_focus = self.browsers.focus_shown_dialogs(window, cx);
+        if dialog_took_focus {
+            // A page's dialog is modal: it closes an open menu and keeps the keys.
+            self.context_menu = None;
+            self.menu_return = None;
+        }
         if window.has_active_dialog(cx)
             || dialog_took_focus
             || self.browsers.dialog_holds_focus(window, cx)
@@ -10401,6 +10411,8 @@ impl CockpitView {
             || pane_control_focused
         {
             // Native text, dialogs, and the Inbox keep their own keyboard focus.
+        } else if self.context_menu.is_some() {
+            // An open menu holds the keyboard at the root (`tend_menu_focus`).
         } else if self.settings_open {
             // The pump must not steal focus from Settings search or controls.
             if !self.settings_focus.contains_focused(window, cx) {
@@ -10518,13 +10530,14 @@ impl CockpitView {
             .font_family(ferrite_ui::theme::FONT_UI)
             .map(ferrite_ui::components::tabular)
             .track_focus(&self.focus)
-            .key_context(ferrite_ui::keymap::COCKPIT)
             // At wall range no Pane holds a Composer, so the answer keys are
             // not competing with typing: they answer whichever Thread is
-            // flagged, without the operator focusing it first.
-            .when(level == Level::Wall, |wall| {
-                wall.key_context("Ferrite Wall")
-            })
+            // flagged, without the operator focusing it first. An open menu
+            // joins the context; the keymap's rows stand down for it.
+            .key_context(
+                ferrite_ui::keymap::root_context(level == Level::Wall, self.context_menu.is_some())
+                    .as_str(),
+            )
             // Nothing that acts on a lost machine's Threads is listened for
             // until it is back (ADR 0026).
             .when(!lost, |root| {
@@ -10541,6 +10554,9 @@ impl CockpitView {
                     }))
                     .on_action(cx.listener(|view, _: &AllowOnce, window, cx| {
                         view.answer_chorded(Answer::Allow, window, cx)
+                    }))
+                    .on_action(cx.listener(|view, _: &DenyOnce, window, cx| {
+                        view.answer_chorded(Answer::Deny, window, cx)
                     }))
                     .on_action(cx.listener(|view, _: &AlwaysAllow, window, cx| {
                         view.answer_chorded(Answer::Always, window, cx)
@@ -10771,7 +10787,12 @@ impl CockpitView {
                 if let Some(index) = view.menu_mnemonic(&event.keystroke) {
                     cx.stop_propagation();
                     view.press_menu_row(index, window, cx);
+                } else if view.menu_navigate(&event.keystroke, window, cx) {
+                    cx.stop_propagation();
                 }
+            }))
+            .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, window, cx| {
+                view.typing_leaves_panel(&event.keystroke, window, cx);
             }))
             .on_action(cx.listener(Self::open_settings))
             .map(|root| self.register_board_actions(root, cx))

@@ -44,12 +44,39 @@ pub const PLATFORM: Platform = Platform::Windows;
 /// The key context of a keystroke no text field takes: the cockpit's own
 /// root holds the keyboard (the transcript, the board, a wall), and neither
 /// a Composer nor a kit input is on the focus path.
-pub const NO_TEXT_FIELD: &str = "Ferrite && !Composer && !Input";
+pub const NO_TEXT_FIELD: &str = "Ferrite && !Composer && !Input && !ContextMenu";
 
-/// The Cockpit's own key context, on the window's root: a row bound in it
-/// acts anywhere in the Cockpit, and every deeper context — a Composer, a
-/// float, the kit's menus, popovers and dialogs — outranks it.
-pub const COCKPIT: &str = "Ferrite";
+/// The Composer's caret keys the context menu takes over while it is open.
+pub const COMPOSER_TEXT: &str = "Composer && !ContextMenu";
+
+/// The key context the root carries at wall range, where no Composer holds
+/// the keyboard and the answer keys act on the flagged Thread.
+pub const WALL: &str = "Wall && !ContextMenu";
+
+/// The name of the window root's key context. It carries `Wall` at wall
+/// range and `ContextMenu` while a menu is open, beside it.
+pub const ROOT: &str = "Ferrite";
+
+/// The Cockpit's own key context: a row bound in it acts anywhere in the
+/// Cockpit, and every deeper context — a Composer, a float, the kit's menus,
+/// popovers and dialogs — outranks it. An open context menu takes the
+/// keyboard whole (↵ presses its row, ⎋ closes it, ⇥ goes nowhere), so the
+/// Cockpit's keys, this one's, `NO_TEXT_FIELD`'s and `WALL`'s, stand down.
+pub const COCKPIT: &str = "Ferrite && !ContextMenu";
+
+/// The root's key context, whole: `Ferrite`, with `Wall` at wall range and
+/// `ContextMenu` while a menu is open. A key context set on an element
+/// replaces the one before it, so the root builds this once.
+pub fn root_context(wall: bool, menu: bool) -> String {
+    let mut context = String::from(ROOT);
+    if wall {
+        context.push_str(" Wall");
+    }
+    if menu {
+        context.push_str(" ContextMenu");
+    }
+    context
+}
 
 /// One row of the table: (keystroke, action name, key context).
 pub type Binding = (String, &'static str, Option<&'static str>);
@@ -83,8 +110,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
     let mut table = vec![
         ("backspace".into(), "composer::Backspace", Some("Composer")),
         ("delete".into(), "composer::Delete", Some("Composer")),
-        ("left".into(), "composer::Left", Some("Composer")),
-        ("right".into(), "composer::Right", Some("Composer")),
+        ("left".into(), "composer::Left", Some(COMPOSER_TEXT)),
+        ("right".into(), "composer::Right", Some(COMPOSER_TEXT)),
         ("home".into(), "composer::Home", Some("Composer")),
         ("end".into(), "composer::End", Some("Composer")),
         (with_primary("v"), "composer::Paste", Some("Composer")),
@@ -207,6 +234,8 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             "cockpit::AlwaysAllow",
             Some("Decision"),
         ),
+        // Deny, the card's other button: ⌘. (stop this).
+        (with_primary("."), "cockpit::DenyOnce", Some("Decision")),
         // A Subagent's tab has no Composer; its cards' own fields still type.
         ("y".into(), "cockpit::Allow", Some(SUBAGENT_DECISION)),
         ("n".into(), "cockpit::Deny", Some(SUBAGENT_DECISION)),
@@ -218,15 +247,15 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("4".into(), "cockpit::PickOption4", Some("Decision")),
         // At wall range no Pane holds a Composer, so the same keys answer
         // whichever Thread is flagged without focusing it first.
-        ("y".into(), "cockpit::Allow", Some("Wall")),
-        ("n".into(), "cockpit::Deny", Some("Wall")),
-        ("a".into(), "cockpit::Always", Some("Wall")),
+        ("y".into(), "cockpit::Allow", Some(WALL)),
+        ("n".into(), "cockpit::Deny", Some(WALL)),
+        ("a".into(), "cockpit::Always", Some(WALL)),
         // A tile's quick answers by their digits (F-7): `1` allow, `2`
         // allow for this thread, `3` deny — the focused waiting tile, else
         // the one that has waited longest.
-        ("1".into(), "cockpit::PickOption1", Some("Wall")),
-        ("2".into(), "cockpit::PickOption2", Some("Wall")),
-        ("3".into(), "cockpit::PickOption3", Some("Wall")),
+        ("1".into(), "cockpit::PickOption1", Some(WALL)),
+        ("2".into(), "cockpit::PickOption2", Some(WALL)),
+        ("3".into(), "cockpit::PickOption3", Some(WALL)),
         // Back and forward through where the operator has been, Claude's
         // and the browser's ⌘[ / ⌘].
         (with_primary("["), "cockpit::GoBack", None),
@@ -322,10 +351,9 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
             Some("ToolDisclosure"),
         ),
         // `?`: the shortcuts sheet, read from this table. Only on an empty
-        // Composer line or with no text field holding the keyboard; a `?`
-        // typed into text is just a character.
+        // Composer line; anywhere else a `?` is a character, and with the
+        // keyboard off the Composer it types into it like any other.
         ("?".into(), "shortcuts::Toggle", Some("ComposerEmpty")),
-        ("?".into(), "shortcuts::Toggle", Some(NO_TEXT_FIELD)),
         // A page of the transcript up and down, and its ends, wherever no
         // text needs the keys: an empty Composer line (bound after its
         // own home and end, so the empty line's context wins the tie) or
@@ -717,7 +745,7 @@ pub const IMAGE_VIEWER: &str = "ImageViewer";
 
 /// The contexts where no text field takes typing (a Decision answers its
 /// own letters), so a plain key may act there.
-const LETTER_CONTEXTS: [&str; 4] = [NO_TEXT_FIELD, REVIEW, SUBAGENT_DECISION, "Wall"];
+const LETTER_CONTEXTS: [&str; 4] = [NO_TEXT_FIELD, REVIEW, SUBAGENT_DECISION, WALL];
 
 /// gpui's "no action": a row that keeps a key from the bindings under it.
 const NO_ACTION: &str = "zed::NoAction";
@@ -1073,6 +1101,17 @@ mod tests {
     /// never in none: a binding with none ranks as deep as the deepest and
     /// would take both keys from every float, menu, popover and dialog.
     #[test]
+    fn the_root_context_carries_the_wall_and_an_open_menu_beside_ferrite() {
+        assert_eq!(root_context(false, false), "Ferrite");
+        assert_eq!(root_context(true, false), "Ferrite Wall");
+        assert_eq!(root_context(false, true), "Ferrite ContextMenu");
+        assert_eq!(root_context(true, true), "Ferrite Wall ContextMenu");
+        for stands_down in [COCKPIT, NO_TEXT_FIELD, WALL] {
+            assert!(stands_down.ends_with("!ContextMenu"), "{stands_down}");
+        }
+    }
+
+    #[test]
     fn enter_and_escape_are_the_cockpits_own() {
         for platform in [Platform::Mac, Platform::Windows] {
             let table = bindings(platform);
@@ -1125,7 +1164,7 @@ mod tests {
                 ("3", "cockpit::PickOption3"),
             ] {
                 assert!(table.contains(&(key.into(), action, Some("Decision"))));
-                assert!(table.contains(&(key.into(), action, Some("Wall"))));
+                assert!(table.contains(&(key.into(), action, Some(WALL))));
             }
             for (key, action) in [
                 ("y", "cockpit::Allow"),
@@ -1137,7 +1176,7 @@ mod tests {
                     "{key} types under a Decision"
                 );
                 assert!(table.contains(&(key.into(), action, Some(SUBAGENT_DECISION))));
-                assert!(table.contains(&(key.into(), action, Some("Wall"))));
+                assert!(table.contains(&(key.into(), action, Some(WALL))));
             }
         }
     }
@@ -1174,7 +1213,6 @@ mod tests {
                 ("down", "empty_board::Next", "EmptyBoard"),
                 ("enter", "empty_board::Run", "EmptyBoard"),
                 ("?", "shortcuts::Toggle", "ComposerEmpty"),
-                ("?", "shortcuts::Toggle", NO_TEXT_FIELD),
             ] {
                 assert!(
                     table.contains(&(key.into(), action, Some(context))),
@@ -1408,7 +1446,7 @@ mod tests {
             rows("cockpit::Allow"),
             [
                 ("shift-y".to_string(), Some(SUBAGENT_DECISION)),
-                ("shift-y".to_string(), Some("Wall"))
+                ("shift-y".to_string(), Some(WALL))
             ]
         );
         assert!(rows("cockpit::ToggleNav").is_empty());
@@ -1507,7 +1545,7 @@ mod tests {
                 .iter()
                 .any(|refusal| refusal.contains(&format!("for {action} would take that key"))));
         }
-        assert!(table.contains(&("o".into(), "cockpit::Allow", Some("Wall"))));
+        assert!(table.contains(&("o".into(), "cockpit::Allow", Some(WALL))));
         assert!(table.contains(&("g".into(), "review::Reread", Some(REVIEW))));
     }
 

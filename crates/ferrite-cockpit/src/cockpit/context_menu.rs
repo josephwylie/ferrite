@@ -179,11 +179,29 @@ pub(super) struct ContextMenu {
     /// The submenu open beside its parent row: that row's index and the
     /// submenu's rows.
     pub(super) sub: Option<(usize, Vec<(menu::Item, MenuVerb)>)>,
+    /// Where the keyboard's cursor stands; none until a key moves it.
+    pub(super) cursor: MenuCursor,
+}
+
+/// The row the keyboard would press: in the menu, or in the submenu open
+/// beside it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum MenuCursor {
+    Idle,
+    Row(usize),
+    SubRow(usize),
 }
 
 /// What heads a copy that is only the latest part of a conversation.
 const PARTIAL_HISTORY: &str =
     "[Earlier messages are not included: this view keeps only the latest.]";
+
+/// Where the keyboard goes back to as an open menu closes.
+pub(super) enum MenuReturn {
+    /// The nav list held the keys, its cursor here.
+    Nav(Option<crate::nav::NavCursor>),
+    Focus(FocusHandle),
+}
 
 impl CockpitView {
     /// `thread`'s conversation to the clipboard. Once the view dropped its
@@ -284,6 +302,7 @@ impl CockpitView {
             rows,
             armed: None,
             sub: None,
+            cursor: MenuCursor::Idle,
         });
         cx.notify();
     }
@@ -676,6 +695,127 @@ impl CockpitView {
         })
     }
 
+    /// An open menu takes the keyboard whole: the root holds focus while it
+    /// is up, so no field's bindings (a Decision's, the Composer's history)
+    /// answer its keys. The focus it took comes back as it closes, unless
+    /// what it did moved focus elsewhere. Tended once a frame.
+    pub(super) fn tend_menu_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.context_menu.is_some() {
+            if self.menu_return.is_none() {
+                self.menu_return = Some(if self.nav_keys_held && self.nav_focus.is_focused(window) {
+                    MenuReturn::Nav(self.nav_cursor.clone())
+                } else {
+                    MenuReturn::Focus(window.focused(cx).unwrap_or_else(|| self.focus.clone()))
+                });
+            }
+            // A press that opened another menu over this one may have
+            // focused a field under it.
+            if !self.focus.is_focused(window) {
+                window.focus(&self.focus, cx);
+            }
+        } else if let Some(back) = self.menu_return.take() {
+            if self.focus.is_focused(window) {
+                match back {
+                    MenuReturn::Nav(cursor) => self.focus_nav_on(cursor, window, cx),
+                    MenuReturn::Focus(handle) => window.focus(&handle, cx),
+                }
+            }
+        }
+    }
+
+    /// ↑ ↓ ← → ⏎ on the open menu. Up and down walk the rows of the menu
+    /// (or of its submenu while the cursor is in it) and wrap past the
+    /// ends; → enters a submenu, ← leaves it; ⏎ presses the cursor row.
+    /// True when the key was the menu's.
+    pub(super) fn menu_navigate(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(open) = self.context_menu.as_mut() else {
+            return false;
+        };
+        if keystroke.modifiers.modified() {
+            return false;
+        }
+        let live = |rows: &[Option<(menu::Item, MenuVerb)>], at: usize| {
+            rows.get(at)
+                .and_then(Option::as_ref)
+                .is_some_and(|(item, _)| !item.disabled)
+        };
+        let step = |len: usize, from: Option<usize>, forward: bool, live: &dyn Fn(usize) -> bool| {
+            let first = if forward { 0 } else { len.saturating_sub(1) };
+            let mut at = from.map_or(first, |at| {
+                if forward { (at + 1) % len.max(1) } else { (at + len.max(1) - 1) % len.max(1) }
+            });
+            for _ in 0..len {
+                if live(at) {
+                    return Some(at);
+                }
+                at = if forward { (at + 1) % len } else { (at + len - 1) % len };
+            }
+            None
+        };
+        match (keystroke.key.as_str(), open.cursor) {
+            ("up" | "down", MenuCursor::SubRow(at)) => {
+                let Some((_, rows)) = open.sub.as_ref() else {
+                    return false;
+                };
+                let rows: Vec<_> = rows.iter().map(|(item, _)| item.disabled).collect();
+                let forward = keystroke.key == "down";
+                if let Some(next) = step(rows.len(), Some(at), forward, &|i| !rows[i]) {
+                    open.cursor = MenuCursor::SubRow(next);
+                }
+            }
+            ("up" | "down", cursor) => {
+                let from = match cursor {
+                    MenuCursor::Row(at) => Some(at),
+                    _ => None,
+                };
+                let forward = keystroke.key == "down";
+                let len = open.rows.len();
+                if let Some(next) = step(len, from, forward, &|i| live(&open.rows, i)) {
+                    open.cursor = MenuCursor::Row(next);
+                    open.armed = None;
+                    open.sub = None;
+                }
+            }
+            ("right", MenuCursor::Row(at)) => {
+                let Some(Some((_, MenuVerb::Submenu(kind)))) = open.rows.get(at) else {
+                    return true;
+                };
+                let kind = *kind;
+                self.open_submenu(at, kind, cx);
+                if let Some(open) = self.context_menu.as_mut() {
+                    if open.sub.as_ref().is_some_and(|(_, rows)| !rows.is_empty()) {
+                        open.cursor = MenuCursor::SubRow(0);
+                    }
+                }
+            }
+            ("left", MenuCursor::SubRow(_)) => {
+                if let Some((parent, _)) = open.sub.take() {
+                    open.cursor = MenuCursor::Row(parent);
+                }
+            }
+            ("enter", MenuCursor::Row(at)) => {
+                self.press_menu_row(at, window, cx);
+                return true;
+            }
+            ("enter", MenuCursor::SubRow(at)) => {
+                if let Some(parent) = open.sub.as_ref().map(|(parent, _)| *parent) {
+                    self.press_submenu_row(parent, at, window, cx);
+                }
+                return true;
+            }
+            ("escape", _) => self.context_menu = None,
+            ("left" | "right" | "enter", _) => return true,
+            _ => return false,
+        }
+        cx.notify();
+        true
+    }
+
     /// A row's press: a destructive row arms on the first press and runs
     /// on the second; anything else runs at once. The menu closes after
     /// a verb runs, and stays up while a row is armed.
@@ -992,7 +1132,8 @@ impl CockpitView {
                     y += px(row_height(item));
                     let parent = matches!(verb, MenuVerb::Submenu(_));
                     let lit = open.sub.as_ref().is_some_and(|(at, _)| *at == index);
-                    let face = menu::row(index, item, open.armed == Some(index))
+                    let cursor = open.cursor == MenuCursor::Row(index);
+                    let face = menu::row(index, item, cursor, open.armed == Some(index))
                         .debug_selector(move || format!("context-menu-row-{index}"))
                         .when(lit, |row| row.bg(ferrite_ui::theme::paint::FLOAT_HOVER))
                         .when(parent, |row| {
@@ -1047,7 +1188,12 @@ impl CockpitView {
             for (index, (item, _)) in rows.iter().enumerate() {
                 let parent = *parent;
                 side = side.child(
-                    menu::item_row(("context-submenu-row", index), item, false, false)
+                    menu::item_row(
+                        ("context-submenu-row", index),
+                        item,
+                        open.cursor == MenuCursor::SubRow(index),
+                        false,
+                    )
                         .debug_selector(move || format!("context-submenu-row-{index}"))
                         .on_mouse_down(
                             MouseButton::Left,

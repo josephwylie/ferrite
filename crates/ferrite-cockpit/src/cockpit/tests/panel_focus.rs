@@ -188,6 +188,43 @@ fn enter_presses_a_control_and_escape_gives_the_keyboard_back(cx: &mut TestAppCo
     assert_eq!(composer_text(&view, cx), SENTINEL);
 }
 
+/// More tabs than the strip shows: the arrow keys bring each stop they land
+/// on into view, without a chevron's press.
+#[gpui::test]
+fn arrowing_along_overflowing_tabs_scrolls_each_stop_into_view(cx: &mut TestAppContext) {
+    let (view, thread, cx) = with_tabs("focus-overflow", cx);
+    view.update(cx, |view, cx| {
+        for n in 0..14 {
+            let path = std::path::PathBuf::from(format!("/work/a-long-file-name-{n}.rs"));
+            view.upsert_surface(thread, SurfaceId::File(path), cx);
+        }
+    });
+    tick(cx);
+    let shown = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        let stop = cx.debug_bounds(selector).expect("the stop is drawn");
+        let strip = view.read_with(cx, |view, _| view.panel.tabs_scroll.bounds());
+        stop.left() >= strip.left() - px(1.) && stop.right() <= strip.right() + px(1.)
+    };
+    let settle = |cx: &mut gpui::VisualTestContext| {
+        for _ in 0..12 {
+            cx.executor().advance_clock(std::time::Duration::from_millis(50));
+            view.update(cx, |_, cx| cx.notify());
+            tick(cx);
+        }
+    };
+    press("f6", cx);
+    press("home", cx);
+    settle(cx);
+    press("end left", cx);
+    settle(cx);
+    assert_eq!(focused_control(&view, cx), Some(PanelControl::Plus));
+    assert!(shown(cx, "panel-plus"), "the + at the strip's far end is in view");
+    press("home", cx);
+    settle(cx);
+    let slid = view.read_with(cx, |view, _| view.panel.tabs_scroll.offset().x);
+    assert_eq!(slid, px(0.), "and the first tab is back at the strip's head");
+}
+
 #[gpui::test]
 fn closing_a_tab_by_key_never_parks_its_thread(cx: &mut TestAppContext) {
     let (view, thread, cx) = with_tabs("focus-close", cx);
@@ -356,6 +393,64 @@ fn find_in_files_searches_the_file_not_the_transcript(cx: &mut TestAppContext) {
         cx.update(|window, cx| editor.read(cx).holds_keyboard(window, cx)),
         "the keyboard is back in the file"
     );
+}
+
+/// ⌘F over a prose file (a README) searches that document: the bar opens
+/// over it, the conversation's stays shut, and the first hit is in view.
+#[gpui::test]
+fn find_in_a_prose_file_searches_the_document_and_shows_the_hit(cx: &mut TestAppContext) {
+    let (view, thread, _file, cx) = with_marked_file("focus-prose-find", cx);
+    let readme = view.read_with(cx, |view, _| view.thread_path(thread).unwrap()).join("README.md");
+    let pad = "A paragraph that only pads the document.\n\n".repeat(80);
+    std::fs::write(&readme, format!("# Notes\n\n{pad}The {ONLY_IN_THE_FILE} is here.\n")).unwrap();
+    view.update(cx, |view, cx| view.open_in_files(thread, readme, None, true, cx));
+    tick(cx);
+    assert!(cx.debug_bounds("files-prose").is_some(), "the README reads as prose");
+
+    press("f6", cx);
+    press("cmd-f", cx);
+    assert!(cx.debug_bounds("find-bar").is_some(), "⌘F opens the bar over the document");
+    assert!(!transcript_find_open(&view, cx), "the conversation's bar stays shut");
+    cx.simulate_input(ONLY_IN_THE_FILE);
+    for _ in 0..6 {
+        view.update(cx, |_, cx| cx.notify());
+        tick(cx);
+    }
+    let (count, painted) = view
+        .update(cx, |view, _| view.prose_find_for_test(thread))
+        .expect("the bar is open");
+    assert_eq!(count.as_deref(), Some("1/1"));
+    let painted = painted.expect("the hit painted");
+    let shown = cx.debug_bounds("files-prose").unwrap();
+    assert!(
+        painted.top() >= shown.top() && painted.bottom() <= shown.bottom(),
+        "the hit is in view: {painted:?} in {shown:?}"
+    );
+
+    press("escape", cx);
+    assert!(cx.debug_bounds("find-bar").is_none(), "esc closes the bar");
+}
+
+/// F6 from a document read in the Panel's body goes to the Panel's
+/// controls, not away from the Panel; a second one leaves.
+#[gpui::test]
+fn f6_from_a_document_in_the_panel_enters_its_controls(cx: &mut TestAppContext) {
+    let (view, thread, _file, cx) = with_marked_file("focus-f6-readme", cx);
+    let readme = view.read_with(cx, |view, _| view.thread_path(thread).unwrap()).join("README.md");
+    std::fs::write(&readme, "# Hello\n\nbody\n").unwrap();
+    view.update(cx, |view, cx| view.open_in_files(thread, readme, None, true, cx));
+    tick(cx);
+    let prose = cx.debug_bounds("files-prose").expect("the README reads as prose");
+    cx.simulate_click(prose.center(), gpui::Modifiers::none());
+    tick(cx);
+
+    press("f6", cx);
+    assert!(
+        focused_control(&view, cx).is_some(),
+        "the first F6 lands on the Panel's controls"
+    );
+    press("f6", cx);
+    assert!(composer_focused(&view, cx), "the next one leaves for the conversation");
 }
 
 /// A file opened by a press in the tree: the press leaves the keyboard in

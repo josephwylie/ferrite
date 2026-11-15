@@ -109,6 +109,102 @@ fn open_in_opens_its_submenu_beside_the_menu(cx: &mut TestAppContext) {
     );
 }
 
+/// The menu is worked from the keyboard: ↓ and ↑ walk its rows (past the
+/// rules, wrapping), → steps into a submenu and ← out of it, ⏎ presses the
+/// cursor row and esc closes the menu.
+#[gpui::test]
+fn the_row_menu_is_walked_with_the_arrow_keys(cx: &mut TestAppContext) {
+    use crate::cockpit::context_menu::MenuCursor;
+    let (core, _fake) = cockpit("row-menu-keys", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.update(cx, |view, cx| {
+        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(300.), px(200.)), cx)
+    });
+    tick(cx);
+    let cursor = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.context_menu.as_ref().map(|open| open.cursor))
+    };
+    assert_eq!(cursor(cx), Some(MenuCursor::Idle));
+    cx.simulate_keystrokes("down");
+    tick(cx);
+    assert_eq!(cursor(cx), Some(MenuCursor::Row(0)), "down lands on the first row");
+    cx.simulate_keystrokes("down");
+    tick(cx);
+    assert_eq!(cursor(cx), Some(MenuCursor::Row(2)), "and steps over the rule");
+    cx.simulate_keystrokes("up up");
+    tick(cx);
+    let last = view.read_with(cx, |view, _| {
+        view.context_menu.as_ref().unwrap().rows.len() - 1
+    });
+    assert!(
+        matches!(cursor(cx), Some(MenuCursor::Row(at)) if at >= last - 1),
+        "up wraps to the end"
+    );
+    cx.simulate_keystrokes("down");
+    tick(cx);
+    assert_eq!(cursor(cx), Some(MenuCursor::Row(0)), "down wraps to the start");
+    cx.simulate_keystrokes("right");
+    tick(cx);
+    assert_eq!(cursor(cx), Some(MenuCursor::SubRow(0)), "right enters Open in");
+    assert!(cx.debug_bounds("context-submenu").is_some());
+    cx.simulate_keystrokes("down");
+    tick(cx);
+    assert_eq!(cursor(cx), Some(MenuCursor::SubRow(1)));
+    cx.simulate_keystrokes("left");
+    tick(cx);
+    assert_eq!(cursor(cx), Some(MenuCursor::Row(0)), "left returns to the parent");
+    assert!(cx.debug_bounds("context-submenu").is_none());
+    cx.simulate_keystrokes("down down enter");
+    tick(cx);
+    assert_eq!(cursor(cx), None, "enter pressed the row and closed the menu");
+    view.update(cx, |view, cx| {
+        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(300.), px(200.)), cx)
+    });
+    tick(cx);
+    cx.simulate_keystrokes("down escape");
+    tick(cx);
+    assert_eq!(cursor(cx), None, "escape closes it");
+}
+
+/// An open menu joins the root's key context instead of replacing it, so the
+/// keymap decides what stands down. The Cockpit's own ↵, ⎋ and ⇥ do (the
+/// menu's ↵ presses its row, ⎋ closes it), and a chord bound for every
+/// context, ⌘,, still acts.
+#[gpui::test]
+fn an_open_menu_joins_the_root_context_and_global_chords_still_act(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("row-menu-context", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    view.update(cx, |view, cx| {
+        view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(300.), px(200.)), cx)
+    });
+    tick(cx);
+    let root = cx.update(|window, _| window.context_stack());
+    assert!(
+        root.iter()
+            .any(|context| context.contains("Ferrite") && context.contains("ContextMenu")),
+        "the menu is added to the root's context, not put in its place: {root:?}"
+    );
+    cx.simulate_keystrokes("tab");
+    tick(cx);
+    assert!(
+        view.read_with(cx, |view, _| view.context_menu.is_some()),
+        "the Cockpit's ⇥ stands down for the open menu"
+    );
+    cx.simulate_keystrokes("cmd-,");
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.settings_open, "⌘, is bound for every context and still acts");
+    });
+}
+
 /// A row's `⋯` menu stays in the window: under its button where there is
 /// room, over it (the same gap above) near the window's foot, and never
 /// past the window's edge.

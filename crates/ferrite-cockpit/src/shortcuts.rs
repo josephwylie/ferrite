@@ -67,7 +67,7 @@ pub(crate) enum Entry {
 pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
     use Entry::{Hidden, Row};
     use Place::*;
-    let wall = context == Some("Wall");
+    let wall = context == Some(ferrite_ui::keymap::WALL);
     // The file editor edits as the Composer does: its keys are the same
     // rows, not new ones.
     if context == Some(ferrite_ui::keymap::FILE_EDITOR)
@@ -144,6 +144,7 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         // line, where the letters type.
         "cockpit::AllowOnce" => Row(Decision, "Allow once, from any line"),
         "cockpit::AlwaysAllow" => Row(Decision, "Always allow, from any line"),
+        "cockpit::DenyOnce" => Row(Decision, "Deny, from any line"),
         "cockpit::PickOption1" => Row(Decision, "Pick 1\u{2013}3"),
         "cockpit::PickOption2" | "cockpit::PickOption3" => Hidden,
         "cockpit::PickOption4" => Row(Decision, "Pick 4"),

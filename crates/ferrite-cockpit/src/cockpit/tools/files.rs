@@ -41,6 +41,7 @@ use super::working_set::{OpenFile, WorkingSet};
 use super::*;
 use crate::cockpit::context_menu::Submenu;
 use crate::cockpit::panel::controls::focusable;
+use crate::cockpit::panel::preview::{settle_markdown_found, PreviewFind};
 use crate::cockpit::panel::{PanelControl, Semantics};
 use crate::cockpit::surfaces::SurfaceId;
 use crate::cockpit::tab_scroll::{self, Side, TabScroll};
@@ -134,6 +135,8 @@ struct Rendered {
     markup: SharedString,
     cache: ferrite_pane::rich::TextCache,
     scroll: ScrollHandle,
+    /// ⌘F's bar over the document, while it is open.
+    find: Option<PreviewFind>,
 }
 
 struct Tab {
@@ -225,19 +228,98 @@ impl CockpitView {
     }
 
     /// ⌘F with the keyboard in the shown Files surface: the find bar opens
-    /// over its file. Whether it did.
+    /// over its file, source or rendered. Whether it did.
     pub(in crate::cockpit) fn open_files_find(
-        &self,
+        &mut self,
         thread: ThreadId,
         on_controls: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(editor) = self.files_find_target(thread, on_controls, window, cx) else {
+        if let Some(editor) = self.files_find_target(thread, on_controls, window, cx) {
+            editor.update(cx, |editor, cx| editor.open_find(window, cx));
+            return true;
+        }
+        if self.active_surface(thread) != Some(SurfaceId::Files)
+            || !(on_controls || self.panel_keys_held(window, cx))
+        {
+            return false;
+        }
+        let Some((path, rendered)) = self.shown_rendered(thread) else {
             return false;
         };
-        editor.update(cx, |editor, cx| editor.open_find(window, cx));
+        let find = rendered.find.get_or_insert_with(|| {
+            PreviewFind::new(
+                ferrite_pane::find::Find::new(cx, move |view: &mut Self, cx| {
+                    view.refind_rendered(thread, cx)
+                }),
+                path,
+            )
+        });
+        find.bar.focus(window, cx);
+        cx.notify();
         true
+    }
+
+    /// The shown tab's path and rendered face, while it reads rendered.
+    fn shown_rendered(&mut self, thread: ThreadId) -> Option<(PathBuf, &mut Rendered)> {
+        let files = self.files_of(thread)?;
+        let tab = &mut files.tabs[files.active?];
+        match &mut tab.reading {
+            Reading::Rendered(rendered) => Some((tab.path.clone(), rendered)),
+            _ => None,
+        }
+    }
+
+    /// The rendered bar's line changed: search the document again, a new
+    /// query starting on its first occurrence in view.
+    fn refind_rendered(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let Some((_, Rendered { markup, find: Some(find), .. })) = self.shown_rendered(thread) else {
+            return;
+        };
+        let source = gpui::base::text::TextView::markdown_find_text(markup);
+        if find.bar.search([source.as_str()], 0, cx) && find.bar.active().is_some() {
+            find.reveal_when_painted(true);
+        }
+        cx.notify();
+    }
+
+    fn step_rendered_find(&mut self, thread: ThreadId, forward: bool, cx: &mut Context<Self>) {
+        let Some((_, Rendered { find: Some(find), .. })) = self.shown_rendered(thread) else {
+            return;
+        };
+        if find.bar.step(forward).is_some() {
+            find.reveal_when_painted(false);
+            cx.notify();
+        }
+    }
+
+    fn close_rendered_find(&mut self, thread: ThreadId, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((_, rendered)) = self.shown_rendered(thread) {
+            rendered.find = None;
+            window.blur(cx);
+            cx.notify();
+        }
+    }
+
+    /// What the shown rendered file's bar reads, and where its occurrence painted.
+    #[cfg(test)]
+    pub(crate) fn prose_find_for_test(
+        &mut self,
+        thread: ThreadId,
+    ) -> Option<(Option<SharedString>, Option<gpui::Bounds<Pixels>>)> {
+        let (_, rendered) = self.shown_rendered(thread)?;
+        rendered.find.as_ref().map(PreviewFind::state)
+    }
+
+    /// Once per frame: settle the shown rendered file's active occurrence into view.
+    pub(in crate::cockpit) fn tend_prose_find(&mut self, window: &mut Window) {
+        let Some(thread) = self.panel_thread() else {
+            return;
+        };
+        if let Some((_, Rendered { scroll, find: Some(find), .. })) = self.shown_rendered(thread) {
+            settle_markdown_found(find, scroll, window);
+        }
     }
 
     /// Bring file tab `at` into view in the tabs row.
@@ -258,10 +340,15 @@ impl CockpitView {
         };
         self.active_surface(thread) == Some(SurfaceId::Files)
             && self.files_ref(thread).is_some_and(|files| {
-                files
-                    .active
-                    .and_then(|active| files.tabs[active].shown_editor())
-                    .is_some_and(|editor| editor.read(cx).find_holds_focus(window, cx))
+                files.active.is_some_and(|active| {
+                    let tab = &files.tabs[active];
+                    match &tab.reading {
+                        Reading::Rendered(Rendered { find: Some(find), .. }) => find.holds_focus(window, cx),
+                        _ => tab
+                            .shown_editor()
+                            .is_some_and(|editor| editor.read(cx).find_holds_focus(window, cx)),
+                    }
+                })
             })
     }
 
@@ -421,6 +508,7 @@ impl CockpitView {
                             markup: markup.into(),
                             cache: Default::default(),
                             scroll: ScrollHandle::new(),
+                            find: None,
                         })
                     });
                     (TabBody::Code(Self::editor_for(&path, source, settings, thread, cx)), reading)
@@ -483,6 +571,7 @@ impl CockpitView {
                     markup: markup.into(),
                     cache: Default::default(),
                     scroll: ScrollHandle::new(),
+                    find: None,
                 });
             }
             Reading::Rendered(_) => {
@@ -1107,22 +1196,43 @@ impl CockpitView {
         let open_path = tab.path.clone();
         let body = match (&tab.body, &tab.reading) {
             (TabBody::Code(_), Reading::Rendered(rendered)) => div()
-                .id("files-prose")
-                .debug_selector(|| "files-prose".into())
+                .relative()
+                .flex()
+                .flex_col()
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
-                .track_scroll(&rendered.scroll)
-                .px(px(TX_INSET_SOLO))
-                .pt(px(BODY_PAD_T))
-                .pb(px(HALF_ROW))
-                .text_size(px(FS_PROSE))
-                .line_height(px(LH_PROSE))
-                .child(ferrite_pane::rich::Markdown::new(
-                    format!("files-{}", tab.path.display()),
-                    rendered.markup.clone(),
-                    rendered.cache.clone(),
-                ))
+                .child(
+                    div()
+                        .id("files-prose")
+                        .debug_selector(|| "files-prose".into())
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .track_scroll(&rendered.scroll)
+                        .px(px(TX_INSET_SOLO))
+                        .pt(px(BODY_PAD_T))
+                        .pb(px(HALF_ROW))
+                        .text_size(px(FS_PROSE))
+                        .line_height(px(LH_PROSE))
+                        .child(
+                            ferrite_pane::rich::Markdown::new(
+                                format!("files-{}", tab.path.display()),
+                                rendered.markup.clone(),
+                                rendered.cache.clone(),
+                            )
+                            .find(rendered.find.as_ref().and_then(|find| find.bar.marks(0))),
+                        ),
+                )
+                .children(rendered.find.as_ref().map(|find| find.bar.bar()))
+                .on_action(cx.listener(move |view, _: &ferrite_pane::find::Next, _, cx| {
+                    view.step_rendered_find(thread, true, cx)
+                }))
+                .on_action(cx.listener(move |view, _: &ferrite_pane::find::Previous, _, cx| {
+                    view.step_rendered_find(thread, false, cx)
+                }))
+                .on_action(cx.listener(move |view, _: &ferrite_pane::find::Close, window, cx| {
+                    view.close_rendered_find(thread, window, cx)
+                }))
                 .into_any_element(),
             (TabBody::Code(editor), _) => div().flex_1().min_h_0().child(editor.clone()).into_any_element(),
             (TabBody::Unshown(why), _) => {
