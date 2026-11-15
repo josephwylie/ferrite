@@ -159,15 +159,17 @@ fn grown(added: &HashSet<PathBuf>, path: &Path, element: impl IntoElement) -> gp
 }
 
 /// A file taken off the draft at `left`, closing its place.
-fn slipping(index: usize, path: &Path, left: Instant, ghost: impl IntoElement) -> gpui::AnyElement {
-    let id = SharedString::from(format!("attachment-out-{index}-{}", path.display()));
-    ferrite_ui::motion::slip_out(
-        id,
-        left,
-        ferrite_ui::motion::CHIP_OUT,
-        ferrite_ui::theme::CH,
-        ghost,
-    )
+/// `gap` is the row's, which the closing chip gives back as it goes. Its
+/// id is the file and the moment it went, not its place, which moves as
+/// the ghosts before it expire.
+fn slipping(
+    path: &Path,
+    left: Instant,
+    gap: f32,
+    ghost: impl IntoElement,
+) -> gpui::AnyElement {
+    let id = SharedString::from(format!("attachment-out-{}-{left:?}", path.display()));
+    ferrite_ui::motion::slip_out(id, left, ferrite_ui::motion::CHIP_OUT, gap, ghost)
     .into_any_element()
 }
 
@@ -214,7 +216,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
         .iter()
         .map(|(index, path)| {
             if let Some(left) = closing.get(path) {
-                return slipping(*index, path, *left, ghost_card(*index, path));
+                return slipping(path, *left, ferrite_ui::theme::SPACE_2, ghost_card(*index, path));
             }
             grown(
                 &added,
@@ -302,25 +304,30 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
                     .and_then(|state| status_label(("attachment-status", index), state)),
             )
             .when_some(
-                retry_of(readiness.get(&path), on_retry.clone()).filter(|_| live),
+                retry_of(readiness.get(&path), on_retry.clone()),
                 |chip, retry| {
                     let retried = path.clone();
-                    chip.child(
-                        retry_button(("retry-attachment", index))
-                            .accessibility_label(format!("Retry {name}"))
-                            .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                retry(&retried, window, cx);
-                            }),
-                    )
+                    let button = retry_button(("retry-attachment", index))
+                        .tab_stop(live)
+                        .accessibility_label(format!("Retry {name}"));
+                    chip.child(if live {
+                        button.on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            retry(&retried, window, cx);
+                        })
+                    } else {
+                        button
+                    })
                 },
             )
-            .when_some(on_remove.clone().filter(|_| live), |chip, remove| {
+            .when_some(on_remove.clone(), |chip, remove| {
                 let removed = path.clone();
-                chip.child(
-                    remove_button(("remove-attachment", index))
+                let button = remove_button(("remove-attachment", index))
+                    .tab_stop(live)
+                    .accessibility_label(format!("Remove {name}"));
+                chip.child(if live {
+                    button
                         .debug_selector(move || format!("tray-file-{index}-remove"))
-                        .accessibility_label(format!("Remove {name}"))
                         .tooltip_builder(ferrite_ui::menu::tooltip(format!(
                             "Remove {}",
                             path.display()
@@ -328,8 +335,10 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
                         .on_click(move |_, window, cx| {
                             cx.stop_propagation();
                             remove(&removed, window, cx);
-                        }),
-                )
+                        })
+                } else {
+                    button
+                })
             })
             .when(live, |chip| {
                 chip.on_click(move |_, window, cx| {
@@ -338,7 +347,7 @@ fn chips(attachments: Attachments) -> gpui::AnyElement {
                 })
             });
         match left {
-            Some(left) => slipping(index, &path, left, chip),
+            Some(left) => slipping(&path, left, theme::CH, chip),
             None => grown(&added, &path, chip),
         }
     });

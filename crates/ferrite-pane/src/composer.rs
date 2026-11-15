@@ -456,22 +456,28 @@ impl Composer {
         let composer = entity.read(cx);
         let count = composer.attachment_count();
         let now = cx.background_executor().now();
-        let mut ghosts: Vec<_> = composer.departed(now).collect();
-        if count == 0 && ghosts.is_empty() {
+        let mut ghosts = composer.departed(now).peekable();
+        if count == 0 && ghosts.peek().is_none() {
             return None;
         }
-        ghosts.sort_by_key(|ghost| ghost.at);
-        let mut files = composer.files.paths().to_vec();
+        let emptied = (count == 0).then(|| ghosts.map(|ghost| ghost.left).max()).flatten();
+        let mut files = Vec::new();
         let mut readiness = composer.files.readiness().clone();
         let mut closing = std::collections::HashMap::new();
-        for ghost in &ghosts {
-            if let departed::Gone::File { path, readiness: state } = &ghost.what {
-                files.insert(ghost.at.min(files.len()), path.clone());
-                readiness.extend(state.clone().map(|state| (path.clone(), state)));
-                closing.insert(path.clone(), ghost.left);
+        let kept = composer.files.paths();
+        for place in composer.places(kept.len(), now, |gone| matches!(gone, departed::Gone::File { .. })) {
+            match place {
+                departed::Place::Kept(index) => files.push(kept[index].clone()),
+                departed::Place::Gone(ghost) => {
+                    let departed::Gone::File { path, readiness: state } = &ghost.what else {
+                        continue;
+                    };
+                    files.push(path.clone());
+                    readiness.extend(state.clone().map(|state| (path.clone(), state)));
+                    closing.insert(path.clone(), ghost.left);
+                }
             }
         }
-        let emptied = (count == 0).then(|| ghosts.iter().map(|ghost| ghost.left).max()).flatten();
         let added = composer.files_growing(cx);
         let comments = composer.review.len();
         let annotations = composer.browser_annotations.clone();

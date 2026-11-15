@@ -30,12 +30,37 @@ pub(super) struct Departed {
     pub(super) left: Instant,
 }
 
+/// One place in the tray: what the draft holds (by its index among its
+/// kind), or what has gone and is closing.
+pub(super) enum Place<'a> {
+    Kept(usize),
+    Gone(&'a Departed),
+}
+
 impl Composer {
     /// The ghosts still closing at `now`, oldest first.
-    pub(super) fn departed(&self, now: Instant) -> impl Iterator<Item = &Departed> {
+    pub(super) fn departed(&self, now: Instant) -> impl DoubleEndedIterator<Item = &Departed> {
         self.leaving
             .iter()
             .filter(move |ghost| now.saturating_duration_since(ghost.left) < CHIP_OUT.duration())
+    }
+
+    /// The tray's places for the `kept` things the draft holds and the
+    /// ghosts of `mine` among them. Each ghost's `at` counts the places
+    /// there were when it went, so the newest is put back first: that
+    /// undoes the removals in the order they were made, whatever order the
+    /// operator made them in.
+    pub(super) fn places(
+        &self,
+        kept: usize,
+        now: Instant,
+        mine: impl Fn(&Gone) -> bool,
+    ) -> Vec<Place<'_>> {
+        let mut places: Vec<_> = (0..kept).map(Place::Kept).collect();
+        for ghost in self.departed(now).rev().filter(|ghost| mine(&ghost.what)) {
+            places.insert(ghost.at.min(places.len()), Place::Gone(ghost));
+        }
+        places
     }
 
     /// Take `path` off the draft. Focus goes where the operator can keep

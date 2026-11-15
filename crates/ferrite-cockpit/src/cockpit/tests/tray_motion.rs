@@ -77,6 +77,24 @@ fn left_of_row(cx: &mut gpui::VisualTestContext) -> f32 {
     left("tray-replies", cx)
 }
 
+/// Where the tray's open part starts: it drops toward the line as the
+/// tray closes.
+fn tray_top(cx: &mut gpui::VisualTestContext) -> f32 {
+    f32::from(
+        cx.debug_bounds("pending-attachment-tray")
+            .expect("the tray")
+            .top(),
+    )
+}
+
+fn line_top(cx: &mut gpui::VisualTestContext) -> f32 {
+    f32::from(
+        cx.debug_bounds("focused-prompt-editor")
+            .expect("the line")
+            .top(),
+    )
+}
+
 fn tray_height(cx: &mut gpui::VisualTestContext) -> f32 {
     cx.debug_bounds("pending-attachment-tray")
         .map_or(0.0, |tray| f32::from(tray.size.height))
@@ -92,18 +110,23 @@ fn the_last_citation_closes_the_tray_and_send_holds_still(cx: &mut TestAppContex
     composer.update(cx, |composer, cx| composer.insert("hello", cx));
     cite(&view, &["only quote"], cx);
     let send = cx.debug_bounds("composer-send").expect("Send");
-    let full = tray_height(cx);
-    assert!(full > 0.0);
+    assert!(tray_height(cx) > 0.0);
+    let open = tray_top(cx);
+    let line = line_top(cx);
     press_remove("cite-chip-0-remove", cx);
-    let mut last = full;
-    for _ in 0..4 {
+    let mut last = open;
+    for _ in 0..2 {
         at(MOTION_CHIP_OUT_MS / 4, cx);
-        let now = tray_height(cx);
-        assert!(now <= last, "it only closes: {now} after {last}");
+        let now = tray_top(cx);
+        assert!(now >= last, "it only closes: the tray at {now} after {last}");
         assert_eq!(cx.debug_bounds("composer-send"), Some(send), "Send holds");
+        assert_eq!(line_top(cx), line, "the line holds");
         last = now;
     }
-    assert!(last < full, "it closed some: {last} of {full}");
+    assert!(
+        last > open && last < line,
+        "mid-close the open part is between full and none: {open} < {last} < {line}"
+    );
     at(MOTION_CHIP_OUT_MS, cx);
     tick(cx);
     assert_eq!(tray_height(cx), 0.0, "and is gone");
@@ -208,4 +231,77 @@ fn a_removed_file_closes_its_place_and_the_next_follows(cx: &mut TestAppContext)
     at(MOTION_CHIP_OUT_MS, cx);
     tick(cx);
     assert_eq!(left("tray-file-0", cx), first, "closed up");
+}
+
+/// The chip after the one removed stands where it did on the first frame
+/// after the press: the closing chip is the chip it was, neither wider nor
+/// narrower, and the row does not jump.
+#[gpui::test]
+fn a_removed_citation_leaves_its_neighbour_where_it_stood(cx: &mut TestAppContext) {
+    let (view, cx) = window("tray-reply-still", cx);
+    cite(&view, &["first quote", "second quote"], cx);
+    let before = left("cite-chip-1", cx);
+    press_remove("cite-chip-0-remove", cx);
+    let after = left("cite-chip-0", cx);
+    assert!(
+        (after - before).abs() < 0.5,
+        "the neighbour moved {before} to {after}"
+    );
+}
+
+/// A frame that comes a moment after the press, as a real one does, does
+/// not snap the neighbours to where the row starts.
+#[gpui::test]
+fn a_frame_after_the_press_does_not_snap_the_row_shut(cx: &mut TestAppContext) {
+    let (view, cx) = window("tray-reply-gap", cx);
+    cite(&view, &["first quote", "second quote"], cx);
+    let before = left("cite-chip-1", cx);
+    let composer = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    cx.update(|window, cx| {
+        composer.update(cx, |composer, cx| composer.remove_reply(0, window, cx));
+        // The first frame to draw the ghost comes a moment after it went.
+        cx.background_executor().advance_clock(Duration::from_millis(1));
+    });
+    cx.run_until_parked();
+    let after = left("cite-chip-0", cx);
+    assert!(
+        before - after < 4.0,
+        "the neighbour jumped {before} to {after} on the first frame"
+    );
+}
+
+/// Citations [A, B, C], B taken off and then A before B has gone: the
+/// ghosts close in the places they held, A, B, then C where it was.
+#[gpui::test]
+fn citations_removed_out_of_order_close_in_their_own_places(cx: &mut TestAppContext) {
+    let (view, cx) = window("tray-reply-order", cx);
+    cite(&view, &["a", "bbbbbbbbbbbbbbbbbbbb", "cccccccccc"], cx);
+    let before = left("cite-chip-2", cx);
+    press_remove("cite-chip-1-remove", cx);
+    press_remove("cite-chip-0-remove", cx);
+    let after = left("cite-chip-0", cx);
+    assert!(
+        (after - before).abs() < 4.0,
+        "the last one moved {before} to {after}: the ghosts are out of order"
+    );
+}
+
+/// The same for files: [A, B, C], A then C taken off.
+#[gpui::test]
+fn files_removed_out_of_order_close_in_their_own_places(cx: &mut TestAppContext) {
+    let (view, cx) = window("tray-file-order", cx);
+    let files = ["a.md", "bbbbbbbbbbbbbbbbbbbb.md", "cccccccccc.md"]
+        .map(|name| std::path::PathBuf::from(format!("/nonexistent/{name}")));
+    let composer = view.read_with(cx, |view, _| view.panes[0].composer.clone());
+    composer.update(cx, |composer, cx| composer.add_files(&files, cx));
+    tick(cx);
+    at(ferrite_ui::theme::MOTION_CHIP_IN_MS, cx);
+    let before = left("tray-file-1", cx);
+    press_remove("tray-file-0-remove", cx);
+    press_remove("tray-file-2-remove", cx);
+    let after = left("tray-file-1", cx);
+    assert!(
+        (after - before).abs() < 4.0,
+        "the middle one moved {before} to {after}: the ghosts are out of order"
+    );
 }

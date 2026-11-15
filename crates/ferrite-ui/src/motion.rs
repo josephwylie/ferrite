@@ -1256,30 +1256,35 @@ struct FoldBody {
 impl gpui::RenderOnce for FoldBody {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
         let natural = window.with_global_id(self.id, |id, window| {
-            window.with_element_state(id, |cell: Option<Rc<Cell<gpui::Size<gpui::Pixels>>>>, _| {
+            window.with_element_state(id, |cell: Option<Rc<Cell<Option<gpui::Size<gpui::Pixels>>>>>, _| {
                 let cell = cell.unwrap_or_default();
                 (cell.clone(), cell)
             })
         });
         let measured = natural.clone();
         let shown = self.shown.clamp(0.0, 1.0);
+        // A body not yet measured stands at its natural size for the frame
+        // that measures it: clipping to a size of 0 would snap its
+        // neighbours to where it started.
+        let size = natural.get().filter(|_| shown < 1.0);
         let clip = div().flex().flex_shrink_0();
-        let clip = match self.axis {
-            Axis::Vertical => clip.flex_col().when(shown < 1.0, |clip| {
-                clip.h(natural.get().height * shown)
-                    .overflow_hidden()
-                    .opacity(shown)
-            }),
-            Axis::Horizontal { gap } => clip.when(shown < 1.0, |clip| {
-                clip.w(natural.get().width * shown)
-                    .mr(px(-gap * (1.0 - shown)))
-                    .overflow_hidden()
-                    .opacity(shown)
-            }),
+        let clip = match (self.axis, size) {
+            (Axis::Vertical, Some(natural)) => clip
+                .flex_col()
+                .h(natural.height * shown)
+                .overflow_hidden()
+                .opacity(shown),
+            (Axis::Vertical, None) => clip.flex_col(),
+            (Axis::Horizontal { gap }, Some(natural)) => clip
+                .w(natural.width * shown)
+                .mr(px(-gap * (1.0 - shown)))
+                .overflow_hidden()
+                .opacity(shown),
+            (Axis::Horizontal { .. }, None) => clip,
         };
         clip.on_children_prepainted(move |bounds, _, _| {
             if let Some(body) = bounds.first() {
-                measured.set(body.size);
+                measured.set(Some(body.size));
             }
         })
         .child(div().flex().flex_col().flex_shrink_0().child(self.body))

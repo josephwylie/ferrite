@@ -401,7 +401,7 @@ impl CockpitView {
             }
             _ => None,
         };
-        let keyed = matches!(&shown, Some((_, None | Some(SurfaceId::Files))));
+        let keyed = matches!(&shown, Some((_, tab)) if reads_panel_keys(tab.as_ref()));
         if !keyed && self.panel_keys_held(window, cx) {
             self.leave_panel(window, cx);
         }
@@ -728,8 +728,9 @@ impl CockpitView {
                 .child(body)
                 .into_any_element()
         };
+        let takes_keys = reads_panel_keys(active.as_ref());
         let body = match active {
-            None => keyed(self.surface_empty(thread, cx)),
+            None => self.surface_empty(thread, cx),
             Some(SurfaceId::Overview) => {
                 let scroll = self.panel.scrolls.get(&thread).cloned().unwrap_or_default();
                 div()
@@ -757,7 +758,7 @@ impl CockpitView {
                     .into_any_element()
             }
             Some(SurfaceId::File(_) | SurfaceId::Browser) => padded(self.panel_preview(owner, cx)),
-            Some(SurfaceId::Files) => keyed(self.files_pane(thread, cx).into_any_element()),
+            Some(SurfaceId::Files) => self.files_pane(thread, cx).into_any_element(),
             Some(SurfaceId::Changes) => filled(self.changes_pane(tools::Diff::Changes(thread), cx).into_any_element()),
             Some(SurfaceId::Terminal(number)) => {
                 filled(self.terminal_pane(thread, number, cx).into_any_element())
@@ -766,12 +767,19 @@ impl CockpitView {
             Some(SurfaceId::Agent(key)) => filled(self.agent_drill_body(thread, &key, cx)),
             Some(SurfaceId::PullRequest(number)) => filled(self.pr_surface(thread, number, cx)),
         };
+        let body = if takes_keys { keyed(body) } else { body };
         ferrite_ui::motion::swap_since(
             self.panel.picked,
             div().flex().flex_col().flex_1().min_h_0().min_w_0().child(body),
         )
         .into_any_element()
     }
+}
+
+/// Whether `tab`'s body takes the Panel's keys (`panel_keys`): the empty
+/// Panel and Files read them, every other tab's body has its own.
+fn reads_panel_keys(tab: Option<&SurfaceId>) -> bool {
+    matches!(tab, None | Some(SurfaceId::Files))
 }
 
 /// How far in from the window's right edge the title tools' right edge sits
