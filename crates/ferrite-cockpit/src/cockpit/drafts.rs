@@ -5,6 +5,7 @@
 use super::*;
 use ferrite_core::draft_content::DraftContent;
 use ferrite_core::drafts::Drafts;
+use ferrite_core::replies::Reply;
 use ferrite_core::roster::DraftId;
 
 /// How long after the last keystroke the drafts are written: a burst of
@@ -104,6 +105,30 @@ impl CockpitView {
             this.update(cx, |view, cx| view.save_drafts(cx)).ok();
         })
         .detach();
+    }
+
+    /// `replies` went out on `thread`: their quotes keep the Blocks they
+    /// were cited from, for the sent rows' Go to source.
+    pub(super) fn keep_cited_sources(&mut self, thread: ThreadId, replies: &[Reply]) {
+        if self.cited_sources.record(thread, replies) {
+            if let Err(error) = self.cited_sources.save(&self.prefs.dir) {
+                eprintln!("ferrite: cited sources were not saved: {error}");
+            }
+        }
+    }
+
+    /// Delete `thread`, and with it the sources its quotes were cited from.
+    pub(super) fn delete_thread(
+        &mut self,
+        thread: ThreadId,
+    ) -> Result<(), ferrite_core::engine::DeleteError> {
+        self.cockpit.delete(thread)?;
+        if self.cited_sources.forget(thread) {
+            if let Err(error) = self.cited_sources.save(&self.prefs.dir) {
+                eprintln!("ferrite: cited sources were not saved: {error}");
+            }
+        }
+        Ok(())
     }
 
     /// `thread`'s Pane just opened: its Composer takes what it was left

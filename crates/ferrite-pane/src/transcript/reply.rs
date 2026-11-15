@@ -20,8 +20,8 @@
 use std::time::{Duration, Instant};
 
 use gpui::{
-    prelude::*, px, AnyElement, Bounds, Context, MouseButton, MouseDownEvent, MouseUpEvent,
-    Pixels, Point, SharedString, Size, Window,
+    prelude::*, px, AnyElement, Bounds, Context, MouseButton, MouseDownEvent, MouseUpEvent, Pixels,
+    Point, SharedString, Size, Window,
 };
 
 use super::{Navigate, TranscriptEvent, TranscriptView};
@@ -81,16 +81,15 @@ impl TranscriptView {
             let block = gpui::base::TextSelection::painted_bounds(window, cx)
                 .first()
                 .and_then(|first| view.block_at(first.center().y));
-            view.reply = (passage.is_some() || crate::quote::too_long(&selected)).then(|| {
-                SelectionReply {
+            view.reply =
+                (passage.is_some() || crate::quote::too_long(&selected)).then(|| SelectionReply {
                     staged: false,
                     passage,
                     block,
                     at,
                     appears: cx.background_executor().now() + delay,
                     fading: None,
-                }
-            });
+                });
             if !delay.is_zero() {
                 cx.spawn(async move |view, cx| {
                     cx.background_executor().timer(delay).await;
@@ -200,20 +199,66 @@ impl TranscriptView {
         })
     }
 
-    /// Scroll to the row holding `block`. Whether it is still in this
-    /// transcript (a replayed or evicted history may have dropped it).
+    /// Bring the top of the row holding `block` into view below the pinned
+    /// band, leaving it be when that top is already readable. Says whether it is still in this transcript (a
+    /// replayed or evicted history may have dropped it).
     pub fn reveal_block(&mut self, block: BlockId, cx: &mut Context<Self>) -> bool {
-        let Some(row) = self
-            .rows
+        let Some(row) = self.row_holding(block) else {
+            return false;
+        };
+        self.navigate(Navigate::Cite { row }, cx);
+        cx.notify();
+        true
+    }
+
+    fn row_holding(&self, block: BlockId) -> Option<usize> {
+        self.rows
             .rows()
             .iter()
             .position(|row| row.blocks().iter().any(|candidate| candidate.id == block))
-        else {
-            return false;
+    }
+
+    /// Where the row holding `block` is drawn, as the tests read it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn block_row_bounds(&self, block: BlockId) -> Option<gpui::Bounds<Pixels>> {
+        self.scroll
+            .list_state()
+            .bounds_for_item(self.row_holding(block)?)
+    }
+
+    /// A sent Quote row's Go to source: scroll to the Block it was cited
+    /// from, or have the row say it is gone.
+    fn open_cited(&mut self, block: BlockId, cx: &mut Context<Self>) {
+        if !self.reveal_block(block, cx) {
+            self.missing_sources.insert(block);
+            cx.notify();
+        }
+    }
+
+    /// Where each Quote row of the prompt `line` was cited from.
+    pub(super) fn quote_sources(
+        &self,
+        line: &str,
+        view: Option<&gpui::Entity<Self>>,
+    ) -> Vec<Option<crate::attachments::QuoteSource>> {
+        let Some(view) = view.map(gpui::Entity::downgrade) else {
+            return Vec::new();
         };
-        self.navigate(Navigate::Reveal { row }, cx);
-        cx.notify();
-        true
+        ferrite_core::replies::split(line)
+            .0
+            .iter()
+            .map(|reply| {
+                let key = ferrite_core::cited_sources::key(&reply.quote);
+                let block = *self.input.cited.get(&key)?;
+                let view = view.clone();
+                Some(crate::attachments::QuoteSource {
+                    missing: self.missing_sources.contains(&block),
+                    go: std::rc::Rc::new(move |_, cx| {
+                        let _ = view.update(cx, |transcript, cx| transcript.open_cited(block, cx));
+                    }),
+                })
+            })
+            .collect()
     }
 
     /// The button on offer at `at` for `passage` (a reference scene's: no
@@ -249,8 +294,7 @@ impl TranscriptView {
             return None;
         }
         let staged = self.reply.as_ref().is_some_and(|reply| reply.staged);
-        if !staged
-            && (!self.input.focused || !gpui::base::TextSelection::has_selection(window, cx))
+        if !staged && (!self.input.focused || !gpui::base::TextSelection::has_selection(window, cx))
         {
             self.reply = None;
             return None;
@@ -305,36 +349,54 @@ impl TranscriptView {
                         },
                     )
                 }),
-            None => glass_button(&namespace, "selection-reply-quote", "Shorten selection", false)
-                .opacity(0.5)
-                .tooltip(ferrite_ui::menu::tooltip("Selection is too long to cite")),
+            None => glass_button(
+                &namespace,
+                "selection-reply-quote",
+                "Shorten selection",
+                false,
+            )
+            .opacity(0.5)
+            .tooltip(ferrite_ui::menu::tooltip("Selection is too long to cite")),
         };
-        let side_chat = passage.clone().zip(self.input.rewind.as_ref()).map(|(passage, allowed)| {
-            let button = glass_button(&namespace, "selection-side-chat", "Start a side chat", false);
-            match allowed {
-                Err(why) => button
-                    .opacity(0.4)
-                    .tooltip(ferrite_ui::menu::tooltip(format!(
-                        "Start a side chat \u{b7} {why}"
-                    ))),
-                Ok(()) => button.when(!fading, |button| {
-                    let weak = weak.clone();
-                    button.cursor_pointer().on_mouse_down(
-                        MouseButton::Left,
-                        move |_: &MouseDownEvent, window: &mut Window, cx: &mut gpui::App| {
-                            cx.stop_propagation();
-                            gpui::base::TextSelection::clear(window, cx);
-                            let passage = passage.clone();
-                            let _ = weak.update(cx, |view, cx| {
-                                view.reply = None;
-                                cx.emit(TranscriptEvent::SideChat(passage));
-                                cx.notify();
-                            });
-                        },
-                    )
-                }),
-            }
-        });
+        let side_chat =
+            passage
+                .clone()
+                .zip(self.input.rewind.as_ref())
+                .map(|(passage, allowed)| {
+                    let button = glass_button(
+                        &namespace,
+                        "selection-side-chat",
+                        "Start a side chat",
+                        false,
+                    );
+                    match allowed {
+                        Err(why) => {
+                            button
+                                .opacity(0.4)
+                                .tooltip(ferrite_ui::menu::tooltip(format!(
+                                    "Start a side chat \u{b7} {why}"
+                                )))
+                        }
+                        Ok(()) => button.when(!fading, |button| {
+                            let weak = weak.clone();
+                            button.cursor_pointer().on_mouse_down(
+                                MouseButton::Left,
+                                move |_: &MouseDownEvent,
+                                      window: &mut Window,
+                                      cx: &mut gpui::App| {
+                                    cx.stop_propagation();
+                                    gpui::base::TextSelection::clear(window, cx);
+                                    let passage = passage.clone();
+                                    let _ = weak.update(cx, |view, cx| {
+                                        view.reply = None;
+                                        cx.emit(TranscriptEvent::SideChat(passage));
+                                        cx.notify();
+                                    });
+                                },
+                            )
+                        }),
+                    }
+                });
         let row = gpui::div()
             .id(id)
             .debug_selector(|| "selection-reply".into())
@@ -382,9 +444,10 @@ fn cite_place(
             && pointer.y <= rect.bottom() + near
     });
     let preferred = match rects.last() {
-        Some(last) if !on_text => {
-            gpui::point(last.right(), last.bottom() + px(theme::SELECTION_CITE_BELOW))
-        }
+        Some(last) if !on_text => gpui::point(
+            last.right(),
+            last.bottom() + px(theme::SELECTION_CITE_BELOW),
+        ),
         _ => pointer,
     };
     let edge = px(theme::SELECTION_CITE_EDGE);
@@ -393,8 +456,20 @@ fn cite_place(
         value.min(limit - extent - edge).max(edge)
     };
     gpui::point(
-        held(preferred.x, column.left(), column.right(), window.width, size.width),
-        held(preferred.y, column.top(), column.bottom(), window.height, size.height),
+        held(
+            preferred.x,
+            column.left(),
+            column.right(),
+            window.width,
+            size.width,
+        ),
+        held(
+            preferred.y,
+            column.top(),
+            column.bottom(),
+            window.height,
+            size.height,
+        ),
     )
 }
 
@@ -417,7 +492,11 @@ fn cite_size(too_long: bool, side_chat: bool, window: &mut Window) -> Size<Pixel
             .width()
     };
     let pad = px(2. * theme::SELECTION_CITE_PAD_X + 2.);
-    let first = if too_long { "Shorten selection" } else { "Cite" };
+    let first = if too_long {
+        "Shorten selection"
+    } else {
+        "Cite"
+    };
     let mut width = shaped(first) + pad;
     if !too_long {
         width += px(theme::SELECTION_CITE_ICON + theme::SELECTION_CITE_ICON_GAP);

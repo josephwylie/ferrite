@@ -9,6 +9,7 @@ pub mod api;
 pub mod attachment;
 mod attention;
 pub mod cadence;
+pub mod cited_sources;
 pub mod clock;
 pub mod cockpit;
 pub mod diagnostics;

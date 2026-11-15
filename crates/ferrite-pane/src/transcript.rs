@@ -112,6 +112,9 @@ enum Navigate {
     Band { turn: usize, offset: f32 },
     /// A row `into` px from the top (the minimap's jumps).
     At { index: usize, into: f32 },
+    /// A cited message's row: where it lies if its top is readable, else
+    /// its top just below the pinned band.
+    Cite { row: usize },
     /// A Find hit's row: where it lies if it is in view, else its top.
     Reveal { row: usize },
     /// The reader opened or shut something in place: the view stays where
@@ -214,6 +217,11 @@ pub struct TranscriptInput {
     /// The Session's commands and skills: a sent prompt's `/name` that
     /// names one is drawn blue, its description on hover.
     pub skills: std::sync::Arc<[ferrite_core::SessionCommand]>,
+    /// The Block each sent Quote row was cited from, by its words
+    /// (`ferrite_core::cited_sources`): the row offers Go to source.
+    pub cited: std::sync::Arc<std::collections::BTreeMap<String, BlockId>>,
+    /// Changes whenever a source in `cited` is added, re-pointed or dropped.
+    pub cited_revision: u64,
     /// A muted line standing under the first prompt, which no block says:
     /// `Model Haiku 5.5` in a subagent's drill-in.
     pub note: Option<SharedString>,
@@ -253,6 +261,8 @@ pub struct TranscriptKey {
     pub quotes: bool,
     /// How many skills the prompts can name: a late catalogue redraws them.
     pub skills: usize,
+    /// Which state of the sent quotes' sources the rows were drawn from.
+    pub cited: u64,
     pub note: Option<SharedString>,
     pub earlier: Option<Earlier>,
     pub queued: usize,
@@ -277,6 +287,7 @@ impl TranscriptInput {
             rewind: self.rewind.clone(),
             quotes: self.quotes,
             skills: self.skills.len(),
+            cited: self.cited_revision,
             note: self.note.clone(),
             earlier: self.earlier,
             queued: self.queued,
@@ -478,6 +489,10 @@ pub struct TranscriptView {
     pinned_drawn: Rc<Cell<PinnedBand>>,
     /// The position a re-render was last asked for.
     pinned_asked: Rc<Cell<Option<PinnedBand>>>,
+    /// The row a Go to source is landing, with the band height it last
+    /// saw (none yet): the band is its own turn's, measured only once drawn,
+    /// so layout re-lands the row until that height stops changing.
+    cite_landing: Rc<Cell<Option<(usize, Option<gpui::Pixels>)>>>,
     /// Each row's laid-out height, as the list last measured it: the
     /// minimap places its ticks and its view band from these.
     heights: Rc<std::cell::RefCell<HashMap<RowId, f32>>>,
@@ -487,6 +502,9 @@ pub struct TranscriptView {
     /// second press (a double-click) sends nothing before the sent prompt
     /// reaches the transcript and spends the box.
     used_steps: HashMap<String, String>,
+    /// Cited Blocks Go to source found gone from this transcript: their
+    /// Quote rows say so.
+    missing_sources: HashSet<BlockId>,
     #[cfg(any(test, feature = "test-support"))]
     disclosure_bounds: Rc<std::cell::RefCell<HashMap<DisclosureId, gpui::Bounds<gpui::Pixels>>>>,
     /// What prose path targets resolve against: the checkout and the paths
@@ -582,6 +600,8 @@ impl TranscriptView {
                 quotes: false,
                 reply_to: SharedString::default(),
                 skills: Default::default(),
+                cited: Default::default(),
+                cited_revision: 0,
                 note: None,
                 earlier: None,
                 queued: 0,
@@ -639,8 +659,10 @@ impl TranscriptView {
             pinned_h: Rc::new(Cell::new(gpui::px(0.))),
             pinned_drawn: Rc::new(Cell::new(None)),
             pinned_asked: Rc::new(Cell::new(None)),
+            cite_landing: Rc::new(Cell::new(None)),
             heights: Default::default(),
             used_steps: HashMap::new(),
+            missing_sources: HashSet::new(),
             #[cfg(any(test, feature = "test-support"))]
             disclosure_bounds: Default::default(),
             targets,
@@ -1088,6 +1110,7 @@ impl TranscriptView {
     /// sent prompt's hold, a band jump still sizing its room. The room
     /// already under the rows stays, used up as they arrive.
     fn revoke_automatic_movement(&mut self) {
+        self.cite_landing.set(None);
         self.scroll.cancel_ease();
         self.scroll.release_reading_place();
         self.drop_pending_reveal();
@@ -1161,6 +1184,12 @@ impl TranscriptView {
                 self.scroll.scroll_to(index, px(into));
             }
             Navigate::At { index, into } => self.scroll.scroll_to(index, px(into)),
+            Navigate::Cite { row } => {
+                self.runway.set(Runway::default());
+                self.scroll.list_state().pause_following_tail();
+                self.scroll.scroll_top_below_band(row);
+                self.cite_landing.set(Some((row, None)));
+            }
             Navigate::Reveal { row } => {
                 self.runway.set(Runway::default());
                 // Keep the hit where it is: a tail follow must not take the
@@ -1714,6 +1743,7 @@ impl TranscriptView {
             let cuts = cuts.map(|((_, allowed), _)| allowed.clone());
             let joins = row.joins();
             let face = pane::PromptFace {
+                sources: self.quote_sources(line, view.as_ref()),
                 above: joins.above,
                 below: joins.below,
                 clamp: pane::prompt_clamps(line).then(|| {
@@ -3136,6 +3166,7 @@ impl Render for TranscriptView {
         let weak = cx.entity().downgrade();
         let pinned_drawn = self.pinned_drawn.clone();
         let pinned_asked = self.pinned_asked.clone();
+        let cite_landing = self.cite_landing.clone();
         let pinned_h = self.pinned_h.clone();
         let runway = self.runway.clone();
         let shelf = self.visuals.clone();
@@ -3280,6 +3311,22 @@ impl Render for TranscriptView {
                     (None, None) => false,
                     _ => true,
                 };
+                if let Some((row, band)) = cite_landing.get() {
+                    if scroll.scroll_top_below_band(row) {
+                        let weak = weak.clone();
+                        window.defer(cx, move |_, cx| {
+                            let _ = weak.update(cx, |_, cx| cx.notify());
+                        });
+                    } else if band == Some(pinned_h.get()) && !settled && !moved {
+                        cite_landing.set(None);
+                    } else {
+                        cite_landing.set(Some((row, Some(pinned_h.get()))));
+                        let weak = weak.clone();
+                        window.defer(cx, move |_, cx| {
+                            let _ = weak.update(cx, |_, cx| cx.notify());
+                        });
+                    }
+                }
                 // Ask once per position: a layout that keeps moving the band
                 // (it cannot, but a loop must never be possible) waits for the
                 // next ordinary render.

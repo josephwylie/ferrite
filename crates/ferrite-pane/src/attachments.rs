@@ -578,7 +578,11 @@ fn failed_tile(
 /// word Quote in `INK_SUBTLE`, then the passage cut at `QUOTE_ROW_LINES`
 /// lines, behind a `QUOTE_RULE_W` `LINE` rule (Markdown's quote rule), and
 /// under it the words the operator replied with, when there are any.
-pub fn quote_row(index: usize, reply: Reply) -> gpui::Stateful<gpui::Div> {
+pub fn quote_row(
+    index: usize,
+    reply: Reply,
+    source: Option<QuoteSource>,
+) -> gpui::Stateful<gpui::Div> {
     use ferrite_ui::theme;
     use gpui::{div, rgb, SharedString};
     div()
@@ -616,6 +620,37 @@ pub fn quote_row(index: usize, reply: Reply) -> gpui::Stateful<gpui::Div> {
                     .child(SharedString::from(reply.text)),
             )
         })
+        .children(source.map(|source| quote_source(index, source)))
+}
+
+/// Where a sent quote was cited from, when Ferrite kept it: the Block's
+/// Go to source, or that it is no longer in this transcript.
+pub struct QuoteSource {
+    pub missing: bool,
+    pub go: std::rc::Rc<dyn Fn(&mut Window, &mut App)>,
+}
+
+fn quote_source(index: usize, source: QuoteSource) -> gpui::Div {
+    use ferrite_ui::theme;
+    use gpui::{div, rgb};
+    let row = div().debug_selector(move || format!("quote-row-{index}-source"));
+    if source.missing {
+        return row
+            .text_color(rgb(theme::INK_SUBTLE))
+            .child("Source unavailable");
+    }
+    row.child(
+        ferrite_ui::components::button(("quote-source", index))
+            .debug_selector(move || format!("quote-row-{index}-go"))
+            .p_0()
+            .h(px(theme::LH_META))
+            .text_color(rgb(theme::LINK_INK))
+            .child("Go to source")
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                (source.go)(window, cx);
+            }),
+    )
 }
 
 /// A tile's `×` in its top corner (an image card's, a reply's): clear until

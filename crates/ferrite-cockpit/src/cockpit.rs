@@ -600,6 +600,8 @@ pub struct CockpitView {
     prefs: Preferences,
     /// What each Thread's Composer holds unsent.
     unsent: drafts::Unsent,
+    /// Where the quotes of sent prompts were cited from.
+    cited_sources: ferrite_core::cited_sources::CitedSources,
     /// The Settings panel is up.
     settings_open: bool,
     /// The Settings sheet on its way out (`settings_element`).
@@ -1507,6 +1509,7 @@ impl CockpitView {
         // operator. Start drafts where they were last working, and leave a
         // new installation genuinely empty.
         let launch_project = startup_project(&cockpit);
+        let cited_sources = ferrite_core::cited_sources::CitedSources::load(&prefs.dir);
         // The existing GPUI fixtures assume construction supplies a draft.
         // Keep their synthetic seed out of production; `startup_project` is
         // tested directly against an empty registry below.
@@ -1615,6 +1618,7 @@ impl CockpitView {
             dragging: None,
             nav_dragging: None,
             unsent: drafts::Unsent::load(&prefs.dir),
+            cited_sources,
             prefs,
             settings_open: false,
             settings_exit: Default::default(),
@@ -2016,6 +2020,12 @@ impl CockpitView {
         let quotes = self.panes[index].is_main();
         let queued = open.queue().len();
         let earlier = self.earlier_history(thread, subject_view.transcript(), quotes);
+        let cited = self
+            .cited_sources
+            .of(thread)
+            .cloned()
+            .map(std::sync::Arc::new)
+            .unwrap_or_default();
         let key = ferrite_pane::transcript::TranscriptKey {
             namespace: namespace.clone(),
             content_revision: revision,
@@ -2033,6 +2043,7 @@ impl CockpitView {
             rewind: rewind.clone(),
             quotes,
             skills: open.commands().len(),
+            cited: self.cited_sources.revision(),
             note: None,
             earlier,
             queued,
@@ -2086,6 +2097,8 @@ impl CockpitView {
             quotes,
             reply_to: open.provider().to_string().into(),
             skills: open.commands().into(),
+            cited,
+            cited_revision: self.cited_sources.revision(),
             note: None,
             earlier,
             queued,
@@ -3685,7 +3698,7 @@ impl CockpitView {
         let mut refused = 0usize;
         let mut reason = None;
         for thread in parked {
-            if let Err(error) = self.cockpit.delete(thread) {
+            if let Err(error) = self.delete_thread(thread) {
                 refused += 1;
                 reason = Some(error.to_string());
             }
@@ -5710,6 +5723,7 @@ impl CockpitView {
         }
         let draft = composer.update(cx, |composer, cx| composer.take_draft(cx));
         let text = draft.prompt().trim().to_string();
+        let cited = draft.content().replies.clone();
         // `/effort max` and `/model sonnet` typed out are Ferrite's own
         // acts, the same as the pickers: the chip stays truthful, Codex
         // (which has no such command) gets them too, and a level or model
@@ -5765,6 +5779,9 @@ impl CockpitView {
             }
             admitted
         };
+        if admitted {
+            self.keep_cited_sources(thread, &cited);
+        }
         self.facts.acted(&self.cockpit, thread);
         // A first prompt names an untitled Thread.
         self.facts.renamed(&self.cockpit, thread);

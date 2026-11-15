@@ -169,6 +169,23 @@ impl TranscriptScroll {
         });
     }
 
+    /// Bring row `index`'s top just below the pinned band, unless its top is
+    /// already readable there. Says whether it moved the view.
+    pub(crate) fn scroll_top_below_band(&self, index: usize) -> bool {
+        let viewport = self.list.viewport_bounds();
+        let floor = viewport.top() + self.top_mask.get();
+        let placed = self
+            .list
+            .bounds_for_item(index)
+            .is_some_and(|bounds| bounds.top() >= floor && bounds.top() < viewport.bottom());
+        if placed {
+            return false;
+        }
+        self.scroll_to(index, px(0.));
+        self.list.scroll_by(-self.top_mask.get());
+        true
+    }
+
     /// Scroll a page up or down: the viewport below the pinned band (the
     /// rows pass under it), less the line kept in view of the page before.
     /// Reaching the end resumes following it.
