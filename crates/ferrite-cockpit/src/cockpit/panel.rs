@@ -39,7 +39,7 @@ mod sections;
 pub(in crate::cockpit) use sections::Depth;
 mod strip;
 
-use super::surfaces::{SurfaceId, Surfaces, ThreadSurfaces};
+use super::surfaces::{Close, Restart, SurfaceId, Surfaces, ThreadSurfaces};
 use ferrite_ui::icons::{self, icon};
 use super::*;
 
@@ -55,6 +55,8 @@ pub(crate) struct Panel {
     /// they were last written.
     pub(crate) surfaces: Surfaces,
     dirty: bool,
+    /// Each Thread's open Files and preferences, as stored (`files.json`).
+    pub(crate) working_sets: super::tools::WorkingSets,
     /// Each Thread's sections' scroll, so a Thread's Overview comes back
     /// where it was left.
     scrolls: std::collections::HashMap<ThreadId, ScrollHandle>,
@@ -91,13 +93,15 @@ impl Panel {
     /// written over at the next change: they are conveniences, never worth
     /// refusing to start for.
     pub(crate) fn load(dir: &std::path::Path) -> Self {
-        let surfaces = Surfaces::load(dir, survives_restart).unwrap_or_else(|error| {
-            eprintln!("ferrite: the panel's tabs were not read: {error}");
-            Surfaces::default()
-        });
+        let surfaces = Surfaces::load(dir, |_, id| id.lifecycle().restart == Restart::Restore)
+            .unwrap_or_else(|error| {
+                eprintln!("ferrite: the panel's tabs were not read: {error}");
+                Surfaces::default()
+            });
         Self {
             surfaces,
             dirty: false,
+            working_sets: super::tools::WorkingSets::load(dir),
             scrolls: Default::default(),
             tabs_scroll: ScrollHandle::new(),
             tabs_tween: Default::default(),
@@ -121,26 +125,6 @@ struct TabPress {
     id: SurfaceId,
     x: f32,
     dragging: bool,
-}
-
-/// Which stored Surfaces still resolve after a restart (the file's
-/// `migrate`): the singletons, the branch's pull request (read again as it
-/// shows), and a File whose file is still there. A
-/// shell, a live page, a side chat's fork and an agent's drill-in end with
-/// the window. A deleted Thread's Panel goes when the tabs are next
-/// written (`save_surfaces`).
-fn survives_restart(_: ThreadId, id: &SurfaceId) -> bool {
-    match id {
-        SurfaceId::Overview
-        | SurfaceId::Changes
-        | SurfaceId::Files
-        | SurfaceId::Background
-        | SurfaceId::PullRequest(_) => true,
-        SurfaceId::File(path) => path.exists(),
-        SurfaceId::Browser | SurfaceId::Terminal(_) | SurfaceId::SideChat(_) | SurfaceId::Agent(_) => {
-            false
-        }
-    }
 }
 
 /// The least width the Panel shows `active` at, in a window `window` wide
@@ -352,17 +336,23 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// Every Thread the roster or the parked list still holds.
+    pub(super) fn known_threads(&self) -> std::collections::HashSet<ThreadId> {
+        let mut known: std::collections::HashSet<ThreadId> =
+            self.cockpit.threads().into_iter().collect();
+        if let Ok(parked) = self.cockpit.parked() {
+            known.extend(parked);
+        }
+        known
+    }
+
     /// Write the tabs if they changed (once a frame, or as the window
     /// quits), a deleted Thread's going with it.
     pub(super) fn save_surfaces(&mut self) {
         if !std::mem::take(&mut self.panel.dirty) {
             return;
         }
-        let mut known: std::collections::HashSet<ThreadId> =
-            self.cockpit.threads().into_iter().collect();
-        if let Ok(parked) = self.cockpit.parked() {
-            known.extend(parked);
-        }
+        let known = self.known_threads();
         if !known.is_empty() {
             self.panel.surfaces.retain(|thread| known.contains(&thread));
         }
@@ -397,6 +387,7 @@ impl CockpitView {
             }
         }
         self.save_surfaces();
+        self.save_working_sets();
     }
 
     /// How wide the panel of Pane `index` rests: its Thread's width, a

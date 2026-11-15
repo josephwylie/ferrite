@@ -196,21 +196,33 @@ impl CockpitView {
             return Vec::new();
         };
         let count = state.tabs.len();
-        let row = |label: &'static str, verb: MenuVerb, enabled: bool| {
+        let row = |label: SharedString, verb: MenuVerb, enabled: bool| {
             let mut item = menu::Item::new(label);
             item.disabled = !enabled;
             Some((item, verb))
         };
         let mut rows = Vec::new();
         if let Some(SurfaceId::File(_)) = state.tabs.get(at) {
-            rows.push(row("Copy path", MenuVerb::CopyPath, true));
+            rows.push(row("Copy path".into(), MenuVerb::CopyPath, true));
             rows.push(None);
         }
+        let close = match state.tabs.get(at).map(|id| id.lifecycle().close) {
+            Some(Close::End(what)) => format!("End {what}").into(),
+            _ => "Close".into(),
+        };
         rows.extend([
-            row("Close", MenuVerb::CloseSurface, at < count),
-            row("Close others", MenuVerb::CloseOtherSurfaces, count > 1),
-            row("Close to the right", MenuVerb::CloseSurfacesRight, at + 1 < count),
-            row("Close all", MenuVerb::CloseAllSurfaces, count > 0),
+            row(close, MenuVerb::CloseSurface, at < count),
+            row(
+                "Close others".into(),
+                MenuVerb::CloseOtherSurfaces,
+                count > 1,
+            ),
+            row(
+                "Close to the right".into(),
+                MenuVerb::CloseSurfacesRight,
+                at + 1 < count,
+            ),
+            row("Close all".into(), MenuVerb::CloseAllSurfaces, count > 0),
         ]);
         rows
     }

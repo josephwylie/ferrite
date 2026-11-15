@@ -14,6 +14,7 @@ mod files;
 mod save;
 mod terminal;
 mod tree;
+mod working_set;
 
 use super::surfaces::SurfaceId;
 use super::*;
@@ -42,6 +43,7 @@ pub(crate) use editor::Editor;
 pub(crate) use save::SaveState;
 pub(crate) use files::{Sub as FilesSub, Verb as FilesVerb};
 pub(crate) use terminal::{Sub as TerminalSub, Verb as TerminalVerb};
+pub(crate) use working_set::WorkingSets;
 
 impl CockpitView {
     /// ⌘J: the focused Thread's last shell brought forward, or its first

@@ -43,7 +43,11 @@ fn owner(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> ferrit
 }
 
 /// `owner`'s side chat Surfaces, in tab order.
-fn side_tabs(view: &Entity<CockpitView>, owner: ThreadId, cx: &mut gpui::VisualTestContext) -> Vec<u64> {
+pub(super) fn side_tabs(
+    view: &Entity<CockpitView>,
+    owner: ThreadId,
+    cx: &mut gpui::VisualTestContext,
+) -> Vec<u64> {
     panel_tabs(view, owner, cx)
         .0
         .into_iter()

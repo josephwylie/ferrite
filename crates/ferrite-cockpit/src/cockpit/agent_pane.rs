@@ -72,21 +72,28 @@ impl CockpitView {
         subject: Subject,
         cx: &mut Context<Self>,
     ) {
-        let Some(open) = self.cockpit.thread(thread) else {
-            return;
-        };
-        let subject = open.activity().canonical_subject(&subject);
-        let Some(generation) = open
-            .activity()
-            .subject(&subject)
-            .map(|subject| subject.revision())
-        else {
-            return;
-        };
-        let Some(key) = agent_key(&subject) else {
-            return;
-        };
-        if !self.agent_drills.drills.contains_key(&(thread, key.clone())) {
+        if let Some(key) = self.hold_agent_drill(thread, &subject, cx) {
+            self.upsert_surface(thread, SurfaceId::Agent(key), cx);
+        }
+    }
+
+    /// Build the view of `subject`'s history if none is held, from what the
+    /// Thread knows of the agent. None when the Thread does not know it.
+    fn hold_agent_drill(
+        &mut self,
+        thread: ThreadId,
+        subject: &Subject,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let open = self.cockpit.thread(thread)?;
+        let subject = open.activity().canonical_subject(subject);
+        let generation = open.activity().subject(&subject)?.revision();
+        let key = agent_key(&subject)?;
+        if !self
+            .agent_drills
+            .drills
+            .contains_key(&(thread, key.clone()))
+        {
             let mut pane = PaneView::new(thread, cx);
             pane.select_subject(subject.clone(), generation, cx);
             if let Some(entity) = pane.transcript() {
@@ -102,7 +109,31 @@ impl CockpitView {
                 },
             );
         }
-        self.upsert_surface(thread, SurfaceId::Agent(key), cx);
+        Some(key)
+    }
+
+    /// A shown Agent tab with no view (reopened after its close, or stored
+    /// across a restart) takes one from the agent's saved history.
+    fn restore_shown_agent_drills(&mut self, cx: &mut Context<Self>) {
+        let wanted: Vec<(ThreadId, String)> = self
+            .panes
+            .iter()
+            .filter_map(|pane| pane.thread())
+            .filter_map(|thread| match self.active_surface(thread)? {
+                SurfaceId::Agent(key) => Some((thread, key)),
+                _ => None,
+            })
+            .filter(|(thread, key)| {
+                !self
+                    .agent_drills
+                    .drills
+                    .contains_key(&(*thread, key.clone()))
+            })
+            .collect();
+        for (thread, key) in wanted {
+            let subject = Subject::Subagent(ferrite_core::activity::AgentKey::from_stored(key));
+            self.hold_agent_drill(thread, &subject, cx);
+        }
     }
 
     /// Remember why `subject`'s history failed to load, wherever it is open.
@@ -165,6 +196,7 @@ impl CockpitView {
 
     /// Every frame: keep each open agent's transcript told what it holds.
     pub(super) fn tend_agent_drills(&mut self, cx: &mut Context<Self>) {
+        self.restore_shown_agent_drills(cx);
         let keys: Vec<(ThreadId, String)> = self.agent_drills.drills.keys().cloned().collect();
         for key in keys {
             let Some(drill) = self.agent_drills.drills.get(&key) else {
@@ -220,7 +252,7 @@ impl CockpitView {
     ) -> AnyElement {
         use ferrite_ui::theme::*;
         let Some(drill) = self.agent_drills.drills.get(&(owner, key.to_owned())) else {
-            return div().into_any_element();
+            return self.agent_unavailable(owner, key, cx);
         };
         div()
             .debug_selector(|| "agent-drill".into())
@@ -249,6 +281,44 @@ impl CockpitView {
                     .flex_1()
                     .min_h_0()
                     .children(drill.pane.transcript()),
+            )
+            .into_any_element()
+    }
+
+    /// An Agent tab whose agent the Thread no longer knows: why, and the
+    /// tab's close.
+    fn agent_unavailable(&self, owner: ThreadId, key: &str, cx: &mut Context<Self>) -> AnyElement {
+        use ferrite_ui::theme::*;
+        let surface = SurfaceId::Agent(key.to_owned());
+        div()
+            .debug_selector(|| "agent-unavailable".into())
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(SPACE_2))
+            .px(px(SPACE_4))
+            .font_family(FONT_UI)
+            .text_size(px(FS_UI))
+            .text_color(rgb(INK_SUBTLE))
+            .child("This agent is no longer available")
+            .child(
+                div()
+                    .text_size(px(FS_META))
+                    .line_height(px(LH_META))
+                    .text_center()
+                    .child("Its saved history is not in this thread."),
+            )
+            .child(
+                ferrite_ui::components::form_button("agent-unavailable-close", cx)
+                    .debug_selector(|| "agent-unavailable-close".into())
+                    .h(px(ROW))
+                    .px(px(CH))
+                    .child(ferrite_ui::components::form_label("Close tab", INK_SUBTLE))
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        view.close_surface(owner, &surface, cx);
+                    })),
             )
             .into_any_element()
     }

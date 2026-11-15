@@ -31,6 +31,7 @@ use ferrite_ui::theme::{self};
 use super::editor::{self, Editor};
 use super::save::SaveState;
 use super::tree::{FileTree, Row, Status};
+use super::working_set::{OpenFile, WorkingSet};
 use super::*;
 use crate::cockpit::surfaces::SurfaceId;
 use crate::cockpit::context_menu::Submenu;
@@ -78,7 +79,23 @@ enum TabBody {
         rich: ferrite_pane::rich::TextCache,
         scroll: ScrollHandle,
     },
-    Unshown(&'static str),
+    Unshown(Unshown),
+}
+
+/// Why a tab's file is not shown.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Unshown {
+    Unreadable,
+    Binary,
+}
+
+impl Unshown {
+    fn note(self) -> &'static str {
+        match self {
+            Self::Unreadable => "Could not read this file",
+            Self::Binary => "This is not a text file",
+        }
+    }
 }
 
 struct Tab {
@@ -105,6 +122,23 @@ pub(crate) struct Files {
 impl Files {
     fn active_path(&self) -> Option<&Path> {
         self.active.map(|at| self.tabs[at].path.as_path())
+    }
+
+    fn working_set(&self) -> WorkingSet {
+        WorkingSet {
+            files: self
+                .tabs
+                .iter()
+                .map(|tab| OpenFile {
+                    path: tab.path.clone(),
+                    preview: tab.preview,
+                })
+                .collect(),
+            active: self.active,
+            settings: self.settings,
+            preview_tabs: self.preview_tabs,
+            show_tree: self.show_tree,
+        }
     }
 }
 
@@ -138,20 +172,37 @@ impl CockpitView {
                 }
             })
             .detach();
-            self.tools.files.insert(
-                thread,
-                Files {
-                    tree: FileTree::new(root),
-                    filter,
-                    tabs: Vec::new(),
-                    active: None,
-                    settings: editor::Settings::default(),
-                    preview_tabs: true,
-                    show_tree: true,
-                    tree_scroll: ScrollHandle::new(),
-                    pressed: None,
-                },
-            );
+            let stored = self.panel.working_sets.get(thread.get()).cloned();
+            let mut files = Files {
+                tree: FileTree::new(root),
+                filter,
+                tabs: Vec::new(),
+                active: None,
+                settings: editor::Settings::default(),
+                preview_tabs: true,
+                show_tree: true,
+                tree_scroll: ScrollHandle::new(),
+                pressed: None,
+            };
+            if let Some(stored) = stored {
+                files.settings = stored.settings;
+                files.preview_tabs = stored.preview_tabs;
+                files.show_tree = stored.show_tree;
+                for open in stored.files {
+                    if let Some(body) = Self::tab_body(&open.path, files.settings, thread, cx) {
+                        files.tabs.push(Tab {
+                            path: open.path,
+                            preview: open.preview,
+                            body,
+                        });
+                    }
+                }
+                files.active = stored.active.filter(|at| *at < files.tabs.len());
+                if let Some(path) = files.active_path().map(Path::to_path_buf) {
+                    files.tree.reveal(&path);
+                }
+            }
+            self.tools.files.insert(thread, files);
         }
         self.files_of(thread)
     }
@@ -208,10 +259,10 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<TabBody> {
         let Ok(bytes) = std::fs::read(path) else {
-            return Some(TabBody::Unshown("Could not read this file"));
+            return Some(TabBody::Unshown(Unshown::Unreadable));
         };
         let Ok(source) = String::from_utf8(bytes) else {
-            return Some(TabBody::Unshown("This is not a text file"));
+            return Some(TabBody::Unshown(Unshown::Binary));
         };
         let document = Document {
             path: path.to_path_buf(),
@@ -287,6 +338,46 @@ impl CockpitView {
             }
         }
         self.remove_tab(thread, at, cx);
+    }
+
+    /// Read tab `at`'s file again, after it could not be read.
+    fn reload_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
+        let Some(files) = self.files_of(thread) else {
+            return;
+        };
+        let (path, settings) = (files.tabs[at].path.clone(), files.settings);
+        let Some(body) = Self::tab_body(&path, settings, thread, cx) else {
+            return;
+        };
+        if let Some(tab) = self
+            .files_of(thread)
+            .and_then(|files| files.tabs.get_mut(at))
+        {
+            tab.body = body;
+        }
+        cx.notify();
+    }
+
+    /// Write every Thread's open files and Files preferences when they
+    /// changed, once a frame (`tend_panel`).
+    pub(in crate::cockpit) fn save_working_sets(&mut self) {
+        let live = self
+            .tools
+            .files
+            .iter()
+            .map(|(thread, files)| (thread.get(), files.working_set()));
+        if !self.panel.working_sets.sync(live) {
+            return;
+        }
+        let known = self
+            .known_threads()
+            .into_iter()
+            .map(ThreadId::get)
+            .collect();
+        self.panel.working_sets.retain(&known);
+        if let Err(error) = self.panel.working_sets.save(&self.prefs.dir) {
+            eprintln!("ferrite: the Files tabs were not saved: {error}");
+        }
     }
 
     fn remove_tab(&mut self, thread: ThreadId, at: usize, cx: &mut Context<Self>) {
@@ -715,6 +806,7 @@ impl CockpitView {
                     },
                 ))
             });
+        let retry_path = tab.path.clone();
         let body = match &tab.body {
             TabBody::Code(editor) => div().flex_1().min_h_0().child(editor.clone()).into_any_element(),
             TabBody::Prose { document, rich, scroll } => div()
@@ -735,15 +827,37 @@ impl CockpitView {
                     rich.clone(),
                 ))
                 .into_any_element(),
-            TabBody::Unshown(why) => div()
-                .flex()
-                .flex_1()
-                .items_center()
-                .justify_center()
-                .text_size(px(FS_LABEL))
-                .text_color(rgb(INK_SUBTLE))
-                .child(*why)
-                .into_any_element(),
+            TabBody::Unshown(why) => {
+                let why = *why;
+                div()
+                    .debug_selector(|| "files-unshown".into())
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(SPACE_2))
+                    .text_size(px(FS_LABEL))
+                    .text_color(rgb(INK_SUBTLE))
+                    .child(why.note())
+                    .when(why == Unshown::Unreadable, |note| {
+                        note.child(
+                            ferrite_ui::components::form_button("files-retry", cx)
+                                .debug_selector(|| "files-retry".into())
+                                .h(px(ROW))
+                                .px(px(CH))
+                                .child(ferrite_ui::components::form_label("Try again", INK_SUBTLE))
+                                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                                    if let Some(at) = view.files_ref(thread).and_then(|files| {
+                                        files.tabs.iter().position(|tab| tab.path == retry_path)
+                                    }) {
+                                        view.reload_tab(thread, at, cx);
+                                    }
+                                })),
+                        )
+                    })
+                    .into_any_element()
+            }
         };
         column.child(breadcrumb).child(body)
     }
@@ -919,6 +1033,11 @@ impl CockpitView {
     }
 
     /// The path of the shown tab.
+    #[cfg(test)]
+    pub(in crate::cockpit) fn files_wraps(&self, thread: ThreadId) -> Option<bool> {
+        self.files_ref(thread).map(|files| files.settings.wrap)
+    }
+
     pub(in crate::cockpit) fn files_active_path(&self, thread: ThreadId) -> Option<PathBuf> {
         self.files_ref(thread)?.active_path().map(Path::to_path_buf)
     }

@@ -45,11 +45,63 @@ pub(crate) enum SurfaceId {
     PullRequest(u64),
 }
 
+/// What closing a Surface's tab does to what it holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Close {
+    /// Nothing outlives the tab but its identity: the Surface reads what it
+    /// shows from the Thread.
+    Hide,
+    /// The view is put away; the durable subject (a file on disk, an agent's
+    /// saved history) stays, and reopening builds the view again from it.
+    Release,
+    /// The resource ends with its tab, and nothing brings it back. Names
+    /// what ends, for the menu's `End <what>`.
+    End(&'static str),
+}
+
+/// What a restart does to a stored tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Restart {
+    /// The tab returns, and builds what it shows from its subject as it is
+    /// shown; a subject that is gone says so in the tab.
+    Restore,
+    /// The resource ended with the window (no process or page survives), so
+    /// the tab does not return.
+    Ends,
+}
+
+/// One Surface kind's close, reopen and restart behavior.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Lifecycle {
+    pub(crate) close: Close,
+    pub(crate) restart: Restart,
+}
+
+impl Lifecycle {
+    const fn new(close: Close, restart: Restart) -> Self {
+        Self { close, restart }
+    }
+
+    /// Whether a closed tab of this kind can come back.
+    pub(crate) fn reopenable(self) -> bool {
+        !matches!(self.close, Close::End(_))
+    }
+}
+
 impl SurfaceId {
-    /// Whether a closed tab of this kind can come back: a closed shell or
-    /// live page cannot.
-    fn reopenable(&self) -> bool {
-        !matches!(self, Self::Terminal(_) | Self::Browser)
+    /// The one table of how each kind lives, closes, reopens and restarts.
+    pub(crate) fn lifecycle(&self) -> Lifecycle {
+        match self {
+            Self::Overview
+            | Self::Changes
+            | Self::Files
+            | Self::Background
+            | Self::PullRequest(_) => Lifecycle::new(Close::Hide, Restart::Restore),
+            Self::File(_) | Self::Agent(_) => Lifecycle::new(Close::Release, Restart::Restore),
+            Self::Browser => Lifecycle::new(Close::End("page"), Restart::Ends),
+            Self::Terminal(_) => Lifecycle::new(Close::End("shell"), Restart::Ends),
+            Self::SideChat(_) => Lifecycle::new(Close::End("side chat"), Restart::Ends),
+        }
     }
 }
 
@@ -228,6 +280,11 @@ impl ThreadSurfaces {
         self.tabs.insert(index.min(self.tabs.len()), tab);
     }
 
+    /// Whether a closed tab waits to come back.
+    pub(crate) fn can_reopen(&self) -> bool {
+        !self.closed.is_empty()
+    }
+
     /// Bring back the last tab closed that can come back, shown.
     pub(crate) fn reopen_closed(&mut self) -> Option<SurfaceId> {
         let id = self.closed.pop()?;
@@ -259,7 +316,7 @@ impl ThreadSurfaces {
     }
 
     fn remember(&mut self, id: SurfaceId) {
-        if id.reopenable() {
+        if id.lifecycle().reopenable() {
             self.closed.retain(|closed| *closed != id);
             self.closed.push(id);
         }

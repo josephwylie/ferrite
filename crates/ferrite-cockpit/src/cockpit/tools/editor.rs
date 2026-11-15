@@ -59,7 +59,7 @@ pub(crate) enum Event {
 }
 
 /// What the Files ⋯ menu sets for every editor.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Settings {
     pub wrap: bool,
     pub auto_save: bool,
