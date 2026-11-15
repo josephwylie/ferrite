@@ -75,6 +75,7 @@ mod thread_groups;
 mod terminal;
 mod tools;
 mod transcript_pointer;
+mod scroll_continuity;
 mod send_scroll;
 mod sends;
 mod transcript_rows;

@@ -14,19 +14,19 @@ fn frame(cx: &mut gpui::VisualTestContext) -> usize {
 }
 
 /// Step the clock `ms` and draw the frame due then.
-fn at(ms: u64, cx: &mut gpui::VisualTestContext) {
+pub(super) fn at(ms: u64, cx: &mut gpui::VisualTestContext) {
     cx.executor().advance_clock(Duration::from_millis(ms));
     frame(cx);
 }
 
-fn transcript(
+pub(super) fn transcript(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
 ) -> Entity<ferrite_pane::transcript::TranscriptView> {
     view.read_with(cx, |view, _| view.panes[0].transcript().unwrap().clone())
 }
 
-fn scroll(
+pub(super) fn scroll(
     view: &Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
 ) -> ferrite_pane::transcript::TranscriptScroll {
@@ -36,7 +36,7 @@ fn scroll(
 
 /// A finished first turn far longer than the view, the operator typing
 /// the next prompt; `drive` runs the motion kit live.
-fn answered<'a>(
+pub(super) fn answered<'a>(
     name: &str,
     drive: bool,
     cx: &'a mut TestAppContext,
@@ -46,7 +46,7 @@ fn answered<'a>(
 }
 
 /// `answered`, the first turn's answer being `answer`.
-fn answered_with<'a>(
+pub(super) fn answered_with<'a>(
     name: &str,
     drive: bool,
     answer: String,
@@ -78,7 +78,7 @@ fn answered_with<'a>(
 }
 
 /// Send what was typed, and draw the frame that adds its prompt.
-fn send(cx: &mut gpui::VisualTestContext) {
+pub(super) fn send(cx: &mut gpui::VisualTestContext) {
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
 }
@@ -508,7 +508,7 @@ fn a_call_mid_ease_lets_the_prompt_go_to_the_tail(cx: &mut TestAppContext) {
 }
 
 /// Scrolled away to the top of a long transcript.
-fn scrolled_away(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
+pub(super) fn scrolled_away(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
     let scroll = scroll(view, cx);
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: scroll.bounds().center(),

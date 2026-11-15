@@ -19,8 +19,8 @@ const OVERDRAW: Pixels = px(200.);
 #[derive(Clone, Debug)]
 pub struct TranscriptScroll {
     list: ListState,
-    // A fully visible row's inset, sampled from native layout for width reflow.
-    resize_anchor: Rc<Cell<Option<(Pixels, usize, Pixels)>>>,
+    // The passage the reader holds, sampled from native layout for width reflow.
+    reading: Rc<RefCell<Option<ReadingPlace>>>,
     // How much of the viewport's top the pinned band covers, sampled after
     // layout (find reveals below it).
     top_mask: Rc<Cell<Pixels>>,
@@ -29,6 +29,33 @@ pub struct TranscriptScroll {
     // How many scrollbar gestures the list had counted when last asked
     // (`take_scrollbar_gesture`).
     gestures_seen: Rc<Cell<u64>>,
+}
+
+/// Where in the readable view the held passage is read: a third of the way
+/// down, where Find sets a hit it reveals.
+const READING_LINE: f32 = 1. / 3.;
+
+/// The passage the reader holds while the layout reflows: the point `along`
+/// of the way down row `row` (0 its top, 1 its foot) sits `line` below the
+/// viewport's top, as measured at `width`. The row is named by identity, so a
+/// row spliced in or out above it cannot aim the restore at another row, and
+/// the point is a fraction of the row, so a tall answer that rewraps taller
+/// or shorter keeps the same passage under the reader's eye instead of the
+/// same pixel depth.
+#[derive(Clone, Debug)]
+struct ReadingPlace {
+    row: RowId,
+    along: f32,
+    line: Pixels,
+    width: Pixels,
+}
+
+/// What a layout did to the viewport (`TranscriptScroll::settle_layout`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Settled {
+    /// The reader's passage was put back after a reflow: lay out again.
+    pub anchored: bool,
+    pub ease: EaseStep,
 }
 
 /// Where a programmatic scroll eases to: a row's offset (a send's prompt),
@@ -88,7 +115,7 @@ impl TranscriptScroll {
         list.set_follow_mode(FollowMode::Tail);
         Self {
             list,
-            resize_anchor: Default::default(),
+            reading: Default::default(),
             top_mask: Rc::new(Cell::new(px(0.))),
             ease: Default::default(),
             gestures_seen: Rc::new(Cell::new(0)),
@@ -258,50 +285,81 @@ impl TranscriptScroll {
         })
     }
 
-    /// Retain the next fully visible row when wrapping above it changes.
-    /// GPUI still owns every offset, measurement and tail-follow transition.
-    pub(crate) fn did_layout(&self) -> bool {
+    /// What this layout moves of the viewport on its own, in one place: the
+    /// reader's passage put back after a reflow, then the ease on its way.
+    pub(crate) fn settle_layout(&self, now: Instant, rows: &TranscriptRows) -> Settled {
+        let anchored = self.hold_reading_place(rows);
+        Settled {
+            anchored,
+            ease: self.step_ease(now, rows),
+        }
+    }
+
+    /// The navigation took the viewport: no passage is held until the next
+    /// layout samples one.
+    pub(crate) fn release_reading_place(&self) {
+        self.reading.take();
+    }
+
+    /// Put the passage the reader holds back where it was when wrapping
+    /// changes it, then sample the passage now held. GPUI still owns every
+    /// offset, measurement and tail-follow transition.
+    fn hold_reading_place(&self, rows: &TranscriptRows) -> bool {
         let viewport = self.list.viewport_bounds();
         if self.list.is_following_tail() {
-            self.resize_anchor.set(None);
+            self.reading.take();
             return false;
         }
         let mut adjusted = false;
-        if let Some((width, index, inset)) = self.resize_anchor.get() {
-            if width != viewport.size.width && index < self.list.item_count() {
+        let held = self.reading.borrow().clone();
+        if let Some(place) = held.filter(|place| place.width != viewport.size.width) {
+            if let Some(index) = rows.position(&place.row) {
                 if let Some(bounds) = self.list.bounds_for_item(index) {
-                    let delta = bounds.top() - viewport.top() - inset;
+                    let delta = bounds.top() + bounds.size.height * place.along
+                        - viewport.top()
+                        - place.line;
                     if delta.abs() > px(0.5) {
                         self.list.scroll_by(delta);
                         adjusted = true;
                     }
                 } else {
                     // Reflow can move the held row beyond native overdraw.
-                    // Measure it before restoring the original inset.
+                    // Measure it before restoring the original place.
                     self.list.scroll_to_reveal_item(index);
                     return true;
                 }
             }
         }
-        let anchor =
-            (self.list.logical_scroll_top().item_ix..self.list.item_count()).find_map(|index| {
-                let bounds = self.list.bounds_for_item(index)?;
-                (bounds.top() >= viewport.top() && bounds.top() < viewport.bottom()).then_some((
-                    viewport.size.width,
-                    index,
-                    bounds.top() - viewport.top(),
-                ))
-            });
-        self.resize_anchor.set(anchor);
+        let mask = self.top_mask.get();
+        let reading_line = mask + (viewport.size.height - mask) * READING_LINE;
+        let top = self.list.logical_scroll_top();
+        let place = (top.item_ix != 0 || top.offset_in_item > px(0.))
+            .then(|| {
+                (top.item_ix..self.list.item_count()).find_map(|index| {
+                    let bounds = self.list.bounds_for_item(index)?;
+                    let depth = viewport.top() + reading_line - bounds.top();
+                    if depth < px(0.) || depth >= bounds.size.height {
+                        return None;
+                    }
+                    Some(ReadingPlace {
+                        row: rows.get(index)?.id().clone(),
+                        along: depth / bounds.size.height.max(px(1.)),
+                        line: reading_line,
+                        width: viewport.size.width,
+                    })
+                })
+            })
+            .flatten();
+        *self.reading.borrow_mut() = place;
         adjusted
     }
 
     /// The rows' inset moved with the width (`theme::tx_inset_at`), a frame
-    /// after the width did: measure every row again, holding the row the
-    /// resize held where it stands.
+    /// after the width did: measure every row again, holding the reader's
+    /// passage where it stands.
     pub(crate) fn remeasure_held(&self) {
-        if let Some((_, index, inset)) = self.resize_anchor.get() {
-            self.resize_anchor.set(Some((px(-1.), index, inset)));
+        if let Some(place) = self.reading.borrow_mut().as_mut() {
+            place.width = px(-1.);
         }
         self.remeasure_all();
     }
@@ -386,14 +444,14 @@ mod tests {
             .unwrap()
             .id()
             .clone();
-        scroll.ease_to(EaseTarget::Row {
-            id,
-            offset: px(0.),
-        });
+        scroll.ease_to(EaseTarget::Row { id, offset: px(0.) });
         assert!(scroll.easing());
         let stood = scroll.offset();
         let after = rows_of(&["one"]);
-        assert_eq!(scroll.step_ease(Instant::now(), &after), EaseStep::Cancelled);
+        assert_eq!(
+            scroll.step_ease(Instant::now(), &after),
+            EaseStep::Cancelled
+        );
         assert!(!scroll.easing());
         assert_eq!(scroll.step_ease(Instant::now(), &after), EaseStep::Idle);
         assert_eq!(scroll.offset(), stood);
