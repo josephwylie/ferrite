@@ -163,26 +163,29 @@ fn dragged_files_edge_the_pane_under_them(cx: &mut TestAppContext) {
     assert!(!b.pane(1).drop_target, "left: no edge");
 }
 
-/// cmd-B snaps the column to the rail (Claude's sidebar): the Panes take
-/// the board's new width on the next frame, with no width between.
+/// cmd-B slides the column to the rail: the Panes take the board's width
+/// on screen every frame, and rest on the wider one.
 #[gpui::test]
-fn the_panes_take_the_nav_fold_at_once(cx: &mut TestAppContext) {
+fn the_panes_ride_the_nav_fold(cx: &mut TestAppContext) {
     let mut b = board("stale-nav-ride", &[], cx);
     let view = b.view.clone();
     let before = b.pane(0).cell_width;
     view.update(b.cx, |view, cx| view.set_nav_collapsed(true, cx));
-    frames(b.cx, 32);
+    let mut last = before;
+    for _ in 0..6 {
+        frames(b.cx, 16);
+        let width = b.pane(0).cell_width;
+        assert!(
+            (width - b.rect(0).w).abs() < 0.5,
+            "on the board's own width each frame: {width} vs {}",
+            b.rect(0).w
+        );
+        assert!(width > last, "widening: {last} -> {width}");
+        last = width;
+    }
+    frames(b.cx, 400);
     let landed = b.pane(0).cell_width;
-    let rect = b.rect(0);
-    assert!(
-        landed > before,
-        "wider beside the rail: {before} -> {landed}"
-    );
-    assert!(
-        (landed - rect.w).abs() < 0.5,
-        "on the board's own width at once: {landed} vs {}",
-        rect.w
-    );
+    assert!(landed > last, "wider beside the rail: {last} -> {landed}");
     frames(b.cx, 400);
     assert_eq!(b.pane(0).cell_width, landed, "and stays there");
 }

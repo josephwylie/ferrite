@@ -78,7 +78,7 @@ impl CockpitView {
     /// board's edge, or — with no column, on Windows — short of the
     /// caption buttons.
     fn view_head_end(&self) -> f32 {
-        if self.panel_pane().is_none() && ferrite_ui::frame::CUSTOM {
+        if self.panel_drawn_pane().is_none() && ferrite_ui::frame::CUSTOM {
             super::panel::tools_inset()
         } else {
             self.board_right()

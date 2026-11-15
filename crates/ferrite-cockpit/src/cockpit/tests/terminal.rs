@@ -207,6 +207,17 @@ fn typed_reaches(
     false
 }
 
+/// Whether `needle` is on the shell's screen now, without waiting for it.
+fn typed_reaches_in(
+    shell: &Entity<ferrite_terminal::TerminalView>,
+    needle: &str,
+    cx: &mut gpui::VisualTestContext,
+) -> bool {
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    shell.update(cx, |shell, cx| shell.select_all(cx));
+    shell.read_with(cx, |shell, _| shell.selection().is_some_and(|text| text.contains(needle)))
+}
+
 #[gpui::test]
 fn keys_typed_after_the_door_opens_reach_the_shell(cx: &mut TestAppContext) {
     let (view, thread, cx) = window("terminal-keys", cx);
@@ -246,4 +257,42 @@ fn a_click_in_the_shell_takes_the_keyboard_back_from_the_composer(cx: &mut TestA
     tick(cx);
     cx.simulate_keystrokes("e c h o space c l i c k 5 enter");
     assert!(typed_reaches(&shell, "\nclick5", cx), "the click gave the shell the keyboard");
+}
+
+fn frame_after(ms: u64, cx: &mut gpui::VisualTestContext) {
+    cx.executor().advance_clock(std::time::Duration::from_millis(ms));
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+}
+
+/// A panel sliding shut over a shell that has the keyboard takes it back:
+/// what is typed mid-slide never reaches the shell, and ⌥⌘B opens the panel
+/// again at once, with no click first.
+#[gpui::test]
+fn a_panel_sliding_shut_gives_the_shell_no_keys(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
+    let (view, thread, cx) = window("terminal-closing", cx);
+    opened(&view, cx);
+    let shell = view.read_with(cx, |view, _| view.terminal_view(thread)).unwrap();
+    tick(cx);
+    cx.simulate_keystrokes("e c h o space b e f o r e 1 enter");
+    assert!(typed_reaches(&shell, "\nbefore1", cx), "the shell has the keyboard");
+
+    cx.simulate_keystrokes("cmd-alt-b");
+    frame_after(20, cx);
+    frame_after(20, cx);
+    let width = cx.debug_bounds("panel").expect("still sliding").size.width;
+    assert!(width > px(0.) && width < px(ferrite_ui::theme::TERMINAL_W), "mid-slide: {width:?}");
+    cx.simulate_keystrokes("e c h o space m i d 2 enter");
+    frame_after(400, cx);
+    frame_after(20, cx);
+    assert!(cx.debug_bounds("panel").is_none(), "the panel has gone");
+    assert!(
+        !typed_reaches_in(&shell, "mid2", cx),
+        "nothing typed mid-slide reached the shell"
+    );
+
+    cx.simulate_keystrokes("cmd-alt-b");
+    frame_after(400, cx);
+    assert!(cx.debug_bounds("panel").is_some(), "⌥⌘B reopens it without a click");
 }

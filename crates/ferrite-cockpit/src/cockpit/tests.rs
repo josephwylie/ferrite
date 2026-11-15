@@ -4,6 +4,7 @@ mod background_work;
 mod boards;
 mod changes;
 mod checks;
+mod column_motion;
 mod completion_checks;
 mod coordinator;
 mod composer_chips;

@@ -10,6 +10,7 @@ pub(crate) mod beside;
 mod browser;
 #[cfg(feature = "browser-smoke")]
 mod browser_smoke;
+mod columns;
 mod context_menu;
 pub(crate) mod coordinator;
 pub(crate) mod decisions;
@@ -504,6 +505,9 @@ pub struct CockpitView {
     /// The Panel bodies that take keys of their own (the launcher, Files):
     /// while focus is anywhere inside, the focus pump leaves it be.
     panel_focus: gpui::FocusHandle,
+    /// The panel's column while it slides shut, so the keyboard inside it
+    /// can be found and taken back (`columns::closing_holds_focus`).
+    panel_closing_focus: gpui::FocusHandle,
     /// Back and forward through where the operator has been (`history`).
     history: history::History,
     session_controls: Option<(ThreadId, u64)>,
@@ -683,6 +687,7 @@ pub struct CockpitView {
     /// Each Thread's reader slot (its Review) sliding open or shut
     /// (`beside.rs`).
     reader_slides: beside::ReaderSlides,
+    columns: columns::Columns,
     /// The Provider an empty board's first draft starts on.
     launch_provider: Provider,
     /// The machines this window can be on (ADR 0026); `None` in a window
@@ -1536,6 +1541,7 @@ impl CockpitView {
             panel: panel::Panel::load(&prefs.dir),
             panel_empty_focus: cx.focus_handle(),
             panel_focus: cx.focus_handle(),
+            panel_closing_focus: cx.focus_handle(),
             history: Default::default(),
             session_controls: None,
             mode_picker: None,
@@ -1616,6 +1622,7 @@ impl CockpitView {
             solo_beside: None,
             preview_pressed: None,
             reader_slides: Default::default(),
+            columns: columns::Columns::new(),
             plan_card: None,
             launch_provider,
             machines: None,
@@ -2876,14 +2883,6 @@ impl CockpitView {
             || self.sheet_float_open()
     }
 
-    fn nav_width(&self) -> f32 {
-        if !self.nav_measure_full.get() && self.nav_folded() {
-            0.0
-        } else {
-            nav::COLUMN_WIDTH
-        }
-    }
-
     fn nav_folded(&self) -> bool {
         self.nav_collapsed || (self.nav_auto_fold.get() && !self.nav_forced_open)
     }
@@ -2894,7 +2893,7 @@ impl CockpitView {
         let held = self.nav_auto_fold.get();
         let slack = if held { NAV_AUTO_FOLD_HYSTERESIS } else { 0.0 };
         let width = f32::from(window.viewport_size().width);
-        let right = self.board_right();
+        let right = self.panel_target_w().max(self.board_pad());
         let board = width - nav::COLUMN_WIDTH - right;
         let narrowest = |view: &Self| {
             view.pane_rects(window)
@@ -3005,7 +3004,7 @@ impl CockpitView {
     /// the widths ride.
     fn rest_board(&self) -> layout::Rect {
         let board = self.board.get();
-        let rest_left = self.nav_width();
+        let rest_left = self.nav_rest_w();
         layout::Rect {
             x: rest_left,
             w: (board.w + board.x - rest_left).max(0.0),
@@ -9791,7 +9790,8 @@ impl Render for CockpitView {
         // loops). Each reads what this frame drew, never the clock again: a
         // slide that ended between the draw and here still asks for the one
         // frame that lands it at rest.
-        let sliding = self.reader_slides.moving() || self.tabs_scrolling(cx);
+        let sliding =
+            self.reader_slides.moving() || self.columns.moving() || self.tabs_scrolling(cx);
         let fading = ferrite_ui::motion::hover_fades_active();
         if fading || sliding {
             // A blend is drawn again by the view that paints it alone: a
@@ -9922,6 +9922,7 @@ impl CockpitView {
             self.solo_beside = None;
         }
         self.update_auto_fold(window);
+        self.tend_columns(cx);
         if self.nav_folded() {
             self.snooze_editor = None;
         }
@@ -10250,6 +10251,9 @@ impl CockpitView {
         let nav_list_focused = self.nav_keys_held && self.nav_focus.is_focused(window);
         // So does a Panel body that reads its own keys: "Open a surface",
         // pressed, or a Files editor or filter being typed in.
+        if self.closing_holds_focus(window, cx) {
+            window.focus(&wanted, cx);
+        }
         let panel_keys_held = self.panel_focus.contains_focused(window, cx);
         if window.has_active_dialog(cx)
             || self.floats_hold_focus()
@@ -12836,13 +12840,28 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// The nav column as far in as it is this frame, its face pinned to the
+    /// board's edge and clipped as it slides, under a veil that takes the
+    /// pointer while it slides out.
     fn nav(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.nav_folded() {
+        let drawn = self.nav_width();
+        if drawn <= 0.0 {
             return None;
         }
+        let face = nav::column(self.board_ground())
+            .absolute()
+            .top_0()
+            .right_0()
+            .child(nav::card(self.nav_rows(window, cx)));
         Some(
-            nav::column(self.board_ground())
-                .child(nav::card(self.nav_rows(window, cx)))
+            div()
+                .relative()
+                .flex_shrink_0()
+                .h_full()
+                .w(px(drawn))
+                .overflow_hidden()
+                .child(face)
+                .when(self.nav_folded(), |column| column.child(columns::veil()))
                 .into_any_element(),
         )
     }
@@ -12855,11 +12874,7 @@ impl CockpitView {
     fn nav_edge_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         use ferrite_ui::theme::NAV_INSET_Y;
         let open = !self.nav_folded();
-        let left = if open {
-            nav::EDGE_TAB_OPEN_X_OVER_RING
-        } else {
-            0.0
-        };
+        let left = nav::EDGE_TAB_OPEN_X_OVER_RING * self.nav_width() / nav::COLUMN_WIDTH;
         div()
             .absolute()
             .top(px(nav::CARD_TOP))
