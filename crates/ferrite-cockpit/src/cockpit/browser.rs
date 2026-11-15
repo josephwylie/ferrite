@@ -115,6 +115,9 @@ pub(super) struct Browser {
     dialog_unfocused: bool,
     /// Its dialog's card was in the last frame drawn, so it can take focus.
     dialog_drawn: Cell<bool>,
+    /// `dialog_drawn` as of the last frame: only a dialog on screen holds
+    /// the keyboard.
+    dialog_on_screen: bool,
     /// The right-click the page reported, and where the pointer was.
     context: Option<PageContext>,
     pointer: Rc<Cell<gpui::Point<gpui::Pixels>>>,
@@ -137,6 +140,7 @@ impl Browsers {
         let mut took = false;
         for browser in self.threads.values_mut() {
             let drawn = browser.dialog_drawn.replace(false);
+            browser.dialog_on_screen = drawn;
             if drawn && browser.dialog_unfocused && browser.dialog_synced.is_some() {
                 browser.dialog_unfocused = false;
                 browser.focus_dialog(window, cx);
@@ -148,7 +152,9 @@ impl Browsers {
 
     pub(super) fn dialog_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         self.threads.values().any(|browser| {
-            browser.dialog_synced.is_some() && browser.dialog_focus.contains_focused(window, cx)
+            browser.dialog_on_screen
+                && browser.dialog_synced.is_some()
+                && browser.dialog_focus.contains_focused(window, cx)
         })
     }
 
@@ -249,6 +255,7 @@ impl CockpitView {
                 dialog_synced: None,
                 dialog_unfocused: false,
                 dialog_drawn: Cell::new(false),
+                dialog_on_screen: false,
                 context: None,
                 pointer: Default::default(),
                 failed: BTreeMap::new(),
@@ -915,20 +922,24 @@ impl CockpitView {
                     menus.push((*thread, browser.pointer.get()));
                     browser.context = Some(context);
                 }
-                let dialog = page.native.state().dialog;
-                if dialog != browser.dialog_synced {
-                    if let Some(DialogRequest {
-                        kind: DialogKind::Prompt { default },
-                        ..
-                    }) = &dialog
-                    {
-                        let default = default.clone();
-                        browser.prompt.update(cx, |field, cx| field.set(default, cx));
-                    }
-                    browser.dialog_unfocused = dialog.is_some();
-                    browser.dialog_synced = dialog;
-                    cx.notify();
+            }
+            // A shown tab without a page (closed, not loaded yet, the
+            // Server gone) has no dialog.
+            let dialog = shown
+                .and_then(|id| browser.pages.get(&id))
+                .and_then(|page| page.native.state().dialog);
+            if dialog != browser.dialog_synced {
+                if let Some(DialogRequest {
+                    kind: DialogKind::Prompt { default },
+                    ..
+                }) = &dialog
+                {
+                    let default = default.clone();
+                    browser.prompt.update(cx, |field, cx| field.set(default, cx));
                 }
+                browser.dialog_unfocused = dialog.is_some();
+                browser.dialog_synced = dialog;
+                cx.notify();
             }
         }
         for (thread, url) in windows {

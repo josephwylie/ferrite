@@ -468,7 +468,6 @@ fn an_address_draft_survives_the_pages_own_navigation(cx: &mut TestAppContext) {
     });
     tick(cx);
     assert_eq!(address_text(&view, thread, cx), "http://localhost:5173/typed-half");
-    let _ = engine;
 }
 
 #[gpui::test]
@@ -488,7 +487,7 @@ fn a_popup_during_a_new_tab_leaves_what_was_typed_for_the_new_tab(cx: &mut TestA
 }
 
 #[gpui::test]
-fn retry_reloads_a_failed_page_and_a_target_less_failure_does_not_offer_it(
+fn retry_reloads_a_failed_page(
     cx: &mut TestAppContext,
 ) {
     use ferrite_pane::visual::web::fake::Call;
@@ -510,4 +509,39 @@ fn retry_reloads_a_failed_page_and_a_target_less_failure_does_not_offer_it(
     let retry = cx.debug_bounds("browser-retry").unwrap();
     cx.simulate_click(retry.center(), gpui::Modifiers::none());
     until(cx, |_| navigations(&engine) > before);
+}
+
+fn dialog_holds(view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> bool {
+    cx.update(|window, cx| view.read(cx).browsers.dialog_holds_focus(window, cx))
+}
+
+#[gpui::test]
+fn closing_the_page_under_a_dialog_gives_the_keyboard_back(cx: &mut TestAppContext) {
+    let (engine, view, _thread, cx) = browser_window(cx, "bnt-dialog-close");
+    engine.raise_dialog_at("http://localhost:5173/start", alert("Going"));
+    until(cx, |cx| cx.debug_bounds("browser-dialog").is_some());
+    tick(cx);
+    assert!(dialog_holds(&view, cx));
+    let close = cx.debug_bounds("browser-close-page").unwrap();
+    cx.simulate_click(close.center(), gpui::Modifiers::none());
+    until(cx, |cx| cx.debug_bounds("browser-dialog").is_none());
+    tick(cx);
+    assert!(!dialog_holds(&view, cx), "a closed page's dialog holds nothing");
+    type_in_composer(&view, "typed", cx);
+}
+
+#[gpui::test]
+fn a_dialog_left_on_another_thread_holds_no_keyboard(cx: &mut TestAppContext) {
+    let (engine, view, thread, cx) = browser_window(cx, "bnt-dialog-switch");
+    let other = open_second_page(&view, thread, "http://localhost:5173/other", cx);
+    until(cx, |_| engine.live_views() == 2);
+    engine.raise_dialog_at("http://localhost:5173/start", alert("Here"));
+    until(cx, |cx| cx.debug_bounds("browser-dialog").is_some());
+    tick(cx);
+    assert!(dialog_holds(&view, cx));
+    view.update(cx, |view, cx| view.focus_thread(other, cx));
+    tick(cx);
+    tick(cx);
+    assert!(cx.debug_bounds("browser-dialog").is_none());
+    assert!(!dialog_holds(&view, cx), "a dialog off screen holds nothing");
 }

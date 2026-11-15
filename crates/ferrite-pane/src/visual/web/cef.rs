@@ -548,6 +548,16 @@ impl ViewState {
         self.dirty.store(true, Ordering::SeqCst);
     }
 
+    /// Dismiss the dialog of a browser about to close. Its reset arrives
+    /// under a retired generation and is ignored, and the callback must not
+    /// outlive `cef_shutdown`.
+    fn retire_dialog(&self) {
+        if let Some(MainThread(callback)) = self.requests.lock().unwrap().dialog.take() {
+            callback.cont(0, None);
+        }
+        self.navigation.lock().unwrap().dialog = None;
+    }
+
     fn is_current(&self, generation: u64) -> bool {
         self.generation.load(Ordering::SeqCst) == generation
     }
@@ -844,6 +854,7 @@ impl EngineInner {
         for view in self.live_views() {
             view.agent_access.paused.store(true, Ordering::SeqCst);
             view.agent_access.epoch.fetch_add(1, Ordering::SeqCst);
+            view.state.retire_dialog();
             view.state.generation.fetch_add(1, Ordering::SeqCst);
             view.observation.borrow_mut().take();
             if let Some(browser) = view.browser.borrow_mut().take() {
@@ -1069,6 +1080,7 @@ impl ViewInner {
         let started = Instant::now();
         // Retire the generation first: anything the closing browser still
         // sends is ignored.
+        self.state.retire_dialog();
         self.state.generation.fetch_add(1, Ordering::SeqCst);
         *self.state.layers.lock().unwrap() = BrowserLayers::default();
         if let Some(host) = self
@@ -1109,6 +1121,7 @@ impl ViewInner {
         if !due || self.browser.borrow().is_none() {
             return;
         }
+        self.state.retire_dialog();
         self.state.generation.fetch_add(1, Ordering::SeqCst);
         *self.state.layers.lock().unwrap() = BrowserLayers::default();
         if let Some(host) = self
