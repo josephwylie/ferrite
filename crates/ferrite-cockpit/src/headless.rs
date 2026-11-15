@@ -221,17 +221,20 @@ impl Driver {
         let mut view = None;
         let (width, height) = window_size();
         let window = cx
-            .open_window(gpui::size(gpui::px(width), gpui::px(height)), |window, cx| {
-                let cockpit = cx.new(build);
-                view = Some(cockpit.clone());
-                let content =
-                    cx.new(|cx| crate::cockpit_window::CockpitWindow::new(cockpit, window, cx));
-                cx.new(|cx| {
-                    gpui::component::Root::new(content, window, cx)
-                        .bordered(false)
-                        .bg(ferrite_ui::theme::paint::WINDOW)
-                })
-            })
+            .open_window(
+                gpui::size(gpui::px(width), gpui::px(height)),
+                |window, cx| {
+                    let cockpit = cx.new(build);
+                    view = Some(cockpit.clone());
+                    let content =
+                        cx.new(|cx| crate::cockpit_window::CockpitWindow::new(cockpit, window, cx));
+                    cx.new(|cx| {
+                        gpui::component::Root::new(content, window, cx)
+                            .bordered(false)
+                            .bg(ferrite_ui::theme::paint::WINDOW)
+                    })
+                },
+            )
             .expect("open the off-screen window");
         Self {
             cx,
