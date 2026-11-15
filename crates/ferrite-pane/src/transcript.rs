@@ -1279,13 +1279,14 @@ impl TranscriptView {
         let (members, texts) = selection.capture_members(|| {
             for (index, row) in self.rows.rows().iter().enumerate() {
                 selection.begin_row();
-                self.collect_row_text(row, &selection);
+                self.collect_row_text(row, &selection, false);
                 rows.resize(selection.captured(), index);
             }
         });
         self.document.sync_members(members, cx);
         self.texts = rows.into_iter().zip(texts).collect();
-        if self.find.is_some() {
+        if let Some(find) = self.find.as_mut() {
+            find.stale = true;
             self.refind(cx);
         }
     }
@@ -1296,29 +1297,36 @@ impl TranscriptView {
         crate::file_links::link_targets(source, &self.targets)
     }
 
-    fn collect_row_text(&self, row: &TranscriptRow, selection: &TextRuns) {
+    /// One row's copy fragments, as it draws them; `open`, as it would with
+    /// every disclosure open (what a find searches).
+    fn collect_row_text(&self, row: &TranscriptRow, selection: &TextRuns, open: bool) {
         if matches!(
             row.kind(),
             RowKind::Tail | RowKind::Working | RowKind::LiveTail | RowKind::TurnFold | RowKind::Divider
         ) {
             return;
         }
+        let shown = |id: DisclosureId| open || self.tool_state(id) == DisclosureState::Expanded;
         if let Some(source) = row.source() {
             let block = &row.blocks()[0];
             let _ = selection.answer(block.markdown_run.unwrap_or(block.id), self.linked(source));
         } else if row.kind() == RowKind::Group {
+            let Some(group) = Self::group_id(row) else {
+                return;
+            };
             pane::collect_group_text(
                 row.blocks(),
-                self.group_expanded(row),
-                |block| self.tool_state(self.member_id(block)) == DisclosureState::Expanded,
+                &group,
+                shown(group.clone()),
+                |block| shown(self.member_id(block)),
                 selection,
             );
         } else if let Some(block) = row.blocks().first() {
             let expanded = match &block.body {
-                Body::Tool(tool) => self.tool_state(DisclosureId::Tool(tool.call.clone())),
-                Body::Thinking(_) => self.tool_state(DisclosureId::Reasoning(block.id)),
-                _ => DisclosureState::Collapsed,
-            } == DisclosureState::Expanded;
+                Body::Tool(tool) => shown(DisclosureId::Tool(tool.call.clone())),
+                Body::Thinking(_) => shown(DisclosureId::Reasoning(block.id)),
+                _ => false,
+            };
             pane::collect_block_text(block, expanded, &self.input.skills, selection);
         }
     }
@@ -1332,7 +1340,7 @@ impl TranscriptView {
         let _ = selection.capture_members(|| {
             for row in self.rows.rows() {
                 selection.begin_row();
-                self.collect_row_text(row, &selection);
+                self.collect_row_text(row, &selection, false);
             }
         });
         let logical = self.selection_source.registered(self.input.thread);
@@ -1633,7 +1641,7 @@ impl TranscriptView {
         }
         let row_cx = self.row_cx(selection);
         if row.kind() == RowKind::Group {
-            return self.render_group(row, &row_cx, view);
+            return self.render_group(row, &row_cx, view, window);
         }
         if let Body::Prompt(line) = &block.body {
             // Its send time, Edit, Rewind, Fork and `Copy`, under the
@@ -1858,6 +1866,7 @@ impl TranscriptView {
         row: &TranscriptRow,
         row_cx: &pane::RowCx,
         view: Option<Entity<Self>>,
+        window: Option<&mut Window>,
     ) -> AnyElement {
         let Some(id) = Self::group_id(row) else {
             return div().into_any_element();
@@ -1911,7 +1920,7 @@ impl TranscriptView {
                 .map(|block| self.render_work(block, row_cx, view.as_ref(), true))
                 .collect()
         };
-        pane::render_tool_group(
+        let group = pane::render_tool_group(
             row.blocks(),
             row_cx,
             pane::GroupCx {
@@ -1921,7 +1930,13 @@ impl TranscriptView {
                 view_h: self.list_h.get(),
                 ground: theme::tx_ground(self.input.solo),
             },
-        )
+        );
+        if let (Some(list), Some(window)) = (list.as_deref(), window) {
+            if !list.settled() {
+                window.request_animation_frame();
+            }
+        }
+        group
     }
 
     /// The disclosure a group member opens by: a call's, a thought's.

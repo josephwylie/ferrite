@@ -99,6 +99,11 @@ pub enum Body {
     /// The provider compacting the context, and once it has, what it
     /// reported (T3's compaction divider).
     Compaction(Compaction),
+    /// The plan a completed turn ended on, its steps as they stood: the
+    /// checklist the live task card takes away when the turn settles, kept
+    /// inside the turn's fold so the reader can check what was done and
+    /// what was left.
+    Plan(Vec<crate::progress::PlanStep>),
 }
 
 /// A context compaction: running until the provider moves on, then what
@@ -176,6 +181,23 @@ pub fn format_tokens(count: u64) -> String {
         _ => fixed,
     };
     format!("{fixed}{unit}")
+}
+
+/// A kept plan as copy and search read it: a line a step, its status first.
+pub fn plan_text(steps: &[crate::progress::PlanStep]) -> String {
+    use crate::progress::StepStatus;
+    steps
+        .iter()
+        .map(|step| {
+            let mark = match step.status {
+                StepStatus::Completed => "done",
+                StepStatus::InProgress => "in progress",
+                StepStatus::Pending => "pending",
+            };
+            format!("{mark}: {}", step.text)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The row a finished turn leaves behind.
@@ -2689,7 +2711,11 @@ impl Transcript {
                     // The cost is kept (`last_cost`) but never rendered —
                     // no dollar value appears anywhere (#22 operator
                     // amendment); a completed turn ends without a row.
-                    TurnOutcome::Completed => {}
+                    TurnOutcome::Completed => {
+                        if self.progress.plan_touched && !self.progress.plan.is_empty() {
+                            dirty.push(self.push(Body::Plan(self.progress.plan.clone())));
+                        }
+                    }
                     TurnOutcome::Interrupted => dirty.push(self.push(Body::TurnEnd(TurnEnd {
                         outcome: TurnOutcome::Interrupted,
                         elapsed_ms: None,
@@ -3326,6 +3352,7 @@ pub fn plain_text(blocks: &[Block]) -> String {
             Body::Notice(text) | Body::Meta(text) => text.clone(),
             Body::TurnEnd(end) => end.text(),
             Body::Compaction(compaction) => compaction.text(),
+            Body::Plan(steps) => plan_text(steps),
             // The page is a picture; its words are its title and caption.
             Body::Visual(visual) => format!("● Visual ({})", visual.text().replace('\n', " · ")),
             Body::WrapUp(wrap) => wrap.text(),
@@ -4028,6 +4055,7 @@ mod tests {
             Body::Notice(text) | Body::Meta(text) => text.clone(),
             Body::TurnEnd(end) => end.text(),
             Body::Compaction(compaction) => compaction.text(),
+            Body::Plan(steps) => plan_text(steps),
             Body::Visual(visual) => visual.text(),
             Body::WrapUp(wrap) => wrap.text(),
         }
@@ -5447,6 +5475,32 @@ mod tests {
         assert_eq!(update.evicted, vec![oldest]);
         assert_eq!(transcript.blocks().len(), 2);
         assert_eq!(body_text(&transcript.blocks()[0]), "two");
+    }
+
+    /// The long-history gap (transcript-002), pinned as it stands: a Thread
+    /// past `DEFAULT_CAPACITY` blocks loses its oldest, and nothing in what
+    /// remains says earlier turns exist or how to reach them. Paging them
+    /// back in is a stated limit, not built.
+    #[test]
+    fn a_history_past_the_cap_loses_its_start_without_saying_so() {
+        let mut transcript = Transcript::default();
+        let mut evicted = 0;
+        for n in 0..DEFAULT_CAPACITY + 100 {
+            evicted += transcript
+                .apply(Input::Prompt(format!("question {n}")))
+                .evicted
+                .len();
+        }
+        assert_eq!(transcript.blocks().len(), DEFAULT_CAPACITY);
+        assert_eq!(evicted, 100);
+        assert_eq!(body_text(&transcript.blocks()[0]), "question 100");
+        assert!(
+            !transcript
+                .blocks()
+                .iter()
+                .any(|block| matches!(block.body, Body::Notice(_) | Body::Meta(_))),
+            "no row marks where the shown history starts"
+        );
     }
 
     /// The memory claim behind a cockpit left running all day: a Thread that

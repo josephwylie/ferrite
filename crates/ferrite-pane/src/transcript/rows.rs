@@ -91,6 +91,8 @@ pub(crate) enum RowKind {
     /// A context compaction's divider (T3's): never folded, and it breaks
     /// a run of work.
     Compaction,
+    /// A completed turn's kept plan, inside its open fold.
+    Plan,
     /// A turn's wrap-up box. `spent`: a later prompt (or wrap-up) follows
     /// it, so its steps are no longer offered.
     WrapUp {
@@ -112,6 +114,7 @@ impl RowKind {
             Body::Meta(_) => Self::Meta,
             Body::TurnEnd(_) => Self::TurnEnd,
             Body::Compaction(_) => Self::Compaction,
+            Body::Plan(_) => Self::Plan,
             // Fallback prose (no Markdown source) is agent prose too.
             Body::Paragraph { .. } | Body::Heading { .. } | Body::Bullet { .. } => {
                 Self::Answer { narration: false }
@@ -475,6 +478,44 @@ pub(crate) fn live_anchor(blocks: &[Block], shape: &RowShape) -> Option<Disclosu
                 .find(|block| matches!(block.body, Body::Thinking(_)))
                 .map(|block| DisclosureId::Live(block.id))
         })
+}
+
+/// The disclosure that hides each block while shut: its turn's fold, or the
+/// running turn's live row. What a find opens to show a hit in it.
+pub(crate) fn hidden_by(blocks: &[Block], shape: &RowShape) -> HashMap<BlockId, DisclosureId> {
+    let mut hidden: HashMap<BlockId, DisclosureId> =
+        turns::folds(blocks, |block| !draws_nothing(block, shape))
+            .into_iter()
+            .flat_map(|fold| {
+                let id = DisclosureId::Turn(fold.prompt);
+                fold.hidden
+                    .into_iter()
+                    .map(move |block| (block, id.clone()))
+            })
+            .collect();
+    if let (Some(start), Some(anchor)) = (live_start(blocks, shape), live_anchor(blocks, shape)) {
+        hidden.extend(
+            blocks[start..]
+                .iter()
+                .map(|block| (block.id, anchor.clone())),
+        );
+    }
+    hidden
+}
+
+impl RowShape {
+    /// The shape with every fold and the live row's work open: every block
+    /// that ever draws has its row.
+    pub(crate) fn opened(&self, blocks: &[Block]) -> Self {
+        Self {
+            open_folds: turns::folds(blocks, |block| !draws_nothing(block, self))
+                .into_iter()
+                .map(|fold| fold.prompt)
+                .collect(),
+            live_open: true,
+            ..self.clone()
+        }
+    }
 }
 
 /// The call a pending Decision gates waits in the Decision itself; it
