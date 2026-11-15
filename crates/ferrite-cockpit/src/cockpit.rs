@@ -44,6 +44,7 @@ mod surfaces;
 pub(crate) mod subagents;
 pub(crate) mod tools;
 mod transcript_glue;
+pub(in crate::cockpit) use transcript_glue::Handoff;
 mod updating;
 mod user_commands;
 mod view_head;
@@ -2676,7 +2677,9 @@ impl CockpitView {
                 }
             }
             // Native progress can change without appending a transcript row.
-            turn_ended |= self.facts.streamed(&self.cockpit, update.thread);
+            let settled = self.facts.streamed(&self.cockpit, update.thread);
+            self.advance_pr_actions(update.thread, settled, cx);
+            turn_ended |= settled;
         }
         let precise = restarted.is_empty()
             && !swept_change

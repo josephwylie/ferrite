@@ -33,6 +33,7 @@ pub(in crate::cockpit) mod background;
 mod changes;
 pub(crate) mod hunks;
 pub(crate) mod preview;
+pub(in crate::cockpit) mod pr_action;
 pub(in crate::cockpit) mod pr_read;
 pub(in crate::cockpit) mod pull_request;
 mod sections;
@@ -86,8 +87,10 @@ pub(crate) struct Panel {
     pub(in crate::cockpit) pr_reads: pr_read::PrReads,
     /// What a PR's prose (its body, guide and comments) renders through.
     pub(crate) pr_rich: ferrite_pane::rich::TextCache,
-    /// The Thread whose PR's Merge waits for its second press.
-    pr_armed: Option<ThreadId>,
+    /// What each PR's action in flight has become.
+    pub(in crate::cockpit) pr_actions: pr_action::PrActions,
+    /// The PR whose Merge waits for its second press.
+    pr_armed: Option<pr_read::PrTarget>,
     /// The keyboard stops of the head and a pull request's header.
     pub(crate) focus: PanelFocus,
 }
@@ -119,6 +122,7 @@ impl Panel {
             background_turned: Default::default(),
             pr_reads: Default::default(),
             pr_rich: Default::default(),
+            pr_actions: Default::default(),
             pr_armed: None,
             focus: Default::default(),
         }
@@ -361,6 +365,7 @@ impl CockpitView {
         if !known.is_empty() {
             self.panel.surfaces.retain(|thread| known.contains(&thread));
             self.panel.focus.retain_threads(|thread| known.contains(&thread));
+            self.panel.pr_actions.retain_threads(&known);
         }
         if let Err(error) = self.panel.surfaces.save(&self.prefs.dir) {
             eprintln!("ferrite: the panel's tabs were not saved: {error}");

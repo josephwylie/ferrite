@@ -56,6 +56,9 @@ pub(super) const STATES: &[&str] = &[
     "panel-empty",
     "panel-maximized",
     "panel-pr",
+    "panel-pr-merging",
+    "panel-pr-merge-failed",
+    "panel-pr-merged",
     "scroll-to-end",
     "send-landed",
     "composer-tokens",
@@ -118,7 +121,10 @@ pub(super) fn build(state: &str) -> (Scene, Setup) {
         "panel-plusmenu" => panel("panel-plusmenu", PanelStaged::PlusMenu),
         "panel-empty" => panel("panel-empty", PanelStaged::Empty),
         "panel-maximized" => panel("panel-maximized", PanelStaged::Maximized),
-        "panel-pr" => panel_pr(),
+        "panel-pr" => panel_pr("panel-pr", PrStaged::Ready),
+        "panel-pr-merging" => panel_pr("panel-pr-merging", PrStaged::Merging),
+        "panel-pr-merge-failed" => panel_pr("panel-pr-merge-failed", PrStaged::MergeFailed),
+        "panel-pr-merged" => panel_pr("panel-pr-merged", PrStaged::Merged),
         "scroll-to-end" => scroll_to_end(),
         "send-landed" => send_landed(),
         "composer-tokens" => composer_tokens(),
@@ -635,11 +641,20 @@ fn panel(state: &str, staged: PanelStaged) -> (Scene, Setup) {
     (scene, setup)
 }
 
+#[derive(Clone, Copy)]
+enum PrStaged {
+    Ready,
+    Merging,
+    MergeFailed,
+    Merged,
+}
+
 /// The pull request Surface on Summary, the PR open and ready to merge:
-/// every check green, Merge as the primary action.
-fn panel_pr() -> (Scene, Setup) {
-    let scene = conversation("panel-pr");
-    let setup: Setup = Box::new(|view, _, cx| {
+/// every check green, Merge as the primary action, or a merge of it
+/// partway through `staged`.
+fn panel_pr(label: &'static str, staged: PrStaged) -> (Scene, Setup) {
+    let scene = conversation(label);
+    let setup: Setup = Box::new(move |view, _, cx| {
         let Some(thread) = view.focused_thread() else {
             return;
         };
@@ -649,11 +664,15 @@ fn panel_pr() -> (Scene, Setup) {
         for check in &mut pr.checks {
             check.status = WireCheckStatus::Success;
         }
+        let merged = matches!(staged, PrStaged::Merged);
+        if merged {
+            pr.state = WirePrState::Merged;
+        }
         view.facts.pr_answered(
             thread,
             Some(PullRequest {
                 number: pr.number,
-                state: PrState::Open,
+                state: if merged { PrState::Merged } else { PrState::Open },
                 draft: false,
                 url: Some(pr.url.clone()),
                 title: Some(pr.title.clone()),
@@ -661,7 +680,14 @@ fn panel_pr() -> (Scene, Setup) {
                 runs: Vec::new(),
             }),
         );
+        let number = pr.number;
         view.fixture_pr_snapshot(thread, pr);
+        match staged {
+            PrStaged::Ready => {}
+            PrStaged::Merging => view.fixture_pr_merge_running(thread, number),
+            PrStaged::MergeFailed => view.fixture_pr_merge_failed(thread, number),
+            PrStaged::Merged => view.fixture_pr_merge_done(thread, number),
+        }
         view.open_pr_surface(thread, cx);
     });
     (scene, setup)

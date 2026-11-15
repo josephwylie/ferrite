@@ -53,7 +53,7 @@ pub(super) enum MenuTarget {
     /// A Panel tab's right-click, by its place in the strip.
     SurfaceTab { thread: ThreadId, at: usize },
     /// The pull request Surface's `⋯`.
-    PrMore(ThreadId),
+    PrMore(super::panel::pr_read::PrTarget),
     /// The nav card's PR badge: the PR's own doors, not the Thread's.
     PrLink(ThreadId),
     /// A Factory picker (#221): its rows are the Factory view's `picks`.
@@ -407,7 +407,7 @@ impl CockpitView {
             MenuTarget::TerminalMore(_) => rows = self.terminal_more_rows(),
             MenuTarget::SurfaceMenu(thread) => rows = self.surface_menu_rows(thread),
             MenuTarget::SurfaceTab { thread, at } => rows = self.surface_tab_rows(thread, at),
-            MenuTarget::PrMore(thread) => rows = self.pr_menu_rows(thread),
+            MenuTarget::PrMore(target) => rows = self.pr_menu_rows(target),
             MenuTarget::PrLink(thread) => rows = self.pr_link_rows(thread),
             MenuTarget::Factory => {
                 rows = self
@@ -780,7 +780,7 @@ impl CockpitView {
             (MenuTarget::SurfaceTab { thread, at }, verb) => {
                 self.run_surface_tab_verb(thread, at, verb, cx)
             }
-            (MenuTarget::PrMore(thread), MenuVerb::Pr(action)) => self.run_pr_action(thread, action, cx),
+            (MenuTarget::PrMore(target), MenuVerb::Pr(action)) => self.run_pr_action(target, action, cx),
             (MenuTarget::PrLink(thread), MenuVerb::PrOpen(how)) => {
                 self.open_pr_as(thread, how, window, cx)
             }
