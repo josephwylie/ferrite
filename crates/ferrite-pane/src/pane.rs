@@ -678,6 +678,9 @@ pub struct PaneWiring {
     pub start: Option<Hero>,
     /// The Thread details card, laid over the body's top right.
     pub details: Option<AnyElement>,
+    /// What the Thread offers when its provider lost the conversation it
+    /// saved (`resume_offer`), the first row of the Composer's stack.
+    pub resume_offer: Option<AnyElement>,
 }
 
 /// Turns the Pane head's band into its drag handle: the cockpit gives it an
@@ -877,6 +880,8 @@ pub(crate) struct PaneCtx<'a> {
     pub decision_joined: bool,
     /// `l1_composer`: the Solo box's controls.
     pub toolbar: Option<ComposerControls>,
+    /// `PaneWiring::resume_offer`, for `l1_composer`.
+    pub resume_offer: Option<AnyElement>,
 }
 
 /// The group name every Pane root carries (`.group(PANE_GROUP)`): what a
@@ -925,6 +930,7 @@ pub fn render_pane(
         fill,
         start,
         details,
+        resume_offer,
     } = wiring;
     let has_activity_decisions = activity_decisions.is_some() || expand_question;
     // The Decision is the transcript's tail now (`decision_tail`): no card
@@ -1050,6 +1056,7 @@ pub fn render_pane(
         activity_decisions: None,
         decision_joined,
         toolbar,
+        resume_offer,
     };
 
     // Solo (fullscreen included) has no head: the nav's row names the
@@ -1170,6 +1177,7 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
                 drop_target: cx.drop_target,
                 joined: cx.decision_joined,
                 toolbar: cx.toolbar.take(),
+                offer: cx.resume_offer.take(),
             },
         )
         .into_any_element(),
@@ -1379,6 +1387,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
             drop_target,
             joined: false,
             toolbar,
+            offer: None,
         },
     );
     // Codex's home: at the body's centre the hero, and the Composer at the
@@ -1997,6 +2006,26 @@ pub fn thread_word(
             .unwrap_or(theme::words::APPROVAL)
     });
     state_word(state, kind, card, Some(&turn), unread)
+}
+
+/// The Pane's offer when its provider no longer holds the conversation the
+/// Thread saved: what happened and what the way on costs, above the one
+/// button that takes it (`action`). The Composer's column holds it.
+pub fn resume_offer(key: u64, line: SharedString, action: gpui::component::button::Button) -> AnyElement {
+    div()
+        .debug_selector(move || format!("resume-offer-{key}"))
+        .flex()
+        .flex_col()
+        .min_w_0()
+        .gap(px(theme::HALF_ROW))
+        .pb(px(theme::SPACE_4))
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .text_color(rgb(INK_SUBTLE))
+        .child(line)
+        .child(div().flex().child(action))
+        .into_any_element()
 }
 
 /// The Pane's foot while its question is too big for the body: `◆ needs

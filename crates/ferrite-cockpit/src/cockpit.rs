@@ -11123,6 +11123,7 @@ impl CockpitView {
                 .then(|| self.quick_answers(index, cx))
                 .flatten(),
             toolbar: l1.then(|| self.composer_toolbar(index, cx)).flatten(),
+            resume_offer: l1.then(|| self.resume_offer(index, cx)).flatten(),
             fill: self
                 .grid_board()
                 .then(|| self.fill_button(index, thread, cx)),
@@ -11493,6 +11494,57 @@ impl CockpitView {
             }
             _ => self.cockpit.answer_target(),
         }
+    }
+
+    /// The offer to go on in a fresh conversation, while the Thread's
+    /// provider has none to resume. It says what the way on costs.
+    fn resume_offer(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let thread = self.panes.get(index).filter(|pane| pane.is_main())?.thread()?;
+        let open = self.cockpit.thread(thread).filter(|open| open.resume_lost())?;
+        let key = thread.get();
+        let line = "A fresh conversation starts from the transcript's latest turns, sent as \
+                    context with your next prompt. It will not remember the rest.";
+        let action = ferrite_ui::components::secondary_button(
+            SharedString::from(format!("resume-fresh-{key}")),
+            None,
+            "Start a fresh conversation",
+            cx,
+        )
+        .debug_selector(move || format!("resume-fresh-{key}"))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |view, _: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                view.start_fresh_conversation(index, thread, window, cx);
+            }),
+        );
+        Some(pane::resume_offer(key, line.into(), action))
+    }
+
+    /// Take the offer: the Thread goes on in a fresh conversation, and what
+    /// the failed send gave back to the Composer goes out through the same
+    /// path ↵ takes.
+    fn start_fresh_conversation(
+        &mut self,
+        index: usize,
+        thread: ThreadId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.cockpit.thread(thread).is_some_and(|open| open.resume_lost()) {
+            return;
+        }
+        if let Err(error) = self.cockpit.start_fresh_conversation(thread) {
+            self.cockpit
+                .say(thread, format!("could not start a fresh conversation: {error}"));
+            cx.notify();
+            return;
+        }
+        self.focus_pane(index);
+        if !self.panes[index].composer.read(cx).is_empty() {
+            self.submit(&Submit, window, cx);
+        }
+        cx.notify();
     }
 
     /// A wall tile's quick answers while its Thread waits (F-7): an

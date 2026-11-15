@@ -325,6 +325,11 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
     },
+    /// Start a fresh native conversation for a Thread whose provider can no
+    /// longer resume its own (`ThreadState::resume_lost`).
+    StartFresh {
+        thread: ThreadId,
+    },
     Snooze {
         thread: ThreadId,
         until: Option<std::time::SystemTime>,
@@ -578,6 +583,7 @@ impl Op {
             | Op::SetModel { thread, .. }
             | Op::SetEffort { thread, .. }
             | Op::SetProvider { thread, .. }
+            | Op::StartFresh { thread, .. }
             | Op::Snooze { thread, .. }
             | Op::Rename { thread, .. }
             | Op::Park { thread, .. }
@@ -1808,6 +1814,10 @@ pub struct ThreadState {
     /// Draft's until it settles.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub for_draft: bool,
+    /// The provider has no conversation under the id the Thread saved, and
+    /// says so: the Thread offers a fresh one (`Op::StartFresh`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resume_lost: bool,
     /// Prompts the provider gave back, for the Composer (`take_recovered`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recovered: Vec<WireRecovered>,

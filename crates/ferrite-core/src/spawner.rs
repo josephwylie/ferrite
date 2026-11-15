@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::engine::{Preparation, RssSampler, SpawnRequest, Spawner};
 use crate::providers::{
-    ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, Session, SettingAck,
+    ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, ResumeRefused, Session, SettingAck,
 };
 use crate::session::SessionLifecycle;
 use crate::settings::Settings;
@@ -242,16 +242,18 @@ enum SessionConfig {
 impl SessionConfig {
     fn spawn(self, defaults: Arc<Mutex<SessionDefaults>>) -> io::Result<Box<dyn Session + Send>> {
         let (provider, inner): (Provider, Box<dyn Session + Send>) = match self {
-            SessionConfig::Claude(config) => (
-                Provider::Claude,
-                Box::new(
-                    ClaudeSession::spawn(config).map_err(|e| io::Error::other(e.to_string()))?,
-                ),
-            ),
-            SessionConfig::Codex(config) => (
-                Provider::Codex,
-                Box::new(CodexSession::spawn(config).map_err(|e| io::Error::other(e.to_string()))?),
-            ),
+            SessionConfig::Claude(config) => {
+                let resuming = config.resume.is_some();
+                let session = ClaudeSession::spawn(config)
+                    .map_err(|e| ResumeRefused::error(resuming, e.to_string()))?;
+                (Provider::Claude, Box::new(session))
+            }
+            SessionConfig::Codex(config) => {
+                let resuming = config.resume.is_some();
+                let session = CodexSession::spawn(config)
+                    .map_err(|e| ResumeRefused::error(resuming, e.to_string()))?;
+                (Provider::Codex, Box::new(session))
+            }
         };
         Ok(Box::new(SessionWithDefaults {
             inner,

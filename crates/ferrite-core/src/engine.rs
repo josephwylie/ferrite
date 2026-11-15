@@ -29,7 +29,7 @@ use crate::notifications::{DecisionNoticeId, Frame, NoticeId, Notifications};
 pub use crate::prompt_history::HistoryDirection;
 use crate::prompt_history::PromptHistory;
 use crate::protocol::{self, Outgoing, ServerMessage, SharedRoster};
-use crate::providers::{Session, SettingAck};
+use crate::providers::{ResumeFailure, Session, SettingAck};
 use crate::roster::{DraftId, DraftScope};
 use crate::session::SessionLifecycle;
 use crate::store::{LoadError, Provider, Store, ThreadWriter};
@@ -591,6 +591,10 @@ struct Thread {
     activity: Journaled,
     generation: u64,
     store_error: Option<String>,
+    /// Its provider answered a resume that it holds no conversation under
+    /// `resume`. No start tries again until `start_fresh_conversation`
+    /// replaces the conversation.
+    resume_lost: bool,
     history: HashMap<AgentKey, history::Pending>,
     history_errors: HashMap<AgentKey, String>,
     /// The live Session, or None while the Thread is not in use (ADR 0032).
@@ -731,6 +735,7 @@ impl Thread {
             activity,
             generation,
             store_error: None,
+            resume_lost: false,
             history: HashMap::new(),
             history_errors: HashMap::new(),
             session,
@@ -896,6 +901,7 @@ impl Thread {
                 .collect(),
             controls: announced.controls().iter().map(Into::into).collect(),
             store_error: self.store_error.clone(),
+            resume_lost: self.resume_lost,
             for_draft: false,
             recovered: self
                 .native_queue
@@ -1998,6 +2004,21 @@ impl Engine {
         self.replace_session(thread, provider, model, effort, ReplacementKind::Fresh)
     }
 
+    /// Continue a Thread whose provider lost its conversation on a fresh
+    /// one in place: the transcript stays, and the earlier turns go with
+    /// the next prompt as context, once, as a provider switch's do. Only a
+    /// start the provider refused as missing offers it, and with none
+    /// lost this does nothing: a conversation in
+    /// use elsewhere is not lost, and a fresh one beside it would fork.
+    pub fn start_fresh_conversation(&mut self, thread: ThreadId) -> Result<(), ProvisionError> {
+        let state = self.threads.get(&thread).ok_or(ProvisionError::Locked)?;
+        if !state.resume_lost {
+            return Ok(());
+        }
+        let (provider, model, effort) = (state.provider, state.model.clone(), state.effort.clone());
+        self.replace_session(thread, provider, model, effort, ReplacementKind::Handover)
+    }
+
     fn hand_over(
         &mut self,
         thread: ThreadId,
@@ -2169,12 +2190,14 @@ impl Engine {
             ReplacementKind::Fresh => {
                 state.activity.replace();
                 state.resume = None;
+                state.resume_lost = false;
                 state.carry = None;
             }
             ReplacementKind::Handover => {
                 let handover = handover.expect("committed with header");
                 state.carry = Some(carry_digest(handover.from, &handover.exchanges));
                 state.resume = None;
+                state.resume_lost = false;
                 state.apply(Input::Notice(crate::store::handover_notice(
                     provider,
                     model.as_deref(),
@@ -2642,7 +2665,9 @@ impl Engine {
             return Ok(());
         };
         let words = format!("{what}: {error}");
-        if let Some(state) = self.threads.get_mut(&thread) {
+        // A Thread whose resume is lost already has its offer on screen:
+        // the refusal of a send says nothing the offer has not.
+        if let Some(state) = self.threads.get_mut(&thread).filter(|state| !state.resume_lost) {
             state.apply(Input::Notice(words.clone()));
         }
         Err(words)
@@ -2670,6 +2695,11 @@ impl Engine {
         }
         if let Some(refusal) = vanished_root_refusal(state) {
             return Err(io::Error::new(io::ErrorKind::NotFound, refusal));
+        }
+        if state.resume_lost {
+            return Err(io::Error::other(
+                "the provider cannot resume this conversation: start a fresh one to go on",
+            ));
         }
         // After a close, or with no Session yet, this start begins a new
         // generation. After one ended unseen, nothing a window holds is
@@ -3295,7 +3325,26 @@ impl Engine {
                         state.end_session();
                         state.replace_generation();
                         crate::log!("thread {id}: session could not start: {error}");
-                        state.apply(Input::Notice(format!("could not start: {error}")));
+                        let returned = !state.awaiting.prompts.is_empty();
+                        let notice = match ResumeFailure::of(&error) {
+                            Some(ResumeFailure::SessionGone) => {
+                                state.resume_lost = true;
+                                let back = if returned { " Your prompt is back in the Composer." } else { "" };
+                                format!("could not start: {error}.{back}")
+                            }
+                            Some(ResumeFailure::InUse) => {
+                                let back = if returned {
+                                    "; your prompt is back in the Composer, to send once it is free"
+                                } else {
+                                    ""
+                                };
+                                format!(
+                                    "could not start: {error}. The conversation is in use elsewhere{back}"
+                                )
+                            }
+                            None => format!("could not start: {error}"),
+                        };
+                        state.apply(Input::Notice(notice));
                         state.give_up_awaiting();
                     }
                 }

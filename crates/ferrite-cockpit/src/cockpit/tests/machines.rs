@@ -612,6 +612,7 @@ fn box_thread(thread: ThreadId, title: &str) -> ferrite_core::protocol::ThreadSt
         session_project_root: None,
         first_prompt_sent: true,
         has_prompt_history: true,
+        resume_lost: false,
         starting: false,
         working: false,
         tuning: false,
