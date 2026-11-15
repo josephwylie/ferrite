@@ -105,6 +105,10 @@ pub struct Cockpit {
     /// What a fixture world's forge says (`fixture_forge`), by checkout:
     /// answered in place of its CLI. Empty outside fixtures.
     forge_fixture: HashMap<PathBuf, ferrite_reviewr::forge::PrView>,
+    /// The checkouts whose whole-PR reads wait for a test's answer
+    /// (`fixture_hold_pr_reads`), and the reads waiting.
+    forge_held: std::collections::HashSet<PathBuf>,
+    held_reads: Vec<HeldRead>,
     /// What a fixture world's disk says is free (`fixture_free_disk`):
     /// answered in place of the volume. `None` outside fixtures.
     free_disk_fixture: Option<u64>,
@@ -243,6 +247,8 @@ impl Cockpit {
             composing: std::collections::BTreeSet::new(),
             forge: Default::default(),
             forge_fixture: HashMap::new(),
+            forge_held: Default::default(),
+            held_reads: Vec::new(),
             free_disk_fixture: None,
             drawn: None,
             told: None,
@@ -1261,6 +1267,23 @@ fn read_here<T: Send + 'static>(
     answered
 }
 
+/// A whole-PR read a fixture world holds (`Cockpit::fixture_hold_pr_reads`):
+/// the window waits on it until a test answers.
+pub struct HeldRead {
+    pub path: PathBuf,
+    answer: crate::doorbell::Sender<io::Result<crate::protocol::ReviewPullRequest>>,
+}
+
+impl HeldRead {
+    pub fn answer(self, read: crate::protocol::ReviewPullRequest) {
+        let _ = self.answer.send(Ok(read));
+    }
+
+    pub fn fail(self, why: &str) {
+        let _ = self.answer.send(Err(io::Error::other(why.to_string())));
+    }
+}
+
 /// A command whose reply carries nothing the window needs.
 fn run(server: &mut remote::Remote, op: Op) -> io::Result<()> {
     server.execute(op).map(drop).map_err(io::Error::from)
@@ -2005,6 +2028,14 @@ impl Cockpit {
         &mut self,
         path: &Path,
     ) -> io::Result<Receiver<io::Result<crate::protocol::ReviewPullRequest>>> {
+        if self.forge_held.contains(path) {
+            let (answer, answered) = crate::doorbell::channel();
+            self.held_reads.push(HeldRead {
+                path: path.to_path_buf(),
+                answer,
+            });
+            return Ok(answered);
+        }
         if let Some(view) = self.forge_fixture.get(path).cloned() {
             return Ok(read_here(move || {
                 Ok(crate::protocol::ReviewPullRequest::of(view, "PR"))
@@ -2755,6 +2786,18 @@ impl Cockpit {
     /// `view`, as its forge's CLI would, without running one.
     pub fn fixture_forge(&mut self, path: PathBuf, view: ferrite_reviewr::forge::PrView) {
         self.forge_fixture.insert(path, view);
+    }
+
+    /// From now on the whole-PR reads of the checkout at `path` (a
+    /// `fixture_forge` one) wait, each, for a test to answer it, in any
+    /// order (`take_held_reads`).
+    pub fn fixture_hold_pr_reads(&mut self, path: PathBuf) {
+        self.forge_held.insert(path);
+    }
+
+    /// The whole-PR reads held since the last call, oldest first.
+    pub fn take_held_reads(&mut self) -> Vec<HeldRead> {
+        std::mem::take(&mut self.held_reads)
     }
 
     /// A fixture world's GitHub login: the repositories it reaches and

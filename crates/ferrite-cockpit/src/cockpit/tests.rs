@@ -49,6 +49,7 @@ mod panel;
 mod panel_preview;
 mod parking;
 mod pr;
+mod pr_reads;
 mod project_picker;
 mod provider_controls;
 mod provider_forms;

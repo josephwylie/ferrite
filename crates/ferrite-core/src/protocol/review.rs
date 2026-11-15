@@ -695,15 +695,22 @@ pub struct ReviewPullRequest {
 }
 
 /// Why a `review_pull_request` brought no pull request back, beyond its
-/// note: what the panel's PR tab tells apart from a branch with none.
+/// note: what the panel's PR tab tells apart from a branch with none, and
+/// the recovery each earns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WirePrUnread {
     /// The forge's CLI is not installed (or lacks its extension), or not
     /// signed in.
     NoCli,
-    /// The read failed (offline, a rate limit, a git error): the last
-    /// snapshot still stands.
+    /// The forge did not answer in time.
+    TimedOut,
+    /// The forge refused the read until its limit resets.
+    RateLimited,
+    /// The forge could not be reached.
+    Offline,
+    /// The read failed some other way (a git error, a forge error): the
+    /// last snapshot still stands.
     #[serde(other)]
     Failed,
 }
@@ -714,11 +721,13 @@ impl WirePrUnread {
     fn of(view: &PrView) -> Option<Self> {
         match view {
             PrView::NoCli(_) | PrView::NoExtension(_) | PrView::NotAuthed(..) => Some(Self::NoCli),
-            PrView::Pending
-            | PrView::Loading
-            | PrView::Held
-            | PrView::GitError(_)
-            | PrView::Error(..) => Some(Self::Failed),
+            PrView::TimedOut(_) => Some(Self::TimedOut),
+            PrView::Error(_, message) => Some(match forge::Failure::of(message) {
+                forge::Failure::RateLimited => Self::RateLimited,
+                forge::Failure::Offline => Self::Offline,
+                forge::Failure::Other => Self::Failed,
+            }),
+            PrView::Pending | PrView::Loading | PrView::Held | PrView::GitError(_) => Some(Self::Failed),
             PrView::Pr(_)
             | PrView::NoPr
             | PrView::Detached
@@ -735,11 +744,7 @@ impl ReviewPullRequest {
         let unread = WirePrUnread::of(&view);
         let pr = match view {
             PrView::Pr(snapshot) => Ok((*snapshot).into()),
-            view => Err(ferrite_reviewr::ferrite::pr_note(
-                &view,
-                noun,
-                ferrite_reviewr::keymap::Key::plain('r'),
-            )),
+            view => Err(ferrite_reviewr::ferrite::pr_note(&view, noun)),
         };
         Self {
             noun: noun.to_string(),
@@ -906,9 +911,17 @@ mod tests {
         let retry = ReviewPullRequest::of(PrView::NoCli(ferrite_reviewr::git::Forge::GitHub), "PR");
         assert_eq!(retry.unread, Some(WirePrUnread::NoCli), "no gh");
         assert!(
-            retry.pr.is_err_and(|note| note.contains("press r")),
-            "the remedy names r"
+            retry.pr.is_err_and(|note| note.contains("then retry")),
+            "the remedy names the way back"
         );
+        let github = ferrite_reviewr::git::Forge::GitHub;
+        for (view, kind) in [
+            (PrView::TimedOut(github), WirePrUnread::TimedOut),
+            (PrView::Error(github, "API rate limit exceeded".into()), WirePrUnread::RateLimited),
+            (PrView::Error(github, "dial tcp: no such host".into()), WirePrUnread::Offline),
+        ] {
+            assert_eq!(ReviewPullRequest::of(view, "PR").unread, Some(kind));
+        }
         let failed = ReviewPullRequest::of(
             PrView::Error(ferrite_reviewr::git::Forge::GitHub, "offline".into()),
             "PR",

@@ -37,42 +37,89 @@ pub enum PrView {
     MalformedOrigin(String),
     /// A local Git read failed before the forge fetch could start.
     GitError(String),
+    /// The forge CLI did not answer within `READ_DEADLINE`.
+    TimedOut(crate::git::Forge),
     /// Any other forge-CLI failure (rate limit, offline, …); the app freezes the last good view.
     Error(crate::git::Forge, String),
 }
 
+/// How long one read may take, its forge CLI's processes included.
+pub const READ_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// What a forge CLI's failure wording says went wrong, for the remedy it earns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Failure {
+    RateLimited,
+    Offline,
+    Other,
+}
+
+impl Failure {
+    pub fn of(message: &str) -> Self {
+        let s = message.to_lowercase();
+        if s.contains("rate limit") || s.contains("abuse detection") || reports_status(&s, 429) {
+            Self::RateLimited
+        } else if [
+            "could not resolve host",
+            "no such host",
+            "dial tcp",
+            "connection refused",
+            "connection reset",
+            "network is unreachable",
+            "tls handshake",
+            "i/o timeout",
+            "error connecting to",
+        ]
+        .iter()
+        .any(|wording| s.contains(wording))
+        {
+            Self::Offline
+        } else {
+            Self::Other
+        }
+    }
+}
+
 impl PrView {
     /// The remedy for a retryable failure, which keeps the visible snapshot; `None` otherwise.
-    pub fn retry_remedy(&self, refresh: crate::keymap::Key) -> Option<String> {
-        let refresh = refresh.label();
+    pub fn retry_remedy(&self) -> Option<String> {
         match self {
             Self::NoCli(forge) => Some(format!(
-                "{} CLI not found. Install `{}`, then press {refresh}.",
+                "{} CLI not found. Install `{}`, then retry.",
                 forge.display_name(),
                 forge.cli()
             )),
             // A forge with no extension still gets a remedy.
             Self::NoExtension(forge) => Some(match extension_hint(*forge) {
                 Some(hint) => format!(
-                    "{} CLI extension missing. Run {hint}, then press {refresh}.",
+                    "{} CLI extension missing. Run {hint}, then retry.",
                     forge.display_name()
                 ),
-                None => format!(
-                    "{} CLI extension missing. Press {refresh} to retry.",
-                    forge.display_name()
-                ),
+                None => format!("{} CLI extension missing. Retry to try again.", forge.display_name()),
             }),
             Self::NotAuthed(forge, host) => Some(format!(
-                "Not signed in to {host}. Run {}, then press {refresh}.",
+                "Not signed in to {host}. Run {}, then retry.",
                 login_hint(*forge, host)
             )),
-            Self::GitError(message) => {
-                Some(format!("Git read failed: {message}. Press {refresh} to retry."))
-            }
-            Self::Error(forge, message) => Some(format!(
-                "{} unavailable: {message}. Press {refresh} to retry.",
-                forge.display_name()
+            Self::GitError(message) => Some(format!("Git read failed: {message}. Retry to try again.")),
+            Self::TimedOut(forge) => Some(format!(
+                "{} did not answer within {} seconds. Retry to try again.",
+                forge.display_name(),
+                READ_DEADLINE.as_secs()
             )),
+            Self::Error(forge, message) => Some(match Failure::of(message) {
+                Failure::RateLimited => format!(
+                    "{} rate limit reached: {message}. Wait a few minutes, then retry.",
+                    forge.display_name()
+                ),
+                Failure::Offline => format!(
+                    "Cannot reach {}: {message}. Check the connection, then retry.",
+                    forge.display_name()
+                ),
+                Failure::Other => {
+                    format!("{} unavailable: {message}. Retry to try again.", forge.display_name())
+                }
+            }),
             _ => None,
         }
     }
@@ -479,10 +526,42 @@ fn fetch_input_inner(
     Ok(PrFetchInput { repository, origin_repository, local })
 }
 
-/// Read GitHub for one already-derived input. Degradation stays in-band for the PR tab.
+/// Read the forge for one already-derived input, within `READ_DEADLINE`. Degradation stays
+/// in-band for the PR tab.
 #[must_use]
 pub fn fetch(repo: &Path, input: &PrFetchInput) -> PrView {
-    fetch_cancellable(repo, input, &AtomicBool::new(false))
+    let forge = match &input.repository {
+        crate::git::RepositoryIdentity::Repository(target) => target.forge(),
+        _ => crate::git::Forge::GitHub,
+    };
+    within(READ_DEADLINE, PrView::TimedOut(forge), |cancelled| fetch_cancellable(repo, input, cancelled))
+}
+
+/// Run `read` with a cancellation flag raised once `limit` has passed; a read the deadline
+/// stopped is `timed_out`, whatever it made of being stopped.
+fn within(
+    limit: std::time::Duration,
+    timed_out: PrView,
+    read: impl FnOnce(&AtomicBool) -> PrView,
+) -> PrView {
+    use std::sync::atomic::Ordering;
+    let cancelled = AtomicBool::new(false);
+    let (finished, deadline) = std::sync::mpsc::channel::<()>();
+    let raise = &cancelled;
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            if deadline.recv_timeout(limit) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+                raise.store(true, Ordering::Release);
+            }
+        });
+        let view = read(&cancelled);
+        drop(finished);
+        if cancelled.load(Ordering::Acquire) {
+            timed_out
+        } else {
+            view
+        }
+    })
 }
 
 /// Read GitHub with a cancellation signal owned by the event-loop coordinator.
@@ -1287,6 +1366,28 @@ pub(crate) fn parse_iso(s: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    #[test]
+    fn a_read_past_its_deadline_is_stopped_and_timed_out() {
+        let timed_out = PrView::TimedOut(crate::git::Forge::GitHub);
+        let view = within(Duration::from_millis(20), timed_out.clone(), |cancelled| {
+            while !cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            PrView::Error(crate::git::Forge::GitHub, "request cancelled".into())
+        });
+        assert_eq!(view, timed_out);
+        assert_eq!(within(Duration::from_secs(30), timed_out, |_| PrView::NoPr), PrView::NoPr);
+    }
+
+    #[test]
+    fn failure_wording_tells_a_rate_limit_from_a_dropped_connection() {
+        assert_eq!(Failure::of("API rate limit exceeded for user"), Failure::RateLimited);
+        assert_eq!(Failure::of("gh: Too Many Requests (HTTP 429)"), Failure::RateLimited);
+        assert_eq!(Failure::of("dial tcp: lookup api.github.com: no such host"), Failure::Offline);
+        assert_eq!(Failure::of("GraphQL: something odd"), Failure::Other);
+    }
     use super::*;
 
     #[test]
