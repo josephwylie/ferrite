@@ -176,11 +176,10 @@ impl TranscriptScroll {
     }
 
     /// One frame of the ease, after a layout: re-measure what is left to
-    /// go, and scroll so that what is left is the tween's value now. `foot`
-    /// is the list's padding past its last row (the end lies under it). A
+    /// go, and scroll so that what is left is the tween's value now. A
     /// target the list has not measured is snapped to; one whose row has
     /// left the transcript ends the ease where it stands.
-    pub(crate) fn step_ease(&self, now: Instant, foot: Pixels, rows: &TranscriptRows) -> EaseStep {
+    pub(crate) fn step_ease(&self, now: Instant, rows: &TranscriptRows) -> EaseStep {
         let Some(mut ease) = self.ease.borrow().clone() else {
             return EaseStep::Idle;
         };
@@ -205,8 +204,7 @@ impl TranscriptScroll {
             EaseTarget::End if self.list.is_following_tail() => Some(px(0.)),
             EaseTarget::End => Some(
                 self.list.max_offset_for_scrollbar().y
-                    + self.list.scroll_px_offset_for_scrollbar().y
-                    + foot,
+                    + self.list.scroll_px_offset_for_scrollbar().y,
             ),
         };
         let Some(mut left) = left else {

@@ -779,11 +779,17 @@ impl ListState {
         self.0.borrow().scrollbar_gestures
     }
 
-    /// Returns the maximum scroll offset according to the items we have measured.
+    /// Returns the maximum scroll offset according to the items we have measured,
+    /// and the list's padding: the extent `set_offset_from_scrollbar` maps onto, so
+    /// a thumb painted from this and an offset set from the thumb agree.
     /// This value remains constant while dragging to prevent the scrollbar from moving away unexpectedly.
     pub fn max_offset_for_scrollbar(&self) -> Point<Pixels> {
         let state = self.0.borrow();
-        point(Pixels::ZERO, state.max_scroll_offset())
+        let padding = state.last_padding.unwrap_or_default();
+        point(
+            Pixels::ZERO,
+            state.max_scroll_offset() + padding.top + padding.bottom,
+        )
     }
 
     /// Returns the current scroll offset adjusted for the scrollbar.

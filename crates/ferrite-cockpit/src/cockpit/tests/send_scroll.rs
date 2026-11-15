@@ -114,7 +114,7 @@ fn stopped_mid_ease(
     cx: &mut TestAppContext,
     take: impl FnOnce(&Entity<CockpitView>, &mut gpui::VisualTestContext),
 ) {
-    let (view, _fake, cx) = answered(name, true, cx);
+    let (view, fake, cx) = answered(name, true, cx);
     let scroll = scroll(&view, cx);
     send(cx);
     at(16, cx);
@@ -137,6 +137,40 @@ fn stopped_mid_ease(
         "it stays where it stopped, not snapping on: {stood:?} → {:?}",
         scroll.offset().y
     );
+    later_text_and_a_tool(&fake, cx);
+    assert!(
+        (scroll.offset().y - stood).abs() <= px(0.5),
+        "the reader's passage stays put as the turn's text and tool arrive: {stood:?} → {:?}",
+        scroll.offset().y
+    );
+}
+
+/// The running turn's next text, then a tool call and its result.
+fn later_text_and_a_tool(fake: &Fake, cx: &mut gpui::VisualTestContext) {
+    let stream = fake.streams.borrow().len() - 1;
+    let events = [
+        SessionEvent::TextDelta {
+            text: "Looking at it now.".into(),
+        },
+        SessionEvent::ToolStarted {
+            id: "later-tool".into(),
+            name: "Read".into(),
+            input: serde_json::json!({"file_path": "/workspace/a.rs"}),
+        },
+        SessionEvent::ToolCompleted {
+            id: "later-tool".into(),
+            output: "12 lines".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        },
+    ];
+    for event in events {
+        fake.streams.borrow()[stream].send(event).unwrap();
+    }
+    tick(cx);
+    for _ in 0..4 {
+        at(16, cx);
+    }
 }
 
 #[gpui::test]
@@ -168,6 +202,164 @@ fn a_scrollbar_drag_mid_ease_stops_it(cx: &mut TestAppContext) {
     stopped_mid_ease("send-ease-drag", cx, |view, cx| {
         scroll(view, cx).list_state().scrollbar_drag_started();
     });
+}
+
+/// The scrollbar thumb's centre and its track's x, as the scrollbar paints
+/// them (`Track` in ferrite-ui: the thumb's natural length, 48px at least).
+fn thumb(
+    scroll: &ferrite_pane::transcript::TranscriptScroll,
+    cx: &mut gpui::VisualTestContext,
+) -> (gpui::Point<gpui::Pixels>, f32, f32) {
+    let layer = cx
+        .debug_bounds("transcript-scrollbar")
+        .expect("the scrollbar layer");
+    let view = f32::from(scroll.bounds().size.height);
+    let range = f32::from(scroll.max_offset().y);
+    let len = (view / (view + range) * view).max(48.);
+    let travel = view - len;
+    let start = -f32::from(scroll.offset().y) / range * travel;
+    let centre = gpui::point(
+        layer.right() - px(4.),
+        scroll.bounds().top() + px(start + len / 2.),
+    );
+    (centre, len, travel)
+}
+
+/// A prompt held at the top with the room for its answer, its ease done.
+fn held_prompt<'a>(
+    name: &str,
+    cx: &'a mut TestAppContext,
+) -> (
+    Entity<CockpitView>,
+    Fake,
+    ferrite_pane::transcript::TranscriptScroll,
+    &'a mut gpui::VisualTestContext,
+) {
+    let (view, fake, cx) = answered(name, true, cx);
+    let scroll = scroll(&view, cx);
+    send(cx);
+    for _ in 0..(MOTION_SCROLL_MAX_MS / 16 + 4) {
+        at(16, cx);
+    }
+    assert!(!scroll.easing(), "the premise: the ease is done");
+    let held = transcript(&view, cx).read_with(cx, |t, _| t.send_anchored() && t.runway_room() > 0.);
+    assert!(held, "the premise: the prompt is held with room under it");
+    (view, fake, scroll, cx)
+}
+
+/// A thumb drag after the send's ease has finished, with the runway still
+/// under the prompt, takes the scroll: later text and a tool call leave the
+/// reader's passage where it is.
+#[gpui::test]
+fn a_thumb_drag_after_the_ease_keeps_the_reader_put(cx: &mut TestAppContext) {
+    let (view, fake, scroll, cx) = held_prompt("send-thumb", cx);
+    let (grab, _, _) = thumb(&scroll, cx);
+    cx.simulate_mouse_move(grab, None, gpui::Modifiers::none());
+    cx.simulate_mouse_down(grab, gpui::MouseButton::Left, gpui::Modifiers::none());
+    std::thread::sleep(Duration::from_millis(12));
+    let to = grab - gpui::point(px(0.), px(60.));
+    cx.simulate_mouse_move(to, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_up(to, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.run_until_parked();
+    let stood = scroll.offset().y;
+    let held = |cx: &mut gpui::VisualTestContext| {
+        transcript(&view, cx).read_with(cx, |t, _| t.send_anchored())
+    };
+    assert!(!held(cx), "the drag took the prompt's hold");
+    later_text_and_a_tool(&fake, cx);
+    assert!(!scroll.is_following_tail(), "not pulled to the tail");
+    assert!(
+        (scroll.offset().y - stood).abs() <= px(0.5),
+        "the passage stays: {stood:?} → {:?}",
+        scroll.offset().y
+    );
+}
+
+/// A click on the scrollbar's track is as much the reader's as a wheel is.
+#[gpui::test]
+fn a_track_click_after_the_ease_keeps_the_reader_put(cx: &mut TestAppContext) {
+    let (view, fake, scroll, cx) = held_prompt("send-track", cx);
+    let (centre, len, _) = thumb(&scroll, cx);
+    let click = centre - gpui::point(px(0.), px(len + 40.));
+    cx.simulate_click(click, gpui::Modifiers::none());
+    cx.run_until_parked();
+    let stood = scroll.offset().y;
+    assert!(
+        !transcript(&view, cx).read_with(cx, |t, _| t.send_anchored()),
+        "the click took the prompt's hold"
+    );
+    later_text_and_a_tool(&fake, cx);
+    assert!(
+        (scroll.offset().y - stood).abs() <= px(0.5),
+        "the passage stays: {stood:?} → {:?}",
+        scroll.offset().y
+    );
+}
+
+/// Find on a hit in a row already in view is the reader's too: the ease
+/// and the prompt's hold go with it.
+#[gpui::test]
+fn find_in_a_visible_row_takes_the_prompts_hold(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (view, _fake, cx) = answered("send-find", true, cx);
+    let scroll = scroll(&view, cx);
+    send(cx);
+    at(16, cx);
+    cx.simulate_keystrokes("cmd-f");
+    tick(cx);
+    cx.simulate_input("second");
+    tick(cx);
+    for _ in 0..8 {
+        transcript(&view, cx).update(cx, |_, cx| cx.notify());
+        at(16, cx);
+    }
+    assert!(
+        !transcript(&view, cx).read_with(cx, |t, _| t.send_anchored()),
+        "Find took the prompt's hold"
+    );
+    assert!(!scroll.easing(), "Find stopped the ease");
+}
+
+/// End and the Scroll to end pill are one move at two speeds: both land on
+/// the tail, with no runway left under the last row.
+fn lands_on_the_tail(name: &str, pill: bool, cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (view, _fake, cx) = answered(name, true, cx);
+    send(cx);
+    for _ in 0..(MOTION_SCROLL_MAX_MS / 16 + 4) {
+        at(16, cx);
+    }
+    scrolled_away(&view, cx);
+    at(SCROLL_END_SHOW_DELAY_MS + 10, cx);
+    if pill {
+        let pill = cx.debug_bounds("scroll-to-end").expect("the pill");
+        cx.simulate_click(pill.center(), gpui::Modifiers::none());
+    } else {
+        cx.simulate_keystrokes("end");
+    }
+    for _ in 0..(MOTION_SCROLL_MAX_MS / 16 + 4) {
+        at(16, cx);
+    }
+    let scroll = scroll(&view, cx);
+    assert!(scroll.is_following_tail(), "following the tail");
+    let room = transcript(&view, cx).read_with(cx, |t, _| t.runway_room());
+    assert_eq!(room, 0., "no runway under the last row");
+    assert!(
+        (scroll.offset().y + scroll.max_offset().y).abs() <= px(0.5),
+        "at the tail: {:?} of {:?}",
+        scroll.offset().y,
+        scroll.max_offset().y
+    );
+}
+
+#[gpui::test]
+fn end_lands_on_the_tail(cx: &mut TestAppContext) {
+    lands_on_the_tail("end-key", false, cx);
+}
+
+#[gpui::test]
+fn the_pill_lands_on_the_tail(cx: &mut TestAppContext) {
+    lands_on_the_tail("end-pill", true, cx);
 }
 
 /// Under reduced motion (the kit at rest) the send lands in one frame,

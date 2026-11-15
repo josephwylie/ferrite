@@ -3060,8 +3060,7 @@ impl Render for TranscriptView {
                 // render asked for the frame: `fading`); landed, the list lays
                 // out once more at its target. A scrollbar drag took it: the
                 // room stays, the prompt is no longer held.
-                let foot = px(pad_b + runway.get().room);
-                match scroll.step_ease(cx.background_executor().now(), foot, &gaps) {
+                match scroll.step_ease(cx.background_executor().now(), &gaps) {
                     EaseStep::Idle | EaseStep::Moving => {}
                     EaseStep::Landed => {
                         let weak = weak.clone();
