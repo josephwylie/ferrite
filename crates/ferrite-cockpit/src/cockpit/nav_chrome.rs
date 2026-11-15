@@ -331,9 +331,9 @@ impl CockpitView {
 
     // ------------------------------------------------------------ the foot
 
-    /// The foot: Settings, Pull requests (the shown Thread's, in the
-    /// Panel), Usage (the shown Provider's plan), the undo notice, free
-    /// disk and the update door.
+    /// The foot: Settings, Pull requests (the shown Thread's PR in the
+    /// Panel, else the destination), Usage (the shown Provider's plan), the
+    /// undo notice, free disk and the update door.
     pub(super) fn nav_foot(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let settings = chrome::foot_button("nav-settings", ferrite_ui::icons::GEAR)
             .nav_action_tooltip("Settings", "cockpit::OpenSettings")
@@ -342,21 +342,11 @@ impl CockpitView {
                 view.toggle_settings(cx);
             }));
         let shown = self.focused_thread();
-        let pr = shown.filter(|thread| self.facts.pr(*thread).is_some());
         let pulls = chrome::foot_button("nav-pull-requests", ferrite_ui::icons::GIT_PULL_REQUEST)
-            .nav_tooltip(if pr.is_some() {
-                "Pull request"
-            } else {
-                "No pull request for this thread"
-            })
-            .when(pr.is_none(), |button| {
-                button.opacity(ferrite_ui::theme::NAV_FOOT_DISABLED_OPACITY)
-            })
-            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+            .nav_tooltip("Pull requests")
+            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
-                if let Some(thread) = pr {
-                    view.open_pr_as(thread, ferrite_pane::link_target::Open::Primary, window, cx);
-                }
+                view.open_prs_for_focus(cx);
             }));
         let provider = shown
             .and_then(|thread| self.cockpit.thread(thread))

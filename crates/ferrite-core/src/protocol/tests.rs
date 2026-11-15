@@ -1358,6 +1358,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                 46,
                 Op::ReviewPullRequest {
                     path: "/home/me/src/ferrite".into(),
+                    number: None,
                 },
             ),
         ),

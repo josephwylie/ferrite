@@ -417,7 +417,7 @@ impl CockpitView {
         let Some(workspace) = self.thread_path(thread) else {
             return;
         };
-        let pr = self.cockpit.review_pull_request(&workspace);
+        let pr = self.cockpit.review_pull_request(&workspace, None);
         land(
             review,
             pr,

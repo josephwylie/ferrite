@@ -537,13 +537,154 @@ pub fn fetch(repo: &Path, input: &PrFetchInput) -> PrView {
     within(READ_DEADLINE, PrView::TimedOut(forge), |cancelled| fetch_cancellable(repo, input, cancelled))
 }
 
+/// Which of a repository's pull requests a list shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ListFilter {
+    #[default]
+    Open,
+    /// Merged and closed ones.
+    Closed,
+    All,
+}
+
+impl ListFilter {
+    fn states(self) -> &'static str {
+        match self {
+            Self::Open => "OPEN",
+            Self::Closed => "MERGED,CLOSED",
+            Self::All => "OPEN,MERGED,CLOSED",
+        }
+    }
+}
+
+/// One row of a repository's pull request list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrRow {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: PrState,
+    pub is_draft: bool,
+    pub author: String,
+    pub head_ref: String,
+    pub base_ref: String,
+    /// The forge's ISO-8601 time of the last change.
+    pub updated_at: String,
+}
+
+/// A repository's pull requests, most recently changed first.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrList {
+    pub rows: Vec<PrRow>,
+    /// The forge holds more than one read fetches.
+    pub more: bool,
+}
+
+/// The GitHub repository of the checkout at `repo`, or the state that says why not.
+fn github_repository(
+    repo: &Path,
+    config: &crate::config::PluginConfig,
+) -> Result<crate::git::RepoTarget, PrView> {
+    let (identity, _) = crate::git::remote_identities(repo, &config.forge_hosts())
+        .map_err(|error| PrView::GitError(error.0))?;
+    match identity {
+        crate::git::RepositoryIdentity::Repository(target)
+            if target.forge() == crate::git::Forge::GitHub =>
+        {
+            Ok(target)
+        }
+        crate::git::RepositoryIdentity::Repository(target) => Err(PrView::Error(
+            target.forge(),
+            "browsing pull requests by number is read for GitHub repositories only".to_string(),
+        )),
+        crate::git::RepositoryIdentity::Missing | crate::git::RepositoryIdentity::Hostless => {
+            Err(PrView::NeedsForgeRemote)
+        }
+        crate::git::RepositoryIdentity::Unsupported(host) => Err(PrView::UnsupportedHost(host)),
+        crate::git::RepositoryIdentity::Malformed(host) => Err(PrView::MalformedOrigin(host)),
+    }
+}
+
+/// Pull request `number` of the repository `repo` is a checkout of, whole: the checkout's branch
+/// plays no part, so it reads the same from any checkout.
+#[must_use]
+pub fn fetch_numbered(repo: &Path, config: &crate::config::PluginConfig, number: u64) -> PrView {
+    let target = match github_repository(repo, config) {
+        Ok(target) => target,
+        Err(view) => return view,
+    };
+    let forge = crate::git::Forge::GitHub;
+    within(READ_DEADLINE, PrView::TimedOut(forge), |cancelled| {
+        let input = PrFetchInput {
+            repository: crate::git::RepositoryIdentity::Repository(target.clone()),
+            origin_repository: None,
+            local: crate::git::PrLocalState::default(),
+        };
+        match read_pr(repo, &input, &target, number, cancelled) {
+            Ok(Some(view)) => view,
+            Ok(None) => PrView::Error(forge, format!("no pull request #{number} in {}/{}", target.owner(), target.name())),
+            Err(error) => error.into(),
+        }
+    })
+}
+
+/// The newest of the repository's pull requests that `filter` admits, as many as one read holds.
+pub fn list(
+    repo: &Path,
+    config: &crate::config::PluginConfig,
+    filter: ListFilter,
+) -> Result<PrList, PrView> {
+    let target = github_repository(repo, config)?;
+    let forge = crate::git::Forge::GitHub;
+    within(READ_DEADLINE, Err(PrView::TimedOut(forge)), |cancelled| {
+        let query = format!(
+            "query($o:String!,$n:String!){{repository(owner:$o,name:$n){{\
+             pullRequests(first:{LIST_CAP},states:[{}],orderBy:{{field:UPDATED_AT,direction:DESC}}){{\
+             pageInfo{{hasNextPage}} nodes{{number title url state isDraft headRefName baseRefName \
+             updatedAt author{{login}}}}}}}}}}",
+            filter.states()
+        );
+        let vars = [
+            ("o".to_string(), target.owner().to_string()),
+            ("n".to_string(), target.name().to_string()),
+        ];
+        let answer = graphql(repo, target.host(), &query, &vars, cancelled)
+            .map_err(PrView::from)?;
+        parse_list(&answer["data"]["repository"]["pullRequests"]).ok_or_else(|| {
+            PrView::Error(forge, "the forge did not answer with a list of pull requests".to_string())
+        })
+    })
+}
+
+/// How many pull requests one list read holds.
+const LIST_CAP: usize = 50;
+
+fn parse_list(connection: &Value) -> Option<PrList> {
+    let nodes = connection["nodes"].as_array()?;
+    let rows = nodes
+        .iter()
+        .map(|node| PrRow {
+            number: node["number"].as_u64().unwrap_or_default(),
+            title: node["title"].as_str().unwrap_or_default().to_string(),
+            url: node["url"].as_str().unwrap_or_default().to_string(),
+            state: parse_state(node["state"].as_str().unwrap_or("OPEN")),
+            is_draft: node["isDraft"].as_bool().unwrap_or(false),
+            author: node["author"]["login"].as_str().unwrap_or_default().to_string(),
+            head_ref: node["headRefName"].as_str().unwrap_or_default().to_string(),
+            base_ref: node["baseRefName"].as_str().unwrap_or_default().to_string(),
+            updated_at: node["updatedAt"].as_str().unwrap_or_default().to_string(),
+        })
+        .collect();
+    Some(PrList { rows, more: connection["pageInfo"]["hasNextPage"].as_bool().unwrap_or(false) })
+}
+
 /// Run `read` with a cancellation flag raised once `limit` has passed; a read the deadline
 /// stopped is `timed_out`, whatever it made of being stopped.
-fn within(
+fn within<T>(
     limit: std::time::Duration,
-    timed_out: PrView,
-    read: impl FnOnce(&AtomicBool) -> PrView,
-) -> PrView {
+    timed_out: T,
+    read: impl FnOnce(&AtomicBool) -> T,
+) -> T {
     use std::sync::atomic::Ordering;
     let cancelled = AtomicBool::new(false);
     let (finished, deadline) = std::sync::mpsc::channel::<()>();

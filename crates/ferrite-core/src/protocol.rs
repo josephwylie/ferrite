@@ -487,6 +487,18 @@ pub enum Op {
     /// `review_pull_request`.
     ReviewPullRequest {
         path: PathBuf,
+        /// Pull request `number` of the checkout's repository instead of
+        /// the branch's own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        number: Option<u64>,
+    },
+    /// The pull requests of the repository the checkout at `path` belongs
+    /// to, the newest first, as `filter` admits them. Replied
+    /// `review_pull_requests`.
+    ListPullRequests {
+        path: PathBuf,
+        #[serde(default)]
+        filter: review::WirePrFilter,
     },
     /// Every file of the checkout at `path`, for a review's all-files
     /// list (ADR 0021). Replied `all_files`.
@@ -589,6 +601,7 @@ impl Op {
             | Op::SearchRepo { .. }
             | Op::ReadFile { .. }
             | Op::ReviewPullRequest { .. }
+            | Op::ListPullRequests { .. }
             | Op::ListFiles { .. }
             | Op::ListBases { .. }
             | Op::PickBase { .. }
@@ -1479,6 +1492,18 @@ pub enum Done {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
         /// Why there is no pull request, past the branch having none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unread: Option<review::WirePrUnread>,
+    },
+    /// A `list_pull_requests`' rows, or the note in their place.
+    ReviewPullRequests {
+        #[serde(default)]
+        rows: Vec<review::WirePrRow>,
+        /// The forge holds more than the rows.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        more: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         unread: Option<review::WirePrUnread>,
     },

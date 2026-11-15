@@ -55,6 +55,7 @@ mod provider_controls;
 mod provider_forms;
 mod provider_navigation;
 mod provider_picker;
+mod prs;
 mod queued_prompts;
 mod reader_motion;
 mod render_performance;

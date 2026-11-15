@@ -800,7 +800,7 @@ fn a_review_is_read_by_git_where_the_server_runs() {
         "{found:?}"
     );
 
-    let asked = window.review_pull_request(&repo);
+    let asked = window.review_pull_request(&repo, None);
     let pr = landed(&mut window, asked).unwrap();
     assert!(
         pr.pr

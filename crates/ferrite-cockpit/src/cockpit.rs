@@ -34,6 +34,7 @@ mod nav_undo;
 mod palette;
 pub(crate) mod panel;
 mod parts;
+mod prs;
 mod sends;
 mod server;
 mod side_chat;
@@ -680,6 +681,8 @@ pub struct CockpitView {
     empty_shown: bool,
     /// A Project's Factory board, shown in the board's place (ADR 0037).
     factory_view: Option<factory::FactoryView>,
+    /// The PRs destination, kept as it was left while another view shows.
+    prs: prs::PrsView,
     /// The Tasks whose needs-you toast stands, and the state it announced.
     task_toasts: std::collections::HashMap<String, ferrite_core::factory::Status>,
     /// The empty board's selected row, and the list's own focus.
@@ -1636,6 +1639,7 @@ impl CockpitView {
             nav_measure_rest: std::cell::Cell::new(false),
             empty_shown: false,
             factory_view: None,
+            prs: Default::default(),
             task_toasts: Default::default(),
             empty_cursor: 0,
             empty_focus: cx.focus_handle(),
@@ -1908,7 +1912,7 @@ impl CockpitView {
     /// wherever the nav row's own click would land. A Thread already
     /// shown stays put.
     fn show_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if self.focused_thread() != Some(thread) || self.factory_view.is_some() || self.empty_shown {
+        if self.focused_thread() != Some(thread) || self.destination_shown() || self.empty_shown {
             self.open_nav_row(thread, cx);
         }
     }
@@ -9133,7 +9137,7 @@ impl CockpitView {
     /// re-aims to the clicked Thread like every other deliberate move.
     fn focus_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         self.empty_shown = false;
-        self.factory_view = None;
+        self.leave_destination();
         if self.cockpit.focus_thread(thread) {
             if let Some(index) = self.pane_for(thread) {
                 self.focus_pane(index);
@@ -9158,7 +9162,7 @@ impl CockpitView {
     /// mirror follows.
     pub fn enter_group(&mut self, group: GroupId, cx: &mut Context<Self>) {
         self.empty_shown = false;
-        self.factory_view = None;
+        self.leave_destination();
         match self.cockpit.enter_group(group) {
             Ok(()) => {
                 self.sync_panes(cx);
@@ -9193,7 +9197,7 @@ impl CockpitView {
     ) -> Result<(), ferrite_core::store::LoadError> {
         self.cockpit.reopen(thread)?;
         self.empty_shown = false;
-        self.factory_view = None;
+        self.leave_destination();
         self.widen_scope_to(thread, cx);
         self.sync_panes(cx);
         cx.notify();
@@ -10089,6 +10093,7 @@ impl CockpitView {
         };
         // The open Task's Worker, drawn in its panel, streams whole too.
         self.leave_factory_if_moved();
+        self.leave_prs_if_moved();
         let drawn: Vec<ThreadId> = match self.factory_worker_drawn() {
             Some(worker) => vec![worker],
             None => drawn,
@@ -10447,6 +10452,8 @@ impl CockpitView {
         let grid = if self.factory_view.is_some() {
             // A Project's Factory board stands in the board's place.
             frame().flex().child(self.factory_board(window, cx))
+        } else if self.prs.shown {
+            frame().flex().child(self.prs_board(cx))
         } else if self.empty_shown && fullscreen.is_none() {
             // Shown on purpose while Threads stay open (`show_empty_board`).
             frame().flex().child(self.empty_board(cx))
@@ -12976,7 +12983,7 @@ impl CockpitView {
     }
 
     fn board_ground(&self) -> ferrite_ui::theme::Paint {
-        let lone = !self.grid_board() && self.factory_view.is_none() && !self.empty_board_shown();
+        let lone = !self.grid_board() && !self.destination_shown() && !self.empty_board_shown();
         ferrite_ui::theme::Paint::solid(ferrite_ui::theme::tx_ground(lone))
     }
 

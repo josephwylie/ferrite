@@ -22,7 +22,7 @@
 //! (`facts.pr`); its whole snapshot (body, checks, conversation) is read
 //! when the Surface opens (`Cockpit::review_pull_request`).
 
-use super::pr_read::{Answer, PrFailure, PrRead, PrTarget};
+use super::pr_read::{Answer, PrFailure, PrRead, PrSource, PrTarget};
 use super::*;
 use crate::cockpit::surfaces::PrTab;
 use ferrite_core::protocol::{
@@ -50,7 +50,11 @@ impl PrTone {
     }
 
     fn of_snapshot(pr: &WirePr) -> Self {
-        match (pr.state, pr.draft) {
+        Self::of_wire(pr.state, pr.draft)
+    }
+
+    pub(in crate::cockpit) fn of_wire(state: WirePrState, draft: bool) -> Self {
+        match (state, draft) {
             (WirePrState::Merged, _) => Self::Merged,
             (WirePrState::Closed, _) => Self::Closed,
             (_, true) => Self::Draft,
@@ -220,11 +224,11 @@ const MENU: [&[PrAction]; 4] = [
 /// view shows the latest comment that does.
 const GUIDE_HEAD: &str = "## Review guide";
 
-/// The latest review guide among the PR's comments.
+/// The latest review guide among the PR's comments, which the forge's read
+/// lists newest first.
 fn guide(pr: &WirePr) -> Option<&str> {
     pr.comments
         .iter()
-        .rev()
         .map(|comment| comment.body.as_str())
         .find(|body| body.trim_start().starts_with(GUIDE_HEAD))
 }
@@ -259,7 +263,7 @@ fn checks_line(pr: &WirePr) -> Option<(String, u32)> {
 }
 
 /// A hairline at 60% (T3's `border-border/60`).
-fn soft_line() -> gpui::Rgba {
+pub(in crate::cockpit) fn soft_line() -> gpui::Rgba {
     rgba((ferrite_ui::theme::LINE << 8) | 0x99)
 }
 
@@ -281,14 +285,31 @@ impl CockpitView {
             })
         });
         let number = tab.or_else(|| self.facts.pr(thread).map(|pr| pr.number))?;
-        Some(PrTarget { thread, number })
+        Some(PrTarget::thread(thread, number))
+    }
+
+    /// The checkout `source` names the repository of.
+    fn pr_source_path(&self, source: PrSource) -> Option<std::path::PathBuf> {
+        match source {
+            PrSource::Thread(thread) => self.thread_path(thread),
+            PrSource::Project(project) => self
+                .cockpit
+                .registry()
+                .project(project)
+                .map(|project| project.root.clone()),
+        }
     }
 
     /// Read `target`'s PR whole for its Surface, unless a read is out, or
     /// (without `again`) it has been read. Tests and captures never run the
     /// forge's CLI: only a fixture world's forge answers them.
-    pub(super) fn read_pr_snapshot(&mut self, target: PrTarget, again: bool, cx: &mut Context<Self>) {
-        let Some(path) = self.thread_path(target.thread) else {
+    pub(in crate::cockpit) fn read_pr_snapshot(
+        &mut self,
+        target: PrTarget,
+        again: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = self.pr_source_path(target.source) else {
             return;
         };
         if cfg!(any(test, feature = "visual-reference")) && !self.cockpit.has_forge_fixture(&path) {
@@ -297,7 +318,8 @@ impl CockpitView {
         let Some(request) = self.panel.pr_reads.begin(target, again) else {
             return;
         };
-        let answer = self.cockpit.review_pull_request(&path);
+        let number = matches!(target.source, PrSource::Project(_)).then_some(target.number);
+        let answer = self.cockpit.review_pull_request(&path, number);
         cx.spawn(async move |this, cx| {
             let read = crate::cockpit::beside::answered(answer, cx).await;
             this.update(cx, |view, cx| view.pr_read_landed(target, request, read, cx))
@@ -317,11 +339,13 @@ impl CockpitView {
         read: std::io::Result<ferrite_core::protocol::ReviewPullRequest>,
         cx: &mut Context<Self>,
     ) {
-        let shown = self
-            .panel
-            .surfaces
-            .get(target.thread)
-            .is_some_and(|state| state.tabs.contains(&SurfaceId::PullRequest(target.number)));
+        let shown =
+            match target.source {
+                PrSource::Thread(thread) => self.panel.surfaces.get(thread).is_some_and(|state| {
+                    state.tabs.contains(&SurfaceId::PullRequest(target.number))
+                }),
+                PrSource::Project(_) => true,
+            };
         if !shown {
             self.panel.pr_reads.forget(target);
             return;
@@ -345,8 +369,8 @@ impl CockpitView {
             _ => None,
         };
         if self.panel.pr_reads.finish(target, request, answer) {
-            if let Some(number) = moved {
-                self.retire_other_prs(target.thread, number);
+            if let (Some(number), PrSource::Thread(thread)) = (moved, target.source) {
+                self.retire_other_prs(thread, number);
             }
             cx.notify();
         }
@@ -356,7 +380,7 @@ impl CockpitView {
     #[cfg(any(test, feature = "visual-reference"))]
     pub(crate) fn fixture_pr_snapshot(&mut self, thread: ThreadId, pr: WirePr) {
         self.retire_other_prs(thread, pr.number);
-        let target = PrTarget { thread, number: pr.number };
+        let target = PrTarget::thread(thread, pr.number);
         self.panel.pr_reads.install(target, pr);
     }
 
@@ -381,7 +405,7 @@ impl CockpitView {
         };
         let (number, tone) = (reading.number, PrTone::of_reading(reading.state, reading.draft));
         self.retire_other_prs(thread, number);
-        let target = PrTarget { thread, number };
+        let target = PrTarget::thread(thread, number);
         if self
             .panel
             .pr_reads
@@ -408,7 +432,7 @@ impl CockpitView {
         });
         for id in others {
             if let SurfaceId::PullRequest(other) = id {
-                self.panel.pr_reads.forget(PrTarget { thread, number: other });
+                self.panel.pr_reads.forget(PrTarget::thread(thread, other));
             }
             self.forget_surface(thread, &id);
         }
@@ -457,6 +481,14 @@ impl CockpitView {
         self.panel.pr_armed = None;
         self.surfaces_mut(thread).pr_tabs.insert(number, tab);
         cx.notify();
+    }
+
+    /// A view of `target`'s PR chosen, in whichever surface shows it.
+    fn select_pr_view(&mut self, target: PrTarget, tab: PrTab, cx: &mut Context<Self>) {
+        match target.source {
+            PrSource::Thread(thread) => self.select_pr_tab(thread, target.number, tab, cx),
+            PrSource::Project(_) => self.select_prs_tab(tab, cx),
+        }
     }
 
     /// The `⋯`'s rows for the PR as it stands; an armed row asks again.
@@ -508,23 +540,56 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The PR Surface: header, views, the view shown.
-    pub(super) fn pr_surface(&self, thread: ThreadId, number: u64, cx: &mut Context<Self>) -> AnyElement {
+    /// The PR Surface: header, then its content.
+    pub(super) fn pr_surface(
+        &self,
+        thread: ThreadId,
+        number: u64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         use ferrite_ui::theme::*;
         let tab = self
             .panel
             .surfaces
             .get(thread)
             .map_or(PrTab::Summary, |state| state.pr_tab(number));
-        let target = PrTarget { thread, number };
+        div()
+            .debug_selector(|| "pr".into())
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .text_size(px(FS_BADGE))
+            .child(self.pr_header(thread, number, cx))
+            .child(self.pr_content(PrTarget::thread(thread, number), tab, cx))
+            .into_any_element()
+    }
+
+    /// A PR's views, the notice of its newest read, and the view shown,
+    /// whichever surface asks.
+    pub(in crate::cockpit) fn pr_content(
+        &self,
+        target: PrTarget,
+        tab: PrTab,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let read = self.panel.pr_reads.get(target);
         let snapshot = read.and_then(|read| read.snapshot.as_ref());
+        let thread = match target.source {
+            PrSource::Thread(thread) => Some(thread),
+            PrSource::Project(_) => None,
+        };
         let body = match (snapshot, read.and_then(PrRead::failure)) {
             (Some(pr), _) => match tab {
-                PrTab::Summary => self.pr_summary(pr),
-                PrTab::Guide => self.pr_guide(thread, pr, cx),
-                PrTab::Timeline => self.pr_timeline(pr),
-                PrTab::Code => self.changes_pane(tools::Diff::PullRequest(thread), cx).into_any_element(),
+                PrTab::Summary => self.pr_summary(target, pr, cx),
+                PrTab::Guide => self.pr_guide(target, thread, pr, cx),
+                PrTab::Timeline => self.pr_timeline(target, pr, cx),
+                PrTab::Code => match thread {
+                    Some(thread) => self
+                        .changes_pane(tools::Diff::PullRequest(thread), cx)
+                        .into_any_element(),
+                    None => pr_note("Code is read in a Thread's checkout".into()),
+                },
             },
             (None, Some(failure)) => pr_note(failure.note.clone().into()),
             (None, None) => pr_note("Reading\u{2026}".into()),
@@ -535,31 +600,19 @@ impl CockpitView {
             _ => None,
         });
         div()
-            .debug_selector(|| "pr".into())
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
-            .text_size(px(FS_BADGE))
-            .child(self.pr_header(thread, number, cx))
-            .child(self.pr_views(thread, number, tab, cx))
+            .child(self.pr_views(target, tab, cx))
             .children(notice)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .child(body),
-            )
-            .into_any_element()
+            .child(div().flex().flex_col().flex_1().min_h_0().child(body))
     }
 
     /// A read that failed: what went wrong and its way back, over the last
     /// good content when there is any.
     fn pr_failed(&self, target: PrTarget, failure: &PrFailure, stale: bool, cx: &mut Context<Self>) -> AnyElement {
         use ferrite_ui::theme::*;
-        let (thread, number) = (target.thread, target.number);
         let said = if stale {
             format!("{}. Showing the last read. {}", failure.headline(), failure.note)
         } else {
@@ -582,7 +635,7 @@ impl CockpitView {
             .child("Retry")
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
-                view.read_pr_snapshot(PrTarget { thread, number }, true, cx);
+                view.read_pr_snapshot(target, true, cx);
             }));
         div()
             .debug_selector(|| "pr-failed".into())
@@ -607,7 +660,7 @@ impl CockpitView {
         let repo = self
             .panel
             .pr_reads
-            .snapshot(PrTarget { thread, number })
+            .snapshot(PrTarget::thread(thread, number))
             .map(|pr| pr.url.clone())
             .or_else(|| self.facts.pr(thread).and_then(|pr| pr.url.clone()))
             .and_then(|url| repo_of(&url));
@@ -718,9 +771,16 @@ impl CockpitView {
     }
 
     /// The views as a segmented group, the checks and comments after it.
-    fn pr_views(&self, thread: ThreadId, number: u64, shown: PrTab, cx: &mut Context<Self>) -> Div {
+    fn pr_views(&self, target: PrTarget, shown: PrTab, cx: &mut Context<Self>) -> Div {
         use ferrite_ui::theme::*;
-        let segments = PrTab::ALL.into_iter().map(|tab| {
+        let thread = match target.source {
+            PrSource::Thread(thread) => Some(thread),
+            PrSource::Project(_) => None,
+        };
+        let tabs = PrTab::ALL
+            .into_iter()
+            .filter(|tab| *tab != PrTab::Code || thread.is_some());
+        let segments = tabs.map(|tab| {
             let id = SharedString::from(format!("pr-tab-{}", tab.label()));
             let selector = id.to_string();
             let key = ferrite_ui::pointer::hover_key(&gpui::ElementId::from(id.clone()));
@@ -743,11 +803,11 @@ impl CockpitView {
                 })
                 .child(tab.label())
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    view.select_pr_tab(thread, number, tab, cx);
+                    view.select_pr_view(target, tab, cx);
                 }));
-            if tab != PrTab::Code {
+            let Some(thread) = thread.filter(|_| tab == PrTab::Code) else {
                 return segment.into_any_element();
-            }
+            };
             // Code's diff is read as it comes near, not after the press:
             // the segment's own hover is its wash's, so a wrapper listens.
             div()
@@ -760,7 +820,7 @@ impl CockpitView {
                 .child(segment)
                 .into_any_element()
         });
-        let snapshot = self.panel.pr_reads.snapshot(PrTarget { thread, number });
+        let snapshot = self.panel.pr_reads.snapshot(target);
         let checks = snapshot.and_then(checks_line).map(|(line, ink)| {
             div()
                 .debug_selector(|| "pr-checks".into())
@@ -800,8 +860,23 @@ impl CockpitView {
             .children(comments)
     }
 
+    /// `text` as the Markdown it is, in the reading size of a document.
+    fn pr_prose(&self, id: String, text: &str) -> AnyElement {
+        use ferrite_ui::theme::*;
+        div()
+            .font_family(FONT_UI)
+            .text_size(px(FS_PROSE))
+            .line_height(px(LH_PROSE))
+            .child(ferrite_pane::rich::Markdown::new(
+                id,
+                text.to_string(),
+                self.panel.pr_rich.clone(),
+            ))
+            .into_any_element()
+    }
+
     /// Summary: the title, where it merges, the description, the checks.
-    fn pr_summary(&self, pr: &WirePr) -> AnyElement {
+    fn pr_summary(&self, target: PrTarget, pr: &WirePr, cx: &mut Context<Self>) -> AnyElement {
         use ferrite_ui::theme::*;
         let merge = match pr.merge {
             ferrite_core::protocol::WireMerge::Clean => Some("Ready to merge"),
@@ -841,9 +916,9 @@ impl CockpitView {
             .when(!pr.body.is_empty(), |summary| {
                 summary.child(
                     div()
+                        .debug_selector(|| "pr-body".into())
                         .mt(px(SPACE_3))
-                        .text_size(px(FS_META))
-                        .child(SharedString::from(pr.body.clone())),
+                        .child(self.pr_prose(format!("pr-body-{target:?}"), &pr.body)),
                 )
             })
             .when(!pr.checks.is_empty(), |summary| {
@@ -857,16 +932,30 @@ impl CockpitView {
                     )
                     .children(checks)
             })
+            .when(pr.more_checks(), |summary| {
+                summary.child(pr_more(
+                    "pr-more-checks",
+                    "More checks than are shown. See all on the forge",
+                    &pr.url,
+                    cx,
+                ))
+            })
             .into_any_element()
     }
 
-    /// Guide: the PR's latest review guide, or the way to ask for one.
-    fn pr_guide(&self, thread: ThreadId, pr: &WirePr, cx: &mut Context<Self>) -> AnyElement {
+    /// Guide: the PR's latest review guide, or the way to ask for one (a
+    /// Thread's own PR only: the PRs destination reads and does not ask).
+    fn pr_guide(
+        &self,
+        target: PrTarget,
+        thread: Option<ThreadId>,
+        pr: &WirePr,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         use ferrite_ui::theme::*;
         if let Some(text) = guide(pr) {
             return pr_scroll("pr-guide")
-                .text_size(px(FS_META))
-                .child(SharedString::from(text.to_string()))
+                .child(self.pr_prose(format!("pr-guide-{target:?}"), text))
                 .into_any_element();
         }
         div()
@@ -879,80 +968,181 @@ impl CockpitView {
             .gap(px(SPACE_2))
             .text_color(rgb(INK_SUBTLE))
             .child("No review guide yet")
-            .child(
-                div()
-                    .id("pr-write-guide")
-                    .debug_selector(|| "pr-write-guide".into())
-                    .flex()
-                    .items_center()
-                    .h(px(SURFACE_TAB_H))
-                    .px(px(PR_SEGMENT_PAD_X))
-                    .rounded(px(R_CONTROL))
-                    .bg(paint::RAISED)
-                    .text_color(rgb(INK_STRONG))
-                    .hover_control("pr-write-guide")
-                    .press_control()
-                    .child("Write guide")
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.run_pr_action(thread, PrAction::WriteGuide, cx);
-                    })),
-            )
+            .when_some(thread, |empty, thread| {
+                empty.child(
+                    div()
+                        .id("pr-write-guide")
+                        .debug_selector(|| "pr-write-guide".into())
+                        .flex()
+                        .items_center()
+                        .h(px(SURFACE_TAB_H))
+                        .px(px(PR_SEGMENT_PAD_X))
+                        .rounded(px(R_CONTROL))
+                        .bg(paint::RAISED)
+                        .text_color(rgb(INK_STRONG))
+                        .hover_control("pr-write-guide")
+                        .press_control()
+                        .child("Write guide")
+                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                            view.run_pr_action(thread, PrAction::WriteGuide, cx);
+                        })),
+                )
+            })
             .into_any_element()
     }
 
-    /// Timeline: the conversation, newest first (T3's default order).
-    fn pr_timeline(&self, pr: &WirePr) -> AnyElement {
+    /// Timeline: the conversation as the forge's read lists it, newest
+    /// first (T3's default order): each entry's code context, its
+    /// resolved or outdated mark, and its replies beneath.
+    fn pr_timeline(&self, target: PrTarget, pr: &WirePr, cx: &mut Context<Self>) -> AnyElement {
         use ferrite_ui::theme::*;
         if pr.comments.is_empty() {
             return pr_note("No comments yet".into());
         }
-        let entries = pr.comments.iter().rev().map(|comment| {
-            let kind = match comment.kind {
-                WirePrCommentKind::Review => "reviewed",
-                WirePrCommentKind::Finding => "commented on",
-                WirePrCommentKind::Comment | WirePrCommentKind::Unknown => "commented",
-            };
-            let what = match comment.kind {
-                WirePrCommentKind::Finding => format!("{} {kind} {}", comment.author, comment.anchor),
-                _ => format!("{} {kind}", comment.author),
-            };
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(SPACE_1))
-                .py(px(SPACE_2))
-                .border_b(px(HAIRLINE_W))
-                .border_color(soft_line())
-                .child(
+        let entries =
+            pr.comments.iter().enumerate().map(|(index, comment)| {
+                let kind = match comment.kind {
+                    WirePrCommentKind::Review => "reviewed",
+                    WirePrCommentKind::Finding => "commented on",
+                    WirePrCommentKind::Comment | WirePrCommentKind::Unknown => "commented",
+                };
+                let what = match comment.kind {
+                    WirePrCommentKind::Finding => {
+                        format!("{} {kind} {}", comment.author, comment.anchor)
+                    }
+                    _ => format!("{} {kind}", comment.author),
+                };
+                let mark = |text: &'static str, ink: u32| {
                     div()
-                        .flex()
-                        .gap(px(SPACE_2))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .font_weight(W_LABEL)
-                                .text_color(rgb(INK_STRONG))
-                                .child(SharedString::from(what)),
-                        )
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_color(rgb(INK_SUBTLE))
-                                .child(SharedString::from(comment.created_at.clone())),
-                        ),
-                )
-                .when(!comment.body.is_empty(), |entry| {
-                    entry.child(
+                        .debug_selector(move || format!("pr-{}-{index}", text.to_lowercase()))
+                        .flex_shrink_0()
+                        .text_color(rgb(ink))
+                        .child(text)
+                };
+                div()
+                    .debug_selector(move || format!("pr-comment-{index}"))
+                    .flex()
+                    .flex_col()
+                    .gap(px(SPACE_1))
+                    .py(px(SPACE_2))
+                    .border_b(px(HAIRLINE_W))
+                    .border_color(soft_line())
+                    .child(
                         div()
-                            .text_size(px(FS_META))
-                            .child(SharedString::from(comment.body.clone())),
+                            .flex()
+                            .gap(px(SPACE_2))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_weight(W_LABEL)
+                                    .text_color(rgb(INK_STRONG))
+                                    .child(SharedString::from(what)),
+                            )
+                            .when(comment.resolved, |head| head.child(mark("Resolved", GREEN)))
+                            .when(comment.outdated, |head| {
+                                head.child(mark("Outdated", INK_SUBTLE))
+                            })
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_color(rgb(INK_SUBTLE))
+                                    .child(SharedString::from(comment.created_at.clone())),
+                            ),
                     )
-                })
-        });
-        pr_scroll("pr-timeline").children(entries).into_any_element()
+                    .children(comment.snippet.as_ref().map(|snippet| {
+                        div()
+                            .debug_selector(move || format!("pr-snippet-{index}"))
+                            .px(px(SPACE_2))
+                            .py(px(SPACE_1))
+                            .rounded(px(R_CONTROL))
+                            .bg(paint::RAISED)
+                            .font_family(FONT_CODE)
+                            .text_size(px(FS_META))
+                            .text_color(rgb(INK_SUBTLE))
+                            .overflow_x_hidden()
+                            .child(SharedString::from(snippet.clone()))
+                    }))
+                    .when(!comment.body.is_empty(), |entry| {
+                        entry.child(
+                            self.pr_prose(format!("pr-comment-{target:?}-{index}"), &comment.body),
+                        )
+                    })
+                    .children(comment.replies.iter().enumerate().map(|(reply, said)| {
+                        div()
+                            .debug_selector(move || format!("pr-reply-{index}-{reply}"))
+                            .flex()
+                            .flex_col()
+                            .ml(px(SPACE_3))
+                            .pl(px(SPACE_3))
+                            .border_l(px(HAIRLINE_W))
+                            .border_color(soft_line())
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap(px(SPACE_2))
+                                    .text_color(rgb(INK_SUBTLE))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .font_weight(W_LABEL)
+                                            .child(SharedString::from(format!(
+                                                "{} replied",
+                                                said.author
+                                            ))),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .child(SharedString::from(said.created_at.clone())),
+                                    ),
+                            )
+                            .child(self.pr_prose(
+                                format!("pr-reply-{target:?}-{index}-{reply}"),
+                                &said.body,
+                            ))
+                    }))
+            });
+        pr_scroll("pr-timeline")
+            .children(entries)
+            .when(pr.more_comments(), |timeline| {
+                timeline.child(pr_more(
+                    "pr-more-comments",
+                    "Older comments are not shown. See all on the forge",
+                    &pr.url,
+                    cx,
+                ))
+            })
+            .into_any_element()
     }
+}
+
+/// The way past a read's cap: `url`, the PR where the forge holds the rest.
+fn pr_more(
+    id: &'static str,
+    said: &'static str,
+    url: &str,
+    cx: &mut Context<CockpitView>,
+) -> AnyElement {
+    use ferrite_ui::theme::*;
+    let url = url.to_string();
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .flex()
+        .items_center()
+        .gap(px(SPACE_1))
+        .mt(px(SPACE_2))
+        .cursor_pointer()
+        .text_color(rgb(INK_SUBTLE))
+        .hover(|link| link.underline())
+        .child(said)
+        .child(icon(icons::EXTERNAL, PR_LINK_GLYPH, INK_SUBTLE))
+        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&url)))
+        .into_any_element()
 }
 
 /// A merged or closed PR's pill (T3's outline Badge): its state's icon and
@@ -1031,6 +1221,45 @@ fn pr_scroll(selector: &'static str) -> gpui::Stateful<Div> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_newest_guide_wins_among_a_newest_first_read() {
+        use ferrite_core::protocol::WirePrComment;
+        let said = |body: &str| WirePrComment {
+            kind: WirePrCommentKind::Comment,
+            author: "bot".into(),
+            anchor: "comment".into(),
+            body: body.into(),
+            snippet: None,
+            created_at: String::new(),
+            resolved: false,
+            outdated: false,
+            replies: Vec::new(),
+        };
+        use ferrite_core::protocol::{WireMerge, WireSync};
+        let pr = WirePr {
+            number: 1,
+            title: String::new(),
+            url: String::new(),
+            body: String::new(),
+            state: WirePrState::Open,
+            draft: false,
+            head: String::new(),
+            base: String::new(),
+            merge: WireMerge::Unknown,
+            sync: WireSync::InSync,
+            checks: Vec::new(),
+            comments: vec![
+                said("## Review guide\nnewest"),
+                said("thanks"),
+                said("## Review guide\noldest"),
+            ],
+            truncated: false,
+            checks_truncated: false,
+            comments_truncated: false,
+        };
+        assert_eq!(guide(&pr), Some("## Review guide\nnewest"));
+    }
 
     #[test]
     fn the_repo_comes_from_the_prs_address() {

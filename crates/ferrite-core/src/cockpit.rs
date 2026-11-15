@@ -105,6 +105,10 @@ pub struct Cockpit {
     /// What a fixture world's forge says (`fixture_forge`), by checkout:
     /// answered in place of its CLI. Empty outside fixtures.
     forge_fixture: HashMap<PathBuf, ferrite_reviewr::forge::PrView>,
+    /// A fixture world's pull requests read by number, and its lists.
+    forge_numbered: HashMap<(PathBuf, u64), crate::protocol::ReviewPullRequest>,
+    forge_lists:
+        HashMap<(PathBuf, crate::protocol::WirePrFilter), crate::protocol::ReviewPullRequests>,
     /// The checkouts whose whole-PR reads wait for a test's answer
     /// (`fixture_hold_pr_reads`), and the reads waiting.
     forge_held: std::collections::HashSet<PathBuf>,
@@ -247,6 +251,8 @@ impl Cockpit {
             composing: std::collections::BTreeSet::new(),
             forge: Default::default(),
             forge_fixture: HashMap::new(),
+            forge_numbered: HashMap::new(),
+            forge_lists: HashMap::new(),
             forge_held: Default::default(),
             held_reads: Vec::new(),
             free_disk_fixture: None,
@@ -2027,6 +2033,7 @@ impl Cockpit {
     pub fn review_pull_request(
         &mut self,
         path: &Path,
+        number: Option<u64>,
     ) -> io::Result<Receiver<io::Result<crate::protocol::ReviewPullRequest>>> {
         if self.forge_held.contains(path) {
             let (answer, answered) = crate::doorbell::channel();
@@ -2036,18 +2043,56 @@ impl Cockpit {
             });
             return Ok(answered);
         }
-        if let Some(view) = self.forge_fixture.get(path).cloned() {
+        if let Some(read) =
+            number.and_then(|number| self.forge_numbered.get(&(path.to_path_buf(), number)))
+        {
+            let read = read.clone();
+            return Ok(read_here(move || Ok(read)));
+        }
+        if let Some(view) = number
+            .is_none()
+            .then(|| self.forge_fixture.get(path))
+            .flatten()
+            .cloned()
+        {
             return Ok(read_here(move || {
                 Ok(crate::protocol::ReviewPullRequest::of(view, "PR"))
             }));
         }
         match &mut self.link {
-            Link::Server(server) => server.review_pull_request(path),
+            Link::Server(server) => server.review_pull_request(path, number),
             Link::InProcess(_) => {
                 let (path, forge) = (path.to_path_buf(), self.forge.clone());
                 Ok(read_here(move || {
-                    let (view, noun) = ferrite_reviewr::ferrite::pull_request(&path, &forge);
+                    let (view, noun) = match number {
+                        Some(number) => {
+                            ferrite_reviewr::ferrite::pull_request_numbered(&path, &forge, number)
+                        }
+                        None => ferrite_reviewr::ferrite::pull_request(&path, &forge),
+                    };
                     Ok(crate::protocol::ReviewPullRequest::of(view, noun))
+                }))
+            }
+        }
+    }
+
+    /// The pull requests of the repository the checkout at `path` belongs
+    /// to, as `filter` admits them, read where `review_pull_request` reads.
+    pub fn list_pull_requests(
+        &mut self,
+        path: &Path,
+        filter: crate::protocol::WirePrFilter,
+    ) -> io::Result<Receiver<io::Result<crate::protocol::ReviewPullRequests>>> {
+        if let Some(list) = self.forge_lists.get(&(path.to_path_buf(), filter)).cloned() {
+            return Ok(read_here(move || Ok(list)));
+        }
+        match &mut self.link {
+            Link::Server(server) => server.list_pull_requests(path, filter),
+            Link::InProcess(_) => {
+                let (path, forge) = (path.to_path_buf(), self.forge.clone());
+                Ok(read_here(move || {
+                    let list = ferrite_reviewr::forge::list(&path, &forge, filter.into());
+                    Ok(crate::protocol::ReviewPullRequests::of(list, "PR"))
                 }))
             }
         }
@@ -2794,6 +2839,28 @@ impl Cockpit {
         self.forge_fixture.insert(path, view);
     }
 
+    /// A fixture world's pull request `number` of the repository the
+    /// checkout at `path` belongs to, as the read by number answers it.
+    pub fn fixture_forge_numbered(
+        &mut self,
+        path: PathBuf,
+        number: u64,
+        read: crate::protocol::ReviewPullRequest,
+    ) {
+        self.forge_numbered.insert((path, number), read);
+    }
+
+    /// A fixture world's list of the repository the checkout at `path`
+    /// belongs to, as `filter` shows it.
+    pub fn fixture_pr_list(
+        &mut self,
+        path: PathBuf,
+        filter: crate::protocol::WirePrFilter,
+        list: crate::protocol::ReviewPullRequests,
+    ) {
+        self.forge_lists.insert((path, filter), list);
+    }
+
     /// From now on the whole-PR reads of the checkout at `path` (a
     /// `fixture_forge` one) wait, each, for a test to answer it, in any
     /// order (`take_held_reads`).
@@ -2816,6 +2883,11 @@ impl Cockpit {
     /// the one PR read tests and captures make, since they never run a CLI.
     pub fn has_forge_fixture(&self, path: &Path) -> bool {
         self.forge_fixture.contains_key(path)
+            || self
+                .forge_numbered
+                .keys()
+                .any(|(fixture, _)| fixture == path)
+            || self.forge_lists.keys().any(|(fixture, _)| fixture == path)
     }
 
     /// A fixture world's free disk: from now on the bar's `N GB free`
