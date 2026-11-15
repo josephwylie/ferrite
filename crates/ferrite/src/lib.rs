@@ -21,6 +21,7 @@ use ferrite_core::server::{settings_dir, store_dir};
 use ferrite_core::settings::Settings;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::workspace::WorkspaceBinding;
+use ferrite_core::window_frame;
 use ferrite_core::ThreadId;
 
 use cockpit::CockpitView;
@@ -346,7 +347,11 @@ pub fn launch() {
             if browser_smoke {
                 ferrite_core::log!("browser window smoke: opening native window; Threads {:?}", core.threads());
             }
-            let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
+            let opening = if demo {
+                WindowBounds::Windowed(Bounds::centered(None, size(px(1440.), px(900.)), cx))
+            } else {
+                saved_window_bounds(&settings_dir, cx)
+            };
             if browser_smoke {
                 ferrite_core::log!("browser window smoke: native bounds computed");
             }
@@ -354,7 +359,7 @@ pub fn launch() {
             let window = cx
                 .open_window(
                     WindowOptions {
-                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        window_bounds: Some(opening),
                         // The titlebar blends into the app: on macOS the
                         // traffic lights sit in the nav's top chrome (#22
                         // D24). Windows has no
@@ -436,6 +441,9 @@ pub fn launch() {
                         });
                         cockpit_window = Some(content.downgrade());
                         cx.new(|cx| {
+                            if !demo {
+                                remember_window_bounds(settings_dir.clone(), window, cx);
+                            }
                             kit::component::Root::new(content, window, cx)
                                 .bordered(false)
                                 .bg(theme::paint::WINDOW)
@@ -652,4 +660,71 @@ mod tests {
             ("menus.rs", include_str!("menus.rs")),
         ]);
     }
+}
+
+fn frame_of(bounds: Bounds<Pixels>) -> window_frame::Frame {
+    window_frame::Frame {
+        x: bounds.origin.x.into(),
+        y: bounds.origin.y.into(),
+        width: bounds.size.width.into(),
+        height: bounds.size.height.into(),
+    }
+}
+
+/// Where the window opens: where it was left, on a display that is still
+/// there (`WindowFrame::fitted`), else centred as a first launch is.
+fn saved_window_bounds(dir: &std::path::Path, cx: &App) -> WindowBounds {
+    let displays: Vec<window_frame::Frame> = cx
+        .primary_display()
+        .into_iter()
+        .chain(cx.displays())
+        .map(|display| frame_of(display.visible_bounds()))
+        .collect();
+    let fitted = window_frame::WindowFrame::load(dir)
+        .and_then(|saved| saved.fitted(&displays, (theme::WINDOW_MIN_W, theme::WINDOW_MIN_H)));
+    let Some(fitted) = fitted else {
+        return WindowBounds::Windowed(Bounds::centered(None, size(px(1440.), px(900.)), cx));
+    };
+    let frame = fitted.frame;
+    let bounds = Bounds::new(
+        point(px(frame.x), px(frame.y)),
+        size(px(frame.width), px(frame.height)),
+    );
+    if fitted.maximized {
+        WindowBounds::Maximized(bounds)
+    } else {
+        WindowBounds::Windowed(bounds)
+    }
+}
+
+/// Keep the window's frame on disk as it moves, once it has been still.
+fn remember_window_bounds<T: 'static>(
+    dir: std::path::PathBuf,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) {
+    let latest = std::rc::Rc::new(std::cell::Cell::new(0u64));
+    cx.observe_window_bounds(window, move |_, window, cx| {
+        let (bounds, maximized) = match window.window_bounds() {
+            WindowBounds::Windowed(bounds) => (bounds, false),
+            WindowBounds::Maximized(bounds) => (bounds, true),
+            WindowBounds::Fullscreen(bounds) => (bounds, false),
+        };
+        let frame = window_frame::WindowFrame { frame: frame_of(bounds), maximized };
+        let moved = latest.get() + 1;
+        latest.set(moved);
+        let (latest, dir) = (latest.clone(), dir.clone());
+        cx.spawn(async move |_, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(500))
+                .await;
+            if latest.get() == moved {
+                if let Err(error) = frame.save(&dir) {
+                    ferrite_core::log!("window frame not saved: {error}");
+                }
+            }
+        })
+        .detach();
+    })
+    .detach();
 }
