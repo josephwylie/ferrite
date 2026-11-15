@@ -160,6 +160,14 @@ pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
         "status::CycleMode" => Row(Composer, "Cycle permission mode"),
         "shortcuts::Toggle" => Row(Composer, "Shortcuts"),
         "cockpit::BandCycle" => Row(Composer, "Accept suggestion / next chip"),
+        "cockpit::FocusNextArea" => Row(Board, "Next area (conversation, panel)"),
+        "cockpit::FocusPreviousArea" => Row(Board, "Previous area"),
+        "cockpit::PanelControlPrevious"
+        | "cockpit::PanelControlNext"
+        | "cockpit::PanelControlFirst"
+        | "cockpit::PanelControlLast"
+        | "cockpit::PanelControlClose"
+        | "cockpit::PanelControlMenu" => Hidden,
         "cockpit::HistoryOlder" => Row(Composer, "Previous prompt"),
         "cockpit::HistoryNewer" => Row(Composer, "Next prompt"),
         "composer::Up" => Row(Composer, "Line up"),

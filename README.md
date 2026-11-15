@@ -104,8 +104,15 @@ Shortcuts below use `cmd`; on Windows use `ctrl`.
 - `cmd-]` / `cmd-[` — next / previous Pane
 - `cmd-d` — jump to the next Decision
 - `cmd-shift-enter` — make the focused Pane fullscreen (and back)
-- `cmd-f` — find in the focused Pane's transcript, or in its reader when you
-  last pressed there. A capital letter makes the search match case.
+- `f6` / `shift-f6` — move the keyboard between the conversation and the
+  Panel's controls (tabs, `+`, maximize, and a pull request's header and
+  views). There `left` / `right` / `home` / `end` move between controls,
+  `enter` or `space` presses one, `shift-f10` opens its menu, `delete` closes
+  a tab, `tab` leaves for the next area and `escape` returns to the
+  conversation.
+- `cmd-f` — find in the focused Pane's transcript, in its reader when you
+  last pressed there, or in the file open in the Files panel when the
+  keyboard is in it. A capital letter makes the search match case.
   `enter` / `shift-enter` (or `cmd-g` / `cmd-shift-g`) — next / previous
   match; `escape` closes the bar.
 - `cmd-=` / `cmd--` — bigger or smaller transcript text, 12–24px, in every Pane;

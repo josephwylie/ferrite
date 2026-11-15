@@ -132,11 +132,19 @@ impl TranscriptView {
         }
     }
 
-    /// Escape: the button goes. Whether one was on offer.
+    /// Escape: the button goes, else an open message or link menu. Whether
+    /// either was up.
     pub fn dismiss_offer(&mut self, cx: &mut Context<Self>) -> bool {
         let offered = self.reply.is_some();
         self.dismiss_reply(cx);
-        offered
+        if offered {
+            return true;
+        }
+        let menu_open = self.message_menu.take().is_some();
+        if menu_open {
+            cx.notify();
+        }
+        menu_open
     }
 
     fn cite_passage(

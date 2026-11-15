@@ -148,6 +148,16 @@ actions!(
         TextSmaller,
         TextReset,
         BandCycle,
+        // F6 and ⇧F6: the next and previous area.
+        FocusNextArea,
+        FocusPreviousArea,
+        // A Panel control's roving row (`panel/controls.rs`).
+        PanelControlPrevious,
+        PanelControlNext,
+        PanelControlFirst,
+        PanelControlLast,
+        PanelControlClose,
+        PanelControlMenu,
         ToolCyclePrevious,
         ToggleTool,
         StopAgent,
@@ -514,7 +524,7 @@ pub struct CockpitView {
     panel_empty_focus: gpui::FocusHandle,
     /// The Panel bodies that take keys of their own (the launcher, Files):
     /// while focus is anywhere inside, the focus pump leaves it be.
-    panel_focus: gpui::FocusHandle,
+    panel_keys: gpui::FocusHandle,
     /// The panel's column while it slides shut, so the keyboard inside it
     /// can be found and taken back (`columns::closing_holds_focus`).
     panel_closing_focus: gpui::FocusHandle,
@@ -1564,7 +1574,7 @@ impl CockpitView {
             context_menu: None,
             panel: panel::Panel::load(&prefs.dir),
             panel_empty_focus: cx.focus_handle(),
-            panel_focus: cx.focus_handle(),
+            panel_keys: cx.focus_handle(),
             panel_closing_focus: cx.focus_handle(),
             history: Default::default(),
             session_controls: None,
@@ -5805,6 +5815,10 @@ impl CockpitView {
             cx.notify();
             return;
         }
+        if self.panel_control_focused(window) {
+            self.leave_panel(window, cx);
+            return;
+        }
         if self.settings_open {
             self.settings_open = false;
             cx.notify();
@@ -6268,6 +6282,12 @@ impl CockpitView {
         let Some(pane) = self.panes.get(index) else {
             return;
         };
+        if let Some(thread) = self.panel_thread() {
+            let on_controls = self.panel_control_focused(window);
+            if self.open_files_find(thread, on_controls, window, cx) {
+                return;
+            }
+        }
         let reading =
             self.preview_pressed == Some(pane.identity) || pane.preview.focused(window, cx);
         if reading && self.preview_shown(index) && self.open_preview_find(index, window, cx) {
@@ -9330,6 +9350,9 @@ impl CockpitView {
                 return;
             }
         }
+        if self.close_panel_in_focus(window, cx) {
+            return;
+        }
         let Some(identity) = self.cockpit.roster().focused() else {
             return;
         };
@@ -10425,7 +10448,8 @@ impl CockpitView {
         if self.closing_holds_focus(window, cx) {
             window.focus(&wanted, cx);
         }
-        let panel_keys_held = self.panel_focus.contains_focused(window, cx);
+        let panel_keys_held =
+            self.panel_keys.contains_focused(window, cx) || self.panel_control_focused(window);
         if window.has_active_dialog(cx)
             || self.floats_hold_focus()
             || nav_list_focused
@@ -10434,6 +10458,7 @@ impl CockpitView {
             || native_text_focused
             || reader_text_focused
             || find_focused
+            || self.files_find_holds_focus(window, cx)
             || self.side_chat_holds_focus(window, cx)
             || self.terminal_holds_focus(window, cx)
             || pane_control_focused
@@ -10623,6 +10648,14 @@ impl CockpitView {
             .on_action(cx.listener(|view, _: &TextSmaller, _, cx| view.step_text_size(-1, cx)))
             .on_action(cx.listener(|view, _: &TextReset, _, cx| view.step_text_size(0, cx)))
             .on_action(cx.listener(Self::band_cycle))
+            .on_action(cx.listener(|view, _: &FocusNextArea, window, cx| view.step_area(window, cx)))
+            .on_action(cx.listener(|view, _: &FocusPreviousArea, window, cx| view.step_area(window, cx)))
+            .on_action(cx.listener(Self::panel_control_previous))
+            .on_action(cx.listener(Self::panel_control_next))
+            .on_action(cx.listener(Self::panel_control_first))
+            .on_action(cx.listener(Self::panel_control_last))
+            .on_action(cx.listener(Self::panel_control_close))
+            .on_action(cx.listener(Self::panel_control_menu))
             .on_action(cx.listener(Self::tool_cycle_previous))
             .on_action(cx.listener(Self::toggle_tool_action))
             .on_action(cx.listener(Self::stop_agent_action))

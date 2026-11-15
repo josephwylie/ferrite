@@ -435,3 +435,63 @@ fn a_prs_code_view_is_the_branchs_diff(cx: &mut TestAppContext) {
     );
     assert!(cx.debug_bounds("changes-scope").is_none(), "no scope to pick in Code");
 }
+
+/// The PR's header and views are stops in the Panel's row of controls: the
+/// keyboard reaches each, a segment is chosen by ⏎ and says so, and the PR's
+/// menu hands the keyboard back to the number it opened from.
+#[gpui::test]
+fn the_pr_surface_is_worked_from_the_keyboard(cx: &mut TestAppContext) {
+    use super::panel_focus::{activate, focused_control, press};
+    use crate::cockpit::panel::{PanelControl, Semantics};
+    use crate::cockpit::surfaces::PrTab;
+    let (view, thread, _fake, cx) = with_pr("pr-keys", ferrite_core::protocol::WirePrState::Open, cx);
+    view.update(cx, |view, cx| view.open_pr_surface(thread, cx));
+    tick(cx);
+
+    press("f6", cx);
+    press("home", cx);
+    let mut seen = Vec::new();
+    for _ in 0..12 {
+        press("right", cx);
+        seen.extend(focused_control(&view, cx));
+    }
+    for want in [
+        PanelControl::PrNumber,
+        PanelControl::PrPrimary,
+        PanelControl::PrMore,
+        PanelControl::PrView(PrTab::Summary),
+        PanelControl::PrView(PrTab::Code),
+    ] {
+        assert!(seen.contains(&want), "the keyboard reaches {want:?}");
+    }
+
+    press("home", cx);
+    while focused_control(&view, cx) != Some(PanelControl::PrView(PrTab::Timeline)) {
+        let before = focused_control(&view, cx);
+        press("right", cx);
+        assert_ne!(focused_control(&view, cx), before, "the Timeline segment is on the row");
+    }
+    activate("enter", cx);
+    assert!(cx.debug_bounds("pr-timeline").is_some(), "⏎ chooses the view");
+    assert_eq!(
+        focused_control(&view, cx),
+        Some(PanelControl::PrView(PrTab::Timeline)),
+        "and the keyboard stays on its segment"
+    );
+    let drawn = view.read_with(cx, |view, _| view.panel.focus.drawn());
+    let chosen = drawn.iter().find(|(control, _)| *control == PanelControl::PrView(PrTab::Timeline));
+    assert_eq!(chosen.map(|(_, semantics)| semantics), Some(&Semantics::tab("Timeline", true)));
+
+    for _ in 0..12 {
+        if focused_control(&view, cx) == Some(PanelControl::PrNumber) {
+            break;
+        }
+        press("left", cx);
+    }
+    assert_eq!(focused_control(&view, cx), Some(PanelControl::PrNumber), "←  reaches the number");
+    press("shift-f10", cx);
+    assert!(view.read_with(cx, |view, _| view.context_menu.is_some()), "⇧F10 opens the number's menu");
+    press("escape", cx);
+    assert!(view.read_with(cx, |view, _| view.context_menu.is_none()));
+    assert_eq!(focused_control(&view, cx), Some(PanelControl::PrNumber), "esc gives the keyboard back");
+}

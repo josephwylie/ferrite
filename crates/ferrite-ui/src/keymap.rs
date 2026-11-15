@@ -235,6 +235,10 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         // ⌘⇧] / ⌘⇧[, typed as their shifted faces), and jump to whoever
         // needs answering.
         (with_primary("}"), "cockpit::NextPane", None),
+        // F6 walks the screen's areas (the conversation, the panel), as it
+        // does in a browser or an editor; ⇧F6 walks back.
+        ("f6".into(), "cockpit::FocusNextArea", None),
+        ("shift-f6".into(), "cockpit::FocusPreviousArea", None),
         (with_primary("{"), "cockpit::PreviousPane", None),
         (with_primary("d"), "cockpit::NextDecision", None),
         // The Composer's `+` menu's first verb: attach files or photos.
@@ -644,6 +648,21 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         (with_primary("v"), NO_ACTION, Some(BROWSER)),
         (with_primary("x"), NO_ACTION, Some(BROWSER)),
         (with_primary("a"), NO_ACTION, Some(BROWSER)),
+        // A Panel control (a tab, `+`, maximize, a pull request's number or
+        // segment) is one stop of a roving row: ←→ ⇱ ⇲ move between stops,
+        // ⏎ presses (the button's own key-up click, so ⏎ stands down), ⌫ or
+        // ⌦ closes a tab, ⇧F10 opens its menu and ⇥ ⇧⇥ leave for the next
+        // or previous area.
+        ("enter".into(), NO_ACTION, Some(PANEL_CONTROL)),
+        ("left".into(), "cockpit::PanelControlPrevious", Some(PANEL_CONTROL)),
+        ("right".into(), "cockpit::PanelControlNext", Some(PANEL_CONTROL)),
+        ("home".into(), "cockpit::PanelControlFirst", Some(PANEL_CONTROL)),
+        ("end".into(), "cockpit::PanelControlLast", Some(PANEL_CONTROL)),
+        ("delete".into(), "cockpit::PanelControlClose", Some(PANEL_CONTROL)),
+        ("backspace".into(), "cockpit::PanelControlClose", Some(PANEL_CONTROL)),
+        ("shift-f10".into(), "cockpit::PanelControlMenu", Some(PANEL_CONTROL)),
+        ("tab".into(), "cockpit::FocusNextArea", Some(PANEL_CONTROL)),
+        ("shift-tab".into(), "cockpit::FocusPreviousArea", Some(PANEL_CONTROL)),
     ]);
     if platform == Platform::Mac {
         table.extend([
@@ -679,6 +698,9 @@ pub const BROWSER: &str = "Browser";
 pub const SUBAGENT_DECISION: &str = "SubagentDecision && !Input && !Composer";
 /// The Panel's "Open a surface" list, which opens its highlighted row on ⏎.
 pub const PANEL_EMPTY: &str = "PanelEmpty";
+/// One control of the Panel's head or a pull request's header
+/// (`cockpit/panel/controls.rs`).
+pub const PANEL_CONTROL: &str = "PanelControl";
 /// The Files editor's key context (`cockpit/tools/editor.rs`).
 pub const FILE_EDITOR: &str = "FileEditor";
 /// The Terminal grid's key context (`ferrite_terminal::KEY_CONTEXT`'s first
@@ -998,6 +1020,31 @@ mod tests {
                 )),
                 "the mode owns shift-tab outside a disclosure walk"
             );
+        }
+    }
+
+    #[test]
+    fn f6_moves_between_areas_and_a_panel_control_roves_with_the_arrows() {
+        for platform in [Platform::Mac, Platform::Windows] {
+            let table = bindings(platform);
+            for row in [
+                ("f6", "cockpit::FocusNextArea", None),
+                ("shift-f6", "cockpit::FocusPreviousArea", None),
+                ("left", "cockpit::PanelControlPrevious", Some(PANEL_CONTROL)),
+                ("right", "cockpit::PanelControlNext", Some(PANEL_CONTROL)),
+                ("home", "cockpit::PanelControlFirst", Some(PANEL_CONTROL)),
+                ("end", "cockpit::PanelControlLast", Some(PANEL_CONTROL)),
+                ("delete", "cockpit::PanelControlClose", Some(PANEL_CONTROL)),
+                ("shift-f10", "cockpit::PanelControlMenu", Some(PANEL_CONTROL)),
+                ("tab", "cockpit::FocusNextArea", Some(PANEL_CONTROL)),
+                ("shift-tab", "cockpit::FocusPreviousArea", Some(PANEL_CONTROL)),
+                ("enter", "zed::NoAction", Some(PANEL_CONTROL)),
+            ] {
+                assert!(
+                    table.contains(&(row.0.into(), row.1, row.2)),
+                    "{platform:?} is missing {row:?}"
+                );
+            }
         }
     }
 

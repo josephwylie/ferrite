@@ -46,6 +46,7 @@ mod navigation;
 mod output_cards;
 mod owned_threads;
 mod panel;
+pub(super) mod panel_focus;
 mod panel_preview;
 mod parking;
 mod pr;
