@@ -558,6 +558,9 @@ pub enum WireSync {
 pub struct WireCheck {
     pub name: String,
     pub status: WireCheckStatus,
+    /// Where the run's log lives, when the forge names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -579,6 +582,9 @@ pub struct WirePrComment {
     pub author: String,
     /// `path:start-end` for a finding, the kind's word otherwise.
     pub anchor: String,
+    /// How a review ended; absent on every other kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<WireReviewState>,
     pub body: String,
     /// A finding's quoted hunk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -598,6 +604,16 @@ pub enum WirePrCommentKind {
     Review,
     Comment,
     Finding,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireReviewState {
+    Approved,
+    ChangesRequested,
+    Commented,
     #[serde(other)]
     Unknown,
 }
@@ -647,6 +663,7 @@ impl From<forge::PrSnapshot> for WirePr {
                         forge::CheckStatus::Pending => WireCheckStatus::Pending,
                         forge::CheckStatus::Skipped => WireCheckStatus::Skipped,
                     },
+                    url: check.url,
                 })
                 .collect(),
             comments: pr
@@ -660,6 +677,11 @@ impl From<forge::PrSnapshot> for WirePr {
                     },
                     author: comment.author,
                     anchor: comment.anchor,
+                    verdict: comment.verdict.map(|state| match state {
+                        forge::ReviewState::Approved => WireReviewState::Approved,
+                        forge::ReviewState::ChangesRequested => WireReviewState::ChangesRequested,
+                        forge::ReviewState::Commented => WireReviewState::Commented,
+                    }),
                     body: comment.body,
                     snippet: comment.snippet,
                     created_at: comment.created_at,

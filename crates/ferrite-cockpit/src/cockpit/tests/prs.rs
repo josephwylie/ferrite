@@ -5,6 +5,7 @@ use super::*;
 use ferrite_core::protocol::{
     ReviewPullRequest, ReviewPullRequests, WireCheck, WireCheckStatus, WirePr, WirePrComment,
     WirePrCommentKind, WirePrFilter, WirePrList, WirePrRow, WirePrState, WirePrUnread, WireReply,
+    WireReviewState,
 };
 use ferrite_core::workspace::registry::ProjectId;
 
@@ -50,6 +51,7 @@ fn comment(kind: WirePrCommentKind, author: &str, body: &str) -> WirePrComment {
         kind,
         author: author.into(),
         anchor: "comment".into(),
+        verdict: None,
         body: body.into(),
         snippet: None,
         created_at: "2026-11-11".into(),
@@ -77,6 +79,7 @@ fn full_pr() -> WirePr {
         checks: vec![WireCheck {
             name: "fmt".into(),
             status: WireCheckStatus::Failure,
+            url: Some("https://ci.example/run/9".into()),
         }],
         comments: vec![
             WirePrComment {
@@ -92,6 +95,16 @@ fn full_pr() -> WirePr {
                 ..comment(WirePrCommentKind::Finding, "ada", "Use `ROW_H` here.")
             },
             comment(WirePrCommentKind::Comment, "bob", "Looks right."),
+            WirePrComment {
+                verdict: Some(WireReviewState::Approved),
+                anchor: "review".into(),
+                ..comment(WirePrCommentKind::Review, "cy", "")
+            },
+            WirePrComment {
+                verdict: Some(WireReviewState::ChangesRequested),
+                anchor: "review".into(),
+                ..comment(WirePrCommentKind::Review, "di", "Please split this.")
+            },
         ],
         truncated: false,
         checks_truncated: false,
@@ -216,6 +229,29 @@ fn a_listed_pr_shows_whole_with_its_review_threads(cx: &mut TestAppContext) {
         shows(cx, "pr-more-comments"),
         "the cap, with the way past it"
     );
+}
+
+/// A review shows its verdict whether or not it has words, and a failed
+/// check opens its run.
+#[gpui::test]
+fn a_pr_shows_each_review_verdict_and_its_failed_checks_run(cx: &mut TestAppContext) {
+    let (_world, cx) = world("prs-verdicts", 0, two_rows(), false, cx);
+    click(cx, "nav-pull-requests");
+    lands(cx, "prs-row-7");
+    click(cx, "prs-row-7");
+    lands(cx, "pr-body");
+
+    click(cx, "pr-tab-Timeline");
+    lands(cx, "pr-verdict-2");
+    assert!(shows(cx, "pr-comment-2"), "the approval stands with no body");
+    assert!(shows(cx, "pr-verdict-3"), "changes requested, with its words");
+    assert!(!shows(cx, "pr-verdict-0"), "a finding has no verdict");
+
+    click(cx, "pr-tab-Summary");
+    lands(cx, "pr-check-0");
+    assert_eq!(cx.opened_url(), None);
+    click(cx, "pr-check-0");
+    assert_eq!(cx.opened_url().as_deref(), Some("https://ci.example/run/9"));
 }
 
 /// Leaving a PR's detail returns to the list as it was: its filter, its

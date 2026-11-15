@@ -10,10 +10,23 @@
 
 use std::time::{Duration, Instant};
 
+use ferrite_core::protocol::WireReviewState;
 use ferrite_core::workspace::PullRequest;
+use ferrite_ui::theme::{GREEN, INK_SUBTLE, RED};
 
 /// The least time between two automatic readings of one Thread's PR.
 pub const AUTO_EVERY: Duration = Duration::from_secs(30);
+
+/// How a review ended, in words and the ink they take; `None` when the forge
+/// gave no verdict.
+pub(crate) fn review_verdict(state: WireReviewState) -> Option<(&'static str, u32)> {
+    match state {
+        WireReviewState::Approved => Some(("Approved", GREEN)),
+        WireReviewState::ChangesRequested => Some(("Changes requested", RED)),
+        WireReviewState::Commented => Some(("Commented", INK_SUBTLE)),
+        WireReviewState::Unknown => None,
+    }
+}
 
 /// One Thread's PR: the last reading, and whether another is on its way.
 #[derive(Debug, Default)]
@@ -53,6 +66,18 @@ impl PrWatch {
 mod tests {
     use super::*;
     use ferrite_core::workspace::{CheckState, PrState};
+
+    #[test]
+    fn a_review_verdict_reads_in_words() {
+        let words = |state| review_verdict(state).map(|(word, _)| word);
+        assert_eq!(words(WireReviewState::Approved), Some("Approved"));
+        assert_eq!(
+            words(WireReviewState::ChangesRequested),
+            Some("Changes requested")
+        );
+        assert_eq!(words(WireReviewState::Commented), Some("Commented"));
+        assert_eq!(words(WireReviewState::Unknown), None);
+    }
 
     fn pr(state: PrState, checks: Option<CheckState>) -> PullRequest {
         PullRequest {

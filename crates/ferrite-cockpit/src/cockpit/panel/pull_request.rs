@@ -23,7 +23,7 @@
 //! when the Surface opens (`Cockpit::review_pull_request`).
 
 use super::pr_action::{ActionState, Stage};
-use super::pr_read::{Answer, PrFailure, PrRead, PrSource, PrTarget};
+use super::pr_read::{stamp_age, Answer, PrFailure, PrRead, PrSource, PrTarget};
 use super::*;
 use crate::cockpit::surfaces::PrTab;
 use ferrite_core::protocol::{
@@ -1063,7 +1063,7 @@ impl CockpitView {
                     .debug_selector(|| "pr-merge".into())
                     .child(SharedString::from(format!("\u{b7} {merge}")))
             }));
-        let checks = pr.checks.iter().map(|check| {
+        let checks = pr.checks.iter().enumerate().map(|(index, check)| {
             let (glyph, ink) = match check.status {
                 WireCheckStatus::Success => (icons::CHECK_CIRCLE, GREEN),
                 WireCheckStatus::Failure => (icons::X_CIRCLE, RED),
@@ -1074,7 +1074,9 @@ impl CockpitView {
                     (icons::CIRCLE_MINUS, INK_SUBTLE)
                 }
             };
-            div()
+            let row = div()
+                .id(("pr-check", index))
+                .debug_selector(move || format!("pr-check-{index}"))
                 .flex()
                 .items_center()
                 .gap(px(SPACE_2))
@@ -1085,8 +1087,18 @@ impl CockpitView {
                         .min_w_0()
                         .truncate()
                         .child(SharedString::from(check.name.clone())),
-                )
-        });
+                );
+            match check.url.clone() {
+                Some(url) => row
+                    .cursor_pointer()
+                    .hover(|row| row.underline())
+                    .child(icon(icons::EXTERNAL, PR_LINK_GLYPH, INK_SUBTLE))
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&url)))
+                    .into_any_element(),
+                None => row.into_any_element(),
+            }
+        })
+        .collect::<Vec<_>>();
         pr_scroll("pr-summary")
             .child(
                 div()
@@ -1203,6 +1215,7 @@ impl CockpitView {
                     }
                     _ => format!("{} {kind}", comment.author),
                 };
+                let verdict = comment.verdict.and_then(crate::pr::review_verdict);
                 let mark = |text: &'static str, ink: u32| {
                     div()
                         .debug_selector(move || format!("pr-{}-{index}", text.to_lowercase()))
@@ -1231,6 +1244,13 @@ impl CockpitView {
                                     .text_color(rgb(INK_STRONG))
                                     .child(SharedString::from(what)),
                             )
+                            .children(verdict.map(|(text, ink)| {
+                                div()
+                                    .debug_selector(move || format!("pr-verdict-{index}"))
+                                    .flex_shrink_0()
+                                    .text_color(rgb(ink))
+                                    .child(text)
+                            }))
                             .when(comment.resolved, |head| head.child(mark("Resolved", GREEN)))
                             .when(comment.outdated, |head| {
                                 head.child(mark("Outdated", INK_SUBTLE))
@@ -1239,7 +1259,7 @@ impl CockpitView {
                                 div()
                                     .flex_shrink_0()
                                     .text_color(rgb(INK_SUBTLE))
-                                    .child(SharedString::from(comment.created_at.clone())),
+                                    .child(stamp_age(&comment.created_at)),
                             ),
                     )
                     .children(comment.snippet.as_ref().map(|snippet| {
@@ -1288,7 +1308,7 @@ impl CockpitView {
                                     .child(
                                         div()
                                             .flex_shrink_0()
-                                            .child(SharedString::from(said.created_at.clone())),
+                                            .child(stamp_age(&said.created_at)),
                                     ),
                             )
                             .child(self.pr_prose(
@@ -1450,6 +1470,7 @@ mod tests {
             kind: WirePrCommentKind::Comment,
             author: "bot".into(),
             anchor: "comment".into(),
+            verdict: None,
             body: body.into(),
             snippet: None,
             created_at: String::new(),

@@ -601,7 +601,7 @@ impl PullRequest {
                     workflow: None,
                     state,
                     detail: detail.into(),
-                    url: None,
+                    url: check.url.clone(),
                 }
             })
             .collect();
@@ -1030,6 +1030,7 @@ mod tests {
         let check = |name: &str, status| forge::Check {
             name: name.into(),
             status,
+            url: None,
         };
         let snapshot = forge::PrSnapshot {
             number: 146,

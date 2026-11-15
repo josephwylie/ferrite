@@ -180,11 +180,13 @@ pub(super) fn snapshot(state: ferrite_core::protocol::WirePrState) -> ferrite_co
         checks: vec![WireCheck {
             name: "fmt".into(),
             status: WireCheckStatus::Failure,
+            url: Some("https://ci.example/run/9".into()),
         }],
         comments: vec![WirePrComment {
             kind: WirePrCommentKind::Comment,
             author: "ada".into(),
             anchor: "comment".into(),
+            verdict: None,
             body: "Looks right.".into(),
             snippet: None,
             created_at: "2026-11-10".into(),

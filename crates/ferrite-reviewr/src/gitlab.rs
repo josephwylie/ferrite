@@ -512,14 +512,14 @@ fn fetch_checks(
         }
         let allow_failure = job["allow_failure"].as_bool().unwrap_or(false);
         let status = job_status(job["status"].as_str().unwrap_or_default(), allow_failure);
-        upsert_latest(&mut checks, Check { name, status });
+        upsert_latest(&mut checks, Check { name, status, url: None });
     }
     // A header-less response past the cap can only be reported as capped.
     let capped = job_pages.map_or(rows.len() >= crate::forge::SURFACE_CAP, |total| total > 1);
     if capped {
         // A capped page could hide a failed job, so the pipeline's own verdict stands in.
         let status = pipeline_status(pipeline["status"].as_str().unwrap_or_default());
-        upsert_latest(&mut checks, Check { name: "pipeline".to_string(), status });
+        upsert_latest(&mut checks, Check { name: "pipeline".to_string(), status, url: None });
     }
     Ok((checks, capped))
 }
@@ -680,6 +680,7 @@ fn merge_comments(discussions: &[Value], approvals: &Value) -> Vec<Comment> {
             author_is_bot: is_gitlab_bot(&author),
             author,
             anchor,
+            verdict: None,
             place,
             body: root["body"].as_str().unwrap_or("").trim().to_string(),
             snippet: None,

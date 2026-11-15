@@ -485,7 +485,7 @@ fn build_checks(evaluations: &Value, statuses: &Value) -> Vec<Check> {
         }
         let blocking = row["configuration"]["isBlocking"].as_bool().unwrap_or(false);
         let status = policy_status(row["status"].as_str().unwrap_or_default(), blocking);
-        upsert_latest(&mut checks, Check { name: name.to_string(), status });
+        upsert_latest(&mut checks, Check { name: name.to_string(), status, url: None });
     }
     // Statuses arrive newest-first; iterate oldest-first so a re-run replaces its earlier run.
     let rows = statuses["value"].as_array().map(Vec::as_slice).unwrap_or_default();
@@ -495,7 +495,7 @@ fn build_checks(evaluations: &Value, statuses: &Value) -> Vec<Check> {
             continue;
         }
         let status = commit_status(row["state"].as_str().unwrap_or_default());
-        upsert_latest(&mut checks, Check { name: name.to_string(), status });
+        upsert_latest(&mut checks, Check { name: name.to_string(), status, url: None });
     }
     checks
 }
@@ -628,6 +628,7 @@ fn merge_comments(threads: &[&Value], pr: &Value) -> Vec<Comment> {
             author_is_bot: is_azure_bot(&root["author"]),
             author,
             anchor,
+            verdict: None,
             place,
             body: root["content"].as_str().unwrap_or("").trim().to_string(),
             snippet: None,

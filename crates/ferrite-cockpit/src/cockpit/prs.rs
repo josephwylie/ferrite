@@ -578,7 +578,7 @@ impl CockpitView {
                         .text_color(rgb(RED))
                         .child(SharedString::from(format!(
                             "{}. {}",
-                            failure.headline(),
+                            failure.list_headline(),
                             failure.note
                         ))),
                 )
@@ -636,7 +636,7 @@ impl CockpitView {
                 .text_color(rgb(RED))
                 .child(SharedString::from(format!(
                     "{}. Showing the last read. {}",
-                    failure.headline(),
+                    failure.list_headline(),
                     failure.note
                 )))
                 .child(self.prs_retry(project, cx))
@@ -681,9 +681,13 @@ impl CockpitView {
         let id = SharedString::from(format!("prs-row-{number}"));
         let selector = id.to_string();
         let key = ferrite_ui::pointer::hover_key(&gpui::ElementId::from(id.clone()));
+        let age = panel::pr_read::stamp_age(&row.updated_at);
         let meta = format!(
-            "{} \u{b7} {} \u{2192} {} \u{b7} {}",
-            row.author, row.head, row.base, row.updated_at
+            "{} \u{b7} {} \u{2192} {}{}{age}",
+            row.author,
+            row.head,
+            row.base,
+            if age.is_empty() { "" } else { " \u{b7} " },
         );
         div()
             .id(id)
