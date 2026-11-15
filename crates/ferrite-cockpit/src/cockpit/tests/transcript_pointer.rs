@@ -1,7 +1,7 @@
 //! Pointer work in the transcript: focus, scroll and text selection.
 #[allow(unused_imports)]
 use super::*;
-use ferrite_pane::quote::Reply;
+use ferrite_core::replies::Reply;
 
 /// #15 AC1: a click lands the operator on a Pane — the focus ring moves,
 /// and the keyboard follows it into that Pane's Composer.
@@ -965,7 +965,7 @@ fn a_prompt_with_three_replies_draws_each_quote_with_its_words(cx: &mut TestAppC
     view.update(cx, |view, cx| {
         view.panes[0].composer.update(cx, |composer, cx| {
             composer.set(
-                ferrite_pane::quote::compose(&replies, "the main message"),
+                ferrite_core::replies::compose(&replies, "the main message"),
                 cx,
             );
         });
@@ -995,7 +995,7 @@ fn a_prompt_with_three_replies_draws_each_quote_with_its_words(cx: &mut TestAppC
     assert!(last.bottom() <= bubble.top(), "the quotes stand over the bubble");
     assert_eq!(
         fake.sent.borrow().last().map(String::as_str),
-        Some(ferrite_pane::quote::compose(&replies, "the main message").as_str())
+        Some(ferrite_core::replies::compose(&replies, "the main message").as_str())
     );
 }
 

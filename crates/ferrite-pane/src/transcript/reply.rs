@@ -25,7 +25,7 @@ use gpui::{
 };
 
 use super::{TranscriptEvent, TranscriptView};
-use crate::quote::Reply;
+use ferrite_core::replies::Reply;
 use ferrite_ui::{icons, motion, theme};
 
 /// The button on offer: the passage it quotes (none when the selection is

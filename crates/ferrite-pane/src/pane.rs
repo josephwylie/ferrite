@@ -3223,7 +3223,7 @@ fn prompt_text_chipping(
     skills: &[ferrite_core::SessionCommand],
     chips: fn(&std::path::Path) -> bool,
 ) -> (PromptText, Vec<std::path::PathBuf>) {
-    let words = crate::quote::split(line).1;
+    let words = ferrite_core::replies::split(line).1;
     let (text, files, _) = ferrite_core::browser_annotations::split(String::from(words));
     let chipped: Vec<_> = files.iter().filter(|path| chips(path)).cloned().collect();
     let quotes_code = text
@@ -3527,7 +3527,7 @@ pub(crate) struct PromptClamp {
 /// what its bubble shows.
 pub(crate) fn prompt_clamps(line: &str) -> bool {
     let words = ferrite_core::prompt_files::split(line.to_owned()).0;
-    let words = crate::quote::split(&words).1;
+    let words = ferrite_core::replies::split(&words).1;
     !words.trim().is_empty()
         && (words.chars().count() > theme::PROMPT_CLAMP_CHARS
             || words.split('\n').count() > theme::PROMPT_CLAMP_LINES)
@@ -3546,7 +3546,7 @@ pub(crate) fn prompt_row(
     let (text, files) = prompt_text(&visible, row_cx.skills);
     let gallery = prompt_gallery(&files);
     // The passages it replied to, as their Quote rows (Claude's).
-    let quotes: Vec<_> = crate::quote::split(line)
+    let quotes: Vec<_> = ferrite_core::replies::split(line)
         .0
         .into_iter()
         .enumerate()

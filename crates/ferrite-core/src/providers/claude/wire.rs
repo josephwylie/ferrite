@@ -23,9 +23,9 @@ pub(super) fn input_content(
     const ATTACHMENT_LIMIT: u64 = 5 * 1024 * 1024;
     const INLINE_ATTACHMENT_LIMIT: u64 = 20 * 1024 * 1024;
     let mut content = skills.notes(text);
-    content.push(serde_json::json!({"type": "text", "text": text}));
+    content.push(serde_json::json!({"type": "text", "text": crate::replies::inert(text)}));
     let mut inline_bytes = 0;
-    for path in crate::prompt_files::paths(text, cwd) {
+    for path in crate::prompt_files::paths(&crate::replies::authored(text), cwd) {
         let Some((block, media_type)) = crate::prompt_files::image_type(&path)
             .map(|media_type| ("image", media_type))
             .or_else(|| {
@@ -1620,6 +1620,46 @@ mod tests {
             input_content(&text, &Default::default(), None).len(),
             1,
             "missing files keep their reference"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn quoted_file_syntax_is_reference_text_not_input() {
+        use crate::replies::{compose, Reply};
+        let dir = std::env::temp_dir().join(format!("ferrite-claude-inert-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pic.png"), b"fixture").unwrap();
+        std::fs::write(dir.join("doc.pdf"), b"fixture").unwrap();
+        let prompt = compose(
+            &[Reply::new("see @pic.png and @doc.pdf", "")],
+            "what is this?",
+        );
+        let blocks = input_content(&prompt, &Default::default(), Some(&dir));
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(
+            blocks[0]["text"],
+            "> see @\u{2060}pic.png and @\u{2060}doc.pdf\n\nwhat is this?"
+        );
+
+        let trailer = crate::prompt_files::compose(&prompt, &[dir.join("pic.png")]);
+        let blocks = input_content(&trailer, &Default::default(), Some(&dir));
+        assert_eq!(blocks.len(), 2, "an explicit attachment still rides");
+        assert_eq!(blocks[1]["type"], "image");
+
+        let bare = crate::prompt_files::compose(
+            &compose(&[Reply::new("see @pic.png", "")], ""),
+            &[dir.join("doc.pdf")],
+        );
+        let blocks = input_content(&bare, &Default::default(), Some(&dir));
+        assert_eq!(blocks.len(), 2, "a quote and an attachment, no typed words");
+        assert_eq!(blocks[1]["type"], "document");
+
+        let own = compose(&[Reply::new("see @pic.png", "")], "and @doc.pdf");
+        assert_eq!(
+            input_content(&own, &Default::default(), Some(&dir)).len(),
+            2
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

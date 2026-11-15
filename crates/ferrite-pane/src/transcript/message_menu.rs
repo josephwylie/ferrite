@@ -25,7 +25,7 @@ use gpui::{AnyElement, ClipboardItem, Context, MouseButton, Pixels, Point, Share
 
 use super::{PromptAction, TranscriptEvent, TranscriptView};
 use crate::file_links::FileLink;
-use crate::quote::Reply;
+use ferrite_core::replies::Reply;
 use ferrite_ui::menu;
 
 /// What the menu is on.

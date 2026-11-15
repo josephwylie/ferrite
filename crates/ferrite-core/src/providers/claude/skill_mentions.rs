@@ -43,7 +43,8 @@ impl Skills {
     /// leading `/name` is left alone: the CLI dispatches that itself.
     pub fn notes(&self, text: &str) -> Vec<Value> {
         let mut named: Vec<&str> = Vec::new();
-        let words = text
+        let authored = crate::replies::authored(text);
+        let words = authored
             .split_whitespace()
             .skip(usize::from(text.starts_with('/')));
         for word in words {
@@ -107,6 +108,17 @@ mod tests {
                  skill: \"mattpocock-skills:grill-with-docs\", passing any arguments they gave \
                  as args. If they only mention it, do not run it."})]
         );
+    }
+
+    #[test]
+    fn a_quoted_skill_name_is_not_noted_but_the_authors_is() {
+        let skills = skills();
+        let quoted =
+            crate::replies::compose(&[crate::replies::Reply::new("run /review", "")], "why?");
+        assert!(skills.notes(&quoted).is_empty());
+        let both =
+            crate::replies::compose(&[crate::replies::Reply::new("run /review", "")], "/review");
+        assert_eq!(named(&skills.notes(&both)), ["review"]);
     }
 
     #[test]
