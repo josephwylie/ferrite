@@ -583,14 +583,14 @@ fn rename_on_a_slim_row_draws_the_editor(cx: &mut TestAppContext) {
         view.update_in(cx, |view, window, cx| view.press_menu_row(rename, window, cx));
         tick(cx);
         assert!(
-            cx.debug_bounds("rename-hint").is_some(),
+            cx.debug_bounds("rename-field").is_some(),
             "{at}: the rename field is drawn in the row"
         );
         let editor = view.read_with(cx, |view, _| view.rename.clone().unwrap().1);
         editor.update(cx, |editor, cx| editor.set(format!("{at} renamed"), cx));
         cx.simulate_keystrokes("enter");
         tick(cx);
-        assert!(cx.debug_bounds("rename-hint").is_none(), "{at}: it closed");
+        assert!(cx.debug_bounds("rename-field").is_none(), "{at}: it closed");
         view.read_with(cx, |view, _| {
             assert_eq!(view.facts.name(thread).as_ref(), format!("{at} renamed"));
         });

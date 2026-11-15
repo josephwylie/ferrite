@@ -463,6 +463,10 @@ pub fn bindings(platform: Platform) -> Vec<Binding> {
         ("right".into(), "nav::Unfold", Some("NavTree")),
         ("escape".into(), "nav::CloseView", Some("NavTree")),
         ("f2".into(), "nav::Rename", Some("NavTree")),
+        // A row's rename field lives under the tree, whose own ↵ and ⎋
+        // would open and close views: its deeper context keeps them.
+        ("enter".into(), "cockpit::Submit", Some("NavRename")),
+        ("escape".into(), "cockpit::Interrupt", Some("NavRename")),
         ("up".into(), "nav::SearchPrevious", Some("NavSearch")),
         ("down".into(), "nav::SearchNext", Some("NavSearch")),
         ("enter".into(), "nav::Open", Some("NavSearch")),

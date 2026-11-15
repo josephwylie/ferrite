@@ -284,7 +284,7 @@ impl CockpitView {
     ) -> AnyElement {
         let thread = row.thread;
         faces.push((NavKey::Card(thread), NavFace::Card(row.clone())));
-        let title = self.editable_thread_title(thread, row.name.clone(), cx);
+        let title = self.editable_thread_title(thread, row.name.clone(), true, cx);
         let card = nav::thread_card(
             row,
             title,
@@ -435,7 +435,7 @@ impl CockpitView {
         };
         faces.push((NavKey::Slim(thread), NavFace::Slim(row.clone(), time.clone())));
         let title = if self.renaming_thread(thread) {
-            list::SlimTitle::Editor(self.editable_thread_title(thread, row.name.clone(), cx))
+            list::SlimTitle::Editor(self.editable_thread_title(thread, row.name.clone(), false, cx))
         } else {
             list::SlimTitle::Row
         };

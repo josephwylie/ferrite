@@ -197,7 +197,7 @@ fn slim(
     let ground = card::card_ground(&key, row.selected, row.picked);
     let title_w = INNER_SLIM_TITLE_W;
     let title = match title {
-        SlimTitle::Editor(field) => field,
+        SlimTitle::Editor(field) => div().w(px(title_w)).child(field).into_any_element(),
         SlimTitle::Row => fitted_in(
             title_w,
             FS_NAV_TITLE,

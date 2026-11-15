@@ -1038,10 +1038,10 @@ fn version_label(version: &str, dev: bool) -> String {
 /// A rename editor with its keys beside it while it edits: `↵ save · esc
 /// cancel` in mono `INK_SUBTLE`, the `·` in structure ink. The keys live
 /// here, where they act, rather than on the menu row that opened it.
-fn rename_field(editor: Entity<ferrite_pane::composer::Composer>) -> Div {
+fn rename_field(editor: Entity<ferrite_pane::composer::Composer>, hint: bool) -> Div {
     let text = "↵ save · esc cancel";
     let at = text.find(" · ").unwrap_or(0);
-    let hint = ferrite_ui::components::text_meta()
+    let hint_text = ferrite_ui::components::text_meta()
         .debug_selector(|| "rename-hint".into())
         .flex_shrink_0()
         .font_family(ferrite_ui::theme::FONT_CODE)
@@ -1058,8 +1058,14 @@ fn rename_field(editor: Entity<ferrite_pane::composer::Composer>) -> Div {
         .gap(px(ferrite_ui::theme::SPACE_2))
         .min_w_0()
         .flex_1()
-        .child(div().min_w_0().flex_1().child(editor))
-        .child(hint)
+        .child(
+            div()
+                .debug_selector(|| "rename-field".into())
+                .min_w_0()
+                .flex_1()
+                .child(editor),
+        )
+        .children(hint.then_some(hint_text))
 }
 
 /// What rides the pointer while a nav card is dragged: that card itself,
@@ -3468,7 +3474,7 @@ impl CockpitView {
         };
         let editor = cx.new(ferrite_pane::composer::Composer::new);
         editor.update(cx, |editor, cx| {
-            editor.set_role(ferrite_pane::composer::Role::Field(None), cx);
+            editor.set_role(ferrite_pane::composer::Role::Field(Some("NavRename")), cx);
             editor.set(title, cx)
         });
         self.rename = Some((target, editor));
@@ -5411,7 +5417,7 @@ impl CockpitView {
     fn pane_title(&self, index: usize, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
         if let Some((RenameTarget::PaneTitle(editing), editor)) = &self.rename {
             if *editing == thread {
-                return rename_field(editor.clone())
+                return rename_field(editor.clone(), true)
                     .font_weight(ferrite_ui::theme::W_BODY)
                     .on_mouse_down(
                         MouseButton::Left,
@@ -5466,11 +5472,12 @@ impl CockpitView {
         &self,
         thread: ThreadId,
         title: SharedString,
+        hint: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if let Some((RenameTarget::Thread(editing), editor)) = &self.rename {
             if *editing == thread {
-                return rename_field(editor.clone())
+                return rename_field(editor.clone(), hint)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
@@ -9814,6 +9821,12 @@ impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         ferrite_ui::motion::hover_frame_start(cx);
         self.tend_reader_slides(cx);
+        if let Some((_, editor)) = &self.rename {
+            let line = editor.read(cx).focus_handle(cx);
+            if !line.is_focused(window) {
+                window.focus(&line, cx);
+            }
+        }
         // Seen is on screen while the window has focus: the Cockpit follows
         // the window's activation from its first frame — a window that opens
         // unfocused sees nothing until it is focused — and the window coming
