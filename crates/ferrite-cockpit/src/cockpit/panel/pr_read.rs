@@ -11,6 +11,8 @@
 
 use std::collections::HashMap;
 
+use gpui::SharedString;
+
 use ferrite_core::protocol::{WirePr, WirePrUnread};
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
@@ -52,7 +54,23 @@ pub(crate) struct PrFailure {
     pub note: String,
 }
 
+/// How long ago a forge's ISO stamp was, in the nav's shorthand (`2h`, `3d`).
+/// Empty under a minute and for a stamp that does not parse: no age is invented.
+pub(crate) fn stamp_age(stamp: &str) -> SharedString {
+    ferrite_core::clock::parse_stamp(stamp).map_or_else(SharedString::default, |at| {
+        crate::facts::since_label(at, ferrite_core::clock::system_time())
+    })
+}
+
 impl PrFailure {
+    /// The headline for a failed read of the PR list, not of one PR.
+    pub(crate) fn list_headline(&self) -> &'static str {
+        match self.kind {
+            WirePrUnread::Failed => "Could not list pull requests",
+            _ => self.headline(),
+        }
+    }
+
     pub(crate) fn headline(&self) -> &'static str {
         match self.kind {
             WirePrUnread::NoCli => "Needs the forge CLI",
@@ -244,5 +262,25 @@ mod tests {
             .into_iter()
             .collect();
         assert_eq!(heads.len(), kinds.len());
+    }
+
+    #[test]
+    fn a_failed_list_does_not_say_it_could_not_read_a_pr() {
+        let failure = |kind| PrFailure { kind, note: String::new() };
+        assert_eq!(
+            failure(WirePrUnread::Failed).list_headline(),
+            "Could not list pull requests"
+        );
+        assert_eq!(
+            failure(WirePrUnread::Offline).list_headline(),
+            failure(WirePrUnread::Offline).headline()
+        );
+    }
+
+    #[test]
+    fn a_forge_stamp_reads_as_the_navs_age() {
+        assert!(stamp_age("2020-01-01T00:00:00Z").ends_with('y'));
+        assert_eq!(stamp_age(&ferrite_core::clock::now_stamp()), "", "just now says nothing");
+        assert_eq!(stamp_age("2026-11-11"), "", "no age is invented");
     }
 }

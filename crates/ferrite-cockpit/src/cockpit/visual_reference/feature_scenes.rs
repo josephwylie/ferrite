@@ -8,7 +8,7 @@
 
 use ferrite_core::protocol::{
     ReviewPullRequest, WireCheck, WireCheckStatus, WireMerge, WirePr, WirePrComment,
-    WirePrCommentKind, WirePrState, WireReply, WireSync,
+    WirePrCommentKind, WirePrState, WireReply, WireReviewState, WireSync,
 };
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::{CheckState, PrState, PullRequest};
@@ -351,6 +351,7 @@ fn pull_request() -> ReviewPullRequest {
     let check = |name: &str, status| WireCheck {
         name: name.into(),
         status,
+        url: None,
     };
     ReviewPullRequest {
         noun: "PR".into(),
@@ -378,6 +379,7 @@ fn pull_request() -> ReviewPullRequest {
                     kind: WirePrCommentKind::Review,
                     author: "maria".into(),
                     anchor: "review".into(),
+                    verdict: Some(WireReviewState::Commented),
                     body: "Looks right. One question on parked rows.".into(),
                     snippet: None,
                     created_at: "2026-10-15T09:12:00Z".into(),
@@ -389,6 +391,7 @@ fn pull_request() -> ReviewPullRequest {
                     kind: WirePrCommentKind::Finding,
                     author: "maria".into(),
                     anchor: "crates/ferrite/src/nav.rs:439-442".into(),
+                    verdict: None,
                     body: "Does a parked row still take the reserved line?".into(),
                     snippet: Some("+    let summary = facts\n+        .summary".into()),
                     created_at: "2026-10-15T09:14:00Z".into(),

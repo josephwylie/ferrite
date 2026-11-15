@@ -1133,6 +1133,7 @@ impl Pr {
             author: "claude".into(),
             author_is_bot: true,
             anchor: format!("{SCHEDULED_WORK}:{anchor}"),
+            verdict: None,
             place: Some(FindingPlace::from_anchor(
                 &format!("{SCHEDULED_WORK}:{anchor}"),
                 None,
@@ -1151,6 +1152,7 @@ impl Pr {
         let check = |name: &str, status| Check {
             name: name.into(),
             status,
+            url: None,
         };
         let checks = |macos, windows, review| {
             vec![
@@ -1175,6 +1177,7 @@ impl Pr {
                         author: "josephwylie".into(),
                         author_is_bot: false,
                         anchor: "comment".into(),
+                        verdict: None,
                         place: None,
                         body: "Tried it locally. Closing the window mid-run no longer takes the \
                                server down."

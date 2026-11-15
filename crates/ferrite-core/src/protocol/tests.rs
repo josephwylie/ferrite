@@ -1873,11 +1873,13 @@ fn samples() -> Vec<(&'static str, Sample)> {
                         checks: vec![WireCheck {
                             name: "macOS (Metal)".into(),
                             status: WireCheckStatus::Running,
+                            url: None,
                         }],
                         comments: vec![WirePrComment {
                             kind: WirePrCommentKind::Finding,
                             author: "reviewer".into(),
                             anchor: "src/a.rs:3-4".into(),
+                            verdict: None,
                             body: "Off by one?".into(),
                             snippet: Some("@@ -1,4 +1,4 @@\n-a\n+b".into()),
                             created_at: "2026-10-15T09:00:00Z".into(),

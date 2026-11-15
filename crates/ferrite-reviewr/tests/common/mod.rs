@@ -169,6 +169,7 @@ pub fn comment() -> ferrite_reviewr::forge::Comment {
         author: "ann".into(),
         author_is_bot: false,
         anchor: "comment".into(),
+        verdict: None,
         place: None,
         body: "b".into(),
         snippet: None,

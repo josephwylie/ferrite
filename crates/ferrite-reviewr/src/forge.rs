@@ -206,6 +206,8 @@ pub enum Sync {
 pub struct Check {
     pub name: String,
     pub status: CheckStatus,
+    /// Where the run's log lives, when the forge names one.
+    pub url: Option<String>,
 }
 
 /// A check's outcome, normalised across check runs and commit statuses.
@@ -226,6 +228,9 @@ pub struct Comment {
     pub author_is_bot: bool,
     /// `path`, `path:line`, or `path:start-end` for a finding, the kind word otherwise.
     pub anchor: String,
+    /// How a `review` ended: approved, changes requested, or only commented.
+    /// `None` for every other kind, and for a review the forge gives no verdict.
+    pub verdict: Option<ReviewState>,
     /// Path, line range, and side for a `finding`. None for a review or comment.
     pub place: Option<FindingPlace>,
     pub body: String,
@@ -254,6 +259,31 @@ pub enum CommentKind {
     Review,
     Comment,
     Finding,
+}
+
+/// The verdict a submitted review carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReviewState {
+    Approved,
+    ChangesRequested,
+    Commented,
+}
+
+impl ReviewState {
+    /// GitHub's `PullRequestReviewState`; a pending or dismissed review has no verdict.
+    fn of_github(state: &str) -> Option<Self> {
+        match state {
+            "APPROVED" => Some(Self::Approved),
+            "CHANGES_REQUESTED" => Some(Self::ChangesRequested),
+            "COMMENTED" => Some(Self::Commented),
+            _ => None,
+        }
+    }
+
+    /// A verdict stands without words; a plain comment review is only its body.
+    fn stands_alone(self) -> bool {
+        self != Self::Commented
+    }
 }
 
 /// Where a finding sits: path, inclusive line range, and which file side.
@@ -1077,8 +1107,8 @@ fn build_detail_query(number: u64) -> String {
          number title url body isDraft state mergeable mergeStateStatus baseRefName headRefName \
          headRefOid isCrossRepository \
          commits(last:1){{nodes{{commit{{statusCheckRollup{{contexts(first:100){{pageInfo{{hasNextPage}} nodes{{__typename \
-         ... on CheckRun{{name status conclusion}} ... on StatusContext{{context state}}}}}}}}}}}}}} \
-         reviews(last:100){{pageInfo{{hasPreviousPage}} nodes{{author{{login}} body submittedAt}}}} \
+         ... on CheckRun{{name status conclusion detailsUrl}} ... on StatusContext{{context state targetUrl}}}}}}}}}}}}}} \
+         reviews(last:100){{pageInfo{{hasPreviousPage}} nodes{{author{{login}} state body submittedAt}}}} \
          comments(last:100){{pageInfo{{hasPreviousPage}} nodes{{author{{login}} body createdAt}}}} \
          reviewThreads(last:100){{pageInfo{{hasPreviousPage}} nodes{{id isResolved isOutdated path \
          startLine line originalStartLine originalLine diffSide \
@@ -1258,7 +1288,12 @@ fn normalize_checks(rollup: &Value) -> Vec<Check> {
             continue;
         }
         let status = check_status(node);
-        upsert_latest(&mut out, Check { name, status });
+        let url = node["detailsUrl"]
+            .as_str()
+            .or_else(|| node["targetUrl"].as_str())
+            .filter(|url| !url.is_empty())
+            .map(str::to_string);
+        upsert_latest(&mut out, Check { name, status, url });
     }
     out
 }
@@ -1292,10 +1327,14 @@ fn merge_comments(reviews: &Value, issues: &Value, threads: &Value) -> Vec<Comme
     // Submitted reviews with a non-empty body (the PR-level `review` cards).
     for r in reviews.as_array().into_iter().flatten() {
         let body = r["body"].as_str().unwrap_or("").trim().to_string();
-        if body.is_empty() {
+        let verdict = r["state"].as_str().and_then(ReviewState::of_github);
+        if body.is_empty() && !verdict.is_some_and(ReviewState::stands_alone) {
             continue;
         }
-        out.push(prose_comment(CommentKind::Review, &r["author"], body, r["submittedAt"].as_str()));
+        let mut review =
+            prose_comment(CommentKind::Review, &r["author"], body, r["submittedAt"].as_str());
+        review.verdict = verdict;
+        out.push(review);
     }
 
     // Plain conversation comments (the `comment` cards).
@@ -1334,6 +1373,7 @@ fn merge_comments(reviews: &Value, issues: &Value, threads: &Value) -> Vec<Comme
         );
         out.push(Comment {
             kind: CommentKind::Finding,
+            verdict: None,
             author_is_bot: is_bot(&login),
             author: login,
             anchor: place.anchor(),
@@ -1421,6 +1461,7 @@ pub(crate) fn prose_row(
         author_is_bot,
         author,
         anchor: anchor.to_string(),
+        verdict: None,
         place: None,
         body,
         snippet: None,
@@ -1637,7 +1678,7 @@ mod tests {
             base_ref: String::new(),
             merge: Merge::Clean,
             sync: Sync::InSync,
-            checks: statuses.iter().map(|&s| Check { name: "c".into(), status: s }).collect(),
+            checks: statuses.iter().map(|&s| Check { name: "c".into(), status: s, url: None }).collect(),
             comments: Vec::new(),
             comments_truncated: false,
             checks_truncated: false,
@@ -2062,6 +2103,43 @@ mod tests {
     }
 
     #[test]
+    fn a_verdict_review_stands_without_a_body_and_a_bare_comment_review_does_not() {
+        let reviews = serde_json::json!([
+            {"author": {"login": "ann"}, "state": "APPROVED", "body": "", "submittedAt": "2026-06-27T09:00:00Z"},
+            {"author": {"login": "bob"}, "state": "CHANGES_REQUESTED", "body": "Split it.", "submittedAt": "2026-06-27T09:10:00Z"},
+            {"author": {"login": "cy"}, "state": "COMMENTED", "body": "", "submittedAt": "2026-06-27T09:20:00Z"},
+            {"author": {"login": "di"}, "state": "PENDING", "body": "", "submittedAt": null}
+        ]);
+        let cs = merge_comments(&reviews, &serde_json::json!([]), &serde_json::json!([]));
+        let verdicts: Vec<_> = cs.iter().map(|c| (c.author.as_str(), c.verdict)).collect();
+        assert_eq!(
+            verdicts,
+            [
+                ("bob", Some(ReviewState::ChangesRequested)),
+                ("ann", Some(ReviewState::Approved)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_check_keeps_the_url_of_its_run() {
+        let rollup = serde_json::json!([
+            {"__typename": "CheckRun", "name": "fmt", "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": "https://ci.example/run/1"},
+            {"__typename": "StatusContext", "context": "deploy", "state": "PENDING", "targetUrl": "https://ci.example/deploy"},
+            {"__typename": "StatusContext", "context": "bare", "state": "SUCCESS"}
+        ]);
+        let urls: Vec<_> = normalize_checks(&rollup).into_iter().map(|c| c.url).collect();
+        assert_eq!(
+            urls,
+            [
+                Some("https://ci.example/run/1".to_string()),
+                Some("https://ci.example/deploy".to_string()),
+                None
+            ]
+        );
+    }
+
+    #[test]
     fn a_finding_anchor_is_the_thread_range() {
         assert_eq!(finding_anchor("a.rs", Some(10), Some(12)), "a.rs:10-12");
         assert_eq!(finding_anchor("a.rs", Some(10), Some(10)), "a.rs:10");
@@ -2109,6 +2187,7 @@ mod tests {
             author: "claude[bot]".to_string(),
             author_is_bot: true,
             anchor: anchor.to_string(),
+            verdict: None,
             place: None,
             body: body.to_string(),
             snippet: None,
