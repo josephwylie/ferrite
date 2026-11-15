@@ -29,6 +29,7 @@ use std::time::Duration;
 
 use ferrite_pane::composer as keys;
 use ferrite_pane::line::Line;
+use ferrite_pane::transcript::Page;
 use ferrite_ui::pointer::Pointer;
 use ferrite_ui::theme;
 use gpui::prelude::*;
@@ -36,8 +37,8 @@ use gpui::{
     actions, div, fill, list, point, px, rgb, rgba, size, AnyElement, App, Bounds, ClickEvent,
     ClipboardItem, Context, Div, Element, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, HighlightStyle,
-    IntoElement, LayoutId, ListAlignment, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
-    Pixels, Render, SharedString, StyledText, TextLayout, UTF16Selection, Window,
+    IntoElement, LayoutId, ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent,
+    MouseMoveEvent, Pixels, Render, SharedString, StyledText, TextLayout, UTF16Selection, Window,
 };
 
 use super::save::{self, Outcome, SaveState};
@@ -48,6 +49,8 @@ actions!(editor, [Enter, Tab, PageUp, PageDown, Save]);
 pub(crate) const AUTO_SAVE_AFTER: Duration = Duration::from_millis(800);
 /// How far past the viewport the list lays out rows.
 const OVERDRAW: f32 = 400.0;
+/// Lines kept above a line the view jumps to.
+const REVEAL_CONTEXT: usize = 3;
 
 pub(crate) enum Event {
     /// The text changed.
@@ -198,7 +201,7 @@ impl Editor {
         };
         find.search(ranges.into_iter().map(|range| &text[range]), from, cx);
         if let Some(hit) = find.active().copied() {
-            self.list.scroll_to_reveal_item(hit.unit);
+            self.reveal_line(hit.unit);
         }
         cx.notify();
     }
@@ -209,7 +212,7 @@ impl Editor {
             .as_mut()
             .and_then(|find| find.step(forward).copied());
         if let Some(hit) = hit {
-            self.list.scroll_to_reveal_item(hit.unit);
+            self.reveal_line(hit.unit);
             cx.notify();
         }
     }
@@ -416,7 +419,34 @@ impl Editor {
     }
 
     fn reveal_caret(&self) {
-        self.list.scroll_to_reveal_item(self.cursor_line());
+        self.reveal_line(self.cursor_line());
+    }
+
+    /// Bring `line` into view. A line the list has not laid out has no
+    /// measured height, so a reveal would stop short of it: the list is put
+    /// on it instead, and measures it on the next frame.
+    fn reveal_line(&self, line: usize) {
+        if self.list.bounds_for_item(line).is_some() {
+            self.list.scroll_to_reveal_item(line);
+        } else {
+            self.list.scroll_to(ListOffset {
+                item_ix: line.saturating_sub(REVEAL_CONTEXT),
+                offset_in_item: px(0.),
+            });
+        }
+    }
+
+    /// Move the view alone, as the paging keys do when the caret is not
+    /// the reader's.
+    pub(crate) fn scroll_page(&self, page: Page) {
+        match page {
+            Page::Top => self.list.scroll_to(ListOffset::default()),
+            Page::Bottom => self.list.scroll_to_end(),
+            Page::Up => self
+                .list
+                .scroll_by(-self.list.viewport_bounds().size.height),
+            Page::Down => self.list.scroll_by(self.list.viewport_bounds().size.height),
+        }
     }
 
     // ------------------------------------------------------------- acts
@@ -1152,6 +1182,19 @@ impl Editor {
 impl Editor {
     pub(crate) fn caret_line_for_test(&self) -> usize {
         self.cursor_line() + 1
+    }
+
+    /// Whether line `line` (1-based) is laid out inside the viewport.
+    pub(crate) fn line_in_view_for_test(&self, line: usize) -> bool {
+        let viewport = self.list.viewport_bounds();
+        self.list.bounds_for_item(line - 1).is_some_and(|bounds| {
+            bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom()
+        })
+    }
+
+    /// The first line (1-based) the viewport shows.
+    pub(crate) fn top_line_for_test(&self) -> usize {
+        self.list.logical_scroll_top().item_ix + 1
     }
 
     pub(crate) fn find_count_for_test(&self) -> Option<String> {

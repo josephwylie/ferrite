@@ -760,6 +760,13 @@ enum CardFrom {
     Head(PaneIdentity),
 }
 
+/// A read-only body the paging keys move: a scrolled document, or the Files
+/// editor's lines.
+enum Reader {
+    Document(ScrollHandle),
+    Code(Entity<tools::Editor>),
+}
+
 /// What an inline rename is aimed at: a Thread's own display name, at
 /// one of the sites that edit it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2233,8 +2240,8 @@ impl CockpitView {
         if self.details_hold_focus(window, cx) {
             return;
         }
-        if let Some(reader) = self.reader_scroll(window, cx) {
-            Self::scroll_reader(&reader, page);
+        if let Some(reader) = self.reader(window, cx) {
+            Self::scroll_reader(&reader, page, cx);
             cx.notify();
             return;
         }
@@ -2248,7 +2255,11 @@ impl CockpitView {
     }
 
     /// Move a read-only body by `page`, the way the transcript's own paging does.
-    fn scroll_reader(scroll: &ScrollHandle, page: Page) {
+    fn scroll_reader(reader: &Reader, page: Page, cx: &mut Context<Self>) {
+        let scroll = match reader {
+            Reader::Code(editor) => return editor.read(cx).scroll_page(page),
+            Reader::Document(scroll) => scroll,
+        };
         let max = scroll.max_offset().y;
         let step = scroll.bounds().size.height;
         let at = scroll.offset().y;
@@ -2262,25 +2273,28 @@ impl CockpitView {
     }
 
     /// The read-only body the paging keys belong to: the open preview's
-    /// document when it holds focus, else the Files prose tab the panel's keys
+    /// document when it holds focus, else the Files tab the panel's keys
     /// are on. Everything else leaves them to the transcript.
-    fn reader_scroll(&self, window: &Window, cx: &gpui::App) -> Option<ScrollHandle> {
+    fn reader(&self, window: &Window, cx: &gpui::App) -> Option<Reader> {
         let index = self.focused();
         let pane = self.panes.get(index)?;
         if pane.preview.focused(window, cx) && self.preview_shown(index) {
             let tab = &pane.preview_tab;
             let list = tab.scroll.0.borrow().base_handle.clone();
-            return Some(if tab.markdown_scroll.max_offset().y > px(0.) {
+            return Some(Reader::Document(if tab.markdown_scroll.max_offset().y > px(0.) {
                 tab.markdown_scroll.clone()
             } else {
                 list
-            });
+            }));
         }
         let thread = pane.thread()?;
         let on_panel = self.panel_control_focused(window) || self.panel_keys_held(window, cx);
-        (on_panel && self.active_surface(thread) == Some(crate::cockpit::surfaces::SurfaceId::Files))
-            .then(|| self.files_prose_scroll(thread))
-            .flatten()
+        if !on_panel || self.active_surface(thread) != Some(crate::cockpit::surfaces::SurfaceId::Files) {
+            return None;
+        }
+        self.files_prose_scroll(thread)
+            .map(Reader::Document)
+            .or_else(|| self.files_editor_of(thread).map(Reader::Code))
     }
 
     /// A send in Pane `index`: its prompt, once it arrives, scrolls to the
