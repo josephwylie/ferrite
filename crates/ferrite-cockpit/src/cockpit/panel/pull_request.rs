@@ -27,7 +27,7 @@ use super::pr_read::{stamp_age, Answer, PrFailure, PrRead, PrSource, PrTarget};
 use super::*;
 use crate::cockpit::surfaces::PrTab;
 use ferrite_core::protocol::{
-    WireCheckStatus, WirePr, WirePrCommentKind, WirePrState, WirePrUnread, WireReviewState,
+    WireCheckStatus, WirePr, WirePrCommentKind, WirePrState, WirePrUnread,
 };
 use ferrite_core::workspace::PrState;
 
@@ -1215,12 +1215,7 @@ impl CockpitView {
                     }
                     _ => format!("{} {kind}", comment.author),
                 };
-                let verdict = comment.verdict.and_then(|state| match state {
-                    WireReviewState::Approved => Some(("Approved", GREEN)),
-                    WireReviewState::ChangesRequested => Some(("Changes requested", RED)),
-                    WireReviewState::Commented => Some(("Commented", INK_SUBTLE)),
-                    WireReviewState::Unknown => None,
-                });
+                let verdict = comment.verdict.and_then(crate::pr::review_verdict);
                 let mark = |text: &'static str, ink: u32| {
                     div()
                         .debug_selector(move || format!("pr-{}-{index}", text.to_lowercase()))

@@ -101,25 +101,32 @@ impl PrView {
                 "Not signed in to {host}. Run {}, then retry.",
                 login_hint(*forge, host)
             )),
-            Self::GitError(message) => Some(format!("Git read failed: {message}. Retry to try again.")),
+            Self::GitError(message) => Some(format!(
+                "Git read failed: {}. Retry to try again.",
+                message.trim_end_matches('.')
+            )),
             Self::TimedOut(forge) => Some(format!(
                 "{} did not answer within {} seconds. Retry to try again.",
                 forge.display_name(),
                 READ_DEADLINE.as_secs()
             )),
-            Self::Error(forge, message) => Some(match Failure::of(message) {
-                Failure::RateLimited => format!(
-                    "{} rate limit reached: {message}. Wait a few minutes, then retry.",
-                    forge.display_name()
-                ),
-                Failure::Offline => format!(
-                    "Cannot reach {}: {message}. Check the connection, then retry.",
-                    forge.display_name()
-                ),
-                Failure::Other => {
-                    format!("{} unavailable: {message}. Retry to try again.", forge.display_name())
-                }
-            }),
+            Self::Error(forge, message) => {
+                // A CLI's own message often ends in a period; the sentence adds one.
+                let message = message.trim_end_matches('.');
+                Some(match Failure::of(message) {
+                    Failure::RateLimited => format!(
+                        "{} rate limit reached: {message}. Wait a few minutes, then retry.",
+                        forge.display_name()
+                    ),
+                    Failure::Offline => format!(
+                        "Cannot reach {}: {message}. Check the connection, then retry.",
+                        forge.display_name()
+                    ),
+                    Failure::Other => {
+                        format!("{} unavailable: {message}. Retry to try again.", forge.display_name())
+                    }
+                })
+            }
             _ => None,
         }
     }
@@ -1494,19 +1501,23 @@ fn replies_from_nodes(nodes: &[Value]) -> Vec<Reply> {
 }
 
 /// Keep only the latest PR-level (`review`/`comment`) post per bot author; humans keep all.
+/// A verdict-only review (no words) is a standing verdict: it neither competes nor is removed.
 fn dedup_bot_prose(out: &mut Vec<Comment>) {
+    let is_bot_prose = |c: &Comment| {
+        c.author_is_bot
+            && c.kind != CommentKind::Finding
+            && !(c.body.is_empty() && c.verdict.is_some())
+    };
     let mut keep_newest: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
-    for c in out.iter() {
-        if c.author_is_bot && c.kind != CommentKind::Finding {
-            let e = keep_newest.entry(c.author.clone()).or_default();
-            if c.created_at > *e {
-                e.clone_from(&c.created_at);
-            }
+    for c in out.iter().filter(|c| is_bot_prose(c)) {
+        let e = keep_newest.entry(c.author.clone()).or_default();
+        if c.created_at > *e {
+            e.clone_from(&c.created_at);
         }
     }
     out.retain(|c| {
-        !(c.author_is_bot && c.kind != CommentKind::Finding)
+        !is_bot_prose(c)
             // An undated review is a standing verdict, never lost to a newer post.
             || (c.kind == CommentKind::Review && c.created_at.is_empty())
             || keep_newest.get(&c.author) == Some(&c.created_at)
@@ -2119,6 +2130,30 @@ mod tests {
                 ("ann", Some(ReviewState::Approved)),
             ]
         );
+    }
+
+    #[test]
+    fn a_bots_empty_approval_leaves_its_comment_standing() {
+        let reviews = serde_json::json!([
+            {"author": {"login": "claude[bot]"}, "state": "APPROVED", "body": "", "submittedAt": "2026-06-27T10:00:00Z"}
+        ]);
+        let issues = serde_json::json!([
+            {"author": {"login": "claude[bot]"}, "body": "Real findings.", "createdAt": "2026-06-27T09:00:00Z"}
+        ]);
+        let cs = merge_comments(&reviews, &issues, &serde_json::json!([]));
+        let bodies: Vec<_> = cs.iter().map(|c| c.body.as_str()).collect();
+        assert_eq!(bodies, ["", "Real findings."]);
+        assert_eq!(cs[0].verdict, Some(ReviewState::Approved));
+    }
+
+    #[test]
+    fn a_cli_message_ending_in_a_period_does_not_double_it() {
+        let view = PrView::Error(
+            crate::git::Forge::GitHub,
+            "gh: Could not resolve to a Repository with the name 'o/r'.".into(),
+        );
+        let remedy = view.retry_remedy().unwrap();
+        assert!(remedy.contains("'o/r'. Retry"), "{remedy}");
     }
 
     #[test]
