@@ -5791,7 +5791,7 @@ mod tests {
                 .into_iter()
                 .map(|(_, _, _, text)| text)
                 .collect::<Vec<_>>()
-                .join(" \u{b7} ")
+                .join("\n")
         };
         let shut = copied(&view, cx);
         assert!(shut.contains("Ran 2 commands and read 1 file"), "{shut}");
@@ -6730,7 +6730,7 @@ mod tests {
             (0..n)
                 .map(|i| format!("line {i}"))
                 .collect::<Vec<_>>()
-                .join(" \u{b7} ")
+                .join("\n")
         };
         // Line count alone keeps output inline, where a transcript copy
         // sweep reaches it; only the byte cap moves it to the viewport.
