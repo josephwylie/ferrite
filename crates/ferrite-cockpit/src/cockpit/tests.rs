@@ -32,6 +32,7 @@ mod key_shortcuts;
 mod layout_polish;
 mod leaving;
 mod link_clicks;
+mod link_targets;
 mod loops_overlay;
 mod machines;
 mod nav_list;

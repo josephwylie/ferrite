@@ -107,6 +107,7 @@ use crate::facts::Facts;
 use crate::nav;
 use crate::notifications::{Handle, NeedsYou, Row as NoticeRow, RowTarget, Verb};
 use ferrite_pane::composer::{Composer, Edited};
+use ferrite_pane::link_target::{LinkTarget, Open};
 use ferrite_pane::decision;
 use ferrite_pane::pane::{self, PaneView};
 use ferrite_ui::menu;
@@ -1827,11 +1828,56 @@ impl CockpitView {
         }
     }
 
-    /// Open the Thread's PR in its browser preview.
+    /// Open the Thread's PR in its browser preview. An explicit open: the
+    /// Thread comes forward first, so the page is the one shown.
     pub(crate) fn open_pr(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         let url = self.facts.pr(thread).and_then(|pr| pr.url.clone());
         if let Some(url) = url {
+            self.show_thread(thread, cx);
             self.browser_action(thread, ferrite_core::browser::Action::Open { url }, cx);
+        }
+    }
+
+    /// The Thread's PR as a link target: the one every door to it opens.
+    pub(crate) fn pr_target(&self, thread: ThreadId) -> Option<LinkTarget> {
+        self.facts.pr(thread).map(|pr| LinkTarget::PullRequest {
+            thread,
+            number: pr.number,
+            url: pr.url.clone(),
+        })
+    }
+
+    /// An explicit open of the Thread's PR, by the door `how` names: its
+    /// native detail, the integrated browser, or the system's. What cannot
+    /// open says why.
+    pub(crate) fn open_pr_as(
+        &mut self,
+        thread: ThreadId,
+        how: Open,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target) = self.pr_target(thread) else {
+            return;
+        };
+        let address = target.address();
+        match (how, address) {
+            (Open::Primary, _) => {
+                self.show_thread(thread, cx);
+                self.open_pr_surface(thread, cx);
+            }
+            (Open::Integrated, Ok(_)) => self.open_pr(thread, cx),
+            (Open::System, Ok(url)) => cx.open_url(&url),
+            (_, Err(why)) => ferrite_pane::link_target::notify_unavailable(&why, window, cx),
+        }
+    }
+
+    /// Bring `thread` to the front for an explicit open: its Pane, from
+    /// wherever the nav row's own click would land. A Thread already
+    /// shown stays put.
+    fn show_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        if self.focused_thread() != Some(thread) || self.factory_view.is_some() || self.empty_shown {
+            self.open_nav_row(thread, cx);
         }
     }
 
@@ -3498,7 +3544,8 @@ impl CockpitView {
             | MenuTarget::TerminalMore(_)
             | MenuTarget::SurfaceMenu(_)
             | MenuTarget::SurfaceTab { .. }
-            | MenuTarget::PrMore(_) => None,
+            | MenuTarget::PrMore(_)
+            | MenuTarget::PrLink(_) => None,
             MenuTarget::Parked
             | MenuTarget::NavFilter
             | MenuTarget::NavFactory
@@ -12748,16 +12795,19 @@ impl CockpitView {
             .on_click(|_, _, cx| cx.stop_propagation())
             .into_any_element();
         let pr = self.facts.pr(thread).map(|pr| {
-            let url = pr.url.clone();
             nav::pr_chip(thread, &nav::NavPr::of(pr))
                 .on_mouse_down(
                     MouseButton::Left,
+                    cx.listener(move |view, event: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        view.open_pr_as(thread, Open::of_modifiers(event.modifiers), window, cx);
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Right,
                     cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
-                        match &url {
-                            Some(url) if event.modifiers.platform => cx.open_url(url),
-                            _ => view.open_pr(thread, cx),
-                        }
+                        view.open_context_menu(MenuTarget::PrLink(thread), event.position, cx);
                     }),
                 )
                 .on_click(|_, _, cx| cx.stop_propagation())

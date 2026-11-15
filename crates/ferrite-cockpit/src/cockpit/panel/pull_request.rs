@@ -528,8 +528,8 @@ impl CockpitView {
                     .tooltip(ferrite_ui::menu::tooltip("Open on GitHub"))
                     .child(SharedString::from(format!("#{number}")))
                     .child(icon(icons::EXTERNAL, PR_LINK_GLYPH, INK_SUBTLE))
-                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.open_pr(thread, cx);
+                    .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                        view.open_pr_as(thread, ferrite_pane::link_target::Open::System, window, cx);
                     })),
             );
         let more = ferrite_pane::preview::head_door("pr-more", "pr-more".into(), icons::ELLIPSIS)

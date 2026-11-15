@@ -5,6 +5,7 @@ mod attachments;
 pub mod composer;
 pub mod decision;
 pub mod file_links;
+pub mod link_target;
 pub mod find;
 pub mod image_viewer;
 pub mod line;

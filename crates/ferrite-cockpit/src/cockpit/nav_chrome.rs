@@ -332,10 +332,10 @@ impl CockpitView {
             .when(pr.is_none(), |button| {
                 button.opacity(ferrite_ui::theme::NAV_FOOT_DISABLED_OPACITY)
             })
-            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                 cx.stop_propagation();
                 if let Some(thread) = pr {
-                    view.open_pr(thread, cx);
+                    view.open_pr_as(thread, ferrite_pane::link_target::Open::Primary, window, cx);
                 }
             }));
         let provider = shown

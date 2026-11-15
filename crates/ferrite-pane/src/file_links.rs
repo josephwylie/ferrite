@@ -69,6 +69,17 @@ impl FileLink {
         })
     }
 
+    /// The path with the position it names, as an editor takes it:
+    /// `/repo/src/main.rs:42`, or `...rs#L12-L15` for a range.
+    pub fn address(&self) -> String {
+        let path = self.path.display();
+        match self.location.as_deref() {
+            Some(location) if location.starts_with('L') => format!("{path}#{location}"),
+            Some(location) => format!("{path}:{location}"),
+            None => path.to_string(),
+        }
+    }
+
     pub fn url(&self) -> Option<String> {
         url::Url::from_file_path(&self.path).ok().map(Into::into)
     }
