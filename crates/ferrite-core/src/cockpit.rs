@@ -25,7 +25,9 @@ use crate::groups::{
     Applied, ApplyError, Dissolved, Drag, DropTarget, GroupChange, GroupId, Groups, Plan,
 };
 use crate::notifications::{DecisionNoticeId, NoticeId, Notifications};
-use crate::protocol::{Done, ErrorCode, NoticeAction, Op, ProjectAction, ServerMessage, When, WireError};
+use crate::protocol::{
+    Done, ErrorCode, NoticeAction, Op, ProjectAction, ServerMessage, When, WireError,
+};
 use crate::roster::{DraftId, DraftScope, PaneIdentity, Roster, View};
 use crate::store::{LoadError, Provider, Store};
 use crate::transcript::Input;
@@ -1747,18 +1749,16 @@ impl Cockpit {
     pub fn send(&mut self, thread: ThreadId, text: String) -> Admission {
         self.act(
             |engine| engine.send(thread, text.clone()),
-            |server| {
-                match server.execute(Op::Send {
-                    thread,
-                    text: text.clone(),
-                }) {
-                    Ok(Some(Done::Held)) => Admission::Held,
-                    Ok(_) => Admission::Delivered,
-                    Err(error) if error.code == ErrorCode::Unconfirmed => {
-                        Admission::Unconfirmed(error.message)
-                    }
-                    Err(error) => Admission::Refused(error.message),
+            |server| match server.execute(Op::Send {
+                thread,
+                text: text.clone(),
+            }) {
+                Ok(Some(Done::Held)) => Admission::Held,
+                Ok(_) => Admission::Delivered,
+                Err(error) if error.code == ErrorCode::Unconfirmed => {
+                    Admission::Unconfirmed(error.message)
                 }
+                Err(error) => Admission::Refused(error.message),
             },
         )
     }

@@ -1913,11 +1913,7 @@ impl Engine {
             .map(|state| std::mem::take(&mut state.awaiting.prompts))
             .unwrap_or_default();
         for held in awaiting {
-            if let Admission::Refused(_) = self.send(thread, held.text.clone()) {
-                if let Some(state) = self.threads.get_mut(&thread) {
-                    state.native_queue.recovered.push((held.text, false));
-                }
-            }
+            let _ = self.send(thread, held.text);
         }
         Ok(())
     }

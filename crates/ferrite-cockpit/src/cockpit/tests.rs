@@ -300,7 +300,9 @@ impl Spawner for Fake {
         request: ferrite_core::cockpit::SpawnRequest,
     ) -> std::io::Result<ferrite_core::session::SessionLifecycle> {
         let Some(gate) = self.start_gate.borrow_mut().take() else {
-            return self.spawn(request).map(ferrite_core::session::SessionLifecycle::ready);
+            return self
+                .spawn(request)
+                .map(ferrite_core::session::SessionLifecycle::ready);
         };
         ferrite_core::session::SessionLifecycle::background(move || {
             let words = gate.recv().unwrap_or_else(|_| "the gate closed".into());

@@ -35,9 +35,9 @@ use super::*;
 
 use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::Admission;
+use ferrite_core::replies::Reply;
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_pane::composer::Role;
-use ferrite_core::replies::Reply;
 use ferrite_ui::icons::{self, icon};
 
 gpui::actions!(side_chat, [Ask]);

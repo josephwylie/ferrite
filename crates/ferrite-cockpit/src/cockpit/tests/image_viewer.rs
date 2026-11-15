@@ -528,7 +528,10 @@ fn the_lightbox_grows_from_the_pressed_picture(cx: &mut TestAppContext) {
     let (core, _fake) = cockpit("viewer-origin", 1);
     let thread = core.threads()[0];
     let mut core = core;
-    let _ = core.send(thread, ferrite_core::prompt_files::compose("look", &[image]));
+    let _ = core.send(
+        thread,
+        ferrite_core::prompt_files::compose("look", &[image]),
+    );
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     hold_nav_open(&view, cx);

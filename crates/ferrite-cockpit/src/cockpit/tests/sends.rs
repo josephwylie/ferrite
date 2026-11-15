@@ -221,7 +221,10 @@ fn an_admitted_send_clears_the_draft_and_goes_once(cx: &mut TestAppContext) {
         1,
         "the request appears once: {sent:?}"
     );
-    assert!(view.read_with(cx, |view, _| view.held_sends.count(view.panes[0].thread().unwrap()) == 0));
+    assert!(view.read_with(cx, |view, _| view
+        .held_sends
+        .count(view.panes[0].thread().unwrap())
+        == 0));
 }
 
 #[gpui::test]
@@ -298,7 +301,11 @@ fn gated<'a>(
     (view, fake, threads, gate, cx)
 }
 
-fn pane_of(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> usize {
+fn pane_of(
+    view: &Entity<CockpitView>,
+    thread: ThreadId,
+    cx: &mut gpui::VisualTestContext,
+) -> usize {
     view.read_with(cx, |view, _| view.pane_for(thread).expect("shown"))
 }
 
@@ -329,7 +336,11 @@ fn fail_start(gate: &mpsc::Sender<String>, words: &str, cx: &mut gpui::VisualTes
     }
 }
 
-fn held_count(view: &Entity<CockpitView>, thread: ThreadId, cx: &mut gpui::VisualTestContext) -> usize {
+fn held_count(
+    view: &Entity<CockpitView>,
+    thread: ThreadId,
+    cx: &mut gpui::VisualTestContext,
+) -> usize {
     view.read_with(cx, |view, _| view.held_sends.count(thread))
 }
 
@@ -339,7 +350,11 @@ fn a_held_draft_returns_to_its_thread_though_the_pane_moved_on(cx: &mut TestAppC
     stage(&view, "send-held-switch", cx);
     cx.simulate_keystrokes("enter");
     tick(cx);
-    assert_eq!(held_count(&view, a, cx), 1, "A's send waits for its Session");
+    assert_eq!(
+        held_count(&view, a, cx),
+        1,
+        "A's send waits for its Session"
+    );
     assert_eq!(held(&view, cx), (String::new(), 0, 0, 0, 0));
 
     view.update(cx, |view, cx| view.focus_thread(b, cx));
@@ -405,9 +420,9 @@ fn a_held_draft_comes_back_whole_beside_newer_typing(cx: &mut TestAppContext) {
     tick(cx);
     cx.simulate_input("newer words");
     view.update(cx, |view, cx| {
-        view.panes[0]
-            .composer
-            .update(cx, |composer, cx| composer.reply(Reply::new("a passage", "what about it"), cx));
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.reply(Reply::new("a passage", "what about it"), cx)
+        });
     });
 
     fail_start(&gate, "claude would not start", cx);
