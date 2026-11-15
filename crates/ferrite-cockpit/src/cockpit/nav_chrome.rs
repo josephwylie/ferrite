@@ -55,7 +55,8 @@ pub(super) fn search_line(cx: &mut Context<CockpitView>) -> Entity<Composer> {
     let line = cx.new(Composer::new);
     line.update(cx, |line, cx| line.set_role(Role::Field(Some("NavSearch")), cx));
     cx.subscribe(&line, |view, _, _: &Edited, cx| {
-        view.nav_search_cursor = 0;
+        view.nav_search_pick.set(None);
+        view.nav_reveal.set(true);
         cx.notify();
     })
     .detach();
@@ -81,6 +82,20 @@ impl CockpitView {
             .chain(&state.parked)
             .filter(|row| row.name.to_lowercase().contains(&words))
             .collect()
+    }
+
+    /// Which of `matches` is highlighted, and so which ⏎ opens: the picked
+    /// Thread's place now, wherever live updates have moved it. A Thread
+    /// that has left the results, or none picked yet, falls to the first
+    /// result, and that result is then the pick.
+    fn search_cursor(&self, matches: &[&nav::ThreadRow]) -> Option<usize> {
+        let at = self
+            .nav_search_pick
+            .get()
+            .and_then(|pick| matches.iter().position(|row| row.thread == pick))
+            .or((!matches.is_empty()).then_some(0))?;
+        self.nav_search_pick.set(Some(matches[at].thread));
+        Some(at)
     }
 
     /// The row under the head: the field, then Filter, Add project and
@@ -207,7 +222,7 @@ impl CockpitView {
     ) -> Stateful<Div> {
         let matches = self.search_matches(state, cx);
         let wall = ferrite_core::clock::system_time();
-        let cursor = self.nav_search_cursor.min(matches.len().saturating_sub(1));
+        let cursor = self.search_cursor(&matches);
         let rows: Vec<AnyElement> = matches
             .iter()
             .enumerate()
@@ -217,7 +232,9 @@ impl CockpitView {
                     .activity_at
                     .map(|at| nav::card_age(at, wall))
                     .unwrap_or_default();
-                chrome::result_row(row, age, at == cursor)
+                let lit = cursor == Some(at);
+                chrome::result_row(row, age, lit)
+                    .children(lit.then(|| self.search_reveal()))
                     .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                         view.open_search_result(thread, window, cx);
                     }))
@@ -236,21 +253,23 @@ impl CockpitView {
     /// ↑ / ↓ in the field: the highlight moves, stopping at the ends.
     pub(super) fn step_search(&mut self, by: isize, cx: &mut Context<Self>) {
         let state = self.nav_state();
-        let count = self.search_matches(&state, cx).len();
-        self.nav_search_cursor = self
-            .nav_search_cursor
-            .saturating_add_signed(by)
-            .min(count.saturating_sub(1));
+        let matches = self.search_matches(&state, cx);
+        let Some(at) = self.search_cursor(&matches) else {
+            return;
+        };
+        let to = at.saturating_add_signed(by).min(matches.len() - 1);
+        self.nav_search_pick.set(Some(matches[to].thread));
+        self.nav_reveal.set(true);
         cx.notify();
     }
 
     /// ⏎ in the field: the highlighted result opens.
     pub(super) fn open_search_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let state = self.nav_state();
+        let matches = self.search_matches(&state, cx);
         let thread = self
-            .search_matches(&state, cx)
-            .get(self.nav_search_cursor)
-            .map(|row| row.thread);
+            .search_cursor(&matches)
+            .map(|at| matches[at].thread);
         if let Some(thread) = thread {
             self.open_search_result(thread, window, cx);
         }
@@ -268,7 +287,7 @@ impl CockpitView {
     /// list comes back.
     pub(super) fn clear_search(&mut self, cx: &mut Context<Self>) {
         self.nav_search.update(cx, |line, cx| line.set(String::new(), cx));
-        self.nav_search_cursor = 0;
+        self.nav_search_pick.set(None);
         cx.notify();
     }
 

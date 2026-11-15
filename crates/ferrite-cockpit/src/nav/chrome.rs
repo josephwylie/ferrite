@@ -177,6 +177,7 @@ pub fn result_row(row: &ThreadRow, age: SharedString, lit: bool) -> Stateful<Div
     div()
         .id(("nav-result", thread as usize))
         .debug_selector(move || selector.to_string())
+        .relative()
         .flex()
         .flex_row()
         .items_center()

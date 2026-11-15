@@ -453,10 +453,10 @@ pub struct CockpitView {
     /// The Thread whose card last scrolled into view for being shown
     /// (`shown_reveal`): a focus change scrolls the new one's.
     nav_shown: std::rc::Rc<std::cell::Cell<Option<ThreadId>>>,
-    /// The nav's search field (`nav_chrome`), and the result its ↑/↓ stand
-    /// on.
+    /// The nav's search field (`nav_chrome`), and the Thread its ↑/↓ stand
+    /// on: a Thread, not a place in the results, which live updates reorder.
     nav_search: Entity<ferrite_pane::composer::Composer>,
-    nav_search_cursor: usize,
+    nav_search_pick: std::cell::Cell<Option<ThreadId>>,
     /// The foot's undo notice: what the last Park or Snooze did, until it
     /// fades (`nav_chrome::NavUndo`).
     nav_undo: Option<nav_chrome::NavUndo>,
@@ -1521,7 +1521,7 @@ impl CockpitView {
             nav_cursor_bounds: Default::default(),
             nav_shown: Default::default(),
             nav_search: nav_chrome::search_line(cx),
-            nav_search_cursor: 0,
+            nav_search_pick: Default::default(),
             nav_undo: None,
             nav_cursor: None,
             nav_keys_held: false,

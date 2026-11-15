@@ -318,6 +318,23 @@ impl CockpitView {
         })
     }
 
+    /// On the highlighted search result: once after the highlight moves, a
+    /// scroll that shows it whole. The keyboard stays in the field.
+    pub(super) fn search_reveal(&self) -> impl IntoElement {
+        let reveal = self.nav_reveal.clone();
+        let scroll = self.nav_scroll.clone();
+        gpui::canvas(
+            move |row: Bounds<Pixels>, window, _| {
+                if reveal.replace(false) {
+                    scroll_into_view(&scroll, row, window);
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0()
+    }
+
     /// On the shown Thread's row: once each time the shown Thread changes
     /// (a focus move from the board, the palette, a toast), a scroll that
     /// shows it whole (#231).

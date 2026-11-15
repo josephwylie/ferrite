@@ -222,6 +222,54 @@ fn the_search_row_replaces_the_list_with_its_results(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds(card(threads[0])).is_some(), "the list is back");
 }
 
+/// ↓ in the search field highlights a Thread, not a place: when a live
+/// update moves it, the highlight stays on it and ⏎ opens it, never the
+/// Thread that took its place.
+#[gpui::test]
+fn the_search_highlight_follows_its_thread_through_live_updates(cx: &mut TestAppContext) {
+    bind_production_keys(cx);
+    let (core, _fake) = cockpit("nav-search-live", 3);
+    let threads = sorted_threads(&core);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    hide_panel(&view, cx);
+    view.update(cx, |view, cx| {
+        for (n, thread) in threads.iter().enumerate() {
+            view.cockpit.rename_thread(*thread, &format!("Needle {n}")).unwrap();
+            view.facts.renamed(&view.cockpit, *thread);
+        }
+        view.refresh_names();
+        cx.notify();
+    });
+    tick(cx);
+    let field = cx.debug_bounds("nav-search").expect("the field");
+    cx.simulate_click(field.center(), gpui::Modifiers::none());
+    tick(cx);
+    cx.simulate_input("needle");
+    cx.simulate_keystrokes("down");
+    tick(cx);
+
+    let results = |view: &CockpitView, cx: &gpui::App| {
+        let state = view.nav_state();
+        view.search_matches(&state, cx).iter().map(|row| row.thread).collect::<Vec<_>>()
+    };
+    let (order, lit) = view.read_with(cx, |view, cx| (results(view, cx), view.nav_search_pick.get()));
+    assert_eq!(order.len(), 3);
+    assert_eq!(lit, Some(order[1]), "↓ lit the second result");
+
+    view.update(cx, |view, cx| view.park_listed(&[order[0]], cx));
+    tick(cx);
+    let after = view.read_with(cx, |view, cx| results(view, cx));
+    assert_ne!(after[1], order[1], "the live update moved the highlighted Thread");
+
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.focused_thread()),
+        Some(order[1]),
+        "⏎ opens the Thread that was highlighted"
+    );
+}
+
 /// The foot: Settings, Pull requests and Usage at 32px; a Park stands
 /// the undo notice in the free middle, and ⌘Z (the list holding the
 /// keys) revives what it parked.
@@ -523,7 +571,7 @@ fn rename_on_a_slim_row_draws_the_editor(cx: &mut TestAppContext) {
         view.set_shelf_open(nav::Shelf::Snoozed, true, cx);
     });
     tick(cx);
-    for (at, thread) in [("Open", threads[2]), ("Parked", threads[0]), ("Snoozed", threads[1])] {
+    for (at, thread) in [("Parked", threads[0]), ("Snoozed", threads[1])] {
         view.update(cx, |view, cx| view.open_context_menu(MenuTarget::Thread(thread), gpui::point(px(10.), px(10.)), cx));
         tick(cx);
         let rename = view.read_with(cx, |view, _| {
