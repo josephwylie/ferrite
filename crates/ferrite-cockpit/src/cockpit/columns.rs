@@ -170,6 +170,20 @@ impl CockpitView {
     }
 }
 
+impl CockpitView {
+    /// Whether the keyboard is inside a column that is sliding shut. It
+    /// draws for a few frames more, but a column that is going holds no
+    /// keys: the focus pump takes the keyboard back to where it goes when
+    /// a column snaps shut, so ⌥⌘B still reaches the window and a shell or
+    /// an editor in the panel hears nothing typed during the slide.
+    pub(super) fn closing_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
+        let panel_closing =
+            self.panel_pane().is_none() && self.panel_closing_focus.contains_focused(window, cx);
+        let nav_closing = self.nav_folded() && self.nav_focus.contains_focused(window, cx);
+        panel_closing || nav_closing
+    }
+}
+
 /// Over a column sliding out: it draws, and nothing in it hears the pointer.
 pub(super) fn veil() -> Div {
     div()

@@ -621,7 +621,11 @@ impl CockpitView {
                         .child(column),
                 )
                 .children(edge)
-                .when(sliding_out, |panel| panel.child(super::columns::veil()))
+                .when(sliding_out, |panel| {
+                    panel
+                        .track_focus(&self.panel_closing_focus)
+                        .child(super::columns::veil())
+                })
                 .into_any_element(),
         )
     }

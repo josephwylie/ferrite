@@ -504,6 +504,9 @@ pub struct CockpitView {
     /// The Panel bodies that take keys of their own (the launcher, Files):
     /// while focus is anywhere inside, the focus pump leaves it be.
     panel_focus: gpui::FocusHandle,
+    /// The panel's column while it slides shut, so the keyboard inside it
+    /// can be found and taken back (`columns::closing_holds_focus`).
+    panel_closing_focus: gpui::FocusHandle,
     /// Back and forward through where the operator has been (`history`).
     history: history::History,
     session_controls: Option<(ThreadId, u64)>,
@@ -1537,6 +1540,7 @@ impl CockpitView {
             panel: panel::Panel::load(&prefs.dir),
             panel_empty_focus: cx.focus_handle(),
             panel_focus: cx.focus_handle(),
+            panel_closing_focus: cx.focus_handle(),
             history: Default::default(),
             session_controls: None,
             mode_picker: None,
@@ -10200,6 +10204,9 @@ impl CockpitView {
         let nav_list_focused = self.nav_keys_held && self.nav_focus.is_focused(window);
         // So does a Panel body that reads its own keys: "Open a surface",
         // pressed, or a Files editor or filter being typed in.
+        if self.closing_holds_focus(window, cx) {
+            window.focus(&wanted, cx);
+        }
         let panel_keys_held = self.panel_focus.contains_focused(window, cx);
         if window.has_active_dialog(cx)
             || self.floats_hold_focus()

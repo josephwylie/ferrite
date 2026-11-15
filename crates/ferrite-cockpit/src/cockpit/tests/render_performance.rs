@@ -1551,20 +1551,29 @@ fn solo_card_right(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestCo
     card.x + card.w
 }
 
-/// Focus moving to a draft, which has no panel, takes the panel and the
-/// toggle away at once.
+/// Focus moving to a draft, which has no panel, takes the toggle away at
+/// once and slides the panel shut.
 #[gpui::test]
-fn the_panel_goes_at_once_when_focus_moves_to_a_draft(cx: &mut TestAppContext) {
+fn the_panel_slides_shut_when_focus_moves_to_a_draft(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
     let (view, cx) = panel_window("motion-panel-draft", cx);
     view.update(cx, |view, cx| {
         view.open_draft_with_provider(DraftTarget::Main, Provider::Claude, cx)
     });
     cx.run_until_parked();
-    assert_eq!(panel_width(cx), None);
     assert!(
         cx.debug_bounds("panel-toggle").is_none(),
         "no Thread: no toggle"
     );
+    cx.executor().advance_clock(Duration::from_millis(60));
+    display_frames(cx);
+    let mid = panel_width(cx).expect("still sliding");
+    assert!(
+        mid > 0. && mid < ferrite_ui::theme::PANEL_W,
+        "narrowing: {mid}"
+    );
+    settle(cx);
+    assert_eq!(panel_width(cx), None, "then gone");
 }
 
 /// A preview opening in a shown Panel snaps it to its wide width, its card
@@ -1615,14 +1624,16 @@ fn a_preview_snaps_the_panel_wide(cx: &mut TestAppContext) {
     );
 }
 
-/// A preview opened while the Panel is hidden opens the Thread's Panel, at
-/// its wide width at once, while the setting never changes; closing it
+/// A preview opened while the Panel is hidden opens the Thread's Panel,
+/// sliding in to its wide width, while the setting never changes; closing it
 /// lets the preview go and leaves the Panel on its Overview.
 #[gpui::test]
 fn a_preview_opens_a_hidden_panel(cx: &mut TestAppContext) {
+    ferrite_ui::motion::testing::drive();
     let (view, cx) = panel_window("motion-panel-preview-hidden", cx);
     view.update(cx, |view, cx| view.toggle_panel_now(cx));
     cx.run_until_parked();
+    settle(cx);
     assert_eq!(panel_width(cx), None, "the premise: hidden");
     let dir = scratch("motion-panel-preview-hidden-file");
     std::fs::create_dir_all(&dir).unwrap();
@@ -1634,6 +1645,7 @@ fn a_preview_opens_a_hidden_panel(cx: &mut TestAppContext) {
         })
     });
     cx.run_until_parked();
+    settle(cx);
     let wide = panel_width(cx).expect("shown");
     assert_eq!(wide, view.read_with(cx, |view, _| view.board_right()));
     assert!(
