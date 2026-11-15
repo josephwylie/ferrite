@@ -60,8 +60,8 @@ pub(crate) fn write(path: &Path, text: &str, expected: Option<u64>, writer: Writ
 
 /// Replace the file whole: a sibling of the real file (a symlink is followed,
 /// as a plain write would) is written and renamed over it, so a failure
-/// part-way leaves the old file. Only where no sibling can be created is the
-/// file written in place.
+/// part-way leaves the old file. Only where the directory refuses the sibling
+/// is the file written in place.
 pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     static WRITES: AtomicU64 = AtomicU64::new(0);
     let Ok(target) = std::fs::canonicalize(path) else {
@@ -79,11 +79,18 @@ pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
         WRITES.fetch_add(1, Ordering::Relaxed)
     ));
     let staging = PathBuf::from(staging);
-    let Ok(mut file) = std::fs::File::create_new(&staging) else {
-        return std::fs::write(&target, bytes);
+    let mut file = match std::fs::File::create_new(&staging) {
+        Ok(file) => file,
+        // A directory that refuses new files; any other refusal (a full
+        // disk) would leave an in-place write half-done.
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            return std::fs::write(&target, bytes)
+        }
+        Err(error) => return Err(error),
     };
     let result = file
         .write_all(bytes)
+        .and_then(|()| file.sync_all())
         .and_then(|()| {
             drop(file);
             permissions.map_or(Ok(()), |permissions| std::fs::set_permissions(&staging, permissions))
