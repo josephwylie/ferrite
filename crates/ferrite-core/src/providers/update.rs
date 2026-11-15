@@ -194,8 +194,7 @@ pub fn latest(provider: Provider) -> io::Result<(String, [u64; 3])> {
 }
 
 /// What a check found.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
     /// No copy is installed; there is nothing to upgrade.
     Missing,

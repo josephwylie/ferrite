@@ -19,12 +19,21 @@ type Answer<T> = Receiver<std::io::Result<T>>;
 pub(crate) struct Environment {
     /// The machine's defaults as its own `settings.json` last said, kept
     /// only for a window on a machine: this computer's are the window's.
+    /// Edits show at once; the Server's reread replaces them when the last
+    /// write lands.
     pub(super) defaults: Option<ServerDefaults>,
+    /// Why the machine's defaults could not be read, or an edit written.
     pub(super) defaults_error: Option<SharedString>,
-    pub(super) defaults_asked: Option<Answer<ServerDefaults>>,
+    defaults_asked: Vec<DefaultsAsk>,
     versions: Option<Answer<Done>>,
     check: Option<Answer<Done>>,
     updates: Vec<(Provider, Answer<Done>)>,
+}
+
+/// A read or a write of the machine's defaults, out and not yet answered.
+struct DefaultsAsk {
+    answer: Answer<ServerDefaults>,
+    write: bool,
 }
 
 /// The CLIs' line in Settings › About: the copy that answers, and where.
@@ -44,20 +53,39 @@ impl CockpitView {
         }
     }
 
+    /// What a machine's failure reads as: a Server from before the command
+    /// is told to update, not shown its refusal.
+    fn said(&self, error: &std::io::Error) -> SharedString {
+        match error.kind() {
+            std::io::ErrorKind::Unsupported => {
+                format!("update ferrited on {}", self.machine_place()).into()
+            }
+            _ => error.to_string().into(),
+        }
+    }
+
     /// Read the machine's defaults, unless a read is out.
     pub(super) fn ask_server_defaults(&mut self) {
-        if self.on_machine() && self.environment.defaults_asked.is_none() {
+        if self.on_machine() && self.environment.defaults_asked.is_empty() {
             self.send_defaults(None);
         }
     }
 
-    fn send_defaults(&mut self, set: Option<ServerDefaults>) {
+    /// Send a read, or with `set` a write, of the machine's defaults.
+    /// Whether it went out.
+    fn send_defaults(&mut self, set: Option<ServerDefaults>) -> bool {
+        let write = set.is_some();
         match self.cockpit.server_defaults(set) {
             Ok(answer) => {
-                self.environment.defaults_asked = Some(answer);
-                self.environment.defaults_error = None;
+                self.environment
+                    .defaults_asked
+                    .push(DefaultsAsk { answer, write });
+                true
             }
-            Err(error) => self.environment.defaults_error = Some(error.to_string().into()),
+            Err(error) => {
+                self.environment.defaults_error = Some(self.said(&error));
+                false
+            }
         }
     }
 
@@ -77,8 +105,9 @@ impl CockpitView {
             .map(|defaults| defaults.factory_tasks_at_once)
     }
 
-    /// Change one default where it lives. On a machine the Server writes it
-    /// and rereads its file, and Settings shows that reread.
+    /// Change one default where it lives. On a machine Settings shows the
+    /// edit at once, the Server writes it and rereads its file, and the
+    /// last reread is what Settings keeps.
     pub(super) fn change_defaults(
         &mut self,
         change: impl FnOnce(&mut ServerDefaults),
@@ -99,7 +128,9 @@ impl CockpitView {
             return;
         };
         change(&mut defaults);
-        self.send_defaults(Some(defaults));
+        if self.send_defaults(Some(defaults.clone())) {
+            self.environment.defaults = Some(defaults);
+        }
         cx.notify();
     }
 
@@ -123,6 +154,15 @@ impl CockpitView {
             None => format!("Reading from {}…", self.machine_place()).into(),
         };
         settings::fact("Defaults", status)
+    }
+
+    /// The machine's refusal of an edit, shown beside the values it kept.
+    fn defaults_unsaved(&self) -> Option<settings::Row> {
+        let error = self.environment.defaults_error.as_ref()?;
+        Some(settings::fact(
+            "Defaults",
+            format!("Not saved on {}: {error}", self.machine_place()).into(),
+        ))
     }
 
     /// Settings › Permissions: how each provider's Sessions ask before
@@ -194,7 +234,7 @@ impl CockpitView {
             ),
         ];
         vec![
-            settings::Group::new(None).rows([applies]),
+            settings::Group::new(None).rows(std::iter::once(applies).chain(self.defaults_unsaved())),
             provider_group(Provider::Claude).rows(claude),
             provider_group(Provider::Codex).rows(codex),
         ]
@@ -209,8 +249,7 @@ impl CockpitView {
             return group.rows([applies, self.defaults_unread()]);
         };
         let at_once = defaults.factory_tasks_at_once;
-        group.rows([
-            applies,
+        group.rows(std::iter::once(applies).chain(self.defaults_unsaved()).chain([
             settings::toggle(
                 "settings-placeholder-suggestions",
                 "Suggest follow-up prompts",
@@ -232,7 +271,7 @@ impl CockpitView {
                     }
                 },
             ),
-        ])
+        ]))
     }
 
     /// Ask the machine's CLIs their versions.
@@ -271,19 +310,58 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// The defaults replies that landed, in the order they were asked. A
+    /// reply keeps the edits still in flight, so only the last one replaces
+    /// what Settings shows; a write that failed is read back, so the rows
+    /// show what the machine kept.
+    fn poll_defaults(&mut self) -> bool {
+        let mut landed = Vec::new();
+        let mut waiting = Vec::new();
+        for ask in std::mem::take(&mut self.environment.defaults_asked) {
+            if !waiting.is_empty() {
+                waiting.push(ask);
+                continue;
+            }
+            match try_answer(&ask.answer) {
+                None => waiting.push(ask),
+                Some(answer) => landed.push((ask.write, answer)),
+            }
+        }
+        self.environment.defaults_asked = waiting;
+        let heard = !landed.is_empty();
+        let mut unsaved = false;
+        for (write, answer) in landed {
+            match answer {
+                Ok(defaults) => {
+                    if write {
+                        self.environment.defaults_error = None;
+                    }
+                    if self.environment.defaults_asked.is_empty() {
+                        self.environment.defaults = Some(defaults);
+                    }
+                }
+                Err(error) if write => {
+                    self.environment.defaults_error = Some(self.said(&error));
+                    unsaved = true;
+                }
+                Err(error) if self.environment.defaults.is_none() => {
+                    self.environment.defaults_error = Some(self.said(&error));
+                }
+                Err(error) => {
+                    ferrite_core::log!("could not reread the machine's defaults: {error}")
+                }
+            }
+        }
+        if unsaved && self.environment.defaults_asked.is_empty() {
+            self.send_defaults(None);
+        }
+        heard
+    }
+
     /// What the machine answered since the pump last looked.
     pub(super) fn poll_environment(&mut self, cx: &mut Context<Self>) {
         let mut heard = false;
-        if let Some(answer) = take_answer(&mut self.environment.defaults_asked) {
-            heard = true;
-            match answer {
-                Ok(defaults) => {
-                    self.environment.defaults = Some(defaults);
-                    self.environment.defaults_error = None;
-                }
-                Err(error) => self.environment.defaults_error = Some(error.to_string().into()),
-            }
-        }
+        heard |= self.poll_defaults();
         if let Some(answer) = take_answer(&mut self.environment.versions) {
             heard = true;
             self.cli_versions = Some(match answer {
@@ -296,6 +374,10 @@ impl CockpitView {
                         )
                     };
                     (line(Provider::Claude), line(Provider::Codex))
+                }
+                Err(error) => {
+                    let said = self.said(&error);
+                    (said.clone(), said)
                 }
                 _ => ("unavailable".into(), "unavailable".into()),
             });
@@ -312,11 +394,14 @@ impl CockpitView {
                     .iter_mut()
                     .find(|cli| cli.provider == provider)
                     .and_then(|cli| cli.status.take());
-                self.cli_updates.checked(
-                    provider,
-                    status.ok_or_else(|| std::io::Error::other("the machine did not answer")),
-                    auto,
-                );
+                let found = match status {
+                    None => Err("the machine did not answer"),
+                    Some(status) => status.known().ok_or(
+                        "the machine's ferrited reported a finding this Ferrite does not know",
+                    ),
+                };
+                self.cli_updates
+                    .checked(provider, found.map_err(std::io::Error::other), auto);
             }
             self.auto_update_clis(cx);
         }
@@ -359,11 +444,15 @@ impl CockpitView {
 /// A reply that arrived, taking its channel; a hung-up one reads as an
 /// error.
 fn take_answer<T>(slot: &mut Option<Answer<T>>) -> Option<std::io::Result<T>> {
-    let answer = match slot.as_ref()?.try_recv() {
-        Ok(answer) => answer,
-        Err(TryRecvError::Empty) => return None,
-        Err(error) => Err(std::io::Error::other(error)),
-    };
+    let answer = try_answer(slot.as_ref()?)?;
     *slot = None;
     Some(answer)
+}
+
+fn try_answer<T>(answer: &Answer<T>) -> Option<std::io::Result<T>> {
+    match answer.try_recv() {
+        Ok(answer) => Some(answer),
+        Err(TryRecvError::Empty) => None,
+        Err(error) => Some(Err(std::io::Error::other(error))),
+    }
 }

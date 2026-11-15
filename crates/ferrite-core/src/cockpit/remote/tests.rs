@@ -344,3 +344,13 @@ fn a_review_falls_back_to_review_diff_on_an_older_server() {
     );
     let _ = std::fs::remove_dir_all(&store);
 }
+
+#[test]
+fn a_command_the_server_does_not_know_reads_as_unsupported() {
+    let error: io::Error = WireError {
+        code: ErrorCode::Unsupported,
+        message: "no such command".into(),
+    }
+    .into();
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+}

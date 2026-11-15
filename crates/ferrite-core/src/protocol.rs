@@ -1025,7 +1025,65 @@ pub struct CliReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binary: Option<CliBinary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<crate::providers::update::Status>,
+    pub status: Option<CliStatus>,
+}
+
+/// What a check found, as it crosses the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CliStatus {
+    Missing,
+    UpToDate {
+        current: String,
+    },
+    Available {
+        current: String,
+        latest: String,
+        #[serde(default)]
+        upgrade: Option<crate::providers::update::Upgrade>,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+impl From<crate::providers::update::Status> for CliStatus {
+    fn from(status: crate::providers::update::Status) -> Self {
+        use crate::providers::update::Status;
+        match status {
+            Status::Missing => CliStatus::Missing,
+            Status::UpToDate { current } => CliStatus::UpToDate { current },
+            Status::Available {
+                current,
+                latest,
+                upgrade,
+            } => CliStatus::Available {
+                current,
+                latest,
+                upgrade,
+            },
+        }
+    }
+}
+
+impl CliStatus {
+    /// The check's finding, or `None` for one this build does not know.
+    pub fn known(self) -> Option<crate::providers::update::Status> {
+        use crate::providers::update::Status;
+        match self {
+            CliStatus::Missing => Some(Status::Missing),
+            CliStatus::UpToDate { current } => Some(Status::UpToDate { current }),
+            CliStatus::Available {
+                current,
+                latest,
+                upgrade,
+            } => Some(Status::Available {
+                current,
+                latest,
+                upgrade,
+            }),
+            CliStatus::Unknown => None,
+        }
+    }
 }
 
 /// What a GitHub start's pickers list (#225).

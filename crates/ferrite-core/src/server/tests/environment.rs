@@ -3,7 +3,7 @@
 //! its machine (`Op::Cli`).
 
 use super::*;
-use crate::protocol::{CliAction, CliBinary, Done};
+use crate::protocol::{CliAction, CliBinary, CliStatus, Done};
 use crate::providers::update::Status;
 use crate::server::clis::Clis;
 use crate::settings::{ServerDefaults, Settings};
@@ -125,7 +125,7 @@ fn the_cli_commands_name_the_servers_machine_and_binary() {
     let Done::Clis { clis } = answered(&mut window, |w| w.cli(CliAction::Check)).unwrap() else {
         panic!("a check answers with the copies");
     };
-    assert!(matches!(clis[0].status, Some(Status::UpToDate { .. })));
+    assert!(matches!(clis[0].status, Some(CliStatus::UpToDate { .. })));
 
     let updated = answered(&mut window, |w| {
         w.cli(CliAction::Update {

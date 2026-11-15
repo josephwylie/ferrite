@@ -5,7 +5,7 @@
 //!
 //! [`Clis`] is the seam: the Server's harness hands it a scripted machine.
 
-use crate::protocol::{CliAction, CliBinary, CliReport, Done, WireError};
+use crate::protocol::{CliAction, CliBinary, CliReport, CliStatus, Done, WireError};
 use crate::providers::{discover, update};
 use crate::store::Provider;
 
@@ -74,6 +74,7 @@ pub fn perform(clis: &dyn Clis, action: &CliAction) -> Result<Done, WireError> {
                         status: check
                             .then(|| {
                                 clis.check(provider)
+                                    .map(CliStatus::from)
                                     .map_err(|error| {
                                         crate::log!("cli check for {provider}: {error}")
                                     })

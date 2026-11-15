@@ -1206,7 +1206,10 @@ fn gone(reason: &str) -> WireError {
 
 impl From<WireError> for io::Error {
     fn from(error: WireError) -> Self {
-        io::Error::other(error.message)
+        match error.code {
+            ErrorCode::Unsupported => io::Error::new(io::ErrorKind::Unsupported, error.message),
+            _ => io::Error::other(error.message),
+        }
     }
 }
 

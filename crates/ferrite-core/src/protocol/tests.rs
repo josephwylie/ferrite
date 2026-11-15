@@ -1317,7 +1317,7 @@ fn samples() -> Vec<(&'static str, Sample)> {
                             version: "2.1.259".into(),
                             path: "/opt/box/bin/claude".into(),
                         }),
-                        status: Some(crate::providers::update::Status::UpToDate {
+                        status: Some(CliStatus::UpToDate {
                             current: "2.1.259".into(),
                         }),
                     }],
@@ -2688,6 +2688,33 @@ fn an_unknown_enum_value_decodes_to_unknown() {
     assert_eq!(
         capabilities,
         vec![Capability::RenderVisual, Capability::Unknown]
+    );
+}
+
+#[test]
+fn a_cli_status_from_a_newer_server_decodes_to_unknown() {
+    let report: CliReport = serde_json::from_str(
+        r#"{"provider":"claude","status":{"kind":"quarantined","since":"yesterday"}}"#,
+    )
+    .unwrap();
+    assert_eq!(report.status, Some(CliStatus::Unknown));
+    assert_eq!(report.status.and_then(CliStatus::known), None);
+}
+
+#[test]
+fn server_defaults_a_server_leaves_out_take_their_defaults() {
+    let sparse: crate::settings::ServerDefaults =
+        serde_json::from_str(r#"{"factory_tasks_at_once":5}"#).unwrap();
+    assert_eq!(
+        sparse,
+        crate::settings::ServerDefaults {
+            factory_tasks_at_once: 5,
+            ..Default::default()
+        }
+    );
+    assert_eq!(
+        serde_json::from_str::<crate::settings::ServerDefaults>("{}").unwrap(),
+        Default::default()
     );
 }
 

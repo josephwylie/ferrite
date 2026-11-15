@@ -1632,22 +1632,22 @@ fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(c
     assert_eq!(activation(), before, "annotation selection never forwards page activation input");
 }
 
-/// Settings on a machine show and edit that machine's own defaults: the
-/// Server writes its file and the sheet shows what it reread, while this
-/// computer's preferences stay as they were.
-#[gpui::test]
-fn settings_on_a_machine_edit_its_defaults_not_this_computers(cx: &mut TestAppContext) {
+/// A window on a machine whose own `settings.json` is `there`, with its
+/// Settings open and the machine's defaults read. Returns the machine's
+/// settings directory too.
+fn settings_on_a_machine<'a>(
+    cx: &'a mut TestAppContext,
+    name: &str,
+    there: &ferrite_core::settings::Settings,
+) -> (
+    Entity<CockpitView>,
+    &'a mut gpui::VisualTestContext,
+    std::path::PathBuf,
+) {
     use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
-    use ferrite_core::settings::Settings;
-    let dir = scratch("rd");
+    let dir = scratch(name);
     let remote = dir.join("r");
     std::fs::create_dir_all(&remote).unwrap();
-    let there = Settings {
-        factory_tasks_at_once: 5,
-        placeholder_suggestions: false,
-        codex_approval_policy: "never".into(),
-        ..Default::default()
-    };
     there.save(&remote).unwrap();
     let dial = ferrite_core::server::fixture_machine(
         remote.join("threads"),
@@ -1678,8 +1678,6 @@ fn settings_on_a_machine_edit_its_defaults_not_this_computers(cx: &mut TestAppCo
     });
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-    let here = view.read_with(cx, |view, _| view.prefs.settings.clone());
-    assert_ne!(here.factory_tasks_at_once, there.factory_tasks_at_once);
     bind_production_keys(cx);
     cx.simulate_keystrokes("cmd-,");
     cx.run_until_parked();
@@ -1687,6 +1685,24 @@ fn settings_on_a_machine_edit_its_defaults_not_this_computers(cx: &mut TestAppCo
         view.read_with(cx, |view, _| view.shown_defaults().is_some())
     });
     tick(cx);
+    (view, cx, remote)
+}
+
+/// Settings on a machine show and edit that machine's own defaults: the
+/// Server writes its file and the sheet shows what it reread, while this
+/// computer's preferences stay as they were.
+#[gpui::test]
+fn settings_on_a_machine_edit_its_defaults_not_this_computers(cx: &mut TestAppContext) {
+    use ferrite_core::settings::Settings;
+    let there = Settings {
+        factory_tasks_at_once: 5,
+        placeholder_suggestions: false,
+        codex_approval_policy: "never".into(),
+        ..Default::default()
+    };
+    let (view, cx, remote) = settings_on_a_machine(cx, "rd", &there);
+    let here = view.read_with(cx, |view, _| view.prefs.settings.clone());
+    assert_ne!(here.factory_tasks_at_once, there.factory_tasks_at_once);
     let shown = |cx: &mut gpui::VisualTestContext| {
         view.read_with(cx, |view, _| view.shown_defaults().unwrap())
     };
@@ -1737,4 +1753,74 @@ fn settings_on_a_machine_edit_its_defaults_not_this_computers(cx: &mut TestAppCo
         Settings::load(&view.read_with(cx, |view, _| view.prefs.dir.clone()))
             .map_or(true, |saved| saved.factory_tasks_at_once == here.factory_tasks_at_once)
     );
+}
+
+/// Two quick edits both land: the second is built on the first, not on what
+/// the machine last said.
+#[gpui::test]
+fn two_quick_edits_to_a_machines_defaults_both_land(cx: &mut TestAppContext) {
+    use ferrite_core::settings::Settings;
+    let there = Settings {
+        factory_tasks_at_once: 5,
+        ..Default::default()
+    };
+    let (view, cx, remote) = settings_on_a_machine(cx, "rd-quick", &there);
+    let search = cx.debug_bounds("settings-search").unwrap();
+    cx.simulate_click(search.center(), gpui::Modifiers::none());
+    cx.simulate_input("at once");
+    tick(cx);
+    let more = cx.debug_bounds("settings-factory-limit-1").unwrap().center();
+    cx.simulate_click(more, gpui::Modifiers::none());
+    cx.simulate_click(more, gpui::Modifiers::none());
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| {
+            view.shown_defaults()
+                .is_some_and(|shown| shown.factory_tasks_at_once == 7)
+        })
+    });
+    tick(cx);
+    assert_eq!(view.read_with(cx, |view, _| view.factory_limit()), Some(7));
+    assert_eq!(Settings::load(&remote).unwrap().factory_tasks_at_once, 7);
+}
+
+/// A machine that cannot write its file says so in both groups that show
+/// its defaults, beside the values it kept.
+#[gpui::test]
+fn a_machine_that_cannot_save_its_defaults_says_so(cx: &mut TestAppContext) {
+    use ferrite_core::settings::Settings;
+    use std::os::unix::fs::PermissionsExt;
+    let there = Settings {
+        factory_tasks_at_once: 5,
+        ..Default::default()
+    };
+    let (view, cx, remote) = settings_on_a_machine(cx, "rd-readonly", &there);
+    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let search = cx.debug_bounds("settings-search").unwrap();
+    cx.simulate_click(search.center(), gpui::Modifiers::none());
+    cx.simulate_input("at once");
+    tick(cx);
+    let more = cx.debug_bounds("settings-factory-limit-1").unwrap().center();
+    cx.simulate_click(more, gpui::Modifiers::none());
+    let says = |group: &super::settings::Group| {
+        group
+            .rows
+            .iter()
+            .any(|row| row.words.iter().any(|word| word.contains("Not saved on box")))
+    };
+    let unsaved = |cx: &mut gpui::VisualTestContext| {
+        view.update(cx, |view, cx| {
+            (
+                says(&view.machine_group(cx)),
+                view.permission_groups(cx).iter().any(says),
+            )
+        })
+    };
+    until(cx, |cx| unsaved(cx).0);
+    assert!(unsaved(cx).1, "the Permissions page says it too");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.factory_limit()),
+        Some(5),
+        "Settings shows what the machine kept"
+    );
+    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o755)).unwrap();
 }

@@ -4782,7 +4782,10 @@ impl CockpitView {
                 "settings-auto-update-clis",
                 "Update the CLIs automatically",
                 // One line (`settings::hint`): the reason first.
-                "New models need a newer CLI · installed when its Threads are idle",
+                format!(
+                    "New models need a newer CLI · installed on {} when its Threads are idle",
+                    self.machine_place()
+                ),
                 settings.auto_update_clis,
                 self.setting_change(cx, |s, v| s.auto_update_clis = v),
             ),
