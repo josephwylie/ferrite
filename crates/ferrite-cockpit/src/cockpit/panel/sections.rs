@@ -213,7 +213,6 @@ pub(super) fn detail_row(
         )
         .child(
             div()
-                .flex_shrink_0()
                 .max_w_full()
                 .min_w_0()
                 .truncate()
