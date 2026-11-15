@@ -19,7 +19,7 @@ pub(crate) struct NavUndo {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum UndoAct {
-    Parked(Vec<ThreadId>),
+    Parked(Vec<super::nav_undo::ParkedThread>),
     Snoozed(ThreadId),
 }
 
@@ -278,9 +278,10 @@ impl CockpitView {
     /// A result opens its Thread; the search clears and the keys go back
     /// to the board.
     fn open_search_result(&mut self, thread: ThreadId, window: &mut Window, cx: &mut Context<Self>) {
-        self.clear_search(cx);
-        self.open_nav_row(thread, cx);
-        window.blur(cx);
+        if self.open_nav_row(thread, cx) {
+            self.clear_search(cx);
+            window.blur(cx);
+        }
     }
 
     /// Esc in the field, or its clear button: the field empties and the
@@ -441,11 +442,7 @@ impl CockpitView {
             return;
         };
         match undo.act {
-            UndoAct::Parked(threads) => {
-                for thread in threads {
-                    self.revive_thread(thread, cx);
-                }
-            }
+            UndoAct::Parked(parked) => self.undo_parked(parked, cx),
             UndoAct::Snoozed(thread) => self.snooze_thread(thread, None, cx),
         }
         cx.notify();

@@ -128,7 +128,6 @@ impl CockpitView {
             return;
         };
         let threads = sweep.swept;
-        self.nav_picked.retain(|picked| !threads.contains(picked));
         self.park_listed(&threads, cx);
         self.notify_part(parts::Part::Nav, cx);
     }

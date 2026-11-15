@@ -359,11 +359,12 @@ impl CockpitView {
     /// A Thread row's press, and ⏎ on it: an open Thread takes focus (on
     /// the Group on screen when it holds it, else Solo); a parked one
     /// revives.
-    pub(super) fn open_nav_row(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    pub(super) fn open_nav_row(&mut self, thread: ThreadId, cx: &mut Context<Self>) -> bool {
         if self.pane_for(thread).is_some() {
             self.focus_thread(thread, cx);
+            true
         } else {
-            self.revive_thread(thread, cx);
+            self.revive_thread(thread, cx)
         }
     }
 }

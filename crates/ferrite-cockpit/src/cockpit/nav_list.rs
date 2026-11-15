@@ -332,7 +332,9 @@ impl CockpitView {
                 view.snooze_editor = None;
                 match &open {
                     Some(verb) => view.notice_verb(verb.clone(), cx),
-                    None => view.open_nav_row(thread, cx),
+                    None => {
+                        view.open_nav_row(thread, cx);
+                    }
                 }
                 window.blur(cx);
             }))

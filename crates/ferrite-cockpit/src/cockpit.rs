@@ -30,6 +30,7 @@ mod nav_chrome;
 mod nav_keys;
 mod nav_list;
 mod nav_pick;
+mod nav_undo;
 mod palette;
 pub(crate) mod panel;
 mod parts;
@@ -9085,18 +9086,33 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Revive one parked Thread into the view that shows it — the shared
-    /// tail of cmd-o and a parked nav row's click (#21).
-    fn revive_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+    /// Revive one parked Thread into the view that shows it: the shared
+    /// tail of cmd-o and a parked nav row's click (#21). Whether it came
+    /// back; when it did not, the nav says so.
+    fn revive_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) -> bool {
+        let revived = self.try_revive(thread, cx);
+        let outcome = nav_undo::Outcome {
+            thread,
+            result: revived.as_ref().map(drop).map_err(|e| e.to_string()),
+        };
+        self.report_failures("reopen", &[outcome]);
+        cx.notify();
+        revived.is_ok()
+    }
+
+    /// `revive_thread` without the words, for a caller with several to
+    /// tell. The board's own state gives way only to a Thread that is back.
+    fn try_revive(
+        &mut self,
+        thread: ThreadId,
+        cx: &mut Context<Self>,
+    ) -> Result<(), ferrite_core::store::LoadError> {
+        self.cockpit.reopen(thread)?;
         self.empty_shown = false;
         self.factory_view = None;
-        match self.cockpit.reopen(thread) {
-            Ok(()) => {
-                self.sync_panes(cx);
-                cx.notify();
-            }
-            Err(e) => ferrite_core::log!("thread {thread} could not be reopened: {e:?}"),
-        }
+        self.sync_panes(cx);
+        cx.notify();
+        Ok(())
     }
 
     /// Focus by grid index — the pointer's and the tests' spelling of the
@@ -9160,15 +9176,16 @@ impl CockpitView {
     /// closed, which is the one they want back (#17); the core walks the
     /// park order, then creation order.
     fn reopen_thread(&mut self, _: &ReopenThread, _window: &mut Window, cx: &mut Context<Self>) {
-        match self.cockpit.reopen_last() {
-            Some((_, Ok(()))) => {
+        if let Some((thread, result)) = self.cockpit.reopen_last() {
+            let outcome = nav_undo::Outcome {
+                thread,
+                result: result.map_err(|e| e.to_string()),
+            };
+            if outcome.result.is_ok() {
                 self.sync_panes(cx);
-                cx.notify();
             }
-            Some((thread, Err(e))) => {
-                ferrite_core::log!("thread {thread} could not be reopened: {e:?}")
-            }
-            None => {}
+            self.report_failures("reopen", &[outcome]);
+            cx.notify();
         }
     }
 
@@ -12843,21 +12860,6 @@ impl CockpitView {
             pr,
             pin: Some(pin),
         }
-    }
-
-    /// Park each of `threads` (reversible: the Parked shelf holds them,
-    /// and ⌘Z takes it back while the foot's notice stands).
-    fn park_listed(&mut self, threads: &[ThreadId], cx: &mut Context<Self>) {
-        let parked: Vec<ThreadId> = threads
-            .iter()
-            .copied()
-            .filter(|thread| self.cockpit.park_thread(*thread).is_ok())
-            .collect();
-        self.sync_panes(cx);
-        if !parked.is_empty() {
-            self.offer_undo(nav_chrome::UndoAct::Parked(parked), cx);
-        }
-        cx.notify();
     }
 
     /// The nav column as far in as it is this frame, its face pinned to the
