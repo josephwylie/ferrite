@@ -23,11 +23,19 @@ pub(crate) struct Environment {
     /// write lands.
     pub(super) defaults: Option<ServerDefaults>,
     /// Why the machine's defaults could not be read, or an edit written.
-    pub(super) defaults_error: Option<SharedString>,
+    pub(super) defaults_error: Option<DefaultsTrouble>,
     defaults_asked: Vec<DefaultsAsk>,
     versions: Option<Answer<Done>>,
     check: Option<Answer<Done>>,
     updates: Vec<(Provider, Answer<Done>)>,
+}
+
+/// What went wrong with the machine's defaults: a read that never
+/// landed, or an edit the machine refused. A read that lands clears only
+/// the first, so a refused edit stays shown beside the values read back.
+pub(super) enum DefaultsTrouble {
+    Unread(SharedString),
+    Unsaved(SharedString),
 }
 
 /// A read or a write of the machine's defaults, out and not yet answered.
@@ -83,7 +91,7 @@ impl CockpitView {
                 true
             }
             Err(error) => {
-                self.environment.defaults_error = Some(self.said(&error));
+                self.defaults_failed(write, self.said(&error));
                 false
             }
         }
@@ -150,15 +158,17 @@ impl CockpitView {
     /// What stands in for the machine's rows until it has said them.
     fn defaults_unread(&self) -> settings::Row {
         let status: SharedString = match &self.environment.defaults_error {
-            Some(error) => format!("Could not read them: {error}").into(),
-            None => format!("Reading from {}…", self.machine_place()).into(),
+            Some(DefaultsTrouble::Unread(error)) => format!("Could not read them: {error}").into(),
+            _ => format!("Reading from {}…", self.machine_place()).into(),
         };
         settings::fact("Defaults", status)
     }
 
     /// The machine's refusal of an edit, shown beside the values it kept.
     fn defaults_unsaved(&self) -> Option<settings::Row> {
-        let error = self.environment.defaults_error.as_ref()?;
+        let Some(DefaultsTrouble::Unsaved(error)) = &self.environment.defaults_error else {
+            return None;
+        };
         Some(settings::fact(
             "Defaults",
             format!("Not saved on {}: {error}", self.machine_place()).into(),
@@ -316,6 +326,19 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// Keeps why a read or a write of the defaults failed. A failed reread
+    /// behind rows already shown is only logged: the rows still stand.
+    fn defaults_failed(&mut self, write: bool, error: SharedString) {
+        self.environment.defaults_error = if write {
+            Some(DefaultsTrouble::Unsaved(error))
+        } else if self.environment.defaults.is_none() {
+            Some(DefaultsTrouble::Unread(error))
+        } else {
+            ferrite_core::log!("could not reread the machine's defaults: {error}");
+            return;
+        };
+    }
+
     /// The defaults replies that landed, in the order they were asked. A
     /// reply keeps the edits still in flight, so only the last one replaces
     /// what Settings shows; a write that failed is read back, so the rows
@@ -339,22 +362,21 @@ impl CockpitView {
         for (write, answer) in landed {
             match answer {
                 Ok(defaults) => {
-                    if write {
+                    if write
+                        || matches!(
+                            self.environment.defaults_error,
+                            Some(DefaultsTrouble::Unread(_))
+                        )
+                    {
                         self.environment.defaults_error = None;
                     }
                     if self.environment.defaults_asked.is_empty() {
                         self.environment.defaults = Some(defaults);
                     }
                 }
-                Err(error) if write => {
-                    self.environment.defaults_error = Some(self.said(&error));
-                    unsaved = true;
-                }
-                Err(error) if self.environment.defaults.is_none() => {
-                    self.environment.defaults_error = Some(self.said(&error));
-                }
                 Err(error) => {
-                    ferrite_core::log!("could not reread the machine's defaults: {error}")
+                    unsaved |= write;
+                    self.defaults_failed(write, self.said(&error));
                 }
             }
         }

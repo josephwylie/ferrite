@@ -1822,3 +1822,67 @@ fn a_machine_that_cannot_save_its_defaults_says_so(cx: &mut TestAppContext) {
     });
     std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
+
+fn says_in_machine_group(
+    view: &Entity<CockpitView>,
+    cx: &mut gpui::VisualTestContext,
+    words: &str,
+) -> bool {
+    view.update(cx, |view, cx| {
+        view.machine_group(cx)
+            .rows
+            .iter()
+            .any(|row| row.words.iter().any(|word| word.contains(words)))
+    })
+}
+
+/// A read that failed and then lands shows the values, not a refused edit.
+#[gpui::test]
+fn a_failed_read_that_later_lands_is_not_an_unsaved_edit(cx: &mut TestAppContext) {
+    use ferrite_core::settings::Settings;
+    use std::os::unix::fs::PermissionsExt;
+    let (view, cx, remote) = settings_on_a_machine(cx, "rd-reread", &Settings::default());
+    let file = remote.join(Settings::FILE);
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    view.update(cx, |view, _| {
+        view.environment.defaults = None;
+        view.ask_server_defaults();
+    });
+    until(cx, |cx| says_in_machine_group(&view, cx, "Could not read them"));
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    view.update(cx, |view, _| view.ask_server_defaults());
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.shown_defaults().is_some())
+    });
+    tick(cx);
+    assert!(!says_in_machine_group(&view, cx, "Not saved"));
+}
+
+/// An edit that saves after one was refused takes the refusal away.
+#[gpui::test]
+fn a_saved_edit_clears_an_earlier_refusal(cx: &mut TestAppContext) {
+    use ferrite_core::settings::Settings;
+    use std::os::unix::fs::PermissionsExt;
+    let there = Settings {
+        factory_tasks_at_once: 5,
+        ..Default::default()
+    };
+    let (view, cx, remote) = settings_on_a_machine(cx, "rd-resave", &there);
+    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let search = cx.debug_bounds("settings-search").unwrap();
+    cx.simulate_click(search.center(), gpui::Modifiers::none());
+    cx.simulate_input("at once");
+    tick(cx);
+    let more = cx.debug_bounds("settings-factory-limit-1").unwrap().center();
+    cx.simulate_click(more, gpui::Modifiers::none());
+    until(cx, |cx| says_in_machine_group(&view, cx, "Not saved on box"));
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.factory_limit()) == Some(5)
+    });
+    std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o755)).unwrap();
+    cx.simulate_click(more, gpui::Modifiers::none());
+    until(cx, |_| {
+        Settings::load(&remote).is_ok_and(|written| written.factory_tasks_at_once == 6)
+    });
+    until(cx, |cx| !says_in_machine_group(&view, cx, "Not saved"));
+}
