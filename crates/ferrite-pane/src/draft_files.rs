@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use ferrite_core::attachment::{self, Destination, Readiness, Source};
+use ferrite_core::attachment::{self, Destination, Failure, Readiness, Source};
 
 pub(crate) struct DraftFiles {
     paths: Vec<PathBuf>,
@@ -131,24 +131,37 @@ impl DraftFiles {
         })
     }
 
-    /// Swap each file for its retained copy, so what is sent is what is
-    /// kept. A copy that cannot be made leaves the file a live reference; on
-    /// a machine nothing is copied, for the paths are the machine's.
-    pub(crate) fn retain(&mut self) {
+    /// Swap each file of this computer for its retained copy, so what is
+    /// sent is what is kept. A workspace file stays the live path the agent
+    /// edits, and on a machine nothing is copied, for the paths are the
+    /// machine's. A file that cannot be copied is marked `Unreadable` and
+    /// nothing is swapped: whether the send may go ahead.
+    pub(crate) fn retain(&mut self) -> bool {
         if self.destination == Destination::Remote {
-            return;
+            return true;
         }
         let mut paths = Vec::with_capacity(self.paths.len());
         let mut local = Vec::new();
         for path in &self.paths {
-            let copy = attachment::retain(path, &self.store).unwrap_or_else(|_| path.clone());
-            if self.source(path) == Source::Local {
-                local.push(copy.clone());
-            }
-            if !paths.contains(&copy) {
-                paths.push(copy);
+            let kept = match self.source(path) {
+                Source::Workspace => path.clone(),
+                Source::Local => match attachment::retain(path, &self.store) {
+                    Ok(copy) => {
+                        local.push(copy.clone());
+                        copy
+                    }
+                    Err(error) => {
+                        let failure = Readiness::Failed(Failure::Unreadable(error.to_string()));
+                        self.readiness.insert(path.clone(), failure);
+                        return false;
+                    }
+                },
+            };
+            if !paths.contains(&kept) {
+                paths.push(kept);
             }
         }
         self.replace(paths, local);
+        true
     }
 }

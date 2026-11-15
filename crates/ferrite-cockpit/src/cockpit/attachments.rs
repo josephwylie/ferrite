@@ -23,13 +23,13 @@ impl CockpitView {
 
     /// Whether `composer`'s send may go ahead. Its files are looked at as
     /// they are now, so one repaired since it failed passes; one that still
-    /// fails stops the send and says why in the tray. The files that pass
-    /// are replaced by retained copies, so what is sent is what is kept.
+    /// fails stops the send and says why in the tray. The files of this
+    /// computer that pass are replaced by retained copies, so what is sent is
+    /// what is kept; a workspace file is sent as its own path.
     pub(super) fn admit_files(&self, composer: &Entity<Composer>, cx: &mut Context<Self>) -> bool {
         if composer.update(cx, |composer, cx| composer.has_blocked_file(cx)) {
             return false;
         }
-        composer.update(cx, |composer, cx| composer.retain_files(cx));
-        true
+        composer.update(cx, |composer, cx| composer.retain_files(cx))
     }
 }

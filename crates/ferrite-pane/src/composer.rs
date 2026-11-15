@@ -387,11 +387,13 @@ impl Composer {
         self.files.blocked().is_some()
     }
 
-    /// Swap the files for retained copies of their bytes: a send's
-    /// attachments are what its history keeps.
-    pub fn retain_files(&mut self, cx: &mut Context<Self>) {
-        self.files.retain();
+    /// Swap the files of this computer for retained copies of their bytes:
+    /// a send's attachments are what its history keeps. False when one could
+    /// not be copied, which the tray then says.
+    pub fn retain_files(&mut self, cx: &mut Context<Self>) -> bool {
+        let kept = self.files.retain();
         cx.notify();
+        kept
     }
 
     pub fn browser_annotations(&self) -> &[Annotation] {

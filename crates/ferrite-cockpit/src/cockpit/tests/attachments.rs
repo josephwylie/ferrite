@@ -171,6 +171,51 @@ fn what_is_sent_is_the_bytes_the_draft_kept(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_file_attached_from_the_workspace_is_sent_as_its_own_path(cx: &mut TestAppContext) {
+    let (view, fake, dir, cx) = window_on("attach-workspace", cx);
+    let notes = files_dir("attach-workspace-repo").join("notes.txt");
+    std::fs::write(&notes, "one").unwrap();
+    view.update(cx, |view, cx| {
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.add_files(std::slice::from_ref(&notes), cx)
+        })
+    });
+    cx.simulate_input(WORDS);
+    tick(cx);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+
+    let sent = fake.sent.borrow().last().cloned().expect("it was sent");
+    assert_eq!(
+        ferrite_core::prompt_files::paths(&sent, None),
+        [notes],
+        "the agent is given the workspace's file, not a copy of it"
+    );
+    assert!(!dir.join("attachments").exists(), "nothing was copied");
+}
+
+#[gpui::test]
+fn a_workspace_file_that_goes_missing_stops_the_send(cx: &mut TestAppContext) {
+    let (view, fake, _dir, cx) = window_on("attach-workspace-gone", cx);
+    let notes = files_dir("attach-workspace-gone-repo").join("notes.txt");
+    std::fs::write(&notes, "one").unwrap();
+    view.update(cx, |view, cx| {
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.add_files(std::slice::from_ref(&notes), cx)
+        })
+    });
+    std::fs::remove_file(&notes).unwrap();
+    cx.simulate_input(WORDS);
+    tick(cx);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+
+    assert_eq!(sent_with(&fake, WORDS), 0);
+    assert_eq!(held_files(&view, cx), [notes]);
+    assert!(cx.debug_bounds("attachment-status").is_some());
+}
+
+#[gpui::test]
 fn a_pasted_screenshot_outlives_the_launch(cx: &mut TestAppContext) {
     let (view, _fake, dir, cx) = window_on("attach-paste", cx);
     let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, PNG.to_vec());

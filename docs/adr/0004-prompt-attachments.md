@@ -106,12 +106,16 @@ workspace are the machine's paths and go as they are. `DraftContent.local`
 records which files are of this computer, so the refusal survives a restart.
 (An older draft has no `local`, and reads as workspace files.)
 
-On send, each file is copied into `<store>/attachments/<hash>/<name>` and the
-prompt names the copy, so history, retry and a restored draft keep the bytes
-that went out. A pasted screenshot is kept there at paste time, not in a
-per-process temp directory. A file over 64 MiB is not copied and stays a live
-reference. Prompts sent before this change name live paths and keep doing
-so; nothing is migrated.
+On send, each file of this computer (a picker, drop or paste) is copied into
+`<store>/attachments/<hash>/<name>` and the prompt names the copy, so history,
+retry and a restored draft keep the bytes that went out. A file of the
+Thread's workspace is not copied: it is a live reference, and the agent that
+edits it edits the workspace's file. Its readiness is read again at send, so
+one that has gone missing refuses the send like any failed file. A file that
+cannot be copied refuses the send too. A pasted screenshot is kept in the
+store at paste time, not in a per-process temp directory. A local file over
+64 MiB is not copied and stays a live reference. Prompts sent before this
+change name live paths and keep doing so; nothing is migrated.
 
 Image previews no longer depend on the header reader that supplies pixel
 sizes: a readable image is drawn, and only an unreadable file is a failed
