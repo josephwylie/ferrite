@@ -475,6 +475,7 @@ impl CockpitView {
             &conversation.pane,
             conversation.inherited,
             None,
+            None,
             cx,
         );
     }
@@ -483,8 +484,9 @@ impl CockpitView {
     /// first `skip` blocks, `note` standing under the first prompt — the
     /// compact, read-only twin of `sync_transcript`, for the right pane's
     /// bodies (the side chat's tabs, a subagent's drill-in): no Decision
-    /// strip, subagents or rewinds, and no Reply (they have no Composer of
-    /// a Pane's to reply into).
+    /// subagents or rewinds, and no Reply (they have no Composer of a
+    /// Pane's to reply into). `decisions` is the Decision row after the
+    /// last, where the view answers its own.
     pub(super) fn sync_compact_transcript(
         &self,
         thread: ThreadId,
@@ -492,6 +494,7 @@ impl CockpitView {
         pane: &PaneView,
         skip: usize,
         note: Option<SharedString>,
+        decisions: Option<ferrite_pane::transcript::TranscriptTail>,
         cx: &mut Context<Self>,
     ) {
         let Some(open) = self.cockpit.thread(thread) else {
@@ -513,6 +516,16 @@ impl CockpitView {
             focused: true,
             reduce_motion: cx.reduce_motion(),
         });
+        let pending_call = decisions
+            .as_ref()
+            .and_then(|_| {
+                open.activity()
+                    .pending_decisions()
+                    .iter()
+                    .find(|request| subagents::shown_for(subject, request))
+            })
+            .map(|request| request.decision.tool_use_id.clone())
+            .filter(|call| !call.is_empty());
         let workspace =
             ferrite_core::workspace::effective_cwd(open.session_project_root(), open.workspace())
                 .map(std::path::Path::to_path_buf);
@@ -524,8 +537,8 @@ impl CockpitView {
             signal_status: Some(status),
             reading_size,
             working: working.as_ref().map(|working| working.key),
-            tail: None,
-            pending_call: None,
+            tail: decisions.as_ref().map(|tail| tail.key),
+            pending_call: pending_call.clone(),
             workspace: workspace.clone(),
             solo: false,
             thinking: self.prefs.settings.show_thinking,
@@ -563,8 +576,8 @@ impl CockpitView {
             target: disclosure.1,
             disclosure_focus: disclosure.2,
             working,
-            tail: None,
-            pending_call: None,
+            tail: decisions,
+            pending_call,
             workspace,
             solo: false,
             thinking: self.prefs.settings.show_thinking,

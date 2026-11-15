@@ -16,7 +16,9 @@
 //! own row (`pane::background_link`, `View live output ▸`).
 
 use super::*;
+use crate::cockpit::background_work::{running_work, stop_targets, StopTarget, Work};
 use crate::cockpit::surfaces::SurfaceId;
+use ferrite_pane::pane::WorkKind;
 use ferrite_core::transcript::{ToolBlock, ToolState};
 use ferrite_core::transcript::tools::{policy, ToolKind};
 
@@ -28,21 +30,25 @@ impl CockpitView {
     /// launched background work.
     pub(super) fn background_section(&self, thread: ThreadId, cx: &mut Context<Self>) -> Option<Div> {
         let open = self.cockpit.thread(thread)?;
-        let calls: Vec<&ToolBlock> = open.transcript().background_calls().collect();
-        if calls.is_empty() {
+        let running = running_work(&open);
+        let finished = open
+            .transcript()
+            .background_calls()
+            .filter(|call| !call.in_background())
+            .count();
+        if running.is_empty() && finished == 0 {
             return None;
         }
-        let finished = calls.iter().filter(|call| !call.in_background()).count();
         let mut section = div()
             .flex()
             .flex_col()
             .child(panel_section_head("panel-background-head", "Background tasks"));
-        for (index, call) in calls.iter().filter(|call| call.in_background()).enumerate() {
-            let launched = call.background.as_ref().map(|work| work.launched);
+        for (index, work) in running.iter().enumerate() {
+            let launched = work.task.launched;
             let row = sections::detail_row(
                 SharedString::from(format!("panel-background-{index}")),
-                glyph(call),
-                label(call),
+                glyph(work),
+                work.task.label.clone(),
                 None,
             )
             .cursor_pointer()
@@ -56,7 +62,7 @@ impl CockpitView {
                     .text_size(px(ferrite_ui::theme::FS_META))
                     .child(ferrite_pane::pane::background_clock(launched))
             }))
-            .children(self.stop_square(thread, call, cx));
+            .children(self.stop_square(thread, work, cx));
             section = section.child(row);
         }
         if finished > 0 {
@@ -88,9 +94,12 @@ impl CockpitView {
             return div();
         };
         let timings = open.activity().main().timings();
-        let calls: Vec<&ToolBlock> = open.transcript().background_calls().collect();
-        let (running, finished): (Vec<&ToolBlock>, Vec<&ToolBlock>) =
-            calls.into_iter().partition(|call| call.in_background());
+        let running = running_work(&open);
+        let finished: Vec<&ToolBlock> = open
+            .transcript()
+            .background_calls()
+            .filter(|call| !call.in_background())
+            .collect();
         let mut body = div()
             .debug_selector(|| "background-pane".into())
             .flex()
@@ -98,18 +107,31 @@ impl CockpitView {
             .gap(px(SPACE_2));
         if !running.is_empty() {
             body = body.child(group_label(format!("Running {}", running.len())));
-            for (index, call) in running.iter().enumerate() {
+            for (index, work) in running.iter().enumerate() {
+                let call = work
+                    .call
+                    .as_deref()
+                    .and_then(|call| open.transcript().tool(call));
                 let tail = div()
                     .flex()
                     .items_center()
                     .gap(px(SPACE_2))
-                    .children(call.background.as_ref().map(|work| {
-                        ferrite_pane::pane::background_clock(work.launched)
-                            .text_size(px(FS_META))
+                    .children(work.task.launched.map(|launched| {
+                        ferrite_pane::pane::background_clock(launched).text_size(px(FS_META))
                     }))
-                    .children(self.stop_square(thread, call, cx));
+                    .children(self.open_agent_button(thread, work, cx))
+                    .children(self.stop_square(thread, work, cx));
                 let id = SharedString::from(format!("background-running-{index}"));
-                body = body.child(self.card(id, call, true, tail, cx));
+                let output = call.map(|call| output_block(call, false, true));
+                body = body.child(self.card(
+                    id,
+                    work.handle(),
+                    work_title(work),
+                    output,
+                    true,
+                    tail,
+                    cx,
+                ));
             }
         }
         if !finished.is_empty() {
@@ -123,7 +145,16 @@ impl CockpitView {
                     .text_color(rgb(INK_SUBTLE))
                     .children(took);
                 let id = SharedString::from(format!("background-finished-{index}"));
-                body = body.child(self.card(id, call, false, tail, cx));
+                let output = Some(output_block(call, true, true));
+                body = body.child(self.card(
+                    id,
+                    call.call.clone(),
+                    label(call),
+                    output,
+                    false,
+                    tail,
+                    cx,
+                ));
             }
         }
         body
@@ -135,14 +166,16 @@ impl CockpitView {
     fn card(
         &self,
         id: SharedString,
-        call: &ToolBlock,
+        key: String,
+        title: SharedString,
+        output: Option<Div>,
         running: bool,
         tail: Div,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         use ferrite_ui::theme::*;
-        let open = running != self.panel.background_turned.contains(&call.call);
-        let target = call.call.clone();
+        let open = running != self.panel.background_turned.contains(&key);
+        let target = key;
         let head_id = format!("{id}-head");
         let head = div()
             .id(SharedString::from(head_id.clone()))
@@ -170,7 +203,7 @@ impl CockpitView {
                     .min_w_0()
                     .truncate()
                     .text_color(rgb(INK_STRONG))
-                    .child(label(call)),
+                    .child(title),
             )
             .child(tail);
         div()
@@ -183,26 +216,47 @@ impl CockpitView {
             .rounded(px(R_CARD))
             .bg(paint::RAISED)
             .child(head)
-            .when(open, |card| card.child(output_block(call, !running, true).pl(px(SPACE_4))))
+            .children(output.filter(|_| open).map(|output| output.pl(px(SPACE_4))))
+    }
+
+    /// `Open` on an agent's card: the agent in the Panel.
+    fn open_agent_button(
+        &self,
+        thread: ThreadId,
+        work: &Work,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let call = work.call.clone().filter(|_| work.task.kind == WorkKind::Subagent)?;
+        Some(
+            ferrite_pane::pane::inline_button(
+                SharedString::from(format!("background-open-{call}")),
+                "Open",
+            )
+            .debug_selector({
+                let call = call.clone();
+                move || format!("background-open-{call}")
+            })
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.open_background_agent(thread, &call, cx);
+            }))
+            .into_any_element(),
+        )
     }
 
     /// The white square that stops a piece of work, where the Session can.
     fn stop_square(
         &self,
         thread: ThreadId,
-        call: &ToolBlock,
+        work: &Work,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let open = self.cockpit.thread(thread)?;
-        if !open.supports_control(ferrite_core::ControlKind::StopTask) {
-            return None;
-        }
+        let target: StopTarget = stop_targets(&open, std::slice::from_ref(work)).pop()?;
         let generation = open.generation();
-        let task = call.background.as_ref()?.task.clone();
-        let target = call.call.clone();
         Some(
             crate::nav::icon_button(
-                SharedString::from(format!("background-stop-{target}")),
+                SharedString::from(format!("background-stop-{}", work.handle())),
                 icons::STOP,
                 ferrite_ui::theme::PANEL_ROW_ICON,
                 ferrite_ui::theme::ICON_BUTTON,
@@ -212,23 +266,21 @@ impl CockpitView {
             .tooltip(ferrite_ui::menu::tooltip("Stop"))
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
-                // Only work this very Session still runs: a square pressed
-                // as its work is handed back stops nothing else.
-                let running = view.cockpit.thread(thread).is_some_and(|open| {
-                    open.generation() == generation
-                        && open.transcript().running_in_background(&target)
-                });
-                if running {
-                    view.run_session_control(
-                        thread,
-                        generation,
-                        ferrite_core::SessionControl::StopTask { id: task.clone() },
-                    );
-                }
-                cx.notify();
+                view.send_stop(thread, generation, target.clone(), cx);
             }))
             .into_any_element(),
         )
+    }
+}
+
+fn work_title(work: &Work) -> SharedString {
+    let label = work.task.label.trim();
+    if !label.is_empty() {
+        label.to_owned().into()
+    } else if work.task.kind == WorkKind::Subagent {
+        "Subagent".into()
+    } else {
+        "Command".into()
     }
 }
 
@@ -238,8 +290,8 @@ pub(in crate::cockpit) fn label(call: &ToolBlock) -> SharedString {
     call.title.clone().unwrap_or_else(|| call.summary.clone()).into()
 }
 
-fn glyph(call: &ToolBlock) -> &'static str {
-    if policy(&call.name).kind == ToolKind::Agent {
+fn glyph(work: &Work) -> &'static str {
+    if work.task.kind == WorkKind::Subagent {
         icons::SUBAGENTS
     } else {
         icons::TERMINAL
