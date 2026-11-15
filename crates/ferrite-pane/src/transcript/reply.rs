@@ -200,8 +200,8 @@ impl TranscriptView {
         })
     }
 
-    /// Scroll to the row holding `block`. Whether it is still in this
-    /// transcript (a replayed or evicted history may have dropped it).
+    /// Scroll to the top of the row holding `block`, even when part of
+    /// it is already in view. Whether it is still in this transcript (a replayed or evicted history may have dropped it).
     pub fn reveal_block(&mut self, block: BlockId, cx: &mut Context<Self>) -> bool {
         let Some(row) = self
             .rows
@@ -211,7 +211,7 @@ impl TranscriptView {
         else {
             return false;
         };
-        self.navigate(Navigate::Reveal { row }, cx);
+        self.navigate(Navigate::At { index: row, into: 0. }, cx);
         cx.notify();
         true
     }
