@@ -3,7 +3,7 @@
 //! buffer last matched it.
 
 use std::hash::{DefaultHasher, Hasher};
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -60,11 +60,14 @@ pub(crate) fn write(path: &Path, text: &str, expected: Option<u64>, writer: Writ
 
 /// Replace the file whole: a sibling of the real file (a symlink is followed,
 /// as a plain write would) is written and renamed over it, so a failure
-/// part-way leaves the old file. Where no sibling can be created, the file is
-/// written in place.
+/// part-way leaves the old file. Only where no sibling can be created is the
+/// file written in place.
 pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     static WRITES: AtomicU64 = AtomicU64::new(0);
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let Ok(target) = std::fs::canonicalize(path) else {
+        // A new file, or a link to one: a plain write creates what it names.
+        return std::fs::write(path, bytes);
+    };
     let permissions = std::fs::metadata(&target).ok().map(|meta| meta.permissions());
     if permissions.as_ref().is_some_and(|permissions| permissions.readonly()) {
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, "the file is read-only"));
@@ -76,12 +79,15 @@ pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
         WRITES.fetch_add(1, Ordering::Relaxed)
     ));
     let staging = PathBuf::from(staging);
-    if std::fs::write(&staging, bytes).is_err() {
-        let _ = std::fs::remove_file(&staging);
+    let Ok(mut file) = std::fs::File::create_new(&staging) else {
         return std::fs::write(&target, bytes);
-    }
-    let result = permissions
-        .map_or(Ok(()), |permissions| std::fs::set_permissions(&staging, permissions))
+    };
+    let result = file
+        .write_all(bytes)
+        .and_then(|()| {
+            drop(file);
+            permissions.map_or(Ok(()), |permissions| std::fs::set_permissions(&staging, permissions))
+        })
         .and_then(|()| std::fs::rename(&staging, &target));
     if result.is_err() {
         let _ = std::fs::remove_file(&staging);
@@ -112,6 +118,17 @@ mod tests {
         assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn saving_through_a_dangling_symlink_creates_its_target() {
+        let dir = scratch("dangling");
+        let target = dir.join("AGENTS.md");
+        let link = dir.join("CLAUDE.md");
+        symlink(&target, &link).unwrap();
+        replace_file(&link, b"new").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
     }
 
     #[test]
