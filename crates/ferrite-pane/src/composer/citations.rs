@@ -317,24 +317,29 @@ fn panel(entity: &Entity<Composer>, index: usize, reply: &Reply, cx: &App) -> An
     let muted = |text: &'static str| div().text_color(rgb(theme::INK_SUBTLE)).child(text);
     let source = match reply.source {
         None => muted("Source not recorded").into_any_element(),
-        Some(_) if missing => div()
-            .debug_selector(|| "cite-source-missing".into())
-            .text_color(rgb(theme::INK_SUBTLE))
-            .child("Source unavailable. The quote is kept.")
-            .into_any_element(),
         Some(_) => {
             let go = entity.downgrade();
+            // A missing source keeps its button: the history may have arrived since.
+            let button = components::form_button(("cite-source", index), cx)
+                .debug_selector(|| "cite-source".into())
+                .key_context("PromptAttachment")
+                .child(if missing { "Try again" } else { "Go to source" })
+                .on_click(move |_, _, cx| {
+                    let _ = go.update(cx, |composer, cx| composer.open_source(index, cx));
+                });
             div()
                 .flex()
-                .child(
-                    components::form_button(("cite-source", index), cx)
-                        .debug_selector(|| "cite-source".into())
-                        .key_context("PromptAttachment")
-                        .child("Go to source")
-                        .on_click(move |_, _, cx| {
-                            let _ = go.update(cx, |composer, cx| composer.open_source(index, cx));
-                        }),
-                )
+                .items_center()
+                .gap_2()
+                .when(missing, |row| {
+                    row.child(
+                        div()
+                            .debug_selector(|| "cite-source-missing".into())
+                            .text_color(rgb(theme::INK_SUBTLE))
+                            .child("Source unavailable. The quote is kept."),
+                    )
+                })
+                .child(button)
                 .into_any_element()
         }
     };

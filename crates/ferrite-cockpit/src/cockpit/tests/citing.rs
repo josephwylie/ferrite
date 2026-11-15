@@ -299,6 +299,10 @@ fn go_to_source_returns_to_the_message_or_says_it_is_gone(cx: &mut TestAppContex
         cx.debug_bounds("cite-source-missing").is_some(),
         "the chip says so"
     );
+    assert!(
+        cx.debug_bounds("cite-source").is_some(),
+        "and can ask again once the history arrives"
+    );
     assert_eq!(
         quotes(&replies(&view, cx))[1],
         ("a lost passage", ""),
