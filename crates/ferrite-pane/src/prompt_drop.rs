@@ -39,7 +39,7 @@ pub fn target(
             }
             activate(window, cx);
             composer.update(cx, |composer, cx| {
-                composer.add_files(files.paths(), cx);
+                composer.add_local_files(files.paths(), cx);
                 composer.focus_handle(cx).focus(window, cx);
             });
             cx.stop_propagation();

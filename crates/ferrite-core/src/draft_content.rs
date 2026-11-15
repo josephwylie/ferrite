@@ -19,6 +19,10 @@ pub struct DraftContent {
     /// The line as typed: Markdown stays Markdown, a leading `> ` stays text.
     pub text: String,
     pub files: Vec<PathBuf>,
+    /// The `files` that came from this computer (a picker, a drop, a paste)
+    /// rather than the Thread's workspace: on a machine they are not there.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub local: Vec<PathBuf>,
     pub replies: Vec<Reply>,
     pub review: Vec<ReviewNote>,
     pub annotations: Vec<Annotation>,

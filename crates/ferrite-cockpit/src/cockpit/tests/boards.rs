@@ -85,10 +85,18 @@ fn native_file_drops_follow_the_pointer_across_panes_and_groups(cx: &mut TestApp
     });
     hide_panel(&view, cx);
     cx.simulate_resize(gpui::size(px(1200.), px(700.)));
+    let dropped = scratch("board-drop-files");
+    std::fs::create_dir_all(&dropped).unwrap();
     let files = vec![
-        here().join("screen shot.png"),
-        here().join("data.weird-extension"),
+        dropped.join("screen shot.png"),
+        dropped.join("data.weird-extension"),
     ];
+    std::fs::write(
+        &files[0],
+        include_bytes!("../../../../ferrite-core/tests/fixtures/browser-original.png"),
+    )
+    .unwrap();
+    std::fs::write(&files[1], "data").unwrap();
     let payload = gpui::ExternalPaths(files.clone().into());
     for (n, group) in groups.into_iter().enumerate() {
         view.update(cx, |view, cx| view.enter_group(group, cx));
@@ -263,10 +271,18 @@ fn native_file_drops_follow_the_pointer_across_panes_and_groups(cx: &mut TestApp
             assert!(view.panes[view.focused()].composer.read(cx).is_empty());
         });
         let sent = fake.sent.borrow();
+        let sent = ferrite_core::prompt_files::paths(sent.last().unwrap(), None);
         assert_eq!(
-            ferrite_core::prompt_files::paths(sent.last().unwrap(), None),
+            sent.iter()
+                .map(|path| path.file_name().unwrap())
+                .collect::<Vec<_>>(),
             files
+                .iter()
+                .map(|path| path.file_name().unwrap())
+                .collect::<Vec<_>>(),
+            "the prompt names the kept copy of each file"
         );
+        assert_ne!(sent, files);
     }
 }
 

@@ -18,10 +18,11 @@ pub(super) fn input_content(
     skills: &super::skill_mentions::Skills,
     cwd: Option<&std::path::Path>,
 ) -> Vec<serde_json::Value> {
+    use crate::attachment::{
+        INLINE_TOTAL as INLINE_ATTACHMENT_LIMIT, NATIVE_LIMIT as ATTACHMENT_LIMIT,
+    };
     use base64::Engine;
     use std::io::Read;
-    const ATTACHMENT_LIMIT: u64 = 5 * 1024 * 1024;
-    const INLINE_ATTACHMENT_LIMIT: u64 = 20 * 1024 * 1024;
     let mut content = skills.notes(text);
     content.push(serde_json::json!({"type": "text", "text": crate::replies::inert(text)}));
     let mut inline_bytes = 0;
