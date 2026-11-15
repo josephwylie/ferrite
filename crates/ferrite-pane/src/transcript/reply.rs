@@ -216,6 +216,41 @@ impl TranscriptView {
         true
     }
 
+    /// A sent Quote row's Go to source: scroll to the Block it was cited
+    /// from, or have the row say it is gone.
+    fn open_cited(&mut self, block: BlockId, cx: &mut Context<Self>) {
+        if !self.reveal_block(block, cx) {
+            self.missing_sources.insert(block);
+            cx.notify();
+        }
+    }
+
+    /// Where each Quote row of the prompt `line` was cited from.
+    pub(super) fn quote_sources(
+        &self,
+        line: &str,
+        view: Option<&gpui::Entity<Self>>,
+    ) -> Vec<Option<crate::attachments::QuoteSource>> {
+        let Some(view) = view.map(gpui::Entity::downgrade) else {
+            return Vec::new();
+        };
+        ferrite_core::replies::split(line)
+            .0
+            .iter()
+            .map(|reply| {
+                let key = ferrite_core::cited_sources::key(&reply.quote);
+                let block = *self.input.cited.get(&key)?;
+                let view = view.clone();
+                Some(crate::attachments::QuoteSource {
+                    missing: self.missing_sources.contains(&block),
+                    go: std::rc::Rc::new(move |_, cx| {
+                        let _ = view.update(cx, |transcript, cx| transcript.open_cited(block, cx));
+                    }),
+                })
+            })
+            .collect()
+    }
+
     /// The button on offer at `at` for `passage` (a reference scene's: no
     /// pointer drags a selection there).
     #[cfg(feature = "visual-reference")]

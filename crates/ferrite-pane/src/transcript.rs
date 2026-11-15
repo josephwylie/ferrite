@@ -214,6 +214,9 @@ pub struct TranscriptInput {
     /// The Session's commands and skills: a sent prompt's `/name` that
     /// names one is drawn blue, its description on hover.
     pub skills: std::sync::Arc<[ferrite_core::SessionCommand]>,
+    /// The Block each sent Quote row was cited from, by its words
+    /// (`ferrite_core::cited_sources`): the row offers Go to source.
+    pub cited: std::sync::Arc<std::collections::BTreeMap<String, BlockId>>,
     /// A muted line standing under the first prompt, which no block says:
     /// `Model Haiku 5.5` in a subagent's drill-in.
     pub note: Option<SharedString>,
@@ -253,6 +256,8 @@ pub struct TranscriptKey {
     pub quotes: bool,
     /// How many skills the prompts can name: a late catalogue redraws them.
     pub skills: usize,
+    /// How many sent quotes name their source.
+    pub cited: usize,
     pub note: Option<SharedString>,
     pub earlier: Option<Earlier>,
     pub queued: usize,
@@ -277,6 +282,7 @@ impl TranscriptInput {
             rewind: self.rewind.clone(),
             quotes: self.quotes,
             skills: self.skills.len(),
+            cited: self.cited.len(),
             note: self.note.clone(),
             earlier: self.earlier,
             queued: self.queued,
@@ -487,6 +493,9 @@ pub struct TranscriptView {
     /// second press (a double-click) sends nothing before the sent prompt
     /// reaches the transcript and spends the box.
     used_steps: HashMap<String, String>,
+    /// Cited Blocks Go to source found gone from this transcript: their
+    /// Quote rows say so.
+    missing_sources: HashSet<BlockId>,
     #[cfg(any(test, feature = "test-support"))]
     disclosure_bounds: Rc<std::cell::RefCell<HashMap<DisclosureId, gpui::Bounds<gpui::Pixels>>>>,
     /// What prose path targets resolve against: the checkout and the paths
@@ -582,6 +591,7 @@ impl TranscriptView {
                 quotes: false,
                 reply_to: SharedString::default(),
                 skills: Default::default(),
+                cited: Default::default(),
                 note: None,
                 earlier: None,
                 queued: 0,
@@ -641,6 +651,7 @@ impl TranscriptView {
             pinned_asked: Rc::new(Cell::new(None)),
             heights: Default::default(),
             used_steps: HashMap::new(),
+            missing_sources: HashSet::new(),
             #[cfg(any(test, feature = "test-support"))]
             disclosure_bounds: Default::default(),
             targets,
@@ -1714,6 +1725,7 @@ impl TranscriptView {
             let cuts = cuts.map(|((_, allowed), _)| allowed.clone());
             let joins = row.joins();
             let face = pane::PromptFace {
+                sources: self.quote_sources(line, view.as_ref()),
                 above: joins.above,
                 below: joins.below,
                 clamp: pane::prompt_clamps(line).then(|| {

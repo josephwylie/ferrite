@@ -3531,6 +3531,8 @@ pub(crate) struct PromptFace {
     pub above: bool,
     pub below: bool,
     pub clamp: Option<PromptClamp>,
+    /// Where each of its Quote rows was cited from, by row.
+    pub sources: Vec<Option<crate::attachments::QuoteSource>>,
 }
 
 /// A long prompt's clamp: whether it is open, and its toggle.
@@ -3563,15 +3565,17 @@ pub(crate) fn prompt_row(
     let (text, files) = prompt_text(&visible, row_cx.skills);
     let gallery = prompt_gallery(&files);
     // The passages it replied to, as their Quote rows (Claude's).
+    let mut sources = face.sources.into_iter();
     let quotes: Vec<_> = ferrite_core::replies::split(line)
         .0
         .into_iter()
         .enumerate()
         .map(|(index, reply)| {
+            let source = sources.next().flatten();
             div()
                 .max_w(relative(theme::PROMPT_BUBBLE_MAX_W))
                 .min_w_0()
-                .child(crate::attachments::quote_row(index, reply))
+                .child(crate::attachments::quote_row(index, reply, source))
         })
         .collect();
     let clamped = face.clamp.as_ref().is_some_and(|clamp| !clamp.open);
@@ -5230,6 +5234,7 @@ mod tests {
                 quotes: true,
                 reply_to: "Claude".into(),
                 skills: Default::default(),
+                cited: Default::default(),
                 note: None,
                 earlier: None,
                 queued: 0,
@@ -5273,6 +5278,7 @@ mod tests {
                     quotes: true,
                     reply_to: "Claude".into(),
                     skills: Default::default(),
+                    cited: Default::default(),
                     note: None,
                     earlier: None,
                     queued: 0,

@@ -4,6 +4,7 @@
 
 use super::*;
 use ferrite_core::draft_content::DraftContent;
+use ferrite_core::replies::Reply;
 use ferrite_core::drafts::Drafts;
 use ferrite_core::roster::DraftId;
 
@@ -104,6 +105,16 @@ impl CockpitView {
             this.update(cx, |view, cx| view.save_drafts(cx)).ok();
         })
         .detach();
+    }
+
+    /// `replies` went out on `thread`: their quotes keep the Blocks they
+    /// were cited from, for the sent rows' Go to source.
+    pub(super) fn keep_cited_sources(&mut self, thread: ThreadId, replies: &[Reply]) {
+        if self.cited_sources.record(thread, replies) {
+            if let Err(error) = self.cited_sources.save(&self.prefs.dir) {
+                eprintln!("ferrite: cited sources were not saved: {error}");
+            }
+        }
     }
 
     /// `thread`'s Pane just opened: its Composer takes what it was left

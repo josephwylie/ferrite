@@ -436,3 +436,94 @@ fn only_the_field_holding_the_keyboard_shows_a_caret(cx: &mut TestAppContext) {
     tick(cx);
     assert!(carets(cx) > 0, "the main line has it back");
 }
+
+/// A sent prompt's Quote row keeps where it was cited from, on Ferrite's
+/// side (the provider is sent the quote alone): Go to source scrolls back to
+/// that message, the file keeps it for the next launch, and a message that
+/// is gone is said so on the row.
+#[gpui::test]
+fn a_sent_quote_offers_go_to_source(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("cite-sent", 1);
+    let thread = core.threads()[0];
+    let dir = scratch("cite-sent-prefs");
+    std::fs::create_dir_all(&dir).unwrap();
+    let prefs = Preferences {
+        dir: dir.clone(),
+        ..Preferences::ephemeral()
+    };
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| {
+        CockpitView::new_with_settings(core, Provider::Claude, prefs, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let stream = fake.streams.borrow()[0].clone();
+    stream
+        .send(SessionEvent::TextDelta {
+            text: PARAGRAPHS.into(),
+        })
+        .unwrap();
+    tick(cx);
+    cite_alpha(&view, cx);
+    let filler: String = (0..80).map(|n| format!("filler {n}\n\n")).collect();
+    stream
+        .send(SessionEvent::TextDelta { text: filler })
+        .unwrap();
+    stream
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    let line = cx.debug_bounds("focused-prompt-editor").expect("the line");
+    cx.simulate_click(line.center(), gpui::Modifiers::none());
+    cx.simulate_input("go on");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert_eq!(
+        fake.sent.borrow().last().map(String::as_str),
+        Some("> alph\n\ngo on"),
+        "the provider is sent the quote alone"
+    );
+    assert!(
+        cx.debug_bounds("quote-row-0").is_some(),
+        "the sent quote is drawn"
+    );
+    let kept = ferrite_core::cited_sources::CitedSources::load(&dir);
+    assert_eq!(kept.of(thread).map(|sources| sources.len()), Some(1));
+
+    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript().unwrap());
+    let away = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
+    click(cx, "quote-row-0-go");
+    let back = transcript.read_with(cx, |transcript, _| transcript.scroll().offset());
+    assert_ne!(back, away, "the transcript scrolled to the cited message");
+}
+
+/// A sent quote whose message is no longer in the transcript says so.
+#[gpui::test]
+fn a_sent_quote_says_when_its_source_is_gone(cx: &mut TestAppContext) {
+    let (view, sent, cx) = conversation_sent("cite-sent-gone", cx, PARAGRAPHS);
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let gone = Source {
+        thread,
+        block: serde_json::from_str("999999").unwrap(),
+    };
+    view.update(cx, |view, cx| {
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.reply(
+                ferrite_core::replies::Reply::new("a lost passage", "").cited_from(gone),
+                cx,
+            )
+        })
+    });
+    tick(cx);
+    let line = cx.debug_bounds("focused-prompt-editor").expect("the line");
+    cx.simulate_click(line.center(), gpui::Modifiers::none());
+    cx.simulate_input("go on");
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    assert!(sent.borrow().last().is_some());
+    click(cx, "quote-row-0-go");
+    assert!(cx.debug_bounds("quote-row-0-go").is_none());
+    assert!(cx.debug_bounds("quote-row-0-source").is_some(), "it says so");
+}
