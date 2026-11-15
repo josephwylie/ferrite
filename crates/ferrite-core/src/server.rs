@@ -22,7 +22,7 @@ use crate::protocol::{
     ServerMessage, When, WireError, WireFile, WireHandle,
 };
 use crate::roster::DraftId;
-use crate::settings::Settings;
+use crate::settings::{ServerDefaults, Settings};
 use crate::spawner::{ProcessRss, SessionDefaults, Spawn, RSS_LIMIT};
 use crate::store::{Provider, Store};
 use crate::ThreadId;
@@ -31,6 +31,7 @@ pub mod agent;
 mod bridge;
 mod browser;
 mod calls;
+pub mod clis;
 mod coordinator;
 mod drive;
 mod factory;
@@ -405,6 +406,9 @@ struct Server {
     /// What the Factory's GitHub starts are read through (#225): the
     /// operator's `gh`, or a test's scripted reader.
     github: Arc<dyn github::GitHub>,
+    /// The provider CLIs this machine has, as a window asks after them
+    /// (`Op::Cli`): the machine's own, or a test's scripted ones.
+    clis: Arc<dyn clis::Clis>,
     /// GitHub reads still out.
     github_reads: Vec<github::Reading>,
     /// Task PR head reads still out (#223).
@@ -468,6 +472,7 @@ impl Server {
             factory_agent: factory::default_agent(&Settings::default()),
             coordinators_tuned: Default::default(),
             github: Arc::new(github::Gh),
+            clis: Arc::new(clis::Host),
             github_reads: Vec::new(),
             head_reads: Vec::new(),
             skills_seen: Vec::new(),
@@ -795,6 +800,11 @@ impl Server {
             }),
             Op::BrowserAttach { thread } => self.attach_browser(id, *thread),
             Op::Browser { thread, action } => self.browser_action(id, *thread, action.clone()),
+            Op::ServerDefaults { set } => self.server_defaults(set.as_ref()).map(Some),
+            Op::Cli { action } => {
+                self.cli(id, request, action);
+                return;
+            }
             Op::SettingsChanged => match Settings::load(&self.settings_dir) {
                 Ok(settings) => {
                     self.apply_settings(&settings);
@@ -1066,6 +1076,24 @@ impl Server {
                 error,
             },
         );
+    }
+
+    /// This machine's defaults as its `settings.json` says: with `set`,
+    /// written first, so the answer is what a later read finds.
+    fn server_defaults(
+        &mut self,
+        set: Option<&ServerDefaults>,
+    ) -> Result<Done, WireError> {
+        let mut settings = Settings::load(&self.settings_dir).map_err(failed)?;
+        if let Some(defaults) = set {
+            settings.set_server_defaults(defaults.clone());
+            settings.save(&self.settings_dir).map_err(failed)?;
+            settings = Settings::load(&self.settings_dir).map_err(failed)?;
+            self.apply_settings(&settings);
+        }
+        Ok(Done::ServerDefaults {
+            defaults: settings.server_defaults(),
+        })
     }
 
     /// Settings apply to the next Session, as they always have.

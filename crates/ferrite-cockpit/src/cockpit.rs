@@ -20,6 +20,7 @@ mod details;
 pub(crate) mod direction;
 mod drafts;
 pub(crate) mod empty_board;
+pub(crate) mod environment;
 pub(crate) mod factory;
 mod history;
 mod leaving;
@@ -646,6 +647,8 @@ pub struct CockpitView {
     /// Who the foot names: the login at the machine (`$USER`).
     /// Where each provider CLI stands against its newest release.
     cli_updates: crate::cli_updates::CliUpdates,
+    /// What the machine's Server has been asked and said.
+    environment: environment::Environment,
     /// Where Ferrite's own update stands (ADR 0023).
     ferrite_update: crate::ferrite_update::FerriteUpdate,
     /// What the window has said about its Server (ADR 0025).
@@ -1635,6 +1638,7 @@ impl CockpitView {
             cli_versions: None,
             cli_probing: false,
             cli_updates: Default::default(),
+            environment: Default::default(),
             ferrite_update: Default::default(),
             server_bands: Default::default(),
             unreadable_told: false,
@@ -2506,6 +2510,7 @@ impl CockpitView {
             self.factory_changed(cx);
         }
         self.poll_factory_skills(cx);
+        self.poll_environment(cx);
         self.apply_thread_rules(&frame, cx);
         self.land(cx);
         self.ring_alerts(cx);
@@ -4192,27 +4197,9 @@ impl CockpitView {
             if self.cli_versions.is_none() {
                 self.probe_cli_versions(cx);
             }
+            self.ask_server_defaults();
         }
         cx.notify();
-    }
-
-    /// Ask the CLIs their versions again, off the UI thread.
-    fn probe_cli_versions(&mut self, cx: &mut Context<Self>) {
-        cx.spawn(async move |this, cx| {
-            let versions = cx
-                .background_executor()
-                .spawn(async {
-                    ferrite_core::providers::discover::rediscover();
-                    (cli_version(Provider::Claude), cli_version(Provider::Codex))
-                })
-                .await;
-            this.update(cx, |view, cx| {
-                view.cli_versions = Some((versions.0.into(), versions.1.into()));
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
     }
 
     /// One beat of the updater: ask the registry when due, then install
@@ -4222,27 +4209,7 @@ impl CockpitView {
             self.auto_update_clis(cx);
             return;
         }
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let results = cx
-                .background_executor()
-                .spawn(async {
-                    Provider::ALL.map(|provider| {
-                        (provider, ferrite_core::providers::update::check(provider))
-                    })
-                })
-                .await;
-            this.update(cx, |view, cx| {
-                let auto = view.prefs.settings.auto_update_clis;
-                for (provider, result) in results {
-                    view.cli_updates.checked(provider, result, auto);
-                }
-                view.auto_update_clis(cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        self.check_clis(cx);
     }
 
     /// Install each ready upgrade whose provider has no Session running,
@@ -4258,33 +4225,15 @@ impl CockpitView {
         }
     }
 
-    /// Install `provider`'s newest CLI now. Once it lands, the model menus
-    /// are asked again and every open Thread of that provider restarts on
-    /// its own conversation — at once when idle, otherwise when its turn
-    /// ends — so nothing keeps running the old release.
+    /// Install `provider`'s newest CLI on the machine the window is on, now.
+    /// Once it lands, the model menus are asked again and every open Thread
+    /// of that provider restarts on its own conversation — at once when
+    /// idle, otherwise when its turn ends — so nothing keeps running the old
+    /// release. Another machine's Threads are not touched.
     fn update_cli(&mut self, provider: Provider, cx: &mut Context<Self>) {
-        let Some(upgrade) = self.cli_updates.begin_update(provider) else {
-            return;
-        };
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { ferrite_core::providers::update::run(provider, &upgrade) })
-                .await;
-            this.update(cx, |view, cx| {
-                if result.is_ok() {
-                    // Open Threads restart on the new CLI as each goes
-                    // idle, and the pickers ask for its menu now.
-                    view.cockpit.cli_replaced(provider);
-                }
-                view.cli_updates.updated(provider, result);
-                view.probe_cli_versions(cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        if self.cli_updates.begin_update(provider) {
+            self.install_cli(provider, cx);
+        }
     }
 
     /// The updater's toasts. Like the Inbox's, they wait for render, the
@@ -4294,6 +4243,7 @@ impl CockpitView {
         use gpui::component::notification::{Notification, NotificationType};
         use gpui::component::WindowExt as _;
         let toasts = self.cli_updates.take_toasts();
+        let place = self.machine_place();
         if toasts.is_empty() {
             // Called every render: a notify here with nothing to show would
             // rebuild the Cockpit on every frame anything else draws.
@@ -4304,8 +4254,8 @@ impl CockpitView {
                 Toast::Offer { provider, latest } => {
                     let view = cx.entity().downgrade();
                     Notification::new()
-                        .title(format!("{} {latest} is available", name(provider)))
-                        .message("Click to update. Newer releases bring newer models.")
+                        .title(format!("{} {latest} is available on {place}", name(provider)))
+                        .message("Click to update it there. Newer releases bring newer models.")
                         .with_type(NotificationType::Info)
                         .autohide(false)
                         .on_click(move |_, _, cx| {
@@ -4314,12 +4264,12 @@ impl CockpitView {
                         })
                 }
                 Toast::Updated { provider, version } => Notification::new()
-                    .title(format!("{} updated to {version}", name(provider)))
-                    .message("Open Threads restart on it as each finishes its turn.")
+                    .title(format!("{} updated to {version} on {place}", name(provider)))
+                    .message("Its open Threads restart on it as each finishes its turn.")
                     .with_type(NotificationType::Success)
                     .autohide(true),
                 Toast::Failed { provider, detail } => Notification::new()
-                    .title(format!("{} update failed", name(provider)))
+                    .title(format!("{} update failed on {place}", name(provider)))
                     .message(detail)
                     .with_type(NotificationType::Error)
                     .autohide(false),
@@ -4547,6 +4497,7 @@ impl CockpitView {
             self.cli_updates.state(provider),
             self.prefs.settings.auto_update_clis,
             self.cockpit.live_sessions(provider),
+            &self.machine_place(),
         );
         let title = ferrite_ui::provider::cli(provider);
         let view = cx.entity().downgrade();
@@ -4732,67 +4683,6 @@ impl CockpitView {
             );
             new_thread_groups.push(provider_group(provider).rows([model, effort]));
         }
-        let modes = |options: &[(&str, Option<&str>)], selected: Option<&str>| {
-            options
-                .iter()
-                .map(|(label, value)| {
-                    (
-                        SharedString::from(label.to_string()),
-                        selected == *value,
-                        value.map(str::to_string),
-                    )
-                })
-                .collect()
-        };
-        let claude_permissions = vec![settings::choices(
-            "settings-claude-mode",
-            "Permissions",
-            "When Claude asks before acting",
-            modes(
-                &[
-                    (settings::CLI_DEFAULT, None),
-                    ("Ask", Some("default")),
-                    ("Accept edits", Some("acceptEdits")),
-                    ("Plan", Some("plan")),
-                    ("Bypass permissions", Some("bypassPermissions")),
-                ],
-                settings.claude_permission_mode.as_deref(),
-            ),
-            self.setting_change(cx, |s, v| s.claude_permission_mode = v),
-        )];
-        let codex_permissions = vec![
-            settings::choices(
-                "settings-codex-approval",
-                "Approvals",
-                "When Codex asks before acting",
-                modes(
-                    &[
-                        ("On request", Some("on-request")),
-                        ("Untrusted", Some("untrusted")),
-                        ("Never", Some("never")),
-                    ],
-                    Some(&settings.codex_approval_policy),
-                ),
-                self.setting_change(cx, |s, v: Option<String>| {
-                    s.codex_approval_policy = v.unwrap_or_else(|| "on-request".into())
-                }),
-            ),
-            settings::choices(
-                "settings-codex-sandbox",
-                "Sandbox",
-                "What Codex may touch",
-                modes(
-                    &[
-                        (settings::CLI_DEFAULT, None),
-                        ("Read only", Some("read-only")),
-                        ("Workspace write", Some("workspace-write")),
-                        ("Full access", Some("danger-full-access")),
-                    ],
-                    settings.codex_sandbox.as_deref(),
-                ),
-                self.setting_change(cx, |s, v| s.codex_sandbox = v),
-            ),
-        ];
         let behaviour = vec![
             settings::toggle(
                 "settings-auto-title",
@@ -4800,13 +4690,6 @@ impl CockpitView {
                 "Titled from the first prompt until you rename it",
                 settings.auto_title,
                 self.setting_change(cx, |s, v| s.auto_title = v),
-            ),
-            settings::toggle(
-                "settings-placeholder-suggestions",
-                "Suggest follow-up prompts",
-                "A likely next prompt in an empty composer · tab takes it",
-                settings.placeholder_suggestions,
-                self.setting_change(cx, |s, v| s.placeholder_suggestions = v),
             ),
             settings::toggle(
                 "settings-confirm-delete",
@@ -4835,21 +4718,6 @@ impl CockpitView {
                 let view = cx.entity().downgrade();
                 move |delta, cx| {
                     let _ = view.update(cx, |view, cx| view.step_text_size(delta, cx));
-                }
-            },
-        )];
-        let at_once = settings.factory_tasks_at_once;
-        let factory = vec![settings::stepper(
-            "settings-factory-limit",
-            "Tasks working at once",
-            "In each Server's Factory · the rest wait in Queued",
-            at_once.to_string().into(),
-            at_once > *ferrite_core::factory::LIMIT_RANGE.start(),
-            at_once < *ferrite_core::factory::LIMIT_RANGE.end(),
-            {
-                let view = cx.entity().downgrade();
-                move |delta, cx| {
-                    let _ = view.update(cx, |view, cx| view.step_factory_limit(delta, cx));
                 }
             },
         )];
@@ -4973,17 +4841,14 @@ impl CockpitView {
             settings::page(settings::PageKey::NewThreads, new_thread_groups),
             settings::page(
                 settings::PageKey::Permissions,
-                vec![
-                    provider_group(Provider::Claude).rows(claude_permissions),
-                    provider_group(Provider::Codex).rows(codex_permissions),
-                ],
+                self.permission_groups(cx),
             ),
             settings::page(
                 settings::PageKey::Behaviour,
                 vec![
                     settings::Group::new(Some("Reading")).rows(reading),
                     settings::Group::new(Some("Threads and navigation")).rows(behaviour),
-                    settings::Group::new(Some("Factory")).rows(factory),
+                    self.machine_group(cx),
                 ],
             ),
             settings::page(
@@ -13174,16 +13039,6 @@ fn head_drag(leaf: ThreadId, face: GhostFace) -> pane::HeadDrag {
             })
             .into_any_element()
     })
-}
-
-/// The copy of a Provider's CLI Ferrite runs — the newest it found — as
-/// "version · path", or where it looked when none answered. The About
-/// section never guesses.
-fn cli_version(provider: Provider) -> String {
-    match ferrite_core::providers::discover::located(provider) {
-        Some(found) => format!("{} · {}", found.version, found.path.display()),
-        None => "not found on PATH or in the usual install directories".to_string(),
-    }
 }
 
 /// Where Ferrite was started. Demo fixtures use this as their checkout;

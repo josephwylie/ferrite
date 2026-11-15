@@ -1630,3 +1630,110 @@ fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(c
     assert!(cx.debug_bounds("browser-annotation-overlay").is_none(), "new address mode has no visible page to annotate");
     assert_eq!(activation(), before, "annotation selection never forwards page activation input");
 }
+
+/// Settings on a machine show and edit that machine's own defaults: the
+/// Server writes its file and the sheet shows what it reread, while this
+/// computer's preferences stay as they were.
+#[gpui::test]
+fn settings_on_a_machine_edit_its_defaults_not_this_computers(cx: &mut TestAppContext) {
+    use ferrite_core::cockpit::{Attach, Endpoint, ServerState};
+    use ferrite_core::settings::Settings;
+    let dir = scratch("rd");
+    let remote = dir.join("r");
+    std::fs::create_dir_all(&remote).unwrap();
+    let there = Settings {
+        factory_tasks_at_once: 5,
+        placeholder_suggestions: false,
+        codex_approval_policy: "never".into(),
+        ..Default::default()
+    };
+    there.save(&remote).unwrap();
+    let dial = ferrite_core::server::fixture_machine(
+        remote.join("threads"),
+        Box::new(OnBox(Default::default())),
+    )
+    .unwrap();
+    let bridge = std::sync::Arc::new(Bridge::new(
+        "box",
+        dir.join("bridge").join("bridge.sock"),
+        dial,
+    ));
+    let mut core = Cockpit::attach(Attach {
+        browser: false,
+        driven: false,
+        store: dir.join("window").join("threads"),
+        server: Endpoint::Machine(bridge),
+        client: ferrite_core::protocol::Peer {
+            name: "window".into(),
+            version: "0".into(),
+        },
+        renderer: None,
+        discovery: Box::new(Fake::default()),
+    })
+    .unwrap();
+    ferrite_core::doorbell::until("client did not attach", || {
+        core.pump();
+        matches!(core.server(), Some(ServerState::Attached { .. }))
+    });
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let here = view.read_with(cx, |view, _| view.prefs.settings.clone());
+    assert_ne!(here.factory_tasks_at_once, there.factory_tasks_at_once);
+    bind_production_keys(cx);
+    cx.simulate_keystrokes("cmd-,");
+    cx.run_until_parked();
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| view.shown_defaults().is_some())
+    });
+    tick(cx);
+    let shown = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, _| view.shown_defaults().unwrap())
+    };
+    assert_eq!(shown(cx), there.server_defaults(), "the machine's, not ours");
+
+    let search = cx.debug_bounds("settings-search").unwrap();
+    cx.simulate_click(search.center(), gpui::Modifiers::none());
+    cx.simulate_input("at once");
+    tick(cx);
+    let at = cx.debug_bounds("settings-factory-limit-1").unwrap().center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| {
+            view.shown_defaults()
+                .is_some_and(|shown| shown.factory_tasks_at_once == 6)
+        })
+    });
+    let search = cx.debug_bounds("settings-search").unwrap();
+    cx.simulate_click(search.center(), gpui::Modifiers::none());
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("follow-up");
+    tick(cx);
+    let at = cx
+        .debug_bounds("settings-placeholder-suggestions")
+        .unwrap()
+        .center();
+    cx.simulate_click(at, gpui::Modifiers::none());
+    until(cx, |cx| {
+        view.read_with(cx, |view, _| {
+            view.shown_defaults()
+                .is_some_and(|shown| shown.placeholder_suggestions)
+        })
+    });
+
+    let written = Settings::load(&remote).unwrap();
+    assert_eq!(written.factory_tasks_at_once, 6, "written to its file");
+    assert!(written.placeholder_suggestions);
+    assert_eq!(
+        written.codex_approval_policy, "never",
+        "what the edit did not name stays"
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view.prefs.settings.clone()),
+        here,
+        "this computer's preferences did not move"
+    );
+    assert!(
+        Settings::load(&view.read_with(cx, |view, _| view.prefs.dir.clone()))
+            .map_or(true, |saved| saved.factory_tasks_at_once == here.factory_tasks_at_once)
+    );
+}

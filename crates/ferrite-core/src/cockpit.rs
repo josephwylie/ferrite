@@ -2574,6 +2574,29 @@ impl Cockpit {
         );
     }
 
+    /// The defaults of the Server this window is on, as its own
+    /// `settings.json` says — written there first when `set`. A window
+    /// that runs its agents itself has no Server to ask.
+    pub fn server_defaults(
+        &mut self,
+        set: Option<crate::settings::ServerDefaults>,
+    ) -> io::Result<Receiver<io::Result<crate::settings::ServerDefaults>>> {
+        self.remote()?.server_defaults(set)
+    }
+
+    /// The provider CLIs of the machine whose Sessions this window shows:
+    /// asked of its Server, or of this computer when the window runs its
+    /// agents itself. The answer is `Done::Clis` or `Done::CliUpdated`.
+    pub fn cli(&mut self, action: crate::protocol::CliAction) -> io::Result<Receiver<io::Result<Done>>> {
+        match &mut self.link {
+            Link::Server(server) => server.cli(action),
+            Link::InProcess(_) => Ok(read_here(move || {
+                crate::server::clis::perform(&crate::server::clis::Host, &action)
+                    .map_err(|error| error.message)
+            })),
+        }
+    }
+
     pub fn live_sessions(&self, provider: Provider) -> usize {
         self.shared.live_sessions(provider)
     }

@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use super::discover::{self, Located};
 use crate::spawn::{AgentEnvironment, NoConsoleWindow};
 use crate::store::Provider;
@@ -101,7 +103,7 @@ pub fn channel(provider: Provider, found: &Path, real: &Path) -> Option<Channel>
 }
 
 /// One upgrade, ready to run.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Upgrade {
     pub program: PathBuf,
     pub args: Vec<String>,
@@ -192,7 +194,8 @@ pub fn latest(provider: Provider) -> io::Result<(String, [u64; 3])> {
 }
 
 /// What a check found.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Status {
     /// No copy is installed; there is nothing to upgrade.
     Missing,

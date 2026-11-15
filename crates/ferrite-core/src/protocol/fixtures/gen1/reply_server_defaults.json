@@ -1,0 +1,1 @@
+{"type":"reply","id":230,"ok":{"kind":"server_defaults","defaults":{"claude_permission_mode":"plan","codex_approval_policy":"on-request","codex_sandbox":"workspace-write","placeholder_suggestions":true,"factory_tasks_at_once":3}}}

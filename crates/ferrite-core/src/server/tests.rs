@@ -22,6 +22,7 @@ mod browser_annotations;
 #[cfg(unix)]
 mod browser_providers;
 mod drive;
+mod environment;
 mod factory;
 mod owned;
 mod park;

@@ -298,6 +298,16 @@ fn live(seq: u64, live: Live) -> Sample {
     input(seq, WireInput::Live(live))
 }
 
+fn server_defaults() -> crate::settings::ServerDefaults {
+    crate::settings::ServerDefaults {
+        claude_permission_mode: Some("plan".into()),
+        codex_approval_policy: "on-request".into(),
+        codex_sandbox: Some("workspace-write".into()),
+        placeholder_suggestions: true,
+        factory_tasks_at_once: 3,
+    }
+}
+
 fn command(id: u64, op: Op) -> Sample {
     Sample::Client(ClientMessage::Command(Command { id, op }))
 }
@@ -1252,6 +1262,82 @@ fn samples() -> Vec<(&'static str, Sample)> {
             ),
         ),
         ("command_settings_changed", command(23, Op::SettingsChanged)),
+        (
+            "command_server_defaults",
+            command(230, Op::ServerDefaults { set: None }),
+        ),
+        (
+            "command_server_defaults_set",
+            command(
+                231,
+                Op::ServerDefaults {
+                    set: Some(server_defaults()),
+                },
+            ),
+        ),
+        (
+            "command_cli_versions",
+            command(
+                232,
+                Op::Cli {
+                    action: CliAction::Versions,
+                },
+            ),
+        ),
+        (
+            "command_cli_update",
+            command(
+                233,
+                Op::Cli {
+                    action: CliAction::Update {
+                        provider: crate::store::Provider::Codex,
+                    },
+                },
+            ),
+        ),
+        (
+            "reply_server_defaults",
+            Sample::Server(ServerMessage::Reply {
+                id: 230,
+                ok: Some(Done::ServerDefaults {
+                    defaults: server_defaults(),
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_clis",
+            Sample::Server(ServerMessage::Reply {
+                id: 232,
+                ok: Some(Done::Clis {
+                    clis: vec![CliReport {
+                        provider: crate::store::Provider::Claude,
+                        binary: Some(CliBinary {
+                            version: "2.1.259".into(),
+                            path: "/opt/box/bin/claude".into(),
+                        }),
+                        status: Some(crate::providers::update::Status::UpToDate {
+                            current: "2.1.259".into(),
+                        }),
+                    }],
+                }),
+                error: None,
+            }),
+        ),
+        (
+            "reply_cli_updated",
+            Sample::Server(ServerMessage::Reply {
+                id: 233,
+                ok: Some(Done::CliUpdated {
+                    provider: crate::store::Provider::Codex,
+                    binary: CliBinary {
+                        version: "0.160.0".into(),
+                        path: "/opt/box/bin/codex".into(),
+                    },
+                }),
+                error: None,
+            }),
+        ),
         (
             "command_search_files",
             command(
