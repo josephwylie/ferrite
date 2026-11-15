@@ -440,3 +440,71 @@ fn a_tap_on_a_file_chip_with_a_line_opens_the_reader_at_that_line(cx: &mut TestA
     cx.run_until_parked();
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "a\nXb\nc\n");
 }
+
+/// A link in an answer is a keyboard stop in the transcript's Tab walk,
+/// ahead of a later code block's Copy: Tab reaches it from the composer, ⏎
+/// opens exactly its address, and the next render leaves focus on it.
+#[gpui::test]
+fn tab_reaches_a_link_and_enter_opens_it(cx: &mut TestAppContext) {
+    fn on(cx: &mut gpui::VisualTestContext, context: &str) -> bool {
+        cx.update(|window, _| {
+            window
+                .context_stack()
+                .iter()
+                .any(|stack| stack.contains(context))
+        })
+    }
+    let (core, fake) = cockpit("link-tab-enter", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    let stream = fake.streams.borrow();
+    stream[0]
+        .send(SessionEvent::TextDelta {
+            text: "Read [the docs](https://example.com/docs) now.\n\n```rust\n    first();\n```"
+                .into(),
+        })
+        .unwrap();
+    stream[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    drop(stream);
+    tick(cx);
+    cx.update(|window, cx| {
+        let composer = view.read(cx).panes[0].composer.focus_handle(cx);
+        window.focus(&composer, cx);
+    });
+
+    cx.simulate_keystrokes("tab");
+    assert!(on(cx, "LinkStop"), "Tab from the composer reaches the link first");
+    cx.simulate_keystrokes("tab");
+    assert!(on(cx, "TranscriptCodeActions"), "then the code block's actions");
+    cx.simulate_keystrokes("shift-tab");
+    assert!(on(cx, "LinkStop"));
+
+    cx.update(|_, cx| view.update(cx, |_, cx| cx.notify()));
+    tick(cx);
+    assert!(on(cx, "LinkStop"), "a render does not pull focus back to the composer");
+
+    cx.simulate_keystrokes("enter");
+    cx.simulate_event(gpui::KeyUpEvent {
+        keystroke: gpui::Keystroke::parse("enter").unwrap(),
+    });
+    let urls = view.read_with(cx, |view, _| view.panes[0].preview.take_browser_urls());
+    assert_eq!(urls, ["https://example.com/docs"]);
+    assert_eq!(cx.opened_url(), None, "the link opens inside Ferrite");
+}
+
+/// The pointer keeps its own press path: pressing a link opens it and never
+/// leaves the keyboard's stop focused, so no focus ring flashes on a click.
+#[gpui::test]
+fn a_press_on_a_link_leaves_no_stop_focused(cx: &mut TestAppContext) {
+    let (view, cx) = linked_answer("link-click-unfocused", cx);
+    let at = on_link(&view, cx);
+    cx.simulate_click(at, gpui::Modifiers::none());
+    browser_opened(&view, cx);
+    assert!(!cx.update(|window, _| ferrite_pane::rich::controls_focused(window)));
+}

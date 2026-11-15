@@ -1,15 +1,18 @@
 use gpui::Corners;
 use std::{
+    collections::HashMap,
     ops::Range,
     rc::Rc,
     sync::{Arc, Mutex, Weak},
 };
 
 use gpui::{
-    App, BorderStyle, Bounds, ClickEvent, CursorStyle, Edges, Element, ElementId, Global,
-    GlobalElementId, Half, HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
-    LayoutId, MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, SharedString, StyledText, TextLayout, Window, point, px, quad,
+    AnyElement, App, AvailableSpace, BorderStyle, Bounds, BoxShadow, ClickEvent, CursorStyle,
+    Edges, Element, ElementId, FocusHandle, Global, GlobalElementId, Half, HighlightStyle, Hitbox,
+    HitboxBehavior, InspectorElementId, InteractiveElement as _, IntoElement, LayoutId,
+    MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    Role, SharedString, StatefulInteractiveElement as _, StyledText, Styled as _, TextLayout,
+    Window, div, point, px, quad, size,
 };
 
 use crate::{
@@ -467,6 +470,114 @@ impl Inline {
         self
     }
 
+    /// Ferrite: each link is a tab stop. A transparent, focusable element
+    /// sits over the link's first line; Tab lands on it, its ring says so,
+    /// and ⏎ or space clicks it through the link handler. The pointer keeps
+    /// its own press path (`paint`), and a press never focuses the stop.
+    fn link_stops(
+        &self,
+        id: Option<&GlobalElementId>,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Vec<AnyElement> {
+        let mut runs: Vec<(Range<usize>, &LinkMark)> = Vec::new();
+        for (range, link) in self.links.iter() {
+            match runs.last_mut() {
+                Some((prior, mark)) if prior.end == range.start && *mark == link => {
+                    prior.end = range.end
+                }
+                _ => runs.push((range.clone(), link)),
+            }
+        }
+        let Some(id) = id.filter(|_| !runs.is_empty()) else {
+            return Vec::new();
+        };
+        // Keyed by the link's URL and which occurrence of it this is, so a
+        // streamed-in link before the focused one leaves focus where it was.
+        let mut seen: HashMap<SharedString, usize> = HashMap::new();
+        let keys: Vec<(SharedString, usize)> = runs
+            .iter()
+            .map(|(_, link)| {
+                let nth = seen.entry(link.url.clone()).or_default();
+                *nth += 1;
+                (link.url.clone(), *nth)
+            })
+            .collect();
+        let handles = window.with_element_state::<HashMap<(SharedString, usize), FocusHandle>, _>(
+            id,
+            |handles, _| {
+                let mut handles = handles.unwrap_or_default();
+                handles.retain(|key, _| keys.contains(key));
+                let ordered: Vec<FocusHandle> = keys
+                    .iter()
+                    .map(|key| {
+                        handles
+                            .entry(key.clone())
+                            .or_insert_with(|| cx.focus_handle().tab_stop(true))
+                            .clone()
+                    })
+                    .collect();
+                (ordered, handles)
+            },
+        );
+        let ring = GlobalState::global(cx)
+            .text_view_state()
+            .map(|state| {
+                let style = &state.read(cx).text_view_style;
+                style.link_focus().unwrap_or(style.link())
+            })
+            .unwrap_or_else(|| crate::Theme::global(cx).tokens.colors.primary);
+        let text_layout = self.styled_text.layout();
+        let line_height = text_layout.line_height();
+        let left = bounds.left();
+        let mut stops = Vec::new();
+        for (ix, ((range, link), handle)) in runs.iter().zip(handles).enumerate() {
+            let Some((top, start, stop)) = underline_spans(&self.text, range.clone(), left, |at| {
+                text_layout.position_for_index(at)
+            })
+            .into_iter()
+            .next() else {
+                continue;
+            };
+            let handler = self.link_click_handler.clone();
+            let url = link.url.clone();
+            let mut stop = div()
+                .id(("link-stop", ix))
+                .track_focus(&handle)
+                .key_context("LinkStop")
+                .role(Role::Link)
+                .aria_label(self.text[range.clone()].to_owned())
+                .capture_any_mouse_down(|_, window, _| window.prevent_default())
+                .focus_visible(move |style| {
+                    style.shadow(vec![BoxShadow {
+                        inset: true,
+                        color: ring,
+                        offset: point(px(0.), px(0.)),
+                        blur_radius: px(0.),
+                        spread_radius: px(1.5),
+                    }])
+                })
+                .rounded(px(3.))
+                .w(stop - start + px(4.))
+                .h(line_height)
+                .on_click(move |event, window, cx| {
+                    if event.is_keyboard() {
+                        handle_link_click(&handler, url.clone(), event.clone(), window, cx);
+                    }
+                })
+                .into_any_element();
+            stop.prepaint_as_root(
+                point(start - px(2.), top),
+                size(AvailableSpace::MinContent, AvailableSpace::MinContent),
+                window,
+                cx,
+            );
+            stops.push(stop);
+        }
+        stops
+    }
+
     /// Get link at given mouse position.
     fn link_for_position(
         layout: &TextLayout,
@@ -859,7 +970,7 @@ pub(super) fn highlight_fits(text: &str, ix: usize, range: &Range<usize>) -> boo
 
 impl Element for Inline {
     type RequestLayoutState = ();
-    type PrepaintState = Hitbox;
+    type PrepaintState = (Hitbox, Vec<AnyElement>);
 
     fn id(&self) -> Option<ElementId> {
         Some(self.id.clone())
@@ -965,7 +1076,8 @@ impl Element for Inline {
         }
 
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
-        hitbox
+        let stops = self.link_stops(id, bounds, window, cx);
+        (hitbox, stops)
     }
 
     fn paint(
@@ -979,7 +1091,7 @@ impl Element for Inline {
         cx: &mut App,
     ) {
         let current_view = window.current_view();
-        let hitbox = prepaint;
+        let (hitbox, stops) = prepaint;
         let (source_root, source_offset) = InlineState::source_metadata(&self.state);
         let Ok(mut state) = self.state.lock() else {
             return;
@@ -1054,6 +1166,10 @@ impl Element for Inline {
         // metadata, so release the paint-time guard first.
         let hovered_index = state.hovered_index;
         drop(state);
+
+        for stop in stops.iter_mut() {
+            stop.paint(window, cx);
+        }
 
         if is_selectable {
             if let Some(text_view_state) = GlobalState::global(cx).text_view_state().cloned() {

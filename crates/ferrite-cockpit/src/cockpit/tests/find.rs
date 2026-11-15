@@ -438,7 +438,7 @@ fn find_settles_an_occurrence_inside_a_tall_row(cx: &mut TestAppContext) {
 
 /// Open `file` in the Solo Pane's preview, in the Panel, let the Panel
 /// ride out to its width and press in it.
-fn read_beside(
+pub(super) fn read_beside(
     view: &Entity<CockpitView>,
     file: std::path::PathBuf,
     cx: &mut gpui::VisualTestContext,

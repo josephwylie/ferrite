@@ -76,6 +76,7 @@ use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
 use ferrite_core::sound::Sound;
 use ferrite_pane::page::PageSource;
+use ferrite_pane::transcript::Page;
 
 /// The action ⌘`ordinal` is bound to: the shown board's `ordinal`th Pane in
 /// head order (R5, `CockpitView::board_order`; Solo's ⌘1 is the Solo Pane).
@@ -2213,11 +2214,16 @@ impl CockpitView {
     /// details card, holding the keyboard, takes them and leaves it be.
     fn page_transcript(
         &mut self,
-        page: ferrite_pane::transcript::Page,
+        page: Page,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
         if self.details_hold_focus(window, cx) {
+            return;
+        }
+        if let Some(reader) = self.reader_scroll(window, cx) {
+            Self::scroll_reader(&reader, page);
+            cx.notify();
             return;
         }
         if let Some(transcript) = self
@@ -2227,6 +2233,42 @@ impl CockpitView {
         {
             transcript.update(cx, |transcript, cx| transcript.page(page, cx));
         }
+    }
+
+    /// Move a read-only body by `page`, the way the transcript's own paging does.
+    fn scroll_reader(scroll: &ScrollHandle, page: Page) {
+        let max = scroll.max_offset().y;
+        let step = scroll.bounds().size.height;
+        let at = scroll.offset().y;
+        let to = match page {
+            Page::Top => px(0.),
+            Page::Bottom => -max,
+            Page::Up => (at + step).min(px(0.)),
+            Page::Down => (at - step).max(-max),
+        };
+        scroll.set_offset(gpui::point(scroll.offset().x, to));
+    }
+
+    /// The read-only body the paging keys belong to: the open preview's
+    /// document when it holds focus, else the Files prose tab the panel's keys
+    /// are on. Everything else leaves them to the transcript.
+    fn reader_scroll(&self, window: &Window, cx: &gpui::App) -> Option<ScrollHandle> {
+        let index = self.focused();
+        let pane = self.panes.get(index)?;
+        if pane.preview.focused(window, cx) && self.preview_shown(index) {
+            let tab = &pane.preview_tab;
+            let list = tab.scroll.0.borrow().base_handle.clone();
+            return Some(if tab.markdown_scroll.max_offset().y > px(0.) {
+                tab.markdown_scroll.clone()
+            } else {
+                list
+            });
+        }
+        let thread = pane.thread()?;
+        let on_panel = self.panel_control_focused(window) || self.panel_keys_held(window, cx);
+        (on_panel && self.active_surface(thread) == Some(crate::cockpit::surfaces::SurfaceId::Files))
+            .then(|| self.files_prose_scroll(thread))
+            .flatten()
     }
 
     /// A send in Pane `index`: its prompt, once it arrives, scrolls to the
@@ -5942,7 +5984,7 @@ impl CockpitView {
         let calls = self.expandable_tools(focused, cx);
         let transcript = self.panes[focused].transcript();
         let tool_focus = self.panes[focused].tool_focus();
-        let in_controls = ferrite_pane::rich::code_actions_focused(window);
+        let in_controls = ferrite_pane::rich::controls_focused(window);
         let cycle_controls = |from_edge, window: &mut Window, cx: &mut gpui::App| {
             transcript.as_ref().is_some_and(|transcript| {
                 transcript.update(cx, |transcript, cx| {
@@ -10286,7 +10328,7 @@ impl CockpitView {
             .panes
             .get(self.focused())
             .is_some_and(|pane| pane.transcript_focus.contains_focused(window, cx))
-            && (ferrite_pane::rich::code_actions_focused(window)
+            && (ferrite_pane::rich::controls_focused(window)
                 || gpui::base::TextSelection::has_selection(window, cx)
                 || self.panes.get(self.focused()).is_some_and(|pane| {
                     pane.rich.output_focused(&pane.text_namespace(), window, cx)
@@ -10503,16 +10545,16 @@ impl CockpitView {
                     }))
                     .on_action(cx.listener(Self::close_thread))
                     .on_action(cx.listener(|view, _: &TranscriptPageUp, window, cx| {
-                        view.page_transcript(ferrite_pane::transcript::Page::Up, window, cx)
+                        view.page_transcript(Page::Up, window, cx)
                     }))
                     .on_action(cx.listener(|view, _: &TranscriptPageDown, window, cx| {
-                        view.page_transcript(ferrite_pane::transcript::Page::Down, window, cx)
+                        view.page_transcript(Page::Down, window, cx)
                     }))
                     .on_action(cx.listener(|view, _: &TranscriptTop, window, cx| {
-                        view.page_transcript(ferrite_pane::transcript::Page::Top, window, cx)
+                        view.page_transcript(Page::Top, window, cx)
                     }))
                     .on_action(cx.listener(|view, _: &TranscriptBottom, window, cx| {
-                        view.page_transcript(ferrite_pane::transcript::Page::Bottom, window, cx)
+                        view.page_transcript(Page::Bottom, window, cx)
                     }))
                     .on_action(cx.listener(Self::reopen_thread))
                     .on_action(cx.listener(Self::paste_into_composer))
