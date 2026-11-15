@@ -1501,26 +1501,26 @@ fn replies_from_nodes(nodes: &[Value]) -> Vec<Reply> {
 }
 
 /// Keep only the latest PR-level (`review`/`comment`) post per bot author; humans keep all.
-/// A verdict-only review (no words) is a standing verdict: it neither competes nor is removed.
+/// A bot's verdict-only reviews (no words) are deduped apart from its prose, so a fresh
+/// approval stands in for its older ones and never evicts its real comment.
 fn dedup_bot_prose(out: &mut Vec<Comment>) {
-    let is_bot_prose = |c: &Comment| {
-        c.author_is_bot
-            && c.kind != CommentKind::Finding
-            && !(c.body.is_empty() && c.verdict.is_some())
-    };
-    let mut keep_newest: std::collections::HashMap<String, String> =
+    let is_bot_post = |c: &Comment| c.author_is_bot && c.kind != CommentKind::Finding;
+    let verdict_only = |c: &Comment| c.body.is_empty() && c.verdict.is_some();
+    let mut keep_newest: std::collections::HashMap<(String, bool), String> =
         std::collections::HashMap::new();
-    for c in out.iter().filter(|c| is_bot_prose(c)) {
-        let e = keep_newest.entry(c.author.clone()).or_default();
+    for c in out.iter().filter(|c| is_bot_post(c)) {
+        let e = keep_newest
+            .entry((c.author.clone(), verdict_only(c)))
+            .or_default();
         if c.created_at > *e {
             e.clone_from(&c.created_at);
         }
     }
     out.retain(|c| {
-        !is_bot_prose(c)
+        !is_bot_post(c)
             // An undated review is a standing verdict, never lost to a newer post.
             || (c.kind == CommentKind::Review && c.created_at.is_empty())
-            || keep_newest.get(&c.author) == Some(&c.created_at)
+            || keep_newest.get(&(c.author.clone(), verdict_only(c))) == Some(&c.created_at)
     });
 }
 
@@ -2144,6 +2144,27 @@ mod tests {
         let bodies: Vec<_> = cs.iter().map(|c| c.body.as_str()).collect();
         assert_eq!(bodies, ["", "Real findings."]);
         assert_eq!(cs[0].verdict, Some(ReviewState::Approved));
+    }
+
+    #[test]
+    fn a_bots_stacked_approvals_keep_only_the_newest() {
+        let approval = |at: &str| {
+            serde_json::json!({"author": {"login": "claude[bot]"}, "state": "APPROVED", "body": "", "submittedAt": at})
+        };
+        let reviews = serde_json::json!([
+            approval("2026-06-27T10:00:00Z"),
+            approval("2026-06-27T12:00:00Z"),
+            approval("2026-06-27T11:00:00Z")
+        ]);
+        let issues = serde_json::json!([
+            {"author": {"login": "claude[bot]"}, "body": "Real findings.", "createdAt": "2026-06-27T09:00:00Z"}
+        ]);
+        let cs = merge_comments(&reviews, &issues, &serde_json::json!([]));
+        let posts: Vec<_> = cs.iter().map(|c| (c.body.as_str(), c.created_at.as_str())).collect();
+        assert_eq!(
+            posts,
+            [("", "2026-06-27T12:00:00Z"), ("Real findings.", "2026-06-27T09:00:00Z")]
+        );
     }
 
     #[test]
