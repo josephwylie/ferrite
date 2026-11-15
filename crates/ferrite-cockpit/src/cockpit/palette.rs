@@ -911,6 +911,13 @@ impl CockpitView {
             bound_chord("cockpit::TogglePanel"),
             Command::TogglePanel,
         );
+        add(
+            self.focused_thread().is_some(),
+            "Toggle thread details".into(),
+            "",
+            bound_chord("cockpit::ToggleDetails"),
+            Command::ToggleDetails,
+        );
         // The Panel's own (ADR 0039): T3's `+` menu, close and reopen
         // chords are Ferrite's ⌘T/⌘W/⌘⇧T, so these are the palette's.
         add(
@@ -1175,6 +1182,7 @@ impl CockpitView {
             Command::Settings => self.open_settings(&OpenSettings, window, cx),
             Command::ToggleSidebar => self.toggle_nav_now(cx),
             Command::TogglePanel => self.toggle_panel_now(cx),
+            Command::ToggleDetails => self.toggle_details_now(window, cx),
             Command::FullscreenPane => self.toggle_fullscreen(&ToggleFullscreen, window, cx),
             Command::TextLarger => self.step_text_size(1, cx),
             Command::TextSmaller => self.step_text_size(-1, cx),

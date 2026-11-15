@@ -183,7 +183,19 @@ pub fn app(keys: Vec<Binding>) -> HeadlessAppContext {
 }
 
 /// The window's size in logical pixels, as the app's opens at.
-pub const SIZE: (f32, f32) = (1440., 900.);
+const SIZE: (f32, f32) = (1440., 900.);
+
+/// `SIZE`, or `WIDTHxHEIGHT` from `FERRITE_HEADLESS_SIZE`, so a capture can
+/// show a narrow window.
+fn window_size() -> (f32, f32) {
+    std::env::var("FERRITE_HEADLESS_SIZE")
+        .ok()
+        .and_then(|size| {
+            let (width, height) = size.split_once('x')?;
+            Some((width.trim().parse().ok()?, height.trim().parse().ok()?))
+        })
+        .unwrap_or(SIZE)
+}
 
 /// One off-screen Cockpit window and the hands that drive it.
 pub struct Driver {
@@ -207,18 +219,22 @@ impl Driver {
         build: impl FnOnce(&mut Context<CockpitView>) -> CockpitView,
     ) -> Self {
         let mut view = None;
+        let (width, height) = window_size();
         let window = cx
-            .open_window(gpui::size(gpui::px(SIZE.0), gpui::px(SIZE.1)), |window, cx| {
-                let cockpit = cx.new(build);
-                view = Some(cockpit.clone());
-                let content =
-                    cx.new(|cx| crate::cockpit_window::CockpitWindow::new(cockpit, window, cx));
-                cx.new(|cx| {
-                    gpui::component::Root::new(content, window, cx)
-                        .bordered(false)
-                        .bg(ferrite_ui::theme::paint::WINDOW)
-                })
-            })
+            .open_window(
+                gpui::size(gpui::px(width), gpui::px(height)),
+                |window, cx| {
+                    let cockpit = cx.new(build);
+                    view = Some(cockpit.clone());
+                    let content =
+                        cx.new(|cx| crate::cockpit_window::CockpitWindow::new(cockpit, window, cx));
+                    cx.new(|cx| {
+                        gpui::component::Root::new(content, window, cx)
+                            .bordered(false)
+                            .bg(ferrite_ui::theme::paint::WINDOW)
+                    })
+                },
+            )
             .expect("open the off-screen window");
         Self {
             cx,

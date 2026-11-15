@@ -103,6 +103,7 @@ icons![
     // ---- UI refresh icons (SPEC §3.7): Lucide's shapes on a 24 grid,
     // stroked 2 as Lucide ships them (`icon()` restrokes them to 1px).
     "panel-right",
+    "details",
     "search",
     "inbox",
     "archive",
@@ -278,6 +279,9 @@ pub const DIFF: &str = "icons/diff.svg";
 // ---- UI refresh icon names (SPEC §3.7; the phases after 0 draw them)
 /// The right panel's toggle.
 pub const PANEL_RIGHT: &str = "icons/panel-right.svg";
+/// The Thread details card's toggle: a window with its small card at the
+/// top right.
+pub const DETAILS: &str = "icons/details.svg";
 /// The nav's `Search` view and the palette's input.
 pub const SEARCH: &str = "icons/search.svg";
 /// The nav's `Needs you` view.

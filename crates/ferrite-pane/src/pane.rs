@@ -50,7 +50,7 @@ use output::{call_body, diff_rows, hunk_rows, render_diff, running_tests, DiffRo
 pub use output::{diff_number_cells, test_elbow, DiffKind, DiffPaint, TestElbow};
 pub(crate) use text::{collect_block_text, collect_group_text, group_live, group_tools, is_agent_card};
 pub use usage::{
-    compact_count, context_meter_segments, context_segments, context_usage, ctx_meter_ink,
+    compact_count, context_meter_segments, context_segments, context_summary, context_usage, ctx_meter_ink,
     plan_usage_fraction, plan_usage_popover, plan_usage_ring, usage_ink,
 };
 pub(crate) use working::{turn_fold, FoldFace};
@@ -139,6 +139,8 @@ pub struct PaneView {
     /// the Pane summons can hang off the Composer's edge or the head and
     /// stay inside the card (`card_corner`), whatever the pointer did.
     pub geometry: std::rc::Rc<std::cell::Cell<PaneGeometry>>,
+    /// The Thread details card over the transcript (`cockpit/details.rs`).
+    pub details: crate::details::DetailsCard,
 }
 
 /// A Pane's last laid-out card and Composer bounds, recorded in prepaint.
@@ -276,6 +278,7 @@ impl PaneView {
             },
             disclosure_revision: 0,
             geometry: std::rc::Rc::default(),
+            details: crate::details::DetailsCard::new(cx),
         }
     }
 
@@ -324,6 +327,7 @@ impl PaneView {
             },
             disclosure_revision: 0,
             geometry: std::rc::Rc::default(),
+            details: crate::details::DetailsCard::new(cx),
         }
     }
 
@@ -672,6 +676,8 @@ pub struct PaneWiring {
     /// An empty Thread's hero (`Hero`): it stands centred over its body
     /// until the first prompt.
     pub start: Option<Hero>,
+    /// The Thread details card, laid over the body's top right.
+    pub details: Option<AnyElement>,
 }
 
 /// Turns the Pane head's band into its drag handle: the cockpit gives it an
@@ -918,6 +924,7 @@ pub fn render_pane(
         toolbar,
         fill,
         start,
+        details,
     } = wiring;
     let has_activity_decisions = activity_decisions.is_some() || expand_question;
     // The Decision is the transcript's tail now (`decision_tail`): no card
@@ -1098,7 +1105,8 @@ pub fn render_pane(
                             .px(px(theme::SPACE_4))
                             .child(start_hero(project))
                     }))
-                    .children(question_measurement),
+                    .children(question_measurement)
+                    .children(details),
             );
             // The order is head · body · progress · dock · composer.
             pane = pane.children(l1_dock(&mut cx));

@@ -20,11 +20,21 @@
 use super::*;
 use ferrite_core::{McpServer, McpStatus};
 
+/// How much of the sections a surface draws: the Panel's Overview all of
+/// them, the details card (`cockpit/details.rs`) the Thread's facts and
+/// its context at a glance.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::cockpit) enum Depth {
+    Full,
+    Summary,
+}
+
 impl CockpitView {
     /// The sections (see the module doc).
-    pub(super) fn panel_sections(
+    pub(in crate::cockpit) fn panel_sections(
         &self,
         thread: ThreadId,
+        depth: Depth,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -51,23 +61,32 @@ impl CockpitView {
                     .flex_col()
                     .child(panel_section_head("panel-context-head", "Context"))
                     .child(div().debug_selector(|| "panel-context".into()).child(
-                        pane::context_usage(
-                            usage,
-                            transcript.context_details(),
-                            transcript.usage_details(),
-                        ),
+                        match depth {
+                            Depth::Full => pane::context_usage(
+                                usage,
+                                transcript.context_details(),
+                                transcript.usage_details(),
+                            )
+                            .into_any_element(),
+                            Depth::Summary => {
+                                pane::context_summary(usage, transcript.context_details())
+                                    .into_any_element()
+                            }
+                        },
                     ))
                     .children(
                         error.map(|error| pane::card_error(error).id("session-control-error")),
                     ),
             );
         }
-        let servers = transcript.mcp_servers();
-        if !servers.is_empty() {
-            sections.push(connectors(servers, window, cx));
+        if depth == Depth::Full {
+            let servers = transcript.mcp_servers();
+            if !servers.is_empty() {
+                sections.push(connectors(servers, window, cx));
+            }
+            sections.extend(self.changes_section(thread, cx));
+            sections.extend(self.background_section(thread, cx));
         }
-        sections.extend(self.changes_section(thread, cx));
-        sections.extend(self.background_section(thread, cx));
 
         div()
             .debug_selector(|| "panel-sections".into())
