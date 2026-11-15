@@ -510,7 +510,11 @@ impl CockpitView {
             .whitespace_normal()
             .text_size(px(FS_UI))
             .line_height(px(LH_UI))
-            .child(reading_head(label, doors))
+            // The browser's page strip is its own head, under the panel's
+            // Browser tab.
+            .when(!matches!(document.body, Body::Browser), |card| {
+                card.child(reading_head(label, doors))
+            })
             .child(body)
             .child(pane::card_ring(paint::CARD_RING))
             .on_action(cx.listener(move |view, _: &Close, _, cx| {

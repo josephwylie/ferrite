@@ -1624,6 +1624,9 @@ fn browser_annotation_host_intercepts_selection_and_releases_cancelled_capture(c
     tick(cx);
     let released = view.update(cx, |view, _| view.cockpit.browser_attach(thread).unwrap());
     assert!(!released.tabs[0].protected, "starting another tab must release hidden selection protection");
-    assert!(cx.debug_bounds("browser-annotate").is_none(), "new address mode has no visible page to annotate");
+    let annotate = cx.debug_bounds("browser-annotate").unwrap();
+    cx.simulate_click(annotate.center(), gpui::Modifiers::none());
+    tick(cx);
+    assert!(cx.debug_bounds("browser-annotation-overlay").is_none(), "new address mode has no visible page to annotate");
     assert_eq!(activation(), before, "annotation selection never forwards page activation input");
 }

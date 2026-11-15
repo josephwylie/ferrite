@@ -9,6 +9,7 @@ mod completion_checks;
 mod coordinator;
 mod composer_chips;
 mod browser_annotations;
+mod browser_chrome;
 mod composer_controls;
 mod composer_menus;
 mod core_transcript_parity;
