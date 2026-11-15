@@ -1449,6 +1449,12 @@ impl CockpitView {
             )
     }
 
+    /// The shown tab's editor, while its source is what shows.
+    pub(in crate::cockpit) fn files_editor_of(&self, thread: ThreadId) -> Option<Entity<Editor>> {
+        let files = self.files_ref(thread)?;
+        files.tabs[files.active?].shown_editor().cloned()
+    }
+
     pub(in crate::cockpit) fn files_prose_scroll(&self, thread: ThreadId) -> Option<ScrollHandle> {
         let files = self.files_ref(thread)?;
         match &files.tabs[files.active?].reading {
@@ -1515,11 +1521,6 @@ impl CockpitView {
         self.files_ref(thread)?.tree.status_of(path)
     }
 
-    /// The shown tab's editor, while its source is what shows.
-    pub(in crate::cockpit) fn files_editor_of(&self, thread: ThreadId) -> Option<Entity<Editor>> {
-        let files = self.files_ref(thread)?;
-        files.tabs[files.active?].shown_editor().cloned()
-    }
 
     pub(in crate::cockpit) fn files_filter_text_for_test(&self, thread: ThreadId, cx: &gpui::App) -> String {
         self.files_ref(thread)

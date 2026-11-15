@@ -395,6 +395,63 @@ fn find_in_files_searches_the_file_not_the_transcript(cx: &mut TestAppContext) {
     );
 }
 
+/// The first find in a long code file brings its hit into view, as ⏎ does
+/// for the ones after it.
+#[gpui::test]
+fn the_first_find_hit_in_a_long_file_is_in_view(cx: &mut TestAppContext) {
+    let (view, thread, file, cx) = with_marked_file("focus-file-first-hit", cx);
+    let mut source = "// filler\n".repeat(600);
+    source.push_str(&format!("const MARK: &str = \"{ONLY_IN_THE_FILE}\";\n"));
+    source.push_str(&"// after\n".repeat(100));
+    std::fs::write(&file, source).unwrap();
+    view.update(cx, |view, cx| view.open_in_files(thread, file, None, true, cx));
+    tick(cx);
+    let editor = view.read_with(cx, |view, _| {
+        view.files_editor_of(thread).expect("a code file")
+    });
+
+    press("f6", cx);
+    press("cmd-f", cx);
+    cx.simulate_input(ONLY_IN_THE_FILE);
+    for _ in 0..3 {
+        tick(cx);
+    }
+    assert_eq!(file_find_count(&editor, cx).as_deref(), Some("1/1"));
+    assert!(
+        editor.read_with(cx, |editor, _| editor.line_in_view_for_test(601)),
+        "the first hit is on screen"
+    );
+}
+
+/// ⌘↓ and ⌘↑ with the keyboard on the Panel's controls read the open code
+/// file to its end and back to its start.
+#[gpui::test]
+fn command_arrows_go_to_the_ends_of_a_code_file(cx: &mut TestAppContext) {
+    let (view, thread, file, cx) = with_marked_file("focus-code-ends", cx);
+    std::fs::write(&file, "// filler\n".repeat(600)).unwrap();
+    view.update(cx, |view, cx| view.open_in_files(thread, file, None, true, cx));
+    tick(cx);
+    let editor = view.read_with(cx, |view, _| {
+        view.files_editor_of(thread).expect("a code file")
+    });
+    press("f6", cx);
+    let top = |cx: &mut gpui::VisualTestContext| editor.read_with(cx, |e, _| e.top_line_for_test());
+    assert_eq!(top(cx), 1);
+    press("cmd-down", cx);
+    for _ in 0..3 {
+        tick(cx);
+    }
+    assert!(
+        editor.read_with(cx, |editor, _| editor.line_in_view_for_test(600)),
+        "⌘↓ reads to the end"
+    );
+    press("cmd-up", cx);
+    for _ in 0..3 {
+        tick(cx);
+    }
+    assert_eq!(top(cx), 1, "⌘↑ goes back to the start");
+}
+
 /// ⌘F over a prose file (a README) searches that document: the bar opens
 /// over it, the conversation's stays shut, and the first hit is in view.
 #[gpui::test]
