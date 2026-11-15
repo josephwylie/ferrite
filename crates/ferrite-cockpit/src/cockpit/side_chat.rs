@@ -483,7 +483,7 @@ impl CockpitView {
     /// Tell `pane`'s transcript what `subject` of `thread` holds after its
     /// first `skip` blocks, `note` standing under the first prompt — the
     /// compact, read-only twin of `sync_transcript`, for the right pane's
-    /// bodies (the side chat's tabs, a subagent's drill-in): no Decision
+    /// bodies (the side chat's tabs, a subagent's drill-in): no Decision strip,
     /// subagents or rewinds, and no Reply (they have no Composer of a
     /// Pane's to reply into). `decisions` is the Decision row after the
     /// last, where the view answers its own.

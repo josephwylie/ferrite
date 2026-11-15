@@ -268,6 +268,9 @@ fn a_finished_tasks_stop_is_forgotten(cx: &mut TestAppContext) {
     running(&fake, &[]);
     tick(cx);
     assert_eq!(view.read_with(cx, |view, _| view.background_stops.len()), 0);
+    running(&fake, &[("task:1", "cargo test")]);
+    tick(cx);
+    assert!(debug_bounds(cx, "background-stop-says-Stop".into()).is_some(), "the line is plain Stop again");
 }
 
 fn working_agent(fake: &Fake, native: &str, name: &str) -> ferrite_core::activity::AgentKey {
@@ -297,7 +300,7 @@ fn stop_on_a_line_of_agents_says_agents_and_stops_them(cx: &mut TestAppContext) 
     let first = working_agent(&fake, "toolu_a", "Read the docs");
     let second = working_agent(&fake, "toolu_b", "Run the audit");
     tick(cx);
-    assert_eq!(view.read_with(cx, |view, _| view.background_stop_scope(0)), Some("Stop agents"));
+    assert!(debug_bounds(cx, "background-stop-says-Stop agents".into()).is_some());
     press_stop(cx);
     let mut stopped = fake.stopped.borrow().clone();
     stopped.sort();
@@ -313,7 +316,7 @@ fn stop_on_commands_and_agents_says_all_and_stops_both(cx: &mut TestAppContext) 
     running(&fake, &[("task:1", "cargo test")]);
     let agent = working_agent(&fake, "toolu_a", "Read the docs");
     tick(cx);
-    assert_eq!(view.read_with(cx, |view, _| view.background_stop_scope(0)), Some("Stop all"));
+    assert!(debug_bounds(cx, "background-stop-says-Stop all".into()).is_some());
     press_stop(cx);
     assert_eq!(
         *fake.controls.borrow(),
@@ -331,7 +334,34 @@ fn stop_that_cannot_reach_commands_says_agents(cx: &mut TestAppContext) {
     running(&fake, &[("task:1", "cargo test")]);
     working_agent(&fake, "toolu_a", "Read the docs");
     tick(cx);
-    assert_eq!(view.read_with(cx, |view, _| view.background_stop_scope(0)), Some("Stop agent"));
+    assert!(debug_bounds(cx, "background-stop-says-Stop agent".into()).is_some());
+    assert!(debug_bounds(cx, "background-stop-remains-1 command left running".into()).is_some());
+}
+
+/// An agent whose status is not known has nothing to stop: the line stops
+/// the command and names the agent it leaves.
+#[gpui::test]
+fn stop_that_cannot_reach_an_unknown_agent_names_it(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{
+        ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject, TranscriptCoverage,
+    };
+    let (core, fake) = cockpit("background-stop-unknown-agent", 1);
+    *fake.native_controls.borrow_mut() = true;
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    running(&fake, &[("task:1", "cargo test")]);
+    let key = AgentKey::new(Provider::Claude, "ui-fixture", "toolu_a");
+    let mut info = AgentInfo::new(key.clone());
+    info.name = Some("Read the docs".into());
+    info.parent = Some(Subject::Main);
+    info.coverage = TranscriptCoverage::Live;
+    let stream = &fake.streams.borrow()[0];
+    stream.send(SessionEvent::Activity(ActivityEvent::Discovered(info))).unwrap();
+    stream
+        .send(SessionEvent::Activity(ActivityEvent::Status { key, state: AgentStatus::Unknown }))
+        .unwrap();
+    tick(cx);
+    assert!(debug_bounds(cx, "background-stop-says-Stop commands".into()).is_some());
+    assert!(debug_bounds(cx, "background-stop-remains-1 agent left running".into()).is_some());
 }
 
 fn open_background_tab(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) {
@@ -354,11 +384,30 @@ fn an_agent_waited_on_is_in_the_line_the_dialog_and_the_tab(cx: &mut TestAppCont
     open_background_tab(&view, cx);
     assert!(debug_bounds(cx, "background-work-line".into()).is_some());
     assert!(debug_bounds(cx, "background-running-0".into()).is_some(), "the tab lists it");
-    assert!(debug_bounds(cx, "background-open-toolu_a".into()).is_some(), "and opens it");
+    assert!(debug_bounds(cx, "background-tab-open-toolu_a".into()).is_some(), "and opens it");
     let details = bounds(cx, "background-details".into());
     cx.simulate_click(details.center(), gpui::Modifiers::none());
     tick(cx);
-    assert!(debug_bounds(cx, "background-dialog-section".into()).is_some(), "the dialog lists it");
+    assert!(debug_bounds(cx, "background-dialog-open-toolu_a".into()).is_some(), "the dialog lists it");
+}
+
+/// While Main's turn runs its agents are rows of the transcript, so the line
+/// stays away, but the Background tab keeps listing them.
+#[gpui::test]
+fn an_agent_is_in_the_tab_while_main_is_busy(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("background-inventory-busy", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    working_agent(&fake, "toolu_a", "Read the docs");
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ThinkingDelta { text: "Waiting on the agent.".into() })
+        .unwrap();
+    tick(cx);
+    assert!(view.read_with(cx, |view, _| {
+        view.cockpit.thread(view.panes[0].thread().unwrap()).unwrap().busy()
+    }));
+    open_background_tab(&view, cx);
+    assert!(debug_bounds(cx, "background-work-line".into()).is_none(), "the rows show it");
+    assert!(debug_bounds(cx, "background-running-0".into()).is_some(), "the tab lists it");
 }
 
 /// A command only a progress snapshot knows of is in the tab as well.

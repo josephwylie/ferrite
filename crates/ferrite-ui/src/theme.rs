@@ -2302,6 +2302,10 @@ pub const BACKGROUND_DIALOG_SECTION_GAP: f32 = 20.0;
 /// What follows the title (`label: activity`) reads at 60% of the muted ink.
 pub const BACKGROUND_LINE_DETAIL_OPACITY: f32 = 0.6;
 pub const BACKGROUND_LINE_ACTIONS_GAP: f32 = 10.0;
+/// The room the line's clock keeps, right-aligned: its overlay draws the
+/// seconds as they turn into a box laid out at an earlier reading, so a
+/// longer one would run into `Details`.
+pub const BACKGROUND_LINE_CLOCK_W: f32 = 32.0;
 /// The floor a head title keeps however narrow the head (a shorter title
 /// keeps its whole text). There is no cap — a long title takes the width
 /// the head has.

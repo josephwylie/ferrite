@@ -229,12 +229,12 @@ impl CockpitView {
         let call = work.call.clone().filter(|_| work.task.kind == WorkKind::Subagent)?;
         Some(
             ferrite_pane::pane::inline_button(
-                SharedString::from(format!("background-open-{call}")),
+                SharedString::from(format!("background-tab-open-{call}")),
                 "Open",
             )
             .debug_selector({
                 let call = call.clone();
-                move || format!("background-open-{call}")
+                move || format!("background-tab-open-{call}")
             })
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
