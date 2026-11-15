@@ -3,7 +3,6 @@
 //! visibility, focus and dismissal.
 use super::*;
 use crate::cockpit::surfaces::SurfaceId;
-use ferrite_ui::theme::*;
 
 fn solo<'a>(
     name: &str,
@@ -155,6 +154,26 @@ fn a_pane_too_narrow_for_the_card_opens_the_overview_in_the_panel(cx: &mut TestA
         panel_tabs(&view, thread, cx).1,
         Some(SurfaceId::Overview),
         "on the full Overview"
+    );
+}
+
+#[gpui::test]
+fn a_narrow_pane_keeps_the_panels_files_and_floats_the_card(cx: &mut TestAppContext) {
+    let (view, thread, cx) = solo("details-narrow-files", 1440., cx);
+    view.update(cx, |view, cx| {
+        view.upsert_surface(thread, SurfaceId::Files, cx)
+    });
+    tick(cx);
+    cx.simulate_keystrokes("cmd-shift-b");
+    tick(cx);
+    assert!(
+        cx.debug_bounds("details-card").is_some(),
+        "the card floats beside Files at the default window size"
+    );
+    assert_eq!(
+        panel_tabs(&view, thread, cx).1,
+        Some(SurfaceId::Files),
+        "Files stays the Panel's tool"
     );
 }
 

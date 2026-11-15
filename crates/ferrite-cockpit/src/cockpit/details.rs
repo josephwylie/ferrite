@@ -4,10 +4,11 @@
 //! Panel's own sections at `Depth::Summary`, so there is no second source
 //! of Thread context, and one press opens the full Overview in the Panel.
 //!
-//! A Pane too narrow to float it without covering most of its transcript
-//! (`DETAILS_MIN_PANE_W`) opens the Overview in the Panel instead.
+//! A Pane too narrow to float it (`DETAILS_MIN_PANE_W`) opens the Overview
+//! in the Panel instead, unless the Panel already holds another tool.
 
 use super::panel::Depth;
+use super::surfaces::SurfaceId;
 use super::*;
 use ferrite_pane::details::Standing;
 use ferrite_ui::motion;
@@ -77,14 +78,18 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Whether Pane `index` is wide enough to float the card without
-    /// covering most of its transcript. A Pane not yet laid out is.
+    /// Whether Pane `index` floats the card. Only a narrow Pane whose Panel
+    /// holds no other tool gives way to the Overview: the card's point is to
+    /// sit beside Files, Browser or a PR, so it never replaces one.
     fn details_fit(&self, index: usize) -> bool {
-        self.panes[index]
+        let wide = self.panes[index]
             .geometry
             .get()
             .card
-            .is_none_or(|card| card.size.width >= px(DETAILS_MIN_PANE_W))
+            .is_none_or(|card| card.size.width >= px(DETAILS_MIN_PANE_W));
+        wide || self
+            .shown_surface(index)
+            .is_some_and(|shown| shown != SurfaceId::Overview)
     }
 
     /// A card open in a Pane that no longer holds the focus shuts: Escape
