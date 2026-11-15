@@ -185,7 +185,7 @@ fn a_page_card_opens_the_page_beside_the_transcript(cx: &mut TestAppContext) {
     // No engine in a test build: the "can't show" note, the browser a
     // click away.
     assert!(cx.debug_bounds("preview-unshown").is_some());
-    assert!(cx.debug_bounds("preview-open-original").is_some());
+    assert!(cx.debug_bounds("preview-open-in-browser").is_some());
 
     // Its title's menu.
     cx.simulate_click(title.center(), gpui::Modifiers::none());
