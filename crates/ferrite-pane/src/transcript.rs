@@ -438,7 +438,14 @@ fn wrap_up_steps(
             let button = if index == 0 {
                 crate::decision::primary_action(id.clone(), step.clone(), cx)
             } else {
-                crate::decision::secondary_action(id.clone(), step.clone(), Vec::new(), false, false, cx)
+                crate::decision::secondary_action(
+                    id.clone(),
+                    step.clone(),
+                    Vec::new(),
+                    false,
+                    false,
+                    cx,
+                )
             };
             let view = view.clone();
             let (call, words) = (wrap.call.clone(), step.clone());

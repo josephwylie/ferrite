@@ -1036,7 +1036,11 @@ fn slide_to(line: &str, found: &std::ops::Range<usize>, slid: f32, view: f32) ->
 /// has painted, a new query moves to the first occurrence in view (or the
 /// first below it) and paints again; then an occurrence outside the
 /// preview's view scrolls a third of the way down.
-pub(in crate::cockpit) fn settle_markdown_found(find: &mut PreviewFind, scroll: &ScrollHandle, window: &mut Window) {
+pub(in crate::cockpit) fn settle_markdown_found(
+    find: &mut PreviewFind,
+    scroll: &ScrollHandle,
+    window: &mut Window,
+) {
     if find.reveal == 0 {
         return;
     }

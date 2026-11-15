@@ -67,7 +67,7 @@ pub(crate) enum Entry {
 pub(crate) fn label(action: &str, context: Option<&str>) -> Option<Entry> {
     use Entry::{Hidden, Row};
     use Place::*;
-    let wall = context == Some("Wall");
+    let wall = context == Some(ferrite_ui::keymap::WALL);
     // The file editor edits as the Composer does: its keys are the same
     // rows, not new ones.
     if context == Some(ferrite_ui::keymap::FILE_EDITOR)

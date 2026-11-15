@@ -10519,16 +10519,14 @@ impl CockpitView {
             .font_family(ferrite_ui::theme::FONT_UI)
             .map(ferrite_ui::components::tabular)
             .track_focus(&self.focus)
-            .key_context(ferrite_ui::keymap::COCKPIT)
             // At wall range no Pane holds a Composer, so the answer keys are
             // not competing with typing: they answer whichever Thread is
-            // flagged, without the operator focusing it first.
-            .when(level == Level::Wall, |wall| {
-                wall.key_context("Ferrite Wall")
-            })
-            .when(self.context_menu.is_some(), |root| {
-                root.key_context("ContextMenu")
-            })
+            // flagged, without the operator focusing it first. An open menu
+            // joins the context; the keymap's rows stand down for it.
+            .key_context(
+                ferrite_ui::keymap::root_context(level == Level::Wall, self.context_menu.is_some())
+                    .as_str(),
+            )
             // Nothing that acts on a lost machine's Threads is listened for
             // until it is back (ADR 0026).
             .when(!lost, |root| {
