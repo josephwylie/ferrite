@@ -188,6 +188,43 @@ fn enter_presses_a_control_and_escape_gives_the_keyboard_back(cx: &mut TestAppCo
     assert_eq!(composer_text(&view, cx), SENTINEL);
 }
 
+/// More tabs than the strip shows: the arrow keys bring each stop they land
+/// on into view, without a chevron's press.
+#[gpui::test]
+fn arrowing_along_overflowing_tabs_scrolls_each_stop_into_view(cx: &mut TestAppContext) {
+    let (view, thread, cx) = with_tabs("focus-overflow", cx);
+    view.update(cx, |view, cx| {
+        for n in 0..14 {
+            let path = std::path::PathBuf::from(format!("/work/a-long-file-name-{n}.rs"));
+            view.upsert_surface(thread, SurfaceId::File(path), cx);
+        }
+    });
+    tick(cx);
+    let shown = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+        let stop = cx.debug_bounds(selector).expect("the stop is drawn");
+        let strip = view.read_with(cx, |view, _| view.panel.tabs_scroll.bounds());
+        stop.left() >= strip.left() - px(1.) && stop.right() <= strip.right() + px(1.)
+    };
+    let settle = |cx: &mut gpui::VisualTestContext| {
+        for _ in 0..12 {
+            cx.executor().advance_clock(std::time::Duration::from_millis(50));
+            view.update(cx, |_, cx| cx.notify());
+            tick(cx);
+        }
+    };
+    press("f6", cx);
+    press("home", cx);
+    settle(cx);
+    press("end left", cx);
+    settle(cx);
+    assert_eq!(focused_control(&view, cx), Some(PanelControl::Plus));
+    assert!(shown(cx, "panel-plus"), "the + at the strip's far end is in view");
+    press("home", cx);
+    settle(cx);
+    let slid = view.read_with(cx, |view, _| view.panel.tabs_scroll.offset().x);
+    assert_eq!(slid, px(0.), "and the first tab is back at the strip's head");
+}
+
 #[gpui::test]
 fn closing_a_tab_by_key_never_parks_its_thread(cx: &mut TestAppContext) {
     let (view, thread, cx) = with_tabs("focus-close", cx);

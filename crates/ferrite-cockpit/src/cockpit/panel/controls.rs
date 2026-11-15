@@ -218,6 +218,12 @@ impl CockpitView {
                 self.reveal_files_tab(thread, *at);
             }
             window.focus(&handle, cx);
+            if matches!(control, PanelControl::Tab(_) | PanelControl::Plus) {
+                let stop = self.panel.focus.bounds.borrow().get(control).copied();
+                if let Some(stop) = stop {
+                    self.panel.tabs_scroll.ease_into_view(stop, cx);
+                }
+            }
             cx.notify();
         }
     }
