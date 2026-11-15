@@ -4,8 +4,8 @@
 
 use super::*;
 use ferrite_core::draft_content::DraftContent;
-use ferrite_core::replies::Reply;
 use ferrite_core::drafts::Drafts;
+use ferrite_core::replies::Reply;
 use ferrite_core::roster::DraftId;
 
 /// How long after the last keystroke the drafts are written: a burst of

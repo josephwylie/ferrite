@@ -113,7 +113,9 @@ mod tests {
         let sent = compose(&[reply], "go on");
         let seen = split(&sent).0.remove(0);
         assert_eq!(
-            loaded.of(thread).and_then(|kept| kept.get(&key(&seen.quote))),
+            loaded
+                .of(thread)
+                .and_then(|kept| kept.get(&key(&seen.quote))),
             Some(&block(7))
         );
     }
